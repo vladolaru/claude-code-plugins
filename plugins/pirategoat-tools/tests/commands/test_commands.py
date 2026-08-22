@@ -156,6 +156,15 @@ class TestReviewCommandsReferenceUnifiedScript:
         assert '--mode "$MODE"' in content
 
 
+class TestReviewRunIdentity:
+    """Review commands link pipeline telemetry to the active Claude session."""
+
+    @pytest.mark.parametrize("command", ORCHESTRATOR_COMMANDS)
+    def test_step_one_passes_claude_session_id(self, command):
+        content = read_command(command)
+        assert '--session-id "${CLAUDE_SESSION_ID}"' in content
+
+
 # =============================================================================
 # Structural Tests — Marketplace Registration
 # =============================================================================
@@ -232,3 +241,14 @@ class TestUnifiedMission:
         content = read_command(command)
         assert "pr review orchestrator" not in content.lower()
 
+
+class TestDependencyRefreshFlagDocumented:
+    """Every review command documents the --refresh-deps opt-in."""
+
+    @pytest.mark.parametrize("command", [
+        "pr-review.md", "full-code-review.md", "code-review.md",
+    ])
+    def test_command_documents_refresh_deps(self, command):
+        text = (COMMANDS_DIR / command).read_text()
+        assert "--refresh-deps" in text
+        assert "refresh" in text.lower()

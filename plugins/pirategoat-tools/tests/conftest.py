@@ -42,8 +42,16 @@ def _load_pipeline_module():
 
 @pytest.fixture(scope="session")
 def pipeline_mod():
-    """Session-scoped pipeline module — shared across all pipeline test files."""
+    """Load the pipeline compatibility facade shared by all pipeline tests."""
     return _load_pipeline_module()
+
+
+@pytest.fixture(scope="session")
+def orchestration_mod():
+    """Session-scoped orchestration module used for caller-local patches."""
+    from review import orchestration
+
+    return orchestration
 
 
 def setup_temp_git_repo(diff_file: str) -> str:

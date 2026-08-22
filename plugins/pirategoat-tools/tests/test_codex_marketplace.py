@@ -210,6 +210,35 @@ def test_review_command_adapters_select_codex_host():
         assert "--host codex" in text
 
 
+def test_generated_skills_never_reference_claude_session_id():
+    """CLAUDE_SESSION_ID is Claude-host vocabulary. A generated Codex
+    skill that passes it hands the pipeline an empty session ID and
+    silently kills transcript correlation. The three review adapters must
+    pass the verified Codex thread identity, while every generated skill
+    remains free of the Claude-only variable."""
+    review_skill_paths = [
+        REPO_ROOT
+        / "plugins"
+        / "pirategoat-tools"
+        / "codex-skills"
+        / command_name
+        / "SKILL.md"
+        for command_name in ("pr-review", "full-code-review", "code-review")
+    ]
+    for skill_path in review_skill_paths:
+        skill_text = skill_path.read_text(encoding="utf-8")
+        assert '--session-id "${CODEX_THREAD_ID}"' in skill_text, skill_path
+
+    skill_files = sorted(REPO_ROOT.glob("plugins/*/codex-skills/*/SKILL.md"))
+    assert skill_files, "generated skill inventory is empty"
+    offenders = [
+        str(path)
+        for path in skill_files
+        if "CLAUDE_SESSION_ID" in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == []
+
+
 def test_canonical_skills_use_host_neutral_skill_directory():
     for skill_path in REPO_ROOT.glob("plugins/*/skills/*/SKILL.md"):
         text = skill_path.read_text()
@@ -227,3 +256,32 @@ def test_generated_codex_compatibility_files_are_current():
         text=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_gitignored_dotfiles_are_not_surfaced_skill_assets():
+    """Local machine junk (.DS_Store and friends) inside a surfaced shared
+    skill must neither crash the generator (such files are often not UTF-8)
+    nor be copied into codex-skills/. Non-ignored dotfiles remain assets."""
+    skill_dir = REPO_ROOT / "plugins" / "dex" / "skills" / "knowledge-capture"
+    assert skill_dir.is_dir(), "surfaced shared skill moved; update the test"
+    junk = skill_dir / ".DS_Store"
+    # Finder may already have dropped a real .DS_Store here — the very
+    # environment this test exists to tolerate. Preserve and restore it
+    # instead of asserting absence.
+    original = junk.read_bytes() if junk.exists() else None
+    try:
+        # Real .DS_Store files are binary; invalid UTF-8 is the crash case.
+        junk.write_bytes(b"Bud1\x00\x01\x86\x99junk")
+        result = subprocess.run(
+            [sys.executable, str(GENERATOR), "--check"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        if original is None:
+            junk.unlink(missing_ok=True)
+        else:
+            junk.write_bytes(original)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert ".DS_Store" not in result.stdout

@@ -1,8 +1,9 @@
 diff --git a/e2e/checkout.spec.ts b/e2e/checkout.spec.ts
 new file mode 100644
+index 0000000..5a84636
 --- /dev/null
 +++ b/e2e/checkout.spec.ts
-@@ -0,0 +1,24 @@
+@@ -0,0 +1,23 @@
 +import { test, expect } from '@playwright/test';
 +
 +test.describe( 'Checkout flow', () => {
@@ -10,7 +11,6 @@ new file mode 100644
 +        await page.goto( '/shop' );
 +        await page.click( '.product-card:first-child .add-to-cart' );
 +
-+        // Hard-coded wait: fragile, slows tests, hides real timing issues
 +        await page.waitForTimeout( 3000 );
 +
 +        await page.click( '.cart-icon' );
@@ -19,7 +19,6 @@ new file mode 100644
 +        await page.fill( '#email', 'test@example.com' );
 +        await page.fill( '#card-number', '4242424242424242' );
 +
-+        // Another hard-coded wait instead of proper assertion
 +        await page.waitForTimeout( 2000 );
 +
 +        await page.click( '#submit-payment' );
@@ -30,6 +29,7 @@ new file mode 100644
 +} );
 diff --git a/e2e/pages/CheckoutPage.ts b/e2e/pages/CheckoutPage.ts
 new file mode 100644
+index 0000000..7eab21c
 --- /dev/null
 +++ b/e2e/pages/CheckoutPage.ts
 @@ -0,0 +1,18 @@

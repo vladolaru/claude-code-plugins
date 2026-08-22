@@ -200,6 +200,8 @@ def test_build_output_includes_host_section_when_provided():
         scope_output="=== REVIEW SCOPE ===\n(empty)",
         exploration_scope=None, output_dir="/tmp",
         pr_number=None, reviewer_name="test",
+        not_diffed_count=0,
+        has_php=False,
         host_context=manifest,
     )
     assert "## Host Context" in output
@@ -214,6 +216,8 @@ def test_build_output_omits_host_section_when_none():
         scope_output="=== REVIEW SCOPE ===\n(empty)",
         exploration_scope=None, output_dir="/tmp",
         pr_number=None, reviewer_name="test",
+        not_diffed_count=0,
+        has_php=False,
         host_context=None,
     )
     assert "## Host Context" not in output
@@ -289,7 +293,7 @@ class TestHostContextSoftCap:
         for i in range(22):
             entries.append({
                 "name": f"lib-{i:02d}", "kind": "library-dep",
-                "path": f"/x/lib-{i:02d}", "source": "install-cache",
+                "path": f"/x/lib-{i:02d}", "source": "ecosystem-cache",
             })
         for i in range(3):
             entries.append({

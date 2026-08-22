@@ -1,5 +1,6 @@
 diff --git a/internal/handler/handler.go b/internal/handler/handler.go
 new file mode 100644
+index 0000000..f319abf
 --- /dev/null
 +++ b/internal/handler/handler.go
 @@ -0,0 +1,22 @@
@@ -27,9 +28,10 @@ new file mode 100644
 +}
 diff --git a/internal/model/order.go b/internal/model/order.go
 new file mode 100644
+index 0000000..79adf69
 --- /dev/null
 +++ b/internal/model/order.go
-@@ -0,0 +1,15 @@
+@@ -0,0 +1,16 @@
 +package model
 +
 +// Order represents a customer order.

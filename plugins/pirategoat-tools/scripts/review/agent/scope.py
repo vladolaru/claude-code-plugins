@@ -28,9 +28,32 @@ import subprocess
 import sys
 from typing import Dict, List, Optional, Tuple
 
+_SCRIPTS_DIR = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+
+from git_paths import decode_git_c_quoted_path
+
 # =============================================================================
 # Semantic filter — content-level noise removal from diffs
 # =============================================================================
+
+def _load_glob_match():
+    """Lazy-load glob_match from review_config.py (the single source of truth
+    for repo-reviewer applicability globs — path scoping must match dispatch
+    gating exactly, or a reviewer dispatched for a path never receives it)."""
+    import importlib.util as _ilu
+    _rc_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "review_config.py",
+    )
+    _rc_spec = _ilu.spec_from_file_location("_scope_review_config", _rc_path)
+    _rc_mod = _ilu.module_from_spec(_rc_spec)
+    _rc_spec.loader.exec_module(_rc_mod)
+    return _rc_mod.glob_match
+
 
 def _load_semantic_filter():
     """Lazy-load filter_diff from diff_noise_filter.py (sibling script)."""
@@ -239,16 +262,104 @@ def _line_has_markup_token(patch_line: str) -> bool:
     (patch_has_markup_tokens) and the a11y budget-priority evidence scan
     (classify_markup_evidence) call this function, so they cannot drift.
     """
-    lowered = patch_line[1:].strip().lower()
+    return _content_has_markup_token(patch_line[1:])
+
+
+def _normalize_scan_line(text: str) -> str:
+    """Lowercase, de-comment, and trim one line for token scanning.
+
+    Returns "" for a line that is entirely comment or whitespace — the
+    caller treats that as no evidence.
+    """
+    lowered = text.strip().lower()
     if lowered.startswith(("//", "#", "/*", "*", "<!--")):
-        return False
-    uncommented = _strip_inline_comment(lowered).strip()
+        return ""
+    return _strip_inline_comment(lowered).strip()
+
+
+def _content_has_markup_token(text: str) -> bool:
+    """True when one line of SOURCE (no diff marker) emits or touches markup.
+
+    The vocabulary half of _line_has_markup_token, split out so evidence
+    can be looked for in a file on disk and not only in a patch. Same two
+    vocabularies, same masking rule, one implementation.
+    """
+    uncommented = _normalize_scan_line(text)
     if not uncommented:
         return False
     if any(pattern.search(uncommented) for pattern in MARKUP_CONTENT_TOKEN_PATTERNS):
         return True
     code_only = _mask_quoted_content(uncommented)
     return any(pattern.search(code_only) for pattern in MARKUP_CODE_TOKEN_PATTERNS)
+
+
+# =============================================================================
+# UI-SURFACE tokens — a DIFFERENT question from the markup vocabulary above,
+# and deliberately a separate (small) set.
+#
+# The markup vocabulary answers "does this CHANGE touch UI markup?" It gates
+# has_markup_changes dispatch, so it is tuned to be precise, and that tuning
+# is load-bearing: `<div className="wrap">` is pinned as NOT markup
+# (`test_presentational_containers_and_generics_are_not_markup`) precisely so
+# a presentational container tweak cannot gate-lift every diff.
+#
+# The a11y scope sniff below asks a different question — "is this FILE a UI
+# surface at all?" — where a presentational container IS the answer. Folding
+# className into the shared set to serve it would silently retune triage;
+# these patterns therefore extend the markup vocabulary rather than join it,
+# and nothing but the sniff reads them.
+#
+# Applied to the same normalized, comment-stripped, lowercased line, so
+# patterns are written lowercase.
+# =============================================================================
+
+_UI_SURFACE_TOKEN_PATTERNS = (
+    # JSX/React presentational attributes. `class=` is deliberately absent —
+    # in a bare .ts/.js file it is far more often `class Foo` or a CSS
+    # selector string than emitted markup.
+    re.compile(r"(?<![\w$])classname\s*=\s*[\"'{]"),
+    # React / DOM-component ecosystem imports. A module that pulls these in
+    # renders something, whatever its extension claims.
+    # Covers `from 'react'`, bare side-effect `import 'react'`, dynamic
+    # `import('react')`, and `require('react')` in one shape.
+    re.compile(
+        r"\b(?:from|import|require)\s*\(?\s*[\"']"
+        r"(?:react(?:-dom)?(?:/[\w./-]*)?|preact(?:/[\w./-]*)?|"
+        r"@wordpress/(?:element|components|block-editor|blocks|primitives|"
+        r"icons|a11y)|@testing-library/[\w-]+)[\"']"
+    ),
+    # Direct DOM construction/queries — the non-JSX way to emit UI.
+    re.compile(
+        r"\bdocument\s*\.\s*(?:queryselector(?:all)?|getelementby\w+|"
+        r"getelementsby\w+|createelement|createtextnode|body|activeelement)\b"
+    ),
+    re.compile(r"\.(?:innerhtml|outerhtml|textcontent|classlist)\b"),
+    re.compile(r"\.setattribute\s*\(\s*[\"'](?:aria-|role|tabindex|alt)"),
+    # WordPress's screen-reader announcement channel, imported or namespaced.
+    re.compile(r"\bwp\s*\.\s*a11y\b"),
+)
+
+
+def _content_has_ui_evidence(text: str) -> bool:
+    """True when one line of SOURCE shows this file is a UI surface.
+
+    A SUPERSET of the markup vocabulary: everything markup evidence
+    recognizes, plus the UI-surface tokens above. See that block for why
+    the extra tokens are not merged into the shared set.
+    """
+    if _content_has_markup_token(text):
+        return True
+    uncommented = _normalize_scan_line(text)
+    if not uncommented:
+        return False
+    return any(
+        pattern.search(uncommented) for pattern in _UI_SURFACE_TOKEN_PATTERNS
+    )
+
+
+def _patch_line_has_ui_evidence(patch_line: str) -> bool:
+    """_content_has_ui_evidence for a patch line (drops the +/- marker)."""
+    return _content_has_ui_evidence(patch_line[1:])
 
 
 def patch_has_markup_tokens(diff_text: str) -> bool:
@@ -261,19 +372,6 @@ def patch_has_markup_tokens(diff_text: str) -> bool:
         if _line_has_markup_token(line):
             return True
     return False
-
-
-def _unquote_git_path(path: str) -> str:
-    """Decode git's C-style path quoting (backslash octal escapes, UTF-8)."""
-    try:
-        return (
-            path.encode("latin-1")
-            .decode("unicode_escape")
-            .encode("latin-1")
-            .decode("utf-8")
-        )
-    except (UnicodeDecodeError, UnicodeEncodeError):
-        return path
 
 
 def _parse_marker_path(line: str) -> Optional[str]:
@@ -293,13 +391,20 @@ def _parse_marker_path(line: str) -> Optional[str]:
     if body == "/dev/null":
         return None
     if body.startswith('"') and body.endswith('"') and len(body) > 1:
-        body = _unquote_git_path(body[1:-1])
+        decoded, was_git_quoted = decode_git_c_quoted_path(body)
+        if decoded is None:
+            return None
+        body = decoded if was_git_quoted else body[1:-1]
     if body.startswith(("a/", "b/")):
         return body[2:]
     return None
 
 
-def classify_markup_evidence(range_spec: str, filepaths: List[str]) -> set:
+def classify_markup_evidence(
+    range_spec: str,
+    filepaths: List[str],
+    line_predicate=_line_has_markup_token,
+) -> set:
     """Return the subset of `filepaths` whose changed lines carry markup tokens.
 
     ONE combined `git diff` for all files, scanned line-by-line while
@@ -308,16 +413,20 @@ def classify_markup_evidence(range_spec: str, filepaths: List[str]) -> set:
     calls and every full diff held in memory before budgeting). The scan
     runs on the raw (unfiltered) diff; that's a superset of the semantically
     filtered text, which is fine for ORDERING evidence.
+
+    `line_predicate` swaps the vocabulary without re-implementing the scan:
+    budget priority asks the markup question, the a11y scope sniff asks the
+    wider UI-surface one (_patch_line_has_ui_evidence). One walker, so a
+    hunk-tracking fix can never land in only one of them.
     """
     if not filepaths:
         return set()
-    git = ["git", "-c", "core.quotepath=false"]
     if range_spec == "--cached":
-        cmd = [*git, "diff", "--cached", "--", *filepaths]
+        cmd = git_path_cmd("diff", "--cached", "--", *filepaths)
     elif range_spec == "":
-        cmd = [*git, "diff", "--", *filepaths]
+        cmd = git_path_cmd("diff", "--", *filepaths)
     else:
-        cmd = [*git, "diff", range_spec, "--", *filepaths]
+        cmd = git_path_cmd("diff", range_spec, "--", *filepaths)
     try:
         output = run_cmd(cmd, check=True)
     except RuntimeError:
@@ -349,9 +458,130 @@ def classify_markup_evidence(range_spec: str, filepaths: List[str]) -> set:
             continue
         if not line.startswith(("+", "-")):
             continue
-        if _line_has_markup_token(line):
+        if line_predicate(line):
             evidence.add(current)
     return evidence
+
+
+# =============================================================================
+# a11y scope sniff — content evidence, not extension guilt.
+#
+# The a11y include matches every _FRONTEND_LANGS extension, and `.ts`/`.js`
+# say nothing about whether a file renders anything. In a full-stack monorepo
+# that handed the a11y reviewer large backend-only server modules: pure
+# budget waste, caught only by the reviewer's own relevance backstop after
+# the tokens were already spent.
+#
+# So bare script modules must SHOW they are UI before entering a11y scope.
+# `.tsx`/`.jsx` never do — JSX in the extension is the evidence — and
+# neither do `.vue`/`.svelte` (single-file components), stylesheets, or
+# templates, all of which are inherent UI surfaces.
+#
+# Deliberately NOT a configurable per-domain predicate. One domain has this
+# problem, because one domain's include spans "anything that might render";
+# a config key no second domain sets is surface an agent has to read and
+# rule out. If a second domain ever needs it, generalize then, with two real
+# call sites to generalize from.
+#
+# Scope only. Triage is untouched: dispatch still decides from the registry's
+# own signals, so an a11y-relevant run is never skipped by this — at worst
+# the reviewer is dispatched and reports NO_DOMAIN_FILES honestly, which is
+# the pre-existing behavior for a diff with no a11y surface at all.
+# =============================================================================
+
+# Bare script modules: no JSX in the extension, so extension proves nothing.
+_AMBIGUOUS_SCRIPT_RE = re.compile(r"\.(js|mjs|cjs|ts)$", re.IGNORECASE)
+
+# How much of a file to read when the patch showed no marker. A UI module
+# declares itself in its imports and its render body; 64KB reaches well past
+# both, and the bound is what keeps a generated bundle from being read whole.
+_UI_SNIFF_READ_BYTES = 64 * 1024
+
+
+def _file_has_ui_evidence(
+    path: str, repo_root: str, limit: int = _UI_SNIFF_READ_BYTES
+) -> bool:
+    """True when the first `limit` bytes of `path` show UI evidence.
+
+    `path` is repository-relative, because every path in this module comes
+    from `git diff --name-only` and Git reports those from the repository
+    root whatever the process CWD is. `repo_root` is therefore REQUIRED,
+    not defaulted: opening a root-relative path against the CWD works only
+    when the pipeline happens to run from the top level, and silently reads
+    nothing — dropping a genuine UI file from scope — from any
+    subdirectory. Same reasoning as `bootstrap.py::get_file_history`.
+
+    Best-effort about the file itself: a deleted or unreadable file yields
+    False, so the patch scan is its only evidence. For a deletion that is
+    the honest answer — there is no file left to review.
+    """
+    try:
+        with open(os.path.join(repo_root, path), "rb") as handle:
+            head = handle.read(limit)
+    except OSError:
+        return False
+    text = head.decode("utf-8", errors="replace")
+    # A read that stopped mid-line may have cut a token in half; drop that
+    # fragment rather than match on it. A read that stopped ON a line
+    # boundary cut nothing, whether or not it hit the limit.
+    lines = text.splitlines()
+    if len(head) == limit and lines and not text.endswith(("\n", "\r")):
+        lines = lines[:-1]
+    return any(_content_has_ui_evidence(line) for line in lines)
+
+
+def filter_a11y_ui_evidence(
+    range_spec: str, files: List[str]
+) -> Tuple[List[str], List[str]]:
+    """Drop bare script modules that show no UI evidence from a11y scope.
+
+    Two evidence sources, cheapest first: the file's own diff hunk (one
+    combined `git diff` for every candidate, via classify_markup_evidence),
+    then a bounded read of the file on disk for the candidates the patch
+    left silent — a UI module edited only in its data layer still belongs
+    to a11y.
+
+    The on-disk read is the WORKING TREE, resolved against the repository
+    root — one `git rev-parse --show-toplevel`, hoisted out of the loop.
+    Reading blobs with `git show <ref>:<path>` was the alternative and is
+    worse on both counts that matter here: it is one subprocess per file
+    instead of one per run, and it answers about a ref when the reviewer
+    is going to read the working tree — for an uncommitted or `--cached`
+    range there is no single right ref to name.
+
+    Fails OPEN. Dropping a file is a claim that evidence is ABSENT, and a
+    root we cannot resolve is a broken instrument, not an absence: every
+    candidate stays in scope rather than being dropped on unread disk.
+
+    Returns (kept, dropped) preserving input order in both.
+    """
+    candidates = [f for f in files if _AMBIGUOUS_SCRIPT_RE.search(f)]
+    if not candidates:
+        return list(files), []
+
+    try:
+        repo_root = run_cmd(
+            git_path_cmd("rev-parse", "--show-toplevel"), check=True
+        )
+    except RuntimeError:
+        repo_root = ""
+    if not repo_root:
+        return list(files), []
+
+    with_patch_evidence = classify_markup_evidence(
+        range_spec, candidates, line_predicate=_patch_line_has_ui_evidence
+    )
+    dropped = {
+        f for f in candidates
+        if f not in with_patch_evidence
+        and not _file_has_ui_evidence(f, repo_root)
+    }
+    if not dropped:
+        return list(files), []
+    return (
+        [f for f in files if f not in dropped],
+        [f for f in files if f in dropped],
+    )
 
 
 # =============================================================================
@@ -455,6 +685,15 @@ def _ext_re(*groups) -> str:
     return r"\.(" + "|".join(exts) + r")$"
 
 
+# The semantic filter's heuristics assume programming-language comment
+# syntax. In prose formats those same characters ARE the content — a
+# Markdown bullet starts with '*' (the docblock heuristic) and a heading
+# with '#' (the comment heuristic) — so filtering strips exactly the
+# changed text the reviewer was dispatched to see (docs-drift domain,
+# path-rescued applies_to.paths files). Prose files bypass the filter.
+_SEMANTIC_FILTER_EXEMPT_RE = re.compile(_ext_re(_DOC_LANGS), re.IGNORECASE)
+
+
 def is_template_file(path: str) -> bool:
     """Return whether path is an inherently UI-emitting template file."""
     lowered = path.lower()
@@ -544,7 +783,11 @@ DOMAIN_CATALOG = {
         "budget_priority": "production_first",
     },
     "a11y": {
-        "description": "UI-emitting files for accessibility review (JS/TS/JSX/TSX/CSS + server-rendered markup: PHP/HTML/templates)",
+        "description": (
+            "UI-emitting files for accessibility review (JSX/TSX/Vue/Svelte/CSS "
+            "+ server-rendered markup: PHP/HTML/templates; bare JS/TS only when "
+            "the change or the file shows UI evidence)"
+        ),
         "include": _ext_re(_FRONTEND_LANGS, _STYLE_LANGS, _MARKUP_LANGS),
         "exclude": None,
         # Budget markup-evidence-bearing files FIRST: the broad markup-language
@@ -647,6 +890,27 @@ NOISE_PATTERNS = [
 # trigger a warning message. Merge-base rebasing happens unconditionally
 # (the threshold only controls the advisory warning, not the rebase decision).
 STALE_BRANCH_THRESHOLD = 10
+
+
+# Every Git invocation whose OUTPUT carries a path must disable
+# core.quotePath, or Git C-quotes any non-ASCII path
+# ("src/caf\303\251.php") and every consumer downstream compares the
+# wrong string. In scope.py that meant `.php"` never matching the `\.php$`
+# domain filter, so a changed file with a non-ASCII name was silently
+# excluded from EVERY domain and reviewed by nobody.
+#
+# ONE prefix rather than the flag repeated per call site, because the flag
+# repeated per call site is exactly how this drifted: the evidence scan
+# had it and the changed-file enumeration next to it did not. Commands
+# whose path output is never CONSUMED keep plain ["git", ...] — the
+# counts and ref resolutions, and the `rev-parse --git-dir` probe whose
+# output is discarded in favour of its exit code.
+GIT_PATH_SAFE = ["git", "-c", "core.quotepath=false"]
+
+
+def git_path_cmd(*args: str) -> List[str]:
+    """Build a Git command whose output paths are never C-quoted."""
+    return [*GIT_PATH_SAFE, *args]
 
 
 def run_cmd(cmd: List[str], check: bool = True, capture_stderr: bool = True) -> str:
@@ -817,12 +1081,12 @@ def detect_range() -> Tuple[str, str]:
         pass
 
     # Check for staged changes
-    staged = run_cmd(["git", "diff", "--cached", "--name-only"], check=True)
+    staged = run_cmd(git_path_cmd("diff", "--cached", "--name-only"), check=True)
     if staged:
         return "--cached", "HEAD"
 
     # Check for unstaged changes
-    unstaged = run_cmd(["git", "diff", "--name-only"], check=True)
+    unstaged = run_cmd(git_path_cmd("diff", "--name-only"), check=True)
     if unstaged:
         return "", "HEAD"  # empty range = unstaged working tree diff
 
@@ -832,11 +1096,11 @@ def detect_range() -> Tuple[str, str]:
 def get_changed_files(range_spec: str) -> List[str]:
     """Get list of changed files for the given range."""
     if range_spec == "--cached":
-        cmd = ["git", "diff", "--cached", "--name-only"]
+        cmd = git_path_cmd("diff", "--cached", "--name-only")
     elif range_spec == "":
-        cmd = ["git", "diff", "--name-only"]
+        cmd = git_path_cmd("diff", "--name-only")
     else:
-        cmd = ["git", "diff", "--name-only", range_spec]
+        cmd = git_path_cmd("diff", "--name-only", range_spec)
 
     output = run_cmd(cmd, check=True)
     if not output:
@@ -903,11 +1167,11 @@ def filter_domain(files: List[str], domain: str) -> Tuple[List[str], List[str]]:
 def get_diff_for_file(range_spec: str, filepath: str) -> str:
     """Get the diff for a single file."""
     if range_spec == "--cached":
-        cmd = ["git", "diff", "--cached", "--", filepath]
+        cmd = git_path_cmd("diff", "--cached", "--", filepath)
     elif range_spec == "":
-        cmd = ["git", "diff", "--", filepath]
+        cmd = git_path_cmd("diff", "--", filepath)
     else:
-        cmd = ["git", "diff", range_spec, "--", filepath]
+        cmd = git_path_cmd("diff", range_spec, "--", filepath)
 
     return run_cmd(cmd, check=True)
 
@@ -932,11 +1196,11 @@ def get_diffstat(range_spec: str, files: List[str]) -> Dict[str, Tuple[int, int]
         Binary files get (0, 0). Files not in the numstat output get (0, 0).
     """
     if range_spec == "--cached":
-        cmd = ["git", "diff", "--cached", "--numstat"]
+        cmd = git_path_cmd("diff", "--cached", "--numstat")
     elif range_spec == "":
-        cmd = ["git", "diff", "--numstat"]
+        cmd = git_path_cmd("diff", "--numstat")
     else:
-        cmd = ["git", "diff", "--numstat", range_spec]
+        cmd = git_path_cmd("diff", "--numstat", range_spec)
 
     output = run_cmd(cmd, check=True)
     if not output:
@@ -1080,6 +1344,40 @@ def build_scope(args: argparse.Namespace) -> dict:
 
     # Step 4: Apply domain filter
     domain_matched, domain_excluded = filter_domain(after_noise, args.domain)
+
+    # Step 4.4: a11y UI-evidence sniff. `.ts`/`.js` are in the a11y include
+    # because they MIGHT render; a backend-only server module in a
+    # full-stack monorepo is the case where they don't. See
+    # filter_a11y_ui_evidence for the full rationale. Runs BEFORE the path
+    # rescue below so an explicit --include-path can still bring a file
+    # back: a reviewer dispatched FOR a path outranks a content sniff.
+    if args.domain == "a11y" and domain_matched:
+        domain_matched, no_ui_evidence = filter_a11y_ui_evidence(
+            range_spec, domain_matched
+        )
+        domain_excluded.extend(no_ui_evidence)
+
+    # Step 4.5: Path-scope rescue. Repo-contributed reviewers may declare
+    # applicability by path glob (applies_to.paths); those files are the
+    # reviewer's scope even when no domain's extension filter recognizes
+    # them — without this, a reviewer dispatched FOR docs/** receives a
+    # scope that excludes the very file that triggered dispatch and exits
+    # NO_DOMAIN_FILES. Rescue applies after noise filtering, like domains.
+    include_paths = [p for p in (getattr(args, "include_path", None) or []) if p]
+    rescued_by_path_set: set = set()
+    if include_paths and domain_excluded:
+        _glob_match = _load_glob_match()
+        rescued_by_path = [
+            f for f in domain_excluded
+            if any(_glob_match(p, f) for p in include_paths)
+        ]
+        if rescued_by_path:
+            rescued_by_path_set = set(rescued_by_path)
+            domain_matched.extend(rescued_by_path)
+            domain_excluded = [
+                f for f in domain_excluded if f not in rescued_by_path_set
+            ]
+
     if not domain_matched:
         return {
             "status": "NO_DOMAIN_FILES",
@@ -1205,8 +1503,19 @@ def build_scope(args: argparse.Namespace) -> dict:
 
             diff_text = get_diff_for_file(range_spec, filepath)
 
-            # Apply semantic filtering to reduce noise (docblocks, comments, formatting)
-            if use_semantic_filter:
+            # Apply semantic filtering to reduce noise (docblocks, comments,
+            # formatting). Prose files are exempt — the filter's comment
+            # heuristics would strip their content (see
+            # _SEMANTIC_FILTER_EXEMPT_RE). Path-rescued files are exempt
+            # too: they are here precisely because the domain's language
+            # recognition did NOT match them (extensionless docs/README,
+            # unknown formats), so the filter's heuristics have no basis —
+            # fail open to full content.
+            if (
+                use_semantic_filter
+                and not _SEMANTIC_FILTER_EXEMPT_RE.search(filepath)
+                and filepath not in rescued_by_path_set
+            ):
                 diff_text = apply_semantic_filter(diff_text)
 
             diff_lines = count_diff_lines(diff_text)
@@ -1251,6 +1560,15 @@ def build_scope(args: argparse.Namespace) -> dict:
         "budget_max": max_lines,
         "budget_exceeded_files": budget_exceeded_files,
         "files": domain_matched_sorted if (args.base_ref_only or args.summary) else list(diffs.keys()),
+        # The reviewer's whole in-scope workload, in EVERY mode — unlike
+        # "files" above, whose meaning flips with the mode. Run-level
+        # coverage aggregation subtracts the union of the sidecar's file
+        # lists from the changed set to find files no reviewer's domain
+        # matched, and under --base-ref-only/--summary the three lists it
+        # had (diffed, budget-deferred, list-only) are all empty because no
+        # diff was ever fetched: every file such an agent owned looked
+        # unowned. This field is what those agents contribute.
+        "in_scope_files": sorted(domain_matched),
         "diffs": diffs,
         "diffstat": diffstat,
         "skipped_files": {
@@ -1379,7 +1697,13 @@ def format_text_output(scope: dict) -> str:
         if budget_files:
             lines.append("")
             lines.append(f"=== NOT DIFFED (budget exceeded, {len(budget_files)} files) ===")
-            lines.append("Use 'git diff <range> -- <file>' to read any of these selectively.")
+            lines.append("These files ARE IN YOUR SCOPE — their diffs were withheld only to fit")
+            lines.append("the context budget. This list is your remaining work queue, largest")
+            lines.append(
+                f"first: review with 'git diff {scope.get('range', '')} -- <file>' "
+                "while tool budget"
+            )
+            lines.append("remains, and declare only the files you genuinely cannot reach.")
             # Sort budget-exceeded by size descending so agent sees biggest changes first
             budget_sorted = sorted(
                 budget_files,
@@ -1439,6 +1763,17 @@ def write_scope_summary(scope: dict, path: str) -> None:
 
     Fail-open: a summary-write failure must never break scope output.
     """
+    # Raw diffstat lines over the reviewer's in-scope workload: inline FILES
+    # plus deferred budget-exceeded files, excluding list-only stats. This is
+    # the budget-sizing number (bootstrap's tool-call budget input) — NOT
+    # total_diff_lines, which counts semantically filtered inline lines only.
+    diffstat = scope.get("diffstat", {}) or {}
+    in_scope_files = list(scope.get("files", []) or []) + list(
+        scope.get("budget_exceeded_files", []) or []
+    )
+    in_scope_stat_lines = sum(
+        sum(diffstat.get(f, (0, 0))) for f in in_scope_files
+    )
     summary = {
         "schema": 1,
         "domain": scope.get("domain"),
@@ -1447,7 +1782,12 @@ def write_scope_summary(scope: dict, path: str) -> None:
         "files_with_diffs": sorted(scope.get("diffs", {}) or {}),
         "budget_exceeded_files": list(scope.get("budget_exceeded_files", []) or []),
         "list_only_files": list(scope.get("list_only_files", []) or []),
+        # Written in every mode, so run-level coverage can treat the union
+        # of these lists as one uniform "reached some reviewer's scope"
+        # population — see reconciliation_context._SIDECAR_FILE_LISTS.
+        "in_scope_files": list(scope.get("in_scope_files", []) or []),
         "total_diff_lines": scope.get("total_diff_lines", 0),
+        "in_scope_stat_lines": in_scope_stat_lines,
         "budget_max": scope.get("budget_max"),
     }
     try:
@@ -1521,6 +1861,18 @@ def main():
         "--summary-json-out",
         default=None,
         help="Write a machine-readable scope summary JSON (admitted/skipped files) to this path. Fail-open.",
+    )
+    parser.add_argument(
+        "--include-path",
+        action="append",
+        default=None,
+        metavar="GLOB",
+        help=(
+            "Additionally include changed files matching this repo-relative "
+            "glob, regardless of the domain's extension filter. Repeatable. "
+            "Used to scope repo-contributed reviewers by their declared "
+            "applies_to.paths."
+        ),
     )
 
     args = parser.parse_args()

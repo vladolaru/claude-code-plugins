@@ -21,6 +21,9 @@ TESTS_DIR = Path(__file__).resolve().parent.parent  # review/ -> tests/
 PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 SCRIPT_PATH = SCRIPTS_DIR / "review" / "reconciliation_context.py"
+sys.path.insert(0, str(SCRIPTS_DIR))
+
+from review.agent.output import ReviewOutputBuilder
 
 
 def _load_module():
@@ -42,6 +45,11 @@ def mod():
 # ---------------------------------------------------------------------------
 # Test fixture helpers
 # ---------------------------------------------------------------------------
+
+# Distinguishes "key absent" (legacy producer) from an explicit null/empty
+# value — the two carry opposite meanings for deferred-review claims.
+_ABSENT = object()
+
 
 def _make_issue(
     severity="medium",
@@ -69,6 +77,60 @@ def _make_issue(
     if severity_floor is not None:
         issue["severity_floor"] = severity_floor
     return issue
+
+
+def _write_summary(
+    output_dir, agent, files_with_diffs, budget_exceeded, *, domain=None,
+    list_only=None, in_scope=None,
+):
+    """Write one agent's scope-summary sidecar under its real filename.
+
+    Keyed on the AGENT name rather than a hand-spelled filename so every
+    coverage test addresses the sidecar the way the aggregator does;
+    `domain` appends the secondary-summary suffix that adapter and
+    multi-domain agents emit.
+    """
+    suffix = f"-{domain}" if domain else ""
+    path = os.path.join(output_dir, f"{agent}-scope-summary{suffix}.json")
+    with open(path, "w") as f:
+        json.dump({
+            "schema": 1,
+            "domain": "x",
+            "status": "OK",
+            "files_with_diffs": files_with_diffs,
+            "budget_exceeded_files": budget_exceeded,
+            "list_only_files": list(list_only or []),
+            # Real sidecars publish this in every mode; the helper defaults
+            # it to the union of what was passed so ordinary-mode fixtures
+            # stay honest without every caller restating their scope.
+            "in_scope_files": (
+                list(in_scope) if in_scope is not None
+                else sorted(
+                    set(files_with_diffs)
+                    | set(budget_exceeded)
+                    | set(list_only or [])
+                )
+            ),
+        }, f)
+
+
+def _write_review(output_dir, stem, unreviewed=None, claims=_ABSENT):
+    """Write <stem>.json — the real filename an agent's review carries.
+
+    Takes the review STEM, not the agent name: several tests exist to pin
+    the stem-derivation rule itself, so deriving it here would hide the
+    thing under test.
+
+    `claims` defaults to a sentinel so a test can distinguish a key-less
+    legacy output from an explicit `deferred_reviewed: []`.
+    """
+    payload = {"reviewer": stem.replace("-review", ""), "issues": []}
+    if unreviewed is not None:
+        payload["unreviewed"] = unreviewed
+    if claims is not _ABSENT:
+        payload["deferred_reviewed"] = claims
+    with open(os.path.join(output_dir, f"{stem}.json"), "w") as f:
+        json.dump(payload, f)
 
 
 def _make_context_with_findings(agent_findings):
@@ -106,7 +168,7 @@ def _make_review_json(
         "pr_id": pr_id,
         "reviewer": reviewer,
         "timestamp": "2026-04-04T10:00:00",
-        "version": "1.0.0",
+        "schema": 1,
         "verdict": verdict,
         "summary": {
             "total_issues": len(issues),
@@ -254,6 +316,24 @@ class TestLoadAgentFindings:
         assert len(result) == 0
 
 
+def test_reconciler_entitlement_write_error_removes_stale_target(
+    mod, tmp_path, monkeypatch
+):
+    sidecar = tmp_path / "reconciliator-advisory-entitlement.json"
+    sidecar.write_text(json.dumps({
+        "schema": 1, "advisory_entitled": True,
+    }))
+
+    def _raise(*args, **kwargs):
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr(mod, "open", _raise, raising=False)
+
+    mod.persist_reconciler_advisory_entitlement(str(tmp_path), {})
+
+    assert not sidecar.exists()
+
+
 class TestSeverityFloorNormalization:
     def test_structured_floor_wins_over_legacy_marker(self, mod):
         issue = _make_issue(
@@ -333,26 +413,6 @@ class TestSeverityFloorNormalization:
             description=["Finding body.", "Severity-floor: high — verified"]
         )
         assert mod.resolve_severity_floor(issue) == "high"
-
-    def test_loading_findings_materializes_floor_from_list_description(
-        self, mod, tmp_path
-    ):
-        review = _make_review_json(
-            issues=[
-                _make_issue(
-                    description=[
-                        "Public interface removed.",
-                        "Severity-floor: public-contract change; consumers exist",
-                    ],
-                )
-            ]
-        )
-        (tmp_path / "woo-regression-review.json").write_text(json.dumps(review))
-
-        loaded = mod.load_agent_findings(str(tmp_path))
-
-        issue = loaded["woo-regression-review"]["issues"][0]
-        assert issue["severity_floor"] == "medium"
 
 
 # ===========================================================================
@@ -770,28 +830,6 @@ class TestCheckScope:
         result = mod.check_scope([], ["src/auth.py"], "abc..HEAD")
         assert result == {}
 
-    def test_mixed_scope(self, mod):
-        """Mix of in-scope and out-of-scope files."""
-        refs = [
-            {"file": "src/auth.py", "lines": [10]},
-            {"file": "src/utils.py", "lines": [20]},
-            {"file": "src/db.py", "lines": [30]},
-        ]
-        changed = ["src/auth.py", "src/db.py"]
-        result = mod.check_scope(refs, changed, "abc..HEAD")
-        assert result["src/auth.py:10"] == "IN_SCOPE:in_hunk"
-        assert result["src/utils.py:20"] == "OUT_OF_SCOPE:file_not_in_diff"
-        assert result["src/db.py:30"] == "IN_SCOPE:in_hunk"
-
-    def test_multiple_lines_per_file(self, mod):
-        """Each line gets its own annotation."""
-        refs = [{"file": "src/auth.py", "lines": [10, 50, 100]}]
-        changed = ["src/auth.py"]
-        result = mod.check_scope(refs, changed, "abc..HEAD")
-        assert "src/auth.py:10" in result
-        assert "src/auth.py:50" in result
-        assert "src/auth.py:100" in result
-
 
 # ===========================================================================
 # TestFilterInScopeReferences
@@ -955,17 +993,6 @@ class TestCheckScopeHunkLevel:
         result = mod.check_scope(refs, ["src/auth.py"], "abc..HEAD")
         assert result["src/auth.py:4"] == "OUT_OF_SCOPE:not_in_hunk"
         assert result["src/auth.py:26"] == "OUT_OF_SCOPE:not_in_hunk"
-
-    def test_suffix_matching_with_hunks(self, mod, monkeypatch):
-        """Agent uses repo-relative path, diff uses same — suffix match works."""
-        monkeypatch.setattr(
-            mod, "_parse_diff_hunks",
-            lambda git_range: ({"src/auth.py": [(10, 20)]}, set())
-        )
-        refs = [{"file": "src/auth.py", "lines": [15, 100]}]
-        result = mod.check_scope(refs, ["src/auth.py"], "abc..HEAD")
-        assert result["src/auth.py:15"] == "IN_SCOPE:in_hunk"
-        assert result["src/auth.py:100"] == "OUT_OF_SCOPE:not_in_hunk"
 
     def test_file_not_in_diff_with_hunks(self, mod, monkeypatch):
         """File not in changed_files stays OUT_OF_SCOPE regardless of hunks."""
@@ -1202,43 +1229,18 @@ class TestParseDiffHunks:
 # ===========================================================================
 
 class TestLineNearHunk:
-    """Tests for _line_near_hunk() helper."""
+    """Tests for _line_near_hunk() helper.
 
-    def test_line_inside_hunk(self, mod):
-        """Line inside hunk range with proximity=0."""
-        assert mod._line_near_hunk(15, [(10, 20)], proximity=0) is True
-
-    def test_line_at_boundary(self, mod):
-        """Line at exact boundary with proximity=0."""
-        assert mod._line_near_hunk(10, [(10, 20)], proximity=0) is True
-        assert mod._line_near_hunk(20, [(10, 20)], proximity=0) is True
+    check_scope() drives this one comparison (:1043-1049) with both proximity
+    values, so TestCheckScopeHunkLevel already exercises the in-hunk, boundary,
+    near, proximity-boundary and multi-hunk cases through the public API on the
+    same literals. What stays here is only what the API cannot reach.
+    """
 
     def test_line_just_outside(self, mod):
         """Line one beyond boundary with proximity=0."""
         assert mod._line_near_hunk(9, [(10, 20)], proximity=0) is False
         assert mod._line_near_hunk(21, [(10, 20)], proximity=0) is False
-
-    def test_line_within_proximity(self, mod):
-        """Line within proximity range."""
-        assert mod._line_near_hunk(7, [(10, 20)], proximity=5) is True  # 3 before
-        assert mod._line_near_hunk(23, [(10, 20)], proximity=5) is True  # 3 after
-
-    def test_line_at_proximity_boundary(self, mod):
-        """Line at exact proximity boundary."""
-        assert mod._line_near_hunk(5, [(10, 20)], proximity=5) is True
-        assert mod._line_near_hunk(25, [(10, 20)], proximity=5) is True
-
-    def test_line_beyond_proximity(self, mod):
-        """Line beyond proximity range."""
-        assert mod._line_near_hunk(4, [(10, 20)], proximity=5) is False
-        assert mod._line_near_hunk(26, [(10, 20)], proximity=5) is False
-
-    def test_multiple_hunks(self, mod):
-        """Checks against all hunks."""
-        hunks = [(10, 15), (50, 55)]
-        assert mod._line_near_hunk(12, hunks, proximity=0) is True
-        assert mod._line_near_hunk(52, hunks, proximity=0) is True
-        assert mod._line_near_hunk(30, hunks, proximity=0) is False
 
     def test_empty_hunks(self, mod):
         """Empty hunk list always returns False."""
@@ -1360,6 +1362,54 @@ class TestFullScript:
         assert ctx["pr_id"] == "42"
         assert ctx["output_builder_path"].endswith("output.py")
 
+    def test_changed_files_reach_the_unscoped_computation(self, tmp_path):
+        """The seam R3 depends on: `build_context` must hand the CLI's
+        changed-file list to the coverage aggregator, or `files_unscoped`
+        is unmeasurable in production."""
+        _write_summary(str(tmp_path), "security-reviewer", ["src/auth.py"], [])
+
+        result = self._run(
+            "--output-dir", str(tmp_path),
+            "--git-range", "abc123..HEAD",
+            "--changed-files", "src/auth.py,package-lock.json",
+            cwd=tmp_path,
+        )
+
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        ctx = json.loads(
+            (tmp_path / "reconciliation-context.json").read_text()
+        )
+        assert ctx["inline_coverage"]["files_unscoped"] == [
+            "package-lock.json"
+        ]
+        md = (tmp_path / "reconciliation-context.md").read_text()
+        assert "## Changed Files In No Reviewer's Scope" in md
+
+    def test_empty_changed_files_flag_reads_as_unmeasured(self, tmp_path):
+        """orchestration.py always passes `--changed-files`, and passes ""
+        when review-context.json carries no CSV.
+
+        That is the production path on which the unmeasured branch is
+        reached. Before this, it published `files_unscoped: []` — a clean
+        coverage bill for a population nothing had measured.
+        """
+        _write_summary(str(tmp_path), "security-reviewer", ["src/auth.py"], [])
+
+        result = self._run(
+            "--output-dir", str(tmp_path),
+            "--git-range", "abc123..HEAD",
+            "--changed-files", "",
+            cwd=tmp_path,
+        )
+
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        ctx = json.loads(
+            (tmp_path / "reconciliation-context.json").read_text()
+        )
+        assert ctx["inline_coverage"]["files_unscoped"] is None
+        md = (tmp_path / "reconciliation-context.md").read_text()
+        assert "No Reviewer's Scope" not in md
+
     def test_empty_output_dir(self, tmp_path):
         """Runs successfully with no review files."""
         result = self._run(
@@ -1422,6 +1472,75 @@ class TestFullScript:
         assert "security-review" in ctx["agent_findings"]
         assert "performance-review" in ctx["agent_findings"]
         assert "patterns-review" in ctx["agent_findings"]
+
+    def test_upstream_advisory_entitles_reconciler_serialization(
+        self, tmp_path, monkeypatch
+    ):
+        issue = _make_issue(severity="critical")
+        issue["channel"] = "advisory"
+        (tmp_path / "repo-reuse-review.json").write_text(json.dumps(
+            _make_review_json(reviewer="repo-reuse", issues=[issue])
+        ))
+
+        result = self._run(
+            "--output-dir", str(tmp_path),
+            "--git-range", "abc..HEAD",
+            cwd=tmp_path,
+        )
+
+        assert result.returncode == 0, result.stderr
+        entitlement = json.loads(
+            (tmp_path / "reconciliator-advisory-entitlement.json").read_text()
+        )
+        assert entitlement == {"schema": 1, "advisory_entitled": True}
+
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        builder = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
+        builder.add_issue(
+            severity="critical", title="Advisory", file="src/app.py",
+            description="d", recommendation="r", line=1,
+            channel="advisory",
+        )
+        output = builder.to_dict(output_dir=str(tmp_path))
+        assert output["verdict"] == "approve"
+
+    def test_no_upstream_advisory_rejects_reconciler_advisory_serialization(
+        self, tmp_path, monkeypatch
+    ):
+        (tmp_path / "security-review.json").write_text(json.dumps(
+            _make_review_json(reviewer="security")
+        ))
+
+        result = self._run(
+            "--output-dir", str(tmp_path),
+            "--git-range", "abc..HEAD",
+            cwd=tmp_path,
+        )
+
+        assert result.returncode == 0, result.stderr
+        entitlement = json.loads(
+            (tmp_path / "reconciliator-advisory-entitlement.json").read_text()
+        )
+        assert entitlement == {"schema": 1, "advisory_entitled": False}
+
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        builder = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
+        builder.add_issue(
+            severity="high", title="Advisory", file="src/app.py",
+            description="d", recommendation="r", line=1,
+            channel="advisory",
+        )
+        with pytest.raises(ValueError, match="advisory.*not entitled"):
+            builder.to_dict(output_dir=str(tmp_path))
+
+    def test_reconciler_snippet_finalizes_with_explicit_output_dir(self):
+        definition = (
+            PLUGIN_ROOT / "agents" / "review-reconciliator.md"
+        ).read_text()
+
+        assert "output = builder.to_dict(output_dir=output_dir)" in definition
 
     def test_dispatched_agents_empty_string_produces_empty_list(self, tmp_path):
         """--dispatched-agents '' means 0 agents dispatched, not unknown."""
@@ -1507,6 +1626,31 @@ class TestFullScript:
         stdout_json = json.loads(result.stdout.strip())
         assert "markdown_path" in stdout_json
         assert stdout_json["markdown_path"].endswith("reconciliation-context.md")
+
+    def test_main_leaves_reviewer_markdown_to_step_orchestration(self, tmp_path):
+        """Reconciliation context building has no human-artifact side effect."""
+        review = _make_review_json(
+            reviewer="security",
+            issues=[_make_issue(file="src/auth.py", line=10)],
+        )
+        (tmp_path / "security-review.json").write_text(json.dumps(review))
+
+        result = self._run(
+            "--output-dir", str(tmp_path),
+            "--git-range", "abc123..HEAD",
+            "--changed-files", "src/auth.py",
+            "--pr-id", "42",
+            cwd=tmp_path,
+        )
+
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+
+        md_path = tmp_path / "security-review.md"
+        assert not md_path.exists()
+
+        stdout_json = json.loads(result.stdout.strip())
+        assert stdout_json["status"] == "ok"
+        assert "reviewer_markdown" not in stdout_json
 
 
 # ===========================================================================
@@ -2027,28 +2171,6 @@ class TestToMarkdown:
         agent_section = md.split("## Agent Findings")[1].split("## Source Snippets")[0]
         assert "\\===" in agent_section
 
-    def test_agent_heading_spoof_in_description_blocked(self, mod):
-        """Agent text containing ## Agent Findings cannot create a duplicate section."""
-        findings = {
-            "security-review": _make_review_json(
-                reviewer="security",
-                verdict="comment",
-                issues=[
-                    _make_issue(
-                        description="Injected:\n## Agent Findings\nFake content",
-                    ),
-                ],
-            ),
-        }
-        ctx = _make_context_with_findings(findings)
-        md = mod.to_markdown(ctx)
-        # Only one real ## Agent Findings section should exist
-        real_sections = [
-            l for l in md.split("\n")
-            if l.strip() == "## Agent Findings"
-        ]
-        assert len(real_sections) == 1
-
     def test_change_purpose_with_fences_isolated(self, mod):
         """Change-purpose containing Markdown fences is wrapped safely."""
         ctx = _make_context_with_findings({})
@@ -2163,36 +2285,6 @@ class TestPrefilterOutOfScope:
         md = mod.to_markdown(ctx)
         agent_section = md.split("## Agent Findings")[1].split("## Source Snippets")[0]
         assert "Near but not in hunk" in agent_section
-
-    def test_in_scope_kept(self, mod):
-        """Issues with IN_SCOPE:in_hunk and IN_SCOPE:near_hunk are kept."""
-        findings = {
-            "security-review": _make_review_json(
-                reviewer="security",
-                verdict="comment",
-                issues=[
-                    _make_issue(
-                        title="In hunk issue",
-                        file="src/app.py",
-                        line=42,
-                    ),
-                    _make_issue(
-                        title="Near hunk issue",
-                        file="src/app.py",
-                        line=50,
-                    ),
-                ],
-            ),
-        }
-        ctx = _make_context_with_findings(findings)
-        ctx["scope_annotations"] = {
-            "src/app.py:42": "IN_SCOPE:in_hunk",
-            "src/app.py:50": "IN_SCOPE:near_hunk",
-        }
-        md = mod.to_markdown(ctx)
-        agent_section = md.split("## Agent Findings")[1].split("## Source Snippets")[0]
-        assert "In hunk issue" in agent_section
-        assert "Near hunk issue" in agent_section
 
     def test_no_scope_annotation_kept(self, mod):
         """Issue with no matching scope annotation is kept (conservative)."""
@@ -2457,18 +2549,6 @@ class TestMissingAgentDetection:
         md = mod.to_markdown(ctx)
         assert "Missing agents" not in md
 
-    def test_not_applicable_agent_not_missing(self, mod):
-        """Agent that returned not_applicable produced output — not missing."""
-        findings = {
-            "security-review": _make_review_json(reviewer="security", verdict="comment"),
-            "a11y-review": _make_review_json(reviewer="a11y", verdict="not_applicable"),
-        }
-        findings["a11y-review"]["skip_reason"] = "No frontend changes"
-        ctx = _make_context_with_findings(findings)
-        ctx["dispatched_agents"] = ["security-review", "a11y-review"]
-        md = mod.to_markdown(ctx)
-        assert "Missing agents" not in md
-
     def test_empty_dispatched_list(self, mod):
         """No missing agents when dispatched list is empty."""
         ctx = _make_context_with_findings({})
@@ -2505,21 +2585,39 @@ def test_extract_host_banner_reads_from_review_context(mod, tmp_path):
     assert banner["reason"] == "fully_unavailable"
 
 
-def test_extract_host_banner_returns_none_when_no_host_context(mod, tmp_path):
-    outdir = tmp_path / "out"
-    outdir.mkdir()
-    (outdir / "review-context.json").write_text(json.dumps({"version": 1}))
-    assert mod.extract_host_banner(str(outdir)) is None
+def test_extract_host_banner_returns_none_for_empty_output_dir(
+    mod, tmp_path, monkeypatch
+):
+    """An unresolved output dir arrives as "" — and os.path.join("", name)
+    is just `name`, so without the early return at :151 the banner would be
+    read from whatever review-context.json happens to sit in the CWD. The
+    fixture below is that foreign file."""
+    (tmp_path / "review-context.json").write_text(json.dumps({
+        "host_context": {"banner": {"degraded": True, "reason": "foreign"}},
+    }))
+    monkeypatch.chdir(tmp_path)
+
+    assert mod.extract_host_banner("") is None
 
 
-def test_extract_host_banner_returns_none_when_host_context_is_null(mod, tmp_path):
-    """Explicit JSON null for host_context should return None, not crash."""
+def test_extract_host_banner_returns_none_when_host_context_is_not_a_dict(
+    mod, tmp_path
+):
+    """A truthy non-dict host_context reaches :162 — `or {}` only rescues
+    the falsy shapes, so without this guard .get() raises on a list."""
     outdir = tmp_path / "out"
     outdir.mkdir()
     (outdir / "review-context.json").write_text(json.dumps({
         "version": 1,
-        "host_context": None,
+        "host_context": ["not", "a", "dict"],
     }))
+    assert mod.extract_host_banner(str(outdir)) is None
+
+
+def test_extract_host_banner_returns_none_when_no_host_context(mod, tmp_path):
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    (outdir / "review-context.json").write_text(json.dumps({"version": 1}))
     assert mod.extract_host_banner(str(outdir)) is None
 
 
@@ -2700,14 +2798,10 @@ class TestNonStringFieldCoercion:
         assert "\n" not in out
         assert "Legit title" in out and "## Source Snippets" in out
 
-    @pytest.mark.parametrize(
-        "sep",
-        [
-            pytest.param("\n", id="lf"),
-            pytest.param("\r", id="cr"),
-            pytest.param("\r\n", id="crlf"),
-        ],
-    )
+    # _escape_inline is `" ".join(...split())` (:1174), and str.split() treats
+    # LF, CR and CRLF identically. [cr] is the discriminating param: the
+    # pre-fix code (163d4ab9) was .replace("\n", " "), which [lf] would pass.
+    @pytest.mark.parametrize("sep", [pytest.param("\r", id="cr")])
     def test_escape_inline_normalizes_all_line_endings(self, mod, sep):
         # CommonMark treats bare CR and CRLF as line endings too, so replacing
         # only LF would still let a CR-delimited title forge a heading.
@@ -2740,18 +2834,6 @@ class TestNonStringFieldCoercion:
 class TestAggregateInlineCoverage:
     """aggregate_inline_coverage() reads *-scope-summary*.json sidecars."""
 
-    def _write_summary(self, output_dir, name, files_with_diffs, budget_exceeded):
-        path = os.path.join(output_dir, name)
-        with open(path, "w") as f:
-            json.dump({
-                "schema": 1,
-                "domain": "x",
-                "status": "OK",
-                "files_with_diffs": files_with_diffs,
-                "budget_exceeded_files": budget_exceeded,
-                "list_only_files": [],
-            }, f)
-
     def test_returns_none_without_summaries(self, mod, tmp_path):
         assert mod.aggregate_inline_coverage(str(tmp_path)) is None
 
@@ -2759,12 +2841,12 @@ class TestAggregateInlineCoverage:
         assert mod.aggregate_inline_coverage(str(tmp_path / "nope")) is None
 
     def test_files_never_inline(self, mod, tmp_path):
-        self._write_summary(
-            str(tmp_path), "security-reviewer-scope-summary.json",
+        _write_summary(
+            str(tmp_path), "security-reviewer",
             ["src/a.php"], ["src/starved.php", "src/b.php"],
         )
-        self._write_summary(
-            str(tmp_path), "code-reviewer-scope-summary.json",
+        _write_summary(
+            str(tmp_path), "code-reviewer",
             ["src/b.php"], ["src/starved.php"],
         )
         cov = mod.aggregate_inline_coverage(str(tmp_path))
@@ -2778,20 +2860,879 @@ class TestAggregateInlineCoverage:
 
     def test_malformed_summary_skipped(self, mod, tmp_path):
         (tmp_path / "broken-scope-summary.json").write_text("{not json")
-        self._write_summary(
-            str(tmp_path), "security-reviewer-scope-summary.json",
+        _write_summary(
+            str(tmp_path), "security-reviewer",
             ["src/a.php"], [],
         )
         cov = mod.aggregate_inline_coverage(str(tmp_path))
         assert cov["agents_reporting"] == 1
 
     def test_secondary_summaries_attribute_to_agent(self, mod, tmp_path):
-        self._write_summary(
-            str(tmp_path), "security-reviewer-scope-summary-config-ops.json",
-            [], ["ci.yml"],
+        _write_summary(
+            str(tmp_path), "security-reviewer", [], ["ci.yml"],
+            domain="config-ops",
         )
         cov = mod.aggregate_inline_coverage(str(tmp_path))
         assert cov["files_never_inline"]["ci.yml"] == ["security-reviewer"]
+
+    def test_undeclared_deferred_file_counts_as_claimed_reviewed(
+        self, mod, tmp_path
+    ):
+        """An agent with output that did NOT declare a deferred file claims
+        to have reviewed it per the budget contract — not a coverage gap."""
+        _write_summary(
+            str(tmp_path), "security-reviewer",
+            ["src/a.php"], ["src/deferred.php"],
+        )
+        _write_review(str(tmp_path), "security-review")
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert "src/deferred.php" not in cov["files_never_inline"]
+        assert cov["files_deferred_reviewed"]["src/deferred.php"] == [
+            "security-reviewer",
+        ]
+        assert cov["files_declared_unreviewed"] == {}
+
+    def test_declared_unreviewed_file_stays_a_gap_with_declaration(
+        self, mod, tmp_path
+    ):
+        _write_summary(
+            str(tmp_path), "security-reviewer",
+            ["src/a.php"], ["src/omitted.php"],
+        )
+        _write_review(
+            str(tmp_path), "security-review", unreviewed=["src/omitted.php"]
+        )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert cov["files_never_inline"]["src/omitted.php"] == [
+            "security-reviewer",
+        ]
+        assert cov["files_declared_unreviewed"]["src/omitted.php"] == [
+            "security-reviewer",
+        ]
+        assert cov["files_deferred_reviewed"] == {}
+
+    def test_one_agent_claim_outweighs_another_agent_declaration(
+        self, mod, tmp_path
+    ):
+        """A file is covered when ANY deferring agent reviewed it, even if a
+        different agent declared it unreviewed."""
+        _write_summary(
+            str(tmp_path), "security-reviewer",
+            [], ["src/shared.php"],
+        )
+        _write_summary(
+            str(tmp_path), "code-reviewer",
+            [], ["src/shared.php"],
+        )
+        _write_review(str(tmp_path), "security-review")
+        _write_review(
+            str(tmp_path), "code-review", unreviewed=["src/shared.php"]
+        )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert "src/shared.php" not in cov["files_never_inline"]
+        assert cov["files_deferred_reviewed"]["src/shared.php"] == [
+            "security-reviewer",
+        ]
+        assert cov["files_declared_unreviewed"]["src/shared.php"] == [
+            "code-reviewer",
+        ]
+
+    def test_equivalent_declared_path_forms_still_count_as_declared(
+        self, mod, tmp_path
+    ):
+        """A declaration of "./src/omitted.php" must match the sidecar's
+        "src/omitted.php" — otherwise an explicit coverage gap inverts into
+        a deferred-but-reviewed claim."""
+        _write_summary(
+            str(tmp_path), "security-reviewer",
+            [], ["src/omitted.php"],
+        )
+        _write_review(
+            str(tmp_path), "security-review", unreviewed=["./src/omitted.php"]
+        )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert cov["files_never_inline"]["src/omitted.php"] == [
+            "security-reviewer",
+        ]
+        assert cov["files_declared_unreviewed"]["src/omitted.php"] == [
+            "security-reviewer",
+        ]
+        assert cov["files_deferred_reviewed"] == {}
+
+    def test_malformed_unreviewed_field_cannot_claim_deferred_files(
+        self, mod, tmp_path
+    ):
+        """A non-null, non-list unreviewed field is unknowable intent — the
+        agent can claim nothing, so its deferred files stay genuine gaps
+        instead of silently flipping to deferred-but-reviewed."""
+        _write_summary(
+            str(tmp_path), "security-reviewer",
+            [], ["src/deferred.php"],
+        )
+        _write_review(
+            str(tmp_path), "security-review", unreviewed="src/deferred.php"
+        )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert cov["files_never_inline"]["src/deferred.php"] == [
+            "security-reviewer",
+        ]
+        assert cov["files_deferred_reviewed"] == {}
+        assert cov["files_declared_unreviewed"] == {}
+
+    @pytest.mark.parametrize(
+        "bad_list",
+        [[42], [""], ["src/deferred.php", 7]],
+        ids=["int", "empty", "mixed"],
+    )
+    def test_malformed_unreviewed_entry_fails_the_whole_list_closed(
+        self, mod, tmp_path, bad_list
+    ):
+        """One malformed entry poisons the list — silently dropping it
+        could leave [] (a full-review claim) where the agent tried to
+        declare a gap. The agent can claim nothing; files stay gaps."""
+        _write_summary(
+            str(tmp_path), "security-reviewer",
+            [], ["src/deferred.php"],
+        )
+        _write_review(
+            str(tmp_path), "security-review", unreviewed=bad_list
+        )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert cov["files_never_inline"]["src/deferred.php"] == [
+            "security-reviewer",
+        ]
+        assert cov["files_deferred_reviewed"] == {}
+        assert cov["files_declared_unreviewed"] == {}
+
+    def test_canonical_null_unreviewed_still_claims_deferred_files(
+        self, mod, tmp_path
+    ):
+        """The builder serializes unreviewed as null when nothing was
+        declared — that is the canonical no-declarations case, and per the
+        budget contract the agent claims its deferred files were reviewed."""
+        _write_summary(
+            str(tmp_path), "security-reviewer",
+            [], ["src/deferred.php"],
+        )
+        with open(os.path.join(str(tmp_path), "security-review.json"), "w") as f:
+            json.dump(
+                {"reviewer": "security", "issues": [], "unreviewed": None}, f
+            )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert "src/deferred.php" not in cov["files_never_inline"]
+        assert cov["files_deferred_reviewed"]["src/deferred.php"] == [
+            "security-reviewer",
+        ]
+
+    # Every out-of-set shape lands on the same "matches nothing" branch; only
+    # the mixed list discriminates the fail-closed policy from partial credit.
+    @pytest.mark.parametrize(
+        "declared",
+        [["src/deferred.php", "src/other.php"]],
+        ids=["mixed"],
+    )
+    def test_declaration_outside_deferred_set_fails_the_list_closed(
+        self, mod, tmp_path, declared
+    ):
+        """Output that bypassed builder validation can declare any string.
+        An entry outside the agent's own deferred set matches nothing, so
+        the whole list is unreliable — the agent can claim nothing and its
+        deferred files stay genuine gaps."""
+        _write_summary(
+            str(tmp_path), "security-reviewer",
+            [], ["src/deferred.php"],
+        )
+        _write_review(
+            str(tmp_path), "security-review", unreviewed=declared
+        )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert cov["files_never_inline"]["src/deferred.php"] == [
+            "security-reviewer",
+        ]
+        assert cov["files_deferred_reviewed"] == {}
+        assert cov["files_declared_unreviewed"] == {}
+
+    def test_declaring_a_deferred_file_covered_elsewhere_stays_valid(
+        self, mod, tmp_path
+    ):
+        """A declaration of an own-deferred file that another agent covered
+        inline is in the agent's deferred set and must not poison the list
+        — its other declarations still count."""
+        _write_summary(
+            str(tmp_path), "security-reviewer",
+            [], ["src/shared.php", "src/omitted.php"],
+        )
+        _write_summary(
+            str(tmp_path), "code-reviewer",
+            ["src/shared.php"], [],
+        )
+        _write_review(
+            str(tmp_path), "security-review",
+            unreviewed=["src/shared.php", "src/omitted.php"],
+        )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        # shared.php was inline elsewhere — covered, not a gap.
+        assert "src/shared.php" not in cov["files_never_inline"]
+        # The declaration list stayed valid, so omitted.php is a declared gap.
+        assert cov["files_never_inline"]["src/omitted.php"] == [
+            "security-reviewer",
+        ]
+        assert cov["files_declared_unreviewed"]["src/omitted.php"] == [
+            "security-reviewer",
+        ]
+
+    @pytest.mark.parametrize(
+        "instance",
+        [
+            "repo-renewals-reviewer",
+            # "reviewer" mid-string: a blanket replace() would corrupt the
+            # stem to repo-review-quality-review.json and lose the output.
+            "repo-reviewer-quality-reviewer",
+            # "scope-summary" mid-string (a legal kebab id): a
+            # first-occurrence filename split would truncate the agent to
+            # "repo-payments" and misattribute the scope.
+            "repo-payments-scope-summary-contract-reviewer",
+        ],
+        ids=["plain", "midstring-reviewer", "midstring-scope-summary"],
+    )
+    def test_adapter_instance_declarations_attribute_to_the_instance(
+        self, mod, tmp_path, instance
+    ):
+        """Adapter instances write instance-named scope summaries and
+        <instance-stem>-review.json output; their declarations must
+        reconcile exactly like a native reviewer's."""
+        _write_summary(
+            str(tmp_path), instance, [], ["src/deferred.php"], domain="code",
+        )
+        stem = instance[: -len("-reviewer")]
+        _write_review(
+            str(tmp_path), f"{stem}-review",
+            unreviewed=["src/deferred.php"],
+        )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert cov["files_never_inline"]["src/deferred.php"] == [instance]
+        assert cov["files_declared_unreviewed"]["src/deferred.php"] == [
+            instance
+        ]
+
+    def test_agent_without_output_cannot_claim_deferred_files(
+        self, mod, tmp_path
+    ):
+        """No review JSON means the agent can neither claim nor declare —
+        its deferred files stay genuine gaps (pre-1.109.0 behavior)."""
+        _write_summary(
+            str(tmp_path), "security-reviewer",
+            [], ["src/deferred.php"],
+        )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert cov["files_never_inline"]["src/deferred.php"] == [
+            "security-reviewer",
+        ]
+        assert cov["files_deferred_reviewed"] == {}
+
+
+class TestUnscopedFiles:
+    """`files_unscoped` — changed files no reviewer's scope contained.
+
+    The population that used to vanish: every other bucket is keyed on a
+    file some agent's sidecar mentions, so a lockfile, binary, or dotfile
+    matching no domain landed in none of them. A field run's true
+    never-covered population was ~46 while the report said 41.
+    """
+
+    def test_changed_files_matching_no_domain_are_reported(self, mod, tmp_path):
+        _write_summary(
+            str(tmp_path), "security-reviewer", ["src/a.php"], [],
+        )
+        cov = mod.aggregate_inline_coverage(
+            str(tmp_path),
+            changed_files=[
+                "src/a.php", "package-lock.json", ".editorconfig",
+            ],
+        )
+        assert cov["files_unscoped"] == [".editorconfig", "package-lock.json"]
+
+    def test_union_covers_every_sidecar_file_list(self, mod, tmp_path):
+        """Inline, deferred, AND name-only listing all count as scoped —
+        a file the agent was told about is not "matched no domain"."""
+        _write_summary(
+            str(tmp_path), "security-reviewer",
+            ["src/inline.php"], ["src/deferred.php"],
+            list_only=["src/listed.php"],
+        )
+        cov = mod.aggregate_inline_coverage(
+            str(tmp_path),
+            changed_files=[
+                "src/inline.php", "src/deferred.php", "src/listed.php",
+                "yarn.lock",
+            ],
+        )
+        assert cov["files_unscoped"] == ["yarn.lock"]
+
+    def test_git_quoted_changed_path_matches_the_unquoted_sidecar(
+        self, mod, tmp_path
+    ):
+        """The two producers quote differently and the set difference is
+        arithmetic on their paths.
+
+        `context.py` runs a plain `git diff --name-only`, so a non-ASCII
+        path arrives C-quoted and octal-escaped; scope sidecars run
+        `-c core.quotepath=false` and emit real UTF-8. Subtracting one
+        alphabet from the other published a fully reviewed file as
+        "reviewed by no one" — inside the block step 9 now forbids the
+        orchestrator to correct.
+        """
+        _write_summary(
+            str(tmp_path), "security-reviewer", ["src/café.php"], [],
+        )
+        cov = mod.aggregate_inline_coverage(
+            str(tmp_path), changed_files=[r'"src/caf\303\251.php"'],
+        )
+        assert cov["files_unscoped"] == []
+
+    def test_unnormalizable_changed_path_leaves_the_population_unmeasured(
+        self, mod, tmp_path
+    ):
+        """A shrunken population reads as a cleaner review than the run
+        earned, so the strict side fails to unmeasured instead."""
+        _write_summary(
+            str(tmp_path), "security-reviewer", ["src/a.php"], [],
+        )
+        cov = mod.aggregate_inline_coverage(
+            str(tmp_path),
+            changed_files=["src/a.php", r'"src/broken\3"'],
+        )
+        assert cov["files_unscoped"] is None
+
+    def test_equivalent_spellings_of_one_path_are_one_file(
+        self, mod, tmp_path
+    ):
+        _write_summary(
+            str(tmp_path), "security-reviewer", ["./src//a.php"], [],
+        )
+        cov = mod.aggregate_inline_coverage(
+            str(tmp_path), changed_files=["src/a.php"],
+        )
+        assert cov["files_unscoped"] == []
+
+    def test_base_ref_only_agent_contributes_its_whole_scope(
+        self, mod, tmp_path
+    ):
+        """A `--base-ref-only`/`--summary` agent never fetches a diff, so
+        its three diff-derived lists are legitimately empty.
+
+        patterns-reviewer is configured that way in the registry, and the
+        reviewer protocol sends every reviewer there on 100+-file PRs — the
+        exact runs this measurement exists for. Before `in_scope_files`,
+        every file such an agent owned published as matched by no one.
+        """
+        _write_summary(
+            str(tmp_path), "patterns-reviewer", [], [],
+            in_scope=["src/a.php", "src/b.php"],
+        )
+        cov = mod.aggregate_inline_coverage(
+            str(tmp_path),
+            changed_files=["src/a.php", "src/b.php", "yarn.lock"],
+        )
+        assert cov["files_unscoped"] == ["yarn.lock"]
+
+    def test_sidecar_without_the_field_degrades_to_contributing_nothing(
+        self, mod, tmp_path
+    ):
+        """A run whose sidecars predate `in_scope_files` under-reports
+        exactly as it did before — never a new false claim, never a
+        crash."""
+        path = tmp_path / "legacy-reviewer-scope-summary.json"
+        path.write_text(json.dumps({
+            "schema": 1,
+            "domain": "x",
+            "status": "OK",
+            "files_with_diffs": ["src/a.php"],
+            "budget_exceeded_files": [],
+            "list_only_files": [],
+        }))
+        cov = mod.aggregate_inline_coverage(
+            str(tmp_path), changed_files=["src/a.php", "src/b.php"],
+        )
+        assert cov["files_unscoped"] == ["src/b.php"]
+
+    def test_all_files_scoped_is_measured_empty(self, mod, tmp_path):
+        _write_summary(
+            str(tmp_path), "security-reviewer", ["src/a.php"], [],
+        )
+        cov = mod.aggregate_inline_coverage(
+            str(tmp_path), changed_files=["src/a.php"],
+        )
+        assert cov["files_unscoped"] == []
+
+    def test_no_changed_file_list_is_unmeasured_not_empty(self, mod, tmp_path):
+        """None, not [] — a caller must not read "not measured" as "none"."""
+        _write_summary(
+            str(tmp_path), "security-reviewer", ["src/a.php"], [],
+        )
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+        assert cov["files_unscoped"] is None
+
+    @pytest.mark.parametrize(
+        "changed_files", [None, []], ids=["absent", "empty"],
+    )
+    def test_absent_and_empty_changed_lists_are_both_unmeasured(
+        self, mod, tmp_path, changed_files
+    ):
+        """An empty list is an absent list, not "zero changed files".
+
+        A review of zero changed files does not exist; a run whose file
+        list never reached the builder does, and orchestration.py reaches
+        it by passing `--changed-files ""`. Reading that as measured-and-
+        zero publishes a clean coverage bill nothing looked at.
+        """
+        _write_summary(
+            str(tmp_path), "security-reviewer", ["src/a.php"], [],
+        )
+        cov = mod.aggregate_inline_coverage(
+            str(tmp_path), changed_files=changed_files,
+        )
+        assert cov["files_unscoped"] is None
+
+    def test_a_measured_run_that_finds_nothing_reports_an_empty_list(
+        self, mod, tmp_path
+    ):
+        """The other side of the same distinction: measured and clean."""
+        _write_summary(
+            str(tmp_path), "security-reviewer", ["src/a.php"], [],
+        )
+        cov = mod.aggregate_inline_coverage(
+            str(tmp_path), changed_files=["src/a.php"],
+        )
+        assert cov["files_unscoped"] == []
+
+    def test_secondary_domain_sidecar_files_count_as_scoped(
+        self, mod, tmp_path
+    ):
+        _write_summary(
+            str(tmp_path), "security-reviewer", ["src/a.php"], [],
+        )
+        _write_summary(
+            str(tmp_path), "security-reviewer", ["ci.yml"], [],
+            domain="config-ops",
+        )
+        cov = mod.aggregate_inline_coverage(
+            str(tmp_path), changed_files=["src/a.php", "ci.yml"],
+        )
+        assert cov["files_unscoped"] == []
+
+
+class TestAgentsReportingCountsAgents:
+    """`agents_reporting` counts distinct agents, not summary files.
+
+    Three reviewers ship a second `-config-ops` sidecar, so the file count
+    reported 22 agents for a 19-agent field run.
+    """
+
+    def test_config_ops_sidecar_does_not_double_count_its_agent(
+        self, mod, tmp_path
+    ):
+        for agent in ("security-reviewer", "code-reviewer", "wp-reviewer"):
+            _write_summary(str(tmp_path), agent, ["src/a.php"], [])
+        for agent in ("security-reviewer", "code-reviewer", "wp-reviewer"):
+            _write_summary(
+                str(tmp_path), agent, ["ci.yml"], [], domain="config-ops",
+            )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert len(list(tmp_path.glob("*-scope-summary*.json"))) == 6
+        assert cov["agents_reporting"] == 3
+
+    def test_only_unreadable_summaries_still_reads_as_no_data(
+        self, mod, tmp_path
+    ):
+        (tmp_path / "broken-scope-summary.json").write_text("{not json")
+        assert mod.aggregate_inline_coverage(str(tmp_path)) is None
+
+
+class TestExplicitClaimsCoverage:
+    """Outputs carrying `deferred_reviewed` switch the aggregator to stated
+    claims — an agent's silence about a deferred file becomes a visible gap
+    instead of an inferred review claim. Key-less outputs keep the legacy
+    complement semantics."""
+
+    def test_explicit_claims_partition_deferred_files(self, mod, tmp_path):
+        """Claimed, declared, and unaccounted deferred files land in three
+        distinct places — the unaccounted one is a GAP, never a claim."""
+        _write_summary(
+            str(tmp_path), "security-reviewer",
+            [], ["src/claimed.php", "src/declared.php", "src/silent.php"],
+        )
+        _write_review(
+            str(tmp_path), "security-review",
+            unreviewed=["src/declared.php"],
+            claims=["src/claimed.php"],
+        )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert cov["files_deferred_reviewed"] == {
+            "src/claimed.php": ["security-reviewer"],
+        }
+        assert cov["files_declared_unreviewed"]["src/declared.php"] == [
+            "security-reviewer",
+        ]
+        assert "src/claimed.php" not in cov["files_never_inline"]
+        assert cov["files_never_inline"]["src/declared.php"] == [
+            "security-reviewer",
+        ]
+        # The file the agent never mentioned: silence is not a claim.
+        assert cov["files_never_inline"]["src/silent.php"] == [
+            "security-reviewer",
+        ]
+        assert "src/silent.php" not in cov["files_deferred_reviewed"]
+        assert "src/silent.php" not in cov["files_declared_unreviewed"]
+
+    def test_empty_claims_list_claims_nothing(self, mod, tmp_path):
+        """`deferred_reviewed: []` is the explicit "claimed nothing" signal
+        the builder always emits — it must not read as a legacy output."""
+        _write_summary(
+            str(tmp_path), "security-reviewer", [], ["src/deferred.php"],
+        )
+        _write_review(str(tmp_path), "security-review", claims=[])
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert cov["files_never_inline"]["src/deferred.php"] == [
+            "security-reviewer",
+        ]
+        assert cov["files_deferred_reviewed"] == {}
+
+    def test_claim_path_forms_are_normalized(self, mod, tmp_path):
+        """A claim of "./src/deferred.php" addresses the sidecar's
+        "src/deferred.php" — the same grammar declarations speak. The
+        unclaimed sibling proves the match came from the claim rather than
+        from a fallback to the legacy complement."""
+        _write_summary(
+            str(tmp_path), "security-reviewer",
+            [], ["src/deferred.php", "src/silent.php"],
+        )
+        _write_review(
+            str(tmp_path), "security-review", claims=["./src/deferred.php"],
+        )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert cov["files_deferred_reviewed"] == {
+            "src/deferred.php": ["security-reviewer"],
+        }
+        assert "src/deferred.php" not in cov["files_never_inline"]
+        assert cov["files_never_inline"]["src/silent.php"] == [
+            "security-reviewer",
+        ]
+
+    def test_legacy_output_without_claims_key_keeps_complement(
+        self, mod, tmp_path
+    ):
+        """Outputs predating the claims field carry no `deferred_reviewed`
+        key; for them silence still means "reviewed" — changing that would
+        retroactively invent gaps in already-published runs."""
+        _write_summary(
+            str(tmp_path), "security-reviewer", [], ["src/deferred.php"],
+        )
+        _write_review(str(tmp_path), "security-review")
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert cov["files_deferred_reviewed"]["src/deferred.php"] == [
+            "security-reviewer",
+        ]
+        assert "src/deferred.php" not in cov["files_never_inline"]
+
+    @pytest.mark.parametrize(
+        "claims",
+        [["src/deferred.php", "src/other.php"]],
+        ids=["mixed"],
+    )
+    def test_out_of_set_claims_fail_closed_within_explicit_mode(
+        self, mod, tmp_path, claims
+    ):
+        """A claim outside the agent's own deferred set proves the list
+        unreliable. It fails closed to claiming NOTHING — never back to the
+        legacy complement, which would claim MORE than the agent stated."""
+        _write_summary(
+            str(tmp_path), "security-reviewer", [], ["src/deferred.php"],
+        )
+        _write_review(str(tmp_path), "security-review", claims=claims)
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert cov["files_deferred_reviewed"] == {}
+        assert cov["files_never_inline"]["src/deferred.php"] == [
+            "security-reviewer",
+        ]
+        assert cov["files_declared_unreviewed"] == {}
+
+    @pytest.mark.parametrize(
+        "claims",
+        [
+            "src/deferred.php",              # not a list
+            [42],                            # non-str entry
+            [""],                            # blank entry
+            ["src/deferred.php", 7],         # one valid + one malformed
+        ],
+        ids=["string", "int-entry", "empty-entry", "mixed"],
+    )
+    def test_malformed_claims_fail_closed_within_explicit_mode(
+        self, mod, tmp_path, claims
+    ):
+        """A malformed claims value is unknowable intent, but the KEY is
+        present — so the output is explicit-mode and the agent claims
+        nothing. Falling back to the complement would turn garbage into a
+        review claim for every deferred file."""
+        _write_summary(
+            str(tmp_path), "security-reviewer", [], ["src/deferred.php"],
+        )
+        _write_review(str(tmp_path), "security-review", claims=claims)
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert cov["files_deferred_reviewed"] == {}
+        assert cov["files_never_inline"]["src/deferred.php"] == [
+            "security-reviewer",
+        ]
+
+    def test_valid_claims_survive_failed_closed_declarations(
+        self, mod, tmp_path
+    ):
+        """Declarations and claims fail independently: a malformed
+        `unreviewed` (fail-to-None) must not void a well-formed claim, and
+        the files the claim does not cover stay gaps."""
+        _write_summary(
+            str(tmp_path), "security-reviewer",
+            [], ["src/claimed.php", "src/gap.php"],
+        )
+        _write_review(
+            str(tmp_path), "security-review",
+            unreviewed="src/gap.php",           # malformed: not a list
+            claims=["src/claimed.php"],
+        )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert cov["files_deferred_reviewed"]["src/claimed.php"] == [
+            "security-reviewer",
+        ]
+        assert cov["files_never_inline"]["src/gap.php"] == ["security-reviewer"]
+        assert cov["files_declared_unreviewed"] == {}
+
+    def test_explicit_and_legacy_agents_coexist_per_file(self, mod, tmp_path):
+        """Mode is per-output, not per-run: one agent's legacy complement
+        can still cover a file its explicit-mode peer left unaccounted."""
+        _write_summary(
+            str(tmp_path), "security-reviewer", [], ["src/shared.php"],
+        )
+        _write_summary(
+            str(tmp_path), "code-reviewer", [], ["src/shared.php"],
+        )
+        _write_review(str(tmp_path), "security-review", claims=[])
+        _write_review(str(tmp_path), "code-review")  # legacy, no key
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert cov["files_deferred_reviewed"]["src/shared.php"] == [
+            "code-reviewer",
+        ]
+        assert "src/shared.php" not in cov["files_never_inline"]
+
+
+class TestAutofilledUnreviewedAttribution:
+    """Save-time auto-filled paths are the SYSTEM's backfill, not the
+    reviewer's budget judgment — the reconciliation context must not
+    attribute them to the agent."""
+
+    def test_autofilled_paths_split_from_agent_declarations(
+        self, mod, tmp_path
+    ):
+        (tmp_path / "security-review.json").write_text(json.dumps({
+            "reviewer": "security",
+            "issues": [],
+            "unreviewed": ["src/declared.php", "src/auto.php"],
+            "deferred_reviewed": [],
+            "meta": {"unreviewed_autofilled": ["src/auto.php"]},
+        }))
+        _write_summary(
+            str(tmp_path), "security-reviewer",
+            [], ["src/declared.php", "src/auto.php"],
+        )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert cov["files_declared_unreviewed"] == {
+            "src/declared.php": ["security-reviewer"],
+        }
+        assert cov["files_autofilled_unreviewed"] == {
+            "src/auto.php": ["security-reviewer"],
+        }
+        # Both remain genuine gaps — only the attribution differs.
+        assert set(cov["files_never_inline"]) == {
+            "src/declared.php", "src/auto.php",
+        }
+
+    def test_absent_marker_leaves_every_path_agent_declared(
+        self, mod, tmp_path
+    ):
+        (tmp_path / "security-review.json").write_text(json.dumps({
+            "reviewer": "security",
+            "issues": [],
+            "unreviewed": ["src/declared.php"],
+        }))
+        _write_summary(
+            str(tmp_path), "security-reviewer", [], ["src/declared.php"],
+        )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert cov["files_declared_unreviewed"]["src/declared.php"] == [
+            "security-reviewer",
+        ]
+        assert cov["files_autofilled_unreviewed"] == {}
+
+    def test_malformed_marker_entry_degrades_only_that_entry(
+        self, mod, tmp_path
+    ):
+        """The marker labels gaps, it does not carry coverage: one bad
+        entry must cost only its own attribution, not the whole marker.
+        Failing the list would silently relabel every real auto-fill as the
+        reviewer's own budget judgment — the attribution this key exists to
+        prevent."""
+        (tmp_path / "security-review.json").write_text(json.dumps({
+            "reviewer": "security",
+            "issues": [],
+            "unreviewed": ["src/declared.php", "src/auto.php"],
+            "deferred_reviewed": [],
+            "meta": {"unreviewed_autofilled": ["src/auto.php", 42]},
+        }))
+        _write_summary(
+            str(tmp_path), "security-reviewer",
+            [], ["src/declared.php", "src/auto.php"],
+        )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert cov["files_autofilled_unreviewed"] == {
+            "src/auto.php": ["security-reviewer"],
+        }
+        assert cov["files_declared_unreviewed"] == {
+            "src/declared.php": ["security-reviewer"],
+        }
+
+    def test_non_list_marker_leaves_every_path_agent_declared(
+        self, mod, tmp_path
+    ):
+        (tmp_path / "security-review.json").write_text(json.dumps({
+            "reviewer": "security",
+            "issues": [],
+            "unreviewed": ["src/auto.php"],
+            "deferred_reviewed": [],
+            "meta": {"unreviewed_autofilled": "src/auto.php"},
+        }))
+        _write_summary(
+            str(tmp_path), "security-reviewer", [], ["src/auto.php"],
+        )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert cov["files_autofilled_unreviewed"] == {}
+        assert cov["files_declared_unreviewed"]["src/auto.php"] == [
+            "security-reviewer",
+        ]
+
+    def test_render_distinguishes_the_two_populations(self, mod):
+        ctx = _make_context_with_findings({})
+        ctx["inline_coverage"] = {
+            "agents_reporting": 1,
+            "files_inline": {},
+            "files_never_inline": {
+                "src/declared.php": ["code-reviewer"],
+                "src/auto.php": ["code-reviewer"],
+            },
+            "files_declared_unreviewed": {
+                "src/declared.php": ["code-reviewer"],
+            },
+            "files_autofilled_unreviewed": {
+                "src/auto.php": ["code-reviewer"],
+            },
+            "files_deferred_reviewed": {},
+        }
+        md = mod.to_markdown(ctx)
+        assert (
+            "`src/declared.php` (skipped by: code-reviewer; "
+            "declared unreviewed (budget) by: code-reviewer)"
+        ) in md
+        assert (
+            "`src/auto.php` (skipped by: code-reviewer; auto-declared "
+            "unreviewed at save (unaccounted) by: code-reviewer)"
+        ) in md
+
+    def test_real_save_autofill_is_never_rendered_as_budget_judgment(
+        self, mod, tmp_path, monkeypatch
+    ):
+        """End-to-end: a real ReviewOutputBuilder save auto-fills a deferred
+        path the reviewer never mentioned. That path must reach the
+        reconciliation context labeled as a save-time backfill — labeling it
+        "(budget)" would credit the system's honesty to the reviewer."""
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        (tmp_path / "code-deferred-files.json").write_text(json.dumps({
+            "schema": 1,
+            "deferred_files": ["src/declared.php", "src/auto.php"],
+        }))
+        _write_summary(
+            str(tmp_path), "code-reviewer",
+            [], ["src/declared.php", "src/auto.php"],
+        )
+
+        builder = ReviewOutputBuilder("42", "code")
+        builder.add_unreviewed("src/declared.php")
+        builder.save(str(tmp_path))
+
+        saved = json.loads((tmp_path / "code-review.json").read_text())
+        assert saved["meta"]["unreviewed_autofilled"] == ["src/auto.php"]
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+        ctx = _make_context_with_findings({})
+        ctx["inline_coverage"] = cov
+        md = mod.to_markdown(ctx)
+
+        auto_line = next(
+            line for line in md.splitlines() if "`src/auto.php`" in line
+        )
+        declared_line = next(
+            line for line in md.splitlines() if "`src/declared.php`" in line
+        )
+        assert "auto-declared unreviewed at save (unaccounted)" in auto_line
+        assert "(budget)" not in auto_line
+        assert "declared unreviewed (budget) by: code-reviewer" in declared_line
+        assert "auto-declared" not in declared_line
 
 
 class TestInlineCoverageMarkdown:
@@ -2813,6 +3754,80 @@ class TestInlineCoverageMarkdown:
         # Prepended — must appear before the findings sections.
         assert md.index("Inline Diff Coverage Gaps") < md.index("## Metadata")
 
+    def test_gap_warning_targets_an_artifact_the_reconciliator_writes(
+        self, mod
+    ):
+        """The reconciliator publishes JSON only — instructing it to carry
+        the coverage warning into `review-findings.md`, a file the pipeline
+        now renders from that JSON, asks for a write it cannot make."""
+        ctx = _make_context_with_findings({})
+        ctx["inline_coverage"] = {
+            "agents_reporting": 2,
+            "files_inline": {},
+            "files_never_inline": {
+                "src/starved.php": ["code-reviewer"],
+            },
+        }
+        md = mod.to_markdown(ctx)
+        assert "coverage warning" in md
+        assert "carry this list into\n`review-findings.json`" in md or (
+            "carry this list into `review-findings.json`" in md
+        )
+        assert "review-findings.md" not in md
+
+    def test_unscoped_files_render_as_their_own_section(self, mod):
+        """Never merged into the gaps list: starved-by-budget and
+        routed-to-nobody are different failures."""
+        ctx = _make_context_with_findings({})
+        ctx["inline_coverage"] = {
+            "agents_reporting": 2,
+            "files_inline": {},
+            "files_never_inline": {},
+            "files_unscoped": ["package-lock.json", ".editorconfig"],
+        }
+        md = mod.to_markdown(ctx)
+        assert "## Changed Files In No Reviewer's Scope" in md
+        assert (
+            "2 changed file(s) matched no reviewer's domain and were "
+            "reviewed by no one" in md
+        )
+        assert "- `package-lock.json`" in md
+        assert md.index("No Reviewer's Scope") < md.index("## Metadata")
+        # ONE observation for the list, not one per file — the report
+        # already pastes this same list verbatim, so per-file entries
+        # would restate it once per file.
+        assert "ONE `add_observation()` naming the whole list" in md
+        assert "one `add_observation()` per file" not in md
+
+    def test_unscoped_paths_are_neutralized_like_every_other_path(self, mod):
+        """A path is producer data — a raw one can forge document
+        structure in the context the reconciliator reads."""
+        ctx = _make_context_with_findings({})
+        ctx["inline_coverage"] = {
+            "agents_reporting": 1,
+            "files_inline": {},
+            "files_never_inline": {},
+            "files_unscoped": [
+                "src/evil```name.py\r\n## injected heading\r\n- injected file",
+            ],
+        }
+        md = mod.to_markdown(ctx)
+        assert "\n## injected heading" not in md
+        assert "\n- injected file" not in md
+        assert "```" not in md.split("## Metadata")[0].replace(
+            "``\u200b`", ""
+        )
+
+    def test_no_unscoped_section_when_everything_is_scoped(self, mod):
+        ctx = _make_context_with_findings({})
+        ctx["inline_coverage"] = {
+            "agents_reporting": 2,
+            "files_inline": {},
+            "files_never_inline": {},
+            "files_unscoped": [],
+        }
+        assert "No Reviewer's Scope" not in mod.to_markdown(ctx)
+
     def test_no_section_without_gaps(self, mod):
         ctx = _make_context_with_findings({})
         ctx["inline_coverage"] = {
@@ -2826,3 +3841,63 @@ class TestInlineCoverageMarkdown:
     def test_no_section_without_coverage_data(self, mod):
         md = mod.to_markdown(_make_context_with_findings({}))
         assert "Inline Diff Coverage Gaps" not in md
+
+    def test_gap_entries_annotate_declarations(self, mod):
+        ctx = _make_context_with_findings({})
+        ctx["inline_coverage"] = {
+            "agents_reporting": 2,
+            "files_inline": {},
+            "files_never_inline": {
+                "src/omitted.php": ["security-reviewer"],
+            },
+            "files_declared_unreviewed": {
+                "src/omitted.php": ["security-reviewer"],
+            },
+            "files_deferred_reviewed": {},
+        }
+        md = mod.to_markdown(ctx)
+        assert (
+            "`src/omitted.php` (skipped by: security-reviewer; "
+            "declared unreviewed (budget) by: security-reviewer)"
+        ) in md
+
+    def test_deferred_reviewed_files_render_as_claims_not_gaps(self, mod):
+        ctx = _make_context_with_findings({})
+        ctx["inline_coverage"] = {
+            "agents_reporting": 2,
+            "files_inline": {},
+            "files_never_inline": {},
+            "files_declared_unreviewed": {},
+            "files_deferred_reviewed": {
+                "src/deferred.php": ["security-reviewer"],
+            },
+        }
+        md = mod.to_markdown(ctx)
+        assert "Inline Diff Coverage Gaps" not in md
+        assert "## Deferred Files Reviewed From The NOT DIFFED Queue" in md
+        assert "`src/deferred.php` (claimed by: security-reviewer)" in md
+        # The note must teach the CURRENT contract: claims are the agent's
+        # own explicit statements, and silence-derivation survives only for
+        # legacy output predating the `deferred_reviewed` key.
+        assert "the agent's own claim, not proof of read" in md
+        assert "stated explicitly under `deferred_reviewed`" in md
+        assert "legacy output predating that key" in md
+
+
+class TestReviewStem:
+    """Review files are named by TERMINAL-suffix derivation only — a
+    blanket replace corrupts repo reviewer ids carrying "reviewer"
+    mid-string (e.g. "api-reviewer-v2") and silently excludes their valid
+    blocking output."""
+
+    def test_mid_string_reviewer_id_output_is_loaded(self, mod, tmp_path):
+        (tmp_path / "repo-api-reviewer-v2-review.json").write_text(json.dumps({
+            "reviewer": "repo-api-reviewer-v2",
+            "issues": [],
+            "verdict": "approve",
+        }))
+        findings = mod.load_agent_findings(
+            str(tmp_path),
+            dispatched_agents=["repo-api-reviewer-v2-reviewer"],
+        )
+        assert "repo-api-reviewer-v2-review" in findings

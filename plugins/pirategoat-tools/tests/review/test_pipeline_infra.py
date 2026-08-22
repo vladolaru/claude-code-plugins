@@ -1,6 +1,7 @@
-"""Tests for review/pipeline.py — infrastructure: step sequence, routing, state, CLI."""
+"""Tests for review/pipeline.py and pipeline_contract.py routing, state, and CLI."""
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -10,7 +11,8 @@ import pytest
 TESTS_DIR = Path(__file__).resolve().parent.parent  # review/ -> tests/
 
 sys.path.insert(0, str(TESTS_DIR))
-from conftest import PIPELINE_SCRIPT_PATH as SCRIPT_PATH, PIPELINE_TOTAL_STEPS as TOTAL_STEPS
+from conftest import PIPELINE_TOTAL_STEPS as TOTAL_STEPS
+from helpers.pipeline_process import hermetic_env, init_repo, run_pipeline
 
 
 @pytest.fixture(scope="module")
@@ -204,6 +206,17 @@ class TestStateManagement:
         config = mod.read_config(str(tmp_path))
         assert config.get("mode") is None
 
+    @pytest.mark.parametrize(
+        "payload", ['["a"]', '"scalar"', "7"], ids=["array", "string", "int"]
+    )
+    def test_read_review_context_rejects_non_dict_json(
+        self, mod, tmp_path, payload
+    ):
+        """Valid JSON that is not an object would crash every
+        context.get() consumer — degrade to the empty-dict fallback."""
+        (tmp_path / "review-context.json").write_text(payload)
+        assert mod.read_review_context(str(tmp_path)) == {}
+
     def test_state_persists_workspace_params(self, mod, tmp_path):
         state = mod.read_state(str(tmp_path))
         state["workspace"] = {"original_branch": "main", "stash_ref": "abc123"}
@@ -212,20 +225,206 @@ class TestStateManagement:
         assert loaded["workspace"]["original_branch"] == "main"
         assert loaded["workspace"]["stash_ref"] == "abc123"
 
-    def test_config_is_never_overwritten(self, mod, tmp_path):
-        """run-config.json fields are seeded from CLI on first call and never overwritten."""
-        config = {"mode": "pr", "pr_number": "42", "interactive": True}
-        mod.write_config(str(tmp_path), config)
-        loaded = mod.read_config(str(tmp_path))
-        assert loaded["mode"] == "pr"
-        assert loaded["pr_number"] == "42"
-
     def test_config_is_source_of_truth_over_cli(self, mod, tmp_path):
         """When run-config.json exists, its values take precedence over CLI args."""
         config = {"mode": "pr", "pr_number": "42", "interactive": True}
         mod.write_config(str(tmp_path), config)
         resolved = mod.resolve_params(str(tmp_path), cli_mode="full", cli_pr_number=None)
         assert resolved["mode"] == "pr"  # config wins over CLI
+
+
+class TestTelemetryIdentityHelpers:
+    """Step 1 identity discovery is best-effort and release-aware."""
+
+    def test_installed_semver_directory_is_plugin_version(self, mod, tmp_path):
+        plugin_root = tmp_path / "1.108.0"
+        plugin_root.mkdir()
+        (plugin_root / "CHANGELOG.md").write_text("## [9.9.9] - 2026-01-01\n")
+
+        assert mod._detect_plugin_version(plugin_root) == "1.108.0"
+
+    def test_source_checkout_uses_first_changelog_version(self, mod, tmp_path):
+        plugin_root = tmp_path / "pirategoat-tools"
+        plugin_root.mkdir()
+        (plugin_root / "CHANGELOG.md").write_text(
+            "# Changelog\n\n## [1.108.0] - 2026-07-19\n\n## [1.107.0] - 2026-07-19\n"
+        )
+
+        assert mod._detect_plugin_version(plugin_root) == "1.108.0"
+
+    def test_unavailable_identity_helpers_return_empty_strings(self, mod, tmp_path, monkeypatch):
+        def fail(*_args, **_kwargs):
+            raise OSError("unavailable")
+
+        monkeypatch.setattr(mod.subprocess, "check_output", fail)
+
+        assert mod._git_output("rev-parse", "HEAD") == ""
+        assert mod._detect_plugin_version(tmp_path / "missing") == ""
+
+    def test_plugin_commit_is_the_checkout_head(self, mod, tmp_path):
+        """`plugin_version` only moves at release, so ~200 dev-mount
+        commits stamp the same number. The commit is what tells two builds
+        of one version apart."""
+        repo = tmp_path / "plugin"
+        repo.mkdir()
+        for args in (
+            ["init", "-b", "main"],
+            ["config", "user.email", "t@t.com"],
+            ["config", "user.name", "T"],
+            ["config", "commit.gpgsign", "false"],
+        ):
+            subprocess.run(["git", *args], cwd=repo, check=True,
+                           capture_output=True)
+        (repo / "CHANGELOG.md").write_text("## [1.0.0] - 2026-01-01\n")
+        subprocess.run(["git", "add", "."], cwd=repo, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True,
+                       capture_output=True)
+        expected = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"], cwd=repo,
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+        assert mod._detect_plugin_commit(repo) == expected
+
+    def test_plugin_commit_is_none_outside_a_repository(self, mod, tmp_path):
+        """Marketplace installs are usually git clones, so this is the
+        exception rather than the norm — but a plugin directory that is
+        no repository must stay silent: not a warning, not an
+        exception."""
+        plugin_root = tmp_path / "1.108.0"
+        plugin_root.mkdir()
+        assert mod._detect_plugin_commit(plugin_root) is None
+
+    def test_plugin_commit_is_none_when_git_is_unusable(self, mod, monkeypatch,
+                                                        tmp_path):
+        def fail(*_args, **_kwargs):
+            raise FileNotFoundError("git")
+
+        monkeypatch.setattr(mod.subprocess, "run", fail)
+        assert mod._detect_plugin_commit(tmp_path) is None
+
+    def test_plugin_commit_rejects_unparseable_output(self, mod, monkeypatch,
+                                                      tmp_path):
+        """Whatever a future Git prints, only an object name is recorded."""
+        class _Result:
+            returncode = 0
+            stdout = "fatal: not a tree\n"
+
+        monkeypatch.setattr(
+            mod.subprocess, "run", lambda *a, **k: _Result()
+        )
+        assert mod._detect_plugin_commit(tmp_path) is None
+
+    def test_explicit_right_endpoint_is_resolved_as_head(self, mod, monkeypatch):
+        identities = {
+            "HEAD~1^{commit}": "previous-head",
+            "HEAD^{commit}": "current-head",
+        }
+
+        def fake_git_output(*args):
+            return identities.get(args[-1], "")
+
+        monkeypatch.setattr(mod, "_git_output", fake_git_output)
+
+        requested_range, base_sha, head_sha = mod._resolve_git_identity(
+            "HEAD~1..HEAD~1"
+        )
+
+        assert requested_range == "HEAD~1..HEAD~1"
+        assert base_sha == "previous-head"
+        assert head_sha == "previous-head"
+
+    @pytest.mark.parametrize(
+        ("git_range", "expected_base", "expected_head"),
+        [
+            ("..topic", "current-head", "topic-head"),
+            ("...topic", "current-head", "topic-head"),
+            ("topic..", "topic-head", "current-head"),
+            ("topic...", "topic-head", "current-head"),
+            ("missing..topic", "", "topic-head"),
+            ("topic..missing", "topic-head", ""),
+            ("missing...topic", "", "topic-head"),
+            ("topic...missing", "topic-head", ""),
+        ],
+    )
+    def test_range_defaults_omitted_endpoints_and_preserves_unresolved_refs(
+        self, mod, monkeypatch, git_range, expected_base, expected_head
+    ):
+        identities = {
+            "HEAD^{commit}": "current-head",
+            "topic^{commit}": "topic-head",
+        }
+
+        def fake_git_output(*args):
+            return identities.get(args[-1], "")
+
+        monkeypatch.setattr(mod, "_git_output", fake_git_output)
+
+        _, base_sha, head_sha = mod._resolve_git_identity(git_range)
+
+        assert base_sha == expected_base
+        assert head_sha == expected_head
+
+    def test_symbolic_supplied_endpoints_are_resolved_to_shas(
+        self, mod, monkeypatch
+    ):
+        """Context merge_base from an explicit range like "main..HEAD" is the
+        literal branch name — the durable identity must resolve it, never
+        record a movable ref."""
+        identities = {
+            "main^{commit}": "a" * 40,
+            "HEAD^{commit}": "b" * 40,
+        }
+
+        def fake_git_output(*args):
+            return identities.get(args[-1], "")
+
+        monkeypatch.setattr(mod, "_git_output", fake_git_output)
+
+        _, base_sha, head_sha = mod._resolve_git_identity(
+            "main..HEAD", base_sha="main", head_sha="HEAD"
+        )
+
+        assert base_sha == "a" * 40
+        assert head_sha == "b" * 40
+
+    def test_full_sha_endpoints_survive_when_git_is_unavailable(
+        self, mod, monkeypatch
+    ):
+        """Peeling needs git; without it an already-full object id is the
+        best obtainable identity and must not be dropped."""
+        monkeypatch.setattr(mod, "_git_output", lambda *_args: "")
+
+        _, base_sha, head_sha = mod._resolve_git_identity(
+            "main..HEAD", base_sha="c" * 40, head_sha="d" * 64
+        )
+
+        assert base_sha == "c" * 40
+        assert head_sha == "d" * 64
+
+    def test_full_sha_tag_object_endpoints_are_peeled_to_commits(
+        self, mod, monkeypatch
+    ):
+        """A supplied full object id can be an annotated tag object —
+        ^{commit} peels it so the manifest records commit identity."""
+        tag_object = "e" * 40
+        commit = "f" * 40
+        identities = {
+            f"{tag_object}^{{commit}}": commit,
+            "HEAD^{commit}": "b" * 40,
+        }
+
+        monkeypatch.setattr(
+            mod, "_git_output", lambda *args: identities.get(args[-1], "")
+        )
+
+        _, base_sha, head_sha = mod._resolve_git_identity(
+            "v1.0..HEAD", base_sha=tag_object
+        )
+
+        assert base_sha == commit
+        assert head_sha == "b" * 40
 
 
 class TestFailureRecovery:
@@ -326,37 +525,40 @@ class TestFormatOutput:
 class TestCLIIntegration:
     """Subprocess tests for the CLI."""
 
-    def _run(self, *args):
-        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
-        return subprocess.run(cmd, capture_output=True, text=True)
+    @pytest.fixture(autouse=True)
+    def _isolated_repo(self, tmp_path):
+        """run_pipeline's cwd has no default — see its docstring. Isolate
+        every subprocess call in this class to a throwaway repo at
+        tmp_path so none of them can touch the real checkout."""
+        init_repo(tmp_path)
 
     def test_step_1_pr_mode_exits_0(self, tmp_path):
-        r = self._run("--step", "1", "--mode", "pr",
-                       "--output-dir", str(tmp_path), "--pr-number", "42")
+        r = run_pipeline("--step", "1", "--mode", "pr",
+                       "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         assert r.returncode == 0
 
     def test_step_1_full_mode_exits_0(self, tmp_path):
-        r = self._run("--step", "1", "--mode", "full",
-                       "--output-dir", str(tmp_path))
+        r = run_pipeline("--step", "1", "--mode", "full",
+                       "--output-dir", str(tmp_path), cwd=tmp_path)
         assert r.returncode == 0
 
     def test_step_1_incremental_mode_exits_0(self, tmp_path):
-        r = self._run("--step", "1", "--mode", "incremental",
-                       "--output-dir", str(tmp_path))
+        r = run_pipeline("--step", "1", "--mode", "incremental",
+                       "--output-dir", str(tmp_path), cwd=tmp_path)
         assert r.returncode == 0
 
     def test_invalid_step_exits_1(self, tmp_path):
-        r = self._run("--step", "99", "--mode", "pr",
-                       "--output-dir", str(tmp_path))
+        r = run_pipeline("--step", "99", "--mode", "pr",
+                       "--output-dir", str(tmp_path), cwd=tmp_path)
         assert r.returncode == 1
 
     def test_missing_mode_exits_error(self, tmp_path):
-        r = self._run("--step", "1", "--output-dir", str(tmp_path))
+        r = run_pipeline("--step", "1", "--output-dir", str(tmp_path), cwd=tmp_path)
         assert r.returncode != 0
 
     def test_writes_run_config_and_pipeline_state(self, tmp_path):
-        self._run("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        run_pipeline("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         config_path = tmp_path / "run-config.json"
         state_path = tmp_path / "pipeline-state.json"
         assert config_path.is_file()
@@ -365,18 +567,122 @@ class TestCLIIntegration:
         assert config["mode"] == "pr"
         assert config["pr_number"] == "42"
 
+    def test_cli_seeded_config_fields_are_never_overwritten_on_rerun(self, tmp_path):
+        """run-config.json is seeded from the CLI on the FIRST step 1 only.
+
+        Step 1 reruns against the same output dir are routine (interactive
+        resume, bot retry), and they may carry a different command line.
+        The seeded identity of the run — which mode, which PR, which range —
+        must survive that: `pipeline.py:707`'s `if not existing_config.get(
+        "mode")` gate is what keeps a rerun from re-pointing a half-finished
+        review at a different target while its artifacts still describe the
+        old one. Only the fields with explicit rerun-sync semantics (host,
+        quick, refresh_dependencies, session_id) may change.
+        """
+        run_pipeline("--step", "1", "--mode", "pr",
+                     "--output-dir", str(tmp_path), "--pr-number", "42",
+                     "--git-range", "aaa111..bbb222",
+                     "--output-instructions", "original", cwd=tmp_path)
+
+        r = run_pipeline("--step", "1", "--mode", "full",
+                         "--output-dir", str(tmp_path), "--pr-number", "99",
+                         "--git-range", "ccc333..ddd444",
+                         "--output-instructions", "rewritten", cwd=tmp_path)
+        assert r.returncode == 0
+
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["mode"] == "pr"
+        assert config["pr_number"] == "42"
+        assert config["git_range"] == "aaa111..bbb222"
+        assert config["output_instructions"] == "original"
+
+    def test_run_config_carries_the_running_plugin_version(self, mod, tmp_path):
+        """Step 1 stamps the artifact with the plugin that produced it.
+
+        The stamp is the SAME fact telemetry records on the manifest, taken
+        from the one detector (_detect_plugin_version) at the one place it
+        runs. Without it, a durable run directory could not be attributed
+        to a plugin version once its telemetry log is gone.
+        """
+        run_pipeline("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        expected = mod._detect_plugin_version()
+        assert expected  # source checkout must resolve a version
+        assert config["plugin_version"] == expected
+
+    def test_pre_seeded_config_is_stamped_on_the_bot_path(self, mod, tmp_path):
+        """Bot runs pre-write run-config.json, so the seed branch is skipped.
+
+        The stamp must land on the existing-config path too, or every
+        non-interactive run ships an unattributed artifact.
+        """
+        (tmp_path / "run-config.json").write_text(json.dumps({
+            "mode": "pr", "pr_number": "42", "interactive": False,
+        }))
+        run_pipeline("--step", "1", "--output-dir", str(tmp_path), cwd=tmp_path)
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["plugin_version"] == mod._detect_plugin_version()
+
+    def test_stale_stamp_from_an_earlier_plugin_is_refreshed(self, mod, tmp_path):
+        """run-config.json survives cleanup across interactive reruns.
+
+        A rerun under an upgraded plugin must re-stamp, or the artifact
+        would credit the run to the version that ran LAST time.
+        """
+        (tmp_path / "run-config.json").write_text(json.dumps({
+            "mode": "pr", "pr_number": "42", "plugin_version": "0.0.1",
+        }))
+        run_pipeline("--step", "1", "--output-dir", str(tmp_path), cwd=tmp_path)
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["plugin_version"] == mod._detect_plugin_version()
+        assert config["plugin_version"] != "0.0.1"
+
+    def test_run_config_carries_the_producing_build_commit(self, mod, tmp_path):
+        """The plugin under test IS a git checkout, so the field resolves."""
+        run_pipeline("--step", "1", "--mode", "pr",
+                     "--output-dir", str(tmp_path), "--pr-number", "42",
+                     cwd=tmp_path)
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["plugin_commit"] == mod._detect_plugin_commit()
+        assert config["plugin_commit"]
+
+    def test_undeterminable_commit_is_written_as_an_explicit_null(
+        self, mod, tmp_path, monkeypatch
+    ):
+        """One shape, always. An omitted key would make "we could not tell"
+        indistinguishable from "this artifact predates the field"."""
+        config = {"mode": "pr", "pr_number": "42"}
+        mod._stamp_run_config(str(tmp_path), config, "plugin_commit", None)
+        written = json.loads((tmp_path / "run-config.json").read_text())
+        assert "plugin_commit" in written
+        assert written["plugin_commit"] is None
+
+    def test_unchanged_stamp_does_not_rewrite_the_config(self, mod, tmp_path):
+        config = {"mode": "pr", "plugin_commit": "abc1234"}
+        mod.write_config(str(tmp_path), config)
+        mtime = (tmp_path / "run-config.json").stat().st_mtime_ns
+        mod._stamp_run_config(str(tmp_path), config, "plugin_commit", "abc1234")
+        assert (tmp_path / "run-config.json").stat().st_mtime_ns == mtime
+
+    def test_stale_build_commit_is_refreshed_on_rerun(self, mod, tmp_path):
+        """run-config.json survives cleanup across interactive reruns, so a
+        rerun on a newer build must re-stamp."""
+        (tmp_path / "run-config.json").write_text(json.dumps({
+            "mode": "pr", "pr_number": "42", "plugin_commit": "0000000",
+        }))
+        run_pipeline("--step", "1", "--output-dir", str(tmp_path), cwd=tmp_path)
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["plugin_commit"] == mod._detect_plugin_commit()
+        assert config["plugin_commit"] != "0000000"
+
     def test_workspace_params_persisted_to_state(self, tmp_path):
-        self._run("--step", "1", "--mode", "pr",
+        run_pipeline("--step", "1", "--mode", "pr",
                    "--output-dir", str(tmp_path), "--pr-number", "42",
-                   "--original-branch", "develop", "--stash-ref", "abc123")
+                   "--original-branch", "develop", "--stash-ref", "abc123", cwd=tmp_path)
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         assert state["workspace"]["original_branch"] == "develop"
         assert state["workspace"]["stash_ref"] == "abc123"
-
-    def test_mode_required_when_no_config(self, tmp_path):
-        """First call must provide --mode."""
-        r = self._run("--step", "1", "--output-dir", str(tmp_path))
-        assert r.returncode != 0
 
     def test_step_1_clears_stale_artifacts(self, tmp_path):
         """Step 1 should clear stale artifacts from previous runs."""
@@ -395,8 +701,8 @@ class TestCLIIntegration:
         # Seed files that should be PRESERVED
         (tmp_path / "run-config.json").write_text('{"mode": "pr", "pr_number": "42"}')
         (tmp_path / ".branch-review-baseline.json").write_text('{"preserved": true}')
-        self._run("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        run_pipeline("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         # Stale artifacts should be gone
         assert not (tmp_path / "dispatch-plan.json").exists()
         assert not (tmp_path / "review-findings.json").exists()
@@ -409,89 +715,322 @@ class TestCLIIntegration:
         assert (tmp_path / "run-config.json").is_file()
         assert (tmp_path / ".branch-review-baseline.json").is_file()
 
-    def test_step_1_preserves_review_context(self, tmp_path):
-        """Step 1 should preserve review-context.json — review/context.py overwrites it at step 3."""
-        (tmp_path / "review-context.json").write_text('{"output": {"directory": "/some/path"}}')
-        self._run("--step", "1", "--mode", "full",
-                   "--output-dir", str(tmp_path))
-        assert (tmp_path / "review-context.json").is_file(), "review-context.json should be preserved for incremental baseline lookup"
+    def test_step_1_clears_synthesis_dispatch_markers(self, tmp_path):
+        """The namespaced suffix needs its own sweep pattern.
+
+        `*.started` does not match `*.synthesis-started` — the reviewer
+        glob stops at a literal `.started` ending — so the markers stopped
+        being swept the moment they were renamed out of the reviewer
+        contract. A surviving marker makes finalize report last run's
+        dispatch as this run's stall, with no completion artifact to
+        contradict it.
+        """
+        import fnmatch
+
+        assert not fnmatch.fnmatch(
+            "review-reconciliator.synthesis-started", "*.started"
+        ), "the reviewer glob must NOT be relied on to sweep these"
+
+        for name in ("review-reconciliator", "decision-reviewer"):
+            (tmp_path / f"{name}.synthesis-started").write_text("2026-08-19T12:00:00+00:00")
+        (tmp_path / "synthesis-agents.json").write_text('{"schema": 1}')
+
+        run_pipeline("--step", "1", "--mode", "pr",
+                     "--output-dir", str(tmp_path), "--pr-number", "42",
+                     cwd=tmp_path)
+
+        assert not list(tmp_path.glob("*.synthesis-started"))
+        assert not (tmp_path / "synthesis-agents.json").exists()
+
+    def test_step_1_clears_worktree_hygiene_artifacts(self, tmp_path):
+        """Hygiene artifacts are per-run measurements, not run-dir state.
+
+        A surviving `.worktree-baseline.json` would let a run whose own
+        capture failed compare against a previous run's snapshot and
+        publish it as this run's measurement. It also has to be listed by
+        exact name: glob patterns never match a leading dot.
+        """
+        (tmp_path / ".worktree-baseline.json").write_text(
+            '{"schema": 1, "repo_root": "/stale", "entries": []}'
+        )
+        (tmp_path / "worktree-hygiene.json").write_text('{"status": "clean"}')
+        run_pipeline("--step", "1", "--mode", "pr",
+                  "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
+        assert not (tmp_path / ".worktree-baseline.json").exists()
+        assert not (tmp_path / "worktree-hygiene.json").exists()
+
+    def test_step_1_clears_the_usage_snapshot(self, tmp_path):
+        """A previous run's token usage must never stand in for this one.
+
+        The snapshot is a per-run measurement like the hygiene artifacts;
+        surviving it would let a rerun in the same output dir publish an
+        older run's cost as its own.
+        """
+        (tmp_path / "usage-snapshot.json").write_text(
+            '{"schema": 1, "availability": {"subagents": "complete"}}'
+        )
+        run_pipeline("--step", "1", "--mode", "pr",
+                  "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
+        assert not (tmp_path / "usage-snapshot.json").exists()
+
+    def test_step_1_clears_per_agent_and_reconciliation_artifacts(self, tmp_path):
+        """Agent sidecars, markers, and reconciliation context are per-run artifacts.
+
+        Stale copies caused real failures in a reused output dir: a leftover
+        <agent>-review.md made an agent's Write no-op, a leftover .started
+        marker turns a forgotten dispatch into TIMED_OUT instead of
+        NOT_DISPATCHED, and stale scope summaries would contaminate the
+        run-level inline-coverage map.
+        """
+        (tmp_path / "security-review.md").write_text("stale agent markdown")
+        (tmp_path / "security-reviewer-scope-summary.json").write_text('{"stale": true}')
+        (tmp_path / "a11y-reviewer-scope-summary-config-ops.json").write_text('{"stale": true}')
+        (tmp_path / "security-advisory-entitlement.json").write_text('{"schema": 1, "advisory_entitled": true}')
+        (tmp_path / "reconciliator-advisory-entitlement.json").write_text('{"schema": 1, "advisory_entitled": false}')
+        (tmp_path / "security-reviewer.started").write_text("2026-07-20T00:00:00+00:00")
+        (tmp_path / "reconciliation-context.json").write_text('{"stale": true}')
+        (tmp_path / "reconciliation-context.md").write_text("stale")
+        (tmp_path / "critic-context.md").write_text("stale")
+        run_pipeline("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path), cwd=tmp_path)
+        assert not (tmp_path / "security-review.md").exists()
+        assert not (tmp_path / "security-reviewer-scope-summary.json").exists()
+        assert not (tmp_path / "a11y-reviewer-scope-summary-config-ops.json").exists()
+        assert not (tmp_path / "security-advisory-entitlement.json").exists()
+        assert not (tmp_path / "reconciliator-advisory-entitlement.json").exists()
+        assert not (tmp_path / "security-reviewer.started").exists()
+        assert not (tmp_path / "reconciliation-context.json").exists()
+        assert not (tmp_path / "reconciliation-context.md").exists()
+        assert not (tmp_path / "critic-context.md").exists()
+
+    def test_step_1_resets_interactive_review_context_to_current_output(self, tmp_path):
+        """Interactive runs seed context without retaining prior-run fields."""
+        (tmp_path / "review-context.json").write_text(json.dumps({
+            "git": {
+                "git_range": "stale-base..stale-head",
+                "merge_base": "stale-base",
+                "head_sha": "stale-head",
+            },
+            "pr": {"number": 41},
+            "output": {"directory": "/stale/output"},
+        }))
+
+        run_pipeline("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path), cwd=tmp_path)
+
+        assert json.loads((tmp_path / "review-context.json").read_text()) == {
+            "output": {"directory": str(tmp_path)},
+        }
+
+    def test_step_1_preserves_noninteractive_review_context(self, tmp_path):
+        """Bot runs retain their precomputed Git and PR context."""
+        context = {
+            "git": {
+                "git_range": "bot-base..bot-head",
+                "merge_base": "bot-base",
+                "head_sha": "bot-head",
+            },
+            "pr": {"number": 42},
+            "output": {"directory": str(tmp_path)},
+        }
+        (tmp_path / "run-config.json").write_text(json.dumps({
+            "mode": "pr",
+            "pr_number": "42",
+            "interactive": False,
+        }))
+        (tmp_path / "review-context.json").write_text(json.dumps(context))
+
+        result = run_pipeline("--step", "1", "--output-dir", str(tmp_path), cwd=tmp_path)
+
+        assert result.returncode == 0
+        assert json.loads((tmp_path / "review-context.json").read_text()) == context
 
     def test_step_1_clears_change_purpose(self, tmp_path):
         """Step 1 should clear stale change-purpose.md from previous runs."""
         (tmp_path / "change-purpose.md").write_text("Old change purpose from previous review.")
-        self._run("--step", "1", "--mode", "full",
-                   "--output-dir", str(tmp_path))
+        run_pipeline("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path), cwd=tmp_path)
         assert not (tmp_path / "change-purpose.md").exists(), "Stale change-purpose.md should be cleared"
 
     def test_step_1_writes_run_id(self, tmp_path):
         """Step 1 should write a run_id to pipeline-state.json."""
-        self._run("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        run_pipeline("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         assert "run_id" in state
         assert len(state["run_id"]) > 0
+
+    def test_step_1_persists_explicit_session_id(self, tmp_path):
+        (tmp_path / "run-config.json").write_text(json.dumps({
+            "mode": "full",
+            "interactive": True,
+            "session_id": "session-stale",
+        }))
+
+        result = run_pipeline(
+            "--step", "1", "--mode", "full", "--output-dir", str(tmp_path),
+            "--session-id", "session-current",
+            cwd=tmp_path,
+        )
+
+        assert result.returncode == 0
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["session_id"] == "session-current"
+
+    def test_step_1_clears_stale_session_id_on_interactive_rerun(
+        self, tmp_path
+    ):
+        """Interactive output dirs are reused and run-config.json survives
+        cleanup: an omitted --session-id means this run's session is
+        unknown, and the previous run's ID must not correlate the new
+        telemetry with the old Claude transcript."""
+        (tmp_path / "run-config.json").write_text(json.dumps({
+            "mode": "full",
+            "interactive": True,
+            "session_id": "session-stale",
+        }))
+
+        result = run_pipeline(
+            "--step", "1", "--mode", "full", "--output-dir", str(tmp_path),
+            cwd=tmp_path,
+        )
+
+        assert result.returncode == 0
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert "session_id" not in config
+
+    def test_step_1_uses_preseeded_session_id_when_cli_omits_it(self, tmp_path):
+        (tmp_path / "run-config.json").write_text(json.dumps({
+            "mode": "pr",
+            "pr_number": "42",
+            "interactive": False,
+            "session_id": "bot-session",
+        }))
+        (tmp_path / "review-context.json").write_text(json.dumps({
+            "git": {"merge_base": "abc123"},
+        }))
+
+        result = run_pipeline("--step", "1", "--output-dir", str(tmp_path), cwd=tmp_path)
+
+        assert result.returncode == 0
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["session_id"] == "bot-session"
+
+    def test_step_1_generates_unique_run_ids(self, tmp_path):
+        first = tmp_path / "first"
+        second = tmp_path / "second"
+
+        run_pipeline("--step", "1", "--mode", "full", "--output-dir", str(first), cwd=tmp_path)
+        run_pipeline("--step", "1", "--mode", "full", "--output-dir", str(second), cwd=tmp_path)
+
+        first_state = json.loads((first / "pipeline-state.json").read_text())
+        second_state = json.loads((second / "pipeline-state.json").read_text())
+        assert first_state["run_id"] != second_state["run_id"]
+
+
+class TestSkippedStepRecording:
+    """Steps the router passes over are recorded in durable pipeline state."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_repo(self, tmp_path):
+        init_repo(tmp_path)
+
+    def test_skipped_steps_recorded_with_condition(self, tmp_path):
+        """Branch mode passes over step 2 — needs_workspace_setup is PR-only."""
+        r = run_pipeline("--step", "1", "--mode", "full",
+                       "--output-dir", str(tmp_path), cwd=tmp_path)
+        assert r.returncode == 0
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        skipped = {s["step"]: s for s in state["skipped_steps"]}
+        assert 2 in skipped
+        assert skipped[2]["condition"] == "needs_workspace_setup"
+        assert skipped[2]["title"] == "Repo Setup"
+
+    def test_trailing_skip_recorded_at_last_active_step(self, tmp_path):
+        """Step 12 follows the last active step, so step 11 must record it."""
+        run_pipeline("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path), cwd=tmp_path)
+        r = run_pipeline("--step", "11", "--mode", "full",
+                       "--output-dir", str(tmp_path), cwd=tmp_path)
+        assert r.returncode == 0
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        skipped = {s["step"]: s for s in state["skipped_steps"]}
+        assert 12 in skipped
+        assert skipped[12]["condition"] == "has_workspace_state_interactive"
+        assert skipped[12]["title"] == "Cleanup"
+
+    def test_skip_records_are_not_duplicated(self, tmp_path):
+        """Re-invoking the same step records each passed-over step once."""
+        run_pipeline("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path), cwd=tmp_path)
+        run_pipeline("--step", "11", "--mode", "full",
+                   "--output-dir", str(tmp_path), cwd=tmp_path)
+        run_pipeline("--step", "11", "--mode", "full",
+                   "--output-dir", str(tmp_path), cwd=tmp_path)
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        recorded = [entry["step"] for entry in state["skipped_steps"]]
+        assert recorded == sorted(set(recorded))
+        assert recorded.count(12) == 1
+
+    def test_active_steps_are_never_recorded_as_skipped(self, tmp_path):
+        """A step the router runs must not appear in the skip ledger."""
+        run_pipeline("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path), cwd=tmp_path)
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        recorded = {entry["step"] for entry in state["skipped_steps"]}
+        assert recorded.isdisjoint({1, 3, 5, 6, 7, 8, 9, 10, 11})
 
 
 class TestQuickModeConfig:
     """--quick CLI flag is stored in run-config.json and persists across steps."""
 
-    def _run(self, *args):
-        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
-        return subprocess.run(cmd, capture_output=True, text=True)
+    @pytest.fixture(autouse=True)
+    def _isolated_repo(self, tmp_path):
+        init_repo(tmp_path)
 
     def test_quick_flag_stored_in_config(self, tmp_path):
         """Passing --quick stores quick=true in run-config.json."""
-        r = self._run("--step", "1", "--mode", "pr",
+        r = run_pipeline("--step", "1", "--mode", "pr",
                        "--output-dir", str(tmp_path), "--pr-number", "42",
-                       "--quick")
+                       "--quick", cwd=tmp_path)
         assert r.returncode == 0
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["quick"] is True
 
     def test_no_quick_flag_defaults_false(self, tmp_path):
         """Without --quick, config has quick=false."""
-        r = self._run("--step", "1", "--mode", "pr",
-                       "--output-dir", str(tmp_path), "--pr-number", "42")
+        r = run_pipeline("--step", "1", "--mode", "pr",
+                       "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         assert r.returncode == 0
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config.get("quick") is False
-
-    def test_quick_from_config_on_subsequent_steps(self, mod, tmp_path):
-        """--quick persists in config and is readable on subsequent steps."""
-        # Seed config as step 1 would
-        mod.write_config(str(tmp_path), {
-            "mode": "pr", "pr_number": "42", "interactive": True, "quick": True,
-        })
-        # Subsequent step reads config — quick should still be true
-        config = mod.read_config(str(tmp_path))
-        assert config["quick"] is True
 
     def test_quick_flag_on_rerun_overrides_existing_config(self, tmp_path):
         """Rerunning step 1 with --quick on a previously non-quick output dir
         should update run-config.json to quick=true."""
         # First run: no --quick
-        self._run("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        run_pipeline("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config.get("quick") is False
         # Second run: with --quick (same output dir)
-        self._run("--step", "1", "--mode", "pr",
+        run_pipeline("--step", "1", "--mode", "pr",
                    "--output-dir", str(tmp_path), "--pr-number", "42",
-                   "--quick")
+                   "--quick", cwd=tmp_path)
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["quick"] is True
 
     def test_quick_flag_resets_on_rerun_without_flag(self, tmp_path):
         """Rerunning step 1 WITHOUT --quick after a quick run should reset to false."""
         # First run: with --quick
-        self._run("--step", "1", "--mode", "pr",
+        run_pipeline("--step", "1", "--mode", "pr",
                    "--output-dir", str(tmp_path), "--pr-number", "42",
-                   "--quick")
+                   "--quick", cwd=tmp_path)
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["quick"] is True
         # Second run: without --quick (same output dir)
-        self._run("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        run_pipeline("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["quick"] is False
 
@@ -500,9 +1039,9 @@ class TestQuickModeConfig:
         should NOT reset the pre-written quick=true. The bot writes the correct
         value in run-config.json and may not pass --quick on subsequent calls."""
         # Step 1: with --quick
-        self._run("--step", "1", "--mode", "pr",
+        run_pipeline("--step", "1", "--mode", "pr",
                    "--output-dir", str(tmp_path), "--pr-number", "42",
-                   "--quick")
+                   "--quick", cwd=tmp_path)
         # Simulate bot mode by setting interactive=false and providing
         # the review-context.json that bot mode requires
         config_path = tmp_path / "run-config.json"
@@ -514,8 +1053,8 @@ class TestQuickModeConfig:
         }))
         assert config["quick"] is True
         # Step 1 rerun: without --quick (bot mode)
-        r = self._run("--step", "1", "--mode", "pr",
-                       "--output-dir", str(tmp_path), "--pr-number", "42")
+        r = run_pipeline("--step", "1", "--mode", "pr",
+                       "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         assert r.returncode == 0
         config = json.loads(config_path.read_text())
         assert config["quick"] is True, \
@@ -525,15 +1064,15 @@ class TestQuickModeConfig:
         """In interactive mode, re-invoking step 1 without --quick should still
         reset quick to false (existing behavior for human-driven reruns)."""
         # Step 1: with --quick
-        self._run("--step", "1", "--mode", "pr",
+        run_pipeline("--step", "1", "--mode", "pr",
                    "--output-dir", str(tmp_path), "--pr-number", "42",
-                   "--quick")
+                   "--quick", cwd=tmp_path)
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["quick"] is True
         assert config.get("interactive") is True  # default
         # Step 1 rerun: without --quick (interactive rerun)
-        r = self._run("--step", "1", "--mode", "pr",
-                       "--output-dir", str(tmp_path), "--pr-number", "42")
+        r = run_pipeline("--step", "1", "--mode", "pr",
+                       "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         assert r.returncode == 0
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["quick"] is False, \
@@ -543,23 +1082,164 @@ class TestQuickModeConfig:
 class TestHostConfig:
     """The first pipeline call selects a host for all later briefings."""
 
-    def _run(self, *args):
-        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
-        return subprocess.run(cmd, capture_output=True, text=True)
+    @pytest.fixture(autouse=True)
+    def _isolated_repo(self, tmp_path):
+        init_repo(tmp_path)
 
     def test_claude_is_the_backward_compatible_default(self, tmp_path):
-        result = self._run(
-            "--step", "1", "--mode", "full", "--output-dir", str(tmp_path)
+        result = run_pipeline(
+            "--step", "1", "--mode", "full", "--output-dir", str(tmp_path),
+            cwd=tmp_path,
         )
         assert result.returncode == 0
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["host"] == "claude"
 
     def test_codex_host_is_persisted(self, tmp_path):
-        result = self._run(
+        result = run_pipeline(
             "--step", "1", "--mode", "full", "--output-dir", str(tmp_path),
             "--host", "codex",
+            cwd=tmp_path,
         )
         assert result.returncode == 0
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["host"] == "codex"
+
+
+class TestDependencyRefreshConfig:
+    """--refresh-deps is stored in run-config.json; hard-off non-interactive."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_repo(self, tmp_path):
+        init_repo(tmp_path)
+
+    def _trusting_env(self, tmp_path):
+        config_dir = tmp_path / "xdg" / "pirategoat"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        (config_dir / "config.json").write_text(json.dumps(
+            {"review": {"refresh_dependencies": True}}))
+        return {**os.environ, "XDG_CONFIG_HOME": str(tmp_path / "xdg")}
+
+    def test_flag_stored_in_config(self, tmp_path):
+        r = run_pipeline("--step", "1", "--mode", "pr",
+                      "--output-dir", str(tmp_path), "--pr-number", "42",
+                      "--refresh-deps", cwd=tmp_path, env=hermetic_env())
+        assert r.returncode == 0
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["refresh_dependencies"] is True
+
+    def test_no_flag_defaults_false(self, tmp_path):
+        r = run_pipeline("--step", "1", "--mode", "pr",
+                      "--output-dir", str(tmp_path), "--pr-number", "42",
+                      cwd=tmp_path, env=hermetic_env())
+        assert r.returncode == 0
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config.get("refresh_dependencies") is False
+
+    def test_non_interactive_cli_flag_is_forced_off(self, tmp_path):
+        r = run_pipeline("--step", "1", "--mode", "full",
+                      "--output-dir", str(tmp_path),
+                      "--interactive", "false", "--refresh-deps",
+                      cwd=tmp_path, env=hermetic_env())
+        assert r.returncode == 0
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["refresh_dependencies"] is False
+        assert "interactive-only" in r.stderr
+
+    def test_non_interactive_preseeded_config_is_forced_off(self, tmp_path):
+        # A bot pre-writes run-config.json; the pipeline must not honor a
+        # pre-seeded refresh_dependencies in bot mode.
+        (tmp_path / "run-config.json").write_text(json.dumps({
+            "mode": "full", "interactive": False,
+            "refresh_dependencies": True,
+        }))
+        r = run_pipeline("--step", "1", "--output-dir", str(tmp_path),
+                      cwd=tmp_path, env=hermetic_env())
+        assert r.returncode == 0
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["refresh_dependencies"] is False
+
+    def test_interactive_rerun_syncs_flag_from_cli(self, tmp_path):
+        # First run without the flag; rerun with it — CLI is authoritative
+        # on interactive reruns, matching --quick semantics.
+        run_pipeline("--step", "1", "--mode", "pr",
+                  "--output-dir", str(tmp_path), "--pr-number", "42",
+                  cwd=tmp_path, env=hermetic_env())
+        r = run_pipeline("--step", "1", "--mode", "pr",
+                      "--output-dir", str(tmp_path), "--pr-number", "42",
+                      "--refresh-deps", cwd=tmp_path, env=hermetic_env())
+        assert r.returncode == 0
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["refresh_dependencies"] is True
+        # And back off again
+        run_pipeline("--step", "1", "--mode", "pr",
+                  "--output-dir", str(tmp_path), "--pr-number", "42",
+                  cwd=tmp_path, env=hermetic_env())
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["refresh_dependencies"] is False
+
+    def test_step_1_clears_stale_dependency_refresh_artifact(self, tmp_path):
+        (tmp_path / "dependency-refresh.json").write_text("{}")
+        r = run_pipeline("--step", "1", "--mode", "pr",
+                      "--output-dir", str(tmp_path), "--pr-number", "42",
+                      cwd=tmp_path, env=hermetic_env())
+        assert r.returncode == 0
+        assert not (tmp_path / "dependency-refresh.json").exists()
+
+    def test_user_config_defaults_interactive_runs_on(self, tmp_path):
+        # ~/.config/pirategoat/config.json declares interactive runs
+        # dependency-trusted: no per-run flag needed.
+        out = tmp_path / "out"
+        r = run_pipeline("--step", "1", "--mode", "pr",
+                      "--output-dir", str(out), "--pr-number", "42",
+                      cwd=tmp_path, env=self._trusting_env(tmp_path))
+        assert r.returncode == 0
+        config = json.loads((out / "run-config.json").read_text())
+        assert config["refresh_dependencies"] is True
+
+    def test_no_refresh_deps_overrides_config_default(self, tmp_path):
+        out = tmp_path / "out"
+        r = run_pipeline("--step", "1", "--mode", "pr",
+                      "--output-dir", str(out), "--pr-number", "42",
+                      "--no-refresh-deps",
+                      cwd=tmp_path, env=self._trusting_env(tmp_path))
+        assert r.returncode == 0
+        config = json.loads((out / "run-config.json").read_text())
+        assert config["refresh_dependencies"] is False
+
+    def test_user_config_never_applies_to_non_interactive(self, tmp_path):
+        out = tmp_path / "out"
+        r = run_pipeline("--step", "1", "--mode", "full",
+                      "--output-dir", str(out),
+                      "--interactive", "false",
+                      cwd=tmp_path, env=self._trusting_env(tmp_path))
+        assert r.returncode == 0
+        config = json.loads((out / "run-config.json").read_text())
+        assert config["refresh_dependencies"] is False
+
+    def test_rerun_without_flag_keeps_config_default(self, tmp_path):
+        # With a trusting user config, flag absence resolves to the
+        # config default, not to off.
+        out = tmp_path / "out"
+        env = self._trusting_env(tmp_path)
+        run_pipeline("--step", "1", "--mode", "pr",
+                  "--output-dir", str(out), "--pr-number", "42",
+                  cwd=tmp_path, env=env)
+        run_pipeline("--step", "1", "--mode", "pr",
+                  "--output-dir", str(out), "--pr-number", "42",
+                  cwd=tmp_path, env=env)
+        config = json.loads((out / "run-config.json").read_text())
+        assert config["refresh_dependencies"] is True
+
+    def test_malformed_user_config_defaults_off(self, tmp_path):
+        config_dir = tmp_path / "xdg" / "pirategoat"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.json").write_text("{not json")
+        env = {**os.environ, "XDG_CONFIG_HOME": str(tmp_path / "xdg")}
+        out = tmp_path / "out"
+        r = run_pipeline("--step", "1", "--mode", "pr",
+                      "--output-dir", str(out), "--pr-number", "42",
+                      cwd=tmp_path, env=env)
+        assert r.returncode == 0
+        config = json.loads((out / "run-config.json").read_text())
+        assert config["refresh_dependencies"] is False

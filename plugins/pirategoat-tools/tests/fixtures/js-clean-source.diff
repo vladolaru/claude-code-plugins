@@ -1,0 +1,32 @@
+diff --git a/src/api/user-client.ts b/src/api/user-client.ts
+new file mode 100644
+--- /dev/null
++++ b/src/api/user-client.ts
+@@ -0,0 +1,27 @@
++const API_BASE = process.env.API_BASE_URL ?? 'https://api.example.com';
++
++interface UserSummary {
++    id: string;
++    displayName: string;
++}
++
++export async function fetchUserSummary(
++    userId: string,
++    token: string,
++): Promise<UserSummary> {
++    const response = await fetch(
++        `${ API_BASE }/users/${ encodeURIComponent( userId ) }`,
++        {
++            headers: {
++                Authorization: `Bearer ${ token }`,
++                'Content-Type': 'application/json',
++            },
++        },
++    );
++
++    if ( ! response.ok ) {
++        throw new Error( `HTTP ${ response.status }` );
++    }
++
++    return ( await response.json() ) as UserSummary;
++}

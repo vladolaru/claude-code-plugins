@@ -10,17 +10,233 @@ Zero external dependencies (stdlib only).
 """
 
 import glob as glob_mod
+import hashlib
 import json
 import os
 import re
 import sys
+import uuid
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+try:
+    from . import manifest_sections
+    from .dispatch_status import (
+        DISPATCHED_STATUSES,
+        SKIPPED_STATUSES,
+        validate_dispatch_plan_agents,
+    )
+    from .agent.output import _VALID_SEVERITIES, _VERDICT_RANK
+    from .atomic_io import atomic_write_json
+    from .critic_adjustments import FINDINGS_READ_OK, read_findings_file
+except ImportError:
+    _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _scripts_parent not in sys.path:
+        sys.path.insert(0, _scripts_parent)
+    from review import manifest_sections
+    from review.dispatch_status import (
+        DISPATCHED_STATUSES,
+        SKIPPED_STATUSES,
+        validate_dispatch_plan_agents,
+    )
+    from review.agent.output import _VALID_SEVERITIES, _VERDICT_RANK
+    from review.atomic_io import atomic_write_json
+    from review.critic_adjustments import FINDINGS_READ_OK, read_findings_file
+
+from git_paths import normalize_repo_paths
+
 
 LOG_DIR = os.path.expanduser("~/.pirategoat-tools/logs/reviews")
 MARKER_FILE = ".telemetry-log-path"
+# Bumped 1 -> 2 alongside review_metrics/contracts.py's
+# _SUPPORTED_MANIFEST_SCHEMA (same lockstep the _OBSERVED_READS_SCHEMA
+# pair follows) when the manifest's `outcome` block gained `verdict_sync`
+# — see AGENTS.md's Artifact Schemas rule. A manifest written under
+# schema 1 has no `verdict_sync` key at all, and readers route anything
+# but the schema they were written against down their existing
+# unsupported path rather than silently reading a field the producer
+# never vouched for.
+#
+# The manifest then gained the top-level `synthesis_agents` section plus
+# its `availability` conjunct (reconciliator/critic lifecycle) WITHOUT a
+# further bump, under the
+# Artifact Schemas rule's carve-out: schema 2 was introduced in 1.114.0
+# and 1.114.0 is still unreleased (the plugin's newest tag is
+# pirategoat-tools/v1.108.0), so no artifact was ever published claiming
+# schema 2 without these keys.
+#
+# The manifest then gained `availability["dependency_refresh"]` and
+# `availability["reviewer_markdown"]` (both sections already existed;
+# only their flags were missing) plus the new top-level
+# `findings_markdown` section and its own flag, again WITHOUT a further
+# bump, under the same still-unreleased carve-out.
+#
+# The `coverage` section then gained `deferred_honesty_by_agent` and
+# `deferred_total_by_agent` (Task 14, backlog #19 — the agent-vs-system
+# NOT DIFFED honesty split), again WITHOUT a further bump under the same
+# carve-out: both keys are optional within `coverage`, so a manifest
+# written before this change simply lacks them (unmeasured), never a
+# manifest claiming schema 2 with a shape schema 2 never had.
+#
+# The `agent_complete` EVENT then gained `resave` (whether a review JSON
+# for that reviewer was already published when the save reached
+# publication), again WITHOUT a further bump under the same carve-out.
+# The manifest is unaffected either way: `_AGENT_COMPLETE_MANIFEST_FIELDS`
+# deliberately omits the key, so no manifest shape changed at all.
+#
+# Bumping to 3 here would publish a compatibility boundary between two
+# shapes that never both existed in the wild. Revisit the moment 1.114.0
+# is tagged: the next manifest key after that is a real 2 -> 3 bump.
+EVENT_SCHEMA = 2
+# Optional manifest sections whose `availability["<name>"]` boolean shares
+# the section's own top-level key. The analysis consumer's flag/payload
+# consistency pin (`review_metrics` tests) parametrizes over this tuple —
+# via `contracts._OPTIONAL_SECTION_AVAILABILITY_KEYS`, the same
+# producer-declared-contract pattern `synthesis_lifecycle.ROW_KEYS` follows
+# — so a section added here joins the pin automatically instead of
+# silently shipping the "measured: true, payload dropped" gap Task 12
+# closed for worktree_hygiene, usage, and skipped_steps, and Task 13
+# closed for dependency_refresh, reviewer_markdown, and findings_markdown.
+#
+# `dispatch` is excluded: its payload is self-describing (no top-level
+# availability boolean of its own). `pipeline`, `transcript`, and
+# `lifecycle` are excluded: each is an availability flag with no
+# same-named top-level section — `lifecycle`'s payload lives under
+# `agents`, and `transcript`'s comes from a measurement source outside
+# the manifest entirely.
+OPTIONAL_SECTION_AVAILABILITY_KEYS = (
+    "coverage",
+    "worktree_hygiene",
+    "synthesis_agents",
+    "usage",
+    "skipped_steps",
+    "dependency_refresh",
+    "reviewer_markdown",
+    "findings_markdown",
+)
+# Full SHA-1 (40 hex) or SHA-256 (64 hex) object name — matches the
+# pipeline's _FULL_SHA_RE contract for durable git identity.
+_FULL_SHA_RE = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
+_STEP_MANIFEST_FIELDS = (
+    "schema",
+    "run_id",
+    "event",
+    "timestamp",
+    "step",
+    "phase",
+    "title",
+    "duration_since_prev_ms",
+)
+_AGENT_START_MANIFEST_FIELDS = (
+    "schema",
+    "run_id",
+    "event",
+    "timestamp",
+    "agent",
+    "domain",
+    "model_tier",
+    "budget_target",
+)
+_AGENT_COMPLETE_MANIFEST_FIELDS = (
+    "schema",
+    "run_id",
+    "event",
+    "timestamp",
+    "agent",
+    "duration_ms",
+    "verdict",
+    "issue_count",
+)
+_SEVERITY_FIELDS = _VALID_SEVERITIES
+
+
+def _advisory_measurement(data: Any) -> Dict[str, Any]:
+    """Return typed advisory-suppression facts from a review summary."""
+    if not isinstance(data, dict):
+        return {}
+    summary = data.get("summary")
+    if not isinstance(summary, dict):
+        return {}
+
+    suppressed = summary.get("advisory_suppressed")
+    if (not isinstance(suppressed, int)
+            or isinstance(suppressed, bool)
+            or suppressed < 0):
+        return {}
+
+    measurement: Dict[str, Any] = {"advisory_suppressed": suppressed}
+    verdict = data.get("verdict")
+    verdict_without_advisory = summary.get("verdict_without_advisory")
+    if (
+        suppressed > 0
+        and isinstance(verdict, str)
+        and isinstance(verdict_without_advisory, str)
+        and verdict in _VERDICT_RANK
+        and verdict_without_advisory in _VERDICT_RANK
+        and _VERDICT_RANK[verdict_without_advisory] > _VERDICT_RANK[verdict]
+    ):
+        measurement["verdict_without_advisory"] = verdict_without_advisory
+    return measurement
+
+
+def _incomplete_agent_executions(
+    started: List[Dict[str, Any]], completed: List[Dict[str, Any]]
+) -> List[str]:
+    """Return a sorted multiset with one name per unmatched start event."""
+    unmatched = Counter(
+        event.get("agent") for event in started if event.get("agent")
+    ) - Counter(
+        event.get("agent") for event in completed if event.get("agent")
+    )
+    return sorted(unmatched.elements())
+
+
+def project_agent_lifecycle(items, *, strict: bool = False):
+    """Project append-only saves into one completion per execution.
+
+    The canonical save-revision projection shared by the telemetry producer
+    and the review_metrics consumer (via contracts) — both sides MUST agree
+    bit-exactly, so there is exactly one implementation.
+
+    ``items`` yields ``(is_completion, agent, payload)`` triples in event
+    order; ``agent`` is the agent name or ``None`` when unusable. A
+    completion matches an outstanding start while any remain — so
+    overlapping executions of the same agent each keep their completion.
+    Only once every start is matched does a further completion count as a
+    corrected save, replacing the latest completion.
+
+    With ``strict=False`` completions with no preceding start remain visible
+    for strict consumers to reject; with ``strict=True`` they fail the whole
+    projection (returns ``None``).
+    """
+    started: List[dict] = []
+    completed: List[dict] = []
+    start_counts: Counter = Counter()
+    completion_counts: Counter = Counter()
+    completion_slot: Dict[str, int] = {}
+
+    for is_completion, agent, payload in items:
+        if not is_completion:
+            started.append(payload)
+            if agent:
+                start_counts[agent] += 1
+            continue
+        if strict and (agent is None or agent not in start_counts):
+            return None
+        if (
+            agent
+            and agent in completion_slot
+            and completion_counts[agent] >= start_counts[agent]
+        ):
+            completed[completion_slot[agent]] = payload
+        else:
+            completed.append(payload)
+            if agent and start_counts[agent] > 0:
+                completion_counts[agent] += 1
+                completion_slot[agent] = len(completed) - 1
+
+    return started, completed
 
 
 class ReviewTelemetry:
@@ -37,6 +253,7 @@ class ReviewTelemetry:
         self.output_dir = output_dir
         self.log_dir = log_dir or LOG_DIR
         self._log_path: Optional[str] = None
+        self._event_parse_gaps = 0
 
     @property
     def log_path(self) -> Optional[str]:
@@ -48,10 +265,23 @@ class ReviewTelemetry:
                     self._log_path = f.read().strip()
         return self._log_path
 
+    @property
+    def manifest_path(self) -> Optional[str]:
+        """Materialized manifest path derived from the current JSONL log."""
+        log_path = self.log_path
+        if log_path is None:
+            return None
+        if log_path.endswith(".jsonl"):
+            return f"{log_path[:-len('.jsonl')]}.manifest.json"
+        return f"{log_path}.manifest.json"
+
     def start(self, pr_number: str = "", total_steps: int = 15,
               bot_mode: bool = False, quick_mode: bool = False,
               mode: str = "", repo_path: str = "",
-              identifier: str = "") -> str:
+              identifier: str = "", run_id: str = "",
+              session_id: str = "", plugin_version: str = "",
+              git_range: str = "", base_sha: str = "",
+              head_sha: str = "") -> str:
         """Create log file + marker. Write pipeline_start. Return log path.
 
         Args:
@@ -62,13 +292,13 @@ class ReviewTelemetry:
         os.makedirs(self.log_dir, exist_ok=True)
 
         self._quick_mode = quick_mode
+        self._run_id = run_id
 
         now = datetime.now(timezone.utc)
         timestamp = now.strftime("%Y%m%dT%H%M%S")
         prefix = self._build_filename_prefix(mode, repo_path, identifier)
         run_num = self._next_run_number(prefix)
-        filename = f"{prefix}-run{run_num}--{timestamp}.jsonl"
-        self._log_path = os.path.join(self.log_dir, filename)
+        self._log_path = self._allocate_log_path(prefix, run_num, timestamp)
 
         # Write marker so subsequent invocations can find the log
         marker = os.path.join(self.output_dir, MARKER_FILE)
@@ -76,6 +306,8 @@ class ReviewTelemetry:
             f.write(self._log_path)
 
         event = {
+            "schema": EVENT_SCHEMA,
+            "run_id": run_id,
             "event": "pipeline_start",
             "timestamp": now.isoformat(),
             "step": 0,
@@ -85,14 +317,23 @@ class ReviewTelemetry:
                 "total_steps": total_steps,
                 "bot_mode": bot_mode,
                 "quick_mode": quick_mode,
+                "session_id": session_id,
+                "plugin_version": plugin_version,
+                "mode": mode,
+                "repo_path": repo_path,
+                "git": {
+                    "requested_range": git_range,
+                    "base_sha": base_sha,
+                    "head_sha": head_sha,
+                },
             },
         }
         self._append(event)
+        self._materialize_manifest("running")
         return self._log_path
 
     def log_step(self, step: int, phase: str, title: str,
                  bot_mode: bool = False,
-                 thoughts_length: int = 0,
                  decisions: Optional[dict] = None) -> None:
         """Append step timing event (no snapshot). No-op if not started."""
         if self.log_path is None:
@@ -110,17 +351,18 @@ class ReviewTelemetry:
             "duration_since_prev_ms": duration_ms,
             "args": {
                 "bot_mode": bot_mode,
-                "thoughts_length": thoughts_length,
             },
         }
         if decisions:
             event["decisions"] = decisions
         self._append(event)
+        self._materialize_manifest("running")
 
-    def log_agent_start(self, agent_name: str, domain: str = "",
+    def log_agent_start(self, agent_name: str, domain: Any = "",
                         model_tier: str = "", scope_files: int = 0,
                         scope_lines: int = 0,
-                        budget_target: Optional[int] = None) -> None:
+                        budget_target: Optional[int] = None,
+                        scope_paths: Optional[List[str]] = None) -> None:
         """Append agent_start event. No-op if not started."""
         if self.log_path is None:
             return
@@ -130,21 +372,62 @@ class ReviewTelemetry:
             "event": "agent_start",
             "timestamp": now.isoformat(),
             "agent": agent_name,
-            "domain": domain,
+            "domain": "" if domain is None else domain,
             "model_tier": model_tier,
             "scope": {
                 "files": scope_files,
                 "lines": scope_lines,
             },
         }
+        if scope_paths is not None:
+            event["scope"]["paths"] = normalize_repo_paths(
+                scope_paths,
+                repo_path=self._pipeline_repo_path(),
+            )
         if budget_target is not None:
             event["budget_target"] = budget_target
         self._append(event)
 
     def log_agent_complete(self, agent_name: str, verdict: str = "",
                            issue_count: int = 0,
-                           severities: Optional[dict] = None) -> None:
-        """Append agent_complete event with duration from .started file. No-op if not started."""
+                           severities: Optional[dict] = None,
+                           resave: bool = False) -> None:
+        """Append agent_complete event with duration from .started file. No-op if not started.
+
+        The save echo deliberately invites a correction re-save (claim a
+        deferred file you actually read, then save again), so a reviewer
+        publishing twice is SANCTIONED, and each save logs its own
+        completion with its own duration. The event stream is append-only:
+        it therefore holds one event per SAVE, not one per AGENT, and a raw
+        `agent_complete` tally is not an agent count. A 19-reviewer field
+        run logged 21.
+
+        The contract over that stream is **last-wins per outstanding
+        EXECUTION SLOT**, resolved once in `project_agent_lifecycle()` —
+        the projection both the manifest producer and the metrics consumer
+        run, so no consumer has to re-derive it. A completion first matches
+        an outstanding start while any remain, because overlapping
+        executions of one reviewer are a supported case and each keeps its
+        own completion; only once every start is matched does a further
+        completion REPLACE the latest. So one agent with two starts and
+        three completions projects to TWO rows, not one. Identities
+        collapse to one row only for a single-execution agent — the
+        ordinary case, and the one the 19/21 field run was.
+
+        `len(completed)` is therefore an EXECUTION count. It equals the
+        agent count exactly when every agent ran once; counting raw events
+        where the answer means "agents" is the bug this shape invites.
+        Every consumer either reads the projection or names its field
+        `*_events`.
+
+        `resave` records one observation and nothing more: a review JSON
+        for this reviewer was ALREADY published when this save reached
+        publication. It is not a correction count and not an agent-count
+        discriminator — a second execution's first save reports True, and a
+        save following a failed `os.replace()` reports False. It is
+        deliberately NOT carried into the durable manifest, where the
+        projection has already dropped the superseded events it describes.
+        """
         if self.log_path is None:
             return
 
@@ -159,6 +442,7 @@ class ReviewTelemetry:
             "verdict": verdict,
             "issue_count": issue_count,
             "severities": severities or {},
+            "resave": bool(resave),
         }
         self._append(event)
 
@@ -175,8 +459,7 @@ class ReviewTelemetry:
             return None
 
     def finalize(self, step: int, phase: str, title: str,
-                 bot_mode: bool = False,
-                 thoughts_length: int = 0) -> None:
+                 bot_mode: bool = False) -> None:
         """Append pipeline_end with snapshot + summary. No-op if not started."""
         if self.log_path is None:
             return
@@ -189,6 +472,7 @@ class ReviewTelemetry:
         if first_ts:
             total_ms = int((now - first_ts).total_seconds() * 1000)
 
+        extracts = self._output_extracts()
         event = {
             "event": "pipeline_end",
             "timestamp": now.isoformat(),
@@ -198,12 +482,12 @@ class ReviewTelemetry:
             "duration_since_prev_ms": duration_ms,
             "args": {
                 "bot_mode": bot_mode,
-                "thoughts_length": thoughts_length,
             },
-            "snapshot": self._snapshot(),
-            "summary": self._build_summary(total_ms),
+            "snapshot": self._snapshot(extracts),
+            "summary": self._build_summary(total_ms, extracts),
         }
         self._append(event)
+        self._materialize_manifest("complete")
 
     # ── Private helpers ──────────────────────────────────────────────
 
@@ -226,6 +510,35 @@ class ReviewTelemetry:
         normalized = os.path.normpath(path).lstrip(os.sep)
         return cls._UNSAFE_RE.sub("-", normalized).strip("-")
 
+    # Longest sibling filename built from the prefix is the manifest:
+    # {prefix}-run{N}--{timestamp}-{nonce}.manifest.json — 74 bytes of fixed
+    # overhead at 6 run-number digits. Cap the prefix so every derived name
+    # stays under the common 255-byte filename component limit; an oversized
+    # prefix (deep worktree, long branch name) would otherwise make
+    # allocation raise ENAMETOOLONG, which the fail-open pipeline swallows
+    # into a run with no telemetry at all.
+    _PREFIX_MAX_BYTES = 180
+
+    @classmethod
+    def _cap_prefix(cls, prefix: str) -> str:
+        """Deterministically shorten oversized prefixes, keeping distinctness.
+
+        Same input → same output (so run numbering keeps grouping a run's
+        retries), and distinct long prefixes stay distinct via a digest of
+        the full original. Byte-aware: the legacy fallback prefix is not
+        ASCII-sanitized.
+        """
+        raw = prefix.encode("utf-8")
+        if len(raw) <= cls._PREFIX_MAX_BYTES:
+            return prefix
+        digest = hashlib.sha256(raw).hexdigest()[:8]
+        head = (
+            raw[: cls._PREFIX_MAX_BYTES - 9]
+            .decode("utf-8", "ignore")
+            .rstrip("-")
+        )
+        return f"{head}-{digest}"
+
     def _build_filename_prefix(self, mode: str, repo_path: str,
                                identifier: str) -> str:
         """Build the structured prefix for a telemetry log filename.
@@ -238,10 +551,12 @@ class ReviewTelemetry:
         if mode and repo_path:
             repo_slug = self.path_to_slug(repo_path)
             id_slug = self._UNSAFE_RE.sub("-", identifier).strip("-") if identifier else "branch"
-            return f"{mode}-{repo_slug}-{id_slug}"
+            return self._cap_prefix(f"{mode}-{repo_slug}-{id_slug}")
 
         # Fallback: use output_dir basename (legacy callers)
-        return os.path.basename(os.path.normpath(self.output_dir)) or "review"
+        return self._cap_prefix(
+            os.path.basename(os.path.normpath(self.output_dir)) or "review"
+        )
 
     def _next_run_number(self, prefix: str) -> int:
         """Count existing log files with the same prefix and return the next run number."""
@@ -249,10 +564,471 @@ class ReviewTelemetry:
         existing = glob_mod.glob(pattern)
         return len(existing) + 1
 
+    def _allocate_log_path(self, prefix: str, run_num: int, timestamp: str) -> str:
+        """Atomically allocate a nonce-suffixed log path unique to this run."""
+        while True:
+            nonce = uuid.uuid4().hex
+            filename = f"{prefix}-run{run_num}--{timestamp}-{nonce}.jsonl"
+            path = os.path.join(self.log_dir, filename)
+            try:
+                with open(path, "x"):
+                    pass
+                return path
+            except FileExistsError:
+                continue
+
     def _append(self, event: dict) -> None:
         """Append a JSON line to the log file."""
+        schema, run_id = self._read_event_identity()
+        event.setdefault("schema", schema)
+        event.setdefault("run_id", run_id)
         with open(self._log_path, "a") as f:
             f.write(json.dumps(event, separators=(",", ":")) + "\n")
+
+    def _read_events(self) -> List[dict]:
+        """Read object events, skipping and counting malformed/non-object lines.
+
+        Counting skipped lines keeps the manifest from presenting a damaged log
+        as if it were a clean, shorter event stream.
+        """
+        self._event_parse_gaps = 0
+        events = []
+        log_path = self.log_path
+        if not log_path or not os.path.isfile(log_path):
+            return events
+
+        try:
+            with open(log_path, "rb") as log:
+                for line in log:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except (json.JSONDecodeError, TypeError, UnicodeError):
+                        self._event_parse_gaps += 1
+                        continue
+                    if isinstance(event, dict):
+                        events.append(event)
+                    else:
+                        self._event_parse_gaps += 1
+        except OSError:
+            pass
+        return events
+
+    def _read_json_file(self, name: str) -> Optional[dict]:
+        """Read an output JSON object without letting failures escape."""
+        return manifest_sections.read_json_file(self.output_dir, name)
+
+    @staticmethod
+    def _select_scalar_fields(event: dict, fields: tuple[str, ...]) -> dict:
+        """Copy only named scalar fields into a manifest event."""
+        return {
+            name: event[name]
+            for name in fields
+            if name in event
+            and (
+                event[name] is None
+                or isinstance(event[name], (str, int, float, bool))
+            )
+        }
+
+    def _pipeline_repo_path(self) -> str:
+        """Read the repository root recorded by the pipeline start event."""
+        start = self._read_first_event()
+        if start is None or start.get("event") != "pipeline_start":
+            return ""
+        pipeline = start.get("pipeline", {})
+        if not isinstance(pipeline, dict):
+            return ""
+        repo_path = pipeline.get("repo_path")
+        return repo_path if isinstance(repo_path, str) else ""
+
+    def _manifest_step_event(self, event: dict) -> dict:
+        """Sanitize one step event for the durable manifest."""
+        result = self._select_scalar_fields(event, _STEP_MANIFEST_FIELDS)
+
+        args = event.get("args", {})
+        if isinstance(args, dict):
+            safe_args = self._select_scalar_fields(args, ("bot_mode",))
+            if safe_args:
+                result["args"] = safe_args
+
+        decisions = event.get("decisions", {})
+        if (
+            isinstance(decisions, dict)
+            and isinstance(decisions.get("critic_skipped"), bool)
+        ):
+            result["decisions"] = {
+                "critic_skipped": decisions["critic_skipped"]
+            }
+        return result
+
+    def _manifest_agent_start_event(
+        self, event: dict, repo_path: str = ""
+    ) -> dict:
+        """Sanitize one agent start event for the durable manifest."""
+        result = self._select_scalar_fields(
+            event, _AGENT_START_MANIFEST_FIELDS
+        )
+        if event.get("domain") is None and "domain" in event:
+            result["domain"] = ""
+        scope = event.get("scope", {})
+        if isinstance(scope, dict):
+            safe_scope = self._select_scalar_fields(scope, ("files", "lines"))
+            if isinstance(scope.get("paths"), list):
+                safe_scope["paths"] = normalize_repo_paths(
+                    scope["paths"],
+                    repo_path=repo_path,
+                    normalize_backslash_separators=False,
+                    decode_git_quoted=False,
+                )
+            if safe_scope:
+                result["scope"] = safe_scope
+        return result
+
+    def _manifest_agent_complete_event(self, event: dict) -> dict:
+        """Sanitize one agent completion event for the durable manifest.
+
+        `resave` is intentionally absent from _AGENT_COMPLETE_MANIFEST_FIELDS:
+        it describes a RAW event, and the projection below keeps only the
+        last completion per identity, so a manifest row is never a
+        superseded save to flag. Read the JSONL when you need per-save
+        detail.
+        """
+        result = self._select_scalar_fields(
+            event, _AGENT_COMPLETE_MANIFEST_FIELDS
+        )
+        severities = event.get("severities", {})
+        if isinstance(severities, dict):
+            safe_severities = {
+                name: severities[name]
+                for name in _SEVERITY_FIELDS
+                if type(severities.get(name)) is int
+            }
+            result["severities"] = safe_severities
+        return result
+
+    def _project_manifest_agent_lifecycle(
+        self, events: List[dict], repo_path: str
+    ) -> tuple[List[dict], List[dict]]:
+        """Sanitize raw events and run the shared lifecycle projection.
+
+        This is where the event stream's **last-wins-per-outstanding-
+        execution-slot** contract becomes the manifest's shape. N
+        sanctioned re-saves by a reviewer that started ONCE are N
+        `agent_complete` events in the JSONL and exactly one row in
+        `agents.completed` (the latest); a reviewer that started twice
+        keeps two rows, because overlapping executions are supported and
+        each is its own execution. So `len(completed)` counts EXECUTIONS,
+        never raw events, and equals the agent count only when every agent
+        ran once. Consumers that want an agent count read this projection
+        — deduplicating on `agent` when retries make the two differ. The
+        raw log is the only place a per-save tally, or the `resave` flag
+        distinguishing the saves, survives.
+        """
+
+        def items():
+            for event in events:
+                event_name = event.get("event")
+                agent = event.get("agent")
+                agent_key = agent if isinstance(agent, str) and agent else None
+                if event_name == "agent_start":
+                    yield False, agent_key, self._manifest_agent_start_event(
+                        event, repo_path=repo_path
+                    )
+                elif event_name == "agent_complete":
+                    yield True, agent_key, self._manifest_agent_complete_event(
+                        event
+                    )
+
+        return project_agent_lifecycle(items())
+
+    def _build_manifest(self, status: str) -> dict:
+        """Build the versioned materialized view from durable run events."""
+        events = self._read_events()
+        start = next(
+            (event for event in events if event.get("event") == "pipeline_start"),
+            {},
+        )
+        end = next(
+            (
+                event
+                for event in reversed(events)
+                if event.get("event") == "pipeline_end"
+            ),
+            {},
+        )
+
+        pipeline = start.get("pipeline", {})
+        if not isinstance(pipeline, dict):
+            pipeline = {}
+        git = pipeline.get("git", {})
+        git = dict(git) if isinstance(git, dict) else {}
+
+        context = self._read_json_file("review-context.json")
+        resolved_git = context.get("git", {}) if isinstance(context, dict) else {}
+        if isinstance(resolved_git, dict):
+            value = resolved_git.get("git_range")
+            if value:
+                git["requested_range"] = value
+            # SHA endpoints may only be replaced by full object names: with an
+            # explicit symbolic range ("main..HEAD") the context merge_base is
+            # the literal branch name, and overwriting the pipeline_start
+            # resolution with it would make the durable identity movable.
+            for manifest_name, context_name in (
+                ("base_sha", "merge_base"),
+                ("head_sha", "head_sha"),
+            ):
+                value = resolved_git.get(context_name)
+                if isinstance(value, str) and _FULL_SHA_RE.fullmatch(value):
+                    git[manifest_name] = value
+
+        steps = [
+            self._manifest_step_event(event)
+            for event in events
+            if event.get("event") == "step"
+        ]
+        repo_path = pipeline.get("repo_path")
+        repo_path = repo_path if isinstance(repo_path, str) else ""
+        started, completed = self._project_manifest_agent_lifecycle(
+            events, repo_path
+        )
+        incomplete = _incomplete_agent_executions(started, completed)
+
+        pipeline_result = self._read_json_file("pipeline-result.json") or {}
+        summary = end.get("summary", {})
+        if not isinstance(summary, dict):
+            summary = {}
+
+        manifest = {
+            "schema": EVENT_SCHEMA,
+            "status": status,
+            "run": {
+                "id": start.get("run_id", ""),
+                "session_id": pipeline.get("session_id") or None,
+                "plugin_version": pipeline.get("plugin_version") or None,
+                "mode": pipeline.get("mode") or None,
+                "repo_path": pipeline.get("repo_path") or None,
+                "output_dir": pipeline.get("output_dir") or self.output_dir,
+                "started_at": start.get("timestamp"),
+                "ended_at": end.get("timestamp"),
+                "git": git,
+            },
+            "steps": steps,
+            "agents": {
+                "started": started,
+                "completed": completed,
+                "incomplete": incomplete,
+            },
+            "outcome": {
+                "summary": summary,
+                "pipeline_status": pipeline_result.get("status"),
+                "verdict": pipeline_result.get("verdict"),
+                "critic_verdict": pipeline_result.get("critic_verdict"),
+                "verdict_sync": pipeline_result.get("verdict_sync"),
+            },
+            "availability": {
+                "pipeline": True,
+                "transcript": False,
+            },
+        }
+        final_info = manifest_sections.inspect_dispatch_plan(
+            self.output_dir, "dispatch-plan.json"
+        )
+        manifest["dispatch"] = manifest_sections.build_dispatch_manifest(
+            self.output_dir, final_info
+        )
+        coverage = manifest_sections.build_coverage_manifest(
+            self.output_dir,
+            events,
+            context,
+            repo_path,
+            final_info,
+            normalize_paths=normalize_repo_paths,
+        )
+        manifest["coverage"] = coverage
+        manifest["availability"]["coverage"] = coverage is not None
+        manifest["dependency_refresh"] = (
+            manifest_sections.build_dependency_refresh_manifest(self.output_dir)
+        )
+        manifest["availability"]["dependency_refresh"] = (
+            manifest["dependency_refresh"] is not None
+        )
+        manifest["reviewer_markdown"] = (
+            manifest_sections.build_reviewer_markdown_manifest(self.output_dir)
+        )
+        manifest["availability"]["reviewer_markdown"] = (
+            manifest["reviewer_markdown"] is not None
+        )
+        manifest["findings_markdown"] = (
+            manifest_sections.build_findings_markdown_manifest(self.output_dir)
+        )
+        manifest["availability"]["findings_markdown"] = (
+            manifest["findings_markdown"] is not None
+        )
+        manifest["worktree_hygiene"] = (
+            manifest_sections.build_worktree_hygiene_manifest(self.output_dir)
+        )
+        manifest["availability"]["worktree_hygiene"] = (
+            manifest["worktree_hygiene"] is not None
+        )
+        # A family of its own, never folded into manifest["agents"]: the
+        # reconciliator and the decision critic are not reviewers, are
+        # never in the dispatch plan, and must not move any reviewer count.
+        manifest["synthesis_agents"] = (
+            manifest_sections.build_synthesis_agents_manifest(self.output_dir)
+        )
+        manifest["availability"]["synthesis_agents"] = (
+            manifest["synthesis_agents"] is not None
+        )
+        manifest["usage"] = (
+            manifest_sections.build_usage_manifest(self.output_dir)
+        )
+        manifest["availability"]["usage"] = manifest["usage"] is not None
+        manifest["skipped_steps"] = (
+            manifest_sections.build_skipped_steps_manifest(self.output_dir)
+        )
+        manifest["availability"]["skipped_steps"] = (
+            manifest["skipped_steps"] is not None
+        )
+        if self._event_parse_gaps:
+            manifest["event_parse_gaps"] = self._event_parse_gaps
+        return manifest
+
+    def _materialize_manifest(self, status: str) -> None:
+        """Atomically refresh the run manifest without affecting telemetry."""
+        try:
+            manifest_path = self.manifest_path
+            if not manifest_path:
+                return
+            manifest = self._build_manifest(status)
+            atomic_write_json(manifest_path, manifest)
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            pass
+
+    def reproject_usage(self) -> str:
+        """Patch a SETTLED manifest's `usage` section out of band.
+
+        A normal run projects `usage` wholesale, inside `_build_manifest`,
+        every time an event is appended — the last time being `finalize()`.
+        This exists for the one case that flow never reaches again: a
+        manual re-run of `usage_snapshot.py`'s CLI, long after `finalize()`
+        already returned, over a manifest that already settled. Nothing
+        else revisits `usage` after that point, so a freshly re-measured
+        snapshot would silently diverge from what the manifest still
+        reports without this — the exact gap the CLI's monotonic upgrade
+        exists to close.
+
+        Two gates keep the patch narrow and safe, both fail CLOSED (no
+        write, `False`):
+
+        * ``status == "complete"``. A still-running manifest is
+          `finalize()`'s territory alone — patching `usage` here while a
+          run is still producing steps would risk publishing a manifest
+          with a stale `usage` beside a fresher `run`/`dispatch`/etc., or
+          racing `finalize()`'s own full rebuild. Skipping here costs
+          nothing real: the in-pipeline step-11 call into this method
+          reaches it while the manifest still reads "running" (finalize
+          has not appended `pipeline_end` yet), so it is a no-op every
+          time; `finalize()`'s own full rebuild, moments later in the same
+          run, is what actually settles `usage` for a normal pipeline run.
+        * ``schema == EVENT_SCHEMA``. An unsupported-schema manifest is not
+          this method's to interpret; writing into a shape it does not
+          recognize would be worse than the read-only paths that already
+          refuse the same manifests.
+
+        Only ``usage`` and its ``availability.usage`` companion flag are
+        ever touched — every other field is left exactly as the last full
+        rebuild wrote it. Returns a reason string rather than a bool,
+        because "nothing was written" covers four different facts a caller
+        cannot otherwise tell apart — and on a settled, current-schema
+        manifest the io_failure case is the one a human re-running by
+        hand needs to see:
+
+        * ``"written"`` — a write happened (including one that honestly
+          records ``usage: None`` because the snapshot itself is absent
+          or unreadable).
+        * ``"absent"`` — no manifest exists to patch.
+        * ``"not_settled"`` — the manifest still reads running; the
+          normal in-pipeline case.
+        * ``"unsupported_schema"`` — a schema this method does not
+          recognize, or a manifest that is not a JSON object at all.
+        * ``"io_failure"`` — the marker, the manifest read, or the write
+          raised.
+        """
+        # The marker read behind this property raises on a corrupt or
+        # unreadable marker file — the same class _materialize_manifest
+        # guards inside its own try. UnicodeDecodeError is a ValueError.
+        try:
+            manifest_path = self.manifest_path
+        except (OSError, ValueError):
+            return "io_failure"
+        if not manifest_path or not os.path.isfile(manifest_path):
+            return "absent"
+        try:
+            with open(manifest_path, encoding="utf-8") as source:
+                manifest = json.load(source)
+        except (OSError, ValueError):
+            return "io_failure"
+        if not isinstance(manifest, dict):
+            return "unsupported_schema"
+        if manifest.get("schema") != EVENT_SCHEMA:
+            return "unsupported_schema"
+        if manifest.get("status") != "complete":
+            return "not_settled"
+        section = manifest_sections.build_usage_manifest(self.output_dir)
+        manifest["usage"] = section
+        availability = manifest.get("availability")
+        if not isinstance(availability, dict):
+            availability = {}
+            manifest["availability"] = availability
+        availability["usage"] = section is not None
+        try:
+            atomic_write_json(manifest_path, manifest)
+        except (OSError, TypeError, ValueError):
+            return "io_failure"
+        return "written"
+
+    def _read_first_event(self) -> Optional[dict]:
+        """Read the immutable first JSONL event (the pipeline_start line).
+
+        Cached per instance after the first successful read — start() writes
+        the line once and it never changes, so every consumer (event identity,
+        quick mode, repo path) shares one file read instead of scanning the
+        growing log.
+        """
+        cached = getattr(self, "_first_event", None)
+        if cached is not None:
+            return cached
+        if not self.log_path or not os.path.isfile(self.log_path):
+            return None
+        try:
+            with open(self.log_path, "rb") as f:
+                first_line = f.readline().strip()
+            if not first_line:
+                return None
+            event = json.loads(first_line)
+        except (json.JSONDecodeError, OSError, TypeError, UnicodeError):
+            return None
+        if not isinstance(event, dict):
+            return None
+        self._first_event = event
+        return event
+
+    def _read_event_identity(self) -> tuple[int, str]:
+        """Read durable event identity from memory or the pipeline_start event."""
+        run_id = getattr(self, "_run_id", "")
+        if run_id:
+            return EVENT_SCHEMA, run_id
+
+        start = self._read_first_event()
+        if start is not None:
+            return (
+                start.get("schema", EVENT_SCHEMA),
+                start.get("run_id", ""),
+            )
+        return EVENT_SCHEMA, ""
 
     def _duration_since_prev(self, now: datetime) -> Optional[int]:
         """Calculate milliseconds since the previous event."""
@@ -266,14 +1042,17 @@ class ReviewTelemetry:
         if not self._log_path or not os.path.isfile(self._log_path):
             return None
         try:
+            line = ""
             with open(self._log_path) as f:
-                lines = f.readlines()
-            if not lines:
-                return None
-            line = lines[line_index].strip()
+                if line_index == 0:
+                    line = f.readline().strip()
+                else:
+                    for raw in f:
+                        if raw.strip():
+                            line = raw.strip()
             if line:
                 return datetime.fromisoformat(json.loads(line)["timestamp"])
-        except (json.JSONDecodeError, KeyError, ValueError, IndexError):
+        except (json.JSONDecodeError, KeyError, ValueError, OSError):
             pass
         return None
 
@@ -284,38 +1063,39 @@ class ReviewTelemetry:
         cross-process case where start() and finalize() run in different
         invocations of the pipeline script.
         """
-        if self.log_path and os.path.isfile(self.log_path):
-            try:
-                with open(self.log_path) as f:
-                    first_line = f.readline().strip()
-                if first_line:
-                    event = json.loads(first_line)
-                    if event.get("event") == "pipeline_start":
-                        return event.get("pipeline", {}).get("quick_mode", False)
-            except (json.JSONDecodeError, KeyError, OSError):
-                pass
+        event = self._read_first_event()
+        if event is not None and event.get("event") == "pipeline_start":
+            pipeline = event.get("pipeline", {})
+            if isinstance(pipeline, dict):
+                return pipeline.get("quick_mode", False)
         return getattr(self, "_quick_mode", False)
 
-    def _snapshot(self) -> dict:
+    def _output_extracts(self) -> dict:
+        """Extract every output-file summary once for shared consumption."""
+        return {
+            "context": self._extract_context(),
+            "dispatch": self._extract_dispatch(),
+            "agents": self._extract_agent_results(),
+            "findings": self._extract_findings(),
+        }
+
+    def _snapshot(self, extracts: Optional[dict] = None) -> dict:
         """Build a snapshot of the output directory state."""
+        extracts = extracts if extracts is not None else self._output_extracts()
         snap: Dict[str, Any] = {}
         snap["files"] = self._list_files()
 
-        context = self._extract_context()
-        if context:
-            snap["context"] = context
+        if extracts["context"]:
+            snap["context"] = extracts["context"]
 
-        dispatch = self._extract_dispatch()
-        if dispatch:
-            snap["dispatch"] = dispatch
+        if extracts["dispatch"]:
+            snap["dispatch"] = extracts["dispatch"]
 
-        agents = self._extract_agent_results()
-        if agents:
-            snap["agent_results"] = agents
+        if extracts["agents"]:
+            snap["agent_results"] = extracts["agents"]
 
-        findings = self._extract_findings()
-        if findings:
-            snap["findings"] = findings
+        if extracts["findings"]:
+            snap["findings"] = extracts["findings"]
 
         return snap
 
@@ -342,6 +1122,9 @@ class ReviewTelemetry:
             pr = ctx.get("pr", {})
             git = ctx.get("git", {})
             size = ctx.get("pr_size", {})
+            changed_files = normalize_repo_paths(
+                git.get("changed_files"), strict=True
+            )
             return {
                 "pr_number": pr.get("number"),
                 "pr_title": pr.get("title"),
@@ -351,7 +1134,10 @@ class ReviewTelemetry:
                 "base_ref": git.get("base_ref"),
                 "head_ref": git.get("head_ref"),
                 "commit_count": git.get("commit_count"),
-                "changed_files_count": len(git.get("changed_files", [])),
+                "changed_files": changed_files,
+                "changed_files_count": (
+                    len(changed_files) if changed_files is not None else None
+                ),
                 "pr_size": size,
                 "linked_issues": ctx.get("linked_issues", []),
                 "source": ctx.get("source"),
@@ -368,10 +1154,13 @@ class ReviewTelemetry:
         try:
             with open(path) as f:
                 plan = json.load(f)
-            agents = plan.get("agents", [])
+            if not isinstance(plan, dict):
+                return None
+            raw_agents = plan.get("agents")
+            agents = validate_dispatch_plan_agents(raw_agents)
             by_status: Dict[str, List[str]] = {}
             for a in agents:
-                status = a.get("status", "SKIP")
+                status = a["status"]
                 by_status.setdefault(status, []).append(a["name"])
             return {
                 "total_agents": len(agents),
@@ -385,7 +1174,7 @@ class ReviewTelemetry:
                     for a in agents
                 },
             }
-        except (json.JSONDecodeError, KeyError):
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
             return None
 
     def _extract_agent_results(self) -> Optional[dict]:
@@ -399,9 +1188,12 @@ class ReviewTelemetry:
                     continue
                 path = os.path.join(self.output_dir, name)
                 base = name.replace("-review.json", "")
+                read = read_findings_file(path)
+                if read.status != FINDINGS_READ_OK:
+                    results[base] = {"error": "malformed"}
+                    continue
                 try:
-                    with open(path) as f:
-                        data = json.load(f)
+                    data = read.findings
                     issues = data.get("issues", [])
                     severities = dict(Counter(
                         i.get("severity", "medium").lower() for i in issues
@@ -411,6 +1203,7 @@ class ReviewTelemetry:
                         "issue_count": len(issues),
                         "severities": severities,
                     }
+                    results[base].update(_advisory_measurement(data))
                 except (json.JSONDecodeError, KeyError):
                     results[base] = {"error": "malformed"}
         except OSError:
@@ -420,56 +1213,71 @@ class ReviewTelemetry:
     def _extract_findings(self) -> Optional[dict]:
         """Extract reconciled findings summary."""
         path = os.path.join(self.output_dir, "review-findings.json")
-        if not os.path.isfile(path):
+        read = read_findings_file(path)
+        if read.status != FINDINGS_READ_OK:
             return None
         try:
-            with open(path) as f:
-                data = json.load(f)
+            data = read.findings
             issues = data.get("issues", [])
             severities = dict(Counter(
                 i.get("severity", "medium").lower() for i in issues
             ))
-            return {
+            findings = {
                 "verdict": data.get("verdict"),
                 "total_issues": len(issues),
                 "severities": severities,
             }
+            findings.update(_advisory_measurement(data))
+            return findings
         except (json.JSONDecodeError, KeyError):
             return None
 
-    def _build_summary(self, total_duration_ms: Optional[int]) -> dict:
+    def _build_summary(
+        self,
+        total_duration_ms: Optional[int],
+        extracts: Optional[dict] = None,
+    ) -> dict:
         """Build pipeline summary from all available data."""
+        extracts = extracts if extracts is not None else self._output_extracts()
         summary: Dict[str, Any] = {"total_duration_ms": total_duration_ms}
         summary["quick_mode"] = self._read_quick_mode()
 
-        context = self._extract_context()
+        context = extracts["context"]
         if context:
             summary["pr_size_category"] = context.get("pr_size", {}).get("category")
             summary["changed_files_count"] = context.get("changed_files_count")
             summary["commit_count"] = context.get("commit_count")
 
-        dispatch = self._extract_dispatch()
+        dispatch = extracts["dispatch"]
         if dispatch:
             summary["agents_total"] = dispatch["total_agents"]
             by_status = dispatch.get("by_status", {})
             summary["agents_dispatched"] = sum(
-                len(v) for k, v in by_status.items() if k.startswith("DISPATCH")
+                len(v) for k, v in by_status.items() if k in DISPATCHED_STATUSES
             )
             summary["agents_skipped"] = sum(
-                len(v) for k, v in by_status.items() if not k.startswith("DISPATCH")
+                len(v) for k, v in by_status.items() if k in SKIPPED_STATUSES
             )
 
-        agents = self._extract_agent_results()
+        agents = extracts["agents"]
         if agents:
             summary["agents_completed"] = len(agents)
             summary["total_agent_issues"] = sum(
                 a.get("issue_count", 0) for a in agents.values() if "error" not in a
             )
 
-        findings = self._extract_findings()
+        findings = extracts["findings"]
         if findings:
             summary["final_verdict"] = findings.get("verdict")
             summary["final_issues"] = findings.get("total_issues")
             summary["final_severities"] = findings.get("severities")
+            if "advisory_suppressed" in findings:
+                summary["final_advisory_suppressed"] = (
+                    findings["advisory_suppressed"]
+                )
+            if "verdict_without_advisory" in findings:
+                summary["final_verdict_without_advisory"] = (
+                    findings["verdict_without_advisory"]
+                )
 
         return summary

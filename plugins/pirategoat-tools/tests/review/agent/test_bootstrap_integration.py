@@ -1,8 +1,12 @@
 """Tests for review/agent/bootstrap.py — integration tests (subprocess runs against all agents)."""
 
+from concurrent.futures import ThreadPoolExecutor
 import importlib
 import importlib.util
+import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -16,6 +20,8 @@ BOOTSTRAP_SCRIPT = SCRIPTS_DIR / "review" / "agent" / "bootstrap.py"
 
 sys.path.insert(0, str(SCRIPTS_DIR))
 
+from review.agent.output import ReviewOutputBuilder
+
 # Import AGENT_CONFIG to derive ALL_AGENTS
 _spec = importlib.util.spec_from_file_location("bootstrap_reviewer", str(BOOTSTRAP_SCRIPT))
 _mod = importlib.util.module_from_spec(_spec)
@@ -23,6 +29,9 @@ _spec.loader.exec_module(_mod)
 AGENT_CONFIG = _mod.AGENT_CONFIG
 build_output = _mod.build_output
 derive_reviewer_name = _mod.derive_reviewer_name
+extract_scope_files = _mod.extract_scope_files
+extract_not_diffed_files = _mod.extract_not_diffed_files
+extract_list_only_files = _mod.extract_list_only_files
 
 ALL_AGENTS = sorted(AGENT_CONFIG.keys())
 
@@ -90,8 +99,8 @@ class TestCategoryRepresentatives:
         # Personalization
         assert "REVIEWER_NAME: performance" in stdout
         assert f"{tmp_path}/performance-review.json" in stdout
-        assert f"{tmp_path}/performance-review.md" in stdout
-        assert 'reviewer="performance"' in stdout
+        assert f"{tmp_path}/performance-review.md" not in stdout
+        assert "PIRATEGOAT_REVIEWER_NAME=performance" in stdout
 
         # Budget present with hard ceiling
         assert "=== REVIEW BUDGET ===" in stdout
@@ -107,6 +116,195 @@ class TestCategoryRepresentatives:
         # REVIEW SCOPE header not duplicated
         assert stdout.count("=== REVIEW SCOPE ===") <= 1
 
+    def test_agent_start_telemetry_uses_the_already_parsed_scope_paths(
+        self, tmp_path
+    ):
+        telemetry_log = tmp_path / "review.jsonl"
+        telemetry_log.write_text(json.dumps({
+            "schema": 1,
+            "run_id": "run-1",
+            "event": "pipeline_start",
+            "pipeline": {"repo_path": _get_fixture_repo()},
+        }) + "\n")
+        (tmp_path / ".telemetry-log-path").write_text(str(telemetry_log))
+
+        result = run_bootstrap(
+            "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
+        )
+
+        assert result.returncode == 0
+        # Telemetry scope covers the full in-scope set: inline FILES entries,
+        # deferred NOT DIFFED paths (in-scope work whose diffs were withheld
+        # for context budget), and list-only CHANGED (no diff) paths the
+        # reviewer is told to inspect when relevant.
+        expected_scope = sorted(set(
+            extract_scope_files(result.stdout)
+            + extract_not_diffed_files(result.stdout)
+            + extract_list_only_files(result.stdout)
+        ))
+        events = [json.loads(line) for line in telemetry_log.read_text().splitlines()]
+        agent_start = next(
+            event for event in events if event.get("event") == "agent_start"
+        )
+        assert expected_scope
+        assert agent_start["scope"]["paths"] == expected_scope
+
+    def test_ref_mode_instance_writes_scope_summaries_and_sidecars(
+        self, tmp_path, monkeypatch
+    ):
+        """Adapter ref-mode instances must leave the same per-agent scope
+        evidence as native reviewers — instance-named scope summaries (so
+        run-level coverage reconciliation sees adapter scopes) and an
+        instance-named deferred sidecar (so the builder's declaration
+        verification finds it via PIRATEGOAT_REVIEWER_NAME)."""
+        ref = tmp_path / "renewals.md"
+        ref.write_text("Review renewals logic end to end.")
+
+        result = run_bootstrap(
+            "--agent", "repo-reviewer-adapter",
+            "--repo-agent-ref", str(ref),
+            "--instance-name", "repo-renewals-reviewer",
+            "--channel", "advisory",
+            "--scope-domains", "code",
+            "--output-dir", str(tmp_path),
+        )
+
+        assert result.returncode == 0
+        summary = tmp_path / "repo-renewals-reviewer-scope-summary-code.json"
+        assert summary.is_file()
+        data = json.loads(summary.read_text())
+        assert data["domain"] == "code"
+        assert isinstance(data["in_scope_stat_lines"], int)
+        # Identity chain: sidecar name matches what the builder derives
+        # from PIRATEGOAT_REVIEWER_NAME.
+        assert "PIRATEGOAT_REVIEWER_NAME=repo-renewals" in result.stdout
+        assert (tmp_path / "repo-renewals-deferred-files.json").is_file()
+        entitlement = json.loads(
+            (tmp_path / "repo-renewals-advisory-entitlement.json").read_text()
+        )
+        assert entitlement == {"schema": 1, "advisory_entitled": True}
+
+        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
+        monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "repo-renewals")
+        builder = ReviewOutputBuilder(pr_id="1", reviewer="repo-renewals")
+        builder.add_issue(
+            severity="critical", title="Advisory", file="src/app.py",
+            description="d", recommendation="r", line=1,
+            channel="advisory",
+        )
+        assert builder.to_dict()["verdict"] == "approve"
+
+    def test_ref_mode_scope_failure_is_an_error_not_a_clean_exit(
+        self, tmp_path
+    ):
+        """When every declared ref-mode domain fails scope discovery (bad
+        range, git error, timeout), the adapter must report the
+        infrastructure failure — a NO_DOMAIN_FILES exit would let the repo
+        reviewer emit a clean not-applicable result for a run that never
+        inspected anything."""
+        ref = tmp_path / "renewals.md"
+        ref.write_text("Review renewals logic end to end.")
+
+        result = run_bootstrap(
+            "--agent", "repo-reviewer-adapter",
+            "--repo-agent-ref", str(ref),
+            "--instance-name", "repo-renewals-reviewer",
+            "--scope-domains", "code",
+            "--output-dir", str(tmp_path),
+            "--range", "no-such-ref..HEAD",
+        )
+
+        assert result.returncode == 1
+        assert "STATUS: ERROR" in result.stdout
+        assert "No files matched" not in result.stdout
+
+    def test_ref_mode_agent_start_records_the_dispatched_model_tier(
+        self, tmp_path
+    ):
+        """A repo reviewer dispatched with an explicit model override must
+        log that tier — the static adapter tier ("inherit") would make the
+        durable manifest report conflicting models for one agent identity
+        (the dispatch projection carries the override)."""
+        telemetry_log = tmp_path / "review.jsonl"
+        telemetry_log.write_text(json.dumps({
+            "schema": 1,
+            "run_id": "run-1",
+            "event": "pipeline_start",
+            "pipeline": {"repo_path": _get_fixture_repo()},
+        }) + "\n")
+        (tmp_path / ".telemetry-log-path").write_text(str(telemetry_log))
+        ref = tmp_path / "renewals.md"
+        ref.write_text("Review renewals logic end to end.")
+
+        result = run_bootstrap(
+            "--agent", "repo-reviewer-adapter",
+            "--repo-agent-ref", str(ref),
+            "--instance-name", "repo-renewals-reviewer",
+            "--scope-domains", "code",
+            "--model-tier", "opus",
+            "--output-dir", str(tmp_path),
+        )
+
+        assert result.returncode == 0
+        events = [
+            json.loads(line)
+            for line in telemetry_log.read_text().splitlines()
+        ]
+        agent_start = next(
+            event for event in events if event.get("event") == "agent_start"
+        )
+        assert agent_start["agent"] == "repo-renewals-reviewer"
+        assert agent_start["model_tier"] == "opus"
+
+    def test_native_agent_start_keeps_the_registry_model_tier(self, tmp_path):
+        """Outside ref-mode the registry is the single source of truth for
+        the tier — a stray --model-tier flag must not override it."""
+        telemetry_log = tmp_path / "review.jsonl"
+        telemetry_log.write_text(json.dumps({
+            "schema": 1,
+            "run_id": "run-1",
+            "event": "pipeline_start",
+            "pipeline": {"repo_path": _get_fixture_repo()},
+        }) + "\n")
+        (tmp_path / ".telemetry-log-path").write_text(str(telemetry_log))
+
+        result = run_bootstrap(
+            "--agent", "performance-reviewer",
+            "--model-tier", "opus",
+            "--output-dir", str(tmp_path),
+        )
+
+        assert result.returncode == 0
+        events = [
+            json.loads(line)
+            for line in telemetry_log.read_text().splitlines()
+        ]
+        agent_start = next(
+            event for event in events if event.get("event") == "agent_start"
+        )
+        assert agent_start["model_tier"] == "sonnet"
+
+    def test_deferred_sidecar_backs_add_unreviewed_validation(self, tmp_path):
+        """Bootstrap persists the authoritative NOT DIFFED set so the
+        builder can reject declarations that match no deferred file."""
+        result = run_bootstrap(
+            "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
+        )
+        assert result.returncode == 0
+        sidecar = tmp_path / "performance-deferred-files.json"
+        assert sidecar.is_file()
+        data = json.loads(sidecar.read_text())
+        assert sorted(data["deferred_files"]) == sorted(
+            extract_not_diffed_files(result.stdout)
+        )
+        # Closes the main()->build_output() seam: not_diffed_count must be
+        # derived from this exact deferred set, not a neighboring fact
+        # (e.g. total scope files) that also happens to be non-empty here.
+        # A mis-wired count would pass every other assertion in this suite.
+        assert ("Not reviewed (budget):" in result.stdout) == bool(
+            data["deferred_files"]
+        )
+
     def test_test_agent(self, tmp_path):
         """Test-reviewer agent gets DOMAIN RULES (php-tests-reviewer)."""
         result = run_bootstrap("--agent", "php-tests-reviewer", "--output-dir", str(tmp_path))
@@ -121,7 +319,7 @@ class TestCategoryRepresentatives:
         assert "=== REVIEW BUDGET ===" in stdout
         assert "REVIEWER_NAME: php-tests" in stdout
         assert f"{tmp_path}/php-tests-review.json" in stdout
-        assert 'reviewer="php-tests"' in stdout
+        assert "PIRATEGOAT_REVIEWER_NAME=php-tests" in stdout
 
         # Other conditional sections absent
         assert "=== EXPLORATION SCOPE ===" not in stdout
@@ -137,7 +335,7 @@ class TestCategoryRepresentatives:
 
         # Personalization
         assert "REVIEWER_NAME: patterns" in stdout
-        assert 'reviewer="patterns"' in stdout
+        assert "PIRATEGOAT_REVIEWER_NAME=patterns" in stdout
 
         # Not a test agent — no DOMAIN RULES
         assert "=== DOMAIN RULES ===" not in stdout
@@ -156,7 +354,7 @@ class TestCategoryRepresentatives:
 
         # Personalization still works
         assert "REVIEWER_NAME: tests-mutation" in stdout
-        assert 'reviewer="tests-mutation"' in stdout
+        assert "PIRATEGOAT_REVIEWER_NAME=tests-mutation" in stdout
 
     def test_secondary_domains_agent(self, tmp_path):
         """Agent with secondary_domains gets SECONDARY SCOPE (security-reviewer).
@@ -284,6 +482,8 @@ class TestArchitecturalInvariants:
             output_dir=str(tmp_path),
             pr_number=None,
             reviewer_name="code",
+            not_diffed_count=0,
+            has_php=False,
         )
 
         assert section in prompt
@@ -311,6 +511,190 @@ class TestArchitecturalInvariants:
             )
 
 
+class TestCanonicalExecutableBuilderSource:
+    """Bootstrap is the sole executable ReviewOutputBuilder command source."""
+
+    def test_protocol_is_reference_only_and_bootstrap_emits_one_builder_command(
+        self, tmp_path
+    ):
+        protocol = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
+        review_rules = _mod.extract_protocol_sections(
+            protocol,
+            _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS,
+        )
+        prompt = build_output(
+            agent_name="security-reviewer",
+            plugin_root=str(PLUGIN_ROOT),
+            status="OK",
+            review_rules=review_rules,
+            domain_rules=None,
+            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number="42",
+            reviewer_name="security",
+            not_diffed_count=0,
+            has_php=False,
+        )
+
+        assert "python3 <<'PY'" not in protocol
+        for shell_variable in (
+            "PIRATEGOAT_PLUGIN_ROOT=",
+            "PIRATEGOAT_OUTPUT_DIR=",
+            "PIRATEGOAT_REVIEWER_NAME=",
+            "PIRATEGOAT_PR_ID=",
+        ):
+            assert shell_variable not in protocol
+        assert prompt.count("python3 <<'PY'") == 1
+        assert f"PIRATEGOAT_PLUGIN_ROOT={PLUGIN_ROOT}" in prompt
+        assert f"PIRATEGOAT_OUTPUT_DIR={tmp_path}" in prompt
+        assert "PIRATEGOAT_REVIEWER_NAME=security" in prompt
+        assert "PIRATEGOAT_PR_ID=42" in prompt
+        assert (
+            "builder = ReviewOutputBuilder(pr_id=pr_id, reviewer=reviewer_name)"
+            in prompt
+        )
+        assert "result = builder.save(output_dir)" in prompt
+        assert "MUST NOT create or write a temporary builder script" in prompt
+        assert "generic filenames collide" in prompt
+        assert "RECORDED COUNTS" in prompt
+        assert "Return signal format:" in prompt
+        assert "STATUS: FINISHED" in prompt
+        assert f"{tmp_path}/security-review.json" in prompt
+        assert f"{tmp_path}/security-review.md" not in prompt
+
+    def test_envelope_carries_the_plugin_version_assignment(self, tmp_path):
+        """The producing plugin version travels in the same envelope.
+
+        Emitted unconditionally, empty when unresolved: it is a fact that
+        is sometimes unknown, never one that is sometimes absent, and the
+        transcript analyzers recognize the builder command by its
+        assignment names.
+        """
+        (tmp_path / "run-config.json").write_text(
+            json.dumps({"mode": "pr", "plugin_version": "1.114.0"})
+        )
+        prompt = build_output(
+            agent_name="security-reviewer",
+            plugin_root=str(PLUGIN_ROOT),
+            status="OK",
+            review_rules="rules",
+            domain_rules=None,
+            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number="42",
+            reviewer_name="security",
+            not_diffed_count=0,
+            has_php=False,
+            plugin_version="1.114.0",
+        )
+        assert "PIRATEGOAT_PLUGIN_VERSION=1.114.0" in prompt
+
+    def test_envelope_keeps_the_assignment_when_the_version_is_unknown(
+        self, tmp_path
+    ):
+        prompt = build_output(
+            agent_name="security-reviewer",
+            plugin_root=str(PLUGIN_ROOT),
+            status="OK",
+            review_rules="rules",
+            domain_rules=None,
+            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number="42",
+            reviewer_name="security",
+            not_diffed_count=0,
+            has_php=False,
+        )
+        assert "PIRATEGOAT_PLUGIN_VERSION=''" in prompt
+
+    def test_output_dir_is_taught_as_an_artifact_only_namespace(self, tmp_path):
+        """Scratch work has a home, and the briefing has to name it.
+
+        A field run had a reviewer awk-slice its scoped diff into three
+        ad-hoc .patch files inside OUTPUT_DIR. The technique was sound; the
+        location was never taught, and the only $TMPDIR mention reaching a
+        reviewer was buried in a protocol probe example.
+        """
+        prompt = build_output(
+            agent_name="security-reviewer",
+            plugin_root=str(PLUGIN_ROOT),
+            status="OK",
+            review_rules="rules",
+            domain_rules=None,
+            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number="42",
+            reviewer_name="security",
+            not_diffed_count=0,
+            has_php=False,
+        )
+        assert "OUTPUT_DIR accepts only your named artifacts" in prompt
+        assert "goes in $TMPDIR" in prompt
+
+    def test_envelope_carries_the_budget_target_when_one_is_set(self, tmp_path):
+        """save() can only echo the target if the target reaches the builder.
+
+        The briefing states it once, far from the moment of decision; the
+        echo restates it where the reviewer can still act. This assignment
+        is the only channel between the two.
+        """
+        prompt = build_output(
+            agent_name="security-reviewer",
+            plugin_root=str(PLUGIN_ROOT),
+            status="OK",
+            review_rules="rules",
+            domain_rules=None,
+            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number="42",
+            reviewer_name="security",
+            not_diffed_count=0,
+            has_php=False,
+            review_budget=80,
+        )
+        assert "PIRATEGOAT_REVIEW_BUDGET=80" in prompt
+        assert prompt.count("python3 <<'PY'") == 1
+
+    def test_envelope_omits_the_budget_assignment_when_there_is_none(
+        self, tmp_path
+    ):
+        """No calibrated budget is an absence, not an unknown value — an
+        empty target would be echoed back as a number the run never set."""
+        prompt = build_output(
+            agent_name="security-reviewer",
+            plugin_root=str(PLUGIN_ROOT),
+            status="OK",
+            review_rules="rules",
+            domain_rules=None,
+            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number="42",
+            reviewer_name="security",
+            not_diffed_count=0,
+            has_php=False,
+        )
+        assert "PIRATEGOAT_REVIEW_BUDGET" not in prompt
+
+    def test_main_reads_the_version_from_the_run_config_stamp(self, tmp_path):
+        """One detector: step 1 stamps run-config.json, bootstrap forwards it.
+
+        Re-detecting here would create a second source of the same fact.
+        """
+        (tmp_path / "run-config.json").write_text(
+            json.dumps({"mode": "pr", "plugin_version": "9.9.9"})
+        )
+        result = run_bootstrap(
+            "--agent", "security-reviewer", "--output-dir", str(tmp_path)
+        )
+        assert "PIRATEGOAT_PLUGIN_VERSION=9.9.9" in result.stdout
+
+
 class TestNotApplicableCompletionContract:
     """The shared protocol is the sole executable abstention recipe."""
 
@@ -331,17 +715,16 @@ class TestNotApplicableCompletionContract:
             output_dir=str(tmp_path),
             pr_number=None,
             reviewer_name="woo-regression",
+            not_diffed_count=0,
+            has_php=False,
         )
 
         assert "builder.mark_not_applicable(" in prompt
         assert "builder.save(OUTPUT_DIR)" in prompt
         assert "STATUS: FINISHED" in prompt
 
-    def test_output_instructions_require_script_invocation_and_count_reconciliation(self, tmp_path):
-        """Bug 2 regression guard: agents must not drive the builder via
-        inline `python3 -c` (finding prose breaks shell quoting), and must
-        copy COUNTS from save()'s RECORDED echo instead of self-reporting
-        from intent (which masked the line=None demotion)."""
+    def test_output_instructions_require_collision_safe_builder_invocation(self, tmp_path):
+        """Parallel reviewers must execute the builder without a shared script file."""
         prompt = build_output(
             agent_name="security-reviewer",
             plugin_root=str(PLUGIN_ROOT),
@@ -353,28 +736,150 @@ class TestNotApplicableCompletionContract:
             output_dir=str(tmp_path),
             pr_number=None,
             reviewer_name="security",
+            not_diffed_count=0,
+            has_php=False,
         )
 
+        heredoc_body = prompt.split("python3 <<'PY'\n", 1)[1].split("\nPY", 1)[0]
+        compile(heredoc_body, "<bootstrap builder example>", "exec")
+
+        assert "MUST use a one-shot quoted heredoc" in prompt
+        assert "python3 <<'PY'" in prompt
+        assert "MUST NOT create or write a temporary builder script with the Write tool" in prompt
+        assert "parallel reviewers share the parent-session scratch directory" in prompt
+        assert "generic filenames collide" in prompt
+        assert "script FILE (Write tool) or a heredoc" not in prompt
         assert "python3 -c" in prompt  # named so it can be forbidden
         assert "NEVER" in prompt
-        assert "heredoc" in prompt
+
+    def test_output_instructions_require_count_reconciliation(self, tmp_path):
+        """Agents must report the builder's recorded state, not their intent."""
+        prompt = build_output(
+            agent_name="security-reviewer",
+            plugin_root=str(PLUGIN_ROOT),
+            status="OK",
+            review_rules="",
+            domain_rules=None,
+            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number=None,
+            reviewer_name="security",
+            not_diffed_count=0,
+            has_php=False,
+        )
+
         assert "RECORDED COUNTS" in prompt
 
-    def test_protocol_fallback_output_example_uses_save(self):
-        """The File-Based Output section is skip-listed from bootstrap, so it
-        IS the fallback path. Its example must go through builder.save() —
-        a manual to_json()/to_markdown() write never prints the RECORDED
-        COUNTS echo, leaving fallback agents reporting counts from intent."""
-        protocol = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
-        start = protocol.index("## File-Based Output")
-        end = protocol.index("\n## ", start + 1)
-        section = protocol[start:end]
+    def test_registered_agents_derive_unique_nonempty_reviewer_names(self):
+        """Every shipped agent has a collision-safe output identity."""
+        reviewer_names = [derive_reviewer_name(agent_name) for agent_name in ALL_AGENTS]
 
-        assert "builder.save(" in section
-        assert "RECORDED COUNTS" in section
-        # The old example told agents to write to_json()/to_markdown() by hand,
-        # bypassing the echo entirely.
-        assert "builder.to_json()" not in section
+        assert all(reviewer_names)
+        assert len(reviewer_names) == len(set(reviewer_names))
+
+    def test_bootstrap_heredocs_save_distinct_outputs_for_parallel_reviewers(
+        self, tmp_path
+    ):
+        """Concrete bootstrap commands sharing OUTPUT_DIR cannot collide."""
+        output_dir = tmp_path / "shared reviewer's output folder"
+        invocations = []
+        for agent_name in ("security-reviewer", "performance-reviewer"):
+            reviewer_name = derive_reviewer_name(agent_name)
+            prompt = build_output(
+                agent_name=agent_name,
+                plugin_root=str(PLUGIN_ROOT),
+                status="OK",
+                review_rules="",
+                domain_rules=None,
+                scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+                exploration_scope=None,
+                output_dir=str(output_dir),
+                pr_number="42",
+                reviewer_name=reviewer_name,
+                not_diffed_count=0,
+                has_php=False,
+            )
+            start = prompt.index("PIRATEGOAT_PLUGIN_ROOT=")
+            end = prompt.index("\nPY", start) + len("\nPY")
+            invocations.append(
+                prompt[start:end].replace(
+                    "builder.set_files_reviewed(N)",
+                    "builder.set_files_reviewed(2)",
+                )
+            )
+
+        def run_invocation(invocation):
+            return subprocess.run(
+                ["bash", "-c", invocation],
+                cwd=tmp_path,
+                timeout=30,
+                capture_output=True,
+                text=True,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(run_invocation, invocations))
+
+        assert all(result.returncode == 0 for result in results), [
+            result.stderr for result in results
+        ]
+        assert all("RECORDED COUNTS:" in result.stdout for result in results)
+        assert sorted(path.name for path in output_dir.iterdir()) == [
+            "performance-review.json",
+            "security-review.json",
+        ]
+        for reviewer_name in ("security", "performance"):
+            saved = json.loads(
+                (output_dir / f"{reviewer_name}-review.json").read_text()
+            )
+            assert saved["reviewer"] == reviewer_name
+            assert saved["pr_id"] == "42"
+            assert saved["meta"]["files_reviewed"] == 2
+
+    def test_bootstrap_heredoc_executes_with_shell_sensitive_paths(self, tmp_path):
+        """Bootstrap must hand paths to stdin Python without literal interpolation."""
+        plugin_root = tmp_path / "plugin root's copy"
+        shutil.copytree(PLUGIN_ROOT / "scripts", plugin_root / "scripts")
+        output_dir = tmp_path / "reviewer's output folder"
+        prompt = build_output(
+            agent_name="security-reviewer",
+            plugin_root=str(plugin_root),
+            status="OK",
+            review_rules="",
+            domain_rules=None,
+            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            exploration_scope=None,
+            output_dir=str(output_dir),
+            pr_number="42",
+            reviewer_name="security",
+            not_diffed_count=0,
+            has_php=False,
+        )
+        start = prompt.index("PIRATEGOAT_PLUGIN_ROOT=")
+        end = prompt.index("\nPY", start) + len("\nPY")
+        shell_example = prompt[start:end]
+        shell_example = shell_example.replace(
+            "builder.set_files_reviewed(N)",
+            "builder.set_files_reviewed(3)",
+        )
+        python_files_before = set(tmp_path.rglob("*.py"))
+
+        result = subprocess.run(
+            ["bash", "-c", shell_example],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "RECORDED COUNTS:" in result.stdout
+        assert sorted(path.name for path in output_dir.iterdir()) == [
+            "security-review.json",
+        ]
+        saved = json.loads((output_dir / "security-review.json").read_text())
+        assert saved["meta"]["files_reviewed"] == 3
+        assert set(tmp_path.rglob("*.py")) == python_files_before
 
     def test_agent_definitions_do_not_duplicate_abstention_calls(self):
         offenders = [
@@ -541,9 +1046,20 @@ class TestVerificationMethodContract:
         assert "More agents = higher confidence" not in text
 
     def test_reconciliator_treats_clearance_conflicts_as_verification_targets(self):
+        """A clearance that contradicts a finding is resolved by verifying
+        the finding, not by counting sides.
+
+        Pinned on the rule's meaning rather than its old heading text
+        ("Clearance vs. finding"), which moved when the method-adequacy
+        judgment was lifted out to apply to EVERY clearance — the wording
+        can change, this contract cannot.
+        """
         text = (PLUGIN_ROOT / "agents/review-reconciliator.md").read_text()
-        assert "Clearance vs. finding" in text
+        assert "contradicts a finding" in text
         assert "never a vote" in text
+        # And the judgment that voids a bad-method clearance is not gated
+        # on some finding having disagreed with it first.
+        assert "Judge EVERY clearance by its method" in text
 
     def test_protocol_requires_add_clearance_for_absence_claims(self):
         text = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
@@ -580,9 +1096,78 @@ class TestVerificationMethodContract:
             output_dir=str(tmp_path),
             pr_number=None,
             reviewer_name="code",
+            not_diffed_count=0,
+            has_php=False,
         )
         assert "## Absence Claims" in prompt
         assert "searched pattern is absent" in prompt
+
+
+class TestEmpiricalProbeContract:
+    """The probe-naming convention must reach the reviewers that run code.
+
+    The sweep in orchestration deletes only untracked files whose BASENAME
+    carries `pirategoat-probe`. That enforcement half is inert unless the
+    producer half — this protocol section — actually reaches an agent, and
+    a section placed in a stripped part of the protocol reaches nobody
+    (the 1.108.0 failure `TestNotDiffedContractIsDelivered` guards for the
+    NOT DIFFED contract). This class is the same guard for the convention.
+    """
+
+    CLAUSES = (
+        "## Empirical Probes",
+        "Never create or modify tracked files",
+        "pirategoat-probe",
+        "FILENAME",
+        "git does not ignore",
+        "Create, run, and delete in a single command",
+        "git reset",
+    )
+
+    def _delivered_prompt(self, tmp_path):
+        protocol = (
+            PLUGIN_ROOT / "agents/shared/reviewer-protocol.md"
+        ).read_text()
+        review_rules = _mod.extract_protocol_sections(
+            protocol,
+            _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS,
+        )
+        return build_output(
+            agent_name="code-reviewer",
+            plugin_root=str(PLUGIN_ROOT),
+            status="OK",
+            review_rules=review_rules,
+            domain_rules=None,
+            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number=None,
+            reviewer_name="code",
+            not_diffed_count=0,
+            has_php=False,
+        )
+
+    @pytest.mark.parametrize("clause", CLAUSES)
+    def test_clause_reaches_agent_prompts(self, clause, tmp_path):
+        """Each clause survives skip-list extraction into the built prompt.
+
+        Compared with whitespace collapsed: the protocol is hard-wrapped
+        prose, so a clause spanning a line break is still delivered. Only
+        deleting or rewording it should fail this guard.
+        """
+        delivered = " ".join(self._delivered_prompt(tmp_path).split())
+        assert " ".join(clause.split()) in delivered
+
+    def test_section_is_not_in_the_skip_list(self):
+        """A future skip-list entry must not silently strip the convention."""
+        assert not any(
+            skipped.startswith("## Empirical Probes")
+            for skipped in _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
+        ), (
+            "The probe convention is policy, not mechanics bootstrap "
+            "performs — stripping it makes the residue sweep's producer "
+            "half reach zero agents."
+        )
 
 
 class TestSmokeAllAgents:
@@ -631,6 +1216,8 @@ class TestReviewOutputBuilderAPIExample:
             output_dir=str(output_dir),
             pr_number="42",
             reviewer_name="security",
+            not_diffed_count=0,
+            has_php=False,
         )
 
     def test_output_contains_add_issue_example(self, tmp_path):
@@ -655,9 +1242,11 @@ class TestReviewOutputBuilderAPIExample:
         assert str(tmp_path) in output
 
     def test_output_contains_set_files_reviewed(self, tmp_path):
-        """The usage example must show set_files_reviewed()."""
+        """The example must require the actual reviewed-file count."""
         output = self._build(tmp_path)
-        assert "set_files_reviewed(" in output
+        assert "builder.set_files_reviewed(N)" in output
+        assert "REQUIRED: replace N with the actual number of files you reviewed" in output
+        assert "builder.set_files_reviewed(1)" not in output
 
     def test_output_contains_set_confidence(self, tmp_path):
         """The usage example must show set_confidence()."""
@@ -695,6 +1284,8 @@ class TestBootstrapOutputSizeCap:
             output_dir=output_dir,
             pr_number="42",
             reviewer_name="security",
+            not_diffed_count=0,
+            has_php=False,
         )
 
     def test_small_scope_included_inline(self, tmp_path):
@@ -711,6 +1302,8 @@ class TestBootstrapOutputSizeCap:
             output_dir=str(tmp_path),
             pr_number="42",
             reviewer_name="security",
+            not_diffed_count=0,
+            has_php=False,
         )
         assert small_scope in output
 
@@ -748,6 +1341,8 @@ class TestBootstrapOutputSizeCap:
                 output_dir=str(tmp_path),
                 pr_number="42",
                 reviewer_name=reviewer_name,
+                not_diffed_count=0,
+                has_php=False,
             )
 
         security_output = build("security-reviewer", "security", "security")
@@ -766,97 +1361,444 @@ class TestBootstrapOutputSizeCap:
 
 
 class TestDynamicDispatchRisk:
-    """Bootstrap injects DYNAMIC_DISPATCH_RISK for dead-code-reviewer."""
+    """Bootstrap injects DYNAMIC_DISPATCH_RISK for dead-code-reviewer.
+
+    has_php is a REQUIRED fact the caller supplies (main() derives it from
+    telemetry_scope_paths — the same fact-based, sidecar-preferring path
+    union used for scope telemetry and the NOT DIFFED contract).
+    build_output() never parses scope_output for PHP filenames — see the
+    regression tests at the bottom of this class for the failure mode that
+    replaced.
+    """
+
+    def _build(self, tmp_path, has_php, scope_output="=== FILES ===\n=== DIFFS ===",
+               agent_name="dead-code-reviewer"):
+        return build_output(
+            agent_name=agent_name,
+            plugin_root="/fake/root",
+            status="OK",
+            review_rules="rules",
+            domain_rules=None,
+            scope_output=scope_output,
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number="42",
+            reviewer_name="dead-code",
+            not_diffed_count=0,
+            has_php=has_php,
+        )
 
     def test_dead_code_reviewer_gets_dispatch_risk(self, tmp_path):
         """dead-code-reviewer output includes DYNAMIC_DISPATCH_RISK."""
-        scope_with_php = "=== FILES ===\nsrc/payment.php  (+10 -5)\nsrc/utils.ts  (+3 -1)\n=== DIFFS ==="
-        output = build_output(
-            agent_name="dead-code-reviewer",
-            plugin_root="/fake/root",
-            status="OK",
-            review_rules="rules",
-            domain_rules=None,
-            scope_output=scope_with_php,
-            exploration_scope=None,
-            output_dir=str(tmp_path),
-            pr_number="42",
-            reviewer_name="dead-code",
-        )
+        output = self._build(tmp_path, has_php=True)
         assert "DYNAMIC_DISPATCH_RISK:" in output
 
     def test_dispatch_risk_high_with_php_files(self, tmp_path):
-        """DYNAMIC_DISPATCH_RISK is 'high' when PHP files are in scope."""
-        scope_with_php = "=== FILES ===\nsrc/payment.php  (+10 -5)\nsrc/utils.ts  (+3 -1)\n=== DIFFS ==="
-        output = build_output(
-            agent_name="dead-code-reviewer",
-            plugin_root="/fake/root",
-            status="OK",
-            review_rules="rules",
-            domain_rules=None,
-            scope_output=scope_with_php,
-            exploration_scope=None,
-            output_dir=str(tmp_path),
-            pr_number="42",
-            reviewer_name="dead-code",
-        )
+        """DYNAMIC_DISPATCH_RISK is 'high' when the caller's fact says PHP files are in scope."""
+        output = self._build(tmp_path, has_php=True)
         risk_line = [l for l in output.splitlines() if "DYNAMIC_DISPATCH_RISK:" in l]
         assert risk_line, "DYNAMIC_DISPATCH_RISK line not found in output"
         assert "high" in risk_line[0].lower()
 
     def test_dispatch_risk_low_without_php_files(self, tmp_path):
-        """DYNAMIC_DISPATCH_RISK is 'low' when no PHP files are in scope."""
-        scope_no_php = "=== FILES ===\nsrc/utils.ts  (+3 -1)\nsrc/component.tsx  (+20 -5)\n=== DIFFS ==="
-        output = build_output(
-            agent_name="dead-code-reviewer",
-            plugin_root="/fake/root",
-            status="OK",
-            review_rules="rules",
-            domain_rules=None,
-            scope_output=scope_no_php,
-            exploration_scope=None,
-            output_dir=str(tmp_path),
-            pr_number="42",
-            reviewer_name="dead-code",
-        )
+        """DYNAMIC_DISPATCH_RISK is 'low' when the caller's fact says no PHP files are in scope."""
+        output = self._build(tmp_path, has_php=False)
         risk_line = [l for l in output.splitlines() if "DYNAMIC_DISPATCH_RISK:" in l]
         assert risk_line, "DYNAMIC_DISPATCH_RISK line not found in output"
         assert "low" in risk_line[0].lower()
 
     def test_other_agents_no_dispatch_risk(self, tmp_path):
-        """Non-dead-code agents do NOT get DYNAMIC_DISPATCH_RISK."""
-        output = build_output(
-            agent_name="security-reviewer",
-            plugin_root="/fake/root",
-            status="OK",
-            review_rules="rules",
-            domain_rules=None,
-            scope_output="scope",
-            exploration_scope=None,
-            output_dir=str(tmp_path),
-            pr_number="42",
-            reviewer_name="security",
-        )
+        """Non-dead-code agents do NOT get DYNAMIC_DISPATCH_RISK, regardless of has_php."""
+        output = self._build(tmp_path, has_php=True, agent_name="security-reviewer")
         assert "DYNAMIC_DISPATCH_RISK:" not in output
+
+    def test_php_looking_text_cannot_force_high_when_fact_says_low(self, tmp_path):
+        """A scope_output full of .php filenames must not flip the decision
+        when the caller's fact (has_php=False) says otherwise.
+
+        This is the exact failure shape being fixed: the old implementation
+        derived has_php by splitting rendered scope_output text on a double
+        space and checking for a '.php' suffix — a second, independent
+        derivation of the same fact build_output() now receives explicitly.
+        """
+        php_looking_text = (
+            "=== FILES ===\n"
+            "src/handler.php  (+10 -5)\n"
+            "src/other.php  (+3 -1)\n"
+            "=== DIFFS ==="
+        )
+        output = self._build(tmp_path, has_php=False, scope_output=php_looking_text)
+        risk_line = [l for l in output.splitlines() if "DYNAMIC_DISPATCH_RISK:" in l]
+        assert risk_line, "DYNAMIC_DISPATCH_RISK line not found in output"
+        assert "low" in risk_line[0].lower()
+
+    def test_garbled_text_cannot_suppress_high_when_fact_says_php(self, tmp_path):
+        """A scope_output with no recognizable '.php' text must not suppress
+        the high-risk contract when the caller's fact says PHP files are
+        genuinely in scope.
+
+        This mirrors the NOT DIFFED fix's renamed-header test: a future
+        scope.py refactor that reformats or renames the FILES/DIFFS section
+        (spacing, column order, a new section name) must not silently flip
+        has_php just because the old '.php'-suffix text scan no longer
+        matches — the caller's fact is authoritative regardless of how
+        scope.py renders.
+        """
+        garbled_scope = (
+            "=== SCOPE TRUNCATED ===\n"
+            "Full scope written to external file; see it for details.\n"
+        )
+        assert ".php" not in garbled_scope  # the old text-scan's anchor is gone
+        output = self._build(tmp_path, has_php=True, scope_output=garbled_scope)
+        risk_line = [l for l in output.splitlines() if "DYNAMIC_DISPATCH_RISK:" in l]
+        assert risk_line, "DYNAMIC_DISPATCH_RISK line not found in output"
+        assert "high" in risk_line[0].lower()
+
+    def test_real_php_scope_yields_high_end_to_end(self, tmp_path):
+        """End-to-end (subprocess, real scope.py + main()) proof that a
+        real PHP file in scope drives has_php through main()'s derivation.
+
+        The class above covers build_output() in isolation, which cannot
+        catch a mutation to main()'s has_php derivation itself (e.g.
+        `has_php = False`) — that computation lives outside build_output(),
+        so a unit test that only calls build_output() directly is blind to
+        it. This runs the full subprocess chain against a fixture with a
+        genuinely in-scope PHP file (src/ProductManager.php; the domain
+        also excludes tests/ProductManagerTest.php, which must not count).
+        """
+        r = run_bootstrap(
+            "--agent", "dead-code-reviewer", "--output-dir", str(tmp_path),
+            fixture="multi-file-realistic.diff",
+        )
+        assert r.returncode == 0, r.stderr
+        assert "DYNAMIC_DISPATCH_RISK: high" in r.stdout
+
+    def test_real_php_free_scope_yields_low_end_to_end(self, tmp_path):
+        """End-to-end companion to the test above: a fixture with zero PHP
+        files (only .ts/.tsx) must drive has_php to False through the same
+        real main() derivation.
+        """
+        r = run_bootstrap(
+            "--agent", "dead-code-reviewer", "--output-dir", str(tmp_path),
+            fixture="js-ts-source.diff",
+        )
+        assert r.returncode == 0, r.stderr
+        assert "DYNAMIC_DISPATCH_RISK: low" in r.stdout
+
+    def test_domain_excluded_php_test_file_does_not_force_high_end_to_end(self, tmp_path):
+        """A PHP file present only under '=== SKIPPED === Outside domain'
+        (e.g. a test file the dead-code domain deliberately excludes) must
+        not count as PHP-in-scope.
+
+        This is the reachable divergence between the old and new
+        derivations on real scope text: the old text scan read every
+        non-'===' line, including the SKIPPED summary line
+        "Outside domain (N): tests/ProductManagerTest.php" — which has no
+        double space, so the whole line survived as one token and its
+        '.php' suffix set has_php=True even though no PHP file was
+        genuinely in scope. telemetry_scope_paths only contains files that
+        are actually in scope (inline, NOT DIFFED, or list-only), so it
+        excludes SKIPPED files correctly.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+        (repo / "README.md").write_text("# init\n")
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+
+        (repo / "src").mkdir()
+        (repo / "tests").mkdir()
+        (repo / "src" / "app.ts").write_text("export const x = 1;\n")
+        (repo / "tests" / "ProductManagerTest.php").write_text(
+            "<?php\nclass ProductManagerTest extends TestCase {\n"
+            "    public function test_get_product() {\n"
+            "        $this->assertTrue( true );\n    }\n}\n"
+        )
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "add ts app + php test"], cwd=repo, check=True)
+
+        out_dir = tmp_path / "out"
+        result = subprocess.run(
+            [sys.executable, str(BOOTSTRAP_SCRIPT), "--agent", "dead-code-reviewer",
+             "--output-dir", str(out_dir), "--range", "HEAD~1..HEAD"],
+            capture_output=True, text=True, timeout=60, cwd=repo,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "Outside domain" in result.stdout and "ProductManagerTest.php" in result.stdout, (
+            "fixture setup didn't produce the expected SKIPPED line — test doesn't pin what it claims"
+        )
+        assert "DYNAMIC_DISPATCH_RISK: low" in result.stdout
+
+
+class TestRepoRuleAndRefModeSelection:
+    """Repo rules must reach the reviewers they target (effective identity,
+    complete scope), adapter instances must receive their declared path
+    scope, and an explicit isolation request must never run inline."""
+
+    @staticmethod
+    def _write_review_context(output_dir: Path, rules=None, reviewers=None):
+        (output_dir / "review-context.json").write_text(json.dumps({
+            "review_config": {
+                "rules": rules or [],
+                "reviewers": reviewers or [],
+            }
+        }))
+
+    @staticmethod
+    def _rule(rule_dir: Path, rule_id, body, applies_to=None, channel="blocking"):
+        rule_file = rule_dir / f"{rule_id}.md"
+        rule_file.write_text(body)
+        return {
+            "id": rule_id,
+            "path": f"{rule_id}.md",
+            "resolved_path": str(rule_file),
+            "applies_to": applies_to
+            or {"agents": [], "domains": [], "paths": []},
+            "channel": channel,
+        }
+
+    @staticmethod
+    def _make_repo(repo: Path, feature_files):
+        repo.mkdir()
+
+        def _git(*git_args):
+            subprocess.run(
+                ["git"] + list(git_args),
+                cwd=repo, capture_output=True, text=True, check=True,
+            )
+
+        _git("init", "-b", "main")
+        _git("config", "user.email", "t@t.com")
+        _git("config", "user.name", "T")
+        _git("config", "commit.gpgsign", "false")
+        (repo / "base.txt").write_text("base\n")
+        _git("add", ".")
+        _git("commit", "-m", "initial")
+        for relpath, content in feature_files.items():
+            target = repo / relpath
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content)
+        _git("add", ".")
+        _git("commit", "-m", "feature")
+
+    @staticmethod
+    def _run_in_repo(repo: Path, *args):
+        cmd = (
+            [sys.executable, str(BOOTSTRAP_SCRIPT)]
+            + list(args)
+            + ["--range", "HEAD~1..HEAD"]
+        )
+        return subprocess.run(
+            cmd, capture_output=True, text=True, timeout=120, cwd=str(repo)
+        )
+
+    def test_rule_targeting_the_instance_name_reaches_the_adapter(
+        self, tmp_path
+    ):
+        """In ref-mode args.agent is always "repo-reviewer-adapter" — rule
+        selection must key on the synthetic instance name."""
+        ref = tmp_path / "r.md"
+        ref.write_text("Review renewals.")
+        self._write_review_context(tmp_path, rules=[self._rule(
+            tmp_path, "renewals-rule", "RENEWALS INSTANCE RULE MARKER",
+            applies_to={
+                "agents": ["repo-renewals-reviewer"],
+                "domains": [], "paths": [],
+            },
+        )])
+        result = run_bootstrap(
+            "--agent", "repo-reviewer-adapter",
+            "--repo-agent-ref", str(ref),
+            "--instance-name", "repo-renewals-reviewer",
+            "--scope-domains", "code",
+            "--output-dir", str(tmp_path),
+        )
+        assert result.returncode == 0
+        assert "RENEWALS INSTANCE RULE MARKER" in result.stdout
+
+    def test_rule_targeting_a_declared_scope_domain_reaches_the_adapter(
+        self, tmp_path
+    ):
+        """The adapter's registry domain is null — rule selection must use
+        the parsed --scope-domains, not the registry-derived list."""
+        ref = tmp_path / "r.md"
+        ref.write_text("Review renewals.")
+        self._write_review_context(tmp_path, rules=[self._rule(
+            tmp_path, "code-rule", "DECLARED DOMAIN RULE MARKER",
+            applies_to={"agents": [], "domains": ["code"], "paths": []},
+        )])
+        result = run_bootstrap(
+            "--agent", "repo-reviewer-adapter",
+            "--repo-agent-ref", str(ref),
+            "--instance-name", "repo-renewals-reviewer",
+            "--scope-domains", "code",
+            "--output-dir", str(tmp_path),
+        )
+        assert result.returncode == 0
+        assert "DECLARED DOMAIN RULE MARKER" in result.stdout
+
+    def test_advisory_rule_injects_the_channel_contract(
+        self, tmp_path, monkeypatch
+    ):
+        """The channel exists only as rendered prose unless the reviewer is
+        told to propagate it — an untagged advisory-rule finding counts as
+        blocking in the verdict, letting an advisory rule gate the review."""
+        self._write_review_context(tmp_path, rules=[self._rule(
+            tmp_path, "adv-rule", "ADVISORY BODY", channel="advisory",
+        )])
+        result = run_bootstrap(
+            "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
+        )
+        assert result.returncode == 0
+        assert 'add_issue(..., channel="advisory")' in result.stdout
+
+        entitlement = json.loads(
+            (tmp_path / "performance-advisory-entitlement.json").read_text()
+        )
+        assert entitlement == {"schema": 1, "advisory_entitled": True}
+
+        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
+        monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "performance")
+        builder = ReviewOutputBuilder(pr_id="1", reviewer="performance")
+        builder.add_issue(
+            severity="high", title="Advisory", file="src/app.py",
+            description="d", recommendation="r", line=1,
+            channel="advisory",
+        )
+        assert builder.to_dict()["verdict"] == "approve"
+
+    def test_blocking_only_rules_omit_the_channel_contract(
+        self, tmp_path, monkeypatch
+    ):
+        self._write_review_context(tmp_path, rules=[self._rule(
+            tmp_path, "blk-rule", "BLOCKING BODY", channel="blocking",
+        )])
+        result = run_bootstrap(
+            "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
+        )
+        assert result.returncode == 0
+        assert "BLOCKING BODY" in result.stdout
+        assert "CHANNEL CONTRACT" not in result.stdout
+
+        entitlement = json.loads(
+            (tmp_path / "performance-advisory-entitlement.json").read_text()
+        )
+        assert entitlement == {"schema": 1, "advisory_entitled": False}
+
+        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
+        monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "performance")
+        builder = ReviewOutputBuilder(pr_id="1", reviewer="performance")
+        with pytest.raises(ValueError, match="advisory.*not entitled"):
+            builder.add_issue(
+                severity="high", title="Advisory", file="src/app.py",
+                description="d", recommendation="r", line=1,
+                channel="advisory",
+            )
+
+    def test_isolated_execution_is_refused(self, tmp_path):
+        """An explicit isolation request must never silently widen into
+        inline execution of the repo prompt — not even via override."""
+        ref = tmp_path / "r.md"
+        ref.write_text("Review renewals.")
+        result = run_bootstrap(
+            "--agent", "repo-reviewer-adapter",
+            "--repo-agent-ref", str(ref),
+            "--instance-name", "repo-renewals-reviewer",
+            "--execution", "isolated",
+            "--scope-domains", "code",
+            "--output-dir", str(tmp_path),
+        )
+        assert result.returncode == 1
+        assert "Isolated execution is not implemented" in result.stdout
+
+    def test_path_rule_matches_a_budget_deferred_file(self, tmp_path):
+        """A rule about a NOT DIFFED file applies precisely when the
+        reviewer must inspect that file — selection must see the complete
+        in-scope set, not only the inline diff list."""
+        repo = tmp_path / "repo"
+        self._make_repo(repo, {
+            "alpha.php": "<?php\n" + "\n".join(
+                f"echo {i};" for i in range(3000)
+            ) + "\n",
+            "deferred_target.php": "<?php\n" + "\n".join(
+                f"print({i});" for i in range(2500)
+            ) + "\n",
+        })
+        outdir = tmp_path / "out"
+        outdir.mkdir()
+        self._write_review_context(outdir, rules=[self._rule(
+            outdir, "deferred-rule", "DEFERRED FILE RULE MARKER",
+            applies_to={
+                "agents": [], "domains": [],
+                "paths": ["deferred_target.php"],
+            },
+        )])
+        result = self._run_in_repo(
+            repo, "--agent", "code-reviewer", "--output-dir", str(outdir)
+        )
+        assert result.returncode == 0
+        assert "deferred_target.php" in extract_not_diffed_files(result.stdout)
+        assert "DEFERRED FILE RULE MARKER" in result.stdout
+
+    def test_ref_mode_path_declaration_scopes_the_matching_file(
+        self, tmp_path
+    ):
+        """A reviewer dispatched because applies_to.paths matched must
+        receive those files in scope even when no declared domain's
+        extension filter covers them."""
+        repo = tmp_path / "repo"
+        self._make_repo(repo, {
+            "docs/guide.md": "# guide\n",
+            "app.php": "<?php echo 1;\n",
+        })
+        outdir = tmp_path / "out"
+        outdir.mkdir()
+        ref = outdir / "docs-expert.md"
+        ref.write_text("Review the docs.")
+        self._write_review_context(outdir, reviewers=[{
+            "id": "docs-expert", "label": "Docs Expert",
+            "ref": "docs-expert.md", "resolved_ref": str(ref),
+            "applies_to": {
+                "agents": [], "domains": [], "paths": ["docs/**"],
+            },
+            "channel": "blocking", "execution": "inline", "model": None,
+        }])
+        result = self._run_in_repo(
+            repo, "--agent", "repo-reviewer-adapter",
+            "--repo-agent-ref", str(ref),
+            "--instance-name", "repo-docs-expert-reviewer",
+            "--scope-domains", "code",
+            "--output-dir", str(outdir),
+        )
+        assert result.returncode == 0
+        assert "docs/guide.md" in extract_scope_files(result.stdout)
 
 
 class TestOutputFilenameConsistency:
     """Output filenames from ReviewOutputBuilder.save() match bootstrap expectations."""
 
     def test_save_uses_review_suffix(self, tmp_path):
-        """save() should write {reviewer}-review.json and {reviewer}-review.md."""
+        """save() should write {reviewer}-review.json only."""
         from review.agent.output import ReviewOutputBuilder
 
         builder = ReviewOutputBuilder(pr_id="42", reviewer="dead-code")
         result = builder.save(str(tmp_path))
 
+        assert set(result) == {"json"}
         assert result["json"].endswith("dead-code-review.json"), f"Got: {result['json']}"
-        assert result["markdown"].endswith("dead-code-review.md"), f"Got: {result['markdown']}"
         assert os.path.isfile(result["json"])
-        assert os.path.isfile(result["markdown"])
+        assert not os.path.exists(os.path.join(str(tmp_path), "dead-code-review.md"))
 
     def test_bootstrap_output_matches_save_filenames(self, tmp_path):
-        """Bootstrap OUTPUT_FILES paths match what save() actually creates."""
+        """Bootstrap OUTPUT_FILES must name exactly the artifact save() publishes:
+        the review JSON, and no md the pipeline derives elsewhere.
+
+        This checks the briefing TEXT only (what the agent is told to produce);
+        the save() filesystem contract is covered by the tests above.
+        """
         output = build_output(
             agent_name="dead-code-reviewer",
             plugin_root="/fake/root",
@@ -868,9 +1810,54 @@ class TestOutputFilenameConsistency:
             output_dir=str(tmp_path),
             pr_number="42",
             reviewer_name="dead-code",
+            not_diffed_count=0,
+            has_php=False,
         )
         assert f"{tmp_path}/dead-code-review.json" in output
-        assert f"{tmp_path}/dead-code-review.md" in output
+        assert f"{tmp_path}/dead-code-review.md" not in output
+
+
+class TestBootstrapImportDoesNotBreakTelemetry:
+    """Importing `review.agent.bootstrap` first must leave a working
+    `ReviewTelemetry` — a real regression, not a hypothetical one.
+
+    `derive_reviewer_name()` used to live in bootstrap.py itself; the day
+    `manifest_sections.py` started importing it FROM bootstrap
+    (`from .agent.bootstrap import derive_reviewer_name`), a
+    package-qualified `import review.agent.bootstrap` re-entered
+    bootstrap mid-initialization: bootstrap's own top-level telemetry
+    load (`spec_from_file_location` + `exec_module` on `telemetry.py`)
+    runs `telemetry.py`'s top level, which falls back to
+    `from review import manifest_sections`, which in turn tried
+    `from .agent.bootstrap import derive_reviewer_name` — but
+    `sys.modules['review.agent.bootstrap']` was still the PARTIAL module
+    from step one, with `derive_reviewer_name` not yet defined (it sat
+    after the telemetry-loading block in file order). That raised
+    ImportError, caught by telemetry's own best-effort try/except, and
+    `ReviewTelemetry` silently became `None`.
+
+    Must run in a fresh subprocess: the in-process `sys.modules` cache
+    from every other test in this file (and pytest's own collection
+    order) would otherwise make this test pass by accident depending on
+    what already imported what.
+    """
+
+    def test_import_bootstrap_first_leaves_telemetry_working(self):
+        result = subprocess.run(
+            [
+                sys.executable, "-c",
+                "import review.agent.bootstrap as bootstrap\n"
+                "assert bootstrap.ReviewTelemetry is not None, "
+                "'ReviewTelemetry is None — import cycle regression'\n"
+                "print('OK')",
+            ],
+            capture_output=True, text=True, timeout=30,
+            cwd=str(SCRIPTS_DIR),
+        )
+        assert result.returncode == 0, (
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        assert result.stdout.strip() == "OK"
 
 
 def test_ecosystem_integration_reviewer_registered():
@@ -897,3 +1884,167 @@ def test_ecosystem_integration_reviewer_registered():
     assert entry.get("require_php_source_file") is True
     assert "host_context_runtime_host_resolved" not in entry.get("triage_checks", [])
     assert entry.get("budget_override", 0) > 0
+
+
+class TestNotDiffedContractIsDelivered:
+    """The NOT DIFFED handling contract must survive protocol stripping.
+
+    Regression guard for 1.109.0: the contract originally lived in
+    reviewer-protocol.md's '## Scope Discovery' section, which bootstrap strips,
+    so it never reached a single reviewer. Policy belongs in build_output.
+
+    Regression guard for the 1.114.0 fix: build_output() used to re-derive the
+    deferred-file count by regexing its OWN rendered scope text for
+    '=== NOT DIFFED (budget exceeded, N files) ===' — a second, independent
+    text-parsing path duplicating the one load_scope_facts()/main() already
+    used. Any rename or reformat of that header in scope.py silently zeroed
+    the count and dropped the entire honesty contract, with no error and
+    (because these tests hardcoded the same header text the regex expected)
+    no test failure either. build_output() now receives not_diffed_count as
+    an explicit fact from the caller and never inspects scope_output for it.
+    """
+
+    NOT_DIFFED_SCOPE = (
+        "=== REVIEW SCOPE ===\n"
+        "=== FILES ===\n"
+        "src/big.py  (+900 -10)\n"
+        "=== NOT DIFFED (budget exceeded, 3 files) ===\n"
+        "  src/big.py  (+900 -10)\n"
+    )
+
+    def _build(self, tmp_path, scope_output, not_diffed_count, **kwargs):
+        kwargs.setdefault("has_php", False)
+        return build_output(
+            agent_name="security-reviewer",
+            plugin_root="/fake/root",
+            status="OK",
+            review_rules="rules",
+            domain_rules=None,
+            scope_output=scope_output,
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number="42",
+            reviewer_name="security",
+            not_diffed_count=not_diffed_count,
+            review_budget=80,
+            **kwargs,
+        )
+
+    @pytest.mark.parametrize(
+        "phrase",
+        [
+            "Not reviewed (budget):",          # the declaration format
+            'builder.add_unreviewed("<path>")',  # the supported API for it
+            # The one enforced violation: save() auto-fills the gap, so an
+            # APPROVE cannot silently swallow deferred files.
+            "an APPROVE that silently ignores them is a protocol violation",
+            "never count a declared-unreviewed file",
+            "is a contradiction save() rejects",  # declare-vs-claim, moved from
+                                                   # '## ReviewOutputBuilder API'
+        ],
+    )
+    def test_contract_reaches_reviewer(self, tmp_path, phrase):
+        """Each clause of the contract appears in the delivered briefing."""
+        output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, not_diffed_count=1)
+        assert phrase in output
+
+    @pytest.mark.parametrize(
+        "phrase",
+        [
+            "false statement",
+            "Declaring is for genuine budget exhaustion only",
+            "written with most of your budget unspent",
+        ],
+    )
+    def test_unenforceable_underspend_rule_is_not_restored(
+        self, tmp_path, phrase
+    ):
+        """The under-spend "protocol violation" sentence must stay deleted.
+
+        It conditioned on a quantity no reviewer is ever shown at the moment
+        it decides — models keep no running tool-call tally — and a 19-agent
+        field run delivered it verbatim to every one of them for zero effect
+        (0/19 reached target, median 44% spent, nine declaring 100+ files
+        while under half budget). Its premise was falsified in the same run:
+        under-spend did not predict weak output. The replacement is salience
+        at the decision point (save()'s TARGET echo), not sterner prose.
+        """
+        output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, not_diffed_count=1)
+        assert phrase not in output
+
+    def test_contract_absent_without_not_diffed_files(self, tmp_path):
+        """No NOT DIFFED files means no declaration contract to deliver."""
+        clean_scope = "=== REVIEW SCOPE ===\n=== FILES ===\nsrc/a.py  (+5 -1)\n"
+        output = self._build(tmp_path, clean_scope, not_diffed_count=0)
+        assert "Not reviewed (budget):" not in output
+        assert "is a contradiction save() rejects" not in output
+
+    def test_contract_is_not_sourced_from_stripped_protocol(self):
+        """The stripped protocol must not be the contract's only home.
+
+        extract_protocol_sections() drops '## Scope Discovery', so anything
+        placed there is invisible to reviewers by construction.
+        """
+        protocol = (PLUGIN_ROOT / "agents" / "shared" / "reviewer-protocol.md").read_text()
+        delivered = _mod.extract_protocol_sections(
+            protocol, _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
+        )
+        assert "Not reviewed (budget):" not in delivered, (
+            "Contract text placed in a stripped protocol section never reaches "
+            "a reviewer — keep it in build_output()'s REVIEW BUDGET block."
+        )
+        assert "is a contradiction save() rejects" not in delivered, (
+            "The declare-vs-claim contradiction is policy, not mechanics "
+            "bootstrap performs — keep it in build_output()'s REVIEW BUDGET "
+            "block, the same as the rest of this contract."
+        )
+
+    def test_declare_claim_contradiction_was_moved_not_copied(self):
+        """Regression guard: the contradiction rule used to live ONLY in
+        reviewer-protocol.md's '## ReviewOutputBuilder API' section, which
+        bootstrap also strips (see REVIEWER_PROTOCOL_SKIP_SECTIONS) — so it
+        reached zero reviewers despite being taught. The fix moves the
+        teaching into build_output(); the source sentence must not survive
+        in the protocol file as a second, still-inert copy.
+        """
+        protocol = (
+            PLUGIN_ROOT / "agents" / "shared" / "reviewer-protocol.md"
+        ).read_text()
+        assert "declaring and claiming the same path is rejected" not in protocol, (
+            "the old sentence should have moved into build_output(), not "
+            "been left behind as a dead copy in a stripped section"
+        )
+
+    def test_renamed_scope_header_cannot_suppress_a_real_count(self, tmp_path):
+        """A scope.py header rename/reformat must not silently drop the contract.
+
+        This is the exact failure shape being fixed: the old regex expected
+        the literal string '=== NOT DIFFED (budget exceeded, N files) ===' in
+        scope_output. Here that header is renamed to something a future
+        scope.py refactor might plausibly emit, and NO section matches the
+        old pattern at all — yet because the caller still supplies the real
+        fact via not_diffed_count, the contract must still be delivered.
+        """
+        renamed_header_scope = (
+            "=== REVIEW SCOPE ===\n"
+            "=== FILES ===\n"
+            "src/big.py  (+900 -10)\n"
+            "=== DEFERRED (too large to inline, 3 files) ===\n"
+            "  src/big.py  (+900 -10)\n"
+        )
+        assert "NOT DIFFED" not in renamed_header_scope  # the old regex's anchor is gone
+        output = self._build(tmp_path, renamed_header_scope, not_diffed_count=1)
+        assert "Not reviewed (budget):" in output
+        assert "protocol violation" in output
+
+    def test_original_header_text_alone_no_longer_drives_the_contract(self, tmp_path):
+        """The rendered header text must never re-enable the contract by itself.
+
+        NOT_DIFFED_SCOPE carries the exact header the old regex parsed, but
+        not_diffed_count is explicitly 0 (the caller's fact says nothing was
+        deferred). If build_output() still read scope_output text for this
+        decision, the contract would incorrectly appear. It must not.
+        """
+        output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, not_diffed_count=0)
+        assert "Not reviewed (budget):" not in output
+

@@ -145,12 +145,18 @@ def _fill_git_context(ctx, pr_number=None, branch=False, incremental=False, git_
     git = ctx.setdefault("git", {})
 
     if git_range:
-        # Explicit range provided
+        # Explicit range provided. Match on "..." before ".." — a naive
+        # two-dot split turns "main...topic" into head_ref ".topic". An
+        # omitted endpoint stays unset so downstream resolution defaults
+        # to HEAD, matching git's own range semantics.
         git.setdefault("git_range", git_range)
-        parts = git_range.split("..")
-        if len(parts) == 2:
-            git.setdefault("merge_base", parts[0])
-            git.setdefault("head_ref", parts[1])
+        separator = "..." if "..." in git_range else ".."
+        base_ref, found, head_ref = git_range.partition(separator)
+        if found:
+            if base_ref.strip():
+                git.setdefault("merge_base", base_ref.strip())
+            if head_ref.strip():
+                git.setdefault("head_ref", head_ref.strip())
     elif pr_number and "merge_base" not in git:
         gh_cmd = ctx.get("github_cli_command", "gh")
         # Get PR base info
@@ -220,6 +226,21 @@ def _fill_git_context(ctx, pr_number=None, branch=False, incremental=False, git_
             if merge_base:
                 git["merge_base"] = merge_base
                 git.setdefault("git_range", f"{merge_base}..HEAD")
+
+    # Reviewed head as a commit SHA. Step 1 resolves HEAD before any PR
+    # checkout happens at step 2, so the durable run identity must be
+    # re-resolved here, after workspace setup. The telemetry manifest
+    # refresh only accepts full SHAs, which is exactly what this provides.
+    # Bot-precomputed context already carries head_sha and is preserved.
+    if "head_sha" not in git:
+        # ^{commit} peels annotated tag endpoints to their commit — plain
+        # rev-parse would record the tag object id.
+        head_ref = git.get("head_ref") or "HEAD"
+        head_sha = _run_cmd(
+            ["git", "rev-parse", "--verify", f"{head_ref}^{{commit}}"]
+        )
+        if head_sha:
+            git["head_sha"] = head_sha
 
     # Changed files
     if "changed_files" not in git and git.get("git_range"):
@@ -439,18 +460,9 @@ def load_and_fill(ctx_path, pr_number=None, gh_cmd=None, branch=False,
     # Review defaults
     ctx.setdefault("review", {}).setdefault("agent_timeout_seconds", 1200)
 
-    # Populate the per-clone install cache so InstallCacheResolver can
-    # surface library-dep entries below. Best-effort — install failures
-    # degrade host_context but do not block the review.
     repo_root = _resolve_repo_root(repo_path or os.getcwd())
-    install_payload = {}
-    try:
-        install_payload = _populate_install_cache(repo_root)
-    except Exception:  # noqa: BLE001 — review must continue
-        pass
-
     # Host context — discover from the repo root when git can identify it.
-    _fill_host_context(ctx, repo_root, install_payload=install_payload)
+    _fill_host_context(ctx, repo_root)
 
     # Repo-contributed review config (rules + reviewers) from the reviewed repo.
     _fill_review_config(ctx, repo_root)
@@ -528,70 +540,7 @@ def _resolve_author_name(ctx):
         pr["author_name"] = name
 
 
-def _populate_install_cache(repo_path):
-    """Run ensure_installed.py for the repo. Returns parsed payload or empty dict.
-
-    Best-effort: subprocess failure / timeout / unparseable JSON / missing
-    script all degrade silently to {}. The caller wraps this in a try/except
-    too, so a raised exception also doesn't block the review.
-
-    Currently invoked for side effects (cache population) only — load_and_fill
-    discards the return. Returning the payload anyway leaves the door open for
-    a debug command or a future caller to inspect populate status.
-    """
-    # Reuse _scripts_dir resolved at module load — single source of truth for
-    # the scripts/ root path, shared with the hosts.chain import above.
-    script = os.path.join(_scripts_dir, "hosts", "ensure_installed.py")
-    if not os.path.isfile(script):
-        return {}
-    try:
-        result = subprocess.run(
-            [sys.executable, script, "--repo", repo_path],
-            capture_output=True, text=True,
-            # Matches the inner per-manager timeout in
-            # ensure_installed.py:_run_install_command. A pathological install
-            # that consumes the full inner timeout will trip both timeouts at
-            # once — the caller still degrades silently, the inner banner is lost.
-            timeout=20 * 60,
-        )
-        if result.returncode != 0:
-            return {}
-        try:
-            return json.loads(result.stdout)
-        except json.JSONDecodeError:
-            return {}
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        return {}
-
-
-def _merge_install_cache_banner(host_context, install_payload):
-    """Preserve install-cache degradation banners in rebuilt host context."""
-    if not isinstance(host_context, dict) or not isinstance(install_payload, dict):
-        return
-
-    banner = install_payload.get("banner")
-    if not banner:
-        return
-
-    diagnostics = host_context.setdefault("diagnostics", {})
-    diagnostics["install_cache"] = {
-        "status": install_payload.get("status"),
-        "managers": install_payload.get("managers", []),
-        "banner": banner,
-    }
-
-    existing = host_context.get("banner")
-    if not existing:
-        host_context["banner"] = banner
-        return
-
-    existing_unresolved = existing.setdefault("unresolved", [])
-    existing_unresolved.extend(banner.get("unresolved", []))
-    if banner.get("message") and banner["message"] not in existing.get("message", ""):
-        existing["message"] = f"{existing.get('message', '').rstrip()} {banner['message']}".strip()
-
-
-def _fill_host_context(ctx, repo_path, install_payload=None):
+def _fill_host_context(ctx, repo_path):
     """Populate host_context using hosts.chain.ResolverChain.
 
     Failure is soft: if the hosts package cannot be imported at module
@@ -603,7 +552,6 @@ def _fill_host_context(ctx, repo_path, install_payload=None):
         ctx["host_context"] = None
         return
     ctx["host_context"] = _HOSTS_CHAIN().run(repo_path).to_dict()
-    _merge_install_cache_banner(ctx["host_context"], install_payload or {})
 
 
 def _fill_review_config(ctx, repo_path):
@@ -612,11 +560,19 @@ def _fill_review_config(ctx, repo_path):
     Overwritten each run (like host_context) so repo-relative rule/reviewer
     paths resolve against the current checkout. Best-effort: absence or a
     malformed file yields the neutral empty config, never an error.
+
+    The reviewed range's changed files are the PROVENANCE GATE: rules and
+    reviewers whose defining files sit inside the range are PR-controlled
+    text and are excluded (reported under ``untrusted``). When the changed
+    set is unavailable the loader fails closed.
     """
     if _REVIEW_CONFIG_LOADER is None:
         ctx["review_config"] = None
         return
-    ctx["review_config"] = _REVIEW_CONFIG_LOADER(repo_path)
+    changed_files = ctx.get("git", {}).get("changed_files")
+    if not isinstance(changed_files, list):
+        changed_files = None
+    ctx["review_config"] = _REVIEW_CONFIG_LOADER(repo_path, changed_files)
 
 
 # ---------------------------------------------------------------------------
@@ -641,15 +597,47 @@ def main():
                         help="Path to the repo under review (for host-context "
                              "discovery). Defaults to the git root of the "
                              "current working directory when available.")
+    parser.add_argument("--refresh-host-context", action="store_true",
+                        help="Only re-run host-context discovery against the "
+                             "existing review-context.json and write it back. "
+                             "Used after a trusted-branch dependency refresh "
+                             "so reviewers see the fresh installed state.")
 
     args = parser.parse_args()
 
-    if not args.pr_number and not args.branch:
+    if not args.refresh_host_context and not args.pr_number and not args.branch:
         print("ERROR: Must provide --pr-number or --branch", file=sys.stderr)
         sys.exit(1)
 
     os.makedirs(args.output_dir, exist_ok=True)
     ctx_path = os.path.join(args.output_dir, "review-context.json")
+
+    if args.refresh_host_context:
+        # This runs mid-review after dependency refresh and updates only host
+        # context. Damaged run state must fail without being overwritten.
+        try:
+            with open(ctx_path) as f:
+                ctx = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError, OSError, UnicodeError):
+            print(
+                "ERROR: --refresh-host-context requires an existing readable "
+                "review-context.json; refusing to overwrite run state.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if not isinstance(ctx, dict):
+            print(
+                "ERROR: --refresh-host-context requires review-context.json "
+                "to contain a JSON object; refusing to overwrite run state.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        repo_root = _resolve_repo_root(args.repo_path or os.getcwd())
+        _fill_host_context(ctx, repo_root)
+        with open(ctx_path, "w") as f:
+            json.dump(ctx, f, indent=2)
+        print(json.dumps(ctx.get("host_context"), indent=2))
+        return
 
     ctx = load_and_fill(
         ctx_path,

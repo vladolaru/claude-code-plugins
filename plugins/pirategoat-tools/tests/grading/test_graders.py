@@ -29,6 +29,10 @@ from helpers.graders import (
     grade_error_exit,
     grade_output_pair,
     grade_review_baseline,
+    match_findings,
+    grade_detection,
+    merge_grades,
+    aggregate_detection_trials,
 )
 
 from review.agent.output import ReviewOutputBuilder
@@ -237,6 +241,39 @@ class TestGradeNoDomainFiles:
         result = grade_no_domain_files(text)
         assert not result.passed
 
+    def test_bootstrap_signal_template_is_not_a_finding(self):
+        # Bootstrap output embeds the return-signal template; its "N"
+        # placeholders and explicit zero counts are not severity findings.
+        text = (
+            "STATUS: NO_DOMAIN_FILES\nACTION: APPROVE and exit\n"
+            "COUNTS: critical: N, high: N, medium: N\n"
+            "critical: 0, high: 0, medium: 0"
+        )
+        result = grade_no_domain_files(text)
+        assert result.passed, f"Failures: {result.failures}"
+
+    def test_nonzero_count_fails(self):
+        text = "VERDICT: APPROVE\nCOUNTS: critical: 0, high: 2, medium: 0"
+        result = grade_no_domain_files(text)
+        assert not result.passed
+
+
+class TestGradeErrorExitTemplate:
+    """The bootstrap return-signal template must not read as a FINISHED claim."""
+
+    def test_indented_template_line_passes(self):
+        text = (
+            "STATUS: ERROR\nERROR: NO_CHANGES\n"
+            "Return signal format:\n  STATUS: FINISHED\n  OUTPUT_FILES:"
+        )
+        result = grade_error_exit(text)
+        assert result.passed, f"Failures: {result.failures}"
+
+    def test_column_zero_finished_signal_fails(self):
+        text = "ERROR: something\nSTATUS: FINISHED\nCOUNTS: critical: 0"
+        result = grade_error_exit(text)
+        assert not result.passed
+
 
 class TestGradeOutputPair:
     """Tests for grade_output_pair."""
@@ -418,3 +455,445 @@ def test_issue_behavior_evidence_rejects_speculative():
             file="f.php", line=1, recommendation="r",
             behavior_evidence="speculative",
         )
+
+
+class TestMatchFindings:
+    """Pure matcher: file + line-window + keyword regexes, claimed-set semantics."""
+
+    KEY = {
+        "required_findings": [
+            {"id": "sql-injection", "file": "src/UserHandler.php", "line": 6,
+             "match_any": [r"sql\s*inject", r"\bprepare\b"]},
+        ],
+        "acceptable_findings": [
+            {"id": "csrf-nonce", "file": "src/UserHandler.php",
+             "match_any": [r"\bnonce\b", r"csrf"]},
+        ],
+    }
+
+    def _issue(self, **kw):
+        base = {"file": "src/UserHandler.php", "line": 6, "title": "",
+                "description": "", "category": "", "severity": "high"}
+        base.update(kw)
+        return base
+
+    def test_required_matches_on_file_line_and_keyword(self):
+        issues = [self._issue(title="SQL injection via $_GET")]
+        m = match_findings(issues, self.KEY)
+        assert m["matched_required"] == {"sql-injection": 0}
+        assert m["missing_required"] == []
+        assert m["unexpected"] == []
+
+    def test_line_outside_tolerance_does_not_match(self):
+        issues = [self._issue(line=20, title="SQL injection via $_GET")]
+        m = match_findings(issues, self.KEY)
+        assert m["missing_required"] == ["sql-injection"]
+        assert [u["index"] for u in m["unexpected"]] == [0]
+
+    def test_unexpected_entries_carry_diagnosable_evidence(self):
+        # The widen-the-regex workflow needs to see what the reviewer wrote:
+        # the matcher greps title/description/category, so an unexpected entry
+        # must expose those fields plus location, not a bare index.
+        issues = [self._issue(
+            line=20, title="SQL injection via $_GET",
+            description="Query concatenates raw input" + "x" * 400,
+        )]
+        u = match_findings(issues, self.KEY)["unexpected"][0]
+        assert u["file"] == "src/UserHandler.php"
+        assert u["line"] == 20
+        assert u["title"] == "SQL injection via $_GET"
+        assert u["description"].startswith("Query concatenates raw input")
+        assert len(u["description"]) == 300
+        assert "severity" in u and "category" in u
+
+    def test_keyword_miss_does_not_match(self):
+        issues = [self._issue(title="Something unrelated entirely")]
+        m = match_findings(issues, self.KEY)
+        assert m["missing_required"] == ["sql-injection"]
+
+    def test_key_without_line_matches_any_line_including_null(self):
+        issues = [self._issue(line=None, title="Missing nonce verification")]
+        m = match_findings(issues, self.KEY)
+        assert m["matched_acceptable"] == {"csrf-nonce": 0}
+        assert m["unexpected"] == []
+
+    def test_issue_with_null_line_cannot_satisfy_line_bearing_key(self):
+        issues = [self._issue(line=None, title="SQL injection via $_GET")]
+        m = match_findings(issues, self.KEY)
+        assert m["missing_required"] == ["sql-injection"]
+
+    def test_one_issue_claims_only_one_spec(self):
+        # A single issue mentioning both injection and nonce satisfies the
+        # required spec (matched first) and leaves the acceptable one unmatched.
+        issues = [self._issue(title="SQL injection; also missing nonce")]
+        m = match_findings(issues, self.KEY)
+        assert m["matched_required"] == {"sql-injection": 0}
+        assert m["matched_acceptable"] == {}
+
+    def test_keyword_in_category_matches(self):
+        issues = [self._issue(title="", description="", category="sql injection")]
+        m = match_findings(issues, self.KEY)
+        assert m["matched_required"] == {"sql-injection": 0}
+
+    def test_line_tolerance_override(self):
+        key = {
+            "required_findings": [
+                {"id": "sql-injection", "file": "src/UserHandler.php", "line": 6,
+                 "line_tolerance": 0, "match_any": [r"sql\s*inject"]},
+            ],
+            "acceptable_findings": [],
+        }
+        issues = [self._issue(line=7, title="SQL injection via $_GET")]
+        m = match_findings(issues, key)
+        assert m["missing_required"] == ["sql-injection"]
+
+        issues = [self._issue(line=6, title="SQL injection via $_GET")]
+        m = match_findings(issues, key)
+        assert m["matched_required"] == {"sql-injection": 0}
+
+
+class TestGradeDetection:
+    """Answer-key grading of a parsed review JSON."""
+
+    def _review(self, verdict="request_changes", issues=None):
+        return {"verdict": verdict, "issues": issues or []}
+
+    def _issue(self, **kw):
+        base = {"file": "src/UserHandler.php", "line": 6, "title": "SQL injection",
+                "description": "", "category": "sql-injection", "severity": "critical"}
+        base.update(kw)
+        return base
+
+    KEY = {
+        "verdict_in": ["block", "request_changes"],
+        "required_findings": [
+            {"id": "sql-injection", "file": "src/UserHandler.php", "line": 6,
+             "match_any": [r"sql\s*inject"]},
+        ],
+    }
+
+    def test_pass_when_required_found_and_verdict_acceptable(self):
+        r = grade_detection(self._review("block", [self._issue()]), self.KEY)
+        assert r.passed, r.failures
+        assert r.detail["verdict"] == "block"
+        assert r.detail["match"]["matched_required"] == {"sql-injection": 0}
+
+    def test_fail_when_required_missing(self):
+        r = grade_detection(self._review("block", []), self.KEY)
+        assert not r.passed
+        assert any("sql-injection" in f for f in r.failures)
+
+    def test_fail_on_unacceptable_verdict(self):
+        r = grade_detection(self._review("approve", [self._issue()]), self.KEY)
+        assert not r.passed
+        assert any("verdict" in f for f in r.failures)
+
+    def test_max_severity_gate(self):
+        key = {"verdict_in": ["approve"], "max_severity": "low"}
+        clean = self._review("approve", [])
+        assert grade_detection(clean, key).passed
+        boundary = self._review("approve", [self._issue(severity="low")])
+        assert grade_detection(boundary, key).passed
+        noisy = self._review("approve", [self._issue(severity="medium")])
+        r = grade_detection(noisy, key)
+        assert not r.passed
+        assert any("max severity" in f for f in r.failures)
+
+    def test_max_unexpected_gate(self):
+        key = dict(self.KEY, max_unexpected=0)
+        extra = self._issue(file="src/Other.php", title="Unrelated claim")
+        r = grade_detection(self._review("block", [self._issue(), extra]), key)
+        assert not r.passed
+        assert any("unexpected" in f for f in r.failures)
+
+        key_allow_one = dict(self.KEY, max_unexpected=1)
+        r = grade_detection(self._review("block", [self._issue(), extra]), key_allow_one)
+        assert r.passed, r.failures
+
+    def test_expect_not_applicable(self):
+        key = {"expect_not_applicable": True}
+        passing = grade_detection(self._review("not_applicable", []), key)
+        assert passing.passed
+        assert passing.detail["issue_count"] == 0
+
+        r = grade_detection(self._review("comment", [self._issue()]), key)
+        assert not r.passed
+
+        r = grade_detection(self._review("not_applicable", [self._issue()]), key)
+        assert not r.passed
+        assert r.detail["issue_count"] == 1
+
+
+class TestMergeGrades:
+    def test_merge_combines_counts_and_failures(self):
+        a = GradeResult(passed=True, score=1.0, failures=[], checks_run=3, checks_passed=3)
+        b = GradeResult(passed=False, score=0.5, failures=["x"], checks_run=2,
+                        checks_passed=1, detail={"verdict": "block"})
+        m = merge_grades(a, b)
+        assert not m.passed
+        assert m.checks_run == 5 and m.checks_passed == 4
+        assert m.failures == ["x"]
+        assert m.score == 0.8
+        assert m.detail == {"verdict": "block"}
+
+    def test_merge_detail_falls_back_to_first(self):
+        a = GradeResult(passed=True, score=1.0, failures=[], checks_run=1,
+                        checks_passed=1, detail={"verdict": "x"})
+        b = GradeResult(passed=True, score=1.0, failures=[], checks_run=1,
+                        checks_passed=1, detail=None)
+        m = merge_grades(a, b)
+        assert m.detail == {"verdict": "x"}
+
+    def test_detection_label_keeps_merged_failures_attributable(self):
+        a = GradeResult(passed=False, score=0.0, failures=["missing field"],
+                        checks_run=1, checks_passed=0)
+        b = GradeResult(passed=False, score=0.0, failures=["verdict wrong"],
+                        checks_run=1, checks_passed=0)
+        m = merge_grades(a, b, detection_label="detection")
+        assert m.failures == ["missing field", "detection: verdict wrong"]
+        # The label must not mutate the input grade.
+        assert b.failures == ["verdict wrong"]
+
+
+class TestGradeDetectionGates:
+    """grade_detection records per-gate outcomes for trial aggregation."""
+
+    def test_gates_recorded_when_present(self):
+        key = {"verdict_in": ["approve"], "max_severity": "low", "max_unexpected": 0}
+        review = {"verdict": "approve",
+                  "issues": [{"file": "f.php", "line": 1, "title": "noise",
+                              "description": "", "category": "", "severity": "medium"}]}
+        r = grade_detection(review, key)
+        assert r.detail["gates"] == {"max_severity": False, "max_unexpected": False}
+
+    def test_gates_empty_when_no_gates_in_key(self):
+        r = grade_detection({"verdict": "block", "issues": []}, {"verdict_in": ["block"]})
+        assert r.detail["gates"] == {}
+
+
+class TestAggregateDetectionTrials:
+    """Aggregation = strict majority of trials passing outright.
+
+    Per-check majority votes were removed (2026-08-09): an outright majority
+    implies a per-check majority for every check (the same passing trials
+    passed each one), so per-check votes could never be the sole failure and
+    only duplicated the diagnostics per_trial_failures already carries.
+    """
+
+    @staticmethod
+    def _grade(passed, detail=None):
+        return GradeResult(
+            passed=passed, score=1.0 if passed else 0.0,
+            failures=[] if passed else ["some check failed"],
+            checks_run=1, checks_passed=1 if passed else 0,
+            detail=detail,
+        )
+
+    def test_minority_passing_trials_fail(self):
+        grades = [self._grade(True), self._grade(False), self._grade(False)]
+        result = aggregate_detection_trials(grades)
+        assert not result.passed
+        assert any("1/3" in f for f in result.failures)
+
+    def test_failed_aggregate_carries_trial_indexed_diagnostics(self):
+        # The console prints failures only — a failed --trials run without
+        # --report-out must still say WHY trials failed, not just how many.
+        grades = [self._grade(True), self._grade(False), self._grade(False)]
+        result = aggregate_detection_trials(grades)
+        assert "trial 2: some check failed" in result.failures
+        assert "trial 3: some check failed" in result.failures
+        # A passing aggregate keeps failures empty — nonempty failures on a
+        # passed result would confuse consumers.
+        passing = aggregate_detection_trials(
+            [self._grade(True), self._grade(True), self._grade(False)])
+        assert passing.passed
+        assert passing.failures == []
+
+    def test_even_trials_require_strict_majority(self):
+        # --trials 2: one pass is not "more than half" — both must pass.
+        grades = [self._grade(True), self._grade(False)]
+        assert not aggregate_detection_trials(grades).passed
+        assert aggregate_detection_trials(
+            [self._grade(True), self._grade(True)]).passed
+
+    def test_aggregate_is_a_single_check(self):
+        # No per-check votes: check counts must not scale with key
+        # complexity, so single- and multi-trial counts are never mixed up.
+        result = aggregate_detection_trials([self._grade(True)])
+        assert result.checks_run == 1
+        assert result.checks_passed == 1
+        assert result.score == 1.0
+
+    def test_unreadable_trial_detail_never_improves_aggregate(self):
+        # A failed trial with detail=None is simply a failed trial; its
+        # detail slot is preserved as {} so per-trial lists stay
+        # index-aligned with the requested trial count.
+        d0 = {"verdict": "block", "compliance_passed": True}
+        grades = [self._grade(True, d0), self._grade(False, detail=None),
+                  self._grade(False, detail=None)]
+        result = aggregate_detection_trials(grades)
+        assert not result.passed
+        assert result.detail["per_trial"] == [d0, {}, {}]
+
+    def test_detail_carries_trial_count_and_per_trial(self):
+        d0 = {"verdict": "approve", "compliance_passed": True}
+        result = aggregate_detection_trials([self._grade(True, d0)])
+        assert result.detail["trials"] == 1
+        assert result.detail["per_trial"] == [d0]
+
+    def test_detail_carries_full_aggregate_diagnostics(self):
+        # The aggregate itself emits the documented detail schema — every
+        # caller gets per-trial diagnostics without post-hoc assembly.
+        grades = [
+            self._grade(True, {"status": "graded", "models": ["claude-b-5"]}),
+            self._grade(False, {"status": "timed_out"}),
+            self._grade(False, None),
+        ]
+        detail = aggregate_detection_trials(grades).detail
+        assert detail["per_trial_passed"] == [True, False, False]
+        assert detail["per_trial_failures"] == [
+            [], ["some check failed"], ["some check failed"]]
+        assert detail["per_trial_status"] == [
+            "graded", "timed_out", "harness_error"]
+        assert detail["models"] == ["claude-b-5"]
+
+
+class TestReviewRoundHardening:
+    """Behaviors added by the 2026-08-06 independent review round."""
+
+    def test_paths_match_normalizes_real_world_variants(self):
+        from helpers.graders import _paths_match
+        spec = "src/UserHandler.php"
+        assert _paths_match("b/src/UserHandler.php", spec)            # diff prefix
+        assert _paths_match("src\\UserHandler.php", spec)             # backslash
+        assert _paths_match("src//UserHandler.php", spec)             # double slash
+        assert _paths_match("./src/./UserHandler.php", spec)          # dot segments
+        assert not _paths_match("src/Other.php", spec)
+        assert not _paths_match("vendor/src/OtherHandler.php", spec)
+        # Absolute paths require repository context before pure matching.
+        assert not _paths_match("/tmp/eval-x/src/UserHandler.php", spec)
+        # Suffix matching must respect segment boundaries.
+        assert not _paths_match("notsrc/UserHandler.php", "rc/UserHandler.php")
+
+    def test_paths_match_rejects_extra_prefix_on_relative_path(self):
+        from helpers.graders import _paths_match
+
+        assert not _paths_match(
+            "vendor/src/UserHandler.php", "src/UserHandler.php",
+        )
+
+    def test_detection_matches_absolute_path_relative_to_repo_root(self, tmp_path):
+        expected = "src/UserHandler.php"
+        issue = {
+            "file": str(tmp_path / expected),
+            "severity": "high",
+            "title": "SQL injection",
+            "description": "Raw input reaches a query",
+            "category": "sql-injection",
+            "line": 10,
+        }
+        key = {
+            "required_findings": [{
+                "id": "sql-injection",
+                "file": expected,
+                "line": 10,
+                "match_any": [r"sql.?injection"],
+            }],
+        }
+
+        assert grade_detection(
+            {"verdict": "block", "issues": [issue]},
+            key,
+            repo_root=tmp_path,
+        ).passed
+
+    def test_detection_rejects_absolute_path_to_different_repo_file(
+        self, tmp_path
+    ):
+        expected = "src/UserHandler.php"
+        issue = {
+            "file": str(tmp_path / "vendor" / expected),
+            "severity": "high",
+            "title": "SQL injection",
+            "description": "Raw input reaches a query",
+            "category": "sql-injection",
+            "line": 10,
+        }
+        key = {
+            "required_findings": [{
+                "id": "sql-injection",
+                "file": expected,
+                "line": 10,
+                "match_any": [r"sql.?injection"],
+            }],
+        }
+
+        assert not grade_detection(
+            {"verdict": "block", "issues": [issue]},
+            key,
+            repo_root=tmp_path,
+        ).passed
+
+    def test_unknown_severity_fails_max_severity_gate(self):
+        from helpers.graders import grade_detection
+        key = {"max_severity": "low"}
+        review = {"verdict": "approve",
+                  "issues": [{"severity": "blocker", "file": "f", "title": "t",
+                              "description": "", "category": ""}]}
+        result = grade_detection(review, key)
+        assert not result.passed
+        assert result.detail["gates"]["max_severity"] is False
+
+    def test_abstention_accepts_both_doctrine_readings(self):
+        from helpers.graders import grade_detection
+        key = {"expect_not_applicable": True}
+        for verdict in ("not_applicable", "approve"):
+            review = {"verdict": verdict, "issues": []}
+            assert grade_detection(review, key).passed, verdict
+        assert not grade_detection({"verdict": "comment", "issues": []}, key).passed
+        assert not grade_detection(
+            {"verdict": "approve", "issues": [{"severity": "low", "file": "f",
+                                              "title": "t", "description": "", "category": ""}]},
+            key,
+        ).passed
+
+    def test_patterns_cannot_bridge_field_boundaries(self):
+        from helpers.graders import _finding_matches
+        spec = {"file": "f.php", "match_any": [r"sql\s*inject"]}
+        issue = {"file": "f.php", "title": "Uses raw SQL",
+                 "description": "injection unrelated word appears here",
+                 "category": ""}
+        assert not _finding_matches(issue, spec)
+        issue["description"] = "clear SQL injection via concatenation"
+        assert _finding_matches(issue, spec)
+
+    def test_unexpected_title_is_truncated(self):
+        from helpers.graders import match_findings
+        issues = [{"file": "g.php", "line": 1, "severity": "low",
+                   "category": "c", "title": "x" * 5000, "description": "d"}]
+        u = match_findings(issues, {"required_findings": []})["unexpected"][0]
+        assert len(u["title"]) == 300
+
+    def test_min_severity_floor_rejects_underclassified_findings(self):
+        from helpers.graders import _finding_matches
+        spec = {"file": "f.php", "min_severity": "critical",
+                "match_any": [r"sql\s*inject"]}
+        issue = {"file": "f.php", "title": "SQL injection", "description": "",
+                 "category": "", "severity": "high"}
+        assert not _finding_matches(issue, spec)
+        issue["severity"] = "critical"
+        assert _finding_matches(issue, spec)
+        # Unknown severity fails the floor closed.
+        issue["severity"] = "blocker"
+        assert not _finding_matches(issue, spec)
+
+    def test_reviewer_identity_mismatch_fails_json_grade(self, tmp_dir):
+        # A valid artifact at the expected path but labeled as another
+        # reviewer must not pass compliance under the wrong identity.
+        path = _make_valid_json(tmp_dir, reviewer="security")
+        assert grade_review_json(path, expected_reviewer="security").passed
+        mismatch = grade_review_json(path, expected_reviewer="performance")
+        assert not mismatch.passed
+        assert any("does not match expected" in f for f in mismatch.failures)
+        # Omitting the expectation keeps prior behavior.
+        assert grade_review_json(path).passed

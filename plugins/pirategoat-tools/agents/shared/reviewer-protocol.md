@@ -64,10 +64,7 @@ The script outputs structured text. Parse these key fields from the header:
 
 **On `STATUS: OK`:** The `=== DIFFS ===` section contains filtered diffs for matched files within the context budget. Files are sorted by budget priority (production code before tests for mixed domains), largest-first within each tier. One oversized leading file may be admitted in full as a protected exception; the remaining files share the normal budget.
 
-**On `BUDGET_EXCEEDED` / `=== NOT DIFFED ===`:** These files matched your domain but their diffs were NOT given to you. Your verdict does not cover them by default, and an APPROVE that silently ignores them is a protocol violation. Before writing output, handle every NOT DIFFED file in one of two ways:
-
-1. **Review it:** `git diff <RANGE> -- <file>` (prioritize production code over tests, largest diffstat first), or
-2. **Declare it:** list it under a `**Not reviewed (budget):**` line in your Markdown summary so the reconciliation step can account for the gap. Never count a declared-unreviewed file toward your verdict.
+**On `BUDGET_EXCEEDED` / `=== NOT DIFFED ===`:** These files matched your domain but their diffs were NOT given to you. The handling contract — claim or declare, and what a declaration costs — is delivered by bootstrap's `=== REVIEW BUDGET ===` section, which knows your actual budget. It is deliberately not repeated here: this section is stripped before you receive the protocol.
 
 ### When You Need More Context
 
@@ -161,6 +158,32 @@ When uncertain, read the actual source file to confirm.
 
 **Preexisting-code agents** (patterns-reviewer, history-insights-reviewer): search the **base ref state** (`git grep <pattern> <base_ref>`, `git show <base_ref>:<path>`), not HEAD. HEAD includes the PR's own changes.
 
+## Empirical Probes (Running Code)
+
+Reproducing a finding by running code is encouraged — never at the
+reviewed repo's expense:
+
+- **Never create or modify tracked files** in the repo under review.
+  Mutation belongs exclusively to tests-mutation-reviewer, which runs
+  solo and restores what it touches.
+- **A probe that needs a new file** creates it inside the repo with
+  `pirategoat-probe` in the FILENAME (e.g. `zz_pirategoat-probe_test.go`
+  — the marker is matched literally, hyphen included, and it must be in
+  the file's own name, not just a parent directory's), in a path
+  git does not ignore (ignored paths are invisible to the pipeline's
+  residue sweep). The pipeline treats that marker as its own residue:
+  leftovers are swept and reported at the end of the run.
+- **Create, run, and delete in a single command**, so an interrupted
+  turn cannot orphan the file:
+
+  ```bash
+  cp "$TMPDIR/probe.go" pkg/zz_pirategoat-probe_test.go && go test ./pkg/ ; rm -f pkg/zz_pirategoat-probe_test.go
+  ```
+
+- **Never use `git reset`, `git checkout --`, or `git clean` as cleanup**
+  — the repo is the user's live working tree and may hold uncommitted
+  work.
+
 ## Absence Claims (Clearing Blast Radius)
 
 A negative search result proves only that the **searched pattern is absent** — never that the dependency is. "I grepped for X and found nothing" is evidence about X, not about what depends on the changed code.
@@ -184,9 +207,9 @@ Rules for any "nothing depends on this" / "no blast radius" / "no consumers" cla
 
 **If the script was not available:**
 ```bash
-PR_NUM=$(gh pr view --json number -q .number 2>/dev/null || ghe pr view --json number -q .number 2>/dev/null || echo "")
-if [ -n "$PR_NUM" ]; then
-  OUTPUT_DIR="/tmp/pr-review-${PR_NUM}"
+PR_NUMBER=$(gh pr view --json number -q .number 2>/dev/null || ghe pr view --json number -q .number 2>/dev/null || echo "")
+if [ -n "$PR_NUMBER" ]; then
+  OUTPUT_DIR="/tmp/pr-review-${PR_NUMBER}"
 else
   OUTPUT_DIR="/tmp"
 fi
@@ -197,59 +220,25 @@ mkdir -p "$OUTPUT_DIR"
 
 ## ReviewOutputBuilder API
 
-```python
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../scripts'))
-from review.agent.output import ReviewOutputBuilder
-
-builder = ReviewOutputBuilder(pr_id=PR_ID, reviewer="REVIEWER_NAME")
-```
+This is a non-executable API reference. Bootstrap's **OUTPUT INSTRUCTIONS** block is the sole canonical executable builder command; if bootstrap fails, stop and report the failure instead of reconstructing a command from this reference.
 
 **Core methods:**
 - `builder.add_issue(severity, title, file, description, recommendation, category="general", line=<required for point defects>, confidence=0.9)` - Add diff-anchored finding. Pass `line=None` ONLY for findings that are line-less by nature (missing test coverage, precedent, cross-file architecture) — recorded as a verdict-counting file-scoped issue
 - `builder.add_observation(file, note, category="general")` - Add informational file-level note (doesn't affect verdict — do NOT use for real findings)
 - `builder.add_clearance(claim, method, evidence=None)` - Record an absence claim ("nothing depends on the removed X") with the exact searches/reads that ground it. Required for any blast-radius clear — see "Absence Claims" section
+- `builder.add_unreviewed(*files)` - Declare NOT DIFFED in-scope files you genuinely could not reach at budget exhaustion; one call takes several paths, the same as `add_deferred_reviewed()` (renders the "Not reviewed (budget)" summary line; never affects the verdict)
+- `builder.add_deferred_reviewed(*files)` - Claim NOT DIFFED files you actually read from the deferred queue (a statement, not proof — surfaced as a claim downstream). Deferred files left unclaimed and undeclared are auto-declared unreviewed at save time. (The declare-vs-claim contradiction rule lives in bootstrap's `=== REVIEW BUDGET ===` section, not here — this section is stripped before reviewers receive the protocol; policy belongs in build_output().)
 - `builder.set_files_reviewed(N)` - Track files reviewed
 - `builder.add_tool_result("ToolName")` - Track tools used
 - `builder.set_confidence(0.0-1.0)` - Set overall confidence
 - `builder.add_positive("observation")` - Note good patterns
-- `builder.save(output_dir)` - Write both output files, print the RECORDED COUNTS echo, return the paths (use this — not manual `to_json()`/`to_markdown()` writes)
+- `builder.save(output_dir)` - Write the review JSON, print the RECORDED COUNTS echo, return the path (use this — not manual `to_json()`/`to_markdown()` writes; the pipeline derives the Markdown from your JSON later)
 
 **Valid severities:** `critical`, `high`, `medium`, `low`, `info`
 
 ## File-Based Output
 
-Write both outputs via `save()`, then return signals only:
-
-```python
-result = builder.save(OUTPUT_DIR)
-# Writes {output_dir}/{reviewer}-review.json and .md, prints the RECORDED
-# COUNTS / RECORDED ISSUES / VERDICT echo, and returns {"json": path, "markdown": path}
-```
-
-Do NOT write `to_json()`/`to_markdown()` output by hand — a manual write skips the RECORDED COUNTS echo, leaving you nothing to reconcile your COUNTS against.
-
-**Invocation rule:** run the builder from a script FILE (written with the Write tool) or a heredoc (`python3 <<'PY' ... PY`). NEVER inline `python3 -c "..."` — finding prose contains apostrophes, quotes, and em-dashes that break shell quoting and crash the call.
-
-**When using `/tmp/` directly** (no PR number detected), save into a timestamped subdirectory to avoid collisions: `builder.save(f"/tmp/{reviewer}-review-{YYYYMMDD-HHMMSS}")`.
-
-**Count reconciliation:** `builder.save()` prints the RECORDED COUNTS / RECORDED ISSUES / VERDICT of what was actually saved. Copy the `COUNTS:` in your return signal from that echo — not from memory of what you intended to file. If the echo differs from your intent (an issue you added is missing, a severity changed), investigate and fix BEFORE declaring FINISHED.
-
-**Return signal format:**
-```
-STATUS: FINISHED
-OUTPUT_FILES:
-  - {output_dir}/{reviewer}-review.json
-  - {output_dir}/{reviewer}-review.md
-COUNTS:
-  critical: N
-  high: N
-  medium: N
-VERDICT: <verdict>
-SUMMARY: <one sentence>
-```
-
-Do NOT return full review text. The reconciliator reads your files.
+Bootstrap's **OUTPUT INSTRUCTIONS** provide the concrete, collision-safe command, resolved reviewer identity and paths, count-reconciliation rules, and return-signal format. They are the sole executable source for file-based output; do not reconstruct a fallback command from this protocol.
 
 ## Project-Specific Knowledge
 
@@ -263,13 +252,13 @@ Read: `CLAUDE.md`, `.claude/skills/`, `.claude/docs/`, ADRs, architecture docs. 
 
 ## Host Context Usage
 
-The bootstrap may inject a **Host Context** section into your prompt with local paths that repo signals made worth checking: upstream runtime hosts (e.g., wp-env'd WordPress at `/x/wp`) and library dependency roots (composer's `vendor/`, npm's `node_modules/` — possibly served from `~/.cache/pirategoat/library-deps/<clone_id>/<manager>/` rather than the repo). Treat these as starting points; explore normally when they don't match the code path under review.
+The bootstrap may inject a **Host Context** section into your prompt with local paths that repo signals made worth checking: upstream runtime hosts (e.g., wp-env'd WordPress at `/x/wp`) and library dependency roots (composer's `vendor/`, npm's `node_modules/`). Treat these as starting points; explore normally when they don't match the code path under review.
 
 **Rules:**
 - Use Host Context paths as shortcuts when your finding depends on upstream behavior — read or grep the listed paths instead of speculating about hook signatures, class methods, or library function shapes.
 - Prefer targeted `Grep` over wholesale directory reads — `vendor/` and `node_modules/` roots can be huge.
 - If a host is marked **unresolved** or the **Banner** indicates degradation, you cannot verify upstream behavior. Two options: (1) downgrade severity and add a `verify locally` note in the recommendation, or (2) skip the finding if it depends entirely on the unverified host. Do not state absence ("function X doesn't exist") for unresolved hosts.
-- Don't recommend edits to paths under `~/.cache/pirategoat/library-deps/` or any other library-dep root — those are review aids, not editable code. Recommendations should target the reviewed repo.
+- Don't recommend edits to Host Context library dependency roots — those are review aids, not editable code. Recommendations should target the reviewed repo.
 - Cite upstream sources using `file:line` so the reconciliator can verify: e.g., `woocommerce/plugins/woocommerce/includes/class-wc-order.php:123`.
 
 ### Bounded Filesystem Discovery

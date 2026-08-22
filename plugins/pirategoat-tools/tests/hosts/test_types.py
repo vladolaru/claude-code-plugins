@@ -1,8 +1,18 @@
 """Tests for host-context data types."""
 
+import re
+from pathlib import Path
+from typing import get_args
+
 import pytest
 
-from hosts.types import HostEntry, HostContextManifest, Banner
+from hosts.types import (
+    Banner,
+    BannerReason,
+    HostEntry,
+    HostContextManifest,
+    ResolverSource,
+)
 
 
 def test_host_entry_minimal():
@@ -59,3 +69,32 @@ def test_banner_degraded_shape():
     assert payload["degraded"] is True
     assert payload["reason"] == "partial_unresolved"
     assert payload["unresolved"][0]["name"] == "wordpress"
+
+
+def test_typescript_banner_reasons_match_runtime_contract():
+    """Runtime banner reasons and the public TypeScript type are one API."""
+    schema = (
+        Path(__file__).resolve().parents[2] / "schemas" / "review-output.ts"
+    ).read_text()
+    interface = re.search(
+        r"export interface HostContextBanner\s*\{.*?\breason:\s*([^;]+);",
+        schema,
+        re.DOTALL,
+    )
+    assert interface is not None
+    ts_reasons = set(re.findall(r'"([a-z_]+)"', interface.group(1)))
+
+    assert ts_reasons == {"partial_unresolved", "fully_unavailable"}
+    assert set(get_args(BannerReason)) == {"partial_unresolved", "fully_unavailable"}
+
+
+def test_resolver_sources_match_runtime_contract():
+    """Resolver sources remain limited to live discovery producers."""
+    assert set(get_args(ResolverSource)) == {
+        "explicit",
+        "wp-env",
+        "docker-compose",
+        "sibling",
+        "ecosystem-cache",
+        "vendor-inspection",
+    }

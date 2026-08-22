@@ -4,6 +4,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -12,6 +13,9 @@ import pytest
 TESTS_DIR = Path(__file__).resolve().parent.parent  # review/ -> tests/
 PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPT_PATH = PLUGIN_ROOT / "scripts" / "review" / "agents_status.py"
+
+from review import dispatch_status
+from review import synthesis_lifecycle
 
 
 def _load_module():
@@ -48,6 +52,43 @@ def _finish_agent(tmp_path, name, issues=None, verdict="APPROVE"):
     (tmp_path / _reviewer_filename(name)).write_text(json.dumps({
         "issues": issues or [], "verdict": verdict,
     }))
+
+
+class _FakeClock:
+    """Deterministic now_fn/sleep_fn pair for wait_for_all_done tests.
+
+    now_fn() returns the current fake time. sleep_fn(seconds) advances the
+    fake clock by exactly the requested amount and records it in .sleeps —
+    so a test can assert both how long each requested sleep was and how
+    many were requested, with zero dependency on real wall-clock timing
+    (no flaky elapsed-time thresholds, no real `time.sleep`).
+
+    Guards against runaway loops: a mutation that disables the
+    --max-seconds expiry check would otherwise spin forever here (a fake
+    sleep never actually blocks), and unlike a subprocess call, an
+    in-process infinite loop has no timeout to kill it. The guard raises
+    once the loop clearly isn't converging, turning a hang into a fast,
+    clean test failure.
+    """
+
+    _MAX_SLEEPS = 200
+
+    def __init__(self, start=0.0):
+        self.now = start
+        self.sleeps = []
+
+    def now_fn(self):
+        return self.now
+
+    def sleep_fn(self, seconds):
+        self.sleeps.append(seconds)
+        if len(self.sleeps) > self._MAX_SLEEPS:
+            raise AssertionError(
+                f"wait_for_all_done slept {len(self.sleeps)} times without "
+                "expiring or finishing — runaway loop (--max-seconds check "
+                "disabled?)"
+            )
+        self.now += seconds
 
 
 class TestCheckStatus:
@@ -143,7 +184,7 @@ class TestCheckStatus:
     def test_skipped_agents_dont_count(self, mod, tmp_path):
         _write_plan(tmp_path, [
             {"name": "code-reviewer", "status": "DISPATCH"},
-            {"name": "a11y-reviewer", "status": "SKIP", "reason": "no frontend files"},
+            {"name": "a11y-reviewer", "status": "SKIPPED", "reason": "no frontend files"},
         ])
         _start_agent(tmp_path, "code-reviewer")
         _finish_agent(tmp_path, "code-reviewer")
@@ -173,6 +214,165 @@ class TestCheckStatus:
         cmd = [sys.executable, str(SCRIPT_PATH), "--output-dir", str(tmp_path)]
         r = subprocess.run(cmd, capture_output=True, text=True)
         assert r.returncode == 1
+
+    def test_invalid_status_exits_1_with_actionable_error(self, tmp_path):
+        _write_plan(tmp_path, [
+            {"name": "security-reviewer", "status": "DISPATCHED"},
+        ])
+
+        cmd = [sys.executable, str(SCRIPT_PATH), "--output-dir", str(tmp_path)]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        assert result.returncode == 1
+        assert "security-reviewer" in result.stderr
+        assert repr("DISPATCHED") in result.stderr
+
+
+class TestDispatchStatusContract:
+    def test_supported_statuses_partition_into_explicit_sets(self):
+        assert dispatch_status.SKIPPED_STATUSES == frozenset({
+            dispatch_status.SKIPPED,
+            dispatch_status.SKIPPED_OVERRIDE,
+            dispatch_status.SKIPPED_QUICK_MODE,
+            dispatch_status.SKIPPED_TRIAGE,
+        })
+        assert dispatch_status.SUPPORTED_DISPATCH_STATUSES == (
+            dispatch_status.DISPATCHED_STATUSES
+            | dispatch_status.SKIPPED_STATUSES
+        )
+
+    @pytest.mark.parametrize(
+        "status",
+        [
+            "DISPATCH",
+            "DISPATCH_OVERRIDE",
+            "SKIPPED",
+            "SKIPPED_OVERRIDE",
+            "SKIPPED_QUICK_MODE",
+            "SKIPPED_TRIAGE",
+        ],
+    )
+    def test_validator_accepts_each_supported_status(self, status):
+        agents = [{"name": "code-reviewer", "status": status}]
+
+        assert dispatch_status.validate_dispatch_plan_agents(agents) == agents
+
+    @pytest.mark.parametrize(
+        "agents",
+        [
+            None,
+            {},
+            "code-reviewer",
+        ],
+    )
+    def test_validator_rejects_non_list_agents(self, agents):
+        with pytest.raises(ValueError) as exc_info:
+            dispatch_status.validate_dispatch_plan_agents(agents)
+
+        assert repr(agents) in str(exc_info.value)
+
+    @pytest.mark.parametrize("entry", [None, "code-reviewer", []])
+    def test_validator_rejects_non_dict_entries_with_index(self, entry):
+        with pytest.raises(ValueError) as exc_info:
+            dispatch_status.validate_dispatch_plan_agents([entry])
+
+        assert "index 0" in str(exc_info.value)
+        assert repr(entry) in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        "name",
+        [None, "", [], {}],
+    )
+    def test_validator_rejects_invalid_names_with_index_and_value(self, name):
+        with pytest.raises(ValueError) as exc_info:
+            dispatch_status.validate_dispatch_plan_agents([
+                {"name": name, "status": "DISPATCH"},
+            ])
+
+        assert "index 0" in str(exc_info.value)
+        assert repr(name) in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        "status,expected_repr",
+        [
+            pytest.param("__missing__", repr(None), id="missing"),
+            pytest.param(None, repr(None), id="null"),
+            pytest.param("", repr(""), id="empty"),
+            pytest.param([], repr([]), id="structured-list"),
+            pytest.param(
+                {"state": "DISPATCH"},
+                repr({"state": "DISPATCH"}),
+                id="structured-dict",
+            ),
+            pytest.param("DISPATCHED", repr("DISPATCHED"), id="unknown"),
+        ],
+    )
+    def test_validator_rejects_invalid_status_with_agent_and_repr(
+        self, status, expected_repr
+    ):
+        agent = {"name": "security-reviewer"}
+        if status != "__missing__":
+            agent["status"] = status
+
+        with pytest.raises(ValueError) as exc_info:
+            dispatch_status.validate_dispatch_plan_agents([agent])
+
+        message = str(exc_info.value)
+        assert "security-reviewer" in message
+        assert expected_repr in message
+
+
+class TestExplicitSkippedFormatting:
+    @pytest.mark.parametrize(
+        "status",
+        [
+            "SKIPPED",
+            "SKIPPED_OVERRIDE",
+            "SKIPPED_QUICK_MODE",
+            "SKIPPED_TRIAGE",
+        ],
+    )
+    def test_formats_each_supported_skipped_status(self, mod, status):
+        result = {
+            "all_done": True,
+            "dispatched": 0,
+            "finished": 0,
+            "running": 0,
+            "timed_out": 0,
+            "not_dispatched": 0,
+            "skipped": 1,
+            "agents": [
+                {"name": "code-reviewer", "status": status, "reason": "not needed"},
+            ],
+        }
+
+        output = mod.format_output(result)
+
+        assert status in output
+        assert "not needed" in output
+
+    def test_does_not_format_unknown_skip_prefix_as_skipped(self, mod):
+        result = {
+            "all_done": True,
+            "dispatched": 0,
+            "finished": 0,
+            "running": 0,
+            "timed_out": 0,
+            "not_dispatched": 0,
+            "skipped": 0,
+            "agents": [
+                {
+                    "name": "code-reviewer",
+                    "status": "SKIPPED_FOREVER",
+                    "reason": "unsupported",
+                },
+            ],
+        }
+
+        output = mod.format_output(result)
+
+        assert "SKIPPED_FOREVER" not in output
+        assert "unsupported" not in output
 
 
 class TestNotDispatchedDoesNotBlockPipeline:
@@ -357,3 +557,327 @@ class TestOverrideStatuses:
         assert result["finished"] == 2
         assert result["skipped"] == 2      # SKIPPED + SKIPPED_OVERRIDE
         assert result["not_dispatched"] == 0
+
+
+class TestWaitMode:
+    """--wait / --max-seconds: script-owned polling. See module docstring for
+    the exit-code contract (0/2/1 unchanged, 3 added for --wait expiry).
+
+    Timing-sensitive properties (expiry-before-sleep, the final-sleep
+    clamp, waking on the very next poll) are pinned deterministically via
+    `_FakeClock`/injected `sleep_fn` — no real wall-clock elapsed-time
+    thresholds, so no flakiness.
+
+    The subprocess tests are NOT restatements of those: the exit codes
+    are the contract the step-7/8 briefings teach the orchestrator by
+    number, so the CLI is their unit level. One cheap ALL_DONE smoke
+    covers exit 0 and the `--wait` wiring; `test_wait_exit_3_on_expiry`
+    covers expiry; `test_no_wait_paths_unchanged` covers 0/2. A real
+    threaded completion is not spawned a second time here — the
+    "observed on the very next poll" property is what mattered, and
+    `test_wait_wakes_on_completion` pins it deterministically.
+    """
+
+    def test_wait_returns_zero_immediately_when_all_done(self, mod, tmp_path):
+        """Already-satisfied status must not sleep at all."""
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+        _start_agent(tmp_path, "code-reviewer")
+        _finish_agent(tmp_path, "code-reviewer")
+
+        clock = _FakeClock()
+        result, expired = mod.wait_for_all_done(
+            str(tmp_path), max_seconds=30,
+            sleep_fn=clock.sleep_fn, now_fn=clock.now_fn,
+        )
+
+        assert result["all_done"] is True
+        assert expired is False
+        assert clock.sleeps == [], "wait_for_all_done slept when already done"
+
+    def test_wait_all_done_cli_smoke(self, tmp_path):
+        """Cheap end-to-end smoke: the CLI wires --wait through for real."""
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+        _start_agent(tmp_path, "code-reviewer")
+        _finish_agent(tmp_path, "code-reviewer")
+
+        cmd = [
+            sys.executable, str(SCRIPT_PATH),
+            "--output-dir", str(tmp_path), "--wait", "--max-seconds", "30",
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        assert r.returncode == 0
+        assert "ALL_DONE: true" in r.stdout
+
+    def test_wait_checks_expiry_before_sleeping(self, mod, tmp_path):
+        """The poll that lands exactly on expiry must return WITHOUT
+        sleeping again — a mutation that sleeps unconditionally before
+        checking the remaining budget would add an extra sleep here."""
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+        _start_agent(tmp_path, "code-reviewer")
+        # Never finished — stays RUNNING for the whole fake-clock window.
+
+        clock = _FakeClock()
+        result, expired = mod.wait_for_all_done(
+            str(tmp_path), max_seconds=3.0, poll_interval=1.5,
+            sleep_fn=clock.sleep_fn, now_fn=clock.now_fn,
+        )
+
+        assert expired is True
+        assert result["all_done"] is False
+        # 3 checks (t=0, 1.5, 3.0) but only 2 sleeps: the third check lands
+        # exactly on expiry and returns instead of sleeping a third time.
+        assert clock.sleeps == [1.5, 1.5]
+
+    def test_wait_clamps_final_sleep_to_remaining(self, mod, tmp_path):
+        """The last sleep before expiry must be clamped to whatever time is
+        actually left, not the full poll_interval — otherwise every wait
+        can overshoot --max-seconds by up to one poll grain."""
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+        _start_agent(tmp_path, "code-reviewer")
+
+        clock = _FakeClock()
+        result, expired = mod.wait_for_all_done(
+            str(tmp_path), max_seconds=4.0, poll_interval=1.5,
+            sleep_fn=clock.sleep_fn, now_fn=clock.now_fn,
+        )
+
+        assert expired is True
+        # t=0 rem=4.0 -> sleep 1.5; t=1.5 rem=2.5 -> sleep 1.5; t=3.0
+        # rem=1.0 -> sleep clamped to 1.0, not the full 1.5s poll_interval.
+        assert clock.sleeps == [1.5, 1.5, 1.0]
+
+    def test_wait_exit_3_on_expiry(self, tmp_path):
+        """Unfinished agent + a short --max-seconds must exit 3, not 0/1/2."""
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+        _start_agent(tmp_path, "code-reviewer")
+        # No review file written — code-reviewer stays RUNNING forever.
+
+        cmd = [
+            sys.executable, str(SCRIPT_PATH),
+            "--output-dir", str(tmp_path),
+            "--wait", "--max-seconds", "1",
+        ]
+        # Generous subprocess-level timeout: if a mutation makes --wait ignore
+        # --max-seconds (never expiring), this call hangs. A bounded
+        # subprocess timeout turns that hang into a clean test failure
+        # (TimeoutExpired) instead of blocking the suite forever.
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        assert r.returncode == 3
+        assert "EXPIRED" in r.stderr
+
+    def test_wait_expired_status_flushed_before_stderr(self, tmp_path):
+        """On expiry, the status table (stdout) must precede EXPIRED
+        (stderr) in a MERGED stream — a caller that captures both on one
+        pipe (e.g. a Codex subprocess) must never see them interleaved out
+        of order."""
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+        _start_agent(tmp_path, "code-reviewer")
+
+        cmd = [
+            sys.executable, str(SCRIPT_PATH),
+            "--output-dir", str(tmp_path),
+            "--wait", "--max-seconds", "1",
+        ]
+        r = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, timeout=15,
+        )
+        assert r.returncode == 3
+        merged = r.stdout
+        assert merged.index("ALL_DONE:") < merged.index("EXPIRED:")
+
+    def test_wait_wakes_on_completion(self, mod, tmp_path):
+        """Completion must be observed on the very first poll after it
+        happens — the loop has to re-check status on every iteration, not
+        return after a single pass."""
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+        _start_agent(tmp_path, "code-reviewer")
+
+        clock = _FakeClock()
+        calls = {"n": 0}
+
+        def sleep_fn(seconds):
+            calls["n"] += 1
+            assert calls["n"] <= 200, "runaway loop — completion never observed"
+            clock.now += seconds
+            if calls["n"] == 2:
+                # Simulate the reviewer finishing partway through the wait.
+                _finish_agent(tmp_path, "code-reviewer")
+
+        result, expired = mod.wait_for_all_done(
+            str(tmp_path), max_seconds=30, poll_interval=1.5,
+            sleep_fn=sleep_fn, now_fn=clock.now_fn,
+        )
+
+        assert result["all_done"] is True
+        assert expired is False
+        # The check_status() call right after the 2nd sleep is the one
+        # that observes the finish — proves every iteration re-checks.
+        assert calls["n"] == 2
+
+    def test_wait_requires_max_seconds(self, tmp_path):
+        """--wait without --max-seconds refuses to block unbounded."""
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+
+        cmd = [sys.executable, str(SCRIPT_PATH), "--output-dir", str(tmp_path), "--wait"]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        assert r.returncode == 1
+        assert "--max-seconds" in r.stderr
+
+    def test_max_seconds_requires_wait(self, tmp_path):
+        """--max-seconds without --wait is rejected, not silently ignored."""
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+
+        cmd = [
+            sys.executable, str(SCRIPT_PATH),
+            "--output-dir", str(tmp_path), "--max-seconds", "30",
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        assert r.returncode == 1
+        assert "--wait" in r.stderr
+
+    @pytest.mark.parametrize("value", ["0", "-5"])
+    def test_max_seconds_must_be_positive(self, tmp_path, value):
+        """--max-seconds must be > 0 — 0 or negative is rejected loudly
+        rather than producing a wait that expires instantly or never."""
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+
+        cmd = [
+            sys.executable, str(SCRIPT_PATH),
+            "--output-dir", str(tmp_path), "--wait", "--max-seconds", value,
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        assert r.returncode == 1
+        assert "--max-seconds" in r.stderr
+
+    def test_no_wait_paths_unchanged(self, tmp_path):
+        """The no-wait CLI path keeps its pinned 0/2 exit codes.
+
+        Error-path exit 1 is already pinned at the CLI level by
+        TestCheckStatus.test_no_dispatch_plan_exits_1 and
+        test_invalid_status_exits_1_with_actionable_error; check_status()'s
+        all_done computation itself is exercised directly by every test in
+        TestCheckStatus / TestNotDispatchedDoesNotBlockPipeline /
+        TestOverrideStatuses. This closes the one CLI-level gap: no existing
+        test invoked main() end-to-end for the success/still-running cases.
+        """
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+        _start_agent(tmp_path, "code-reviewer")
+        _finish_agent(tmp_path, "code-reviewer")
+
+        cmd = [sys.executable, str(SCRIPT_PATH), "--output-dir", str(tmp_path)]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        assert r.returncode == 0
+        assert "ALL_DONE: true" in r.stdout
+
+        still_running_dir = tmp_path / "running"
+        still_running_dir.mkdir()
+        _write_plan(still_running_dir, [{"name": "code-reviewer", "status": "DISPATCH"}])
+        _start_agent(still_running_dir, "code-reviewer")
+
+        cmd = [sys.executable, str(SCRIPT_PATH), "--output-dir", str(still_running_dir)]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        assert r.returncode == 2
+        assert "ALL_DONE: false" in r.stdout
+
+
+class TestSynthesisMarkersAreInvisible:
+    """The synthesis agents are measured elsewhere and must not leak here.
+
+    TWO independent guards, and this class keeps both honest even though
+    either alone would suffice today.
+
+    1. NAMESPACING (primary, since the markers were renamed). Synthesis
+       markers end `.synthesis-started`, not `.started`, so a directory
+       scan for the reviewer suffix cannot see them at all. That is what
+       enforces the separation now: pirategoat-bot's resume path ran
+       exactly such a scan and treated every hit as a reviewer, seeding
+       both synthesis agents as permanently NOT_DISPATCHED and renaming
+       their markers away as orphans. A name list maintained by hand in
+       another repo is a contract nobody enforces; the suffix is one
+       nobody has to.
+
+    2. DISPATCH-PLAN ITERATION (this module's own guard). agents_status
+       reports on the agents in `dispatch-plan.json` and nothing else,
+       and neither synthesis agent is ever in one.
+
+    Namespacing makes the first test near-trivial, which is the point —
+    the invariant should be cheap to hold. The second test deliberately
+    plants the OLD, reviewer-suffixed names to prove guard 2 still stands
+    alone, so a future revert of the suffix cannot silently take both
+    guards down at once.
+    """
+
+    SYNTHESIS_MARKERS = (
+        synthesis_lifecycle.RECONCILIATOR,
+        synthesis_lifecycle.DECISION_CRITIC,
+    )
+
+    def _plant(self, tmp_path):
+        """Real markers, through the production writer."""
+        for name in self.SYNTHESIS_MARKERS:
+            synthesis_lifecycle.mark_dispatched(str(tmp_path), name)
+
+    def _plant_with_reviewer_suffix(self, tmp_path):
+        """Synthesis names under the REVIEWER suffix — the pre-namespacing
+        collision, simulated so guard 2 is pinned on its own."""
+        for name in self.SYNTHESIS_MARKERS:
+            _start_agent(tmp_path, name)
+
+    def test_synthesis_markers_do_not_carry_the_reviewer_suffix(
+        self, tmp_path
+    ):
+        self._plant(tmp_path)
+        assert not list(tmp_path.glob("*.started"))
+        assert len(list(tmp_path.glob("*.synthesis-started"))) == 2
+
+    def test_dispatch_plan_iteration_holds_without_namespacing(
+        self, mod, tmp_path
+    ):
+        """Guard 2, alone: even under the colliding old names, these
+        agents cannot appear, because they are not in the plan."""
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+        _start_agent(tmp_path, "code-reviewer")
+        _finish_agent(tmp_path, "code-reviewer")
+
+        before = mod.check_status(str(tmp_path))
+        self._plant_with_reviewer_suffix(tmp_path)
+
+        assert mod.check_status(str(tmp_path)) == before
+
+    def test_counts_unchanged_with_synthesis_markers_present(
+        self, mod, tmp_path
+    ):
+        _write_plan(tmp_path, [
+            {"name": "code-reviewer", "status": "DISPATCH"},
+            {"name": "security-reviewer", "status": "DISPATCH"},
+        ])
+        _start_agent(tmp_path, "code-reviewer")
+        _finish_agent(tmp_path, "code-reviewer")
+        _start_agent(tmp_path, "security-reviewer")
+
+        before = mod.check_status(str(tmp_path))
+        self._plant(tmp_path)
+        after = mod.check_status(str(tmp_path))
+
+        assert after == before
+        assert [agent["name"] for agent in after["agents"]] == [
+            "code-reviewer", "security-reviewer",
+        ]
+
+    def test_exit_code_unchanged_with_synthesis_markers_present(
+        self, tmp_path
+    ):
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+        _start_agent(tmp_path, "code-reviewer")
+        _finish_agent(tmp_path, "code-reviewer")
+        self._plant(tmp_path)
+
+        r = subprocess.run(
+            [sys.executable, str(SCRIPT_PATH), "--output-dir", str(tmp_path)],
+            capture_output=True, text=True, timeout=15,
+        )
+        assert r.returncode == 0
+        assert "ALL_DONE: true" in r.stdout
+        for name in self.SYNTHESIS_MARKERS:
+            assert name not in r.stdout

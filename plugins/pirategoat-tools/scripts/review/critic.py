@@ -19,6 +19,24 @@ from typing import Optional
 
 TOTAL_STEPS = 4
 
+# Canonical critic verdict vocabulary. The Step 4 rubric below and the
+# briefings.py critic guidance presents exactly these verdicts, the
+# review_metrics consumer (analysis/review_metrics/contracts.py) classifies
+# manifest critic verdicts against this constant, and
+# critic_adjustments.REVISE_VERDICT is the same literal spelled out
+# separately (deliberately not imported — see that constant's own
+# comment) as the one verdict apply_adjustments()'s gate accepts — keep
+# all four aligned.
+CRITIC_VERDICTS = ("STAND", "REVISE", "ESCALATE")
+# Deliberately NOT a member of CRITIC_VERDICTS above: it is not a critique
+# outcome, it is the record that no critique happened — the step-10
+# briefing has the orchestrator write it when quick mode skips the critic
+# and when the critic crashed, timed out, or produced nothing usable.
+# Consumers that measure critique quality must exclude it; consumers that
+# measure whether a critic ran must not. critic_adjustments.py spells the
+# same literal separately for its own presentation mapping.
+CRITIC_VERDICT_SKIPPED = "SKIPPED"
+
 
 def get_step_guidance(
     step: int,

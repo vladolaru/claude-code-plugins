@@ -1,8 +1,9 @@
 diff --git a/internal/handler/handler_test.go b/internal/handler/handler_test.go
 new file mode 100644
+index 0000000..a561b4c
 --- /dev/null
 +++ b/internal/handler/handler_test.go
-@@ -0,0 +1,42 @@
+@@ -0,0 +1,45 @@
 +package handler_test
 +
 +import (
@@ -50,6 +51,7 @@ new file mode 100644
 +}
 diff --git a/internal/model/model_test.go b/internal/model/model_test.go
 new file mode 100644
+index 0000000..2bc847a
 --- /dev/null
 +++ b/internal/model/model_test.go
 @@ -0,0 +1,18 @@

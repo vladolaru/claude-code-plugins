@@ -128,6 +128,43 @@ SAMPLE_NOISE_ONLY_FILES = [
 
 
 # =============================================================================
+# Dispatch status contract
+# =============================================================================
+
+class TestDispatchStatusContract:
+    """Planner output and telemetry share one canonical status vocabulary."""
+
+    @pytest.mark.parametrize("quick", [False, True], ids=["normal", "quick"])
+    def test_planner_outputs_use_canonical_supported_statuses(
+        self, tmp_path, quick
+    ):
+        from review.dispatch_status import SUPPORTED_DISPATCH_STATUSES
+
+        quick_plan = build_dispatch_plan(
+            mode="full",
+            git_range="main..HEAD",
+            output_dir=str(tmp_path),
+            changed_files=["src/service.py"],
+            registry={
+                "agents": {
+                    "simplification-reviewer": {
+                        "dispatch_class": "always",
+                        "domain": "code",
+                        "focus": "",
+                    },
+                }
+            },
+            commit_messages="",
+            diffstat={"added": 5, "removed": 0},
+            quick=quick,
+        )
+
+        assert {
+            agent["status"] for agent in quick_plan["agents"]
+        } <= SUPPORTED_DISPATCH_STATUSES
+
+
+# =============================================================================
 # Unit Tests — parse_changed_files_list
 # =============================================================================
 
@@ -3664,9 +3701,10 @@ class TestRepoReviewerExpansion:
 
     def test_no_review_config_yields_nothing(self):
         dispatch = []
-        signals = expand_repo_reviewers(None, {}, [], dispatch)
+        signals, warnings = expand_repo_reviewers(None, {}, [], dispatch)
         assert dispatch == []
         assert signals == []
+        assert warnings == []
 
     def test_applicable_reviewer_dispatches(self):
         dispatch = []
@@ -3674,7 +3712,7 @@ class TestRepoReviewerExpansion:
                "ref": ".ai/agents/review/renewals.md",
                "applies_to": {"domains": ["security"]},
                "channel": "blocking", "execution": "inline", "model": "sonnet"}
-        signals = expand_repo_reviewers(
+        signals, _warnings = expand_repo_reviewers(
             _review_ctx([rev]), {"security": 3}, ["includes/foo.php"], dispatch
         )
         assert len(dispatch) == 1
@@ -3706,6 +3744,72 @@ class TestRepoReviewerExpansion:
         assert dispatch[0]["status"] == "DISPATCH"
         assert dispatch[0]["channel"] == "advisory"
 
+    def test_resolved_ref_is_preferred_over_root_relative_ref(self):
+        """Bootstrap resolves a relative ref against its own invocation
+        directory — from a repo subdirectory the valid prompt would report
+        missing and the adapter would write an empty result. The dispatch
+        entry must carry the already-validated absolute path."""
+        dispatch = []
+        rev = {"id": "renewals", "label": "R", "ref": ".ai/r.md",
+               "resolved_ref": "/repo/.ai/r.md",
+               "applies_to": {"domains": ["security"]},
+               "channel": "blocking", "execution": "inline", "model": None}
+        expand_repo_reviewers(
+            _review_ctx([rev]), {"security": 1}, ["a.php"], dispatch
+        )
+        assert dispatch[0]["ref"] == "/repo/.ai/r.md"
+
+    def test_isolated_execution_is_refused_not_dispatched(self):
+        """An explicit isolation request must never silently widen into
+        inline execution of the repo prompt."""
+        dispatch = []
+        rev = {"id": "iso", "label": "Iso", "ref": "r.md",
+               "applies_to": {"domains": ["security"]},
+               "channel": "blocking", "execution": "isolated", "model": None}
+        expand_repo_reviewers(
+            _review_ctx([rev]), {"security": 1}, ["a.php"], dispatch
+        )
+        assert dispatch[0]["status"] == "SKIPPED"
+        assert "isolated execution is not implemented" in dispatch[0]["reason"]
+
+    def test_untrusted_exclusions_surface_as_warnings(self):
+        """Provenance-gated entries are hard-excluded at config
+        normalization, so nothing remains to dispatch — the exclusion must
+        still be LOUD, and warnings are the only channel the step-5
+        briefing renders (agent_signals never reach the orchestrator)."""
+        ctx = {"review_config": {
+            "rules": [], "reviewers": [],
+            "untrusted": [{
+                "kind": "reviewer", "id": "evil", "path": ".ai/evil.md",
+                "reason": "defined or modified within the reviewed range",
+            }],
+        }}
+        dispatch = []
+        signals, warnings = expand_repo_reviewers(ctx, {}, [], dispatch)
+        assert dispatch == []
+        assert signals == []
+        assert any(
+            "UNTRUSTED reviewer 'evil'" in warning for warning in warnings
+        )
+
+    def test_untrusted_warnings_reach_the_rendered_plan_warnings(self, registry):
+        """build_dispatch_plan must carry provenance exclusions in its
+        ``warnings`` array — the field pipeline step 5 renders with ⚠️."""
+        ctx = {"review_config": {
+            "rules": [], "reviewers": [],
+            "untrusted": [{
+                "kind": "config", "id": None, "path": ".pirategoat/config.json",
+                "reason": "defined or modified within the reviewed range",
+            }],
+        }}
+        plan = build_dispatch_plan(
+            mode="pr", git_range="base..head", output_dir="/tmp/out",
+            changed_files=["includes/foo.php"], registry=registry,
+            commit_messages="", diffstat={}, review_context=ctx,
+        )
+        assert any("UNTRUSTED config" in w for w in plan["warnings"])
+        assert not any("UNTRUSTED" in s for s in plan["agent_signals"])
+
     def test_scope_domains_fallback_to_code(self):
         dispatch = []
         rev = {"id": "any", "label": "Any", "ref": "r.md",
@@ -3732,3 +3836,51 @@ class TestRepoReviewerExpansion:
         entry = next(a for a in plan["agents"] if a["name"] == "repo-domain-expert-reviewer")
         assert entry["adapter"] == "repo-reviewer-adapter"
         assert entry["status"] == "DISPATCH"
+
+    def test_codex_host_projects_effective_model_tier(self, registry, tmp_path):
+        rev = {"id": "domain-expert", "label": "Domain Expert",
+               "ref": ".ai/agents/review/expert.md",
+               "applies_to": {"paths": ["**/*.php"]}, "channel": "blocking",
+               "execution": "inline", "model": "opus"}
+        plan = build_dispatch_plan(
+            mode="full",
+            git_range="abc..HEAD",
+            output_dir=str(tmp_path),
+            changed_files=["src/x.php"],
+            registry=registry,
+            commit_messages="",
+            diffstat={},
+            review_context=_review_ctx([rev]),
+            host="codex",
+        )
+
+        entry = next(
+            agent for agent in plan["agents"]
+            if agent.get("adapter") == "repo-reviewer-adapter"
+        )
+        assert entry["model"] == "inherit"
+        assert entry["declared_model"] == "opus"
+
+    def test_claude_host_keeps_declared_model_tier(self, registry, tmp_path):
+        rev = {"id": "domain-expert", "label": "Domain Expert",
+               "ref": ".ai/agents/review/expert.md",
+               "applies_to": {"paths": ["**/*.php"]}, "channel": "blocking",
+               "execution": "inline", "model": "opus"}
+        plan = build_dispatch_plan(
+            mode="full",
+            git_range="abc..HEAD",
+            output_dir=str(tmp_path),
+            changed_files=["src/x.php"],
+            registry=registry,
+            commit_messages="",
+            diffstat={},
+            review_context=_review_ctx([rev]),
+            host="claude",
+        )
+
+        entry = next(
+            agent for agent in plan["agents"]
+            if agent.get("adapter") == "repo-reviewer-adapter"
+        )
+        assert entry["model"] == "opus"
+        assert entry["declared_model"] == "opus"

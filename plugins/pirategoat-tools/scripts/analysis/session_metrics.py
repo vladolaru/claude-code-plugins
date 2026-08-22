@@ -17,7 +17,7 @@ Usage:
     python3 extract-session-metrics.py --sessions-dir ~/.claude/projects/-Users-foo-myproject/
 
     # Filter to specific agent types
-    python3 extract-session-metrics.py --agents security-reviewer,code-reviewer
+    python3 extract-session-metrics.py --agent security-reviewer,code-reviewer
 
     # Output as JSON only
     python3 extract-session-metrics.py --format json
@@ -1103,7 +1103,7 @@ def main():
         "(default: auto-detect from current git repo)",
     )
     parser.add_argument(
-        "--agents",
+        "--agent",
         help="Comma-separated list of agent types to include "
         "(e.g. security-reviewer,code-reviewer)",
     )
@@ -1195,8 +1195,8 @@ def main():
     else:
         # Standard mode: extract agent operational metrics
         agent_filter = None
-        if args.agents:
-            agent_filter = [a.strip() for a in args.agents.split(",")]
+        if args.agent:
+            agent_filter = [a.strip() for a in args.agent.split(",")]
 
         results = scan_sessions(
             sessions_dir,

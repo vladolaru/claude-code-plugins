@@ -1,6 +1,8 @@
 """Tests for the explicit (.pirategoat/config.json) resolver."""
 
 import json
+import os
+
 import pytest
 from pathlib import Path
 
@@ -132,3 +134,25 @@ def test_entry_missing_path_is_noted(make_repo):
     assert result.entries == []
     assert "parse_error" in result.notes
     assert "path" in result.notes["parse_error"]
+
+
+def test_symlinked_path_resolving_into_repo_is_skipped(tmp_path, make_repo):
+    """.pirategoat/config.json is repo-controlled; a declared host path
+    that is really a symlink back into the reviewed repo must hit the
+    self-skip — presenting first-party code as trusted upstream source
+    would let reviewers "verify" the PR's changes against themselves.
+    Behavioral pin for any containment re-derivation, in any spelling."""
+    link = tmp_path / "wc-link"
+    config = {"hosts": {"runtime": [
+        {"name": "woocommerce", "path": str(link)}
+    ]}}
+    repo = make_repo({
+        ".pirategoat/config.json": json.dumps(config),
+        "embedded/placeholder.txt": "x",
+    })
+    os.symlink(str(repo / "embedded"), str(link))
+
+    result = ExplicitResolver().resolve(str(repo))
+
+    assert result.entries == []
+    assert "inside reviewed repo" in result.notes.get("skipped", "")

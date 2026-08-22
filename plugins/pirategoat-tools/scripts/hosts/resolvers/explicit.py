@@ -4,6 +4,7 @@ import json
 import os
 from typing import Any, Dict, List
 
+from containment import contains
 from hosts.resolvers.base import HostResolver, ResolverResult
 from hosts.types import HostEntry
 
@@ -83,9 +84,4 @@ class ExplicitResolver(HostResolver):
 
     @staticmethod
     def _is_inside_repo(path: str, repo_path: str) -> bool:
-        resolved_path = os.path.realpath(path)
-        resolved_repo = os.path.realpath(repo_path)
-        try:
-            return os.path.commonpath([resolved_path, resolved_repo]) == resolved_repo
-        except ValueError:
-            return False
+        return contains(repo_path, path)

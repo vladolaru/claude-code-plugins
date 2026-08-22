@@ -3,6 +3,7 @@
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -32,8 +33,12 @@ load_pr_size_from_context = _mod.load_pr_size_from_context
 load_change_purpose = _mod.load_change_purpose
 load_additional_instructions = _mod.load_additional_instructions
 compute_review_budget = _mod.compute_review_budget
+budget_was_capped = _mod.budget_was_capped
 extract_scope_files = _mod.extract_scope_files
+extract_not_diffed_files = _mod.extract_not_diffed_files
+extract_list_only_files = _mod.extract_list_only_files
 extract_scope_line_count = _mod.extract_scope_line_count
+load_scope_facts = _mod.load_scope_facts
 resolve_overall_status = _mod.resolve_overall_status
 REVIEWER_PROTOCOL_SKIP_SECTIONS = _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
 
@@ -41,6 +46,139 @@ REVIEWER_PROTOCOL_SKIP_SECTIONS = _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
 # =============================================================================
 # Unit Tests — direct import
 # =============================================================================
+
+
+class TestResolveReviewerIdentity:
+    """Registry and adapter-ref invocations preserve their current identities."""
+
+    def test_registry_mode_uses_registry_agent_name(self):
+        args = SimpleNamespace(
+            agent="security-reviewer",
+            repo_agent_ref=None,
+            instance_name=None,
+            adapter_label=None,
+            execution="inline",
+        )
+
+        assert _mod.resolve_reviewer_identity(args) == (
+            "security-reviewer",
+            "security-reviewer",
+            None,
+            None,
+            None,
+        )
+
+    def test_ref_mode_uses_instance_name(self):
+        args = SimpleNamespace(
+            agent="repo-reviewer-adapter",
+            repo_agent_ref=".pirategoat/reviewers/renewals.md",
+            instance_name="repo-renewals-reviewer",
+            adapter_label="Renewals",
+            execution="inline",
+        )
+
+        assert _mod.resolve_reviewer_identity(args) == (
+            "repo-reviewer-adapter",
+            "repo-renewals-reviewer",
+            "Renewals",
+            ".pirategoat/reviewers/renewals.md",
+            None,
+        )
+
+    @pytest.mark.parametrize(
+        ("instance_name", "execution", "expected_error"),
+        [
+            (None, "inline", "Adapter ref-mode requires --instance-name."),
+            (
+                "repo-renewals-reviewer",
+                "isolated",
+                "Isolated execution is not implemented.",
+            ),
+        ],
+    )
+    def test_inconsistent_ref_mode_flags_return_printable_error(
+        self, instance_name, execution, expected_error
+    ):
+        args = SimpleNamespace(
+            agent="repo-reviewer-adapter",
+            repo_agent_ref=".pirategoat/reviewers/renewals.md",
+            instance_name=instance_name,
+            adapter_label="Renewals",
+            execution=execution,
+        )
+
+        (
+            agent_name,
+            effective_agent_name,
+            adapter_label,
+            repo_agent_ref,
+            error,
+        ) = _mod.resolve_reviewer_identity(args)
+
+        assert agent_name == "repo-reviewer-adapter"
+        assert effective_agent_name is None
+        assert adapter_label == "Renewals"
+        assert repo_agent_ref == ".pirategoat/reviewers/renewals.md"
+        assert expected_error in error
+        assert "STATUS: ERROR" in error
+
+
+class TestPersistDeferredSidecar:
+    """The extracted writer preserves the existing deferred-file contract."""
+
+    def test_writes_only_authoritative_deferred_files(self, tmp_path):
+        _mod.persist_deferred_sidecar(
+            str(tmp_path),
+            "repo-renewals-reviewer",
+            ["src/deferred.php"],
+            ["src/list-only.php"],
+        )
+
+        payload = json.loads(
+            (tmp_path / "repo-renewals-deferred-files.json").read_text()
+        )
+        assert payload == {"schema": 1, "deferred_files": ["src/deferred.php"]}
+
+    def test_writes_empty_authoritative_set(self, tmp_path):
+        _mod.persist_deferred_sidecar(
+            str(tmp_path), "security-reviewer", [], ["src/list-only.php"]
+        )
+
+        payload = json.loads(
+            (tmp_path / "security-deferred-files.json").read_text()
+        )
+        assert payload == {"schema": 1, "deferred_files": []}
+
+    def test_write_errors_fail_open(self, tmp_path):
+        output_file = tmp_path / "not-a-directory"
+        output_file.write_text("occupied")
+
+        _mod.persist_deferred_sidecar(
+            str(output_file), "security-reviewer", ["src/deferred.php"], []
+        )
+
+    def test_dedupes_deferred_files_order_preserving(self, tmp_path):
+        """A multi-domain agent's secondary-domain scope render can repeat
+        a file already budget-exceeded in the primary domain's sidecar —
+        load_scope_facts() concatenates every summary's
+        budget_exceeded_files without deduping. persist_deferred_sidecar
+        must not publish that duplicate: it inflates len(deferred_files),
+        the total manifest_sections.build_coverage_manifest reconciles
+        the agent's own claimed+declared+autofilled accounting against."""
+        _mod.persist_deferred_sidecar(
+            str(tmp_path),
+            "security-reviewer",
+            ["src/a.php", "src/b.php", "src/a.php"],
+            [],
+        )
+
+        payload = json.loads(
+            (tmp_path / "security-deferred-files.json").read_text()
+        )
+        assert payload == {
+            "schema": 1,
+            "deferred_files": ["src/a.php", "src/b.php"],
+        }
 
 
 class TestExtractProtocolSections:
@@ -239,6 +377,8 @@ class TestChangePurposeInjection:
             output_dir="/tmp/test",
             pr_number="1",
             reviewer_name="security",
+            not_diffed_count=0,
+            has_php=False,
             change_purpose="Adds retry logic to the payment gateway.",
         )
         assert "=== REVIEW FOCUS (pipeline synthesis) ===" in output
@@ -294,6 +434,8 @@ class TestCoverageNoteInjection:
             output_dir="/tmp/test",
             pr_number="1",
             reviewer_name="security",
+            not_diffed_count=0,
+            has_php=False,
             coverage_note=note,
         )
         assert "=== COVERAGE NOTE ===" in output
@@ -312,6 +454,8 @@ class TestCoverageNoteInjection:
             output_dir="/tmp/test",
             pr_number="1",
             reviewer_name="security",
+            not_diffed_count=0,
+            has_php=False,
         )
         assert "=== COVERAGE NOTE ===" not in output
 
@@ -404,6 +548,75 @@ class TestComputeReviewBudget:
         assert budget == 15
 
 
+class TestBudgetWasCapped:
+    """Cap detection feeds the honest capped-budget briefing text."""
+
+    def test_below_cap_not_capped(self):
+        assert budget_was_capped(changed_lines=130) is False
+
+    def test_at_formula_boundary_not_capped(self):
+        # 15 + 650//10 = 80 exactly — reaches the cap without exceeding it
+        assert budget_was_capped(changed_lines=650) is False
+
+    def test_above_cap_capped(self):
+        assert budget_was_capped(changed_lines=52879) is True
+
+
+class TestBudgetBriefingText:
+    """The budget section must be honest about capping and push spend-down."""
+
+    def _output(self, tmp_path, scope_output="scope", budget=80, capped=False,
+                not_diffed_count=0):
+        return build_output(
+            agent_name="security-reviewer",
+            plugin_root="/fake",
+            status="OK",
+            review_rules="Rules here",
+            domain_rules=None,
+            scope_output=scope_output,
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number="1",
+            reviewer_name="security",
+            not_diffed_count=not_diffed_count,
+            has_php=False,
+            review_budget=budget,
+            budget_capped=capped,
+        )
+
+    def test_uncapped_budget_claims_calibration(self, tmp_path):
+        output = self._output(tmp_path, budget=40, capped=False)
+        assert "Calibrated to YOUR scope." in output
+
+    def test_capped_budget_does_not_claim_calibration(self, tmp_path):
+        output = self._output(tmp_path, budget=80, capped=True)
+        assert "Calibrated to YOUR scope." not in output
+        assert "effort floor" in output
+
+    def test_not_diffed_scope_gets_spend_down_instruction(self, tmp_path):
+        # The header text ("258 files") is deliberately NOT what the count is
+        # sourced from anymore — not_diffed_count is a fact passed by the
+        # caller (main() derives it from scope_facts), independent of how
+        # scope.py renders its section header. This scope text is present
+        # only to prove the header is inert for this decision.
+        scope = (
+            "=== FILES ===\n"
+            "src/a.ts  (+10 -2)\n"
+            "\n"
+            "=== NOT DIFFED (budget exceeded, 258 files) ===\n"
+            "  src/big.ts  (+862 -0)\n"
+        )
+        output = self._output(tmp_path, scope_output=scope, budget=80, capped=True,
+                               not_diffed_count=258)
+        assert "258 in-scope files" in output
+        assert "coverage gap, not efficiency" in output
+
+    def test_fully_diffed_scope_has_no_spend_down_instruction(self, tmp_path):
+        output = self._output(tmp_path, scope_output="=== FILES ===\nsrc/a.ts  (+10 -2)\n",
+                              budget=40, capped=False)
+        assert "coverage gap, not efficiency" not in output
+
+
 class TestBudgetOverride:
     """Agent-level budget override from registry."""
 
@@ -461,6 +674,176 @@ class TestExtractScopeMultipleBlocks:
         files = extract_scope_files(single)
         assert files == ["foo.php"]
         assert extract_scope_line_count(single) == 8
+
+    def test_line_count_includes_not_diffed_workload(self):
+        """NOT DIFFED files are deferred in-scope work: their lines must size
+        the budget, or the largest reviews get the smallest targets."""
+        scope = (
+            "=== FILES ===\n"
+            "src/inline.py  (+400 -100)\n"
+            "=== NOT DIFFED (budget exceeded, 2 files) ===\n"
+            "These files ARE IN YOUR SCOPE — their diffs were withheld only to fit\n"
+            "the context budget.\n"
+            "  src/deferred-large.py  (+700 -100)\n"
+            "  src/deferred-small.py  (+80 -20)\n"
+            "=== DIFFS ===\n"
+            "diff content\n"
+        )
+        # 500 inline + 800 + 100 deferred = 1400
+        assert extract_scope_line_count(scope) == 1400
+        # Deferred lines must not enter the FILES-only file list.
+        assert extract_scope_files(scope) == ["src/inline.py"]
+
+    def test_extract_not_diffed_files_skips_section_prose(self):
+        """Deferred paths come only from stats-shaped lines — the NOT DIFFED
+        section's instruction prose must never be parsed as file paths."""
+        scope = (
+            "=== FILES ===\n"
+            "src/inline.py  (+400 -100)\n"
+            "=== NOT DIFFED (budget exceeded, 2 files) ===\n"
+            "These files ARE IN YOUR SCOPE — their diffs were withheld only to fit\n"
+            "the context budget. This list is your remaining work queue, largest\n"
+            "first: review with 'git diff base..head -- <file>' while tool budget\n"
+            "remains, and declare only the files you genuinely cannot reach.\n"
+            "  src/deferred-large.py  (+700 -100)\n"
+            "  src/deferred-small.py  (+80 -20)\n"
+            "=== DIFFS ===\n"
+            "diff content\n"
+        )
+        assert extract_not_diffed_files(scope) == [
+            "src/deferred-large.py",
+            "src/deferred-small.py",
+        ]
+
+    def test_extract_not_diffed_files_accumulates_across_secondary_scopes(self):
+        scope = (
+            "=== NOT DIFFED (budget exceeded, 1 files) ===\n"
+            "  src/primary.py  (+300 -10)\n"
+            "=== SECONDARY SCOPE: config-ops ===\n"
+            "=== NOT DIFFED (budget exceeded, 1 files) ===\n"
+            "  config/secondary.php  (+200 -5)\n"
+        )
+        assert extract_not_diffed_files(scope) == [
+            "src/primary.py",
+            "config/secondary.php",
+        ]
+
+    def test_extract_not_diffed_files_empty_without_section(self):
+        scope = "=== FILES ===\nsrc/a.py  (+5 -1)\n=== DIFFS ===\n"
+        assert extract_not_diffed_files(scope) == []
+
+    def test_line_count_excludes_lock_and_generated_stats(self):
+        """CHANGED (no diff) lock/generated files stay out of budget sizing."""
+        scope = (
+            "=== FILES ===\n"
+            "src/app.py  (+50 -10)\n"
+            "=== CHANGED (no diff — 1 lock/generated files) ===\n"
+            "These files changed but diffs are skipped (too large/noisy for inline review).\n"
+            "  package-lock.json  (+9000 -9000)\n"
+            "=== DIFFS ===\n"
+        )
+        assert extract_scope_line_count(scope) == 60
+
+    def test_extract_list_only_files_skips_section_prose(self):
+        """List-only files are in-scope (the section tells the reviewer to
+        inspect them), so telemetry must see them — while their stats stay
+        out of budget sizing and the inline FILES list."""
+        scope = (
+            "=== FILES ===\n"
+            "src/app.py  (+50 -10)\n"
+            "=== CHANGED (no diff — 1 lock/generated files) ===\n"
+            "These files changed but diffs are skipped (too large/noisy for inline review).\n"
+            "Use 'git diff base..head -- <file>' to inspect if relevant.\n"
+            "  package-lock.json  (+9000 -9000)\n"
+            "=== DIFFS ===\n"
+        )
+        assert extract_list_only_files(scope) == ["package-lock.json"]
+        assert extract_scope_files(scope) == ["src/app.py"]
+        assert extract_scope_line_count(scope) == 60
+
+    def test_extract_list_only_files_accumulates_across_secondary_scopes(self):
+        scope = (
+            "=== CHANGED (no diff — 1 lock/generated files) ===\n"
+            "  package-lock.json  (+9000 -9000)\n"
+            "=== SECONDARY SCOPE: config-ops ===\n"
+            "=== CHANGED (no diff — 1 lock/generated files) ===\n"
+            "  composer.lock  (+400 -400)\n"
+        )
+        assert extract_list_only_files(scope) == [
+            "package-lock.json",
+            "composer.lock",
+        ]
+
+    def test_extract_list_only_files_empty_without_section(self):
+        scope = "=== FILES ===\nsrc/a.py  (+5 -1)\n=== DIFFS ===\n"
+        assert extract_list_only_files(scope) == []
+
+
+class TestLoadScopeFacts:
+    """load_scope_facts derives scope facts from summary sidecars, falling
+    back to None (→ text parsing) on any missing or malformed sidecar."""
+
+    def _write_summary(self, path, **overrides):
+        data = {
+            "schema": 1,
+            "files_with_diffs": ["src/a.py"],
+            "budget_exceeded_files": ["src/deferred.py"],
+            "list_only_files": ["package-lock.json"],
+            "in_scope_stat_lines": 100,
+        }
+        data.update(overrides)
+        path.write_text(json.dumps(data))
+        return str(path)
+
+    def test_accumulates_across_primary_and_secondary(self, tmp_path):
+        primary = self._write_summary(tmp_path / "a-scope-summary.json")
+        secondary = self._write_summary(
+            tmp_path / "a-scope-summary-config-ops.json",
+            files_with_diffs=["ci.yml"],
+            budget_exceeded_files=[],
+            list_only_files=[],
+            in_scope_stat_lines=7,
+        )
+        facts = load_scope_facts([primary, secondary])
+        assert facts == {
+            "files": ["src/a.py", "ci.yml"],
+            "not_diffed": ["src/deferred.py"],
+            "list_only": ["package-lock.json"],
+            "stat_lines": 107,
+        }
+
+    def test_no_paths_returns_none(self):
+        assert load_scope_facts([]) is None
+
+    def test_missing_sidecar_returns_none(self, tmp_path):
+        primary = self._write_summary(tmp_path / "a-scope-summary.json")
+        assert load_scope_facts(
+            [primary, str(tmp_path / "gone.json")]
+        ) is None
+
+    def test_malformed_json_returns_none(self, tmp_path):
+        path = tmp_path / "a-scope-summary.json"
+        path.write_text("{not json")
+        assert load_scope_facts([str(path)]) is None
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"in_scope_stat_lines": None},   # pre-field producer
+            {"in_scope_stat_lines": True},   # bool is not a count
+            {"in_scope_stat_lines": 1.5},
+            {"files_with_diffs": "src/a.py"},
+            {"budget_exceeded_files": [1]},
+            {"list_only_files": None},
+        ],
+    )
+    def test_malformed_fields_return_none(self, tmp_path, overrides):
+        """Any deviation falls back wholesale to text parsing — mixed-source
+        facts would be harder to reason about than one honest fallback."""
+        path = self._write_summary(
+            tmp_path / "a-scope-summary.json", **overrides
+        )
+        assert load_scope_facts([path]) is None
 
 
 class TestLoadAdditionalInstructions:
@@ -521,6 +904,8 @@ class TestAdditionalInstructionsInjection:
             output_dir="/tmp/test",
             pr_number="1",
             reviewer_name="security",
+            not_diffed_count=0,
+            has_php=False,
             additional_instructions="Focus on error handling in the retry logic.",
         )
         assert "=== REVIEWER-REQUESTED FOCUS ===" in output
@@ -539,6 +924,8 @@ class TestAdditionalInstructionsInjection:
             output_dir="/tmp/test",
             pr_number="1",
             reviewer_name="security",
+            not_diffed_count=0,
+            has_php=False,
             additional_instructions=None,
         )
         assert "REVIEWER-REQUESTED FOCUS" not in output
@@ -556,6 +943,8 @@ class TestAdditionalInstructionsInjection:
             output_dir="/tmp/test",
             pr_number="1",
             reviewer_name="security",
+            not_diffed_count=0,
+            has_php=False,
         )
         assert "REVIEWER-REQUESTED FOCUS" not in output
 
@@ -572,6 +961,8 @@ class TestAdditionalInstructionsInjection:
             output_dir="/tmp/test",
             pr_number="1",
             reviewer_name="security",
+            not_diffed_count=0,
+            has_php=False,
             change_purpose="Adds retry logic.",
             additional_instructions="Focus on error handling.",
             review_budget=30,

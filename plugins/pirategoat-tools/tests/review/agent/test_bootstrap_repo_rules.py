@@ -1,6 +1,7 @@
 """Tests for repo-contributed review-rule injection in bootstrap.py."""
 
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -64,6 +65,50 @@ class TestSelectRepoRules:
 
     def test_none_config(self, mod):
         assert mod.select_repo_rules(None, "security-reviewer", [], []) == []
+
+
+class TestPersistAdvisoryEntitlementSidecar:
+    @pytest.mark.parametrize("entitled", [True, False])
+    def test_writes_schema_for_effective_instance_identity(
+        self, mod, tmp_path, entitled
+    ):
+        mod.persist_advisory_entitlement_sidecar(
+            str(tmp_path), "repo-renewals-reviewer", entitled
+        )
+
+        payload = json.loads(
+            (tmp_path / "repo-renewals-advisory-entitlement.json").read_text()
+        )
+        assert payload == {"schema": 1, "advisory_entitled": entitled}
+
+    def test_write_error_fails_open(self, mod, tmp_path, monkeypatch):
+        def _raise(*args, **kwargs):
+            raise OSError("disk unavailable")
+
+        monkeypatch.setattr(mod, "open", _raise, raising=False)
+
+        mod.persist_advisory_entitlement_sidecar(
+            str(tmp_path), "security-reviewer", True
+        )
+
+    def test_write_error_removes_stale_entitlement(
+        self, mod, tmp_path, monkeypatch
+    ):
+        sidecar = tmp_path / "security-advisory-entitlement.json"
+        sidecar.write_text(json.dumps({
+            "schema": 1, "advisory_entitled": False,
+        }))
+
+        def _raise(*args, **kwargs):
+            raise OSError("disk unavailable")
+
+        monkeypatch.setattr(mod, "open", _raise, raising=False)
+
+        mod.persist_advisory_entitlement_sidecar(
+            str(tmp_path), "security-reviewer", True
+        )
+
+        assert not sidecar.exists()
 
 
 class TestRenderRepoReviewRules:
@@ -147,6 +192,8 @@ class TestBuildOutputRepoRules:
             output_dir="/tmp",
             pr_number=None,
             reviewer_name="security",
+            not_diffed_count=0,
+            has_php=False,
             repo_review_rules="=== REPO REVIEW RULES (supplied by the repository under review) ===\nbody",
         )
         assert "=== DOMAIN RULES ===" in out

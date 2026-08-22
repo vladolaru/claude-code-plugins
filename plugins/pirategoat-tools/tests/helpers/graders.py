@@ -9,7 +9,7 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import List, Optional
 
 
@@ -22,6 +22,7 @@ class GradeResult:
     failures: list = field(default_factory=list)  # description of each failure
     checks_run: int = 0
     checks_passed: int = 0
+    detail: Optional[dict] = None  # grader-specific detail payload (detection match, trial aggregation)
 
 
 VALID_SEVERITIES = {"critical", "high", "medium", "low", "info"}
@@ -50,11 +51,14 @@ def _grade(checks: List[tuple]) -> GradeResult:
     )
 
 
-def grade_review_json(path: str) -> GradeResult:
+def grade_review_json(path: str, expected_reviewer: str = None) -> GradeResult:
     """Grade a reviewer JSON output file.
 
     Checks: file exists, valid JSON, required fields, valid severities,
-    valid verdict, issue schema, summary structure.
+    valid verdict, issue schema, summary structure. When expected_reviewer
+    is given, the JSON's reviewer field must match it — a valid artifact at
+    the expected path but labeled as ANOTHER reviewer must not pass
+    compliance and proceed to detection scoring under the wrong identity.
     """
     checks = []
 
@@ -79,6 +83,13 @@ def grade_review_json(path: str) -> GradeResult:
         checks.append(
             (field_name in data, f"Missing required field: {field_name}")
         )
+
+    if expected_reviewer is not None:
+        checks.append((
+            data.get("reviewer") == expected_reviewer,
+            f"Reviewer name {data.get('reviewer')!r} does not match "
+            f"expected '{expected_reviewer}'",
+        ))
 
     # Check verdict is valid
     verdict = data.get("verdict", "")
@@ -196,11 +207,14 @@ def grade_no_domain_files(text: str) -> GradeResult:
     Checks: APPROVE verdict, zero findings.
     """
     text_upper = text.upper()
+    # A severity mention only counts as a finding when it is followed by
+    # something other than a zero count or the literal "N" placeholder from
+    # the bootstrap's return-signal template ("COUNTS: critical: N, ...").
+    finding_mention = re.search(r"(CRITICAL|HIGH|MEDIUM):\s*(?!0\b|N\b)\S", text_upper)
     checks = [
         ("APPROVE" in text_upper, "Missing APPROVE verdict"),
         (
-            not any(sev in text_upper for sev in ["CRITICAL:", "HIGH:", "MEDIUM:"])
-            or "CRITICAL: 0" in text.upper(),
+            finding_mention is None,
             "Expected zero findings but found severity mentions"
         ),
     ]
@@ -213,10 +227,14 @@ def grade_error_exit(text: str) -> GradeResult:
     Checks: contains error report, no review findings, no output files written.
     """
     text_upper = text.upper()
+    # Match only an actual return signal (column 0). Bootstrap output embeds
+    # an indented "  STATUS: FINISHED" line inside its return-signal template,
+    # which is instructional text, not a claim of completion.
+    finished_signal = re.search(r"^STATUS: FINISHED", text, re.MULTILINE)
     checks = [
         ("ERROR" in text_upper, "Missing error indication"),
         (
-            "STATUS: FINISHED" not in text,
+            finished_signal is None,
             "Should NOT have STATUS: FINISHED in error scenario"
         ),
     ]
@@ -335,3 +353,329 @@ def grade_review_baseline(path: str) -> GradeResult:
     )
 
     return _grade(checks)
+
+
+# =============================================================================
+# Detection grading (answer-key based)
+# =============================================================================
+#
+# Answer keys assert which planted defects a reviewer must find. Matching is
+# deterministic: repo-relative file path, optional line window, and
+# case-insensitive keyword regexes over title + description + category.
+# One issue can satisfy at most one key spec (claimed-set), so keys must not
+# split a plausibly-merged finding across two required specs. Keys must also
+# not write overlapping specs — match_any patterns for specs targeting the
+# same file should be mutually exclusive, because first-match claiming is
+# order-dependent and can under-match overlapping specs.
+
+DEFAULT_LINE_TOLERANCE = 2
+
+# Verdicts accepted as correct abstention on a NO_DOMAIN_FILES scenario.
+# The shared reviewer protocol mandates not_applicable; the tests-reviewer
+# agent definitions mandate approve — a live doctrine conflict inside the
+# plugin. Keys accept both compliant readings; the conflict itself is a
+# production-definition fix, not a benchmark one.
+_ABSTENTION_VERDICTS = frozenset({"not_applicable", "approve"})
+
+
+def _norm_path(path) -> str:
+    """Normalize a reviewer-reported path for comparison against a spec path.
+
+    Reviewers are not contractually bound to repo-relative POSIX paths, and
+    absolute tempdir paths / backslashes / diff-style a|b prefixes occur in
+    practice (scripts/review/telemetry.py normalizes the same variants). A
+    correct finding must not score as a miss over path spelling.
+    """
+    text = str(path or "").replace("\\", "/")
+    while "//" in text:
+        text = text.replace("//", "/")
+    parts = [p for p in text.split("/") if p not in ("", ".")]
+    if parts and parts[0] in ("a", "b") and len(parts) > 1:
+        parts = parts[1:]
+    return "/".join(parts)
+
+
+def _repo_relative_issue_path(path, repo_root) -> str:
+    """Normalize one reported path relative to the known repository root."""
+    text = str(path or "")
+    normalized = _norm_path(text)
+    is_absolute = (
+        PurePosixPath(text.replace("\\", "/")).is_absolute()
+        or PureWindowsPath(text).is_absolute()
+    )
+    if not is_absolute:
+        return normalized
+
+    root = _norm_path(repo_root)
+    prefix = f"{root}/" if root else ""
+    if prefix and normalized.startswith(prefix):
+        return normalized[len(prefix):]
+    return normalized
+
+
+def _paths_match(issue_path, spec_path: str) -> bool:
+    """Match canonical paths exactly after spelling normalization."""
+    issue_norm = _norm_path(issue_path)
+    spec_norm = _norm_path(spec_path)
+    return bool(issue_norm and spec_norm and issue_norm == spec_norm)
+
+
+# Field separator that \s-bridging regexes cannot cross — a plain space would
+# let a pattern like r"sql\s*inject" match "…raw SQL" + "injection …" across
+# the title/description boundary.
+_FIELD_SEP = " ¦ "
+
+
+def _issue_text(issue: dict) -> str:
+    return _FIELD_SEP.join(
+        str(issue.get(k) or "") for k in ("title", "description", "category")
+    )
+
+
+def _finding_matches(issue: dict, spec: dict) -> bool:
+    if not _paths_match(issue.get("file"), spec["file"]):
+        return False
+    # Severity floor: when the agent's doctrine mandates a classification
+    # (e.g. SQL injection = CRITICAL for security-reviewer), an
+    # under-classified finding is a calibration miss and must not satisfy
+    # the spec. Unknown severities fail closed.
+    min_severity = spec.get("min_severity")
+    if min_severity is not None:
+        severity = issue.get("severity")
+        if severity not in SEVERITY_RANK or (
+            SEVERITY_RANK[severity] < SEVERITY_RANK[min_severity]
+        ):
+            return False
+    expected_line = spec.get("line")
+    if expected_line is not None:
+        line = issue.get("line")
+        if not isinstance(line, int) or isinstance(line, bool):
+            return False
+        if abs(line - expected_line) > spec.get("line_tolerance", DEFAULT_LINE_TOLERANCE):
+            return False
+    text = _issue_text(issue)
+    return any(re.search(pattern, text, re.IGNORECASE) for pattern in spec["match_any"])
+
+
+def match_findings(issues: List[dict], key: dict) -> dict:
+    """Match reviewer issues against an answer key.
+
+    Returns a dict with:
+      matched_required:   {spec_id: issue_index}
+      matched_acceptable: {spec_id: issue_index}
+      missing_required:   [spec_id, ...]
+      unexpected:         [{index, file, line, severity, category, title,
+                            description}, ...]  (issues no spec claimed)
+
+    Unexpected entries carry the fields match_any patterns grep over
+    (title/description/category, description truncated) plus location —
+    without them a correct finding that misses every pattern is
+    undiagnosable from the report, and the documented widen-the-regex
+    workflow needs to see what the reviewer actually wrote.
+    """
+    issues = [i for i in issues if isinstance(i, dict)]
+    matched_required: dict = {}
+    matched_acceptable: dict = {}
+    claimed: set = set()
+
+    for bucket, matched in (
+        ("required_findings", matched_required),
+        ("acceptable_findings", matched_acceptable),
+    ):
+        for spec in key.get(bucket, []):
+            for idx, issue in enumerate(issues):
+                if idx in claimed:
+                    continue
+                if _finding_matches(issue, spec):
+                    matched[spec["id"]] = idx
+                    claimed.add(idx)
+                    break
+
+    missing = [
+        spec["id"] for spec in key.get("required_findings", [])
+        if spec["id"] not in matched_required
+    ]
+    unexpected = [
+        {
+            "index": idx,
+            "file": issues[idx].get("file"),
+            "line": issues[idx].get("line"),
+            "severity": issues[idx].get("severity"),
+            "category": issues[idx].get("category"),
+            "title": str(issues[idx].get("title") or "")[:300],
+            "description": str(issues[idx].get("description") or "")[:300],
+        }
+        for idx in range(len(issues))
+        if idx not in claimed
+    ]
+    return {
+        "matched_required": matched_required,
+        "matched_acceptable": matched_acceptable,
+        "missing_required": missing,
+        "unexpected": unexpected,
+    }
+
+
+def grade_detection(review: dict, key: dict, repo_root=None) -> GradeResult:
+    """Grade a parsed review JSON against a scenario answer key.
+
+    Key fields (all optional except that at least one gate must be present —
+    enforced by tests/grading/test_answer_keys.py):
+      verdict_in:            list of acceptable verdict strings
+      required_findings:     specs the reviewer MUST report (recall gate)
+      acceptable_findings:   legitimate secondary findings (never punished)
+      max_severity:          highest allowed severity for ANY finding
+      max_unexpected:        cap on findings no spec claimed
+      expect_not_applicable: the correct answer is abstention
+
+    When repo_root is known, absolute issue paths are canonicalized against it
+    once before matching. The matcher itself compares repository-relative
+    identities exactly and never infers identity from a path suffix.
+    """
+    verdict = review.get("verdict")
+    issues = [i for i in (review.get("issues") or []) if isinstance(i, dict)]
+    if repo_root is not None:
+        issues = [
+            dict(
+                issue,
+                file=_repo_relative_issue_path(issue.get("file"), repo_root),
+            )
+            for issue in issues
+        ]
+
+    if key.get("expect_not_applicable"):
+        # Both abstention spellings are doctrine-compliant: the shared
+        # reviewer protocol mandates mark_not_applicable on NO_DOMAIN_FILES,
+        # while the tests-reviewer agent definitions instruct APPROVE on the
+        # same status. Until that conflict is reconciled in the definitions,
+        # punishing either reading would grade an internal doc inconsistency,
+        # not reviewer quality. The zero-findings requirement carries the
+        # actual behavioral content.
+        result = _grade([
+            (verdict in _ABSTENTION_VERDICTS,
+             f"expected abstention ({'/'.join(sorted(_ABSTENTION_VERDICTS))}), got '{verdict}'"),
+            (len(issues) == 0,
+             f"expected zero findings on abstention, got {len(issues)}"),
+        ])
+        result.detail = {"verdict": verdict, "match": None, "issue_count": len(issues)}
+        return result
+
+    match = match_findings(issues, key)
+    checks = []
+
+    verdict_in = key.get("verdict_in")
+    if verdict_in:
+        checks.append((verdict in verdict_in, f"verdict '{verdict}' not in {verdict_in}"))
+
+    for spec in key.get("required_findings", []):
+        checks.append((
+            spec["id"] in match["matched_required"],
+            f"required finding not detected: {spec['id']}",
+        ))
+
+    gates = {}
+
+    max_severity = key.get("max_severity")
+    if max_severity is not None:
+        limit = SEVERITY_RANK[max_severity]
+        # Unknown severities fail closed: ranking them as info would let an
+        # issue with severity "blocker" (or a missing field) sail under any
+        # cap, and this gate is the sole check the false-positive probes
+        # rely on.
+        over = sorted({
+            str(i.get("severity")) for i in issues
+            if i.get("severity") not in SEVERITY_RANK
+            or SEVERITY_RANK[i.get("severity")] > limit
+        })
+        checks.append((not over, f"findings above max severity '{max_severity}': {over}"))
+        gates["max_severity"] = not over
+
+    max_unexpected = key.get("max_unexpected")
+    if max_unexpected is not None:
+        within = len(match["unexpected"]) <= max_unexpected
+        checks.append((
+            within,
+            f"{len(match['unexpected'])} unexpected findings exceed cap {max_unexpected}",
+        ))
+        gates["max_unexpected"] = within
+
+    result = _grade(checks)
+    result.detail = {"verdict": verdict, "match": match, "gates": gates}
+    return result
+
+
+def merge_grades(
+    compliance: GradeResult,
+    detection: GradeResult,
+    detection_label: Optional[str] = None,
+) -> GradeResult:
+    """Combine two grades (e.g. compliance + detection) into one result.
+
+    Precedence: detection.detail wins when not None, else compliance.detail.
+    When detection_label is given, detection failures are prefixed
+    "<label>: " so the merged list stays attributable to its source grader.
+    """
+    detection_failures = detection.failures
+    if detection_label is not None:
+        detection_failures = [
+            f"{detection_label}: {msg}" for msg in detection.failures
+        ]
+    total = compliance.checks_run + detection.checks_run
+    passed_count = compliance.checks_passed + detection.checks_passed
+    return GradeResult(
+        passed=compliance.passed and detection.passed,
+        score=passed_count / total if total else 0.0,
+        failures=compliance.failures + detection_failures,
+        checks_run=total,
+        checks_passed=passed_count,
+        detail=detection.detail if detection.detail is not None else compliance.detail,
+    )
+
+
+def aggregate_detection_trials(trial_grades: List[GradeResult]) -> GradeResult:
+    """Aggregate multi-trial dispatches: a strict majority of trials must
+    pass outright.
+
+    Per-check majority votes were removed (2026-08-09): a majority of
+    outright-passing trials implies a per-check majority for every check —
+    those same trials passed each one — so per-check votes could never be
+    the sole failure and only duplicated the diagnostics per_trial_failures
+    already carries in full. With an even trial count the threshold is
+    strictly more than half, so --trials 2 demands both trials pass. A
+    trial with an unreadable/None detail is simply a failed trial —
+    unreadable evidence never improves the aggregate.
+
+    The detail payload is the full aggregate schema consumers rely on:
+    {trials, per_trial, per_trial_failures, per_trial_passed,
+    per_trial_status, models} — per-trial diagnostics live here, in the
+    aggregate itself, so every caller gets the same evidence shape.
+    """
+    trials = len(trial_grades)
+    need = trials // 2 + 1
+    passing = sum(1 for grade in trial_grades if grade.passed)
+    result = _grade([
+        (passing >= need,
+         f"only {passing}/{trials} trials passed outright (need {need})"),
+    ])
+    if not result.passed:
+        # Carry trial-indexed diagnostics in failures — the console prints
+        # failures only, so without this a failed --trials run without
+        # --report-out would say how many trials failed but never why.
+        for idx, grade in enumerate(trial_grades):
+            for msg in grade.failures[:3] if not grade.passed else []:
+                result.failures.append(f"trial {idx + 1}: {msg}")
+    result.detail = {
+        "trials": trials,
+        "per_trial": [grade.detail or {} for grade in trial_grades],
+        "per_trial_failures": [grade.failures for grade in trial_grades],
+        "per_trial_passed": [grade.passed for grade in trial_grades],
+        "per_trial_status": [
+            (grade.detail or {}).get("status", "harness_error")
+            for grade in trial_grades
+        ],
+        "models": sorted({
+            m for grade in trial_grades
+            for m in ((grade.detail or {}).get("models") or [])
+        }),
+    }
+    return result

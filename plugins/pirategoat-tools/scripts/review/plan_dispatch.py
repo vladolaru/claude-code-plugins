@@ -32,6 +32,24 @@ import sys
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
+try:
+    from .dispatch_status import (
+        DISPATCH,
+        SKIPPED,
+        SKIPPED_QUICK_MODE,
+        SKIPPED_TRIAGE,
+    )
+except ImportError:
+    _scripts_parent = str(Path(__file__).resolve().parent.parent)
+    if _scripts_parent not in sys.path:
+        sys.path.insert(0, _scripts_parent)
+    from review.dispatch_status import (
+        DISPATCH,
+        SKIPPED,
+        SKIPPED_QUICK_MODE,
+        SKIPPED_TRIAGE,
+    )
+
 # =============================================================================
 # Import DOMAIN_CATALOG from agent/scope.py
 # =============================================================================
@@ -1557,21 +1575,21 @@ def triage_conditional_agent(
     # Conditional agents target production-code concerns; test-only diffs
     # don't need security/performance/architecture review.
     if domain_files and all(is_test_file(f) for f in domain_files):
-        return "SKIPPED_TRIAGE", "all matching files are test files"
+        return SKIPPED_TRIAGE, "all matching files are test files"
 
     in_scope_added = _count_in_scope_non_test_additions(domain_files, diffstat)
 
     # Gate: min_added_lines — skip if PR doesn't add enough code in non-test scope
     min_lines = config.get("min_added_lines", 0)
     if min_lines > 0 and in_scope_added < min_lines:
-        return "SKIPPED_TRIAGE", f"below minimum addition threshold ({in_scope_added} < {min_lines} lines)"
+        return SKIPPED_TRIAGE, f"below minimum addition threshold ({in_scope_added} < {min_lines} lines)"
 
     # Layer 2: Agent-wide source gate.
     if config.get("require_php_source_file") and not any(
         f.lower().endswith(".php") and not is_test_file(f)
         for f in domain_files
     ):
-        return "SKIPPED_TRIAGE", "requires PHP source file"
+        return SKIPPED_TRIAGE, "requires PHP source file"
 
     # Layer 3: Change-local keyword match. Ambient repository identity is
     # deliberately excluded so existing agents cannot inherit it implicitly.
@@ -1593,7 +1611,7 @@ def triage_conditional_agent(
             reason_parts = []
             for src, kws in by_source.items():
                 reason_parts.append(f"{src}: {', '.join(kws[:3])}")
-            return "DISPATCH", f"keywords matched ({'; '.join(reason_parts)})"
+            return DISPATCH, f"keywords matched ({'; '.join(reason_parts)})"
 
     # Layer 4: Repository identity is an ambient applicability signal. Agents
     # must opt in with source-specific keywords rather than reusing the generic
@@ -1605,7 +1623,7 @@ def triage_conditional_agent(
     )
     if repository_matches:
         matched_keywords = ", ".join(kw for kw, _ in repository_matches[:5])
-        return "DISPATCH", f"repository keywords matched ({matched_keywords})"
+        return DISPATCH, f"repository keywords matched ({matched_keywords})"
 
     # Layer 5: Agent-specific checks. Each check's predicate lives in
     # _CHECK_RUNNERS (the execution view over _CHECK_SPECS); the first that
@@ -1616,7 +1634,7 @@ def triage_conditional_agent(
             domain_files, diffstat, diff_text, in_scope_added, min_lines
         )
         if reason:
-            return "DISPATCH", reason
+            return DISPATCH, reason
 
     # Unknown is not negative — I/O edition. The explicit applicability gate
     # below infers signal ABSENCE from patch text. When this agent's triage
@@ -1625,7 +1643,7 @@ def triage_conditional_agent(
     # conservatively instead of letting a git timeout masquerade as a clean
     # negative scan.
     if diff_text is None and _needs_diff_scan(config):
-        return "DISPATCH", (
+        return DISPATCH, (
             "patch text unavailable (diff fetch failed); cannot verify "
             "absence of triage signals — dispatching conservatively"
         )
@@ -1635,12 +1653,12 @@ def triage_conditional_agent(
     # checks count as evidence; before this reorder the gate short-circuited
     # them, so a check-carrying agent could never dispatch on checks alone.
     if config.get("require_triage_keyword_match"):
-        return "SKIPPED_TRIAGE", "requires positive triage signal; no keyword or check matched"
+        return SKIPPED_TRIAGE, "requires positive triage signal; no keyword or check matched"
 
     # Layer 6: Default — DISPATCH when no triage signal skips the agent.
     # Keywords and triage checks provide positive evidence, but conditional
     # agents still dispatch conservatively when their domain has files.
-    return "DISPATCH", "conditional (domain has files, no triage signal to skip)"
+    return DISPATCH, "conditional (domain has files, no triage signal to skip)"
 
 
 # =============================================================================
@@ -1709,11 +1727,11 @@ def decide_agent_dispatch(
         secondary = config.get("secondary_domains", [])
         if secondary:
             domain_label += f" + {', '.join(secondary)}"
-        return "SKIPPED", f"no files in {domain_label} domain"
+        return SKIPPED, f"no files in {domain_label} domain"
 
     # Always-dispatch agents: dispatch if domain has files
     if dispatch_class == "always":
-        return "DISPATCH", "always dispatch (domain has files)"
+        return DISPATCH, "always dispatch (domain has files)"
 
     # Conditional agents: apply deterministic triage
     if dispatch_class == "conditional" and clean_files is not None:
@@ -1746,10 +1764,10 @@ def decide_agent_dispatch(
 
     # Conditional agents without triage context: dispatch by default
     if dispatch_class == "conditional":
-        return "DISPATCH", "conditional (domain has files)"
+        return DISPATCH, "conditional (domain has files)"
 
     # Fallback
-    return "DISPATCH", "default"
+    return DISPATCH, "default"
 
 
 def _build_pr_text(review_context: Optional[dict]) -> str:
@@ -1800,7 +1818,9 @@ def _load_review_context(path: Optional[str]) -> Optional[dict]:
         return None
 
 
-def expand_repo_reviewers(review_context, domain_counts, clean_files, dispatch_list):
+def expand_repo_reviewers(
+    review_context, domain_counts, clean_files, dispatch_list, host="claude"
+):
     """Expand repo-declared reviewers into synthetic adapter dispatch entries.
 
     Each ``reviewers[]`` entry in the reviewed repo's ``.pirategoat/config.json``
@@ -1809,13 +1829,26 @@ def expand_repo_reviewers(review_context, domain_counts, clean_files, dispatch_l
     All such entries target the generic ``repo-reviewer-adapter`` body but carry a
     distinct ``ref``/``channel``/``execution``/``model``/``scope_domains``.
     Applicability gates dispatch like a conditional agent. Appended in place to
-    ``dispatch_list``; returns the human-readable signal strings.
+    ``dispatch_list``; returns ``(signals, warnings)`` — human-readable
+    per-reviewer signal strings plus provenance-exclusion warnings.
     """
     signals: List[str] = []
+    warnings: List[str] = []
     review_config = (review_context or {}).get("review_config") or {}
+    # Provenance-gated entries never become dispatchable (the exclusion is
+    # hard, enforced at config normalization) — but the gate must be LOUD:
+    # each exclusion goes into the plan's warnings, the only channel the
+    # step-5 briefing actually renders, even when nothing remains to
+    # dispatch.
+    for entry in review_config.get("untrusted") or []:
+        label = entry.get("id") or entry.get("path") or entry.get("kind")
+        warnings.append(
+            f"repo review config: UNTRUSTED {entry.get('kind')} "
+            f"'{label}' — {entry.get('reason')}"
+        )
     reviewers = review_config.get("reviewers") or []
     if not reviewers:
-        return signals
+        return signals, warnings
 
     domains_with_files = {d for d, c in domain_counts.items() if c > 0}
     for rev in reviewers:
@@ -1826,7 +1859,15 @@ def expand_repo_reviewers(review_context, domain_counts, clean_files, dispatch_l
         # broad "code" domain when it declares none), filtered to real domains.
         declared = [d for d in (applies or {}).get("domains", []) if d in DOMAIN_CATALOG]
         scope_domains = declared or ["code"]
-        if applicable:
+        if rev.get("execution") == "isolated":
+            # An explicit isolation request must never silently WIDEN into
+            # inline execution — refuse until isolated execution exists.
+            status = "SKIPPED"
+            reason = (
+                "isolated execution is not implemented — refusing the "
+                "inline fallback"
+            )
+        elif applicable:
             status = "DISPATCH"
             reason = "repo reviewer applicable to this diff"
         else:
@@ -1835,11 +1876,21 @@ def expand_repo_reviewers(review_context, domain_counts, clean_files, dispatch_l
         dispatch_list.append({
             "name": name,
             "adapter": REPO_REVIEWER_ADAPTER,
-            "ref": rev.get("ref"),
+            # The validated ABSOLUTE path: bootstrap resolves a relative ref
+            # against its own invocation directory, so a review launched from
+            # a repo subdirectory would report the valid prompt missing and
+            # the adapter would write an empty result. The repo-relative form
+            # stays available under "ref" semantics only via review_config.
+            "ref": rev.get("resolved_ref") or rev.get("ref"),
             "label": rev.get("label", rev["id"]),
             "channel": rev.get("channel", "blocking"),
             "execution": rev.get("execution", "inline"),
-            "model": rev.get("model"),
+            "model": (
+                "inherit"
+                if host == "codex" and rev.get("model")
+                else rev.get("model")
+            ),
+            "declared_model": rev.get("model"),
             "scope_domains": scope_domains,
             "domain": None,
             "focus": rev.get("label", rev["id"]),
@@ -1847,7 +1898,7 @@ def expand_repo_reviewers(review_context, domain_counts, clean_files, dispatch_l
             "reason": reason,
         })
         signals.append(f"{name}: STATUS={status} ({reason})")
-    return signals
+    return signals, warnings
 
 
 def build_dispatch_plan(
@@ -1860,6 +1911,7 @@ def build_dispatch_plan(
     diffstat: Optional[Dict] = None,
     review_context: Optional[dict] = None,
     quick: bool = False,
+    host: str = "claude",
 ) -> dict:
     """Build the complete dispatch plan.
 
@@ -1873,6 +1925,8 @@ def build_dispatch_plan(
         diffstat: Pre-fetched diffstat (fetched from git if None).
         review_context: Parsed review-context.json dict (for PR metadata triage).
         quick: If True, exclude low-signal agents with SKIPPED_QUICK_MODE status.
+        host: Dispatch host. Codex native subagents ignore Claude model
+            declarations, so repo-reviewer entries project their effective tier.
 
     Returns:
         Dispatch plan dict with mode, dispatch array, scope_summary, etc.
@@ -1937,9 +1991,9 @@ def build_dispatch_plan(
         # the blocklist catches low-signal default dispatches, not
         # keyword-confirmed ones.
         if (quick and agent_name in _QUICK_MODE_EXCLUDED_AGENTS
-                and status == "DISPATCH"
+                and status == DISPATCH
                 and reason in _LOW_SIGNAL_DISPATCH_REASONS):
-            status = "SKIPPED_QUICK_MODE"
+            status = SKIPPED_QUICK_MODE
             reason = "excluded in quick review mode (no triage signal to override)"
 
         entry = {
@@ -1952,20 +2006,20 @@ def build_dispatch_plan(
         dispatch_list.append(entry)
 
         # Build signal string
-        if status == "DISPATCH":
-            signal = f"{agent_name}: STATUS=DISPATCH"
+        if status == DISPATCH:
+            signal = f"{agent_name}: STATUS={DISPATCH}"
             if reason != "always dispatch (domain has files)":
                 signal += f" ({reason})"
-        elif status == "SKIPPED_TRIAGE":
-            signal = f"{agent_name}: STATUS=SKIPPED_TRIAGE ({reason})"
+        elif status == SKIPPED_TRIAGE:
+            signal = f"{agent_name}: STATUS={SKIPPED_TRIAGE} ({reason})"
         else:
-            signal = f"{agent_name}: STATUS=SKIPPED ({reason})"
+            signal = f"{agent_name}: STATUS={SKIPPED} ({reason})"
         agent_signals.append(signal)
 
     # Repo-contributed reviewers: expand each declared reviewer into a synthetic
     # dispatch entry targeting the generic adapter, gated by applicability.
-    repo_signals = expand_repo_reviewers(
-        review_context, domain_counts, clean_files, dispatch_list
+    repo_signals, repo_warnings = expand_repo_reviewers(
+        review_context, domain_counts, clean_files, dispatch_list, host=host
     )
     agent_signals.extend(repo_signals)
 
@@ -1982,7 +2036,7 @@ def build_dispatch_plan(
         "unrecognized_source": unrecognized_source,
     }
 
-    warnings = []
+    warnings = list(repo_warnings)
     if unrecognized_source:
         shown = ", ".join(unrecognized_source[:10])
         if len(unrecognized_source) > 10:
@@ -2046,6 +2100,15 @@ def main():
         default=False,
         help="Quick review mode: exclude low-signal agents.",
     )
+    parser.add_argument(
+        "--host",
+        choices=["claude", "codex"],
+        default="claude",
+        help=(
+            "Dispatch host; Codex projects declared Claude model tiers to "
+            "the effective inherit tier."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -2066,6 +2129,7 @@ def main():
         changed_files=changed_files,
         review_context=review_context,
         quick=args.quick,
+        host=args.host,
     )
 
     # Output JSON to stdout (for inline parsing by commands)

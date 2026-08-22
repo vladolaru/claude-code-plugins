@@ -27,6 +27,21 @@ the file, verify it exists, then move on. Do not skip verification.
 - Branch name: use that branch
 - Explicit git range (contains `..`): use that range
 
+**Detect dependency refresh mode:** If the user's input clearly asks to
+refresh or install dependencies before the review (e.g., "refresh deps",
+"refresh dependencies", "update dependencies first", "install deps first"),
+add `--refresh-deps` to the first `pipeline.py` call. This is trusted-branch
+mode: the pipeline will detect stale dependency roots and brief you to run
+frozen-mode installs in the worktree — only add the flag when the user
+asked. Examples:
+- `/full-code-review refresh deps` → add `--refresh-deps`
+- `/full-code-review` → omit the flag
+
+An omitted flag falls back to the requester's machine-local default
+(`~/.config/pirategoat/config.json` with `review.refresh_dependencies: true`
+turns refresh on for every interactive run). If the user asks to skip the
+refresh for this run, add `--no-refresh-deps`.
+
 **Construct output directory** (sanitize all fragments):
 
 ```bash
@@ -41,10 +56,12 @@ mkdir -p "$OUTPUT_DIR"
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review/pipeline.py \
-  --step 1 --mode full --output-dir "$OUTPUT_DIR"
+  --step 1 --mode full --output-dir "$OUTPUT_DIR" \
+  --session-id "${CLAUDE_SESSION_ID}" [--refresh-deps]
 ```
 
-If an explicit git range was provided, add `--git-range "<RANGE>"`.
+If an explicit git range was provided, add `--git-range "<RANGE>"`. Add
+`--refresh-deps` only if the user asked to refresh dependencies.
 
 Execute the briefing printed by the script. Then call with `--step N`
 where N is the next step indicated in the output. Continue until the

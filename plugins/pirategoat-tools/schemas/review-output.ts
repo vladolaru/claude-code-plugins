@@ -4,6 +4,20 @@
  * These schemas define the structured output format for all review agents,
  * enabling reliable parsing, automation, and integration.
  *
+ * SCHEMA MAINTENANCE: the artifacts declared here carry an integer `schema`
+ * field (REVIEW_OUTPUT_SCHEMA in scripts/review/agent/output.py). When their
+ * shape changes — a key added, removed, or re-typed — bump it in the SAME
+ * commit as the change, update the interface below to match, and note the
+ * bump in the changelog. A schema number that lags the shape is worse than
+ * none: it states a compatibility guarantee the producer is not honoring.
+ * One carve-out, spelled out beside REVIEW_OUTPUT_SCHEMA and in AGENTS.md: a
+ * shape change made inside the SAME unreleased version that introduced the
+ * current number updates this file without moving the number, because the
+ * number only guarantees anything once released.
+ * Other artifact families carry their own `schema` constants; see the
+ * Artifact Schemas section of the plugin's AGENTS.md for the full list and
+ * for which artifacts deliberately carry no schema at all.
+ *
  * Implements: Proposal #3 (Structured Output) from Tier 1 agentic patterns
  */
 
@@ -21,6 +35,23 @@ export type Verdict = 'block' | 'request_changes' | 'approve' | 'comment' | 'not
  * Confidence score (0.0 to 1.0)
  */
 export type ConfidenceScore = number; // 0.0 - 1.0
+
+/**
+ * A decision-critic action, and the provenance it leaves on the finding it
+ * touched. `critic_adjustments.py` writes this directly onto the target
+ * issue object — for `add`, onto the newly created issue; for
+ * `promote`/`demote`/`rescope`/`correct`, onto the finding it patched
+ * in-place (still inside `issues`); for `remove`, onto the finding as it is
+ * moved into `removed_by_critic`. Never written by anything else.
+ */
+export interface CriticAdjustment {
+    action: 'promote' | 'demote' | 'rescope' | 'correct' | 'add' | 'remove';
+    rationale: string; // The critic's stated reason; '' when none was given.
+    // The pre-patch value of just the fields this adjustment changed —
+    // present only for promote/demote/rescope/correct. Absent for `add`
+    // (nothing pre-existed) and `remove` (the whole finding is the change).
+    prior?: Partial<Pick<Issue, 'severity' | 'title' | 'description' | 'recommendation' | 'file' | 'line' | 'category' | 'confidence'>>;
+}
 
 /**
  * Base issue structure common to all review types
@@ -41,70 +72,12 @@ export interface Issue {
     references?: string[]; // Links to docs, patterns, skills
     behavior_evidence?: 'cited' | 'inferred';
     source_cited?: string; // "<file>:<line>" pointer to upstream evidence
-    channel?: 'blocking' | 'advisory'; // Set only by repo-contributed reviewers (native agents omit it). 'blocking' (the default) gates the verdict normally; 'advisory' findings are listed but never gate.
-}
-
-/**
- * Security-specific issue with exploitation details
- */
-export interface SecurityIssue extends Issue {
-    category: 'security';
-    vulnerability_type: 'sql_injection' | 'xss' | 'csrf' | 'broken_access_control' | 'sensitive_data_exposure' | 'other';
-    cvss_score?: number; // 0.0 - 10.0
-    attack_complexity: 'low' | 'medium' | 'high';
-    requires_auth: boolean;
-    exploitation_example?: string; // curl command or attack vector
-    mitigations_present: string[]; // Existing security controls
-    mitigations_missing: string[]; // Missing security controls
-}
-
-/**
- * Performance-specific issue with scale impact
- */
-export interface PerformanceIssue extends Issue {
-    category: 'performance';
-    issue_type: 'n_plus_one' | 'missing_cache' | 'inefficient_query' | 'memory_leak' | 'slow_algorithm' | 'other';
-    current_impact: string; // "2-5 seconds at current scale"
-    scale_10x: string; // "20-50 seconds at 10x scale"
-    scale_100x: string; // "Site crash at 100x scale"
-    optimization_potential: string; // "101 queries → 1 query"
-    caching_applicable: boolean;
-}
-
-/**
- * Architecture-specific issue with pattern recommendations
- */
-export interface ArchitectureIssue extends Issue {
-    category: 'architecture';
-    issue_type: 'solid_violation' | 'tight_coupling' | 'god_object' | 'missing_abstraction' | 'pattern_misuse' | 'other';
-    solid_principles_violated?: ('SRP' | 'OCP' | 'LSP' | 'ISP' | 'DIP')[];
-    pattern_opportunity?: string; // "Strategy pattern recommended"
-    pattern_reference?: string; // "patterns/behavioral/strategy.md"
-    refactoring_effort: 'low' | 'medium' | 'high'; // Hours to fix
-    testability_impact: string; // "0/10 → 9/10 after refactoring"
-}
-
-/**
- * Test quality-specific issue
- */
-export interface TestIssue extends Issue {
-    category: 'test_quality';
-    issue_type: 'false_confidence' | 'flaky' | 'brittle' | 'slow' | 'poor_structure' | 'missing_coverage' | 'other';
-    test_principle_violated?: ('behavior_based' | 'independent' | 'deterministic' | 'fast' | 'readable' | 'single_concern')[];
-    root_cause: 'test_problem' | 'implementation_problem' | 'both';
-    fix_complexity: 'trivial' | 'moderate' | 'complex';
-}
-
-/**
- * Pattern consistency issue
- */
-export interface PatternIssue extends Issue {
-    category: 'pattern_consistency';
-    issue_type: 'duplication' | 'inconsistency' | 'naming_deviation' | 'consolidation_opportunity' | 'other';
-    existing_pattern?: string; // Reference to existing implementation
-    git_history_reference?: string; // Commit hash
-    consistency_score?: number; // 0.0-1.0 (e.g., 0.965 = 96.5% consistent)
-    consolidation_benefit?: string; // "-89 lines of duplicate code"
+    channel?: 'blocking' | 'advisory'; // Exact accepted input vocabulary. 'blocking' is the default and is canonicalized to absence; entitled 'advisory' findings remain listed but are excluded from the verdict.
+    // Present when a decision-critic batch touched this finding: promoted,
+    // demoted, rescoped, corrected, or added it, or (on entries moved into
+    // `removed_by_critic` below) removed it. Absent on every finding no
+    // critic round has adjusted.
+    critic_adjustment?: CriticAdjustment;
 }
 
 /**
@@ -116,7 +89,15 @@ export interface PatternIssue extends Issue {
 export interface Clearance {
     claim: string; // The absence being asserted
     method: string; // Exact searches run / files read (required)
-    evidence?: string | null; // Hit counts, file:line list (optional)
+    // Hit counts, file:line list, and — in a reconciled ledger — the
+    // agents the clearance came from ("per security-reviewer,
+    // concurrency-reviewer — 0 in-tree consumers"). Attribution rides in
+    // this free-text field by convention, with no field of its own:
+    // reconciliation collapses method-correlated clearances into ONE
+    // entry, so the names of every agent that ran the shared probe are
+    // what has to survive the merge. Unvalidated by construction — the
+    // contract lives in agents/review-reconciliator.md.
+    evidence?: string | null;
 }
 
 /**
@@ -127,7 +108,8 @@ export interface ReviewOutput {
     pr_id: string;
     reviewer: string; // 'architecture' | 'security' | 'performance' | 'tests' | 'patterns'
     timestamp: string; // ISO 8601
-    version: string; // Schema version for compatibility
+    plugin_version: string | null; // pirategoat-tools version that produced this artifact; null when the producer could not name itself
+    schema: number; // Shape of this artifact — see SCHEMA MAINTENANCE above
 
     // Summary
     verdict: Verdict;
@@ -141,10 +123,23 @@ export interface ReviewOutput {
             low: number;
             info: number;
         };
+        advisory_suppressed: number; // Advisory-tagged findings excluded from the verdict; always present, including 0 (and 0 for not_applicable).
+        verdict_without_advisory?: Verdict; // Present only when advisory_suppressed > 0 and the verdict over all findings would be stricter.
     };
 
     // Issues
-    issues: Issue[]; // Can be SecurityIssue, PerformanceIssue, etc.
+    issues: Issue[]; // Findings recorded by the producer, possibly carrying a critic_adjustment (see Issue above) if a critic round has touched them.
+
+    // Declared coverage gap (null when nothing declared) — canonical
+    // repo-relative paths of in-scope NOT DIFFED files the reviewer could
+    // not reach at budget exhaustion. Never counts toward the verdict.
+    unreviewed: string[] | null;
+
+    // Explicit deferred-review claims — ALWAYS present (never null; [] means
+    // "claimed nothing"). Key presence distinguishes explicit-claims output
+    // from legacy output where silence was read as a claim. A claim is a
+    // statement, not proof of read, and never counts toward the verdict.
+    deferred_reviewed: string[];
 
     // Recommendations (optional)
     recommendations?: {
@@ -156,6 +151,26 @@ export interface ReviewOutput {
     // Positive observations (optional)
     positive_observations?: string[];
 
+    // File-level informational notes that do NOT count toward the verdict.
+    // The reconciliator records verified, maintainer-intended tradeoffs here
+    // (category: "tradeoff") — trigger condition, affected population
+    // verified at file:line, and why the compromise is intentional.
+    observations?: Array<{ file: string; note: string; category: string }> | null;
+
+    // The producer's own reading of the change as a whole — two or three
+    // sentences the list of findings cannot express. Always present, null
+    // when the producer said nothing. Rendered as the "## Assessment"
+    // section of the derived Markdown.
+    //
+    // Also null when a decision-critic batch WITHDREW it: the critic's
+    // adjustment vocabulary addresses issues, not ledger-level prose, so an
+    // assessment the applied batch may have contradicted is retracted
+    // rather than corrected. The retracted text moves to
+    // withdrawn_narrative_summary below; a non-empty
+    // withdrawn_narrative_summary is what the renderer reads as "withdrawn"
+    // rather than "never written".
+    narrative_summary: string | null;
+
     // Clearances (optional) — auditable absence claims ("nothing depends on
     // the removed X") carrying the verification method. Unlike positives,
     // these flow into the reconciliation context so clearance-vs-finding
@@ -164,57 +179,94 @@ export interface ReviewOutput {
 
     // Metadata
     meta: {
-        files_reviewed: number;
-        review_duration_ms?: number;
+        // Null until the reviewer states a count via set_files_reviewed().
+        // A recorded 0 is therefore always an explicit "I read nothing",
+        // never an unset default — consumers must keep the two apart.
+        files_reviewed: number | null;
+        // Subset of `unreviewed` the builder auto-declared at save time
+        // because the reviewer neither claimed nor declared those deferred
+        // files (null when nothing was auto-filled). Marked so metrics can
+        // separate agent honesty from system honesty. Required going
+        // forward; artifacts produced before save-time auto-fill carry no
+        // such key, so consumers must tolerate its absence.
+        unreviewed_autofilled: string[] | null;
+        // Milliseconds from this actor's dispatch marker to serialization.
+        // Null when no marker was found (hand-rolled builder, standalone
+        // use, unreadable stamp) — the builder has no clock of its own that
+        // spans the review, so absence is reported as absence.
+        review_duration_ms: number | null;
         confidence_score: ConfidenceScore; // Overall confidence
         tool_results_used?: string[]; // e.g., ['test-results', 'semgrep']
-    };
-}
 
-/**
- * Aggregated review output from multiple agents
- */
-export interface AggregatedReview {
-    pr_id: string;
-    timestamp: string;
-    version: string;
-
-    // Overall verdict (most restrictive wins)
-    overall_verdict: Verdict;
-
-    // Aggregated summary
-    summary: {
-        total_issues: number;
-        by_reviewer: {
-            [reviewer: string]: number;
-        };
-        by_severity: {
-            critical: number;
-            high: number;
-            medium: number;
-            low: number;
-            info: number;
+        // Reconciliation accounting — present only on review-findings.json,
+        // written by the review-reconciliator after semantic dedup, scope
+        // checking, and fact verification. Renders as the "**Pipeline:**"
+        // line and the not-applicable coverage line.
+        reconciliation?: {
+            input_findings_count: number;
+            agents_contributing: number;
+            concerns_after_grouping: number;
+            false_positives_dropped: number;
+            out_of_scope_dropped: number;
+            verified_concerns: number;
+            merge_ratio: number;
+            not_applicable_count: number;
+            not_applicable_agents: Array<{ name: string; skip_reason: string }>;
+            reviewing_agents: string[];
+            dispatched_agents: string[];
+            missing_agents: string[];
         };
     };
 
-    // All issues from all reviewers
-    all_issues: Issue[];
-
-    // Individual reviewer outputs
-    reviewers: {
-        [reviewer: string]: ReviewOutput;
-    };
-
-    // Meta
-    meta: {
-        reviewers_completed: string[];
-        reviewers_failed: string[];
-        total_duration_ms: number;
-        parallel_execution: boolean;
-    };
-
-    // Host context banner — forwarded from reconciliation when upstream discovery was degraded.
+    // Host context banner — present only on review-findings.json, copied
+    // through by the reconciliator when upstream host discovery was
+    // degraded. Rendered as a blockquote directly under the H1.
     host_context_banner?: HostContextBanner | null;
+
+    // Decision-critic provenance — present only on review-findings.json,
+    // and only once critic_adjustments.py has applied a batch.
+
+    // Ids of the adjustments this ledger already contains. Present after
+    // the first applied batch; its non-emptiness beside a null
+    // narrative_summary is what distinguishes a withdrawn assessment from
+    // one the producer never wrote.
+    applied_critic_adjustments?: string[];
+
+    // Findings the critic removed. Moved out of `issues` rather than
+    // deleted, each carrying the `critic_adjustment` record (see Issue
+    // above) that removed it, so the decision stays auditable. Rendered as
+    // the "## Removed by the Decision Critic" section.
+    removed_by_critic?: Issue[];
+
+    // Critic decisions the orchestrator's spot-check refuted (`rejected:
+    // true` + `rejection_reason` in decision-critic-adjustments.json).
+    // Present after the first batch that settled at least one rejection.
+    // A rejected entry is never applied to `issues` — the target finding
+    // is never mutated — so this is the ONLY place a rejection is
+    // auditable. The source file it also lives in is read only by
+    // apply_adjustments() itself, never by a downstream consumer.
+    // Cumulative across every batch the ledger absorbs, the same way
+    // applied_critic_adjustments is; apply_adjustments() dedupes by
+    // adjustment_id so a re-run never appends a duplicate. An entry
+    // carrying BOTH `applied: true` and `rejected: true` (a post-hoc hand
+    // edit of decision-critic-adjustments.json) is never recorded here —
+    // the applied mutation is ground truth, and auditing the coexisting
+    // rejected flag would publish two contradictory outcomes for one
+    // adjustment_id.
+    rejected_critic_adjustments?: Array<{
+        adjustment_id: string;
+        action: string | null;
+        target_id: string | null; // null for a rejected `add` (no target)
+        rejection_reason: string;
+    }>;
+
+    // Assessments retracted by an applying batch, oldest first. Each entry
+    // keeps the prose and the ids of the decisions that cost it its
+    // standing — withdrawn, never silently dropped.
+    withdrawn_narrative_summary?: Array<{
+        text: string;
+        withdrawn_by: string[];
+    }>;
 }
 
 /**
@@ -224,30 +276,7 @@ export interface AggregatedReview {
  */
 export interface HostContextBanner {
     degraded: boolean;
-    reason: "partial_unresolved" | "fully_unavailable" | "install_failed";
+    reason: "partial_unresolved" | "fully_unavailable";
     message: string;
     unresolved: Array<{ name: string; reason: string; source?: string }>;
-}
-
-/**
- * Helper type guards for type narrowing
- */
-export function isSecurityIssue(issue: Issue): issue is SecurityIssue {
-    return issue.category === 'security';
-}
-
-export function isPerformanceIssue(issue: Issue): issue is PerformanceIssue {
-    return issue.category === 'performance';
-}
-
-export function isArchitectureIssue(issue: Issue): issue is ArchitectureIssue {
-    return issue.category === 'architecture';
-}
-
-export function isTestIssue(issue: Issue): issue is TestIssue {
-    return issue.category === 'test_quality';
-}
-
-export function isPatternIssue(issue: Issue): issue is PatternIssue {
-    return issue.category === 'pattern_consistency';
 }

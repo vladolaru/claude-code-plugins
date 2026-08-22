@@ -7,8 +7,10 @@ import argparse
 import json
 import re
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 
@@ -48,6 +50,21 @@ class ExpectedFile:
 def normalize_text(value: str) -> str:
     """Normalize punctuation in newly generated files."""
     return value.replace("\u2014", "-")
+
+
+@lru_cache(maxsize=None)
+def gitignored(path: Path) -> bool:
+    """Return whether Git's ignore rules match ``path``."""
+    try:
+        result = subprocess.run(
+            ["git", "check-ignore", "-q", "--", str(path.relative_to(REPO_ROOT))],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return False
+    return result.returncode == 0
 
 
 def display_name(plugin_name: str) -> str:
@@ -287,6 +304,11 @@ def translate_command_body(
 ) -> str:
     body = normalize_text(body)
     body = body.replace("${CLAUDE_PLUGIN_ROOT}", "${CODEX_PLUGIN_ROOT}")
+    # Host session identity: Claude exposes CLAUDE_SESSION_ID; Codex
+    # exposes CODEX_THREAD_ID (verified 2026-08-02 via `codex exec` env
+    # dump). Translate so generated skills correlate transcripts on both
+    # hosts instead of passing an empty Claude-only variable.
+    body = body.replace("${CLAUDE_SESSION_ID}", "${CODEX_THREAD_ID}")
     # Word-boundary match so `$ARGUMENTS_LIST` etc. are not rewritten to
     # `${CODEX_SKILL_ARGUMENTS}_LIST`.
     body = re.sub(r"\$ARGUMENTS\b", "${CODEX_SKILL_ARGUMENTS}", body)
@@ -507,9 +529,17 @@ def expected_files(canonical: dict) -> list[ExpectedFile]:
                 for asset in sorted(skill_dir.rglob("*")):
                     if not asset.is_file() or asset.name == "SKILL.md":
                         continue
+                    # Gitignored dot-prefixed entries (.DS_Store and friends)
+                    # are machine artifacts, not skill assets — and often not
+                    # even text, so reading them would crash the generator.
+                    relative_asset = asset.relative_to(skill_dir)
+                    if any(
+                        part.startswith(".") for part in relative_asset.parts
+                    ) and gitignored(asset):
+                        continue
                     files.append(
                         ExpectedFile(
-                            codex_skill_dir / asset.relative_to(skill_dir),
+                            codex_skill_dir / relative_asset,
                             normalize_text(asset.read_text()),
                         )
                     )

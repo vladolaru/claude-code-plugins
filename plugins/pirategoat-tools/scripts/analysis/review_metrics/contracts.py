@@ -1,0 +1,254 @@
+"""External contracts, shared constants, and time parsing."""
+
+from __future__ import annotations
+
+import importlib.util
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def _load_exact_path_module(name: str, path: Path, unavailable: str):
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(unavailable)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_REVIEW_DIR = Path(__file__).resolve().parents[2] / "review"
+_TELEMETRY_CONTRACT = _load_exact_path_module(
+    "review_telemetry_contract",
+    _REVIEW_DIR / "telemetry.py",
+    "review telemetry contract unavailable",
+)
+_DISPATCH_STATUS_CONTRACT = _load_exact_path_module(
+    "review_dispatch_status_contract",
+    _REVIEW_DIR / "dispatch_status.py",
+    "review dispatch status contract unavailable",
+)
+_CRITIC_CONTRACT = _load_exact_path_module(
+    "review_critic_contract",
+    _REVIEW_DIR / "critic.py",
+    "review critic contract unavailable",
+)
+_SYNTHESIS_CONTRACT = _load_exact_path_module(
+    "review_synthesis_lifecycle_contract",
+    _REVIEW_DIR / "synthesis_lifecycle.py",
+    "review synthesis lifecycle contract unavailable",
+)
+_ATOMIC_IO_CONTRACT = _load_exact_path_module(
+    "review_atomic_io_contract",
+    _REVIEW_DIR / "atomic_io.py",
+    "review atomic io contract unavailable",
+)
+_MANIFEST_SECTIONS_CONTRACT = _load_exact_path_module(
+    "review_manifest_sections_contract",
+    _REVIEW_DIR / "manifest_sections.py",
+    "review manifest sections contract unavailable",
+)
+DEFAULT_LOG_DIR = Path(_TELEMETRY_CONTRACT.LOG_DIR)
+DEFAULT_SESSIONS_ROOT = Path("~/.claude/projects").expanduser()
+DEFAULT_REGISTRY = _REVIEW_DIR / "agent_registry.json"
+
+# The lifecycle projection and incomplete-multiset rule are the producer's
+# own implementations — the consumer must mirror them bit-exactly, so it
+# calls them instead of re-implementing them.
+_project_agent_lifecycle = _TELEMETRY_CONTRACT.project_agent_lifecycle
+_incomplete_agent_executions = _TELEMETRY_CONTRACT._incomplete_agent_executions
+
+_USAGE_FIELDS = (
+    "input_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+    "effective_input_tokens",
+    "output_tokens",
+)
+# The section-status vocabularies are the producer's own private
+# constants — manifest_sections.py has no importable export for most of
+# them — reached via the same exact-path contract `_incomplete_agent_executions`
+# above uses, instead of restated literals. Widening any vocabulary in
+# the producer therefore moves the consumer's fallback set in lockstep;
+# see tests/analysis/test_review_run_metrics.py's drift-detection pin.
+_WORKTREE_HYGIENE_STATUSES = (
+    _MANIFEST_SECTIONS_CONTRACT._WORKTREE_HYGIENE_STATUSES
+)
+_USAGE_SNAPSHOT_AVAILABILITY_STATES = (
+    _MANIFEST_SECTIONS_CONTRACT._USAGE_AVAILABILITY_STATES
+)
+_DEPENDENCY_REFRESH_STATUSES = (
+    _MANIFEST_SECTIONS_CONTRACT._DEPENDENCY_REFRESH_STATUSES
+)
+# Public on the producer (imported there from dependency_refresh.py, its
+# actual owner), unlike the private vocabularies above — still reached
+# through the same exact-path module rather than re-imported from
+# dependency_refresh.py directly, so there is one loading mechanism for
+# every manifest_sections.py-shaped constant this package borrows.
+_DEPENDENCY_REFRESH_SKIP_REASONS = (
+    _MANIFEST_SECTIONS_CONTRACT.DEPENDENCY_REFRESH_SKIP_REASONS
+)
+_MAX_DEPENDENCY_REFRESH_COMMANDS = (
+    _MANIFEST_SECTIONS_CONTRACT._MAX_DEPENDENCY_REFRESH_COMMANDS
+)
+_MAX_DIRTY_FILES = _MANIFEST_SECTIONS_CONTRACT._MAX_DIRTY_FILES
+# Shared by reviewer_markdown (step 8's per-reviewer render) and
+# findings_markdown (steps 9/11's review-findings.md render) — one
+# producer-side validator (`_sanitize_derived_markdown_outcome`) covers
+# both, so one vocabulary covers both here too.
+_DERIVED_MARKDOWN_STATUSES = (
+    _MANIFEST_SECTIONS_CONTRACT._DERIVED_MARKDOWN_STATUSES
+)
+_PIPELINE_FAMILIES = (
+    "dispatch",
+    "coverage",
+    "lifecycle",
+    # Distinct from "lifecycle": that family is the REVIEWER lifecycle
+    # projected from agent_start/agent_complete events. The reconciliator
+    # and the decision critic produce neither, so they are measured as
+    # their own family and never move a reviewer count.
+    "synthesis_agents",
+    "outcomes",
+    "raw_findings",
+    "final_findings",
+    "critic",
+    "wall_time",
+)
+_TRANSCRIPT_FAMILIES = (
+    "transcript",
+    "usage",
+    "orchestrator_usage",
+    "agent_usage",
+    "model_usage",
+    "tool_failures",
+    "artifact_writes",
+    "scope_comparable_reads",
+    "non_scope_comparable_reads",
+    "observed_reads",
+)
+_AVAILABILITY_FAMILIES = _PIPELINE_FAMILIES + _TRANSCRIPT_FAMILIES
+_AVAILABILITY_STATES = {"complete", "partial", "missing", "disabled"}
+_FIXED_WARNING_CODES = {
+    "legacy_log_no_manifest",
+    "invalid_manifest_fallback",
+    "running_lifecycle_overlay_invalid",
+    "invalid_dispatch_projection",
+    "duplicate_run_id_conflict",
+    "registry_unavailable",
+    "orchestrator_transcript_parse_gap",
+    "orchestrator_transcript_time_gap",
+    "orchestrator_transcript_usage_missing",
+    "orchestrator_transcript_unresolved_calls",
+    "orchestrator_stage_timeline_invalid",
+    "expected_agents_unavailable",
+    "expected_agent_identity_invalid",
+    "agent_dispatch_schema_gap",
+    "expected_agent_uncorrelated",
+    "agent_transcript_missing",
+    "duplicate_transcript_ignored",
+    "agent_transcript_parse_gap",
+    "agent_transcript_time_gap",
+    "agent_transcript_usage_missing",
+    "agent_transcript_unresolved_calls",
+    "agent_scope_evidence_missing",
+}
+_SUMMARY_FIELDS = (
+    "total_duration_ms",
+    "quick_mode",
+    "pr_size_category",
+    "changed_files_count",
+    "commit_count",
+    "agents_total",
+    "agents_dispatched",
+    "agents_skipped",
+    "agents_completed",
+    "total_agent_issues",
+    "final_verdict",
+    "final_issues",
+)
+_SEVERITIES = tuple(_TELEMETRY_CONTRACT._SEVERITY_FIELDS)
+# Lockstep with review/telemetry.py's EVENT_SCHEMA — this is the
+# consumer's expected value for the producer's constant, same pairing as
+# _OBSERVED_READS_SCHEMA below. Bumped 1 -> 2 when the manifest's
+# `outcome` block gained `verdict_sync`. It stayed 2 when the manifest
+# gained the `synthesis_agents` section, and again when `_sanitize_manifest` started
+# actually publishing `dependency_refresh`/`reviewer_markdown`/
+# `findings_markdown` (Task 13 — the sections already existed on disk;
+# only the sanitized, consumer-facing view was dropping two of them and
+# never had the third), each under the Artifact Schemas rule's
+# unreleased-version carve-out — see the producer-side comment on
+# EVENT_SCHEMA for the tag evidence.
+_SUPPORTED_MANIFEST_SCHEMA = 2
+_OBSERVED_READS_SCHEMA = 2
+# The `--format json` report's own schema. It stayed 2 when each run row
+# and the cohort aggregate gained `synthesis_agents`, and again when each
+# run row gained `dependency_refresh`/`reviewer_markdown`/
+# `findings_markdown` (Task 13, same run-row source as the manifest
+# fields above — `measure_run()`'s output is dumped wholesale as each
+# row), and again when each run row's `coverage` gained
+# `deferred_honesty_by_agent`/`deferred_total_by_agent` and the cohort
+# aggregate gained `deferred_honesty` (Task 14, backlog #19 — the
+# agent-vs-system NOT DIFFED honesty split), under the same
+# unreleased-version carve-out: 2 was introduced in 1.114.0 and 1.114.0
+# is not tagged, so no report was ever published claiming 2 without
+# these keys.
+_REPORT_SCHEMA = 2
+_SUPPORTED_MANIFEST_STATUSES = {"running", "complete"}
+_DISPATCHED_STATUSES = _DISPATCH_STATUS_CONTRACT.DISPATCHED_STATUSES
+_SUPPORTED_DISPATCH_STATUSES = (
+    _DISPATCH_STATUS_CONTRACT.SUPPORTED_DISPATCH_STATUSES
+)
+_SAFE_RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,255}\Z")
+_PRODUCER_AGENT_NAME_RE = _DISPATCH_STATUS_CONTRACT.AGENT_NAME_RE
+_WINDOWS_DRIVE_RE = re.compile(r"[A-Za-z]:")
+_CRITIC_VERDICTS = frozenset(_CRITIC_CONTRACT.CRITIC_VERDICTS)
+# Deliberately NOT in _CRITIC_VERDICTS: "SKIPPED" records that no critique
+# happened. The synthesis-agent aggregate needs it by name to keep
+# crash-resolution and quick-mode spans out of critique duration
+# statistics, and reads the producer's constant rather than respelling the
+# literal.
+_CRITIC_VERDICT_SKIPPED = _CRITIC_CONTRACT.CRITIC_VERDICT_SKIPPED
+# The producer-declared optional-section contract (mirrors the
+# ROW_KEYS pattern just below): the telemetry module names which
+# availability keys it ever assigns, and the sanitize-layer table-driven
+# loop parametrizes over this tuple instead of five bespoke blocks.
+_OPTIONAL_SECTION_AVAILABILITY_KEYS = (
+    _TELEMETRY_CONTRACT.OPTIONAL_SECTION_AVAILABILITY_KEYS
+)
+# The synthesis-agent row shape and identities, owned by the producer. The
+# consumer mirrors them instead of respelling them, so a renamed agent or
+# a new row key breaks this package's tests rather than silently dropping
+# a measurement.
+_SYNTHESIS_ROW_KEYS = _SYNTHESIS_CONTRACT.ROW_KEYS
+_SYNTHESIS_RECONCILIATOR = _SYNTHESIS_CONTRACT.RECONCILIATOR
+_SYNTHESIS_DECISION_CRITIC = _SYNTHESIS_CONTRACT.DECISION_CRITIC
+_RETAINED_CRITIC_VALUES = _CRITIC_VERDICTS | {"unavailable"}
+_TABLE_CELL_LIMIT = 120
+_MAX_WALL_TIME_MS = 365 * 24 * 60 * 60 * 1000
+_ANSI_ESCAPE_RE = re.compile(
+    r"(?:"
+    r"\x1b(?:\][^\x07\x1b\x9c]*(?:\x07|\x1b\\|\x9c)"
+    r"|\[[0-?]*[ -/]*[@-~]|[@-_])"
+    r"|\x9d[^\x07\x1b\x9c]*(?:\x07|\x1b\\|\x9c)"
+    r"|\x9b[0-?]*[ -/]*[@-~])"
+)
+
+
+
+def _parse_time(value: object) -> datetime | None:
+    # Keep byte-for-byte aligned with review_transcript._aware_timestamp —
+    # the standalone transcript parser cannot import this package, so the
+    # two bodies are mirrored deliberately. A divergence makes the same
+    # boundary timestamp valid evidence in one module and a gap in the other.
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    try:
+        return parsed.astimezone(timezone.utc)
+    except (OverflowError, ValueError):
+        return None

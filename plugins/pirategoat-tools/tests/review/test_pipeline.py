@@ -1,7 +1,8 @@
-"""Tests for review/pipeline.py — step briefing output (get_step_guidance)."""
+"""Tests for review/briefings.py through the pipeline.py compatibility facade."""
 
 import json
-import subprocess
+import pathlib
+import re
 import sys
 from pathlib import Path
 
@@ -11,6 +12,7 @@ TESTS_DIR = Path(__file__).resolve().parent.parent  # review/ -> tests/
 
 sys.path.insert(0, str(TESTS_DIR))
 from helpers.context_fixtures import COMPLETE_CONTEXT
+from helpers.pipeline_process import init_repo, run_pipeline
 from conftest import PIPELINE_SCRIPT_PATH as SCRIPT_PATH
 
 
@@ -72,37 +74,6 @@ class TestStep1ParseInput:
 
 class TestStructuredDataDiscipline:
     """Artifact discipline: verification checkpoints, handoff gates, schema-not-placeholders."""
-
-    def test_step_3_handoff_has_verification(self, mod, tmp_path):
-        """Step 3 handoff should instruct verifying change-purpose.md exists."""
-        state = {"completed_steps": [], "resolved_params": {"has_unfetched_issues": False}}
-        ctx = {"git": {"git_range": "abc..HEAD"}}
-        g = mod.get_step_guidance(3, "pr", state, ctx, output_dir=str(tmp_path))
-        assert g.get("handoff") is not None
-        handoff_text = "\n".join(g["handoff"])
-        assert "verify" in handoff_text.lower() or "confirm" in handoff_text.lower() or "exists" in handoff_text.lower()
-
-    def test_step_4_handoff_has_verification(self, mod, tmp_path):
-        """Step 4 handoff should instruct verifying change-purpose.md exists."""
-        state = {"resolved_params": {"has_unfetched_issues": True}, "completed_steps": [1, 2, 3]}
-        ctx = COMPLETE_CONTEXT
-        g = mod.get_step_guidance(4, "pr", state, ctx, output_dir=str(tmp_path))
-        assert g.get("handoff") is not None
-        handoff_text = "\n".join(g["handoff"])
-        assert "verify" in handoff_text.lower() or "confirm" in handoff_text.lower() or "exists" in handoff_text.lower()
-
-    def test_step_8_has_handoff(self, mod, tmp_path):
-        """Step 8 should gate on reconciliation output files."""
-        state = {
-            "completed_steps": [1, 3, 5, 6, 7],
-            "resolved_params": {"git_range": "abc..HEAD"},
-            "agents": {"dispatched": ["code-reviewer"], "completed": ["code-reviewer"], "failed": []},
-        }
-        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
-        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
-        assert g.get("handoff") is not None
-        handoff_text = "\n".join(g["handoff"])
-        assert "review-findings.json" in handoff_text
 
     def test_step_9_has_handoff(self, mod, tmp_path):
         """Step 9 should gate on review-report.md."""
@@ -378,7 +349,7 @@ class TestStep5DispatchPlan:
         assert not ("python3" in full_text and "plan_dispatch.py" in full_text)
 
     def test_shows_focus_for_agents(self, mod, tmp_path):
-        """Step 5 should show what each agent does so the LLM can make informed override decisions."""
+        """Step 5 gives the main orchestrator agent focus for adjustments."""
         state = self._make_state_with_plan()
         ctx = {"git": {"git_range": "abc..HEAD"}}
         g = mod.get_step_guidance(5, "pr", state, ctx)
@@ -389,13 +360,35 @@ class TestStep5DispatchPlan:
         assert "SOLID" in text  # architecture-reviewer's focus
 
     def test_triage_authority(self, mod, tmp_path):
-        """Triage model should be consistent: planner is authoritative."""
+        """The deterministic planner is the baseline for orchestrator adjustment."""
         state = self._make_state_with_plan()
         ctx = {"git": {"git_range": "abc..HEAD"}}
         g = mod.get_step_guidance(5, "full", state, ctx)
         text = "\n".join(g["actions"])
-        assert "authoritative" in text.lower() or "override" in text.lower()
+        assert "main orchestrator adjustment" in text.lower()
+        assert "adjust" in text.lower()
         assert "preliminary" not in text.lower()
+
+    def test_main_orchestrator_adjustment_contract(self, mod, tmp_path):
+        """Step 5 names the actor without changing its routing policy."""
+        state = self._make_state_with_plan()
+        g = mod.get_step_guidance(5, "pr", state, {})
+        text = "\n".join(g["actions"])
+        lowered = text.lower()
+
+        assert "main orchestrator" in lowered
+        assert "planner handles keyword/file-type signals" in lowered
+        assert "semantically" in lowered
+        assert "clearly irrelevant" in lowered
+        assert (
+            "only force-dispatch a skipped agent when you're confident it will find "
+            "something the plan missed."
+        ) in lowered
+        assert "useful review coverage" not in lowered
+        assert "human override" not in lowered
+        assert "DISPATCH_OVERRIDE" in text
+        assert "SKIPPED_OVERRIDE" in text
+        assert "override_reason" in text
 
     def test_override_writes_to_dispatch_plan(self, mod, tmp_path):
         state = self._make_state_with_plan()
@@ -524,15 +517,6 @@ class TestStep6DispatchAgents:
         assert "security-reviewer" in text
         assert "abc..HEAD" in text  # concrete range, not template
 
-    def test_references_agent_tool(self, mod, tmp_path):
-        """Should reference Agent tool, not Task tool."""
-        state = self._make_state_with_agents()
-        ctx = {"git": {"git_range": "abc..HEAD"}}
-        g = mod.get_step_guidance(6, "full", state, ctx, output_dir=str(tmp_path))
-        text = "\n".join(g["actions"])
-        assert "Agent tool" in text or "Agent" in text
-        assert "Task tool" not in text
-
     def test_codex_dispatch_uses_spawn_agent_and_canonical_reviewer(self, mod, tmp_path):
         """Codex dispatch reads the canonical reviewer instead of copying it."""
         state = self._make_state_with_agents()
@@ -556,6 +540,32 @@ class TestStep6DispatchAgents:
         assert mod._codex_task_name("Repo Reviewer/v2") == "repo_reviewer_v2"
         assert mod._codex_task_name("42-check") == "reviewer_42_check"
 
+        long_name = f"repo-{'a' * 70}-renewals-reviewer"
+        for reviewer_name in (
+            "security-reviewer",
+            "repo-a--b-reviewer",
+            long_name,
+            "42-check",
+        ):
+            task_name = mod._codex_task_name(reviewer_name)
+            assert re.fullmatch(r"[a-z][a-z0-9_]*", task_name)
+            assert len(task_name) <= 64
+
+    def test_codex_task_names_preserve_repeated_separators(self, mod):
+        single_separator = mod._codex_task_name("repo-a-b-reviewer")
+        repeated_separator = mod._codex_task_name("repo-a--b-reviewer")
+
+        assert single_separator == "repo_a_b_reviewer"
+        assert repeated_separator == "repo_a__b_reviewer"
+        assert single_separator != repeated_separator
+
+    def test_codex_task_names_distinguish_long_shared_prefixes(self, mod):
+        shared_prefix = f"repo-{'a' * 70}"
+        first_name = f"{shared_prefix}-renewals-reviewer"
+        second_name = f"{shared_prefix}-billing-reviewer"
+
+        assert mod._codex_task_name(first_name) != mod._codex_task_name(second_name)
+
     def test_claude_remains_default_dispatch_host(self, mod, tmp_path):
         state = self._make_state_with_agents()
         ctx = {"git": {"git_range": "abc..HEAD"}}
@@ -564,6 +574,8 @@ class TestStep6DispatchAgents:
 
         assert "Agent tool" in text
         assert "spawn_agent" not in text
+        # The retired Task-tool spelling must not come back on this host.
+        assert "Task tool" not in text
 
     def test_references_status_check(self, mod, tmp_path):
         """Should reference agents_status.py for monitoring."""
@@ -610,10 +622,16 @@ class TestStep6DispatchAgents:
         assert tok[tok.index("--instance-name") + 1] == "repo-renewals-reviewer"
         assert tok[tok.index("--repo-agent-ref") + 1] == ".ai/agents/review/renewals.md"
         assert tok[tok.index("--scope-domains") + 1] == "wp-architecture,architecture"
+        # The dispatched tier reaches bootstrap so lifecycle telemetry
+        # records it — not the adapter registry's static tier.
+        assert tok[tok.index("--model-tier") + 1] == "sonnet"
 
-    def test_codex_adapter_spawn_uses_adapter_task_not_instance_name(self, mod, tmp_path):
-        """Codex spawn_agent targets the installed generic adapter task, while the
-        synthetic instance name only travels in the bootstrap --instance-name arg."""
+    def test_codex_repo_reviewers_get_instance_task_names(self, mod, tmp_path):
+        """Each repo reviewer instance is its own Codex task. Task names
+        derive from the instance name — two reviewers sharing the
+        repo-reviewer-adapter definition must not collide on one task
+        path — while the adapter definition file is still what the task
+        is told to read. Step 8 already targets instance names."""
         import shlex
         state = {
             "resolved_params": {"git_range": "abc..HEAD"},
@@ -628,6 +646,15 @@ class TestStep6DispatchAgents:
                     "execution": "inline",
                     "scope_domains": ["architecture"],
                 },
+                {
+                    "name": "repo-billing-reviewer",
+                    "adapter": "repo-reviewer-adapter",
+                    "ref": ".ai/agents/review/billing.md",
+                    "label": "Billing Expert",
+                    "channel": "blocking",
+                    "execution": "inline",
+                    "scope_domains": ["architecture"],
+                },
             ],
         }
         ctx = {"git": {"git_range": "abc..HEAD"}}
@@ -636,16 +663,91 @@ class TestStep6DispatchAgents:
             6, "full", state, ctx, config=config, output_dir=str(tmp_path)
         )
         text = "\n".join(g["actions"])
-        # spawn_agent task name is the generic adapter, not the instance name.
-        assert "task name `repo_reviewer_adapter`" in text
-        assert "task name `repo_renewals_reviewer`" not in text
-        # Instance identity is preserved only in the bootstrap command.
+        step_6_task_names = {
+            match.group(1)
+            for line in g["actions"]
+            if (match := re.search(r"task name `([^`]+)`", line))
+        }
+        assert step_6_task_names == {
+            "repo_renewals_reviewer",
+            "repo_billing_reviewer",
+        }
+        assert "task name `repo_reviewer_adapter`" not in text
+        adapter_definition = mod.AGENTS_DIR / "repo-reviewer-adapter.md"
+        adapter_instruction = (
+            f"In the message, first read `{adapter_definition}` completely. "
+            "Treat its YAML frontmatter as Claude Code packaging metadata, "
+            "do not translate its model or tool labels, and follow the "
+            "Markdown reviewer instructions."
+        )
+        assert text.count(adapter_instruction) == 2
+        cmd_lines = [
+            line for line in g["actions"]
+            if "bootstrap.py" in line and "--repo-agent-ref" in line
+        ]
+        instance_names = {
+            shlex.split(line)[shlex.split(line).index("--instance-name") + 1]
+            for line in cmd_lines
+        }
+        assert instance_names == {"repo-renewals-reviewer", "repo-billing-reviewer"}
+
+        step_8_state = {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 3, 5, 6, 7],
+            "agents": {
+                "dispatched": [
+                    "repo-renewals-reviewer",
+                    "repo-billing-reviewer",
+                ],
+                "completed": [
+                    "repo-renewals-reviewer",
+                    "repo-billing-reviewer",
+                ],
+                "failed": [],
+            },
+        }
+        step_8 = mod.get_step_guidance(
+            8, "full", step_8_state, ctx, config=config, output_dir=str(tmp_path)
+        )
+        target_heading = step_8["actions"].index("Codex task targets:")
+        step_8_task_names = set(
+            re.findall(r"`([^`]+)`", step_8["actions"][target_heading + 1])
+        )
+        assert step_8_task_names == step_6_task_names
+
+    def test_codex_adapter_command_omits_the_claude_model_tier(self, mod, tmp_path):
+        """The Codex host dispatches the native subagent with no Claude
+        model override, so forwarding the declared tier would make
+        telemetry attribute the execution to a model that never ran. Empty
+        falls back to the adapter registry's honest 'inherit'."""
+        import shlex
+        state = {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 2, 3, 5],
+            "dispatched_agents": [
+                {
+                    "name": "repo-renewals-reviewer",
+                    "adapter": "repo-reviewer-adapter",
+                    "ref": ".ai/agents/review/renewals.md",
+                    "label": "Renewals Expert",
+                    "channel": "blocking",
+                    "execution": "inline",
+                    "model": "sonnet",
+                    "scope_domains": ["architecture"],
+                },
+            ],
+        }
+        ctx = {"git": {"git_range": "abc..HEAD"}}
+        g = mod.get_step_guidance(
+            6, "full", state, ctx, config={"host": "codex"},
+            output_dir=str(tmp_path),
+        )
         cmd_line = next(
             line for line in g["actions"]
             if "bootstrap.py" in line and "--repo-agent-ref" in line
         )
         tok = shlex.split(cmd_line)
-        assert tok[tok.index("--instance-name") + 1] == "repo-renewals-reviewer"
+        assert tok[tok.index("--model-tier") + 1] == ""
 
     def test_adapter_command_escapes_repo_controlled_strings(self, mod, tmp_path):
         """A malicious repo-supplied label/ref cannot inject shell commands."""
@@ -700,6 +802,7 @@ class TestStep6DispatchAgents:
         assert tokens[tokens.index("--channel") + 1] == "blocking"
         assert tokens[tokens.index("--execution") + 1] == "inline"
         assert tokens[tokens.index("--adapter-label") + 1] == "repo-x-reviewer"
+        assert tokens[tokens.index("--model-tier") + 1] == ""
         assert "None" not in tokens
 
     def test_step6_recomputes_dispatch_plan_summary(self, mod, tmp_path):
@@ -732,6 +835,49 @@ class TestStep6DispatchAgents:
         summary = state["dispatch_plan_summary"]
         assert summary["dispatched"] == 2  # code-reviewer + security-reviewer
         assert summary["skipped"] == 2  # SKIPPED + SKIPPED_OVERRIDE
+
+    @pytest.mark.parametrize("step", [5, 6])
+    def test_dispatch_summaries_use_the_canonical_dispatched_set(
+        self, mod, orchestration_mod, tmp_path, monkeypatch, step
+    ):
+        plan = {
+            "agents": [
+                {"name": "code-reviewer", "status": "DISPATCH", "reason": "always"},
+                {
+                    "name": "a11y-reviewer",
+                    "status": "DISPATCH_OVERRIDE",
+                    "reason": "no files",
+                    "override_reason": "requested focus",
+                },
+                {"name": "docs-reviewer", "status": "SKIPPED", "reason": "no files"},
+                {
+                    "name": "perf-reviewer",
+                    "status": "SKIPPED_OVERRIDE",
+                    "reason": "conditional",
+                    "override_reason": "irrelevant",
+                },
+            ]
+        }
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
+        monkeypatch.setattr(
+            orchestration_mod, "_run_subprocess", lambda *args, **kwargs: ("", True)
+        )
+        state = {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 2, 3],
+        }
+        config = {"mode": "pr", "interactive": True}
+        context = {"git": {"git_range": "abc..HEAD"}}
+
+        mod._orchestrate_step(step, "pr", config, state, context, str(tmp_path))
+
+        assert state["dispatch_plan_summary"]["dispatched"] == 2
+        assert state["dispatch_plan_summary"]["skipped"] == 2
+        if step == 6:
+            assert [agent["name"] for agent in state["dispatched_agents"]] == [
+                "code-reviewer",
+                "a11y-reviewer",
+            ]
 
 
 # ===================================================================
@@ -769,14 +915,75 @@ class TestStep7SaveReviewBaseline:
         text = "\n".join(g["actions"])
         assert "NOT_DISPATCHED" in text
 
-    def test_step_7_discourages_sleep_polling(self, mod, tmp_path):
-        """Step 7 should tell the LLM to wait for notifications, not poll in a sleep loop."""
+    def test_claude_host_wait_uses_notifications_and_watchdog(self, mod, tmp_path):
+        """Claude-host wait guidance: end-turn + notification wake-up + named
+        anti-patterns + a background watchdog launched right after dispatch."""
         state = {"completed_steps": [], "resolved_params": {"git_range": "abc..HEAD"}}
         ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main"}}
         g = mod.get_step_guidance(7, "full", state, ctx, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
-        assert "sleep" in text.lower() and "not" in text.lower() or "do not poll" in text.lower()
-        assert "notification" in text.lower() or "run_in_background" in text.lower()
+
+        assert "END YOUR TURN" in text
+        assert "notification" in text.lower()
+        # Named anti-patterns. The "polling without..." bullet says
+        # "wake-up", not "notification" (M3, backlog #25 follow-up): the
+        # watchdog's own expiry is a legitimate wake-up but not a
+        # notification, so naming the anti-pattern after "notification"
+        # alone would misdescribe the one wake-up path this same briefing
+        # tells the orchestrator to rely on.
+        assert "no foreground" in text.lower() and "sleep" in text.lower()
+        assert "keepalive" in text.lower()
+        assert "polling without a new wake-up" in text.lower()
+        # Watchdog: background wait as a guaranteed wake-up
+        assert "--wait" in text
+        assert "--max-seconds 1500" in text
+        assert "BACKGROUND" in text
+        assert "run_in_background: true" in text
+        assert "holds no model turn open" in text.lower()
+
+        # Ordering (I1, backlog #25 follow-up): the watchdog must be
+        # launched BEFORE the instruction to end the turn — a top-to-bottom
+        # executor that ends its turn on reading step 1 would otherwise
+        # never reach the watchdog launch and silently lose the guaranteed
+        # wake-up.
+        watchdog_pos = text.index("--max-seconds 1500")
+        end_turn_pos = text.index("END YOUR TURN")
+        assert watchdog_pos < end_turn_pos, (
+            "the watchdog launch must appear before the END YOUR TURN "
+            "instruction, not after"
+        )
+
+        # Must not carry the Codex-host cadence
+        assert "once a minute" not in text.lower()
+        assert "--max-seconds 60" not in text
+
+    def test_codex_host_wait_uses_per_minute_polling(self, mod, tmp_path):
+        """Codex-host wait guidance: foreground --wait --max-seconds 60 cadence,
+        not the Claude notification/end-turn mechanism."""
+        state = {"completed_steps": [], "resolved_params": {"git_range": "abc..HEAD"}}
+        ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main"}}
+        config = {"host": "codex"}
+        g = mod.get_step_guidance(7, "full", state, ctx, config=config, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+
+        assert "--wait" in text
+        assert "--max-seconds 60" in text
+        assert "once a minute" in text.lower()
+        assert "exit code 3" in text.lower()
+        # I2, backlog #25 follow-up: the loop needs a stated termination —
+        # anchored to the same 1200s agent timeout the Claude branch names,
+        # plus the documented next move once step 8's own escalation is the
+        # real backstop.
+        assert "1200" in text
+        assert "20 min" in text
+        assert "escalation gate force-proceeds" in text.lower()
+        assert "typical run" in text.lower()
+        assert "typical phase" not in text.lower()
+
+        # Must not carry the Claude-host end-turn/notification mechanism
+        assert "END YOUR TURN" not in text
+        assert "keepalive" not in text.lower()
+        assert "--max-seconds 1500" not in text
 
 
 class TestStep8Reconcile:
@@ -827,15 +1034,6 @@ class TestStep8Reconcile:
         assert "code-reviewer" in text
         assert "security-reviewer" in text
 
-    def test_includes_reconciliation_context_path(self, mod, tmp_path):
-        """All modes should pass reconciliation-context.md to reconciliator."""
-        for mode in ("pr", "full", "incremental"):
-            state = self._make_state_with_agents(change_purpose_exists=True)
-            ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
-            g = mod.get_step_guidance(8, mode, state, ctx, output_dir=str(tmp_path))
-            text = "\n".join(g["actions"])
-            assert "reconciliation-context.md" in text
-
     def test_includes_change_purpose_when_available(self, mod, tmp_path):
         """Should include change purpose in reconciliator prompt."""
         state = self._make_state_with_agents(change_purpose_exists=True)
@@ -883,6 +1081,53 @@ class TestStep8Reconcile:
         assert "reconciliation-context.md" in text
         # Individual review files are no longer listed — they're inside the context file
         assert "code-review.json" not in text
+
+
+class TestStep8FindingsArtifactOwnership:
+    """The reconciliator publishes JSON; the pipeline renders the Markdown.
+
+    A handoff gate that asks the orchestrator to verify an artifact the
+    reconciliator no longer writes would stall every run — and telling the
+    agent to write it is how the narrative went stale after every REVISE.
+    """
+
+    def _guidance(self, mod, tmp_path):
+        state = {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 3, 5, 6, 7],
+            "agents": {
+                "dispatched": ["code-reviewer"],
+                "completed": ["code-reviewer"],
+                "failed": [],
+            },
+        }
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+        return mod.get_step_guidance(
+            8, "pr", state, ctx, output_dir=str(tmp_path)
+        )
+
+    def test_expected_output_names_the_json_as_the_agents_artifact(
+        self, mod, tmp_path
+    ):
+        expected_line = next(
+            line for line in self._guidance(mod, tmp_path)["actions"]
+            if line.startswith("**Expected output:**")
+        )
+        assert "review-findings.json" in expected_line
+        assert "only artifact" in expected_line
+        # The .md may be named here, but only as something the PIPELINE
+        # produces — never as an output the agent is asked to write.
+        assert "writes no Markdown" in expected_line
+
+    def test_handoff_gates_on_the_json_only(self, mod, tmp_path):
+        handoff = "\n".join(self._guidance(mod, tmp_path)["handoff"])
+        assert "review-findings.json" in handoff
+        assert "review-findings.md" not in handoff
+
+    def test_actions_say_the_pipeline_renders_the_markdown(self, mod, tmp_path):
+        text = "\n".join(self._guidance(mod, tmp_path)["actions"])
+        assert "review-findings.md" in text
+        assert "pipeline renders" in text
 
 
 class TestStep8AdditionalInstructions:
@@ -1075,21 +1320,91 @@ class TestStep8ReadinessGate:
         g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
         assert "WAITING" not in g["title"]
 
+    def _make_waiting_state(self):
+        return {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 3, 5, 6, 7],
+            "waiting_on_agents": {
+                "running": ["security-reviewer"],
+                "not_dispatched": [],
+            },
+            "agents": {"dispatched": ["security-reviewer"], "completed": [], "failed": []},
+        }
+
+    def test_claude_host_waiting_uses_end_turn_and_fresh_watchdog(self, mod, tmp_path):
+        """Claude-host WAITING gate (backlog #25 follow-up, I4): mirrors
+        step 7's end-turn/notification mechanism, plus a fresh watchdog
+        sized to the remaining budget before escalation force-proceeds —
+        replacing the mechanism-free "wait, then re-run this step" prose
+        that produced the field improvisations in the first place."""
+        state = self._make_waiting_state()
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
+        assert "WAITING" in g["title"]
+        assert g["blocks_progress"] is True
+        text = "\n".join(g["actions"])
+
+        assert "END YOUR TURN" in text
+        assert "--wait" in text
+        assert "run_in_background: true" in text
+        assert "BACKGROUND" in text
+        assert "holds no model turn open" in text.lower()
+        # Ordering pin (the I1/D1 defect class): ending the turn is
+        # terminal, so the watchdog instruction must come FIRST — a
+        # top-to-bottom executor that ends its turn before launching it
+        # loses what may be the only remaining wake-up in this state.
+        watchdog_pos = text.index("--wait")
+        end_turn_pos = text.index("END YOUR TURN")
+        assert watchdog_pos < end_turn_pos
+        # Escalation text itself is untouched (settled design) — still
+        # reachable only via the elapsed>=threshold branch, not asserted
+        # here since this state hits the not-yet-escalated branch.
+
+        # Must not carry the Codex-host cadence
+        assert "once a minute" not in text.lower()
+        assert "--max-seconds 60" not in text
+
+    def test_codex_host_waiting_uses_per_minute_polling(self, mod, tmp_path):
+        """Codex-host WAITING gate (backlog #25 follow-up, I4): mirrors
+        step 7's per-minute cadence, not the Claude end-turn mechanism."""
+        state = self._make_waiting_state()
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+        config = {"host": "codex"}
+        g = mod.get_step_guidance(8, "pr", state, ctx, config=config, output_dir=str(tmp_path))
+        assert "WAITING" in g["title"]
+        assert g["blocks_progress"] is True
+        text = "\n".join(g["actions"])
+
+        assert "--wait" in text
+        assert "--max-seconds 60" in text
+        assert "once a minute" in text.lower()
+        assert "exit code 3" in text.lower()
+
+        # Must not carry the Claude-host end-turn/notification mechanism
+        assert "END YOUR TURN" not in text
+        assert "run_in_background" not in text
+
 
 class TestStep9ReviewReport:
-    def test_writes_review_report(self, mod, tmp_path):
-        state = {"completed_steps": []}
-        ctx = {}
-        g = mod.get_step_guidance(9, "pr", state, ctx)
-        text = "\n".join(g["actions"])
-        assert "review-report.md" in text
-
     def test_references_review_findings(self, mod, tmp_path):
         state = {"completed_steps": []}
         ctx = {}
         g = mod.get_step_guidance(9, "full", state, ctx)
         text = "\n".join(g["actions"])
         assert "review-findings" in text
+
+    def test_banner_parenthetical_credits_the_pipeline_not_the_agent(
+        self, mod, tmp_path
+    ):
+        """The reconciliator no longer writes any Markdown, so the step-9
+        banner instruction must not claim it already did."""
+        ctx = {"host_context": {"banner": {
+            "degraded": True, "message": "WooCommerce source unresolved.",
+        }}}
+        g = mod.get_step_guidance(9, "pr", {"completed_steps": []}, ctx)
+        text = "\n".join(g["actions"])
+        assert "Host context banner" in text
+        assert "reconciliator already did the same" not in text
 
     def test_all_modes_have_this_step(self, mod, tmp_path):
         """Review report synthesis runs for ALL modes (fixes branch flow gap)."""
@@ -1110,16 +1425,6 @@ class TestStep9ReviewReport:
         assert "Maria" in text  # default addresses author by name
         assert "actionable" in text.lower()
 
-    def test_includes_output_instructions_override(self, mod, tmp_path):
-        """Step 9 should use caller-provided output_instructions from run-config.json verbatim."""
-        config = {"mode": "pr", "output_instructions": "Keep it brief. Bullet points only."}
-        state = {"completed_steps": []}
-        ctx = {}
-        g = mod.get_step_guidance(9, "pr", state, ctx, config=config)
-        text = "\n".join(g["actions"])
-        assert "Keep it brief" in text
-        assert "Bullet points only" in text
-
     def test_surfaces_inline_coverage_gaps(self, mod, tmp_path):
         """Files no reviewer saw inline must be forced into the report."""
         state = {
@@ -1130,9 +1435,296 @@ class TestStep9ReviewReport:
         }
         g = mod.get_step_guidance(9, "full", state, {})
         text = "\n".join(g["actions"])
-        assert "Review coverage" in text
-        assert "src/starved.php" in text
-        assert "code-reviewer, security-reviewer" in text
+        assert "## Review coverage" in text
+        assert "`src/starved.php`" in text
+        assert "`code-reviewer`, `security-reviewer`" in text
+
+    def test_surfaces_deferred_claims_as_not_proof(self, mod, tmp_path):
+        """Deferred-review claims stay visible without becoming proof of review."""
+        state = {
+            "completed_steps": [],
+            "inline_coverage_gaps": {},
+            "inline_coverage_claims": {
+                "src/big_module.py": ["security-reviewer"],
+            },
+        }
+        g = mod.get_step_guidance(9, "full", state, {})
+        text = "\n".join(g["actions"])
+        assert "claims" in text.lower()
+        assert "src/big_module.py" in text
+        assert "security-reviewer" in text
+        assert "not proof" in text.lower()
+        assert "`src/big_module.py`" in text
+        assert "`security-reviewer`" in text
+
+    def test_deferred_claims_render_untrusted_values_as_safe_code_spans(
+        self, mod, tmp_path
+    ):
+        path = "src/evil``name.py\r\n## injected heading\r\n- injected file`"
+        claimant = (
+            "`security`reviewer\r\n# injected claimant\r\n* injected agent`"
+        )
+        state = {
+            "completed_steps": [],
+            "inline_coverage_gaps": {},
+            "inline_coverage_claims": {path: [claimant]},
+        }
+
+        g = mod.get_step_guidance(9, "full", state, {})
+        text = "\n".join(g["actions"])
+
+        assert "\n## injected heading" not in text
+        assert "\n- injected file" not in text
+        assert "\n# injected claimant" not in text
+        assert "\n* injected agent" not in text
+        assert (
+            "``` src/evil``name.py ## injected heading - injected file` ```"
+            in text
+        )
+        assert (
+            "`` `security`reviewer # injected claimant * injected agent` ``"
+            in text
+        )
+
+    def test_malformed_deferred_claims_are_ignored(self, mod, tmp_path):
+        state = {
+            "completed_steps": [],
+            "inline_coverage_gaps": {},
+            "inline_coverage_claims": ["unexpected-list"],
+        }
+        g = mod.get_step_guidance(9, "full", state, {})
+        assert "## Review coverage" not in "\n".join(g["actions"])
+
+    @pytest.mark.parametrize(
+        "reconciliation_payload",
+        [
+            None,
+            {"inline_coverage": ["malformed"]},
+        ],
+        ids=["missing-context", "malformed-coverage"],
+    )
+    def test_step9_state_loading_clears_stale_deferred_claims(
+        self, mod, tmp_path, reconciliation_payload
+    ):
+        if reconciliation_payload is not None:
+            (tmp_path / "reconciliation-context.json").write_text(
+                json.dumps(reconciliation_payload)
+            )
+        state = {
+            "inline_coverage_gaps": {"src/stale.py": ["code-reviewer"]},
+            "inline_coverage_claims": {
+                "src/stale.py": ["security-reviewer"],
+            },
+        }
+
+        mod._orchestrate_step(9, "full", {}, state, {}, str(tmp_path))
+
+        assert state["inline_coverage_claims"] == {}
+
+    def test_step9_state_loading_wires_deferred_claims_to_warning(
+        self, mod, tmp_path
+    ):
+        claims = {"src/big_module.py": ["security-reviewer"]}
+        (tmp_path / "reconciliation-context.json").write_text(
+            json.dumps(
+                {
+                    "inline_coverage": {
+                        "files_never_inline": {},
+                        "files_deferred_reviewed": claims,
+                    },
+                }
+            )
+        )
+        state = {}
+
+        mod._orchestrate_step(9, "full", {}, state, {}, str(tmp_path))
+
+        assert state["inline_coverage_claims"] == claims
+        g = mod.get_step_guidance(9, "full", state, {})
+        text = "\n".join(g["actions"])
+        assert "claims, not proof of read" in text
+        assert "`src/big_module.py`" in text
+        assert "`security-reviewer`" in text
+
+    def test_coverage_section_is_one_verbatim_paste_block(self, mod):
+        """All three populations render into ONE fenced, ready-to-paste
+        section, with the copy-verbatim instruction attached.
+
+        The field failure this pins: the briefing described a hedged
+        measurement instead of rendering it, and the orchestrator restated
+        "skipped by every matching agent's diff budget and no reviewer
+        reported reviewing them" as "read by nobody" — false for files
+        that were provably read.
+        """
+        state = {
+            "completed_steps": [],
+            "inline_coverage_gaps": {"src/starved.php": ["code-reviewer"]},
+            "inline_coverage_claims": {"src/big.py": ["security-reviewer"]},
+            "inline_coverage_unscoped": ["package-lock.json", ".editorconfig"],
+        }
+        g = mod.get_step_guidance(9, "full", state, {})
+        text = "\n".join(g["actions"])
+
+        # One paste, one heading, one fence pair.
+        assert text.count("## Review coverage") == 1
+        assert text.count("```markdown") == 1
+
+        # The hedged sentence is rendered, not described.
+        assert (
+            "1 changed file(s) were skipped by every matching agent's diff "
+            "budget and no reviewer reported reviewing them from the "
+            "deferred NOT DIFFED queue:" in text
+        )
+        assert "- `src/starved.php` (skipped by: `code-reviewer`)" in text
+
+        # Unscoped files get their own honest line.
+        assert (
+            "2 changed file(s) matched no reviewer's domain and were "
+            "reviewed by no one" in text
+        )
+        assert "- `package-lock.json`" in text
+        assert "- `.editorconfig`" in text
+
+        # Claims keep their own hedge, in their own subsection.
+        assert (
+            "### Reviewed from the deferred queue — claims, not proof of "
+            "read" in text
+        )
+        assert "- `src/big.py` (claimed by: `security-reviewer`)" in text
+
+        # And the paste instruction forbids paraphrase.
+        assert "VERBATIM" in text
+        assert "never restate, summarize, re-count, or edit" in text
+        assert "commentary AFTER the block" in text
+        assert "verdict must acknowledge this gap" in text
+
+        # ORDER, not just presence: an instruction that arrives after the
+        # block it governs has already been disobeyed. The copy-verbatim
+        # sentence must precede the opening fence, which must precede the
+        # heading, which must precede the closing fence.
+        instruction = text.index("VERBATIM")
+        opening = text.index("```markdown")
+        heading = text.index("## Review coverage")
+        closing = text.index("\n```", opening + len("```markdown"))
+        assert instruction < opening < heading < closing
+
+    def test_verdict_gap_clause_rides_on_a_proven_gap(self, mod):
+        """Claims are hedged as "not proof of read" three lines up.
+
+        Telling the orchestrator that "the verdict must acknowledge this
+        gap" on a claims-only run manufactures a gap out of the one
+        population the block is careful NOT to call one.
+        """
+        claims_only = {
+            "completed_steps": [],
+            "inline_coverage_gaps": {},
+            "inline_coverage_claims": {"src/big.py": ["security-reviewer"]},
+            "inline_coverage_unscoped": [],
+        }
+        text = "\n".join(
+            mod.get_step_guidance(9, "full", claims_only, {})["actions"]
+        )
+        assert "## Review coverage" in text
+        assert "verdict must acknowledge" not in text
+
+    @pytest.mark.parametrize(
+        "population",
+        ["inline_coverage_gaps", "inline_coverage_unscoped"],
+    )
+    def test_either_proven_gap_population_demands_the_verdict_clause(
+        self, mod, population
+    ):
+        value = (
+            {"src/starved.php": ["code-reviewer"]}
+            if population == "inline_coverage_gaps"
+            else ["package-lock.json"]
+        )
+        state = {"completed_steps": [], population: value}
+        text = "\n".join(mod.get_step_guidance(9, "full", state, {})["actions"])
+        assert "verdict must acknowledge this gap" in text
+
+    def test_coverage_section_renders_unscoped_files_alone(self, mod):
+        """A run whose only coverage problem is unrouted files still gets
+        the section — this population reaches no per-agent bucket."""
+        state = {
+            "completed_steps": [],
+            "inline_coverage_gaps": {},
+            "inline_coverage_claims": {},
+            "inline_coverage_unscoped": ["assets/logo.png"],
+        }
+        text = "\n".join(mod.get_step_guidance(9, "full", state, {})["actions"])
+        assert "## Review coverage" in text
+        assert (
+            "1 changed file(s) matched no reviewer's domain and were "
+            "reviewed by no one" in text
+        )
+        assert "- `assets/logo.png`" in text
+
+    def test_coverage_section_omits_unscoped_line_when_all_files_scoped(
+        self, mod
+    ):
+        """Measured-and-empty prints nothing — a zero line would read as a
+        finding."""
+        state = {
+            "completed_steps": [],
+            "inline_coverage_gaps": {"src/starved.php": ["code-reviewer"]},
+            "inline_coverage_claims": {},
+            "inline_coverage_unscoped": [],
+        }
+        text = "\n".join(mod.get_step_guidance(9, "full", state, {})["actions"])
+        assert "## Review coverage" in text
+        assert "matched no reviewer's domain" not in text
+
+    def test_step9_state_loading_wires_unscoped_files(self, mod, tmp_path):
+        (tmp_path / "reconciliation-context.json").write_text(
+            json.dumps({
+                "inline_coverage": {
+                    "files_never_inline": {},
+                    "files_deferred_reviewed": {},
+                    "files_unscoped": ["package-lock.json", 7],
+                },
+            })
+        )
+        state = {}
+
+        mod._orchestrate_step(9, "full", {}, state, {}, str(tmp_path))
+
+        assert state["inline_coverage_unscoped"] == ["package-lock.json"]
+        text = "\n".join(mod.get_step_guidance(9, "full", state, {})["actions"])
+        assert "`package-lock.json`" in text
+
+    def test_step9_state_loading_treats_unmeasured_unscoped_as_no_section(
+        self, mod, tmp_path
+    ):
+        """`files_unscoped: null` is "not measured", not "none found"."""
+        (tmp_path / "reconciliation-context.json").write_text(
+            json.dumps({
+                "inline_coverage": {
+                    "files_never_inline": {},
+                    "files_deferred_reviewed": {},
+                    "files_unscoped": None,
+                },
+            })
+        )
+        state = {"inline_coverage_unscoped": ["stale.py"]}
+
+        mod._orchestrate_step(9, "full", {}, state, {}, str(tmp_path))
+
+        # None, not [] — the state keeps "nothing was measured" distinct
+        # from "measured, nothing found", because only the second may ever
+        # be reported as a clean coverage result.
+        assert state["inline_coverage_unscoped"] is None
+        text = "\n".join(mod.get_step_guidance(9, "full", state, {})["actions"])
+        assert "## Review coverage" not in text
+
+    def test_what_held_is_sourced_from_the_ledger_not_memory(self, mod):
+        """Step 9's "what held" section must derive from the ledger's
+        rendered clearances — the from-memory rebuild is the failure."""
+        g = mod.get_step_guidance(9, "full", {"completed_steps": []}, {})
+        text = "\n".join(g["actions"])
+        assert "## Clearances (verified absences)" in text
+        assert "never from memory" in text
+        assert "write no such section" in text
 
     def test_no_coverage_warning_without_gaps(self, mod, tmp_path):
         state = {"completed_steps": [], "inline_coverage_gaps": {}}
@@ -1222,12 +1814,76 @@ class TestStep9ReviewReport:
 
 
 class TestStep10DecisionCritic:
+    @staticmethod
+    def _revise_section(guidance):
+        """The REVISE block: from the `**REVISE**` line up to `**ESCALATE**`."""
+        lines = "\n".join(guidance["actions"]).split("\n")
+        collected = []
+        in_revise = False
+        for line in lines:
+            if "REVISE" in line and "**" in line:
+                in_revise = True
+                collected.append(line)
+            elif "ESCALATE" in line and "**" in line:
+                in_revise = False
+            elif in_revise:
+                collected.append(line)
+        assert collected, "no REVISE block found in the step-10 briefing"
+        return "\n".join(collected)
+
     def test_dispatches_decision_reviewer(self, mod, tmp_path):
         state = {"completed_steps": []}
         ctx = {}
         g = mod.get_step_guidance(10, "pr", state, ctx)
         text = "\n".join(g["actions"])
         assert "decision-reviewer" in text
+
+    def test_spot_check_accounting_is_per_entry_never_aggregate(
+        self, mod, tmp_path
+    ):
+        """The field failure: a report said "all four spot-checked" about a
+        FIVE-entry batch, and the unverified entry propagated as fact.
+
+        The instruction must demand one line per adjustment id with its own
+        outcome, and must forbid the aggregate phrasing outright.
+        """
+        g = mod.get_step_guidance(10, "pr", {"completed_steps": []}, {})
+        revise = self._revise_section(g)
+
+        # Per-entry accounting during the spot-check itself.
+        assert "PER ENTRY, never in aggregate" in revise
+        assert "`not checked`" in revise
+        assert "never absorbed into a batch-level statement" in revise
+
+        # Per-entry accounting when reporting it.
+        assert "one line per adjustment" in revise
+        assert "`<adjustment_id>: verified | refuted | not checked`" in revise
+        assert "Never an aggregate count" in revise
+
+    def test_spot_check_instruction_carries_no_aggregate_phrasing(self, mod):
+        """An "all N spot-checked" phrase may appear in exactly one place:
+        the sentence that forbids it.
+
+        Scoped per SENTENCE, not per action string. Filtering by whole
+        action auto-exempted anything appended to the same `actions.append`
+        as the prohibition — which is precisely where a future aggregate
+        phrasing would land, since that is the action about reporting the
+        batch.
+        """
+        revise = self._revise_section(
+            mod.get_step_guidance(10, "pr", {"completed_steps": []}, {})
+        )
+        aggregate = re.compile(r'all ["\u201c]?(?:N|\d+)["\u201d]? '
+                               r'(?:spot-check|verif|check)')
+        sentences = re.split(r'(?<=[.:])\s+', revise)
+        offenders = [
+            sentence for sentence in sentences
+            if aggregate.search(sentence)
+            and "Never an aggregate count" not in sentence
+        ]
+        assert not offenders, offenders
+        # The prohibition itself must still be there to be exempted.
+        assert any(aggregate.search(s) for s in sentences)
 
     def test_codex_critic_uses_canonical_agent_definition(self, mod, tmp_path):
         state = {"completed_steps": []}
@@ -1251,15 +1907,6 @@ class TestStep10DecisionCritic:
             text = "\n".join(g["actions"])
             assert "review-report.md" in text
 
-    def test_has_verdict_handling(self, mod, tmp_path):
-        state = {"completed_steps": []}
-        ctx = {}
-        g = mod.get_step_guidance(10, "pr", state, ctx)
-        text = "\n".join(g["actions"])
-        assert "STAND" in text
-        assert "REVISE" in text
-        assert "ESCALATE" in text
-
     def test_instructs_wait_for_critic(self, mod, tmp_path):
         """Critic must NOT run in background — LLM needs the verdict."""
         state = {"completed_steps": []}
@@ -1268,15 +1915,6 @@ class TestStep10DecisionCritic:
         text = "\n".join(g["actions"])
         assert "wait" in text.lower() or "do not" in text.lower()
         assert "background" in text.lower()
-
-    def test_instructs_writing_review_verdict_json(self, mod, tmp_path):
-        """Should instruct the LLM to write review-verdict.json after acting on verdict."""
-        state = {"completed_steps": []}
-        ctx = {}
-        g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
-        text = "\n".join(g["actions"])
-        assert "review-verdict.json" in text
-        assert "verdict" in text.lower()
 
     def test_revise_instructs_report_edit(self, mod, tmp_path):
         """REVISE verdict instructions must explicitly mention editing review-report.md."""
@@ -1306,6 +1944,62 @@ class TestStep10DecisionCritic:
         lower = revise_text.lower()
         assert any(verb in lower for verb in ["edit", "update", "fix", "correct", "reframe"]), (
             "REVISE instructions must use a concrete action verb (edit/update/fix/correct/reframe)"
+        )
+
+    def test_revise_routes_through_the_adjustments_ledger(self, mod, tmp_path):
+        """REVISE must apply the critic's adjustments, not only edit prose.
+
+        The load-bearing half of the flow is the `critic_adjustments.py`
+        invocation: without it the critic's finding-level decisions reach
+        the human report and never the machine-readable ledger that bot
+        mode, baselines, and metrics consume.
+        """
+        state = {"completed_steps": []}
+        g = mod.get_step_guidance(10, "pr", state, {}, output_dir=str(tmp_path))
+        revise_text = self._revise_section(g)
+
+        assert "decision-critic-adjustments.json" in revise_text, (
+            "REVISE must tell the orchestrator to read the adjustments file"
+        )
+        assert "critic_adjustments.py" in revise_text, (
+            "REVISE must invoke the module that carries adjustments into "
+            "review-findings.json"
+        )
+        assert "--output-dir" in revise_text, (
+            "the apply command must be runnable as written"
+        )
+        assert "rejected" in revise_text, (
+            "a refuted adjustment must be marked rejected, not deleted"
+        )
+
+    def test_revise_updates_the_ledger_before_the_report(self, mod, tmp_path):
+        """Ordering is the contract: JSON first, then prose that matches it."""
+        state = {"completed_steps": []}
+        g = mod.get_step_guidance(10, "pr", state, {}, output_dir=str(tmp_path))
+        revise_text = self._revise_section(g)
+
+        read_adjustments = revise_text.index("decision-critic-adjustments.json")
+        apply_adjustments = revise_text.index("critic_adjustments.py")
+        edit_report = revise_text.index("review-report.md")
+
+        assert read_adjustments < apply_adjustments < edit_report, (
+            "REVISE must read the adjustments, apply them to the findings "
+            "JSON, and only then edit the report to match — a report edited "
+            "first would describe a ledger the critic never reached"
+        )
+
+    def test_critic_dispatch_prompt_requires_the_adjustments_file(
+        self, mod, tmp_path
+    ):
+        """The critic itself must be told to write the machine-readable form."""
+        state = {"completed_steps": []}
+        g = mod.get_step_guidance(10, "pr", state, {}, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        prompt = text.split("Use this dispatch prompt:", 1)[1]
+        prompt = prompt.split("Act on the critic's verdict:", 1)[0]
+
+        assert "decision-critic-adjustments.json" in prompt, (
+            "the dispatch prompt must ask the critic for the adjustments file"
         )
 
     def test_stand_instructs_no_changes(self, mod, tmp_path):
@@ -1365,9 +2059,14 @@ class TestStep10DecisionCritic:
         # Dispatch prompt should use critic-context.md
         assert "critic-context.md" in text
         # Should NOT reference review-findings.json in the dispatch prompt
-        # (it's consumed during the build step, not passed to the critic)
+        # (it's consumed during the build step, not passed to the critic).
+        # The slice ends where the prompt ends: the post-dispatch REVISE
+        # actions legitimately name the findings JSON the orchestrator
+        # patches, and that text never reaches the critic.
         dispatch_start = text.index("dispatch prompt")
-        dispatch_section = text[dispatch_start:]
+        dispatch_section = text[dispatch_start:].split(
+            "Act on the critic's verdict:", 1
+        )[0]
         assert "review-findings.json" not in dispatch_section
 
     def test_normal_flow_includes_report_path_in_dispatch(self, mod, tmp_path):
@@ -1380,13 +2079,28 @@ class TestStep10DecisionCritic:
         assert "review-report.md" in text
         assert "report" in text.lower()  # label for the report path
 
-    def test_report_synthesis_failed_includes_findings_md_as_report(self, mod, tmp_path):
-        """When report synthesis failed, the report path should be review-findings.md."""
-        state = {"completed_steps": [], "degradation": {"report_synthesis_failed": True}}
-        ctx = {}
-        g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
+    def test_absent_report_puts_findings_md_in_the_dispatch_prompt(
+        self, mod, tmp_path
+    ):
+        """When no review-report.md was written, the report path handed to
+        the critic is review-findings.md.
+
+        Previously keyed on `degradation["report_synthesis_failed"]`, a flag
+        nothing under scripts/ ever set — so this asserted a fallback that
+        could not fire in production. It now keys on the existence facts
+        step 10's orchestration records.
+        """
+        state = {
+            "completed_steps": [],
+            "critic_source": {
+                "target": "review-findings.md",
+                "available": ["review-findings.md", "review-findings.json"],
+                "render_incomplete": False,
+            },
+        }
+        g = mod.get_step_guidance(10, "pr", state, {}, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
-        assert "review-findings.md" in text
+        assert f"{tmp_path}/review-findings.md" in text
 
     def test_step_10_dispatch_includes_output_dir(self, mod, tmp_path):
         """Step 10 dispatch prompt should include the output directory path."""
@@ -1400,57 +2114,52 @@ class TestStep10DecisionCritic:
 class TestCriticVerdictPersistence:
     """Critic verdict is persisted to file and read back by step 11."""
 
-    def _run(self, *args):
-        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
-        return subprocess.run(cmd, capture_output=True, text=True)
-
-    def test_step_10_instructs_writing_critic_verdict_file(self, mod, tmp_path):
-        """Step 10 should instruct writing decision-critic-verdict.json."""
-        state = {"completed_steps": []}
-        ctx = {}
-        g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
-        text = "\n".join(g["actions"])
-        assert "decision-critic-verdict.json" in text
+    @pytest.fixture(autouse=True)
+    def _isolated_repo(self, tmp_path):
+        """run_pipeline's cwd has no default — see its docstring. Isolate
+        every subprocess call in this class to a throwaway repo at
+        tmp_path so none of them can touch the real checkout."""
+        init_repo(tmp_path)
 
     def test_step_11_reads_critic_verdict_from_file(self, tmp_path):
         """Step 11 should read decision-critic-verdict.json into state."""
-        self._run("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        run_pipeline("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         (tmp_path / "review-verdict.json").write_text('{"verdict": "APPROVE"}')
         (tmp_path / "review-report.md").write_text("# Review")
         (tmp_path / "review-findings.json").write_text('{"verdict": "APPROVE", "issues": []}')
         (tmp_path / "decision-critic-verdict.json").write_text('{"verdict": "STAND"}')
-        r = self._run("--step", "11", "--mode", "pr",
-                       "--output-dir", str(tmp_path))
+        r = run_pipeline("--step", "11", "--mode", "pr",
+                       "--output-dir", str(tmp_path), cwd=tmp_path)
         assert r.returncode == 0
         result = json.loads((tmp_path / "pipeline-result.json").read_text())
         assert result["critic_verdict"] == "STAND"
 
     def test_step_11_critic_verdict_unavailable_when_file_missing(self, tmp_path):
         """Step 11 should report critic_verdict as unavailable when file is missing."""
-        self._run("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        run_pipeline("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         (tmp_path / "review-verdict.json").write_text('{"verdict": "APPROVE"}')
         (tmp_path / "review-report.md").write_text("# Review")
         (tmp_path / "review-findings.json").write_text('{"verdict": "APPROVE", "issues": []}')
-        r = self._run("--step", "11", "--mode", "pr",
-                       "--output-dir", str(tmp_path))
+        r = run_pipeline("--step", "11", "--mode", "pr",
+                       "--output-dir", str(tmp_path), cwd=tmp_path)
         assert r.returncode == 0
         result = json.loads((tmp_path / "pipeline-result.json").read_text())
         assert result["critic_verdict"] == "unavailable"
 
     def test_step_11_maps_skipped_critic_to_unavailable(self, tmp_path):
         """SKIPPED verdict (quick mode) should map to unavailable for downstream consumers."""
-        self._run("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        run_pipeline("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         (tmp_path / "review-verdict.json").write_text('{"verdict": "APPROVE"}')
         (tmp_path / "review-report.md").write_text("# Review")
         (tmp_path / "review-findings.json").write_text('{"verdict": "approve", "issues": []}')
         (tmp_path / "decision-critic-verdict.json").write_text(
             '{"verdict": "SKIPPED", "reason": "quick mode, reconciliation verdict: approve"}'
         )
-        r = self._run("--step", "11", "--mode", "pr",
-                       "--output-dir", str(tmp_path))
+        r = run_pipeline("--step", "11", "--mode", "pr",
+                       "--output-dir", str(tmp_path), cwd=tmp_path)
         assert r.returncode == 0
         result = json.loads((tmp_path / "pipeline-result.json").read_text())
         assert result["critic_verdict"] == "unavailable"
@@ -1458,9 +2167,116 @@ class TestCriticVerdictPersistence:
     def test_step_1_clears_stale_critic_verdict(self, tmp_path):
         """Step 1 should clear decision-critic-verdict.json from previous runs."""
         (tmp_path / "decision-critic-verdict.json").write_text('{"verdict": "REVISE"}')
-        self._run("--step", "1", "--mode", "full",
-                   "--output-dir", str(tmp_path))
+        run_pipeline("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path), cwd=tmp_path)
         assert not (tmp_path / "decision-critic-verdict.json").exists()
+
+
+class TestStep10CriticSource:
+    """The critic's source is chosen by what EXISTS, not by a flag.
+
+    The old branch read `degradation["report_synthesis_failed"]` — a key no
+    writer under `scripts/` ever sets, the same dead-flag class this branch
+    already deleted once — and then used the render outcome as a proxy for
+    the Markdown's existence, which reports `complete` for a run that had no
+    ledger to render. Both roads led to the same place: the critic pointed
+    at a file nobody wrote.
+
+    `briefings.py` is pure, so step 10's orchestration records the existence
+    facts into state, the way it already records `reconciliation_verdict`.
+    """
+
+    def _guidance(self, mod, tmp_path, critic_source=None, **state_extra):
+        state = {"completed_steps": [], **state_extra}
+        if critic_source is not None:
+            state["critic_source"] = critic_source
+        return mod.get_step_guidance(
+            10, "pr", state, {}, config={"mode": "pr"},
+            output_dir=str(tmp_path),
+        )
+
+    def test_report_present_is_the_critic_target(self, mod, tmp_path):
+        g = self._guidance(mod, tmp_path, critic_source={
+            "target": "review-report.md",
+            "available": ["review-report.md", "review-findings.json"],
+            "render_incomplete": False,
+        })
+        text = "\n".join(g["situation"] + g["actions"])
+        assert f"{tmp_path}/review-report.md" in text
+        assert "review-findings.md" not in text
+
+    def test_missing_report_falls_back_to_the_rendered_markdown(
+        self, mod, tmp_path
+    ):
+        g = self._guidance(mod, tmp_path, critic_source={
+            "target": "review-findings.md",
+            "available": ["review-findings.md", "review-findings.json"],
+            "render_incomplete": False,
+        })
+        text = "\n".join(g["situation"] + g["actions"])
+        # Assert the CRITIC TARGET specifically. `review-report.md` still
+        # appears further down as the file the REVISE flow tells the
+        # orchestrator to bring into agreement with the ledger — a
+        # different instruction, unaffected by which artifact the critic
+        # reads.
+        assert (
+            f"Report path (for critic.py --report): "
+            f"{tmp_path}/review-findings.md"
+        ) in text
+        assert "`review-report.md` is missing" in text
+
+    def test_missing_markdown_falls_back_to_the_json_ledger(
+        self, mod, tmp_path
+    ):
+        g = self._guidance(mod, tmp_path, critic_source={
+            "target": "review-findings.json",
+            "available": ["review-findings.json"],
+            "render_incomplete": False,
+        })
+        situation = "\n".join(g["situation"])
+        assert "review-findings.json" in situation
+        assert "review-findings.md" not in situation
+
+    def test_an_incomplete_render_is_named_as_the_reason(self, mod, tmp_path):
+        g = self._guidance(mod, tmp_path, critic_source={
+            "target": "review-findings.json",
+            "available": ["review-findings.json"],
+            "render_incomplete": True,
+        })
+        situation = "\n".join(g["situation"])
+        assert "render" in situation.lower()
+
+    def test_nothing_present_says_so_instead_of_naming_a_missing_file(
+        self, mod, tmp_path
+    ):
+        g = self._guidance(mod, tmp_path, critic_source={
+            "target": None, "available": [], "render_incomplete": False,
+        })
+        situation = "\n".join(g["situation"])
+        assert "no review artifact" in situation.lower()
+
+    def test_unrecorded_source_keeps_the_nominal_report_target(
+        self, mod, tmp_path
+    ):
+        """No `critic_source` key at all — older state, or step 10's
+        orchestration never ran — is not a measured absence, so it must not
+        render as one."""
+        g = self._guidance(mod, tmp_path)
+        text = "\n".join(g["situation"] + g["actions"])
+        assert f"{tmp_path}/review-report.md" in text
+        assert "no review artifact" not in text.lower()
+
+    def test_the_dead_flag_is_no_longer_consulted(self, mod, tmp_path):
+        """`report_synthesis_failed` has no writer; reading it made the
+        fallback depend on a fact nothing produced."""
+        source = pathlib.Path(
+            mod.__file__
+        ).parent.joinpath("briefings.py")
+        code = "\n".join(
+            line for line in source.read_text().splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        assert "report_synthesis_failed" not in code
 
 
 class TestStep11PresentResults:
@@ -1483,6 +2299,198 @@ class TestStep11PresentResults:
         assert "review-report.md" in text
         assert "pipeline-result.json" in text
         assert "Present to the user" not in text
+
+    @pytest.mark.parametrize("interactive", [True, False])
+    @pytest.mark.parametrize(
+        ("expected", "status"),
+        [(2, "partial"), (1, "failed")],
+    )
+    def test_zero_reviewer_markdown_includes_regeneration_command(
+        self, mod, tmp_path, interactive, expected, status
+    ):
+        config = {"mode": "pr", "interactive": interactive}
+        state = {
+            "completed_steps": [],
+            "reviewer_markdown": {
+                "ran": True,
+                "written": 0,
+                "expected": expected,
+                "status": status,
+            },
+            "degradation": {"reviewer_markdown_incomplete": True},
+        }
+
+        guidance = mod.get_step_guidance(
+            11, "pr", state, {}, config=config, output_dir=str(tmp_path)
+        )
+
+        lines = [
+            line for line in guidance["actions"]
+            if "Reviewer Markdown:" in line
+        ]
+        assert len(lines) == 1
+        assert f"0/{expected}" in lines[0]
+        assert (
+            f"python3 {SCRIPT_PATH.parent}/agent/output.py "
+            f"materialize {tmp_path}"
+        ) in lines[0]
+
+    @pytest.mark.parametrize("interactive", [True, False])
+    def test_regeneration_command_quotes_paths_with_spaces(
+        self, mod, tmp_path, interactive
+    ):
+        output_dir = tmp_path / "review output"
+        state = {
+            "completed_steps": [],
+            "reviewer_markdown": {
+                "ran": True,
+                "written": 0,
+                "expected": 1,
+                "status": "partial",
+            },
+            "degradation": {"reviewer_markdown_incomplete": True},
+        }
+
+        guidance = mod.get_step_guidance(
+            11,
+            "pr",
+            state,
+            {},
+            config={"mode": "pr", "interactive": interactive},
+            output_dir=str(output_dir),
+        )
+
+        lines = [
+            line for line in guidance["actions"]
+            if "Reviewer Markdown:" in line
+        ]
+        assert len(lines) == 1
+        assert f"materialize '{output_dir}'" in lines[0]
+        assert "\n" not in lines[0]
+
+    @pytest.mark.parametrize("interactive", [True, False])
+    def test_complete_reviewer_markdown_reports_positive_count_without_command(
+        self, mod, tmp_path, interactive
+    ):
+        config = {"mode": "pr", "interactive": interactive}
+        state = {
+            "completed_steps": [],
+            "reviewer_markdown": {
+                "ran": True,
+                "written": 2,
+                "expected": 2,
+                "status": "complete",
+            },
+        }
+
+        guidance = mod.get_step_guidance(
+            11, "pr", state, {}, config=config, output_dir=str(tmp_path)
+        )
+
+        lines = [
+            line for line in guidance["actions"]
+            if "Reviewer Markdown:" in line
+        ]
+        assert lines == ["Reviewer Markdown: materialized 2/2 files."]
+        assert "agent/output.py materialize" not in lines[0]
+
+    @pytest.mark.parametrize("interactive", [True, False])
+    def test_findings_markdown_outcome_is_reported_beside_the_reviewer_one(
+        self, mod, tmp_path, interactive
+    ):
+        """Write-only state is unreportable state. Step 11 is where a run
+        says what it left behind, and the findings render is a best-effort
+        artifact three degraded paths depend on."""
+        state = {
+            "completed_steps": [],
+            "findings_markdown": {
+                "ran": True, "written": 1, "expected": 1,
+                "status": "complete",
+            },
+        }
+        guidance = mod.get_step_guidance(
+            11, "pr", state, {},
+            config={"mode": "pr", "interactive": interactive},
+            output_dir=str(tmp_path),
+        )
+        lines = [
+            line for line in guidance["actions"]
+            if "Findings Markdown:" in line
+        ]
+        assert lines == ["Findings Markdown: materialized 1/1 files."]
+
+    @pytest.mark.parametrize("interactive", [True, False])
+    def test_failed_findings_render_carries_its_own_recovery_command(
+        self, mod, tmp_path, interactive
+    ):
+        state = {
+            "completed_steps": [],
+            "findings_markdown": {
+                "ran": True, "written": 0, "expected": 1, "status": "failed",
+            },
+            "degradation": {"findings_markdown_incomplete": True},
+        }
+        guidance = mod.get_step_guidance(
+            11, "pr", state, {},
+            config={"mode": "pr", "interactive": interactive},
+            output_dir=str(tmp_path),
+        )
+        lines = [
+            line for line in guidance["actions"]
+            if "Findings Markdown:" in line
+        ]
+        assert len(lines) == 1
+        assert "0/1" in lines[0]
+        # The suffix is what makes the printed command actually rebuild the
+        # findings ledger rather than the per-reviewer family.
+        assert (
+            f"materialize {tmp_path} --suffix review-findings.json"
+            in lines[0]
+        )
+
+    def test_absent_findings_markdown_state_reports_it_did_not_run(
+        self, mod, tmp_path
+    ):
+        guidance = mod.get_step_guidance(
+            11, "pr", {"completed_steps": []}, {},
+            config={"mode": "pr", "interactive": True},
+            output_dir=str(tmp_path),
+        )
+        lines = [
+            line for line in guidance["actions"]
+            if "Findings Markdown:" in line
+        ]
+        assert len(lines) == 1
+        assert "did not run" in lines[0]
+
+    @pytest.mark.parametrize(
+        "key,label",
+        [("reviewer_markdown", "Reviewer Markdown"),
+         ("findings_markdown", "Findings Markdown")],
+    )
+    def test_nothing_to_render_is_reported_without_a_recovery_command(
+        self, mod, tmp_path, key, label
+    ):
+        """A completed render of zero sources is a measured zero, not a
+        gap: there is nothing to regenerate, so offering the command
+        would send the reader after work that cannot exist."""
+        state = {
+            "completed_steps": [],
+            key: {
+                "ran": True, "written": 0, "expected": 0,
+                "status": "complete",
+            },
+        }
+        guidance = mod.get_step_guidance(
+            11, "pr", state, {},
+            config={"mode": "pr", "interactive": True},
+            output_dir=str(tmp_path),
+        )
+        lines = [l for l in guidance["actions"] if f"{label}:" in l]
+        assert len(lines) == 1
+        assert "⚠️" not in lines[0]
+        assert "regenerate" not in lines[0]
+        assert "nothing to render" in lines[0]
 
     def test_incremental_mentions_baseline_saved(self, mod, tmp_path):
         config = {"mode": "incremental", "interactive": True}
@@ -1567,7 +2575,9 @@ class TestDegradedPaths:
         assert "pipeline-result.json" in text
         # Schema fields should be referenced or documented
         for field in ("status", "verdict", "report_path", "findings_path",
-                      "critic_verdict", "degradation_notes"):
+                      "critic_verdict", "degradation_notes",
+                      "worktree_hygiene", "usage", "verdict_sync",
+                      "verdict_sync_reason"):
             assert field in text, f"Step 11 output missing pipeline-result.json field: {field}"
 
     def test_scenario_a_reconciliation_failed(self, mod, tmp_path):
@@ -1578,18 +2588,33 @@ class TestDegradedPaths:
         text = "\n".join(g["actions"])
         assert "raw agent" in text.lower() or "degraded" in text.lower()
 
-    def test_scenario_b_report_synthesis_failed(self, mod, tmp_path):
-        """Step 10 should fall back to review-findings.md when review-report.md missing."""
-        state = {"completed_steps": [], "degradation": {"report_synthesis_failed": True}}
-        ctx = {}
-        g = mod.get_step_guidance(10, "pr", state, ctx)
+    def test_scenario_b_report_missing(self, mod, tmp_path):
+        """Step 10 falls back to review-findings.md when review-report.md is
+        absent — established by step 10's recorded existence facts, not by
+        the writer-less `report_synthesis_failed` flag this once read."""
+        state = {
+            "completed_steps": [],
+            "critic_source": {
+                "target": "review-findings.md",
+                "available": ["review-findings.md"],
+                "render_incomplete": False,
+            },
+        }
+        g = mod.get_step_guidance(10, "pr", state, {})
         text = "\n".join(g["actions"])
         assert "review-findings.md" in text
 
     def test_scenario_c_critic_failed(self, mod, tmp_path):
-        """Step 11 should show critic_verdict as unavailable when critic failed."""
-        state = {"completed_steps": [], "degradation": {"critic_failed": True},
-                 "critic_verdict": "unavailable"}
+        """Step 11 should show critic_verdict as unavailable when critic failed.
+
+        `state["critic_verdict"]` is the sole signal for this — there is
+        no separate `degradation["critic_failed"]` flag in production
+        (grep confirms nothing under scripts/ ever sets it); a missing,
+        unparseable, or SKIPPED critic verdict all collapse into
+        "unavailable" via `critic_verdict_for_state()` before step 11
+        even reaches this briefing.
+        """
+        state = {"completed_steps": [], "critic_verdict": "unavailable"}
         ctx = {}
         config = {"mode": "pr", "interactive": True}
         g = mod.get_step_guidance(11, "pr", state, ctx, config=config)
@@ -1599,7 +2624,7 @@ class TestDegradedPaths:
     def test_scenario_d_both_failed(self, mod, tmp_path):
         """Both reconciliation and report failed: verdict forced to COMMENT."""
         state = {"completed_steps": [],
-                 "degradation": {"reconciliation_failed": True, "report_synthesis_failed": True},
+                 "degradation": {"reconciliation_failed": True},
                  "forced_verdict": "COMMENT"}
         ctx = {}
         config = {"mode": "pr", "interactive": True}
@@ -1633,13 +2658,19 @@ class TestStep10QuickMode:
         assert "SKIPPED" in text
         assert "decision-critic-verdict.json" in text
 
-    def test_skip_critic_on_comment_verdict(self, mod, tmp_path):
+    def test_quick_skip_maps_comment_verdict_to_a_comment_review_verdict(
+        self, mod, tmp_path
+    ):
+        """briefings.py:1409 maps the reconciliation verdict onto the review
+        verdict the orchestrator is told to write. Only `approve` becomes
+        APPROVE; every other skippable verdict must become COMMENT, or a
+        quick run that reconciled to `comment` would publish an approval."""
         state = {"completed_steps": [], "reconciliation_verdict": "comment"}
         config = {"quick": True}
         g = mod.get_step_guidance(10, "pr", state, {}, config=config, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
-        assert "decision-reviewer" not in text
-        assert "SKIPPED" in text
+        assert '{"verdict": "COMMENT"}' in text
+        assert '{"verdict": "APPROVE"}' not in text
 
     def test_run_critic_on_request_changes(self, mod, tmp_path):
         state = {"completed_steps": [], "reconciliation_verdict": "request_changes"}
@@ -1680,3 +2711,182 @@ class TestStep10QuickMode:
             assert "decision-reviewer" not in text, (
                 f"Critic should be skipped for verdict '{verdict}'"
             )
+
+
+class TestStep3DependencyRefresh:
+    """Step 3 briefing renders trusted-branch dependency refresh guidance."""
+
+    _SIGNAL_STATE = {
+        "completed_steps": [],
+        "dependency_refresh": {
+            "signals": [
+                {
+                    "manager": "composer",
+                    "directory": ".",
+                    "reasons": ["changed_in_range"],
+                    "changed_files": ["composer.lock"],
+                    "installed_state_present": True,
+                    "suggested_command": (
+                        "composer install --no-scripts --no-plugins "
+                        "--prefer-dist --no-interaction"
+                    ),
+                },
+            ],
+        },
+    }
+
+    def _text(self, g):
+        parts = list(g["situation"]) + list(g["actions"])
+        if g.get("handoff"):
+            parts += list(g["handoff"])
+        return "\n".join(parts)
+
+    def test_signals_render_refresh_section(self, mod, tmp_path):
+        config = {"mode": "full", "interactive": True,
+                  "refresh_dependencies": True}
+        g = mod.get_step_guidance(3, "full", dict(self._SIGNAL_STATE), {},
+                                  config=config, output_dir=str(tmp_path))
+        text = self._text(g)
+        assert "Dependency refresh" in text
+        assert "composer install" in text
+        assert "Commands disable lifecycle scripts on purpose; do not strip flags" in text
+        assert "yarn install --frozen-lockfile --ignore-scripts" in text
+        assert "never chain commands (`&&`, `;`)" in text
+        assert "Pipeline independently verifies reported commands and worktree state" in text
+        assert "git status --porcelain" in text
+        assert "--refresh-host-context" in text
+        assert "dependency-refresh.json" in text
+
+    def test_refresh_guidance_only_contains_adaptive_work_in_order(
+        self, mod, tmp_path
+    ):
+        config = {"mode": "full", "interactive": True,
+                  "refresh_dependencies": True}
+        guidance = mod.get_step_guidance(
+            3,
+            "full",
+            dict(self._SIGNAL_STATE),
+            {},
+            config=config,
+            output_dir=str(tmp_path),
+        )
+        actions = "\n".join(guidance["actions"])
+
+        ordered_guidance = [
+            "1. Run each suggested command",
+            "NEVER run update/upgrade/add/require",
+            "2. After all install attempts",
+            "record them as dependency-refresh failure evidence",
+            "tracked worktree was verified clean before installs",
+            "restore the refresh-created tracked changes",
+            "3. Re-resolve host context",
+        ]
+        offsets = [actions.index(phrase) for phrase in ordered_guidance]
+        assert offsets == sorted(offsets)
+        assert "even when an install command fails" in actions
+        assert "git restore --source=HEAD --staged --worktree -- <path>" in actions
+        assert "git checkout -- <path>" not in actions
+        assert "stash" not in actions.lower()
+        assert "pre-existing tracked changes remain unstashed" not in actions
+
+    def test_handoff_gates_the_refresh_report(self, mod, tmp_path):
+        config = {"mode": "full", "interactive": True,
+                  "refresh_dependencies": True}
+        g = mod.get_step_guidance(3, "full", dict(self._SIGNAL_STATE), {},
+                                  config=config, output_dir=str(tmp_path))
+        handoff_text = "\n".join(g["handoff"])
+        assert "dependency-refresh.json" in handoff_text
+        # change-purpose handoff still present (no unfetched issues)
+        assert "change-purpose.md" in handoff_text
+
+    def test_refresh_handoff_survives_unfetched_issues(self, mod, tmp_path):
+        state = dict(self._SIGNAL_STATE)
+        state["resolved_params"] = {"has_unfetched_issues": True}
+        config = {"mode": "full", "interactive": True,
+                  "refresh_dependencies": True}
+        g = mod.get_step_guidance(3, "full", state, {},
+                                  config=config, output_dir=str(tmp_path))
+        handoff_text = "\n".join(g["handoff"] or [])
+        assert "dependency-refresh.json" in handoff_text
+        # change-purpose moves to step 4 when issues are unfetched
+        assert "change-purpose.md" not in handoff_text
+
+    def test_enabled_with_no_signals_reports_nothing_to_refresh(self, mod, tmp_path):
+        state = {"completed_steps": [],
+                 "dependency_refresh": {"signals": []}}
+        config = {"mode": "full", "interactive": True,
+                  "refresh_dependencies": True}
+        g = mod.get_step_guidance(3, "full", state, {},
+                                  config=config, output_dir=str(tmp_path))
+        text = self._text(g)
+        assert "nothing to refresh" in text
+        assert "composer install" not in text
+        handoff_text = "\n".join(g["handoff"] or [])
+        assert "dependency-refresh.json" not in handoff_text
+
+    def test_detection_failure_reports_unknown_staleness(self, mod, tmp_path):
+        state = {"completed_steps": [],
+                 "dependency_refresh": {"signals": [],
+                                        "detection_failed": True}}
+        config = {"mode": "full", "interactive": True,
+                  "refresh_dependencies": True}
+        g = mod.get_step_guidance(3, "full", state, {},
+                                  config=config, output_dir=str(tmp_path))
+        text = self._text(g)
+        assert "detection failed" in text
+
+    def test_dirty_worktree_skips_refresh_with_honest_degradation(
+        self, mod, tmp_path
+    ):
+        state = {
+            "dependency_refresh": {
+                **self._SIGNAL_STATE["dependency_refresh"],
+                "skipped_reason": "dirty_worktree",
+                "dirty_files": ["composer.lock"],
+            }
+        }
+        config = {"refresh_dependencies": True}
+
+        situation, actions, handoff = mod._dependency_refresh_briefing(
+            state, config, str(tmp_path)
+        )
+
+        text = "\n".join(situation)
+        assert "refresh skipped" in text.lower()
+        assert "pre-existing tracked changes" in text
+        assert "degraded host context" in text
+        assert "commit or stash" in text
+        assert "re-run" in text
+        assert actions == []
+        assert handoff == []
+
+    def test_failed_worktree_status_skips_refresh_closed(self, mod, tmp_path):
+        state = {
+            "dependency_refresh": {
+                **self._SIGNAL_STATE["dependency_refresh"],
+                "skipped_reason": "worktree_status_failed",
+                "dirty_files": [],
+            }
+        }
+        config = {"refresh_dependencies": True}
+
+        situation, actions, handoff = mod._dependency_refresh_briefing(
+            state, config, str(tmp_path)
+        )
+
+        text = "\n".join(situation)
+        assert "refresh skipped" in text.lower()
+        assert "could not verify that the tracked worktree is clean" in text
+        assert "degraded host context" in text
+        assert "resolve the Git status failure" in text
+        assert "re-run" in text
+        assert actions == []
+        assert handoff == []
+
+    def test_flag_off_renders_nothing(self, mod, tmp_path):
+        config = {"mode": "full", "interactive": True}
+        g = mod.get_step_guidance(3, "full", dict(self._SIGNAL_STATE), {},
+                                  config=config, output_dir=str(tmp_path))
+        text = self._text(g)
+        assert "Dependency refresh" not in text
+        assert "dependency-refresh.json" not in text

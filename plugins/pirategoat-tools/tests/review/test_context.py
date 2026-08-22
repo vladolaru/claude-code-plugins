@@ -170,6 +170,97 @@ class TestIncrementalAncestryValidation:
         assert ctx["git"]["merge_base"] == "fullrange123"
 
 
+class TestReviewedHeadSha:
+    """Step 3 records the reviewed head as a commit SHA post-checkout —
+    step 1 resolves HEAD before the PR checkout, so the durable identity
+    must come from here."""
+
+    def test_resolves_head_ref_to_full_sha(self, mod):
+        head_sha = "a" * 40
+
+        def mock_run_cmd(cmd, cwd=None):
+            cmd_str = " ".join(cmd)
+            if cmd_str == "git rev-parse --verify feature-branch^{commit}":
+                return head_sha
+            if "branch --show-current" in cmd_str:
+                return "feature-branch"
+            if "symbolic-ref" in cmd_str:
+                return "refs/remotes/origin/main"
+            if "merge-base" in cmd_str:
+                return "b" * 40
+            return None
+
+        ctx = {}
+        from unittest.mock import patch
+        with patch.object(mod, '_run_cmd', side_effect=mock_run_cmd):
+            mod._fill_git_context(ctx, branch=True)
+
+        assert ctx["git"]["head_sha"] == head_sha
+
+    @pytest.mark.parametrize(
+        "git_range", ["main..feature", "main...feature"],
+        ids=["two-dot", "three-dot"],
+    )
+    def test_explicit_range_resolves_the_range_head_endpoint(
+        self, mod, git_range
+    ):
+        def mock_run_cmd(cmd, cwd=None):
+            if " ".join(cmd) == "git rev-parse --verify feature^{commit}":
+                return "c" * 40
+            return None
+
+        ctx = {}
+        from unittest.mock import patch
+        with patch.object(mod, '_run_cmd', side_effect=mock_run_cmd):
+            mod._fill_git_context(ctx, git_range=git_range)
+
+        assert ctx["git"]["merge_base"] == "main"
+        assert ctx["git"]["head_ref"] == "feature"
+        assert ctx["git"]["head_sha"] == "c" * 40
+
+    def test_omitted_range_head_endpoint_falls_back_to_head(self, mod):
+        def mock_run_cmd(cmd, cwd=None):
+            if " ".join(cmd) == "git rev-parse --verify HEAD^{commit}":
+                return "e" * 40
+            return None
+
+        ctx = {}
+        from unittest.mock import patch
+        with patch.object(mod, '_run_cmd', side_effect=mock_run_cmd):
+            mod._fill_git_context(ctx, git_range="main..")
+
+        assert "head_ref" not in ctx["git"]
+        assert ctx["git"]["head_sha"] == "e" * 40
+
+    def test_precomputed_head_sha_is_preserved(self, mod):
+        """Bot-provided context already carries the resolved head."""
+        ctx = {"git": {"git_range": "x..y", "head_ref": "y",
+                       "head_sha": "d" * 40, "merge_base": "x"}}
+        calls = []
+
+        def mock_run_cmd(cmd, cwd=None):
+            calls.append(" ".join(cmd))
+            return None
+
+        from unittest.mock import patch
+        with patch.object(mod, '_run_cmd', side_effect=mock_run_cmd):
+            mod._fill_git_context(ctx, git_range=None)
+
+        assert ctx["git"]["head_sha"] == "d" * 40
+        assert not any("rev-parse --verify" in call for call in calls)
+
+    def test_unresolvable_head_leaves_head_sha_absent(self, mod):
+        def mock_run_cmd(cmd, cwd=None):
+            return None
+
+        ctx = {}
+        from unittest.mock import patch
+        with patch.object(mod, '_run_cmd', side_effect=mock_run_cmd):
+            mod._fill_git_context(ctx, git_range="main..gone")
+
+        assert "head_sha" not in ctx["git"]
+
+
 class TestCLI:
     def _run(self, *args):
         cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
@@ -267,50 +358,6 @@ def test_host_context_recomputed_when_present(tmp_path, monkeypatch):
     )
     assert ctx["host_context"]["resolved"] == []
     assert ctx["host_context"]["banner"] is None
-
-
-def test_install_cache_failure_banner_is_preserved(mod, tmp_path, monkeypatch):
-    """ensure_installed.py failure banners should survive host_context rebuild."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    outdir = tmp_path / "out"
-    outdir.mkdir()
-    (outdir / "review-context.json").write_text(json.dumps({
-        "version": 1,
-        "git": {"merge_base": "abc", "head_ref": "HEAD", "git_range": "abc..HEAD"},
-    }))
-
-    install_banner = {
-        "degraded": True,
-        "reason": "install_failed",
-        "message": "library-dep verification degraded: install failed for composer",
-        "unresolved": [{"name": "composer", "reason": "missing_binary"}],
-    }
-
-    class FakeManifest:
-        def to_dict(self):
-            return {
-                "version": 1,
-                "resolved": [],
-                "unresolved": [],
-                "banner": None,
-                "diagnostics": {},
-            }
-
-    class FakeChain:
-        def run(self, repo_path):
-            return FakeManifest()
-
-    monkeypatch.setattr(mod, "_populate_install_cache", lambda repo_path: {"banner": install_banner})
-    monkeypatch.setattr(mod, "_HOSTS_CHAIN", FakeChain)
-
-    ctx = mod.load_and_fill(
-        ctx_path=str(outdir / "review-context.json"),
-        branch=True,
-        repo_path=str(repo),
-    )
-
-    assert ctx["host_context"]["banner"] == install_banner
 
 
 def test_host_context_uses_git_root_when_repo_path_omitted_from_subdir(tmp_path, monkeypatch):
@@ -429,7 +476,14 @@ def test_fill_review_config_populates_context(tmp_path, monkeypatch):
     outdir.mkdir()
     (outdir / "review-context.json").write_text(json.dumps({
         "version": 1,
-        "git": {"merge_base": "abc", "head_ref": "HEAD", "git_range": "abc..HEAD"},
+        # changed_files is the provenance the loader gates on: known, and
+        # not touching the config or rule file, so the rule is trusted.
+        "git": {
+            "merge_base": "abc",
+            "head_ref": "HEAD",
+            "git_range": "abc..HEAD",
+            "changed_files": ["src/app.php"],
+        },
     }))
 
     _insert_scripts_onto_path()
@@ -444,3 +498,122 @@ def test_fill_review_config_populates_context(tmp_path, monkeypatch):
     assert ctx["review_config"] is not None
     ids = [r["id"] for r in ctx["review_config"]["rules"]]
     assert "r1" in ids
+
+
+class TestRefreshHostContextMode:
+    """--refresh-host-context re-resolves host_context in place."""
+
+    def _init_repo(self, path):
+        subprocess.run(["git", "init"], cwd=path, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "t@e.com"],
+                       cwd=path, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.name", "T"],
+                       cwd=path, capture_output=True, check=True)
+
+    def _run(self, *args, cwd):
+        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
+        return subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
+
+    def test_refresh_updates_host_context_and_preserves_fields(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._init_repo(repo)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        ctx = {
+            "git": {"git_range": "abc..def", "changed_files": ["a.py"]},
+            "pr": {"number": 42},
+            "review_config": {"rules": [{"id": "preserved-rule"}]},
+            "output": "opaque-output",
+            "host_context": {"stale": True},
+        }
+        (out_dir / "review-context.json").write_text(json.dumps(ctx))
+
+        r = self._run("--refresh-host-context",
+                      "--output-dir", str(out_dir),
+                      "--repo-path", str(repo),
+                      cwd=repo)
+
+        assert r.returncode == 0
+        updated = json.loads((out_dir / "review-context.json").read_text())
+        assert updated["host_context"] != {"stale": True}
+        expected = {**ctx, "host_context": json.loads(r.stdout)}
+        assert updated == expected
+
+    def test_refresh_does_not_require_branch_or_pr_number(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._init_repo(repo)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        (out_dir / "review-context.json").write_text("{}")
+
+        r = self._run("--refresh-host-context",
+                      "--output-dir", str(out_dir),
+                      "--repo-path", str(repo),
+                      cwd=repo)
+
+        assert r.returncode == 0
+
+    def test_refresh_with_corrupt_context_fails_without_overwriting(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._init_repo(repo)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        ctx_path = out_dir / "review-context.json"
+        original = b"{not json"
+        ctx_path.write_bytes(original)
+
+        r = self._run("--refresh-host-context",
+                      "--output-dir", str(out_dir),
+                      "--repo-path", str(repo),
+                      cwd=repo)
+
+        assert r.returncode != 0
+        assert "ERROR:" in r.stderr
+        assert "refusing to overwrite" in r.stderr
+        assert ctx_path.read_bytes() == original
+
+    def test_refresh_with_missing_context_fails_without_creating_file(
+        self, tmp_path
+    ):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._init_repo(repo)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        ctx_path = out_dir / "review-context.json"
+
+        r = self._run("--refresh-host-context",
+                      "--output-dir", str(out_dir),
+                      "--repo-path", str(repo),
+                      cwd=repo)
+
+        assert r.returncode != 0
+        assert "ERROR:" in r.stderr
+        assert "refusing to overwrite" in r.stderr
+        assert not ctx_path.exists()
+
+    def test_refresh_with_non_object_context_fails_without_overwriting(
+        self, tmp_path
+    ):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._init_repo(repo)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        ctx_path = out_dir / "review-context.json"
+        original = " [1, 2]\n"
+        ctx_path.write_text(original)
+
+        r = self._run("--refresh-host-context",
+                      "--output-dir", str(out_dir),
+                      "--repo-path", str(repo),
+                      cwd=repo)
+
+        assert r.returncode != 0
+        assert "ERROR:" in r.stderr
+        assert "JSON object" in r.stderr
+        assert "refusing to overwrite" in r.stderr
+        assert ctx_path.read_text() == original

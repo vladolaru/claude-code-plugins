@@ -139,7 +139,7 @@ Code review orchestration with 34 agents (28 domain reviewers, 2 pipeline, 2 cro
 | `skills/` | 21 shared reference skills |
 | `codex-skills/` | 7 generated Codex command adapters |
 | `commands/` | 7 slash commands (`/pr-review`, `/full-code-review`, `/code-review`, `/iterative-review`, `/pr-update`, `/copy-as`, `/switch-to`) |
-| `scripts/` | Domain packages: `review/` (pipeline, plan_dispatch, context, telemetry, agents_status, critic, workspace_setup, agent_registry.json + `agent/` bootstrap, scope, output, diff_noise_filter), `hosts/` (host_context CLI, repo-signaled advisory chain for upstream runtime-hosts/library-deps, standalone resolver helpers, ensure_installed CLI for per-repo lockfile-hashed install caching, ecosystem_cache CLI for machine-wide WordPress/WooCommerce source cache management), `linear/` (pipeline, events), `figma/` (spec extraction, node parsing), `analysis/` (session analyzer, metrics), `iterative_review/` (multi-round independent review — Codex primary, Claude Code fallback) |
+| `scripts/` | Domain packages: `review/` (pipeline facade, pipeline_contract, briefings, orchestration, plan_dispatch, dispatch_status, context, telemetry, synthesis_lifecycle, agents_status, critic, critic_adjustments, atomic_io, reviewer_names, workspace_setup, dependency_refresh, user_settings, agent_registry.json + `agent/` bootstrap, scope, output, diff_noise_filter), `hosts/` (host_context CLI, repo-signaled advisory chain for upstream runtime-hosts/library-deps, standalone resolver helpers, ecosystem_cache CLI for machine-wide WordPress/WooCommerce source cache management), `linear/` (pipeline, events), `figma/` (spec extraction, node parsing), `analysis/` (supported review-run/cohort metrics, privacy-preserving transcript enrichment, durable per-run token-usage snapshot, session analyzer, general metrics), `iterative_review/` (multi-round independent review — Codex primary, Claude Code fallback) |
 | `schemas/` | TypeScript type definitions for structured review output |
 | `tests/` | Deterministic eval suite — see [Testing](#pirategoat-tools-1) section |
 | `AGENTS.md` | Full development instructions, architecture, agent registry reference |
@@ -246,19 +246,31 @@ The `plugins/pirategoat-tools/tests/` directory contains deterministic evals (no
 | `scripts/review/agent/bootstrap.py` | `pytest plugins/pirategoat-tools/tests/review/agent/test_bootstrap.py plugins/pirategoat-tools/tests/review/agent/test_bootstrap_integration.py -v` |
 | `agents/shared/reviewer-protocol.md` | `pytest plugins/pirategoat-tools/tests/review/agent/test_bootstrap_integration.py -v` |
 | `agents/shared/tests-reviewer-protocol.md` | `pytest plugins/pirategoat-tools/tests/review/agent/test_bootstrap_integration.py -v` |
-| `scripts/review/pipeline.py` (routing, state, CLI) | `pytest plugins/pirategoat-tools/tests/review/test_pipeline_infra.py -v` |
-| `scripts/review/pipeline.py` (orchestration, subprocess) | `pytest plugins/pirategoat-tools/tests/review/test_pipeline_integration.py -v` |
-| `scripts/review/pipeline.py` (briefing text) | `pytest plugins/pirategoat-tools/tests/review/test_pipeline.py -v` |
+| `scripts/review/pipeline.py` | `pytest plugins/pirategoat-tools/tests/review/test_pipeline_infra.py -v` |
+| `scripts/review/pipeline_contract.py` | `pytest plugins/pirategoat-tools/tests/review/test_pipeline.py plugins/pirategoat-tools/tests/review/test_pipeline_infra.py plugins/pirategoat-tools/tests/review/test_pipeline_integration.py -v` |
+| `scripts/review/briefings.py` | `pytest plugins/pirategoat-tools/tests/review/test_pipeline.py -v` |
+| `scripts/review/orchestration.py` | `pytest plugins/pirategoat-tools/tests/review/test_pipeline_integration.py plugins/pirategoat-tools/tests/review/test_orchestration_hygiene.py plugins/pirategoat-tools/tests/review/test_critic_adjustments.py plugins/pirategoat-tools/tests/review/test_synthesis_lifecycle.py -v` (hygiene covers the step-3 baseline / step-11 sweep and the step-11 usage capture; critic-adjustments covers step 11's defensive adjustment re-run and verdict sync; synthesis-lifecycle covers the step-8/10 dispatch markers and the step-9/11 observations) |
+| `scripts/review/dispatch_status.py` | `pytest plugins/pirategoat-tools/tests/review/test_agents_status.py plugins/pirategoat-tools/tests/review/test_pipeline.py plugins/pirategoat-tools/tests/review/test_pipeline_infra.py plugins/pirategoat-tools/tests/review/test_pipeline_integration.py plugins/pirategoat-tools/tests/review/test_plan_dispatch.py plugins/pirategoat-tools/tests/review/test_telemetry.py plugins/pirategoat-tools/tests/analysis/test_review_run_metrics.py -v` |
+| `scripts/containment.py` | `pytest plugins/pirategoat-tools/tests/test_containment_contract.py plugins/pirategoat-tools/tests/hosts/ plugins/pirategoat-tools/tests/review/test_review_config.py plugins/pirategoat-tools/tests/review/test_telemetry.py -v` |
+| `scripts/review/atomic_io.py` | `pytest plugins/pirategoat-tools/tests/review/test_atomic_io.py -v` |
 | `scripts/review/plan_dispatch.py` | `pytest plugins/pirategoat-tools/tests/review/test_plan_dispatch.py plugins/pirategoat-tools/tests/review/test_criteria_coverage.py -v` |
 | `scripts/review/agent_registry.json` (triage criteria/keywords/checks) | `pytest plugins/pirategoat-tools/tests/review/test_criteria_coverage.py plugins/pirategoat-tools/tests/review/test_plan_dispatch.py -v` (every criterion bullet needs a dispatching probe) |
+| `plugins/pirategoat-tools/AGENTS.md` agent-registry reference (`model_tier` row) or `scripts/review/agent_registry.json` `model_tier` values | `pytest plugins/pirategoat-tools/tests/review/test_registry_docs.py -v` |
 | `scripts/review/context.py` | `pytest plugins/pirategoat-tools/tests/review/test_context.py -v` |
+| `scripts/review/dependency_refresh.py` | `pytest plugins/pirategoat-tools/tests/review/test_dependency_refresh.py -v` |
+| `scripts/review/user_settings.py` | `pytest plugins/pirategoat-tools/tests/review/test_user_settings.py plugins/pirategoat-tools/tests/review/test_pipeline_infra.py -v` |
 | `scripts/review/reconciliation_context.py` | `pytest plugins/pirategoat-tools/tests/review/test_reconciliation_context.py plugins/pirategoat-tools/tests/review/test_critic_context.py -v` |
+| `scripts/review/reviewer_names.py` | `pytest plugins/pirategoat-tools/tests/review/agent/test_bootstrap_integration.py plugins/pirategoat-tools/tests/review/test_agents_status.py plugins/pirategoat-tools/tests/review/test_telemetry.py -v` (bootstrap pins the derivation directly; agents-status and telemetry exercise it indirectly through `agents_status.py` and `manifest_sections.py`'s coverage builders, its other importers) |
 | `scripts/review/agents_status.py` | `pytest plugins/pirategoat-tools/tests/review/test_agents_status.py -v` |
 | `scripts/review/agent/scope.py` | `pytest plugins/pirategoat-tools/tests/review/agent/test_scope.py plugins/pirategoat-tools/tests/review/agent/test_scope_routing.py -v` |
 | `scripts/review/agent/diff_noise_filter.py` | `pytest plugins/pirategoat-tools/tests/review/agent/test_diff_noise_filter.py -v` |
 | `scripts/review/agent/output.py` | `pytest plugins/pirategoat-tools/tests/review/agent/test_output.py plugins/pirategoat-tools/tests/grading/test_graders.py -v` |
 | `scripts/review/telemetry.py` | `pytest plugins/pirategoat-tools/tests/review/test_telemetry.py -v` |
+| `scripts/review/synthesis_lifecycle.py` | `pytest plugins/pirategoat-tools/tests/review/test_synthesis_lifecycle.py -v` (the module plus its four orchestration seams) |
+| `scripts/review/manifest_sections.py` | `pytest plugins/pirategoat-tools/tests/review/test_telemetry.py -v` |
+| `scripts/review/pipeline.py` stale-artifact sweep (`_STALE_ARTIFACTS`) | `pytest plugins/pirategoat-tools/tests/review/test_pipeline_infra.py -v` |
 | `scripts/review/critic.py` | `pytest plugins/pirategoat-tools/tests/review/test_critic.py -v` |
+| `scripts/review/critic_adjustments.py` | `pytest plugins/pirategoat-tools/tests/review/test_critic_adjustments.py -v` |
 | `scripts/review/workspace_setup.py` | `pytest plugins/pirategoat-tools/tests/review/test_workspace_setup.py -v` |
 | `scripts/linear/pipeline.py` (routing, state, CLI) | `pytest plugins/pirategoat-tools/tests/linear/test_pipeline.py -v` |
 | `scripts/linear/pipeline.py` (briefing text) | `pytest plugins/pirategoat-tools/tests/linear/test_pipeline_guidance.py -v` |
@@ -272,8 +284,14 @@ The `plugins/pirategoat-tools/tests/` directory contains deterministic evals (no
 | `scripts/iterative_review/*.py` (other / multiple) | `pytest plugins/pirategoat-tools/tests/iterative_review/ -v` |
 | `scripts/analysis/session_metrics.py` | `pytest plugins/pirategoat-tools/tests/analysis/test_session_metrics.py -v` |
 | `scripts/analysis/session_analyzer.py` | `pytest plugins/pirategoat-tools/tests/analysis/test_session_analyzer.py -v` |
+| `scripts/analysis/review_transcript.py` | `pytest plugins/pirategoat-tools/tests/analysis/test_review_transcript.py -v` |
+| `scripts/analysis/review_run_metrics.py` or `scripts/analysis/review_metrics/*.py` | `pytest plugins/pirategoat-tools/tests/analysis/test_review_run_metrics.py -v` |
+| `scripts/analysis/codex_rollout.py` | `pytest plugins/pirategoat-tools/tests/analysis/test_codex_rollout.py -v` |
+| `scripts/analysis/codex_session_analyzer.py` or `scripts/analysis/codex_session_metrics.py` | `pytest plugins/pirategoat-tools/tests/analysis/test_codex_session_scripts.py -v` |
+| `scripts/analysis/usage_snapshot.py` | `pytest plugins/pirategoat-tools/tests/analysis/test_usage_snapshot.py plugins/pirategoat-tools/tests/review/test_orchestration_hygiene.py plugins/pirategoat-tools/tests/review/test_telemetry.py -v` (the CLI, the step-11 seam that invokes it, and `ReviewTelemetry.reproject_usage()` — the manifest's own out-of-band `usage` patch a manual re-run calls into) |
 | `tests/helpers/graders.py` | `pytest plugins/pirategoat-tools/tests/grading/test_graders.py -v` |
 | `tests/grading/eval_agent_compliance.py` | `pytest plugins/pirategoat-tools/tests/grading/test_eval_agent_compliance.py -v` |
+| Any `SCENARIOS` answer key or `tests/fixtures/*.diff` | `pytest plugins/pirategoat-tools/tests/grading/test_answer_keys.py -v` |
 | Any reviewer agent `.md` | `pytest plugins/pirategoat-tools/tests/review/agent/test_bootstrap_integration.py -v` (verifies agent config still works) |
 | New agent added to `AGENT_CONFIG` | `pytest plugins/pirategoat-tools/tests/review/agent/test_bootstrap_integration.py -v` (auto-included in all parameterized tests) |
 | Any review command `.md` | `pytest plugins/pirategoat-tools/tests/commands/test_commands.py -v` (validates structure, agent refs, script refs) |
@@ -318,6 +336,28 @@ Every commit that modifies plugin behavior (features, fixes, refactors, performa
 **Coalescing rule:** If the latest version bump has not been pushed to the remote yet, fold new changes into the same version entry rather than bumping again — provided they are of similar impact (e.g., two fixes, or a feature and a closely related fix). If the new change is a higher semver impact (e.g., existing unpushed patch + new feature), upgrade the version to match.
 
 **Exempt from version bumps:** `docs`, `test`, `ci`, `style`, `chore` commits that don't change runtime behavior. Still add a changelog entry if the change is notable.
+
+### Changelog Entry Style
+
+The changelog's audience is a plugin user deciding whether a change affects
+them. The why-narrative, evidence, field-run numbers, and mechanism tour live
+in the commit body — git is the archive; never duplicate it into the changelog.
+
+- **One bullet per user-visible behavior, not per commit.** A follow-up fix to
+  an UNRELEASED entry folds into the bullet that introduced the behavior —
+  edit that bullet; never append a correction trail beneath it.
+- **One sentence per bullet; two at most**, and only when the second states a
+  consequence the first cannot carry. No bold-lead paragraph essays, no test
+  counts, no file-by-file tours.
+- **Purely internal changes** (refactors, test estate, doc wording, analysis
+  tooling performance) get no bullet unless a consumer would notice.
+- **The two-sentence test:** if a bullet cannot be written in two sentences,
+  it is either several behaviors (split it) or commit-body detail (cut it).
+
+Why this is a rule and not taste: the unreleased 1.114.0 entry twice grew past
+20KB of essay bullets and had to be distilled (121.6KB → 9.3KB → regrown to
+24KB → distilled again). Agents copy whichever pattern the file already shows,
+so the entry style is load-bearing — a single essay bullet re-seeds the drift.
 
 ### Plugin-Prefixed Tags
 

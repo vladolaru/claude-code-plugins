@@ -51,6 +51,22 @@ add `--quick` to the first `pipeline.py` call. Examples:
 - `$pirategoat-tools:pr-review quick mode https://github.com/.../pull/42` → add `--quick`
 - `$pirategoat-tools:pr-review 42` → do NOT add `--quick` (standard review)
 
+**Detect dependency refresh mode:** If the user's input clearly asks to
+refresh or install dependencies before the review (e.g., "refresh deps",
+"refresh dependencies", "update dependencies first", "install deps first"),
+add `--refresh-deps` to the first `pipeline.py` call. This is trusted-branch
+mode: the pipeline will detect stale dependency roots and brief you to run
+frozen-mode installs in the worktree - only add the flag when the user
+asked. Examples:
+- `$pirategoat-tools:pr-review 42 refresh deps` → add `--refresh-deps`
+- `$pirategoat-tools:pr-review 42 with fresh dependencies` → add `--refresh-deps`
+- `$pirategoat-tools:pr-review 42` → omit the flag
+
+An omitted flag falls back to the requester's machine-local default
+(`~/.config/pirategoat/config.json` with `review.refresh_dependencies: true`
+turns refresh on for every interactive run). If the user asks to skip the
+refresh for this run, add `--no-refresh-deps`.
+
 **Construct output directory** (sanitize all fragments):
 
 ```bash
@@ -66,10 +82,12 @@ mkdir -p "$OUTPUT_DIR"
 CODEX_PLUGIN_ROOT="<absolute plugin root: two directories above the directory containing this SKILL.md>"
 python3 ${CODEX_PLUGIN_ROOT}/scripts/review/pipeline.py \
   --host codex \
-  --step 1 --mode pr --output-dir "$OUTPUT_DIR" --pr-number "<PR_NUMBER>" [--quick]
+  --step 1 --mode pr --output-dir "$OUTPUT_DIR" --pr-number "<PR_NUMBER>" \
+  --session-id "${CODEX_THREAD_ID}" [--quick] [--refresh-deps]
 ```
 
-Add `--quick` only if the user indicated they want a quick review.
+Add `--quick` only if the user indicated they want a quick review; add
+`--refresh-deps` only if they asked to refresh dependencies.
 
 Execute the briefing printed by the script. Then call with `--step N`
 where N is the next step indicated in the output. Continue until the

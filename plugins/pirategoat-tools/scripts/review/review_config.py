@@ -24,7 +24,20 @@ raises to the caller. Invalid entries are dropped and recorded in
 import json
 import os
 import re
+import sys
+import unicodedata
 from typing import Any, Dict, List
+
+try:
+    from .dispatch_status import AGENT_NAME_RE
+except ImportError:
+    _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _scripts_parent not in sys.path:
+        sys.path.insert(0, _scripts_parent)
+    from review.dispatch_status import AGENT_NAME_RE
+
+from containment import contains
+from git_paths import decode_git_c_quoted_path
 
 CONFIG_RELPATH = os.path.join(".pirategoat", "config.json")
 
@@ -48,21 +61,46 @@ def empty_config() -> Dict[str, Any]:
         "defaults": {"execution": DEFAULT_EXECUTION, "channel": DEFAULT_CHANNEL},
         "rules": [],
         "reviewers": [],
+        "untrusted": [],
         "diagnostics": [],
     }
 
 
-def load_review_config(repo_path: str) -> Dict[str, Any]:
+_UNTRUSTED_REASON = (
+    "defined or modified within the reviewed range — untrusted until merged. "
+    "To test a new reviewer deliberately, dispatch the adapter manually via "
+    "bootstrap ref-mode (--repo-agent-ref)."
+)
+_PROVENANCE_UNKNOWN_REASON = (
+    "provenance unknown (no changed-file set for the reviewed range) — "
+    "repo-contributed rules and reviewers fail closed."
+)
+
+
+def load_review_config(
+    repo_path: str, changed_files: Any = None
+) -> Dict[str, Any]:
     """Read + validate the ``review`` section of ``.pirategoat/config.json``.
 
     Returns a normalized dict (always the :func:`empty_config` shape) so callers
     never branch on absence. Never raises for repo-provided input.
+
+    ``changed_files`` is the PROVENANCE GATE: the repo-relative paths changed
+    within the reviewed range. Rules are injected into reviewer prompts and
+    reviewer refs are EXECUTED as the adapter's task, so an entry whose
+    defining file (or the config itself) lies inside the reviewed range is
+    PR-controlled text, not repo-owner-approved content — it is excluded and
+    reported under ``untrusted``. ``None`` means provenance is unknown and the
+    gate fails closed. Pass an empty list when the range is known to touch no
+    files. The gate is enforced here, at the single normalization choke point,
+    so no downstream consumer (plan_dispatch expansion, bootstrap rule
+    injection) can drift around it.
     """
     result = empty_config()
     config_path = os.path.join(repo_path, CONFIG_RELPATH)
     # Guard the config path itself against a committed symlink that escapes the
-    # repo (nested rule/reviewer paths get the same _path_inside_repo check).
-    if not os.path.isfile(config_path) or not _path_inside_repo(config_path, repo_path):
+    # repo (nested rule/reviewer paths get the same shared containment gate).
+    if not os.path.isfile(config_path) or not contains(repo_path, config_path):
         return result
 
     try:
@@ -87,6 +125,48 @@ def load_review_config(repo_path: str) -> Dict[str, Any]:
         )
         return result
 
+    config_relpath = CONFIG_RELPATH.replace(os.sep, "/")
+    if changed_files is None:
+        result["untrusted"].append(
+            {"kind": "config", "id": None, "path": config_relpath,
+             "reason": _PROVENANCE_UNKNOWN_REASON}
+        )
+        result["diagnostics"].append(
+            f"{config_relpath}: {_PROVENANCE_UNKNOWN_REASON}"
+        )
+        return result
+    changed = set()
+    for path in changed_files:
+        if not isinstance(path, str) or not path:
+            continue
+        # Git C-quotes names with non-ASCII or control bytes by default
+        # (core.quotePath), so the same file has two spellings depending on
+        # the producer. The gate must match either — an encoded entry that
+        # fails to match its decoded declaration would pass PR-controlled
+        # prompt text as trusted.
+        changed.add(path.replace(os.sep, "/"))
+        dequoted = _dequote_git_path(path)
+        if dequoted != path:
+            changed.add(dequoted.replace(os.sep, "/"))
+    # Comparison happens on canonical keys (casefolded, NFC) so
+    # filesystem-equivalent spellings of the same file cannot slip
+    # PR-controlled content past the gate.
+    changed_keys = {_provenance_key(path) for path in changed}
+    repo_real = os.path.realpath(repo_path)
+    if _provenance_tainted(
+        _provenance_rel_paths(config_relpath, config_path, repo_real),
+        changed_keys,
+    ):
+        # The declarations themselves are PR-controlled: nothing they
+        # declare can be trusted, including entries pointing at untouched
+        # files.
+        result["untrusted"].append(
+            {"kind": "config", "id": None, "path": config_relpath,
+             "reason": _UNTRUSTED_REASON}
+        )
+        result["diagnostics"].append(f"{config_relpath}: {_UNTRUSTED_REASON}")
+        return result
+
     defaults = review.get("defaults")
     if isinstance(defaults, dict):
         execution = defaults.get("execution")
@@ -100,8 +180,26 @@ def load_review_config(repo_path: str) -> Dict[str, Any]:
     seen_rule_ids: set = set()
     seen_reviewer_ids: set = set()
 
+    def _gate(entry, kind, file_field):
+        rel_path = str(entry.get(file_field, "")).replace(os.sep, "/")
+        identities = _provenance_rel_paths(
+            rel_path, entry.get(f"resolved_{file_field}") or "", repo_real
+        )
+        if not _provenance_tainted(identities, changed_keys):
+            return entry
+        result["untrusted"].append(
+            {"kind": kind, "id": entry.get("id"), "path": rel_path,
+             "reason": _UNTRUSTED_REASON}
+        )
+        diagnostics.append(
+            f"{kind} '{entry.get('id')}': {rel_path}: {_UNTRUSTED_REASON}"
+        )
+        return None
+
     for raw in _as_list(review.get("rules")):
         entry = _normalize_rule(raw, repo_path, result["defaults"], seen_rule_ids, diagnostics)
+        if entry is not None:
+            entry = _gate(entry, "rule", "path")
         if entry is not None:
             result["rules"].append(entry)
 
@@ -109,6 +207,8 @@ def load_review_config(repo_path: str) -> Dict[str, Any]:
         entry = _normalize_reviewer(
             raw, repo_path, result["defaults"], seen_reviewer_ids, diagnostics
         )
+        if entry is not None:
+            entry = _gate(entry, "reviewer", "ref")
         if entry is not None:
             result["reviewers"].append(entry)
 
@@ -196,12 +296,24 @@ def _normalize_reviewer(raw, repo_path, defaults, seen_ids, diagnostics):
     }
 
 
+# IDs become machine identifiers downstream — repo-<id>-reviewer telemetry
+# names, output filenames, shell command tokens — so they must satisfy the
+# canonical producer agent-name grammar (dispatch_status.AGENT_NAME_RE) that
+# the whole measurement chain validates against. str.isalnum() would admit
+# uppercase and non-ASCII ids that every consumer rejects, making a validly
+# configured reviewer unmeasurable. Human-facing names belong in 'label'.
+_VALID_ID_RE = AGENT_NAME_RE
+
+
 def _valid_id(value, kind, seen_ids, diagnostics):
     if not isinstance(value, str) or not value:
         diagnostics.append(f"{kind}: missing or non-string 'id'")
         return None
-    if not all(c.isalnum() or c == "-" for c in value):
-        diagnostics.append(f"{kind} '{value}': id must be kebab-case alphanumeric")
+    if not _VALID_ID_RE.fullmatch(value):
+        diagnostics.append(
+            f"{kind} '{value}': id must be lowercase ASCII kebab-case "
+            "(a-z, 0-9, '-'; put display names in 'label')"
+        )
         return None
     if value in seen_ids:
         diagnostics.append(f"{kind} '{value}': duplicate id, skipping")
@@ -224,7 +336,7 @@ def _resolve_repo_file(raw_path, repo_path, kind, rid, field, diagnostics):
         diagnostics.append(f"{kind} '{rid}': missing or non-string '{field}'")
         return None
     abs_path = os.path.abspath(os.path.join(repo_path, raw_path))
-    if not _path_inside_repo(abs_path, repo_path):
+    if not contains(repo_path, abs_path):
         diagnostics.append(f"{kind} '{rid}': {field} escapes the repo: {raw_path}")
         return None
     if not os.path.isfile(abs_path):
@@ -245,13 +357,70 @@ def _normalize_applies_to(raw) -> Dict[str, List[str]]:
     return out
 
 
-def _path_inside_repo(path: str, repo_path: str) -> bool:
-    resolved_path = os.path.realpath(path)
-    resolved_repo = os.path.realpath(repo_path)
-    try:
-        return os.path.commonpath([resolved_path, resolved_repo]) == resolved_repo
-    except ValueError:
-        return False
+def _dequote_git_path(path: str) -> str:
+    """Decode one Git C-quoted path (``"..."``) to its literal form.
+
+    Returns the input unchanged when it is not quoted or the quoting is
+    malformed — an undecodable entry can only fail to match, never widen
+    trust.
+    """
+    decoded, was_git_quoted = decode_git_c_quoted_path(
+        path, errors="surrogateescape"
+    )
+    if decoded is None:
+        return path
+    # Preserve the legacy provenance policy for a quote-delimited spelling
+    # without escapes. The shared grammar treats it as an ordinary filename;
+    # this gate additionally compares the unwrapped spelling, which can only
+    # exclude content and never widen trust.
+    if not was_git_quoted and len(path) >= 2 and path[0] == path[-1] == '"':
+        return path[1:-1]
+    return decoded
+
+
+def _provenance_rel_paths(declared_rel: str, abs_path: str, repo_real: str) -> set:
+    """Repo-relative identities of one declaration file for the provenance gate.
+
+    The declared relative path plus the symlink-resolved target's relative
+    path: Git reports a change against the TARGET, so a declaration reached
+    through an in-repo symlink must be gated on both spellings.
+    """
+    identities = {declared_rel}
+    if abs_path:
+        real = os.path.realpath(abs_path)
+        identities.add(os.path.relpath(real, repo_real).replace(os.sep, "/"))
+    return identities
+
+
+def _provenance_key(rel_path: str) -> str:
+    """Canonical comparison key for one provenance path spelling.
+
+    Casefolded and NFC-normalized: on case-insensitive or
+    normalization-insensitive filesystems (default macOS, Windows) Git can
+    track ``.PIRATEGOAT/config.json`` or an NFD spelling while ``open()``
+    reads the very same on-disk file through the declared spelling — an
+    exact-string comparison would then trust PR-controlled content. On
+    case-sensitive filesystems this over-matches at worst, which can only
+    exclude an entry (fail closed), never widen trust.
+    """
+    return unicodedata.normalize("NFC", rel_path).casefold()
+
+
+def _provenance_tainted(identities: set, changed_keys: set) -> bool:
+    """Whether any identity spelling is inside the changed set.
+
+    A changed entry taints an identity when it equals the identity OR any
+    of its ancestor directories (segment-wise): Git reports a submodule
+    update as its gitlink root (``vendor/reviewers``), not the files
+    beneath it, so a declaration under a changed gitlink is content from
+    the newly selected — PR-controlled — submodule commit.
+    """
+    for ident in identities:
+        parts = _provenance_key(ident).split("/")
+        for i in range(1, len(parts) + 1):
+            if "/".join(parts[:i]) in changed_keys:
+                return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -259,50 +428,84 @@ def _path_inside_repo(path: str, repo_path: str) -> bool:
 # reviewer expansion — single source of truth so the two consumers never drift)
 # ---------------------------------------------------------------------------
 
-def _glob_to_regex(pattern: str) -> str:
-    """Translate a repo-relative glob to a regex.
+def _glob_tokens(pattern: str) -> list:
+    """Tokenize a repo-relative glob.
 
-    ``**`` matches any number of path segments (including none), ``*`` matches
-    within a segment (does not cross ``/``), ``?`` one non-slash char. Kept
-    deliberately conventional so ``includes/**`` and ``**/*.php`` behave the way
-    the rule authors expect.
+    ``**/`` matches any number of whole path segments (including none), ``**``
+    matches anything, ``*`` matches within a segment (does not cross ``/``),
+    ``?`` one non-slash char. Kept deliberately conventional so
+    ``includes/**`` and ``**/*.php`` behave the way the rule authors expect.
     """
-    i, out = 0, ["^"]
+    i, out = 0, []
     n = len(pattern)
     while i < n:
         if pattern[i:i + 3] == "**/":
-            out.append("(?:.*/)?")
+            out.append("**/")
             i += 3
         elif pattern[i:i + 2] == "**":
-            out.append(".*")
+            out.append("**")
             i += 2
-        elif pattern[i] == "*":
-            out.append("[^/]*")
-            i += 1
-        elif pattern[i] == "?":
-            out.append("[^/]")
+        elif pattern[i] in ("*", "?"):
+            out.append(pattern[i])
             i += 1
         else:
-            out.append(re.escape(pattern[i]))
+            out.append(("lit", pattern[i]))
             i += 1
-    out.append("$")
-    return "".join(out)
+    return out
 
 
 def glob_match(pattern: str, path: str) -> bool:
     """True if ``path`` (repo-relative, forward slashes) matches ``pattern``.
 
-    Over-complex patterns (length or wildcard count beyond the caps) are treated
-    as non-matching to bound regex backtracking against semi-trusted input.
+    Matched with a dynamic program over (token, position) — worst case
+    O(len(pattern) * len(path)) against semi-trusted input. A regex
+    translation backtracks catastrophically here: interleaved ``*``
+    quantifiers took seconds on a nonmatching 100-char path with only six
+    stars, while the caps admit twenty and matching repeats across every
+    changed file. Over-complex patterns (length or wildcard count beyond
+    the caps) are still treated as non-matching to bound even linear cost.
     """
     if not pattern or not isinstance(path, str):
         return False
     if len(pattern) > _MAX_GLOB_LEN or pattern.count("*") > _MAX_GLOB_STARS:
         return False
-    try:
-        return bool(re.match(_glob_to_regex(pattern), path))
-    except re.error:
-        return False
+    m = len(path)
+    # prev[j] — the tokens consumed so far can match path[:j].
+    prev = [False] * (m + 1)
+    prev[0] = True
+    for token in _glob_tokens(pattern):
+        cur = [False] * (m + 1)
+        if token == "**":
+            reachable = False
+            for j in range(m + 1):
+                reachable = reachable or prev[j]
+                cur[j] = reachable
+        elif token == "**/":
+            # Zero segments (epsilon) or any prefix ending at a "/" boundary.
+            reachable = False
+            for j in range(m + 1):
+                cur[j] = prev[j] or (
+                    j > 0 and path[j - 1] == "/" and reachable
+                )
+                reachable = reachable or prev[j]
+        elif token == "*":
+            # Zero or more non-slash chars: a reachable start stays live
+            # until a "/" would have to be consumed.
+            reachable = False
+            for j in range(m + 1):
+                reachable = reachable or prev[j]
+                cur[j] = reachable
+                if j < m and path[j] == "/":
+                    reachable = False
+        elif token == "?":
+            for j in range(m):
+                cur[j + 1] = prev[j] and path[j] != "/"
+        else:
+            _, char = token
+            for j in range(m):
+                cur[j + 1] = prev[j] and path[j] == char
+        prev = cur
+    return prev[m]
 
 
 def any_glob_match(patterns, paths) -> bool:

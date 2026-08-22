@@ -1,6 +1,7 @@
 """Tests for the wp-env resolver."""
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -165,6 +166,49 @@ def test_local_plugin_inside_repo_is_self_owned_and_skipped(tmp_path):
     result = WpEnvResolver().resolve(str(repo))
     assert result.entries == []
     assert result.unresolved == []
+
+
+def test_symlinked_mapping_resolving_into_repo_is_self_owned_and_skipped(tmp_path):
+    """A mapping spelled as an outside path can be a symlink resolving back
+    into the reviewed repo. Reporting it as a runtime host would present
+    the PR's own code as independent upstream — reviewers would "verify"
+    first-party changes against themselves and could emit wrongful
+    integration findings. Conservative skip is correct: better a missing
+    advisory path than a wrong one. This is a behavioral pin: any
+    containment re-derivation, in any spelling, must reproduce it."""
+    repo = tmp_path / "repo"
+    (repo / "embedded-wc").mkdir(parents=True)
+    os.symlink(str(repo / "embedded-wc"), str(tmp_path / "wc-link"))
+    (repo / ".wp-env.json").write_text(json.dumps({
+        "mappings": {"wp-content/plugins/woocommerce": "../wc-link"}
+    }))
+
+    result = WpEnvResolver().resolve(str(repo))
+
+    assert result.entries == []
+    assert result.unresolved == []
+
+
+def test_symlinked_in_repo_mapping_resolving_outside_is_a_runtime_host(tmp_path):
+    """The inverse: an in-repo spelling whose directory is a symlink to an
+    external tree genuinely provides external content — classification
+    follows the resolved identity, not the spelling."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    external = tmp_path / "wc-develop" / "plugins" / "woocommerce"
+    external.mkdir(parents=True)
+    os.symlink(str(external), str(repo / "wc-link"))
+    (repo / ".wp-env.json").write_text(json.dumps({
+        "mappings": {"wp-content/plugins/woocommerce": "./wc-link"}
+    }))
+
+    result = WpEnvResolver().resolve(str(repo))
+
+    assert len(result.entries) == 1
+    entry = result.entries[0]
+    assert entry.name == "woocommerce"
+    assert entry.kind == "runtime-host"
+    assert entry.path == str(repo / "wc-link")
 
 
 def test_local_plugin_outside_repo_is_runtime_host(tmp_path):

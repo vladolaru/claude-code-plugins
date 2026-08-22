@@ -7,10 +7,10 @@ from typing import Dict, List, Literal, Optional, Any
 HostKind = Literal["runtime-host", "library-dep"]
 ResolverSource = Literal[
     "explicit", "wp-env", "docker-compose", "sibling",
-    "ecosystem-cache", "vendor-inspection", "install-cache",
+    "ecosystem-cache", "vendor-inspection",
 ]
 Confidence = Literal["low", "medium", "high"]
-BannerReason = Literal["partial_unresolved", "fully_unavailable", "install_failed"]
+BannerReason = Literal["partial_unresolved", "fully_unavailable"]
 
 
 @dataclass

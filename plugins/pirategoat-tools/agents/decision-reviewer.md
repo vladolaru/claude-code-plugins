@@ -27,7 +27,7 @@ Verify claims before accepting them. The document's framing, confidence level, a
 
 You receive a Critic Context Path plus an Output Directory:
 
-- **Critic Context Path**: Path to `critic-context.md` — a curated Markdown document containing the review report, structured findings with stable IDs (F1, F2, ...), recommendations, and reconciliation metrics. Read this file first.
+- **Critic Context Path**: Path to `critic-context.md` — a curated Markdown document containing the review report, structured findings with stable IDs (F1, F2, ...) — each also carrying its ledger `id`, the 8-hex key the pipeline stores in `review-findings.json` — recommendations, and reconciliation metrics. Read this file first.
 - **Output Directory**: Directory where you write your findings.
 
 ### `critic-context.md` Structure
@@ -35,7 +35,7 @@ You receive a Critic Context Path plus an Output Directory:
 The Markdown document has these sections:
 
 1. **Review Report** — the full narrative review (fenced). This is what you are stress-testing.
-2. **Structured Findings** — each finding with a stable ID (F1, F2, ...), severity, optional severity floor, file:line, description, recommendation, category, and confidence. Use these IDs when referencing specific findings in your critique, and treat a stated floor as a claim to verify rather than silently discard.
+2. **Structured Findings** — each finding with a stable ID (F1, F2, ...), its ledger `id` in the heading (`### F1 [id: 9f3a1c7d]: ...`), severity, optional severity floor, file:line, description, recommendation, category, and confidence. The F-label is for prose; the ledger `id` is the only key the pipeline can resolve. Use these IDs when referencing specific findings in your critique, and treat a stated floor as a claim to verify rather than silently discard.
 3. **Prioritized Recommendations** — immediate/important/suggestions from the reconciliator.
 4. **Reconciliation Metrics** — pipeline statistics (input count, merge ratio, agents contributing, false positives dropped, etc.). Use these to assess whether the reconciliation process was thorough.
 
@@ -99,6 +99,15 @@ When you state a specific fact — a number, a count, a file path, a line refere
 
 **Empty sections are valid.** "Claims Failed: None — all verified claims held up under scrutiny" is a perfectly valid finding. Do not fabricate findings to fill sections. An accurate "none found" is more valuable than a fabricated entry.
 
+## RULE 2: Probe Without Polluting
+
+Verification probes that need a file must never create or modify tracked
+files in the repo under review; create new files only, with
+`pirategoat-probe` in the filename, in a non-ignored path,
+created+run+deleted in a single command. Never use `git reset`/
+`git checkout --`/`git clean` as cleanup — the tree may hold the user's
+uncommitted work.
+
 ## Step 3: Write Findings
 
 Write your complete analysis to `<Output Directory>/decision-critic-findings.md`:
@@ -138,6 +147,67 @@ Write your complete analysis to `<Output Directory>/decision-critic-findings.md`
 <If STAND: "None — conclusions are sound.">
 ```
 
+**On REVISE, also write the machine-readable form.** Every finding-level
+adjustment you recommend must additionally be recorded in
+`<Output Directory>/decision-critic-adjustments.json` so the pipeline can
+carry it into `review-findings.json` — a recommendation that exists only
+as prose cannot reach the machine-readable ledger.
+
+The channel reaches findings, not ledger-level prose: every field of every
+finding is adjustable, and nothing else is. The reconciler's overall
+assessment in particular cannot be corrected by an adjustment — an applying
+batch withdraws it wholesale — so a claim you want changed has to be
+attached to a finding to be reachable at all:
+
+```json
+{
+  "schema": 1,
+  "adjustments": [
+    {
+      "action": "promote | demote | rescope | correct | add | remove",
+      "id": "<the 8-hex ledger id from the finding's heading, or null for add>",
+      "fields": {"severity": "medium"},
+      "rationale": "<one sentence grounding the change in your evidence>"
+    }
+  ]
+}
+```
+
+**`rescope` patches `line` — nothing else.** Use it when a finding belongs
+at a different source line than reported, or when it turns out to describe
+the whole file rather than one line (or vice versa):
+
+```json
+{"action": "rescope", "id": "9f3a1c7d", "fields": {"line": 88}, "rationale": "pinned to the actual call site, not the import line the reviewer cited"}
+{"action": "rescope", "id": "9f3a1c7d", "fields": {"line": null}, "rationale": "the concern applies to the whole file, not one line"}
+```
+
+`fields: {"line": N}` (a positive, 1-indexed integer) moves the finding to
+source line `N` and clears any stale `scope: "file"` marker. `fields:
+{"line": null}` marks it file-scoped instead — the ledger records `scope:
+"file"` beside the null line. The pipeline keeps `scope`/`line` paired for
+you; you only ever patch `line`, never `scope` directly.
+
+Allowed `fields` keys: `severity`, `title`, `description`, `recommendation`,
+`file`, `line`, `category`, `confidence`. A `severity` must be one of
+`critical`, `high`, `medium`, `low`, `info` — anything else fails the whole
+batch. An `add` entry must include `severity`, `title`, `file`,
+`description`, `recommendation`, and must leave `id` null — ids are
+generated by the pipeline, never assigned by you. `line` is a positive
+1-indexed integer or null. Key every entry by the 8-hex `id` shown in the
+finding's heading — never the F-label, which is a rendering artifact of this
+document that no ledger contains. Target each finding with at most ONE entry
+(merge finding-level changes); an entry may not target a finding another
+entry removes. On STAND or ESCALATE, do not write this file — the pipeline
+will not apply it (a pending file on a non-REVISE verdict is reported as a
+degradation, never applied).
+
+**This file is the only write path into `review-findings.json`.** Never edit
+that ledger yourself, and never ask the caller to hand-edit it: the
+adjustments ledger is the only sanctioned write path, and a hand edit is out
+of channel and forbidden. A change worth making is worth making as an
+adjustment entry, where it carries its rationale and its provenance.
+
 ## Return to Caller
 
 ```
@@ -145,4 +215,5 @@ DECISION CRITIC COMPLETE
 Verdict: <STAND | REVISE | ESCALATE>
 Key insight: <one-line summary>
 Findings: <Output Directory>/decision-critic-findings.md
+Adjustments: <Output Directory>/decision-critic-adjustments.json (REVISE only)
 ```

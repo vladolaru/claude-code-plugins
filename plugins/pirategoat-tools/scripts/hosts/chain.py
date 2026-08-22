@@ -8,7 +8,6 @@ from hosts.resolvers.base import HostResolver
 from hosts.resolvers.docker_compose import DockerComposeResolver
 from hosts.resolvers.ecosystem_cache import EcosystemCacheResolver
 from hosts.resolvers.explicit import ExplicitResolver
-from hosts.resolvers.install_cache import InstallCacheResolver
 from hosts.resolvers.plugin_headers import PluginHeadersResolver
 from hosts.resolvers.vendor import VendorResolver
 from hosts.resolvers.wp_env import WpEnvResolver
@@ -24,7 +23,6 @@ _DEFAULT_RESOLVERS: List[HostResolver] = [
                               # surface declared deps that mounts didn't
                               # cover (most importantly: WC need on a
                               # fresh clone with no committed mount).
-    InstallCacheResolver(),   # before VendorResolver — cache wins via dedup
     VendorResolver(),
 ]
 
