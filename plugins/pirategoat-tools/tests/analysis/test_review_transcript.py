@@ -1120,25 +1120,24 @@ class TestAnalyzeSubagent:
             "python3 <<PY\npass\nPY"
         )
 
-    @pytest.mark.parametrize(
-        "review_budget",
-        [
-            pytest.param(None, id="no-budget"),
-            pytest.param(80, id="budgeted"),
-        ],
-    )
     def test_real_bootstrap_builder_envelope_is_counted_as_one_attempt(
-        self, tmp_path, review_budget
+        self, tmp_path
     ):
-        """The rendered envelope, from the real renderer, is recognized
-        regardless of whether the run calibrated a budget.
+        """The rendered envelope, from the real renderer, is recognized.
 
         Hand-built strings elsewhere pin the names; only this test proves
         what bootstrap actually emits is recognized. The budget no longer
         rides this envelope at all (it moved to the deferred-files sidecar
-        in 1.114.0) — both parameter values must render the identical
-        envelope shape, so a regression that starts appending it again
-        would fail this test's shape assertion below.
+        in 1.114.0), so there is no budgeted/unbudgeted variant left to
+        parametrize here — the shape pin for "the live envelope never
+        carries a budget assignment" lives at the source in
+        `test_envelope_never_carries_a_budget_assignment`
+        (`test_bootstrap_integration.py`), including across both a
+        calibrated and an uncalibrated run. If it did start appending one
+        again, this test would still recognize it (the historical-envelope
+        allowance in `_BOOTSTRAP_BUILDER_ENV_OPTIONAL` exists precisely so a
+        recorded transcript carrying it is never misread as no-save) — this
+        test only proves recognition, not envelope shape.
         """
         output_dir = tmp_path / "review output"
         bootstrap_output = _bootstrap_mod.build_output(
@@ -1154,7 +1153,7 @@ class TestAnalyzeSubagent:
             reviewer_name="security",
             not_diffed_count=0,
             has_php=False,
-            review_budget=review_budget,
+            review_budget=80,
         )
         command_start = bootstrap_output.index("PIRATEGOAT_PLUGIN_ROOT=")
         command_end = bootstrap_output.index("\nPY", command_start) + len("\nPY")
