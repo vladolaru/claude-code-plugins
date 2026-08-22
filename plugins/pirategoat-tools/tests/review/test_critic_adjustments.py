@@ -2327,9 +2327,16 @@ class TestReconciliatorWritePathPin:
     """Writer #1 is an agent following a Markdown snippet, so the only
     thing that can hold it to the sanctioned write path is a test.
 
-    If `agents/review-reconciliator.md` drifts back to the bare atomic
-    write it carried one commit ago, the ledger has a fourth write path —
-    with the rest of the suite green, because no Python caller changed.
+    Since findings_save.py shipped, the reconciliator no longer calls
+    `write_findings()` directly — it stages the ledger in `$TMPDIR` and
+    saves it through `findings_save.py`, the validating channel that
+    calls `write_findings()` internally (mirroring critic.py's `--save`
+    mode for the decision critic). If `agents/review-reconciliator.md`
+    drifts back to writing the ledger directly — the bare atomic write it
+    carried two commits ago, or a direct `write_findings()` call from
+    before this channel existed — the ledger has an unvalidated write
+    path again, with the rest of the suite green, because no Python
+    caller changed.
     """
 
     SNIPPET = PLUGIN_ROOT / "agents" / "review-reconciliator.md"
@@ -2337,21 +2344,25 @@ class TestReconciliatorWritePathPin:
     def _text(self):
         return self.SNIPPET.read_text(encoding="utf-8")
 
-    def test_the_snippet_imports_the_sanctioned_writer(self):
+    def test_the_snippet_saves_through_findings_save(self):
         text = self._text()
-        assert "from review.critic_adjustments import write_findings" in text
-        assert "write_findings(output_dir, output)" in text
+        assert "scripts/review/findings_save.py" in text
+        assert "--output-dir" in text
+        assert "--findings" in text
 
     def test_the_snippet_does_not_write_the_ledger_any_other_way(self):
-        """Named spellings, not a blanket ban: `atomic_write_json` may
-        legitimately appear in prose about the write path — what must not
-        come back is a call that writes THIS artifact directly."""
+        """Named spellings, not a blanket ban: `atomic_write_json` and
+        `write_findings` may legitimately appear in prose about the write
+        path — what must not come back is a call that writes THIS
+        artifact directly instead of going through findings_save.py."""
         text = self._text()
         for forbidden in (
             'atomic_write_json(f"{output_dir}/review-findings.json"',
             "atomic_write_json(f'{output_dir}/review-findings.json'",
             'open(f"{output_dir}/review-findings.json"',
             "json.dump(output",
+            "from review.critic_adjustments import write_findings",
+            "write_findings(output_dir, output)",
         ):
             assert forbidden not in text, forbidden
 

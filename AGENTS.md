@@ -271,6 +271,7 @@ The `plugins/pirategoat-tools/tests/` directory contains deterministic evals (no
 | `scripts/review/pipeline.py` stale-artifact sweep (`_SWEEP_ALLOWLIST`) | `pytest plugins/pirategoat-tools/tests/review/test_pipeline_infra.py -v` |
 | `scripts/review/critic.py` | `pytest plugins/pirategoat-tools/tests/review/test_critic.py -v` |
 | `scripts/review/critic_adjustments.py` | `pytest plugins/pirategoat-tools/tests/review/test_critic_adjustments.py -v` |
+| `scripts/review/findings_save.py` | `pytest plugins/pirategoat-tools/tests/review/test_findings_save.py -v` |
 | `scripts/review/workspace_setup.py` | `pytest plugins/pirategoat-tools/tests/review/test_workspace_setup.py -v` |
 | `scripts/linear/pipeline.py` (routing, state, CLI) | `pytest plugins/pirategoat-tools/tests/linear/test_pipeline.py -v` |
 | `scripts/linear/pipeline.py` (briefing text) | `pytest plugins/pirategoat-tools/tests/linear/test_pipeline_guidance.py -v` |

@@ -1475,9 +1475,12 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # Rule 23: update review-findings.json verdict to match. The ledger has
     # three writers across a run — the review-reconciliator agent's first
     # write, critic_adjustments.py applying decision-critic adjustments,
-    # and this verdict sync — and all three now go through atomic_io's
-    # atomic write (agents/review-reconciliator.md instructs the agent to
-    # call it).
+    # and this verdict sync — and all three now go through
+    # critic_adjustments.write_findings(), which wraps atomic_io's atomic
+    # write. The reconciliator reaches it via findings_save.py, a
+    # validating CLI (agents/review-reconciliator.md instructs the agent
+    # to stage the ledger and call that script rather than write_findings
+    # directly).
     # For this write specifically: a truncating open here would leave the
     # artifact destroyable by a crash mid-write no matter how carefully
     # the adjustments path replaced it, and this write is the last one the

@@ -139,10 +139,12 @@ For each verified concern:
    - No `source_agents` fields or finding references like `security-review:F3`
    - Just clear, actionable feedback with file:line references
 
-3. **Use `ReviewOutputBuilder`** to produce structured output:
+3. **Build the ledger with `ReviewOutputBuilder`, then save it through the validating script.** Raw writes to `review-findings.json` are forbidden — the only channel this artifact may be produced through is `findings_save.py`, which validates the whole document (verdict, every issue, the summary counts) before writing anything, then writes atomically via the single sanctioned write path (`critic_adjustments.write_findings`). A hand-rolled `write_findings()` call, a bare `atomic_write_json`, or a plain `open()`/`json.dump()` against `review-findings.json` all bypass that validation and are forbidden.
+
+**3a. Build the ledger in memory:**
 
 ```python
-import sys, os
+import sys, os, json
 
 # Use the output directory and builder path from the dispatch prompt
 output_dir = "OUTPUT_DIR_FROM_PROMPT"
@@ -240,22 +242,54 @@ output['meta']['reconciliation'] = {
     'dispatched_agents': DISPATCHED_LIST,       # all agents that were dispatched (from context)
     'missing_agents': MISSING_LIST,            # dispatched but no output (crashed/timed out)
 }
-
-# Write the ONE artifact you produce — through the ONE sanctioned write
-# path. review-findings.json has three writers across a run (this one,
-# critic_adjustments.py applying the decision critic's adjustments, and the
-# pipeline's end-of-run verdict sync) and all three call write_findings():
-# it replaces the file atomically, so no writer can leave a torn file for
-# the next one. A plain open() or a bare atomic write here would be a
-# fourth write path for an artifact that must have exactly one. Pass the
-# output DIRECTORY, not a path — the filename is the pipeline's to know,
-# so you cannot misname the artifact.
-from review.critic_adjustments import write_findings
-write_findings(output_dir, output)
 ```
 
+**3b. Write the ledger to `$TMPDIR`, then save through the script** (create `$TMPDIR` first if it does not exist):
+
+```python
+staged_path = os.path.join(os.environ["TMPDIR"], "review-findings.json")
+with open(staged_path, "w") as f:
+    f.write(json.dumps(output))
+```
+
+```bash
+PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
+[ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review/agent/bootstrap.py" -type f 2>/dev/null | sort | tail -1 | xargs dirname | xargs dirname | xargs dirname | xargs dirname)
+
+python3 $PLUGIN_ROOT/scripts/review/findings_save.py \
+  --output-dir "<Output Directory>" \
+  --findings "$TMPDIR/review-findings.json"
+```
+
+The command validates everything before writing anything: a non-object
+top level, a `verdict` outside `block`/`request_changes`/`comment`/`approve`,
+an issue missing a required field (`id`, `category`, `severity`, `title`,
+`description`, `file`, `recommendation`, `confidence`) or carrying an
+out-of-vocabulary severity, or a `summary` whose counts don't match the
+`issues` it claims to describe all print one `REJECTED: <problem>` line per
+problem and exit non-zero — with nothing written to the output directory. A
+clean run prints:
+
+```
+RECORDED VERDICT: request_changes
+RECORDED FINDINGS: 9 (critical 0, high 1, medium 7, low 1)
+CLEARANCES: 12 | NARRATIVE: present
+```
+
+and writes `review-findings.json` atomically through
+`critic_adjustments.write_findings()` — the same sanctioned path
+`apply_adjustments()` and the pipeline's Rule 23 verdict sync use. This is
+one of three writers across a run that all go through it; the others are
+`apply_adjustments()` carrying the decision critic's adjustments, and the
+pipeline's end-of-run Rule 23 verdict sync.
+
+**3c. On REJECTED, fix and re-save.** Correct the named problem in your
+in-memory `output` dict (or the staged `$TMPDIR/review-findings.json`),
+re-serialize, and re-run the same `findings_save.py` command — do not work
+around a rejection by writing `review-findings.json` yourself.
+
 **Do not write any Markdown.** `review-findings.md` is rendered from the JSON
-you just wrote — by the pipeline, at step 9 and again at the end of the run
+you just saved — by the pipeline, at step 9 and again at the end of the run
 after the decision critic's adjustments land. Every section the old
 hand-written narrative carried has a structured home in the JSON and comes out
 of the renderer:
@@ -304,4 +338,4 @@ When an agent has `verdict: "not_applicable"`, it means "these changes are outsi
 
 ## Host Context Banner
 
-If the reconciliation context contains `host_context_banner` with `degraded: true`, copy the full banner object into `review-findings.json` under the `host_context_banner` key (`output['host_context_banner'] = <banner>` before the `write_findings()` call). This is a mandatory passthrough — reviewers' claims were scoped by this banner's presence, and downstream consumers rely on it. The renderer prepends the banner's `message` to `review-findings.md` as a blockquote on its own; do not write that blockquote yourself.
+If the reconciliation context contains `host_context_banner` with `degraded: true`, copy the full banner object into `review-findings.json` under the `host_context_banner` key (`output['host_context_banner'] = <banner>` before staging/saving `output` in step 3). This is a mandatory passthrough — reviewers' claims were scoped by this banner's presence, and downstream consumers rely on it. The renderer prepends the banner's `message` to `review-findings.md` as a blockquote on its own; do not write that blockquote yourself.

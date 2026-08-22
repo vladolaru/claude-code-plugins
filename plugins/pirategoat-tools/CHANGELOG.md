@@ -38,6 +38,7 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 - **OUTPUT_DIR is taught as artifact-only**; scratch work goes to `$TMPDIR`.
 - **The output-dir sweep is an allowlist, not a blocklist** — every run's own artifacts survive by name, everything else is deleted, and a non-empty directory with no pipeline identity marker refuses to be swept.
 - **Decision critic saves through a validating script channel** — `critic.py --save` records the verdict, findings, and (REVISE only) adjustments atomically, rejecting a bad verdict, a missing input, an invalid adjustments batch, or a STAND/ESCALATE verdict paired with adjustments before anything is written.
+- **Reconciliator saves the ledger through a validating script channel** — `findings_save.py` records `review-findings.json`, rejecting a bad verdict, a malformed issue, or a summary/issues count mismatch before anything is written.
 
 ### Fixed
 
