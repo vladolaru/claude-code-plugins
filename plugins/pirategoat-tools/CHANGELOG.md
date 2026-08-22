@@ -30,7 +30,7 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 - **One containment invariant** — `scripts/containment.py` backs both advisory-host and repo-contributed rule/reviewer resolution.
 - **One atomic-write primitive** — `scripts/review/atomic_io.py` replaces the hand-rolled temp-file-then-replace copies.
 - **One integer `schema` field** across review artifacts, telemetry events, and the manifest, replacing the never-bumped `version: "1.0.0"` string and the separate `schema_version` name.
-- **Budget pressure moved to the save echo** — the unenforceable under-budget "protocol violation" rule is deleted, and the target now echoes back at save time whenever unreviewed files are declared; the enforced half (auto-fill; no silent APPROVE) is unchanged.
+- **Budget pressure moved to the save echo** — the unenforceable under-budget "protocol violation" rule is deleted, and the target now echoes back at save time whenever unreviewed files are declared, read from the deferred-files sidecar bootstrap writes rather than an env var so the echo survives a reviewer rebuilding its own save command; the enforced half (auto-fill; no silent APPROVE) is unchanged.
 - **`add_unreviewed()` is variadic**, sharing one batch validator with `add_deferred_reviewed()`.
 - **OUTPUT_DIR is taught as artifact-only**; scratch work goes to `$TMPDIR`.
 

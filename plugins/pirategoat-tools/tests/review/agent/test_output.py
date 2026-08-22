@@ -2379,13 +2379,27 @@ class TestBudgetTargetEcho:
     that placement moves nothing. The echo is the one feedback surface every
     agent reads, so the target is repeated there — but only when unreviewed
     files make it actionable, and only when the run actually set one.
+
+    The target travels in the deferred-files sidecar bootstrap writes
+    (schema 2), not an env var: the retired env-var budget transport
+    silently died for any agent that rebuilt its save command, so the
+    sidecar is now the only carrier — the same one output.py already reads
+    for NOT DIFFED auto-fill.
     """
 
     @staticmethod
     def _clean_env(monkeypatch):
         monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
         monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEW_BUDGET", raising=False)
+
+    @staticmethod
+    def _write_sidecar(tmp_path, reviewer="code", schema=2, deferred_files=None,
+                        **fields):
+        payload = {"schema": schema, "deferred_files": deferred_files or []}
+        payload.update(fields)
+        (tmp_path / f"{reviewer}-deferred-files.json").write_text(
+            json.dumps(payload)
+        )
 
     def _save_with_unreviewed(self, tmp_path, monkeypatch, capsys):
         builder = ReviewOutputBuilder("123", "code")
@@ -2397,7 +2411,9 @@ class TestBudgetTargetEcho:
         self, tmp_path, monkeypatch, capsys
     ):
         self._clean_env(monkeypatch)
-        monkeypatch.setenv("PIRATEGOAT_REVIEW_BUDGET", "80")
+        self._write_sidecar(
+            tmp_path, deferred_files=["some/file.go"], review_budget=80
+        )
         out = self._save_with_unreviewed(tmp_path, monkeypatch, capsys)
         assert "TARGET: ~80 tool calls" in out
         assert "read more and re-save before finalizing" in out
@@ -2409,12 +2425,12 @@ class TestBudgetTargetEcho:
     ):
         """Nothing left unread means nothing to act on — silence is right."""
         self._clean_env(monkeypatch)
-        monkeypatch.setenv("PIRATEGOAT_REVIEW_BUDGET", "80")
+        self._write_sidecar(tmp_path, review_budget=80)
         builder = ReviewOutputBuilder("123", "code")
         builder.save(str(tmp_path))
         assert "TARGET:" not in capsys.readouterr().out
 
-    def test_no_target_line_without_the_envelope(
+    def test_no_target_line_without_a_sidecar(
         self, tmp_path, monkeypatch, capsys
     ):
         """The builder must stay usable outside a pipeline run."""
@@ -2422,13 +2438,32 @@ class TestBudgetTargetEcho:
         out = self._save_with_unreviewed(tmp_path, monkeypatch, capsys)
         assert "TARGET:" not in out
 
-    @pytest.mark.parametrize("raw", ["", "   ", "abc", "0", "-5", "12.5"])
+    def test_no_target_line_with_schema_1_sidecar(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """An older run's sidecar predates the budget field entirely — a
+        schema-1 file has no honest target, so pretending otherwise states
+        a compatibility guarantee the producer never made. Auto-fill (a
+        schema-1-only concern) still has to keep working on this file."""
+        self._clean_env(monkeypatch)
+        self._write_sidecar(
+            tmp_path, schema=1, deferred_files=["some/file.go"]
+        )
+        out = self._save_with_unreviewed(tmp_path, monkeypatch, capsys)
+        assert "TARGET:" not in out
+
+    @pytest.mark.parametrize(
+        "raw", [None, "80", "abc", 0, -5, 12.5, True]
+    )
     def test_malformed_budget_is_treated_as_absent(
         self, tmp_path, monkeypatch, capsys, raw
     ):
-        """A target of "0" or "abc" is worse than no target — never repair it."""
+        """A target of 0, a string, or a bool is worse than no target —
+        never repair it. Absent key (None) is the same absence."""
         self._clean_env(monkeypatch)
-        monkeypatch.setenv("PIRATEGOAT_REVIEW_BUDGET", raw)
+        self._write_sidecar(
+            tmp_path, deferred_files=["some/file.go"], review_budget=raw
+        )
         out = self._save_with_unreviewed(tmp_path, monkeypatch, capsys)
         assert "TARGET:" not in out
 
@@ -2439,9 +2474,7 @@ class TestBudgetTargetEcho:
         agent declared nothing, so only the echo can tell it there is
         unread work left."""
         self._clean_env(monkeypatch)
-        monkeypatch.setenv("PIRATEGOAT_REVIEW_BUDGET", "40")
-        sidecar = tmp_path / "code-deferred-files.json"
-        sidecar.write_text(json.dumps({"deferred_files": ["a.go"]}))
+        self._write_sidecar(tmp_path, deferred_files=["a.go"], review_budget=40)
         builder = ReviewOutputBuilder("123", "code")
         builder.save(str(tmp_path))
         out = capsys.readouterr().out

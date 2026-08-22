@@ -1219,17 +1219,11 @@ def build_output(
     lines.append("")
     pr_id_str = pr_number if pr_number else "0"
     lines.append("ReviewOutputBuilder — MUST use a one-shot quoted heredoc in this form:")
-    # The call-budget target, carried into the builder so save() can echo it
-    # back beside the unreviewed count — the one place the reviewer sees the
-    # number while it can still act on it. Omitted entirely when the run set
-    # no budget: unlike the version below there is no "unknown" case to
-    # represent, and both transcript analyzers recognize the envelope by
-    # REQUIRED-subset ⊆ names ⊆ REQUIRED|OPTIONAL, which this name joins.
-    budget_env = (
-        f"PIRATEGOAT_REVIEW_BUDGET={shlex.quote(str(review_budget))} "
-        if review_budget is not None
-        else ""
-    )
+    # The call-budget target no longer rides this envelope: it silently died
+    # for any agent that rebuilt its save command (run12's worst under-spender,
+    # 15% of target, never saw it). save() now reads the effective number from
+    # the deferred-files sidecar bootstrap writes below — the one per-agent
+    # file the builder already provably locates for auto-fill.
     lines.append(
         f"PIRATEGOAT_PLUGIN_ROOT={shlex.quote(plugin_root)} "
         f"PIRATEGOAT_OUTPUT_DIR={shlex.quote(output_dir)} "
@@ -1240,7 +1234,6 @@ def build_output(
         # transcript analyzers recognize a builder command by, so it must
         # not vary with whether this fact happens to be known.
         f"PIRATEGOAT_PLUGIN_VERSION={shlex.quote(plugin_version or '')} "
-        f"{budget_env}"
         "python3 <<'PY'"
     )
     lines.append("import sys, os")
@@ -1363,12 +1356,24 @@ def resolve_reviewer_identity(args):
 
 
 def persist_deferred_sidecar(output_dir, effective_agent_name,
-                             deferred_files, list_only_files):
+                             deferred_files, list_only_files,
+                             review_budget=None, budget_capped=False,
+                             in_scope_count=None, diffed_count=None):
     """Write the authoritative deferred-set sidecar for the output builder.
 
     Written even when empty: with no deferred files, any add_unreviewed()
     declaration is wrong. Fail-open on write errors (builder falls back
     to form-only validation).
+
+    Schema 2 (was 1): also carries the run's tool-call budget and scope
+    counts, replacing the retired env-var budget transport that silently
+    died for any agent that rebuilt its save command. This is the
+    one per-agent sidecar output.py's save() already provably locates (it
+    reads it for NOT DIFFED auto-fill), and the effective (override-applied)
+    number bootstrap computed is never recomputed downstream. review_budget
+    and budget_capped default to None/False so callers that have not yet
+    computed a budget (unlikely, but keeps the signature safe) still write a
+    valid schema-2 payload with an absent target.
     """
     # effective_agent_name, not the registry agent: the builder locates this
     # sidecar via PIRATEGOAT_REVIEWER_NAME, which is derived from the effective
@@ -1395,7 +1400,23 @@ def persist_deferred_sidecar(output_dir, effective_agent_name,
     )
     try:
         with open(deferred_sidecar, "w", encoding="utf-8") as f:
-            json.dump({"schema": 1, "deferred_files": deferred_files}, f)
+            json.dump({
+                "schema": 2,
+                "deferred_files": deferred_files,
+                # Tool-call budget, persisted where save() already reads:
+                # run12's retired env-var transport silently died for any
+                # agent that rebuilt its save command — the worst
+                # under-spender (15% of target) never saw the TARGET echo.
+                # The effective (override-applied) number is written here,
+                # never recomputed downstream.
+                "review_budget": review_budget,
+                "budget_capped": budget_capped,
+                # Scope counts for the save echo's PROGRESS line — counts,
+                # not lists: the scope-summary sidecar keeps the lists for
+                # coverage aggregation.
+                "in_scope_count": in_scope_count,
+                "diffed_count": diffed_count,
+            }, f)
     except OSError:
         pass
 
@@ -1796,13 +1817,6 @@ def main():
     # see has_php's docstring note in build_output().
     has_php = any(p.endswith(".php") for p in telemetry_scope_paths)
 
-    persist_deferred_sidecar(
-        output_dir,
-        effective_agent_name,
-        not_diffed_paths,
-        list_only_paths,
-    )
-
     if scope_lines_for_budget > 0:
         review_budget = compute_review_budget(scope_lines_for_budget, len(scope_files_for_budget))
         budget_capped = budget_was_capped(scope_lines_for_budget)
@@ -1824,6 +1838,20 @@ def main():
     if budget_override is not None:
         review_budget = budget_override
         budget_capped = False
+
+    # Written after the override is applied: the sidecar's review_budget is
+    # the effective (post-override) number save() echoes back, never a
+    # scope-only figure a downstream reader would have to recompute.
+    persist_deferred_sidecar(
+        output_dir,
+        effective_agent_name,
+        not_diffed_paths,
+        list_only_paths,
+        review_budget=review_budget,
+        budget_capped=budget_capped,
+        in_scope_count=len(telemetry_scope_paths),
+        diffed_count=len(scope_files_for_budget),
+    )
 
     # Telemetry: log agent start (best-effort, after budget is finalized)
     if ReviewTelemetry is not None:

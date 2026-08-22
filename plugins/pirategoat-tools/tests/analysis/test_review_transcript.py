@@ -1105,13 +1105,6 @@ class TestAnalyzeSubagent:
         assert is_bootstrap_builder_heredoc(
             stable + "PIRATEGOAT_PLUGIN_VERSION= python3 <<PY\npass\nPY"
         )
-        # 1.114.0 also carries the call-budget target when the run set one.
-        # Unknown-name rejection would drop these saves from the cohort.
-        assert is_bootstrap_builder_heredoc(
-            stable
-            + "PIRATEGOAT_PLUGIN_VERSION=1.114.0 PIRATEGOAT_REVIEW_BUDGET=80 "
-            "python3 <<PY\npass\nPY"
-        )
 
     @pytest.mark.parametrize(
         "review_budget",
@@ -1123,14 +1116,15 @@ class TestAnalyzeSubagent:
     def test_real_bootstrap_builder_envelope_is_counted_as_one_attempt(
         self, tmp_path, review_budget
     ):
-        """Both rendered envelope shapes, from the real renderer.
+        """The rendered envelope, from the real renderer, is recognized
+        regardless of whether the run calibrated a budget.
 
         Hand-built strings elsewhere pin the names; only this test proves
-        what bootstrap actually emits is recognized. A budgeted run appends
-        one more assignment, and recognition rejects any name it does not
-        know — so the shape that carries a budget has to be exercised here
-        too, or the estate greenlights a renderer that silently drops every
-        budgeted save out of the measured cohort.
+        what bootstrap actually emits is recognized. The budget no longer
+        rides this envelope at all (it moved to the deferred-files sidecar
+        in 1.114.0) — both parameter values must render the identical
+        envelope shape, so a regression that starts appending it again
+        would fail this test's shape assertion below.
         """
         output_dir = tmp_path / "review output"
         bootstrap_output = _bootstrap_mod.build_output(
@@ -1148,9 +1142,6 @@ class TestAnalyzeSubagent:
             has_php=False,
             review_budget=review_budget,
         )
-        assert (
-            "PIRATEGOAT_REVIEW_BUDGET" in bootstrap_output
-        ) is (review_budget is not None)
         command_start = bootstrap_output.index("PIRATEGOAT_PLUGIN_ROOT=")
         command_end = bootstrap_output.index("\nPY", command_start) + len("\nPY")
         command = bootstrap_output[command_start:command_end]

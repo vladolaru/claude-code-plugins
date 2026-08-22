@@ -305,6 +305,41 @@ class TestCategoryRepresentatives:
             data["deferred_files"]
         )
 
+    def test_deferred_sidecar_carries_budget_and_scope_counts(self, tmp_path):
+        """Schema 2: the sidecar carries the effective (override-applied)
+        budget and scope counts save()'s PROGRESS line reads — the retired
+        env-var budget transport silently died for any agent that rebuilt
+        its save command, so the sidecar is the only carrier.
+
+        history-insights-reviewer has a fixed budget_override (45) in the
+        registry — proof the sidecar carries the FINAL number, not a
+        scope-only figure a downstream reader would have to recompute.
+        """
+        result = run_bootstrap(
+            "--agent", "history-insights-reviewer", "--output-dir", str(tmp_path)
+        )
+        assert result.returncode == 0
+        assert "Target: ~45 tool calls" in result.stdout
+
+        sidecar = tmp_path / "history-insights-deferred-files.json"
+        assert sidecar.is_file()
+        data = json.loads(sidecar.read_text())
+        assert data["schema"] == 2
+        assert data["review_budget"] == 45
+        assert isinstance(data["budget_capped"], bool)
+        # A budget override is a deliberate per-agent choice, never
+        # presented as scope-clamped.
+        assert data["budget_capped"] is False
+
+        diffed = extract_scope_files(result.stdout)
+        not_diffed = extract_not_diffed_files(result.stdout)
+        list_only = extract_list_only_files(result.stdout)
+        expected_in_scope = len(
+            dict.fromkeys([*diffed, *not_diffed, *list_only])
+        )
+        assert data["in_scope_count"] == expected_in_scope
+        assert data["diffed_count"] == len(diffed)
+
     def test_test_agent(self, tmp_path):
         """Test-reviewer agent gets DOMAIN RULES (php-tests-reviewer)."""
         result = run_bootstrap("--agent", "php-tests-reviewer", "--output-dir", str(tmp_path))
@@ -635,12 +670,17 @@ class TestCanonicalExecutableBuilderSource:
         assert "OUTPUT_DIR accepts only your named artifacts" in prompt
         assert "goes in $TMPDIR" in prompt
 
-    def test_envelope_carries_the_budget_target_when_one_is_set(self, tmp_path):
-        """save() can only echo the target if the target reaches the builder.
-
-        The briefing states it once, far from the moment of decision; the
-        echo restates it where the reviewer can still act. This assignment
-        is the only channel between the two.
+    @pytest.mark.parametrize("review_budget", [80, None])
+    def test_envelope_never_carries_a_budget_assignment(
+        self, tmp_path, review_budget
+    ):
+        """The budget travels in the deferred-files sidecar, never the
+        builder envelope — the retired env-var budget transport silently
+        died for any agent that rebuilt its save command (run12's worst
+        under-spender, 15% of target, never saw the TARGET echo). The
+        envelope must carry exactly its five known assignments (plugin
+        root, output dir, reviewer name, PR id, plugin version) and never
+        a sixth, regardless of whether the run calibrated a budget.
         """
         prompt = build_output(
             agent_name="security-reviewer",
@@ -655,31 +695,13 @@ class TestCanonicalExecutableBuilderSource:
             reviewer_name="security",
             not_diffed_count=0,
             has_php=False,
-            review_budget=80,
+            review_budget=review_budget,
         )
-        assert "PIRATEGOAT_REVIEW_BUDGET=80" in prompt
         assert prompt.count("python3 <<'PY'") == 1
-
-    def test_envelope_omits_the_budget_assignment_when_there_is_none(
-        self, tmp_path
-    ):
-        """No calibrated budget is an absence, not an unknown value — an
-        empty target would be echoed back as a number the run never set."""
-        prompt = build_output(
-            agent_name="security-reviewer",
-            plugin_root=str(PLUGIN_ROOT),
-            status="OK",
-            review_rules="rules",
-            domain_rules=None,
-            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
-            exploration_scope=None,
-            output_dir=str(tmp_path),
-            pr_number="42",
-            reviewer_name="security",
-            not_diffed_count=0,
-            has_php=False,
-        )
-        assert "PIRATEGOAT_REVIEW_BUDGET" not in prompt
+        command_start = prompt.index("PIRATEGOAT_PLUGIN_ROOT=")
+        command_end = prompt.index("python3 <<'PY'", command_start)
+        assignment_line = prompt[command_start:command_end]
+        assert assignment_line.count("PIRATEGOAT_") == 5
 
     def test_main_reads_the_version_from_the_run_config_stamp(self, tmp_path):
         """One detector: step 1 stamps run-config.json, bootstrap forwards it.

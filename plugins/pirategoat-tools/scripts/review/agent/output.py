@@ -190,26 +190,6 @@ def _actor_start_time(
     return None
 
 
-def _review_budget_target() -> Optional[int]:
-    """The run's tool-call target, or None when there isn't an honest one.
-
-    Read from the builder envelope bootstrap emits
-    (``PIRATEGOAT_REVIEW_BUDGET``), which is present only when the run
-    calibrated a budget at all. Anything that is not a positive integer is
-    treated as absent rather than repaired: this value is only ever shown
-    back to the reviewer, and a target of "0" or "abc" is worse than no
-    target.
-    """
-    raw = os.environ.get("PIRATEGOAT_REVIEW_BUDGET")
-    if not isinstance(raw, str) or not raw.strip():
-        return None
-    try:
-        value = int(raw.strip())
-    except ValueError:
-        return None
-    return value if value > 0 else None
-
-
 def _log_agent_complete_telemetry(output_dir, reviewer, verdict, issue_count,
                                   severities, resave):
     """Best-effort telemetry logging on agent completion. Never raises.
@@ -824,6 +804,30 @@ class ReviewOutputBuilder:
         return None
 
     @staticmethod
+    def _read_deferred_sidecar(
+        output_dir: Optional[str], reviewer: Optional[str]
+    ) -> Dict:
+        """Parse the bootstrap-written deferred-files sidecar, or ``{}``.
+
+        The one read path both consumers share — the NOT DIFFED auto-fill
+        set (``_load_deferred_files``) and the review-budget target
+        (``_review_budget_target``) — so the sidecar is opened and parsed
+        in exactly one place. ``{}`` covers every failure uniformly (no
+        output dir/reviewer, missing file, unreadable, malformed, or not a
+        JSON object): callers decide what a given schema entitles them to
+        read, this helper only ever hands back a dict.
+        """
+        if not output_dir or not reviewer:
+            return {}
+        sidecar = os.path.join(output_dir, f"{reviewer}-deferred-files.json")
+        try:
+            with open(sidecar, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    @staticmethod
     def _load_deferred_files(
         output_dir: Optional[str], reviewer: Optional[str]
     ) -> Optional[frozenset]:
@@ -831,20 +835,40 @@ class ReviewOutputBuilder:
 
         None is deliberate fail-open: no sidecar means no authoritative set
         exists (manual builder use, older bootstrap, failed fail-open write)
-        and validation stays form-only.
+        and validation stays form-only. Tolerates schema 1 and schema 2 —
+        both carry ``deferred_files`` in the same shape.
         """
-        if not output_dir or not reviewer:
-            return None
-        sidecar = os.path.join(output_dir, f"{reviewer}-deferred-files.json")
-        try:
-            with open(sidecar, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            return None
-        files = data.get("deferred_files") if isinstance(data, dict) else None
+        data = ReviewOutputBuilder._read_deferred_sidecar(output_dir, reviewer)
+        files = data.get("deferred_files")
         if not isinstance(files, list):
             return None
         return frozenset(p for p in files if isinstance(p, str))
+
+    @staticmethod
+    def _review_budget_target(
+        output_dir: Optional[str], reviewer: Optional[str]
+    ) -> Optional[int]:
+        """The run's tool-call target, or None when there isn't an honest one.
+
+        Read from the same deferred-files sidecar as ``_load_deferred_files``
+        (schema 2 adds ``review_budget`` alongside the deferred set), through
+        the shared ``_read_deferred_sidecar`` helper — replacing the
+        retired env-var budget envelope, which silently died for any agent
+        that rebuilt its save command. A schema-1 sidecar (an
+        older run, written before the budget field existed) has no honest
+        target: reporting one anyway would state a compatibility guarantee
+        the producer never made, so any schema other than 2 reports None,
+        the same as an absent file, an absent key, or a non-positive value.
+        This value is only ever shown back to the reviewer, and a target of
+        "0" or a fabricated number is worse than none.
+        """
+        data = ReviewOutputBuilder._read_deferred_sidecar(output_dir, reviewer)
+        if data.get("schema") != 2:
+            return None
+        value = data.get("review_budget")
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            return None
+        return value
 
     def _known_deferred_files(self) -> Optional[frozenset]:
         """The deferred set via the env envelope — add-time fast feedback.
@@ -1482,7 +1506,7 @@ class ReviewOutputBuilder:
             # on — unreviewed files recorded. Silent when the envelope is
             # absent or malformed: the builder must stay usable outside a
             # pipeline run, where there is no target to report.
-            budget_target = _review_budget_target()
+            budget_target = self._review_budget_target(output_dir, self.reviewer)
             if self.unreviewed and budget_target is not None:
                 print(
                     f"TARGET: ~{budget_target} tool calls — if you finished "

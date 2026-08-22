@@ -584,33 +584,32 @@ class TestBashBuilderRecognition:
         }
         assert _mod._categorize_tool_call("Bash", {"command": legacy})["category"] == "builder-output"
 
-    def test_budget_carrying_envelope_is_recognized(self):
-        """1.114.0 appends the call-budget target when the run set one.
-
-        The value is unread here — recognition is all the envelope is used
-        for — but an unknown assignment would drop the whole save from the
-        cohort, so the name has to be known to this reader.
-        """
-        with_budget = (
+    def test_unknown_optional_assignment_drops_recognition(self):
+        """The call-budget target that once rode this envelope moved to the
+        deferred-files sidecar (schema 2) in 1.114.0 — this reader must not
+        carry a now-retired optional name forward. A foreign sixth
+        assignment (any name outside the required four plus the plugin
+        version) correctly drops the save from the cohort rather than being
+        silently accepted."""
+        with_unknown_assignment = (
             "PIRATEGOAT_PLUGIN_ROOT='/plug' "
             "PIRATEGOAT_OUTPUT_DIR='/tmp/pr-review-42' "
             "PIRATEGOAT_REVIEWER_NAME='security' "
             "PIRATEGOAT_PR_ID='42' "
             "PIRATEGOAT_PLUGIN_VERSION='1.114.0' "
-            "PIRATEGOAT_REVIEW_BUDGET='80' python3 <<'PY'\n"
+            "PIRATEGOAT_SOME_RETIRED_NAME='80' python3 <<'PY'\n"
             "builder.save(os.environ[\"PIRATEGOAT_OUTPUT_DIR\"])\n"
             "PY"
         )
 
-        env = _mod._builder_heredoc_env(with_budget)
+        env = _mod._builder_heredoc_env(with_unknown_assignment)
 
-        assert env is not None
-        assert env["PIRATEGOAT_REVIEW_BUDGET"] == "80"
+        assert env is None
         assert (
-            _mod._categorize_tool_call("Bash", {"command": with_budget})[
-                "category"
-            ]
-            == "builder-output"
+            _mod._categorize_tool_call(
+                "Bash", {"command": with_unknown_assignment}
+            )["category"]
+            != "builder-output"
         )
 
     @pytest.mark.parametrize(

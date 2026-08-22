@@ -69,12 +69,8 @@ _BUILDER_ENV_REQUIRED = frozenset({
 # a pre-1.114.0 transcript remains fully measurable. Refusing it would
 # report saves that demonstrably happened as no-save — a wrong measurement
 # rather than a missing one, and transcripts are immutable.
-# 1.114.0 also began carrying the run's call-budget target, emitted only
-# when the run calibrated one. Additive and unread here, exactly like the
-# version above.
 _BUILDER_ENV_OPTIONAL = frozenset({
     "PIRATEGOAT_PLUGIN_VERSION",
-    "PIRATEGOAT_REVIEW_BUDGET",
 })
 _BUILDER_ENV_NAMES = frozenset(_BUILDER_ENV_REQUIRED | _BUILDER_ENV_OPTIONAL)
 # Must mirror ReviewOutputBuilder.add_issue()'s FULL positional order — a

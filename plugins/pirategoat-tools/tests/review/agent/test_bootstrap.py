@@ -124,7 +124,14 @@ class TestResolveReviewerIdentity:
 
 
 class TestPersistDeferredSidecar:
-    """The extracted writer preserves the existing deferred-file contract."""
+    """The extracted writer preserves the existing deferred-file contract.
+
+    Schema 2 (was 1): the sidecar also carries the run's effective tool-call
+    budget and scope counts, replacing the retired env-var budget transport
+    that silently died for any agent that rebuilt its save command —
+    output.py's save() reads these fields through the same sidecar it
+    already reads for NOT DIFFED auto-fill.
+    """
 
     def test_writes_only_authoritative_deferred_files(self, tmp_path):
         _mod.persist_deferred_sidecar(
@@ -132,29 +139,51 @@ class TestPersistDeferredSidecar:
             "repo-renewals-reviewer",
             ["src/deferred.php"],
             ["src/list-only.php"],
+            review_budget=80,
+            budget_capped=False,
+            in_scope_count=12,
+            diffed_count=11,
         )
 
         payload = json.loads(
             (tmp_path / "repo-renewals-deferred-files.json").read_text()
         )
-        assert payload == {"schema": 1, "deferred_files": ["src/deferred.php"]}
+        assert payload == {
+            "schema": 2,
+            "deferred_files": ["src/deferred.php"],
+            "review_budget": 80,
+            "budget_capped": False,
+            "in_scope_count": 12,
+            "diffed_count": 11,
+        }
 
     def test_writes_empty_authoritative_set(self, tmp_path):
         _mod.persist_deferred_sidecar(
-            str(tmp_path), "security-reviewer", [], ["src/list-only.php"]
+            str(tmp_path), "security-reviewer", [], ["src/list-only.php"],
+            review_budget=40, budget_capped=True,
+            in_scope_count=5, diffed_count=5,
         )
 
         payload = json.loads(
             (tmp_path / "security-deferred-files.json").read_text()
         )
-        assert payload == {"schema": 1, "deferred_files": []}
+        assert payload == {
+            "schema": 2,
+            "deferred_files": [],
+            "review_budget": 40,
+            "budget_capped": True,
+            "in_scope_count": 5,
+            "diffed_count": 5,
+        }
 
     def test_write_errors_fail_open(self, tmp_path):
         output_file = tmp_path / "not-a-directory"
         output_file.write_text("occupied")
 
         _mod.persist_deferred_sidecar(
-            str(output_file), "security-reviewer", ["src/deferred.php"], []
+            str(output_file), "security-reviewer", ["src/deferred.php"], [],
+            review_budget=80, budget_capped=False,
+            in_scope_count=1, diffed_count=0,
         )
 
     def test_dedupes_deferred_files_order_preserving(self, tmp_path):
@@ -170,14 +199,40 @@ class TestPersistDeferredSidecar:
             "security-reviewer",
             ["src/a.php", "src/b.php", "src/a.php"],
             [],
+            review_budget=80, budget_capped=False,
+            in_scope_count=2, diffed_count=2,
         )
 
         payload = json.loads(
             (tmp_path / "security-deferred-files.json").read_text()
         )
         assert payload == {
-            "schema": 1,
+            "schema": 2,
             "deferred_files": ["src/a.php", "src/b.php"],
+            "review_budget": 80,
+            "budget_capped": False,
+            "in_scope_count": 2,
+            "diffed_count": 2,
+        }
+
+    def test_defaults_to_no_budget_and_no_counts_when_omitted(self, tmp_path):
+        """Callers that have not yet computed a budget (unlikely, but the
+        signature must stay safe) still publish a valid schema-2 payload
+        with an absent target rather than crashing."""
+        _mod.persist_deferred_sidecar(
+            str(tmp_path), "security-reviewer", ["src/a.php"], [],
+        )
+
+        payload = json.loads(
+            (tmp_path / "security-deferred-files.json").read_text()
+        )
+        assert payload == {
+            "schema": 2,
+            "deferred_files": ["src/a.php"],
+            "review_budget": None,
+            "budget_capped": False,
+            "in_scope_count": None,
+            "diffed_count": None,
         }
 
 
