@@ -911,6 +911,18 @@ def _budget_utilization(measured: dict[str, Any]) -> dict[str, Any] | None:
     run whose only agents are all still unmeasured on one side or the
     other. Same "absence, not a zero" doctrine as every other family in
     this module.
+
+    First-VALID-occurrence-wins per agent name, same rule as
+    `_budget_target_by_agent` and for the same reason: `agent_usage` is
+    keyed per CORRELATED DISPATCH, not per agent identity —
+    `review_transcript.py`'s own correlation comment says retries remain
+    visible as separate entries — so a retried agent can appear twice
+    with two different `tool_calls` counts. Without a dedup here, that
+    agent would emit two rows and double-weight `median_pct`/`min_pct`/
+    `max_pct`/`sample_count` against every agent that ran once. The
+    first entry with usable evidence (`available: True` and a real
+    `tool_calls` int) is kept; a later retry's entry for the same name
+    is skipped even though its own tool_calls may differ.
     """
     transcript = measured.get("transcript")
     agent_usage = (
@@ -924,15 +936,21 @@ def _budget_utilization(measured: dict[str, Any]) -> dict[str, Any] | None:
 
     agents_out: list[dict[str, Any]] = []
     percentages: list[int] = []
+    counted_agents: set[str] = set()
     for entry in agent_usage:
         if not isinstance(entry, dict) or entry.get("available") is not True:
             continue
         agent = entry.get("agent")
         tool_calls = entry.get("tool_calls")
-        if not isinstance(agent, str) or agent not in targets:
+        if (
+            not isinstance(agent, str)
+            or agent not in targets
+            or agent in counted_agents
+        ):
             continue
         if not isinstance(tool_calls, int) or isinstance(tool_calls, bool):
             continue
+        counted_agents.add(agent)
         target = targets[agent]
         pct = round(tool_calls / target * 100)
         agents_out.append({

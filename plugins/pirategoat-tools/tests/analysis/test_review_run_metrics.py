@@ -6865,6 +6865,58 @@ class TestBudgetUtilization:
         assert row["budget_target"] == 20
         assert row["utilization_pct"] == 40
 
+    def test_first_valid_entry_wins_tool_calls_for_a_retried_agent(
+        self, monkeypatch, tmp_path
+    ):
+        """`agent_usage` is keyed per correlated DISPATCH, not per agent
+        identity — a retried agent can carry two entries under the same
+        registry name (review_transcript.py's own correlation comment:
+        "retries remain visible"). Without a dedup on this side of the
+        join too, a retried agent would emit two per-agent rows and
+        double-weight the run-level median/min/max/sample_count against
+        every agent that ran once."""
+        manifest = self._manifest_with_agents(("a-reviewer", 20))
+        agent_usage = [
+            self._agent_usage_entry("a-reviewer", 8),  # first: 40%
+            self._agent_usage_entry("a-reviewer", 18),  # retry: 90%
+        ]
+
+        measured = self._measure(monkeypatch, tmp_path, manifest, agent_usage)
+
+        utilization = measured["budget_utilization"]
+        assert len(utilization["agents"]) == 1
+        assert utilization["agents"][0] == {
+            "agent": "a-reviewer",
+            "tool_calls": 8,
+            "budget_target": 20,
+            "utilization_pct": 40,
+        }
+        assert utilization["sample_count"] == 1
+        assert utilization["median_pct"] == 40
+        assert utilization["min_pct"] == 40
+        assert utilization["max_pct"] == 40
+
+    def test_measured_zero_tool_calls_is_included_as_zero_percent(
+        self, monkeypatch, tmp_path
+    ):
+        """`available: True, tool_calls: 0` is a real measurement (the
+        agent ran and issued no tool calls) and must be included at 0% —
+        distinct from `available: False`, which is missing evidence and
+        must be excluded entirely."""
+        manifest = self._manifest_with_agents(("a-reviewer", 20))
+        agent_usage = [self._agent_usage_entry("a-reviewer", 0)]
+
+        measured = self._measure(monkeypatch, tmp_path, manifest, agent_usage)
+
+        utilization = measured["budget_utilization"]
+        assert utilization["agents"] == [{
+            "agent": "a-reviewer",
+            "tool_calls": 0,
+            "budget_target": 20,
+            "utilization_pct": 0,
+        }]
+        assert utilization["sample_count"] == 1
+
 
 class TestBudgetUtilizationRendering:
     """The JSON per-agent figures and the table's median-range cell must
