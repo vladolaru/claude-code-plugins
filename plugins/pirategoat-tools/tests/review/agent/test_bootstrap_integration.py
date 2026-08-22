@@ -2048,3 +2048,12 @@ class TestNotDiffedContractIsDelivered:
         output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, not_diffed_count=0)
         assert "Not reviewed (budget):" not in output
 
+    def test_briefing_never_commands_bulk_unreviewed_enumeration(self, tmp_path):
+        """run12: performance-reviewer burned ~1/3 of its calls hand-assembling
+        254 unreviewed paths because the briefing said 'Declare each file you
+        could not reach' — auto-fill already records them for free."""
+        output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, not_diffed_count=3)
+        assert "Declare each file you could not reach" not in output
+        assert "Never spend tool calls enumerating unreviewed files" in output
+        assert "auto-declared" in output
+
