@@ -6,15 +6,16 @@ Codex stores one conversation thread per JSONL file at
 Line 1 is a `session_meta` entry carrying the thread's identity, its
 working directory, and — for subagents — its position in the thread tree.
 
-This module is the only place that knows the rollout schema. Both
-codex_session_analyzer.py and codex_session_metrics.py build on it.
+This module is the only place that knows the rollout schema. It is the
+foundation for the planned codex_session_analyzer.py and
+codex_session_metrics.py CLIs.
 """
 
 from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Iterator
@@ -104,6 +105,13 @@ def _day_dirs(sessions_dir: Path, since_days: int, today: date) -> Iterator[Path
 
     Walking only these keeps discovery proportional to the window rather than
     to the ~10k rollouts a long-running install accumulates.
+
+    Codex names these directories by LOCAL date, not UTC — verified against the
+    real tree, where local matched 2039/2075 files against UTC's 1858. Do not
+    "fix" this to utcnow().
+
+    The window is inclusive on both ends: since_days=7 yields today plus the
+    previous seven days, i.e. eight directories.
     """
     for offset in range(since_days + 1):
         day = today - timedelta(days=offset)
@@ -146,7 +154,7 @@ def discover_threads(
             found.append(meta)
 
     found.sort(key=lambda m: m.mtime, reverse=True)
-    return found[:limit] if limit else found
+    return found[:limit] if limit is not None else found
 
 
 ITEM_COMMAND = "CommandExecution"
@@ -170,11 +178,7 @@ class ThreadScan:
     cached_input_tokens: int = 0
     input_tokens: int = 0
     malformed_lines: int = 0
-    items: list[dict] = None
-
-    def __post_init__(self):
-        if self.items is None:
-            self.items = []
+    items: list[dict] = field(default_factory=list)
 
 
 def _parse_timestamp(value) -> datetime | None:
@@ -245,11 +249,15 @@ def scan_thread(path: Path, keep_items: bool = False) -> ThreadScan:
             item_type = item.get("type")
             if item_type == ITEM_COMMAND:
                 scan.commands += 1
-                if item.get("exit_code"):
+                if item.get("exit_code") not in (0, None):
                     scan.failed_commands += 1
             elif item_type == ITEM_FILE_CHANGE:
+                # `changes` is a dict keyed by absolute file path. Verified
+                # against real rollouts: dict in 405/405 sampled items, never
+                # a list. Counting the item instead of its entries undercounts
+                # multi-file edits by roughly 13%.
                 changes = item.get("changes")
-                scan.files_changed += len(changes) if isinstance(changes, list) else 1
+                scan.files_changed += len(changes) if isinstance(changes, (dict, list)) else 1
             elif item_type == ITEM_MESSAGE:
                 scan.messages += 1
             elif item_type == ITEM_COMPACTION:
@@ -274,38 +282,55 @@ def parent_agent_path(agent_path: str) -> str | None:
     "/root/a". This is the only correlation mechanism the tools implement:
     it needs nothing beyond line 1 of each rollout.
     """
+    if "/" not in agent_path:
+        return None
     head = agent_path.rsplit("/", 1)[0]
     return head or None
 
 
 @dataclass
 class ThreadTree:
-    """Threads grouped by tree position, built from agent_path alone."""
+    """Threads grouped by tree position, built from agent_path alone.
+
+    Keyed by (session_id, agent_path), because agent_path is scoped to one
+    session and NOT globally unique — every root thread is "/root". Keying on
+    the bare path merges every session in the window into one namespace.
+
+    `orphans` is a subset of `roots`: a thread whose parent fell outside the
+    window is surfaced as a root so it is not lost, and also listed here so a
+    caller can say so. Do not count both.
+    """
 
     roots: list[ThreadMeta]
     orphans: list[ThreadMeta]
-    _by_parent: dict[str, list[ThreadMeta]]
+    children_by_parent: dict[tuple[str, str], list[ThreadMeta]] = field(default_factory=dict)
 
-    def children_of(self, agent_path: str) -> list[ThreadMeta]:
-        return self._by_parent.get(agent_path, [])
+    def children_of(self, meta: ThreadMeta) -> list[ThreadMeta]:
+        """Direct children of one thread. Takes the ThreadMeta, not a path.
+
+        A bare path cannot express which session it belongs to, so passing one
+        would reintroduce the collision this keying exists to prevent.
+        """
+        return self.children_by_parent.get((meta.session_id, meta.agent_path), [])
 
 
 def build_tree(metas: list[ThreadMeta]) -> ThreadTree:
     """Group threads into a tree. Threads whose parent is absent become roots."""
-    known_paths = {meta.agent_path for meta in metas}
-    by_parent: dict[str, list[ThreadMeta]] = {}
+    known = {(meta.session_id, meta.agent_path) for meta in metas}
+    children_by_parent: dict[tuple[str, str], list[ThreadMeta]] = {}
     roots: list[ThreadMeta] = []
     orphans: list[ThreadMeta] = []
 
     for meta in metas:
         parent = parent_agent_path(meta.agent_path)
+        key = (meta.session_id, parent)
         if parent is None:
             roots.append(meta)
-        elif parent in known_paths:
-            by_parent.setdefault(parent, []).append(meta)
+        elif key in known:
+            children_by_parent.setdefault(key, []).append(meta)
         else:
             # Parent is outside the window. Report it rather than drop it.
             roots.append(meta)
             orphans.append(meta)
 
-    return ThreadTree(roots=roots, orphans=orphans, _by_parent=by_parent)
+    return ThreadTree(roots=roots, orphans=orphans, children_by_parent=children_by_parent)

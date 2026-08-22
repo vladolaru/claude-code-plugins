@@ -11,7 +11,7 @@ import json
 import os
 import sys
 import time
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -241,7 +241,10 @@ def test_scan_counts_items_and_command_failures(tmp_path):
                 _turn_context_line(),
                 _item_line("CommandExecution", exit_code=0, duration=1.5, command="ls"),
                 _item_line("CommandExecution", exit_code=1, duration=0.5, command="false"),
-                _item_line("FileChange", changes=["a.py"]),
+                _item_line(
+                    "FileChange",
+                    changes={"/w/a.py": {"type": "update"}, "/w/b.py": {"type": "add"}},
+                ),
                 _item_line("AgentMessage", content="done"),
                 _item_line("ContextCompaction"),
                 _token_line(100),
@@ -254,7 +257,7 @@ def test_scan_counts_items_and_command_failures(tmp_path):
 
     assert scan.commands == 2
     assert scan.failed_commands == 1
-    assert scan.files_changed == 1
+    assert scan.files_changed == 2
     assert scan.messages == 1
     assert scan.compactions == 1
     assert scan.model == "gpt-5.6-terra"
@@ -361,10 +364,11 @@ def test_build_tree_groups_children_under_parents(tmp_path):
 
     metas = codex_rollout.discover_threads(tmp_path, since_days=7, today=today)
     tree = codex_rollout.build_tree(metas)
+    by_id = {m.thread_id: m for m in metas}
 
     assert [m.thread_id for m in tree.roots] == ["root"]
-    assert sorted(m.thread_id for m in tree.children_of("/root")) == ["child-a", "child-b"]
-    assert [m.thread_id for m in tree.children_of("/root/a")] == ["grandchild"]
+    assert sorted(m.thread_id for m in tree.children_of(by_id["root"])) == ["child-a", "child-b"]
+    assert [m.thread_id for m in tree.children_of(by_id["child-a"])] == ["grandchild"]
 
 
 def test_build_tree_treats_orphans_as_roots(tmp_path):
@@ -380,3 +384,76 @@ def test_build_tree_treats_orphans_as_roots(tmp_path):
 
     assert [m.thread_id for m in tree.roots] == ["orphan"]
     assert [m.thread_id for m in tree.orphans] == ["orphan"]
+
+
+def test_build_tree_does_not_merge_separate_sessions(tmp_path):
+    """agent_path is session-scoped, not globally unique — every root is "/root".
+
+    Keying the tree on the bare path merged every session in the window into one
+    namespace. Against real data that gave the first root 994 "children", all 994
+    belonging to other sessions.
+    """
+    today = date(2026, 8, 22)
+    for session in ("sess-a", "sess-b"):
+        _write_rollout(tmp_path, today, f"{session}-root", id=f"{session}-root", session_id=session)
+        _write_rollout(
+            tmp_path,
+            today,
+            f"{session}-child",
+            id=f"{session}-child",
+            session_id=session,
+            source=_subagent_source(agent_path="/root/worker_1"),
+        )
+
+    metas = codex_rollout.discover_threads(tmp_path, since_days=7, today=today)
+    tree = codex_rollout.build_tree(metas)
+    by_id = {m.thread_id: m for m in metas}
+
+    assert sorted(m.thread_id for m in tree.roots) == ["sess-a-root", "sess-b-root"]
+    for session in ("sess-a", "sess-b"):
+        children = tree.children_of(by_id[f"{session}-root"])
+        assert [m.thread_id for m in children] == [f"{session}-child"]
+
+
+def test_window_boundary_is_inclusive_on_both_ends(tmp_path):
+    """since_days=7 means today plus the previous seven days — eight directories."""
+    today = date(2026, 8, 22)
+    _write_rollout(tmp_path, today - timedelta(days=7), "edge", id="edge")
+    _write_rollout(tmp_path, today - timedelta(days=8), "beyond", id="beyond")
+
+    found = codex_rollout.discover_threads(tmp_path, since_days=7, today=today)
+
+    assert [m.thread_id for m in found] == ["edge"]
+
+
+def test_limit_zero_returns_nothing(tmp_path):
+    """`if limit else` treated 0 as "unlimited" and returned every thread."""
+    today = date(2026, 8, 22)
+    _write_rollout(tmp_path, today, "a", id="a")
+    _write_rollout(tmp_path, today, "b", id="b")
+
+    assert codex_rollout.discover_threads(tmp_path, since_days=7, today=today, limit=0) == []
+    assert len(codex_rollout.discover_threads(tmp_path, since_days=7, today=today, limit=None)) == 2
+
+
+def test_scan_reports_cached_and_input_token_totals(tmp_path):
+    path = tmp_path / "rollout-tokenfields.jsonl"
+    path.write_text("\n".join([_meta_line(), _token_line(300)]) + "\n")
+
+    scan = codex_rollout.scan_thread(path)
+
+    assert scan.total_tokens == 300
+    assert scan.cached_input_tokens == 10
+    assert scan.input_tokens == 90
+
+
+def test_agent_filter_tolerates_spaces_after_commas(tmp_path):
+    today = date(2026, 8, 22)
+    _write_rollout(tmp_path, today, "w", id="w", source=_subagent_source(role="worker"))
+    _write_rollout(tmp_path, today, "e", id="e", source=_subagent_source(role="explorer"))
+
+    found = codex_rollout.discover_threads(
+        tmp_path, since_days=7, today=today, agent="worker, explorer"
+    )
+
+    assert sorted(m.thread_id for m in found) == ["e", "w"]
