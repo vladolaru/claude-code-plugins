@@ -203,3 +203,91 @@ def test_analyzer_reports_when_nothing_matches(sessions_dir):
 
     assert result.returncode != 0
     assert "no threads" in result.stderr.lower()
+
+
+def test_metrics_json_has_one_row_per_thread(sessions_dir):
+    result = _run(
+        METRICS, "--sessions-dir", str(sessions_dir), "--since", "3650", "--format", "json"
+    )
+    assert result.returncode == 0, result.stderr
+
+    data = json.loads(result.stdout)
+    ids = sorted(row["thread_id"] for row in data["threads"])
+    assert ids == ["child-thread", "root-thread"]
+
+
+def test_metrics_rolls_up_by_agent_role(sessions_dir):
+    result = _run(
+        METRICS, "--sessions-dir", str(sessions_dir), "--since", "3650", "--format", "json"
+    )
+    data = json.loads(result.stdout)
+
+    by_role = {entry["agent_role"]: entry for entry in data["by_role"]}
+    assert by_role["code-reviewer"]["threads"] == 1
+    assert by_role["code-reviewer"]["total_tokens"] == 250
+    assert by_role["code-reviewer"]["failed_commands"] == 1
+
+
+def test_metrics_filters_by_agent(sessions_dir):
+    result = _run(
+        METRICS,
+        "--sessions-dir",
+        str(sessions_dir),
+        "--since",
+        "3650",
+        "--agent",
+        "code-reviewer",
+        "--format",
+        "json",
+    )
+    data = json.loads(result.stdout)
+
+    assert [row["thread_id"] for row in data["threads"]] == ["child-thread"]
+
+
+def test_metrics_markdown_renders_a_table(sessions_dir):
+    result = _run(
+        METRICS, "--sessions-dir", str(sessions_dir), "--since", "3650", "--format", "markdown"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "| thread |" in result.stdout
+    assert "code-reviewer" in result.stdout
+
+
+def test_metrics_exits_nonzero_when_sessions_dir_missing(tmp_path):
+    result = _run(METRICS, "--sessions-dir", str(tmp_path / "nope"))
+
+    assert result.returncode != 0
+    assert "not found" in result.stderr.lower()
+
+
+def test_metrics_reports_empty_result_without_crashing(sessions_dir):
+    result = _run(
+        METRICS,
+        "--sessions-dir",
+        str(sessions_dir),
+        "--since",
+        "3650",
+        "--cwd",
+        "/nowhere",
+        "--format",
+        "json",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["threads"] == []
+
+
+@pytest.mark.skipif(
+    not (Path.home() / ".codex" / "sessions").is_dir(),
+    reason="no real Codex sessions on this machine",
+)
+def test_scripts_run_against_real_sessions():
+    """Smoke test: the real schema still parses. Skipped where Codex is absent."""
+    for script in (ANALYZER, METRICS):
+        result = _run(script, "--since", "2", "--limit", "3", "--format", "json")
+        # Exit 1 is legitimate when nothing was recorded in the window.
+        assert result.returncode in (0, 1), result.stderr
+        if result.returncode == 0 and result.stdout.strip():
+            json.loads(result.stdout)
