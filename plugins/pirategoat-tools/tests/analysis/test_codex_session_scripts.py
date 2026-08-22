@@ -291,3 +291,56 @@ def test_scripts_run_against_real_sessions():
         assert result.returncode in (0, 1), result.stderr
         if result.returncode == 0 and result.stdout.strip():
             json.loads(result.stdout)
+
+
+def test_analyzer_text_truncates_long_command_lines(sessions_dir):
+    """argv for a Codex shell call can hold a whole multi-line script.
+
+    Printed verbatim, a handful of failures buries the report — a real 30-day
+    run produced 36 failures each dumping its full script.
+    """
+    day_dir = sessions_dir / "2026" / "08" / "22"
+    script = "set -eu\n" + "\n".join(f"echo line-{i}" for i in range(200))
+    noisy = day_dir / "rollout-noisy.jsonl"
+    noisy.write_text(
+        "\n".join(
+            [
+                _meta("noisy-thread"),
+                _command(exit_code=1, command=["/bin/zsh", "-lc", script]),
+            ]
+        )
+        + "\n"
+    )
+    stale = time.time() - STALE_OFFSET + 120
+    os.utime(noisy, (stale, stale))
+
+    result = _run(
+        ANALYZER, "--sessions-dir", str(sessions_dir), "--since", "3650",
+        "--thread-id", "noisy-thread",
+    )
+
+    assert result.returncode == 0, result.stderr
+    failure_lines = [ln for ln in result.stdout.splitlines() if ln.strip().startswith("exit 1:")]
+    assert len(failure_lines) == 1
+    assert len(failure_lines[0]) < 200
+    assert "\n" not in failure_lines[0]
+
+
+def test_analyzer_json_keeps_the_full_command(sessions_dir):
+    """Truncation is a text-rendering concern; JSON stays full fidelity."""
+    day_dir = sessions_dir / "2026" / "08" / "22"
+    script = "set -eu\n" + "\n".join(f"echo line-{i}" for i in range(200))
+    noisy = day_dir / "rollout-noisy2.jsonl"
+    noisy.write_text(
+        "\n".join([_meta("noisy2"), _command(exit_code=1, command=["/bin/zsh", "-lc", script])]) + "\n"
+    )
+    stale = time.time() - STALE_OFFSET + 120
+    os.utime(noisy, (stale, stale))
+
+    result = _run(
+        ANALYZER, "--sessions-dir", str(sessions_dir), "--since", "3650",
+        "--thread-id", "noisy2", "--format", "json",
+    )
+    data = json.loads(result.stdout)
+
+    assert "line-199" in str(data["failures"][0]["command"])

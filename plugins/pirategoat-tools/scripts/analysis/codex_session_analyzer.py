@@ -72,6 +72,24 @@ def _failed_commands(scan) -> list[dict]:
     ]
 
 
+COMMAND_PREVIEW_CHARS = 120
+
+
+def _command_preview(command) -> str:
+    """One readable line for a command in text output.
+
+    `command` is the raw argv list, and a Codex shell call routinely carries a
+    whole multi-line script as its last element. Printed verbatim, a handful of
+    failures buries the report. JSON output keeps the full value.
+    """
+    if isinstance(command, list):
+        command = " ".join(str(part) for part in command)
+    collapsed = " ".join(str(command).split())
+    if len(collapsed) <= COMMAND_PREVIEW_CHARS:
+        return collapsed
+    return collapsed[: COMMAND_PREVIEW_CHARS - 1] + "…"
+
+
 def _render_text(report: dict) -> str:
     lines = []
     thread = report["thread"]
@@ -87,7 +105,7 @@ def _render_text(report: dict) -> str:
     if report["failures"]:
         lines.append("  failed commands:")
         for failure in report["failures"]:
-            lines.append(f"    exit {failure['exit_code']}: {failure['command']}")
+            lines.append(f"    exit {failure['exit_code']}: {_command_preview(failure['command'])}")
 
     for child in report["children"]:
         lines.append("")
