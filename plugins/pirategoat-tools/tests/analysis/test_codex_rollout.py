@@ -202,3 +202,134 @@ def test_respects_limit_newest_first(tmp_path):
 def test_missing_sessions_dir_returns_empty(tmp_path):
     found = codex_rollout.discover_threads(tmp_path / "nope", since_days=7, today=date(2026, 8, 22))
     assert found == []
+
+
+def _item_line(item_type, timestamp="2026-08-18T16:01:30.000Z", **fields):
+    item = {"type": item_type, "id": f"id-{item_type}"}
+    item.update(fields)
+    return json.dumps(
+        {"timestamp": timestamp, "type": "event_msg", "payload": {"type": "item_completed", "item": item}}
+    )
+
+
+def _token_line(total, timestamp="2026-08-18T16:01:31.000Z"):
+    return json.dumps(
+        {
+            "timestamp": timestamp,
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "total_token_usage": {"total_tokens": total, "cached_input_tokens": 10, "input_tokens": 90},
+                    "last_token_usage": {"total_tokens": 5},
+                },
+            },
+        }
+    )
+
+
+def _turn_context_line(model="gpt-5.6-terra", timestamp="2026-08-18T16:01:25.000Z"):
+    return json.dumps({"timestamp": timestamp, "type": "turn_context", "payload": {"model": model}})
+
+
+def test_scan_counts_items_and_command_failures(tmp_path):
+    path = tmp_path / "rollout-scan.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                _meta_line(),
+                _turn_context_line(),
+                _item_line("CommandExecution", exit_code=0, duration=1.5, command="ls"),
+                _item_line("CommandExecution", exit_code=1, duration=0.5, command="false"),
+                _item_line("FileChange", changes=["a.py"]),
+                _item_line("AgentMessage", content="done"),
+                _item_line("ContextCompaction"),
+                _token_line(100),
+            ]
+        )
+        + "\n"
+    )
+
+    scan = codex_rollout.scan_thread(path)
+
+    assert scan.commands == 2
+    assert scan.failed_commands == 1
+    assert scan.files_changed == 1
+    assert scan.messages == 1
+    assert scan.compactions == 1
+    assert scan.model == "gpt-5.6-terra"
+
+
+def test_scan_takes_last_token_count_not_the_sum(tmp_path):
+    """total_token_usage is cumulative; summing multiply-counts by ~1900x."""
+    path = tmp_path / "rollout-tokens.jsonl"
+    path.write_text("\n".join([_meta_line(), _token_line(100), _token_line(250)]) + "\n")
+
+    scan = codex_rollout.scan_thread(path)
+
+    assert scan.total_tokens == 250
+
+
+def test_scan_computes_duration_from_first_and_last_timestamp(tmp_path):
+    """Duration spans line 1 to the last entry, so session_meta sets the start."""
+    path = tmp_path / "rollout-duration.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                _meta_line(timestamp="2026-08-18T16:00:00.000Z"),
+                _item_line("AgentMessage", timestamp="2026-08-18T16:01:00.000Z", content="start"),
+                _item_line("AgentMessage", timestamp="2026-08-18T16:02:30.000Z", content="end"),
+            ]
+        )
+        + "\n"
+    )
+
+    scan = codex_rollout.scan_thread(path)
+
+    assert scan.duration_seconds == pytest.approx(150.0, abs=1.0)
+
+
+def test_scan_counts_malformed_lines_without_raising(tmp_path):
+    path = tmp_path / "rollout-malformed.jsonl"
+    path.write_text("\n".join([_meta_line(), "{truncated", _item_line("AgentMessage", content="ok")]) + "\n")
+
+    scan = codex_rollout.scan_thread(path)
+
+    assert scan.malformed_lines == 1
+    assert scan.messages == 1
+
+
+def test_scan_ignores_item_type_spelling(tmp_path):
+    """The field is item.type; item_type does not exist and must not be relied on."""
+    path = tmp_path / "rollout-spelling.jsonl"
+    entry = {
+        "timestamp": "2026-08-18T16:01:30.000Z",
+        "type": "event_msg",
+        "payload": {"type": "item_completed", "item": {"item_type": "CommandExecution", "id": "x"}},
+    }
+    path.write_text("\n".join([_meta_line(), json.dumps(entry)]) + "\n")
+
+    scan = codex_rollout.scan_thread(path)
+
+    assert scan.commands == 0
+
+
+def test_scan_keeps_items_when_asked(tmp_path):
+    path = tmp_path / "rollout-keep.jsonl"
+    path.write_text(
+        "\n".join([_meta_line(), _item_line("CommandExecution", exit_code=0, duration=1.0, command="ls")]) + "\n"
+    )
+
+    scan = codex_rollout.scan_thread(path, keep_items=True)
+
+    assert [item["type"] for item in scan.items] == ["CommandExecution"]
+    assert scan.items[0]["command"] == "ls"
+
+
+def test_scan_holds_no_items_by_default(tmp_path):
+    path = tmp_path / "rollout-nokeep.jsonl"
+    path.write_text(
+        "\n".join([_meta_line(), _item_line("CommandExecution", exit_code=0, duration=1.0, command="ls")]) + "\n"
+    )
+
+    assert codex_rollout.scan_thread(path).items == []

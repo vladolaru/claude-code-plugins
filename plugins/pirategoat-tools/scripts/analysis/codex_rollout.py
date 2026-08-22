@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Iterator
 
@@ -147,3 +147,121 @@ def discover_threads(
 
     found.sort(key=lambda m: m.mtime, reverse=True)
     return found[:limit] if limit else found
+
+
+ITEM_COMMAND = "CommandExecution"
+ITEM_FILE_CHANGE = "FileChange"
+ITEM_MESSAGE = "AgentMessage"
+ITEM_COMPACTION = "ContextCompaction"
+
+
+@dataclass
+class ThreadScan:
+    """Everything one pass over a rollout can tell you about the thread."""
+
+    commands: int = 0
+    failed_commands: int = 0
+    files_changed: int = 0
+    messages: int = 0
+    compactions: int = 0
+    duration_seconds: float = 0.0
+    model: str | None = None
+    total_tokens: int = 0
+    cached_input_tokens: int = 0
+    input_tokens: int = 0
+    malformed_lines: int = 0
+    items: list[dict] = None
+
+    def __post_init__(self):
+        if self.items is None:
+            self.items = []
+
+
+def _parse_timestamp(value) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def scan_thread(path: Path, keep_items: bool = False) -> ThreadScan:
+    """Walk a rollout once, collecting counts, timing, model, and token totals.
+
+    Only finished rollouts give trustworthy results; a live file grows while
+    being read. discover_threads() filters those out before you get here.
+    """
+    scan = ThreadScan()
+    first_ts: datetime | None = None
+    last_ts: datetime | None = None
+    last_usage: dict = {}
+
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                scan.malformed_lines += 1
+                continue
+            if not isinstance(entry, dict):
+                scan.malformed_lines += 1
+                continue
+
+            stamp = _parse_timestamp(entry.get("timestamp"))
+            if stamp is not None:
+                first_ts = first_ts or stamp
+                last_ts = stamp
+
+            payload = entry.get("payload")
+            if not isinstance(payload, dict):
+                continue
+
+            if entry.get("type") == "turn_context":
+                scan.model = payload.get("model") or scan.model
+                continue
+
+            payload_type = payload.get("type")
+
+            if payload_type == "token_count":
+                info = payload.get("info")
+                if isinstance(info, dict):
+                    usage = info.get("total_token_usage")
+                    if isinstance(usage, dict):
+                        # Cumulative for the thread — last one wins, never sum.
+                        last_usage = usage
+                continue
+
+            if payload_type != "item_completed":
+                continue
+
+            item = payload.get("item")
+            if not isinstance(item, dict):
+                continue
+
+            item_type = item.get("type")
+            if item_type == ITEM_COMMAND:
+                scan.commands += 1
+                if item.get("exit_code"):
+                    scan.failed_commands += 1
+            elif item_type == ITEM_FILE_CHANGE:
+                changes = item.get("changes")
+                scan.files_changed += len(changes) if isinstance(changes, list) else 1
+            elif item_type == ITEM_MESSAGE:
+                scan.messages += 1
+            elif item_type == ITEM_COMPACTION:
+                scan.compactions += 1
+
+            if keep_items:
+                scan.items.append(item)
+
+    if first_ts and last_ts:
+        scan.duration_seconds = (last_ts - first_ts).total_seconds()
+
+    scan.total_tokens = last_usage.get("total_tokens", 0)
+    scan.cached_input_tokens = last_usage.get("cached_input_tokens", 0)
+    scan.input_tokens = last_usage.get("input_tokens", 0)
+    return scan
