@@ -15,7 +15,7 @@ Usage:
     python3 analyze-reviewer-sessions.py \
         --sessions-dir ~/.claude/projects/-Users-vladolaru-Work-a8c-ciab-admin \
         --agent patterns-reviewer \
-        --max-sessions 20
+        --limit 20
 
     # Analyze a specific agent with JSON output
     python3 analyze-reviewer-sessions.py \
@@ -26,7 +26,7 @@ Usage:
     # Analyze all agents in the most recent 5 sessions
     python3 analyze-reviewer-sessions.py \
         --sessions-dir ~/.claude/projects/-Users-vladolaru-Work-a8c-ciab-admin \
-        --max-sessions 5
+        --limit 5
 
     # Quality metrics for all agents
     python3 analyze-reviewer-sessions.py \
@@ -1288,7 +1288,7 @@ def main() -> None:
         help="Agent name to filter (e.g., patterns-reviewer). Omit to include all.",
     )
     parser.add_argument(
-        "--max-sessions",
+        "--limit",
         type=int,
         default=20,
         help="Maximum number of recent sessions to scan (default: 20)",
@@ -1319,7 +1319,7 @@ def main() -> None:
         sys.exit(1)
 
     # Find dispatches
-    dispatches_meta = find_agent_dispatches(args.sessions_dir, args.agent, args.max_sessions)
+    dispatches_meta = find_agent_dispatches(args.sessions_dir, args.agent, args.limit)
     if not dispatches_meta:
         print(f"No dispatches found for agent '{args.agent}' in {args.sessions_dir}", file=sys.stderr)
         sys.exit(1)
