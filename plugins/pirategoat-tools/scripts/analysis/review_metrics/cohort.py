@@ -12,7 +12,7 @@ from .contracts import (
     _CRITIC_VERDICT_SKIPPED,
     _CRITIC_VERDICTS,
 )
-from .sanitize import _nonnegative_int, _safe_wall_time_ms
+from .sanitize import _exact_statistic, _nonnegative_int, _safe_wall_time_ms
 from .usage import _add_usage, _dispatched_model, _empty_usage
 from .load import _is_duplicate_conflict
 
@@ -180,10 +180,6 @@ def _aggregate_lifecycle_state(
         totals["retry_overhead"] += lifecycle["retry_overhead"]
         totals["completion_gap"] += lifecycle["completion_gap"]
     return totals
-
-
-def _exact_statistic(value: int | float) -> int | float:
-    return int(value) if isinstance(value, float) and value.is_integer() else value
 
 
 def _aggregate_dispatch(

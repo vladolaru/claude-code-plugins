@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import statistics
 from collections import Counter
 from functools import lru_cache
 from pathlib import Path
@@ -18,6 +19,7 @@ from .contracts import (
     _parse_time,
 )
 from .sanitize import (
+    _exact_statistic,
     _nonnegative_exact_int,
     _nonnegative_int,
     _safe_scalar_map,
@@ -861,6 +863,97 @@ def _transcript_metric_availability(
     return result
 
 
+def _budget_target_by_agent(agents: object) -> dict[str, int]:
+    """First-seen ``budget_target`` per agent from the sanitized lifecycle.
+
+    First occurrence wins: a retried agent's budget does not move mid-run,
+    and the earliest dispatch is the one execution whose target the
+    reviewer actually saw in its own bootstrap prompt. `measured["agents"]`
+    is already the output of `_sanitize_manifest` by the time this runs, so
+    `budget_target` here is either a validated positive int or absent —
+    never a value this function has to re-validate itself.
+    """
+    started = agents.get("started") if isinstance(agents, dict) else None
+    result: dict[str, int] = {}
+    if not isinstance(started, list):
+        return result
+    for entry in started:
+        if not isinstance(entry, dict):
+            continue
+        agent = entry.get("agent")
+        target = entry.get("budget_target")
+        if (
+            isinstance(agent, str)
+            and agent not in result
+            and isinstance(target, int)
+            and not isinstance(target, bool)
+            and target > 0
+        ):
+            result[agent] = target
+    return result
+
+
+def _budget_utilization(measured: dict[str, Any]) -> dict[str, Any] | None:
+    """Per-agent ``tool_calls / budget_target``, plus the run's own median/range.
+
+    Joins two facts already computed elsewhere in this same measured view
+    rather than opening any new data source: `budget_target` from the
+    manifest's projected agent-start lifecycle (`agent_start`'s existing
+    telemetry key — see telemetry.py:139/364-388), and `tool_calls` from
+    the transcript enrichment's per-agent usage rows (already counted by
+    `review_transcript.py`'s `_analyze_entries`). Neither fact needed a
+    new transport; this function is the first thing to read them
+    together.
+
+    None — never an empty or zeroed report — when no agent has both a
+    known target and observed (`available: True`) tool-call evidence:
+    disabled/missing transcripts, a pre-budget-telemetry manifest, or a
+    run whose only agents are all still unmeasured on one side or the
+    other. Same "absence, not a zero" doctrine as every other family in
+    this module.
+    """
+    transcript = measured.get("transcript")
+    agent_usage = (
+        transcript.get("agent_usage") if isinstance(transcript, dict) else None
+    )
+    if not isinstance(agent_usage, list) or not agent_usage:
+        return None
+    targets = _budget_target_by_agent(measured.get("agents"))
+    if not targets:
+        return None
+
+    agents_out: list[dict[str, Any]] = []
+    percentages: list[int] = []
+    for entry in agent_usage:
+        if not isinstance(entry, dict) or entry.get("available") is not True:
+            continue
+        agent = entry.get("agent")
+        tool_calls = entry.get("tool_calls")
+        if not isinstance(agent, str) or agent not in targets:
+            continue
+        if not isinstance(tool_calls, int) or isinstance(tool_calls, bool):
+            continue
+        target = targets[agent]
+        pct = round(tool_calls / target * 100)
+        agents_out.append({
+            "agent": agent,
+            "tool_calls": tool_calls,
+            "budget_target": target,
+            "utilization_pct": pct,
+        })
+        percentages.append(pct)
+
+    if not percentages:
+        return None
+    return {
+        "agents": agents_out,
+        "median_pct": _exact_statistic(statistics.median(percentages)),
+        "min_pct": min(percentages),
+        "max_pct": max(percentages),
+        "sample_count": len(percentages),
+    }
+
+
 def measure_run(
     manifest: dict[str, Any],
     sessions_root: str | Path,
@@ -885,6 +978,7 @@ def measure_run(
         measured["transcript"] = _sanitize_transcript(
             _unavailable_transcript("duplicate_run_id_conflict")
         )
+        measured["budget_utilization"] = None
         measured["metric_availability"] = {
             family: "missing" for family in _AVAILABILITY_FAMILIES
         }
@@ -911,6 +1005,7 @@ def measure_run(
             warnings.append(warning)
     measured["warnings"] = _sanitize_warnings(warnings)
     measured["transcript"] = transcript
+    measured["budget_utilization"] = _budget_utilization(measured)
     measured["metric_availability"] = {
         **_pipeline_metric_availability(measured, lifecycle),
         **_transcript_metric_availability(

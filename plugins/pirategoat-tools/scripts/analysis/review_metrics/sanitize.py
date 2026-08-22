@@ -59,6 +59,18 @@ def _safe_wall_time_ms(value: object) -> int | None:
     return parsed if parsed is not None and parsed <= _MAX_WALL_TIME_MS else None
 
 
+def _exact_statistic(value: int | float) -> int | float:
+    """Demote a whole-valued float (e.g. an even-count median) to int.
+
+    Shared by cohort.py (wall-time mean/median) and measure.py (per-run
+    budget-utilization median) — one canonical spelling for "statistics.
+    median/mean of a list of ints may return a float that carries no
+    fractional information", so a JSON report never shows `45.0` next to
+    `45` for two runs whose numbers are equally exact.
+    """
+    return int(value) if isinstance(value, float) and value.is_integer() else value
+
+
 def _safe_usage_snapshot_map(value: object) -> dict[str, int] | None:
     """One complete token-usage map from the durable usage-snapshot section.
 

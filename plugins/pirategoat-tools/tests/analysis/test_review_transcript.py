@@ -2929,6 +2929,59 @@ def test_invalid_manifest_step_timeline_keeps_usage_unattributed(tmp_path, steps
     }
 
 
+def test_duplicate_step_event_does_not_double_count_usage(tmp_path):
+    """A resumed run that re-enters a pipeline step appends a second event
+    for that same step number to the append-only telemetry log (e.g.
+    `orchestration.py`'s step 9 re-observes on every re-entry). The
+    stage-timeline reader must not crash on the repeat and must not
+    double-count usage in that window: entries between the FIRST
+    occurrence of the repeated step and the step that follows the LAST
+    occurrence are attributed to that step exactly once each, never
+    twice over because the transition fired twice.
+    """
+    sessions = tmp_path / "sessions"
+    session = sessions / "dup-step.jsonl"
+    run_dir = tmp_path / "run"
+    manifest = _manifest("dup-step", tmp_path, run_dir, started=[])
+    manifest["steps"] = [
+        {
+            "event": "step",
+            "step": 9,
+            "timestamp": (_TEST_TRANSCRIPT_START + timedelta(seconds=20)).isoformat(),
+        },
+        # The re-entry: same step number, a later timestamp, appended
+        # rather than replacing the first — exactly what the append-only
+        # log produces on a resumed run.
+        {
+            "event": "step",
+            "step": 9,
+            "timestamp": (_TEST_TRANSCRIPT_START + timedelta(seconds=30)).isoformat(),
+        },
+        {
+            "event": "step",
+            "step": 11,
+            "timestamp": (_TEST_TRANSCRIPT_START + timedelta(seconds=40)).isoformat(),
+        },
+    ]
+    _write_jsonl(
+        session,
+        [
+            _at(_assistant(usage=_usage(1, 1)), 22),  # before the re-entry
+            _at(_assistant(usage=_usage(2, 2)), 25),  # before the re-entry
+            _at(_assistant(usage=_usage(4, 4)), 32),  # after the re-entry
+        ],
+    )
+
+    result = enrich_run_transcript(manifest, sessions, set())
+
+    assert result["warnings"] == []
+    by_step = result["orchestrator_usage_by_step"]
+    # 1 + 2 + 4 = 7 on each side — summed once, not once per transition.
+    assert by_step["9"]["input_tokens"] == 7
+    assert by_step["9"]["output_tokens"] == 7
+    assert "11" not in by_step
+
+
 class TestEnrichRunTranscript:
     def test_missing_session_identity_and_file_have_fixed_unavailable_shapes(self, tmp_path):
         missing_identity = enrich_run_transcript(

@@ -6718,6 +6718,199 @@ def _measured_run(
     return run
 
 
+class TestBudgetUtilization:
+    """Per-agent tool_calls / budget_target, plus the run's own median/range.
+
+    budget_target comes from the manifest's projected agent-start
+    lifecycle (agent_start's existing `budget_target` telemetry key —
+    Task 4 already carries it there; this is the metrics layer's first
+    consumer). tool_calls comes from the transcript enrichment's
+    per-agent usage rows, which already counts them. Combining the two
+    is new; neither fact needed a new transport.
+    """
+
+    def _manifest_with_agents(self, *agents: tuple[str, int]) -> dict:
+        manifest = _manifest(session_id="session-1")
+        manifest["agents"]["started"] = [
+            {"agent": name, "budget_target": target}
+            for name, target in agents
+        ]
+        return manifest
+
+    def _agent_usage_entry(
+        self, agent: str, tool_calls: int, *, available: bool = True
+    ) -> dict:
+        return {
+            "agent": agent,
+            "agent_id": f"{agent}-id",
+            "model": "claude-sonnet-4-5",
+            "available": available,
+            "usage": _usage(0) if available else None,
+            "usage_by_model": {} if available else None,
+            "tool_calls": tool_calls if available else None,
+        }
+
+    def _measure(self, monkeypatch, tmp_path, manifest, agent_usage):
+        registry = tmp_path / "registry.json"
+        registry.write_text(json.dumps({"agents": {"code-reviewer": {}}}))
+        transcript = _complete_empty_transcript()
+        transcript["agent_usage"] = agent_usage
+
+        def enrich(_manifest, _sessions_root, _recognized_agents):
+            return copy.deepcopy(transcript)
+
+        monkeypatch.setattr(measure, "_load_transcript_module", lambda: enrich)
+        return measure_run(manifest, tmp_path, registry_path=registry)
+
+    def test_reports_per_agent_utilization_and_run_level_median_range(
+        self, monkeypatch, tmp_path
+    ):
+        """The brief's own worked example: three agents landing at
+        12%/40%/78% report a median of 40 with a 12-78 range."""
+        manifest = self._manifest_with_agents(
+            ("a-reviewer", 20), ("b-reviewer", 50), ("c-reviewer", 50)
+        )
+        agent_usage = [
+            self._agent_usage_entry("a-reviewer", 8),
+            self._agent_usage_entry("b-reviewer", 6),
+            self._agent_usage_entry("c-reviewer", 39),
+        ]
+
+        measured = self._measure(monkeypatch, tmp_path, manifest, agent_usage)
+
+        utilization = measured["budget_utilization"]
+        by_agent = {
+            row["agent"]: row for row in utilization["agents"]
+        }
+        assert by_agent["a-reviewer"] == {
+            "agent": "a-reviewer",
+            "tool_calls": 8,
+            "budget_target": 20,
+            "utilization_pct": 40,
+        }
+        assert by_agent["b-reviewer"]["utilization_pct"] == 12
+        assert by_agent["c-reviewer"]["utilization_pct"] == 78
+        assert utilization["median_pct"] == 40
+        assert utilization["min_pct"] == 12
+        assert utilization["max_pct"] == 78
+        assert utilization["sample_count"] == 3
+
+    def test_agent_missing_budget_target_is_excluded_not_zeroed(
+        self, monkeypatch, tmp_path
+    ):
+        """An agent with tool_calls but no known budget_target (e.g. a
+        pre-Task-4 manifest, or a lifecycle event that failed to
+        sanitize) must not be silently reported as 0% utilized."""
+        manifest = self._manifest_with_agents(("a-reviewer", 20))
+        agent_usage = [
+            self._agent_usage_entry("a-reviewer", 8),
+            self._agent_usage_entry("untracked-reviewer", 5),
+        ]
+
+        measured = self._measure(monkeypatch, tmp_path, manifest, agent_usage)
+
+        utilization = measured["budget_utilization"]
+        assert [row["agent"] for row in utilization["agents"]] == ["a-reviewer"]
+        assert utilization["sample_count"] == 1
+
+    def test_unavailable_agent_transcript_is_excluded(
+        self, monkeypatch, tmp_path
+    ):
+        """`available: False` means tool_calls is None (missing evidence,
+        not a measured zero) — it must not enter the denominator."""
+        manifest = self._manifest_with_agents(("a-reviewer", 20))
+        agent_usage = [self._agent_usage_entry("a-reviewer", 0, available=False)]
+
+        measured = self._measure(monkeypatch, tmp_path, manifest, agent_usage)
+
+        assert measured["budget_utilization"] is None
+
+    def test_no_measurable_agent_reports_none_not_empty(
+        self, monkeypatch, tmp_path
+    ):
+        """No fabricated zero-agent report: a run this metric can't speak
+        to reports None, the same as every other unmeasured family here."""
+        manifest = self._manifest_with_agents()
+
+        measured = self._measure(monkeypatch, tmp_path, manifest, [])
+
+        assert measured["budget_utilization"] is None
+
+    def test_disabled_transcripts_report_no_utilization(self, tmp_path):
+        """tool_calls lives in the transcript family; with transcripts off
+        there is no numerator, so utilization is unmeasured, not missing
+        the whole run's other facts."""
+        manifest = self._manifest_with_agents(("a-reviewer", 20))
+
+        measured = measure_run(manifest, tmp_path, include_transcripts=False)
+
+        assert measured["budget_utilization"] is None
+
+    def test_first_start_wins_budget_target_for_a_retried_agent(
+        self, monkeypatch, tmp_path
+    ):
+        """A retried agent's budget must not move mid-run: the FIRST
+        dispatch's target is the one the reviewer actually saw in its own
+        bootstrap prompt."""
+        manifest = _manifest(session_id="session-1")
+        manifest["agents"]["started"] = [
+            {"agent": "a-reviewer", "budget_target": 20},
+            {"agent": "a-reviewer", "budget_target": 999},
+        ]
+        agent_usage = [self._agent_usage_entry("a-reviewer", 8)]
+
+        measured = self._measure(monkeypatch, tmp_path, manifest, agent_usage)
+
+        [row] = measured["budget_utilization"]["agents"]
+        assert row["budget_target"] == 20
+        assert row["utilization_pct"] == 40
+
+
+class TestBudgetUtilizationRendering:
+    """The JSON per-agent figures and the table's median-range cell must
+    never disagree — one computed value, two presentations."""
+
+    def _run(self, utilization: dict | None) -> dict:
+        run = copy.deepcopy(_measured_run("run-1"))
+        run["budget_utilization"] = utilization
+        return run
+
+    def test_table_row_shows_median_and_range(self):
+        row = render._table_row(
+            self._run(
+                {
+                    "agents": [],
+                    "median_pct": 40,
+                    "min_pct": 12,
+                    "max_pct": 78,
+                    "sample_count": 3,
+                }
+            )
+        )
+
+        assert "median 40% (12–78%)" in row
+
+    def test_table_row_shows_placeholder_when_unmeasured(self):
+        row = render._table_row(self._run(None))
+
+        assert "—" in row
+
+    def test_format_table_header_includes_budget_util_column(self):
+        table = format_table(
+            [self._run({
+                "agents": [],
+                "median_pct": 40,
+                "min_pct": 12,
+                "max_pct": 78,
+                "sample_count": 3,
+            })],
+            {"runs": 1, "transcript_runs": 0},
+        )
+
+        assert "Budget util" in table
+        assert "median 40% (12" in table
+
+
 class TestAggregateCohort:
     def test_keeps_complete_partial_and_missing_usage_denominators_separate(self):
         complete = _measured_run("complete", usage=_usage(10))

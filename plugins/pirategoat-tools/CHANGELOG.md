@@ -23,6 +23,7 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 - **Build stamps** — durable artifacts carry `plugin_version`, and `run-config.json` also carries `plugin_commit` (short HEAD; explicit `null` when undeterminable) so dev builds are distinguishable between releases.
 - **`agents_status.py --wait --max-seconds N`** — blocks until dispatched reviewers finish, replacing improvised polling patterns.
 - **`BACKLOG.md`** — deferred-but-valid findings from audits and reviews now live in a committed home, each with evidence and a do-when condition.
+- **Per-agent budget utilization** — `review_run_metrics.py` reports each agent's tool calls against its budget target, with a run-level median and range in both the JSON output and the table's new `Budget util` column.
 
 ### Changed
 

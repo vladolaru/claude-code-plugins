@@ -83,6 +83,31 @@ def _synthesis_cell(section: object, state: str) -> str:
     )
 
 
+def _budget_utilization_cell(value: object) -> str:
+    """One run's median tool-call utilization as `median N% (min–max%)`.
+
+    "—" covers every unmeasured shape uniformly: disabled/missing
+    transcripts, a pre-budget-telemetry manifest, or a run with no agent
+    carrying both a known target and observed tool-call evidence. Never a
+    fabricated 0%.
+    """
+    if not isinstance(value, dict):
+        return "—"
+    median = value.get("median_pct")
+    low = value.get("min_pct")
+    high = value.get("max_pct")
+    if (
+        not isinstance(median, (int, float))
+        or isinstance(median, bool)
+        or not isinstance(low, int)
+        or isinstance(low, bool)
+        or not isinstance(high, int)
+        or isinstance(high, bool)
+    ):
+        return "—"
+    return f"median {median}% ({low}–{high}%)"
+
+
 def _table_row(run: dict[str, Any]) -> list[str]:
     identity = run.get("run") if isinstance(run.get("run"), dict) else {}
     dispatch = run.get("dispatch") if isinstance(run.get("dispatch"), dict) else None
@@ -138,6 +163,7 @@ def _table_row(run: dict[str, Any]) -> list[str]:
     synthesis_text = _synthesis_cell(
         run.get("synthesis_agents"), metrics.get("synthesis_agents", "missing")
     )
+    budget_text = _budget_utilization_cell(run.get("budget_utilization"))
     usage = transcript.get("usage") if isinstance(transcript, dict) else None
     usage_state = metrics.get("usage", "missing")
     if usage_state in {"complete", "partial"} and isinstance(usage, dict):
@@ -171,6 +197,7 @@ def _table_row(run: dict[str, Any]) -> list[str]:
         synthesis_text,
         tokens,
         transcript_state,
+        budget_text,
     ]
 
 
@@ -189,6 +216,7 @@ def format_table(runs: list[dict[str, Any]], aggregate: dict[str, Any]) -> str:
         "Recon/Critic",
         "Eff In/Out",
         "Transcript",
+        "Budget util",
     ]
     headers = [_table_cell(value) for value in headers]
     rows = [
