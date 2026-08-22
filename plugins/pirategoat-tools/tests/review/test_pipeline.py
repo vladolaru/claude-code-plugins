@@ -2116,65 +2116,69 @@ class TestCriticVerdictPersistence:
 
     @pytest.fixture(autouse=True)
     def _isolated_repo(self, tmp_path):
-        """run_pipeline's cwd has no default — see its docstring. Isolate
-        every subprocess call in this class to a throwaway repo at
-        tmp_path so none of them can touch the real checkout."""
-        init_repo(tmp_path)
-        # tmp_path also serves as --output-dir in these tests: seed a
-        # harmless, allowlisted pipeline-identity marker so the sweep's
-        # identity guard doesn't refuse a directory that already holds
-        # unrelated repo files (.git, README.md) on the very first call.
-        (tmp_path / ".branch-review-baseline.json").write_text("{}")
+        """run_pipeline's cwd has no default — see its docstring. The repo
+        lives at tmp_path/repo, never at tmp_path itself: tmp_path/out is
+        --output-dir for the rest of the class, and the allowlist sweep
+        deletes any subdirectory it doesn't recognize (including a nested
+        repo) — repo and output-dir must be siblings."""
+        (tmp_path / "repo").mkdir()
+        init_repo(tmp_path / "repo")
+        (tmp_path / "out").mkdir()
 
     def test_step_11_reads_critic_verdict_from_file(self, tmp_path):
         """Step 11 should read decision-critic-verdict.json into state."""
+        out = tmp_path / "out"
         run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
-        (tmp_path / "review-verdict.json").write_text('{"verdict": "APPROVE"}')
-        (tmp_path / "review-report.md").write_text("# Review")
-        (tmp_path / "review-findings.json").write_text('{"verdict": "APPROVE", "issues": []}')
-        (tmp_path / "decision-critic-verdict.json").write_text('{"verdict": "STAND"}')
+                   "--output-dir", str(out), "--pr-number", "42", cwd=tmp_path / "repo")
+        (out / "review-verdict.json").write_text('{"verdict": "APPROVE"}')
+        (out / "review-report.md").write_text("# Review")
+        (out / "review-findings.json").write_text('{"verdict": "APPROVE", "issues": []}')
+        (out / "decision-critic-verdict.json").write_text('{"verdict": "STAND"}')
         r = run_pipeline("--step", "11", "--mode", "pr",
-                       "--output-dir", str(tmp_path), cwd=tmp_path)
+                       "--output-dir", str(out), cwd=tmp_path / "repo")
         assert r.returncode == 0
-        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        result = json.loads((out / "pipeline-result.json").read_text())
         assert result["critic_verdict"] == "STAND"
 
     def test_step_11_critic_verdict_unavailable_when_file_missing(self, tmp_path):
         """Step 11 should report critic_verdict as unavailable when file is missing."""
+        out = tmp_path / "out"
         run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
-        (tmp_path / "review-verdict.json").write_text('{"verdict": "APPROVE"}')
-        (tmp_path / "review-report.md").write_text("# Review")
-        (tmp_path / "review-findings.json").write_text('{"verdict": "APPROVE", "issues": []}')
+                   "--output-dir", str(out), "--pr-number", "42", cwd=tmp_path / "repo")
+        (out / "review-verdict.json").write_text('{"verdict": "APPROVE"}')
+        (out / "review-report.md").write_text("# Review")
+        (out / "review-findings.json").write_text('{"verdict": "APPROVE", "issues": []}')
         r = run_pipeline("--step", "11", "--mode", "pr",
-                       "--output-dir", str(tmp_path), cwd=tmp_path)
+                       "--output-dir", str(out), cwd=tmp_path / "repo")
         assert r.returncode == 0
-        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        result = json.loads((out / "pipeline-result.json").read_text())
         assert result["critic_verdict"] == "unavailable"
 
     def test_step_11_maps_skipped_critic_to_unavailable(self, tmp_path):
         """SKIPPED verdict (quick mode) should map to unavailable for downstream consumers."""
+        out = tmp_path / "out"
         run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
-        (tmp_path / "review-verdict.json").write_text('{"verdict": "APPROVE"}')
-        (tmp_path / "review-report.md").write_text("# Review")
-        (tmp_path / "review-findings.json").write_text('{"verdict": "approve", "issues": []}')
-        (tmp_path / "decision-critic-verdict.json").write_text(
+                   "--output-dir", str(out), "--pr-number", "42", cwd=tmp_path / "repo")
+        (out / "review-verdict.json").write_text('{"verdict": "APPROVE"}')
+        (out / "review-report.md").write_text("# Review")
+        (out / "review-findings.json").write_text('{"verdict": "approve", "issues": []}')
+        (out / "decision-critic-verdict.json").write_text(
             '{"verdict": "SKIPPED", "reason": "quick mode, reconciliation verdict: approve"}'
         )
         r = run_pipeline("--step", "11", "--mode", "pr",
-                       "--output-dir", str(tmp_path), cwd=tmp_path)
+                       "--output-dir", str(out), cwd=tmp_path / "repo")
         assert r.returncode == 0
-        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        result = json.loads((out / "pipeline-result.json").read_text())
         assert result["critic_verdict"] == "unavailable"
 
     def test_step_1_clears_stale_critic_verdict(self, tmp_path):
         """Step 1 should clear decision-critic-verdict.json from previous runs."""
-        (tmp_path / "decision-critic-verdict.json").write_text('{"verdict": "REVISE"}')
+        out = tmp_path / "out"
+        (out / "run-config.json").write_text('{"mode": "full"}')
+        (out / "decision-critic-verdict.json").write_text('{"verdict": "REVISE"}')
         run_pipeline("--step", "1", "--mode", "full",
-                   "--output-dir", str(tmp_path), cwd=tmp_path)
-        assert not (tmp_path / "decision-critic-verdict.json").exists()
+                   "--output-dir", str(out), cwd=tmp_path / "repo")
+        assert not (out / "decision-critic-verdict.json").exists()
 
 
 class TestStep10CriticSource:

@@ -208,10 +208,9 @@ except ImportError:
 # run's reviewer .patch scratch survived it into telemetry).
 # AMENDED per adversarial review (B1, source-verified):
 #   .branch-review-baseline.json — cross-run incremental-review state.
-#   run-config.json    — pre-seeded by pirategoat-bot BEFORE step 1 runs
-#                        (orchestrator-review.js writes it, and the sweep
-#                        at pipeline.py:762 runs before read_config:765);
-#                        also in today's _PRESERVED_FILES for this reason.
+#   run-config.json    — pre-seeded by pirategoat-bot BEFORE step 1 runs:
+#                        this sweep is the first statement of step 1,
+#                        before this function's caller reads run-config.json.
 #   review-context.json — bot-owned, pre-seeded the same way; context.py
 #                        is gap-filling and reads whatever already exists.
 _SWEEP_ALLOWLIST = frozenset({
@@ -223,9 +222,12 @@ _SWEEP_ALLOWLIST = frozenset({
 # The sweep is rm-everything-shaped, so it only runs in a directory that
 # proves it is pipeline-owned — same spirit as the worktree sweep's
 # repo-identity gate. A mistargeted --output-dir fails loudly instead of
-# being emptied.
+# being emptied. review-context.json is included: it is pre-seeded by the
+# bot in the same two-write sequence as run-config.json, and a crash
+# between those writes must not leave a directory that hard-exits forever.
 _PIPELINE_DIR_MARKERS = (
     ".branch-review-baseline.json", "pipeline-state.json", "run-config.json",
+    "review-context.json",
 )
 
 

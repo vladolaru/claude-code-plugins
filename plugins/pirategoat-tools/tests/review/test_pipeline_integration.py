@@ -1011,6 +1011,7 @@ class TestStep5Orchestration:
 
         assert not (tmp_path / "dispatch-plan.initial.json").exists()
 
+
 class TestStep6Orchestration:
     """Step 6 main() reads dispatch-plan.json and populates dispatched_agents."""
 
