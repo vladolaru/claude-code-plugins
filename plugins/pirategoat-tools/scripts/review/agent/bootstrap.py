@@ -1395,7 +1395,7 @@ def resolve_reviewer_identity(args):
 
 def persist_deferred_sidecar(output_dir, effective_agent_name,
                              deferred_files, list_only_files,
-                             review_budget=None, budget_capped=False,
+                             review_budget=None,
                              in_scope_count=None, diffed_count=None):
     """Write the authoritative deferred-set sidecar for the output builder.
 
@@ -1409,9 +1409,24 @@ def persist_deferred_sidecar(output_dir, effective_agent_name,
     one per-agent sidecar output.py's save() already provably locates (it
     reads it for NOT DIFFED auto-fill), and the effective (override-applied)
     number bootstrap computed is never recomputed downstream. review_budget
-    and budget_capped default to None/False so callers that have not yet
-    computed a budget (unlikely, but keeps the signature safe) still write a
-    valid schema-2 payload with an absent target.
+    defaults to None so callers that have not yet computed a budget
+    (unlikely, but keeps the signature safe) still write a valid schema-2
+    payload with an absent target.
+
+    Schema 2 originally also carried ``budget_capped``, dropped here (still
+    within 1.114.0's unreleased window, so no schema bump): nothing ever
+    read it back out of this sidecar. The live consumer of "was this
+    agent's budget capped" is ``build_output()``'s REVIEW BUDGET section,
+    fed directly by the caller's own ``budget_capped`` local — a value
+    computed once per dispatch and never round-tripped through disk. A
+    metrics-layer reader would have had to either re-open this per-run
+    sidecar (a new, ephemeral-file access pattern this measurement layer
+    doesn't otherwise have) or re-derive capping from telemetry's
+    ``scope.lines`` — which silently disagrees with the truth whenever
+    ``budget_override`` applies, since override always forces
+    ``budget_capped=False`` regardless of scope size. Reporting a
+    plausible-but-wrong measurement is worse than reporting none, so
+    the field is deleted rather than surfaced.
     """
     # effective_agent_name, not the registry agent: the builder locates this
     # sidecar via PIRATEGOAT_REVIEWER_NAME, which is derived from the effective
@@ -1448,7 +1463,6 @@ def persist_deferred_sidecar(output_dir, effective_agent_name,
                 # The effective (override-applied) number is written here,
                 # never recomputed downstream.
                 "review_budget": review_budget,
-                "budget_capped": budget_capped,
                 # Scope counts for the save echo's PROGRESS line — counts,
                 # not lists: the scope-summary sidecar keeps the lists for
                 # coverage aggregation.
@@ -1896,7 +1910,6 @@ def main():
         not_diffed_paths,
         list_only_paths,
         review_budget=review_budget,
-        budget_capped=budget_capped,
         in_scope_count=len(telemetry_scope_paths),
         diffed_count=len(scope_files_for_budget),
     )

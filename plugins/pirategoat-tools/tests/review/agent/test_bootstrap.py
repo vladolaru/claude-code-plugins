@@ -142,7 +142,6 @@ class TestPersistDeferredSidecar:
             ["src/deferred.php"],
             ["src/list-only.php"],
             review_budget=80,
-            budget_capped=False,
             in_scope_count=12,
             diffed_count=11,
         )
@@ -154,7 +153,6 @@ class TestPersistDeferredSidecar:
             "schema": 2,
             "deferred_files": ["src/deferred.php"],
             "review_budget": 80,
-            "budget_capped": False,
             "in_scope_count": 12,
             "diffed_count": 11,
         }
@@ -162,7 +160,7 @@ class TestPersistDeferredSidecar:
     def test_writes_empty_authoritative_set(self, tmp_path):
         _mod.persist_deferred_sidecar(
             str(tmp_path), "security-reviewer", [], ["src/list-only.php"],
-            review_budget=40, budget_capped=True,
+            review_budget=40,
             in_scope_count=5, diffed_count=5,
         )
 
@@ -173,7 +171,6 @@ class TestPersistDeferredSidecar:
             "schema": 2,
             "deferred_files": [],
             "review_budget": 40,
-            "budget_capped": True,
             "in_scope_count": 5,
             "diffed_count": 5,
         }
@@ -184,7 +181,7 @@ class TestPersistDeferredSidecar:
 
         _mod.persist_deferred_sidecar(
             str(output_file), "security-reviewer", ["src/deferred.php"], [],
-            review_budget=80, budget_capped=False,
+            review_budget=80,
             in_scope_count=1, diffed_count=0,
         )
 
@@ -201,7 +198,7 @@ class TestPersistDeferredSidecar:
             "security-reviewer",
             ["src/a.php", "src/b.php", "src/a.php"],
             [],
-            review_budget=80, budget_capped=False,
+            review_budget=80,
             in_scope_count=2, diffed_count=2,
         )
 
@@ -212,7 +209,6 @@ class TestPersistDeferredSidecar:
             "schema": 2,
             "deferred_files": ["src/a.php", "src/b.php"],
             "review_budget": 80,
-            "budget_capped": False,
             "in_scope_count": 2,
             "diffed_count": 2,
         }
@@ -232,7 +228,6 @@ class TestPersistDeferredSidecar:
             "schema": 2,
             "deferred_files": ["src/a.php"],
             "review_budget": None,
-            "budget_capped": False,
             "in_scope_count": None,
             "diffed_count": None,
         }

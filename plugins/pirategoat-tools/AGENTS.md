@@ -158,7 +158,7 @@ Not every JSON file in a run directory carries one, and this rule does not ask y
 | `usage-snapshot.json` | `SNAPSHOT_SCHEMA` — `scripts/analysis/usage_snapshot.py` |
 | `observed_reads` payload in transcript enrichment | `_OBSERVED_READS_SCHEMA` — `scripts/analysis/review_transcript.py`. The same-named constant in `review_metrics/contracts.py` is the *consumer's* expected value, and must be bumped in lockstep |
 | `review_run_metrics.py --format json` report | `_REPORT_SCHEMA` — `scripts/analysis/review_metrics/contracts.py` |
-| `<reviewer>-deferred-files.json` | literal `2` at the write site (`persist_deferred_sidecar()` — `scripts/review/agent/bootstrap.py`) — 1.114.0 bumped it from 1 to add `review_budget`, `budget_capped`, `in_scope_count`, `diffed_count` |
+| `<reviewer>-deferred-files.json` | literal `2` at the write site (`persist_deferred_sidecar()` — `scripts/review/agent/bootstrap.py`) — 1.114.0 bumped it from 1 to add `review_budget`, `in_scope_count`, `diffed_count` (a fourth field, `budget_capped`, was added and then deleted within the same unreleased window — nothing ever read it back out of the sidecar) |
 | Per-agent sidecars: advisory entitlement, scope summary, worktree baseline / hygiene | literal `1` at the write site |
 
 **Exception — `review-context.json` and `issue-context.json` carry `version: 1`, and that key is not ours.** pirategoat-bot writes both files and asserts on that field (`src/orchestrator-review.test.js`, `src/orchestrator-linear.test.js`). Renaming it to `schema` would break the bot. Leave it alone.

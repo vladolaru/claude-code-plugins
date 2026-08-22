@@ -2515,7 +2515,7 @@ class TestSaveEchoProgressAndNextUnread:
         deferred = [f"deferred/{i:02d}.go" for i in range(20)]  # largest first
         self._write_sidecar(
             tmp_path, deferred_files=deferred, review_budget=80,
-            budget_capped=False, in_scope_count=30, diffed_count=10,
+            in_scope_count=30, diffed_count=10,
         )
         builder = ReviewOutputBuilder("123", "code")
         builder.add_deferred_reviewed(*deferred[:3])  # claimed — read

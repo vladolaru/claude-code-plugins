@@ -326,10 +326,7 @@ class TestCategoryRepresentatives:
         data = json.loads(sidecar.read_text())
         assert data["schema"] == 2
         assert data["review_budget"] == 45
-        assert isinstance(data["budget_capped"], bool)
-        # A budget override is a deliberate per-agent choice, never
-        # presented as scope-clamped.
-        assert data["budget_capped"] is False
+        assert "budget_capped" not in data
 
         diffed = extract_scope_files(result.stdout)
         not_diffed = extract_not_diffed_files(result.stdout)
