@@ -1869,6 +1869,58 @@ class TestStepElevenRerendersFindingsMarkdown:
         assert result["report_path"] == str(tmp_path / "review-report.md")
         assert state["publication_pending"] is False
 
+    @pytest.mark.parametrize("render_recovers", [True, False])
+    def test_prepare_render_degradation_survives_publication_once(
+        self, tmp_path, monkeypatch, render_recovers
+    ):
+        """The report handoff must not erase failures settled before it."""
+        self._seed(tmp_path, severity="low")
+        (tmp_path / "review-report.md").unlink()
+        _write_critic_verdict(tmp_path, "STAND")
+        state = {}
+        original_materialize = orchestration_mod._materialize_markdown
+
+        monkeypatch.setattr(
+            orchestration_mod, "_materialize_markdown",
+            lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        _orchestrate_step_11("pr", {}, state, {}, str(tmp_path))
+
+        note = "review-findings.md render failed: boom"
+        assert state["publication_pending"] is True
+        assert state["degradation_notes"].count(note) == 1
+        assert not (tmp_path / "pipeline-result.json").exists()
+
+        if render_recovers:
+            monkeypatch.setattr(
+                orchestration_mod, "_materialize_markdown",
+                original_materialize,
+            )
+        (tmp_path / "review-report.md").write_text("# report")
+        _orchestrate_step_11("pr", {}, state, {}, str(tmp_path))
+
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert result["status"] == "degraded"
+        assert result["degradation_notes"].count(note) == 1
+
+    def test_malformed_owned_degradations_fail_closed(
+        self, tmp_path
+    ):
+        """Re-entry inherits only a valid step-11-owned note collection."""
+        self._seed(tmp_path, severity="low")
+        _write_critic_verdict(tmp_path, "STAND")
+        state = {
+            "publication_pending": True,
+            "step_11_degradation_notes": ["owned note", 42],
+            "degradation_notes": ["unrelated generic state note"],
+        }
+
+        _orchestrate_step_11("pr", {}, state, {}, str(tmp_path))
+
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert result["status"] == "success"
+        assert result["degradation_notes"] == []
+
     def test_an_already_written_report_still_wins(self, tmp_path):
         """A re-entered step 11 finds the report already authored; when it
         exists it is the better answer."""

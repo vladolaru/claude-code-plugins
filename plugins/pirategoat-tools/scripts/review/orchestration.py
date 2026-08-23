@@ -1599,6 +1599,31 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
     return context
 
 
+def _merge_step_11_degradation_notes(state, current_notes):
+    """Carry producer-owned step-11 degradations across report handoff.
+
+    The public ``degradation_notes`` state field is presentation state and
+    may contain prose from another producer, so it is never an inheritance
+    source. Only this step's private collection is eligible. A malformed
+    collection is ignored as a whole rather than partially trusting prose
+    whose provenance can no longer be established.
+    """
+    prior_notes = state.get("step_11_degradation_notes")
+    if not (
+        isinstance(prior_notes, list)
+        and all(isinstance(note, str) and note for note in prior_notes)
+    ):
+        prior_notes = []
+
+    merged = []
+    seen = set()
+    for note in [*prior_notes, *current_notes]:
+        if note not in seen:
+            seen.add(note)
+            merged.append(note)
+    return merged
+
+
 def _orchestrate_step_11(mode, config, state, context, output_dir):
     # Synthesis-agent lifecycle, adjudicated FIRST and for a hard ordering
     # reason: finalize itself writes review-findings.json (the critic
@@ -1870,7 +1895,13 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
 
     # Computed last: every degradation any of the work above discovered has
     # to reach the status it is reported beside, or the run publishes
-    # "success" while carrying a note that says otherwise.
+    # "success" while carrying a note that says otherwise. Step 11's report
+    # handoff makes this function re-entrant, so merge its own prior notes
+    # before deriving status: a transient prepare-pass failure remains part
+    # of the terminal run even when publication can repeat that work cleanly.
+    degradation_notes = _merge_step_11_degradation_notes(
+        state, degradation_notes
+    )
     status = "success" if not degradation_notes else "degraded"
 
     pipeline_result = {
@@ -1903,6 +1934,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # `critic_source` here.
     state["verdict_source"] = verdict_source
     state["degradation_notes"] = list(degradation_notes)
+    state["step_11_degradation_notes"] = list(degradation_notes)
     state["publication_pending"] = publication_pending
 
     if publication_pending:
