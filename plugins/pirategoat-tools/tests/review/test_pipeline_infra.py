@@ -1089,6 +1089,29 @@ class TestSkippedStepRecording:
         init_repo(tmp_path / "repo")
         (tmp_path / "out").mkdir()
 
+    def _prepare_step_11(self, tmp_path):
+        result = run_pipeline(
+            "--step", "11", "--mode", "full",
+            "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo",
+        )
+        assert result.returncode == 0
+        state = json.loads(
+            (tmp_path / "out" / "pipeline-state.json").read_text()
+        )
+        assert state["publication_pending"] is True
+        assert 11 not in state["completed_steps"]
+        assert 12 not in {entry["step"] for entry in state["skipped_steps"]}
+        assert not (tmp_path / "out" / "pipeline-result.json").exists()
+
+    def _publish_step_11(self, tmp_path):
+        (tmp_path / "out" / "review-report.md").write_text("# Review report")
+        result = run_pipeline(
+            "--step", "11", "--mode", "full",
+            "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo",
+        )
+        assert result.returncode == 0
+        assert (tmp_path / "out" / "pipeline-result.json").is_file()
+
     def test_skipped_steps_recorded_with_condition(self, tmp_path):
         """Branch mode passes over step 2 — needs_workspace_setup is PR-only."""
         r = run_pipeline("--step", "1", "--mode", "full",
@@ -1101,14 +1124,15 @@ class TestSkippedStepRecording:
         assert skipped[2]["title"] == "Repo Setup"
 
     def test_trailing_skip_recorded_at_last_active_step(self, tmp_path):
-        """Step 12 follows the last active step, so step 11 must record it."""
+        """Step 12 is skipped only after step 11 publishes terminally."""
         run_pipeline("--step", "1", "--mode", "full",
                    "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
-        r = run_pipeline("--step", "11", "--mode", "full",
-                       "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
-        assert r.returncode == 0
+        self._prepare_step_11(tmp_path)
+        self._publish_step_11(tmp_path)
+
         state = json.loads((tmp_path / "out" / "pipeline-state.json").read_text())
         skipped = {s["step"]: s for s in state["skipped_steps"]}
+        assert 11 in state["completed_steps"]
         assert 12 in skipped
         assert skipped[12]["condition"] == "has_workspace_state_interactive"
         assert skipped[12]["title"] == "Cleanup"
@@ -1117,10 +1141,11 @@ class TestSkippedStepRecording:
         """Re-invoking the same step records each passed-over step once."""
         run_pipeline("--step", "1", "--mode", "full",
                    "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
+        self._prepare_step_11(tmp_path)
+        self._publish_step_11(tmp_path)
         run_pipeline("--step", "11", "--mode", "full",
                    "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
-        run_pipeline("--step", "11", "--mode", "full",
-                   "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
+
         state = json.loads((tmp_path / "out" / "pipeline-state.json").read_text())
         recorded = [entry["step"] for entry in state["skipped_steps"]]
         assert recorded == sorted(set(recorded))
