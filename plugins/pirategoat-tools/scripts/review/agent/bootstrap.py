@@ -450,6 +450,34 @@ def order_by_diffstat_largest_first(
     )
 
 
+def partition_scope_paths(
+    inline_paths: List[str],
+    deferred_paths: List[str],
+    list_only_paths: List[str],
+) -> Tuple[List[str], List[str], List[str]]:
+    """Order-deduplicate three scope populations with fixed precedence.
+
+    Inline paths win over deferred paths, and both win over list-only paths.
+    Each returned population is therefore disjoint while preserving the
+    first-seen order of paths that remain in that population.
+    """
+    seen = set()
+
+    def take_unseen(paths: List[str]) -> List[str]:
+        population = []
+        for path in paths:
+            if path not in seen:
+                seen.add(path)
+                population.append(path)
+        return population
+
+    return (
+        take_unseen(inline_paths),
+        take_unseen(deferred_paths),
+        take_unseen(list_only_paths),
+    )
+
+
 def load_scope_facts(summary_paths: List[str]) -> Optional[Dict[str, Any]]:
     """Derive scope facts from the machine-readable scope-summary sidecars.
 
@@ -1434,18 +1462,11 @@ def persist_deferred_sidecar(output_dir, effective_agent_name,
     # on one shared template-named file. List-only files are in scope but are
     # not budget-deferred, so they do not belong in the authoritative set.
     #
-    # deferred_files is deduped here, order-preserving, the same
-    # dict.fromkeys() shape telemetry_scope_paths already uses next to its
-    # own call site: a multi-domain agent's secondary-domain scope render
-    # can list a file already budget-exceeded in the primary domain's
-    # sidecar, and load_scope_facts() concatenates every summary's
-    # budget_exceeded_files without deduping. An undeduped sidecar makes
-    # this the one place a duplicate reaches a DOWNSTREAM consumer: it
-    # inflates len(deferred_files) — the total build_coverage_manifest's
-    # deferred_total_by_agent reads and reconciles claimed+declared+
-    # autofilled against — while save()'s own known_deferred is a
-    # frozenset and never inflates, so an undeduped total would fail that
-    # reconciliation on a correctly-behaving reviewer.
+    # main() passes the normalized deferred population from
+    # partition_scope_paths(). Keep this order-preserving dedupe as defense
+    # for direct callers: an undeduped sidecar inflates the deferred total
+    # build_coverage_manifest reconciles against claimed+declared+autofilled,
+    # while save() reads the same paths as a frozenset and cannot inflate.
     deferred_files = list(dict.fromkeys(deferred_files))
     deferred_sidecar = os.path.join(
         output_dir,
@@ -1852,15 +1873,21 @@ def main():
                 extract_scope_line_count(scope_output) if scope_output else 0
             ),
         }
-    scope_files_for_budget = scope_facts["files"]
     scope_lines_for_budget = scope_facts["stat_lines"]
     # Deferred NOT DIFFED files and list-only CHANGED (no diff) files are
     # in-scope work too: telemetry must carry them or coverage marks them
     # uncovered and reads of them count as out-of-scope. Both are kept out
     # of scope_files_for_budget so inline-diff consumers (file history) keep
     # their meaning, and list-only lines never enter budget sizing.
-    not_diffed_paths = scope_facts["not_diffed"]
-    list_only_paths = scope_facts["list_only"]
+    (
+        scope_files_for_budget,
+        not_diffed_paths,
+        list_only_paths,
+    ) = partition_scope_paths(
+        scope_facts["files"],
+        scope_facts["not_diffed"],
+        scope_facts["list_only"],
+    )
     # load_scope_facts() reads budget_exceeded_files straight off the
     # summary sidecar in priority-tier order (production_first /
     # markup_evidence ahead of size), not the pure size order the rendered
@@ -1871,9 +1898,8 @@ def main():
     not_diffed_paths = order_by_diffstat_largest_first(
         not_diffed_paths, diffstat_totals
     )
-    telemetry_scope_paths = list(
-        dict.fromkeys([*scope_files_for_budget, *not_diffed_paths, *list_only_paths])
-    )
+    progress_scope_paths = [*scope_files_for_budget, *not_diffed_paths]
+    telemetry_scope_paths = [*progress_scope_paths, *list_only_paths]
     # DYNAMIC_DISPATCH_RISK (dead-code-reviewer's Step 0 gate) is derived from
     # this same fact-based path set, not from re-parsing scope_output text —
     # see has_php's docstring note in build_output().
@@ -1910,7 +1936,7 @@ def main():
         not_diffed_paths,
         list_only_paths,
         review_budget=review_budget,
-        in_scope_count=len(telemetry_scope_paths),
+        in_scope_count=len(progress_scope_paths),
         diffed_count=len(scope_files_for_budget),
     )
 

@@ -13,7 +13,7 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 
 - **`--refresh-deps`** — opt-in per run or standing via `~/.config/pirategoat/config.json`, lets interactive runs install stale or missing worktree dependencies before dispatch; defaults off, never for bots.
 - **Deferred-review claims** — `add_deferred_reviewed()` records a NOT DIFFED file actually read; `save()` validates claims against declarations and the deferred sidecar, and auto-declares anything left unaccounted.
-- **Save echo names the continuation** — when unreviewed files remain, the echo also prints a PROGRESS line (in-scope files covered so far) and a NEXT UNREAD list of the largest remaining deferred files, so the reviewer's next turn has a concrete file to read instead of just a target number.
+- **Save echo names the continuation** — when unreviewed files remain, the echo prints reachable PROGRESS derived from disjoint inline and claimable-deferred paths plus a NEXT UNREAD list of the largest remaining deferred files; list-only paths stay in telemetry scope without making 100% progress unreachable.
 - **Structured critic adjustments** — REVISE decisions land in `decision-critic-adjustments.json` and are applied to `review-findings.json` with provenance by a single writer.
 - **Detection benchmark** — the compliance eval grades reviewer findings against per-scenario answer keys (`--trials N`, `--report-out`).
 - **Worktree hygiene measurement** — step-3 snapshot plus a finalize sweep of the pipeline's own probe residue, recorded in the manifest and `pipeline-result.json`.

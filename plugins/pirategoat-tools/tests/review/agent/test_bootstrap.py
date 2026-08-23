@@ -17,6 +17,8 @@ BOOTSTRAP_SCRIPT = SCRIPTS_DIR / "review" / "agent" / "bootstrap.py"
 
 sys.path.insert(0, str(SCRIPTS_DIR))
 
+from review.agent.output import ReviewOutputBuilder
+
 # Import functions under test via importlib (file-based loading)
 import importlib
 
@@ -231,6 +233,139 @@ class TestPersistDeferredSidecar:
             "in_scope_count": None,
             "diffed_count": None,
         }
+
+
+class TestPartitionScopePaths:
+    """Scope populations are disjoint, ordered sets with fixed precedence."""
+
+    def test_partitions_duplicates_and_cross_population_overlap(self):
+        inline, deferred, list_only = _mod.partition_scope_paths(
+            ["src/inline-a.py", "src/shared.py", "src/inline-a.py"],
+            [
+                "src/deferred-a.py",
+                "src/shared.py",
+                "src/deferred-a.py",
+                "src/deferred-b.py",
+            ],
+            [
+                "package-lock.json",
+                "src/deferred-b.py",
+                "package-lock.json",
+                "src/shared.py",
+                "generated/api.json",
+            ],
+        )
+
+        assert inline == ["src/inline-a.py", "src/shared.py"]
+        assert deferred == ["src/deferred-a.py", "src/deferred-b.py"]
+        assert list_only == ["package-lock.json", "generated/api.json"]
+
+    def test_save_echo_uses_reachable_progress_while_telemetry_keeps_list_only(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """Cross-domain repeats cannot inflate progress, while list-only
+        paths remain descriptive telemetry scope outside the claimable queue.
+        """
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        monkeypatch.setattr(
+            _mod,
+            "load_scope_facts",
+            lambda _paths: {
+                "files": [
+                    "src/inline.py",
+                    "src/shared.py",
+                    "src/inline.py",
+                    "src/secondary.py",
+                    "src/shared.py",
+                ],
+                "not_diffed": [
+                    "src/shared.py",
+                    "src/deferred-a.py",
+                    "src/deferred-a.py",
+                    "src/secondary.py",
+                    "src/deferred-b.py",
+                ],
+                "list_only": [
+                    "package-lock.json",
+                    "src/deferred-b.py",
+                    "package-lock.json",
+                    "generated/api.json",
+                ],
+                "stat_lines": 100,
+            },
+        )
+        scope_output = (
+            "STATUS: OK\n"
+            "=== FILES ===\n"
+            "src/inline.py  (+10 -0)\n"
+            "src/shared.py  (+10 -0)\n"
+            "src/secondary.py  (+10 -0)\n"
+            "=== NOT DIFFED (budget exceeded, 2 files) ===\n"
+            "src/deferred-a.py  (+10 -0)\n"
+            "src/deferred-b.py  (+20 -0)\n"
+            "=== CHANGED (no diff — 2 lock/generated files) ===\n"
+            "package-lock.json  (+100 -100)\n"
+            "generated/api.json  (+100 -100)\n"
+        )
+        monkeypatch.setattr(
+            _mod,
+            "run_scope_discovery",
+            lambda *_args, **_kwargs: (0, scope_output),
+        )
+
+        telemetry_starts = []
+
+        class CapturingTelemetry:
+            def __init__(self, _output_dir):
+                pass
+
+            def log_agent_start(self, **kwargs):
+                telemetry_starts.append(kwargs)
+
+        monkeypatch.setattr(_mod, "ReviewTelemetry", CapturingTelemetry)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "bootstrap.py",
+                "--agent",
+                "security-reviewer",
+                "--range",
+                "base..head",
+                "--output-dir",
+                str(tmp_path),
+            ],
+        )
+        with pytest.raises(SystemExit, match="0"):
+            _mod.main()
+        capsys.readouterr()
+
+        builder = ReviewOutputBuilder("123", "security")
+        builder.add_deferred_reviewed("src/deferred-b.py")
+        builder.save(str(tmp_path))
+
+        payload = json.loads(
+            (tmp_path / "security-deferred-files.json").read_text()
+        )
+        covered = payload["diffed_count"] + len(builder.deferred_reviewed)
+        assert telemetry_starts[0]["scope_paths"] == [
+            "src/inline.py",
+            "src/shared.py",
+            "src/secondary.py",
+            "src/deferred-b.py",
+            "src/deferred-a.py",
+            "package-lock.json",
+            "generated/api.json",
+        ]
+        assert payload["deferred_files"] == [
+            "src/deferred-b.py",
+            "src/deferred-a.py",
+        ]
+        assert payload["diffed_count"] == 3
+        assert payload["in_scope_count"] == 5
+        assert 0 <= covered <= payload["in_scope_count"]
+        assert "PROGRESS: covered 4 of 5 in-scope files." in capsys.readouterr().out
 
 
 class TestExtractFileDiffstat:
