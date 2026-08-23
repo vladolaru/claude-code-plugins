@@ -1600,29 +1600,103 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
     return context
 
 
-def _merge_step_11_degradation_notes(state, current_notes):
-    """Carry producer-owned step-11 degradations across report handoff.
+_STEP_11_DEGRADATION_CODES = frozenset({
+    "critic_unavailable_after_dispatch",
+    "critic_adjustment_apply_failed",
+    "critic_adjustment_apply_refused",
+    "critic_adjustment_inspection_failed",
+    "critic_adjustment_pending_non_revise",
+    "findings_markdown_render_failed",
+    "review_record_assembly_failed",
+    "probe_residue_swept",
+    "findings_missing",
+    "ledger_verdict_unusable",
+})
 
-    The public ``degradation_notes`` state field is presentation state and
-    may contain prose from another producer, so it is never an inheritance
-    source. Only this step's private collection is eligible. A malformed
-    collection is ignored as a whole rather than partially trusting prose
-    whose provenance can no longer be established.
-    """
-    prior_notes = state.get("step_11_degradation_notes")
-    if not (
-        isinstance(prior_notes, list)
-        and all(isinstance(note, str) and note for note in prior_notes)
+
+def _degradation_identity(record):
+    return record["code"], record.get("discriminator")
+
+
+def _record_step_11_degradation(
+    records, code, message, discriminator=None,
+):
+    """Record one degradation by stable producer identity, first message."""
+    if not isinstance(code, str) or code not in _STEP_11_DEGRADATION_CODES:
+        raise ValueError(f"unknown step-11 degradation code: {code}")
+    if not isinstance(message, str) or not message:
+        raise ValueError("step-11 degradation message must be non-empty")
+    if discriminator is not None and not (
+        isinstance(discriminator, str) and discriminator
     ):
-        prior_notes = []
+        raise ValueError(
+            "step-11 degradation discriminator must be a non-empty string"
+        )
+    identity = (code, discriminator)
+    if any(_degradation_identity(record) == identity for record in records):
+        return
+    record = {"code": code, "message": message}
+    if discriminator is not None:
+        record["discriminator"] = discriminator
+    records.append(record)
 
+
+def _valid_degradation_records(value):
+    """Validate the private record collection as one provenance unit."""
+    if not isinstance(value, list):
+        return []
+    for record in value:
+        if not isinstance(record, dict):
+            return []
+        if set(record) - {"code", "message", "discriminator"}:
+            return []
+        if not (
+            isinstance(record.get("code"), str)
+            and record["code"] in _STEP_11_DEGRADATION_CODES
+            and isinstance(record.get("message"), str) and record["message"]
+        ):
+            return []
+        discriminator = record.get("discriminator")
+        if discriminator is not None and not (
+            isinstance(discriminator, str) and discriminator
+        ):
+            return []
+    return value
+
+
+def _merge_step_11_degradation_records(state, current_records):
+    """Carry step-11 degradations across handoff by stable identity.
+
+    The public ``degradation_notes`` and the legacy private string list are
+    presentation prose, not provenance, so neither is an inheritance source.
+    A malformed private record collection is ignored as a whole.
+    """
+    prior_records = _valid_degradation_records(
+        state.get("step_11_degradation_records")
+    )
     merged = []
-    seen = set()
-    for note in [*prior_notes, *current_notes]:
-        if note not in seen:
-            seen.add(note)
-            merged.append(note)
+    for record in [*prior_records, *current_records]:
+        _record_step_11_degradation(
+            merged,
+            record["code"],
+            record["message"],
+            record.get("discriminator"),
+        )
     return merged
+
+
+def _degradation_messages(records):
+    return [record["message"] for record in records]
+
+
+def _degradation_identities(records):
+    identities = []
+    for record in records:
+        identity = {"code": record["code"]}
+        if record.get("discriminator") is not None:
+            identity["discriminator"] = record["discriminator"]
+        identities.append(identity)
+    return identities
 
 
 def _sha256_bytes(payload):
@@ -1643,9 +1717,9 @@ def _artifact_source_identity(path):
 
 def _report_source_fingerprint(
     output_dir, findings_status, status, verdict, verdict_source,
-    critic_verdict, degradation_notes,
+    critic_verdict, degradation_records,
 ):
-    """Bind report source bytes to the settled facts they must present."""
+    """Bind source bytes to settled facts and stable degradation identities."""
     source = {
         "review_record": _artifact_source_identity(
             os.path.join(output_dir, REVIEW_RECORD_MD)
@@ -1661,7 +1735,9 @@ def _report_source_fingerprint(
             "verdict": verdict,
             "verdict_source": verdict_source,
             "critic_verdict": critic_verdict,
-            "degradation_notes": list(degradation_notes),
+            "degradation_identities": _degradation_identities(
+                degradation_records
+            ),
         },
     }
     encoded = json.dumps(
@@ -1764,7 +1840,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     critic_verdict = state["critic_verdict"]
 
     findings_path = os.path.join(output_dir, "review-findings.json")
-    degradation_notes = []
+    degradation_records = []
 
     # Critic-absence honesty, keyed on the DISPATCH MARKER and the usable
     # verdict — never on whether some file exists.
@@ -1791,7 +1867,9 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
         output_dir, synthesis_lifecycle.DECISION_CRITIC
     ))
     if critic_dispatched and critic_verdict == "unavailable":
-        degradation_notes.append(
+        _record_step_11_degradation(
+            degradation_records,
+            "critic_unavailable_after_dispatch",
             "critic was dispatched but produced no verdict"
         )
 
@@ -1823,7 +1901,9 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
             try:
                 apply_result = critic_adjustments.apply_adjustments(output_dir)
             except (ValueError, OSError, json.JSONDecodeError) as err:
-                degradation_notes.append(
+                _record_step_11_degradation(
+                    degradation_records,
+                    "critic_adjustment_apply_failed",
                     f"critic adjustment apply attempt failed: {err}"
                 )
             else:
@@ -1838,7 +1918,9 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
                 # to catch exactly that divergence and degrade loudly
                 # instead of silently doing nothing.
                 if apply_result.get("status") == "refused":
-                    degradation_notes.append(
+                    _record_step_11_degradation(
+                        degradation_records,
+                        "critic_adjustment_apply_refused",
                         f"critic adjustment apply attempt refused: "
                         f"({apply_result.get('reason')})"
                     )
@@ -1846,12 +1928,16 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
             try:
                 pending = critic_adjustments.pending_count(output_dir)
             except (ValueError, OSError, json.JSONDecodeError) as err:
-                degradation_notes.append(
+                _record_step_11_degradation(
+                    degradation_records,
+                    "critic_adjustment_inspection_failed",
                     f"critic adjustment inspection failed: {err}"
                 )
             else:
                 if pending:
-                    degradation_notes.append(
+                    _record_step_11_degradation(
+                        degradation_records,
+                        "critic_adjustment_pending_non_revise",
                         f"critic adjustment apply skipped on this settlement "
                         f"pass: critic verdict was {critic_verdict} "
                         f"(adjustments are a REVISE-only channel)"
@@ -1877,13 +1963,17 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     findings_markdown, render_error = _render_findings_markdown(output_dir)
     _record_findings_markdown(state, findings_markdown)
     if render_error:
-        degradation_notes.append(
+        _record_step_11_degradation(
+            degradation_records,
+            "findings_markdown_render_failed",
             f"review-findings.md render failed: {render_error}"
         )
     record_outcome, record_error = assemble_review_record(output_dir, state)
     _record_review_record(state, record_outcome)
     if record_error:
-        degradation_notes.append(
+        _record_step_11_degradation(
+            degradation_records,
+            "review_record_assembly_failed",
             f"{REVIEW_RECORD_MD} assembly failed: {record_error}"
         )
 
@@ -1915,7 +2005,9 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # participant breaking the rule that a probe is created, run, and
     # deleted by the same command.
     if hygiene.get("probe_residue_removed"):
-        degradation_notes.append(
+        _record_step_11_degradation(
+            degradation_records,
+            "probe_residue_swept",
             f"probe residue swept at finalize: "
             f"{len(hygiene['probe_residue_removed'])} file(s) — a probe "
             "should be deleted in the same command that created it"
@@ -1946,7 +2038,9 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # unrecoverable run.
     report_path = os.path.join(output_dir, "review-report.md")
     if not os.path.isfile(findings_path):
-        degradation_notes.append(
+        _record_step_11_degradation(
+            degradation_records,
+            "findings_missing",
             "review-findings.json was absent during step 11 settlement"
         )
 
@@ -1985,7 +2079,9 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     else:
         verdict = "COMMENT"
         verdict_source = "fallback: no usable ledger verdict"
-        degradation_notes.append(
+        _record_step_11_degradation(
+            degradation_records,
+            "ledger_verdict_unusable",
             "no usable verdict in review-findings.json — verdict fell "
             "back to COMMENT"
         )
@@ -1993,13 +2089,16 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # Computed last: every degradation any of the work above discovered has
     # to reach the status it is reported beside, or the run publishes
     # "success" while carrying a note that says otherwise. Step 11's report
-    # handoff makes this function re-entrant, so merge its own prior notes
-    # before deriving status: a transient prepare-pass failure remains part
-    # of the terminal run even when publication can repeat that work cleanly.
-    degradation_notes = _merge_step_11_degradation_notes(
-        state, degradation_notes
+    # handoff makes this function re-entrant, so merge its own prior records
+    # by producer identity before deriving status: a transient prepare-pass
+    # failure remains part of the terminal run even when publication can
+    # repeat that work cleanly, while changing diagnostics cannot multiply
+    # one event or destabilize the source fingerprint.
+    degradation_records = _merge_step_11_degradation_records(
+        state, degradation_records
     )
-    status = "success" if not degradation_notes else "degraded"
+    degradation_notes = _degradation_messages(degradation_records)
+    status = "success" if not degradation_records else "degraded"
     source_fingerprint = _report_source_fingerprint(
         output_dir,
         findings_read.status,
@@ -2007,7 +2106,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
         verdict,
         verdict_source,
         critic_verdict,
-        degradation_notes,
+        degradation_records,
     )
     publication_pending = _bind_report_handoff(
         state, report_path, source_fingerprint
@@ -2043,7 +2142,13 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # `critic_source` here.
     state["verdict_source"] = verdict_source
     state["degradation_notes"] = list(degradation_notes)
-    state["step_11_degradation_notes"] = list(degradation_notes)
+    state["step_11_degradation_records"] = [
+        dict(record) for record in degradation_records
+    ]
+    # Migration from the immediately preceding string-only private state:
+    # those messages carry no trustworthy producer identity, so never reuse
+    # them as either audit facts or fingerprint input.
+    state.pop("step_11_degradation_notes", None)
     state["publication_pending"] = publication_pending
 
     if publication_pending:

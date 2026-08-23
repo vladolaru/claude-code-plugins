@@ -1914,6 +1914,45 @@ class TestStepElevenRerendersFindingsMarkdown:
         assert result["status"] == "degraded"
         assert result["degradation_notes"].count(note) == 1
 
+    def test_varying_render_diagnostics_converge_by_stable_identity(
+        self, tmp_path, monkeypatch
+    ):
+        """Volatile exception prose must not create an endless stale loop."""
+        self._seed(tmp_path, severity="low")
+        _write_critic_verdict(tmp_path, "STAND")
+        state = {}
+        attempts = iter(("boom one", "boom two"))
+
+        def fail_with_changing_diagnostic(*_args, **_kwargs):
+            raise RuntimeError(next(attempts))
+
+        monkeypatch.setattr(
+            orchestration_mod, "_materialize_markdown",
+            fail_with_changing_diagnostic,
+        )
+
+        _orchestrate_step_11("pr", {}, state, {}, str(tmp_path))
+
+        assert state["publication_pending"] is True
+        assert state["report_handoff_status"] == "unbound_report"
+        assert state["step_11_degradation_records"] == [{
+            "code": "findings_markdown_render_failed",
+            "message": "review-findings.md render failed: boom one",
+        }]
+
+        (tmp_path / "review-report.md").write_text(
+            "# report\nRewritten from the prepared source."
+        )
+        _orchestrate_step_11("pr", {}, state, {}, str(tmp_path))
+
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert result["status"] == "degraded"
+        assert result["degradation_notes"] == [
+            "review-findings.md render failed: boom one"
+        ]
+        assert state["report_handoff_status"] == "published"
+        assert len(state["step_11_degradation_records"]) == 1
+
     def test_malformed_owned_degradations_fail_closed(
         self, tmp_path
     ):
@@ -1931,6 +1970,65 @@ class TestStepElevenRerendersFindingsMarkdown:
         result = json.loads((tmp_path / "pipeline-result.json").read_text())
         assert result["status"] == "success"
         assert result["degradation_notes"] == []
+        assert state["step_11_degradation_records"] == []
+        assert "step_11_degradation_notes" not in state
+
+    def test_distinct_degradation_categories_keep_first_seen_order(
+        self
+    ):
+        state = {"step_11_degradation_records": [
+            {
+                "code": "findings_markdown_render_failed",
+                "message": "render first diagnostic",
+            },
+            {
+                "code": "review_record_assembly_failed",
+                "message": "record diagnostic",
+            },
+        ]}
+        current = [
+            {
+                "code": "findings_markdown_render_failed",
+                "message": "render later diagnostic",
+            },
+            {"code": "findings_missing", "message": "findings diagnostic"},
+        ]
+
+        merged = orchestration_mod._merge_step_11_degradation_records(
+            state, current
+        )
+
+        assert merged == [
+            {
+                "code": "findings_markdown_render_failed",
+                "message": "render first diagnostic",
+            },
+            {
+                "code": "review_record_assembly_failed",
+                "message": "record diagnostic",
+            },
+            {"code": "findings_missing", "message": "findings diagnostic"},
+        ]
+
+    def test_unrecognized_private_degradation_code_is_not_inherited(self):
+        state = {"step_11_degradation_records": [{
+            "code": "foreign_producer",
+            "message": "unrelated private state prose",
+        }]}
+
+        assert orchestration_mod._merge_step_11_degradation_records(
+            state, []
+        ) == []
+
+    def test_unhashable_private_degradation_code_fails_closed(self):
+        state = {"step_11_degradation_records": [{
+            "code": ["not", "a", "string"],
+            "message": "malformed private state prose",
+        }]}
+
+        assert orchestration_mod._merge_step_11_degradation_records(
+            state, []
+        ) == []
 
     def test_a_report_authored_after_preparation_is_published(self, tmp_path):
         """A source-bound report wins over non-terminal record fallbacks."""

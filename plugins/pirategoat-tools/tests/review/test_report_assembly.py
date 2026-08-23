@@ -755,15 +755,15 @@ class TestRecordWriteIsAtomic:
 
 
 class TestPreparedReportSourceFingerprint:
-    def _fingerprint(self, out_dir, notes=None):
+    def _fingerprint(self, out_dir, records=None):
         return _report_source_fingerprint(
             str(out_dir),
             critic_adjustments.FINDINGS_READ_OK,
-            "degraded" if notes else "success",
+            "degraded" if records else "success",
             "REQUEST_CHANGES",
             "findings ledger",
             "STAND",
-            notes or [],
+            records or [],
         )
 
     def test_same_source_and_facts_are_deterministic(self, out_dir):
@@ -790,6 +790,24 @@ class TestPreparedReportSourceFingerprint:
         _write_ledger(out_dir)
         assemble_review_record(str(out_dir), {})
 
-        first = self._fingerprint(out_dir, ["first", "second"])
-        second = self._fingerprint(out_dir, ["second", "first"])
+        first = self._fingerprint(out_dir, [
+            {"code": "findings_missing", "message": "diagnostic a"},
+            {"code": "ledger_verdict_unusable", "message": "diagnostic b"},
+        ])
+        second = self._fingerprint(out_dir, [
+            {"code": "ledger_verdict_unusable", "message": "diagnostic b"},
+            {"code": "findings_missing", "message": "diagnostic a"},
+        ])
         assert first != second
+
+    def test_diagnostic_prose_is_not_fingerprint_identity(self, out_dir):
+        _write_ledger(out_dir)
+        assemble_review_record(str(out_dir), {})
+
+        first = self._fingerprint(out_dir, [{
+            "code": "findings_markdown_render_failed", "message": "boom one",
+        }])
+        second = self._fingerprint(out_dir, [{
+            "code": "findings_markdown_render_failed", "message": "boom two",
+        }])
+        assert first == second
