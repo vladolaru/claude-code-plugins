@@ -23,6 +23,23 @@ def mod(pipeline_mod):
     return pipeline_mod
 
 
+def _publish_step_11(output_dir, cwd, mode="pr"):
+    """Prepare without a report, then publish the authored report."""
+    report = Path(output_dir) / "review-report.md"
+    report_text = report.read_text() if report.is_file() else "# Review"
+    report.unlink(missing_ok=True)
+    prepared = run_pipeline(
+        "--step", "11", "--mode", mode,
+        "--output-dir", str(output_dir), cwd=cwd,
+    )
+    assert prepared.returncode == 0, prepared.stderr
+    report.write_text(report_text)
+    return run_pipeline(
+        "--step", "11", "--mode", mode,
+        "--output-dir", str(output_dir), cwd=cwd,
+    )
+
+
 class TestStep1ParseInput:
     """Step 1: Parse Input — all modes."""
 
@@ -1578,7 +1595,7 @@ class TestStep9ReviewRecord:
         text = "\n".join(g["actions"])
         assert "do not write a report yet" in text.lower()
         assert "Do not edit it" in text
-        assert "authored ONCE at step" in text
+        assert "authored from a source-bound settlement at step" in text
 
     def test_carries_no_output_instructions(self, mod, tmp_path):
         """The voice belongs to step 11 now — both the caller override and
@@ -2033,8 +2050,7 @@ class TestCriticVerdictPersistence:
         (out / "review-report.md").write_text("# Review")
         (out / "review-findings.json").write_text('{"verdict": "APPROVE", "issues": []}')
         (out / "decision-critic-verdict.json").write_text('{"verdict": "STAND"}')
-        r = run_pipeline("--step", "11", "--mode", "pr",
-                       "--output-dir", str(out), cwd=tmp_path / "repo")
+        r = _publish_step_11(out, tmp_path / "repo")
         assert r.returncode == 0
         result = json.loads((out / "pipeline-result.json").read_text())
         assert result["critic_verdict"] == "STAND"
@@ -2046,8 +2062,7 @@ class TestCriticVerdictPersistence:
                    "--output-dir", str(out), "--pr-number", "42", cwd=tmp_path / "repo")
         (out / "review-report.md").write_text("# Review")
         (out / "review-findings.json").write_text('{"verdict": "APPROVE", "issues": []}')
-        r = run_pipeline("--step", "11", "--mode", "pr",
-                       "--output-dir", str(out), cwd=tmp_path / "repo")
+        r = _publish_step_11(out, tmp_path / "repo")
         assert r.returncode == 0
         result = json.loads((out / "pipeline-result.json").read_text())
         assert result["critic_verdict"] == "unavailable"
@@ -2062,8 +2077,7 @@ class TestCriticVerdictPersistence:
         (out / "decision-critic-verdict.json").write_text(
             '{"verdict": "SKIPPED", "reason": "quick mode, reconciliation verdict: approve"}'
         )
-        r = run_pipeline("--step", "11", "--mode", "pr",
-                       "--output-dir", str(out), cwd=tmp_path / "repo")
+        r = _publish_step_11(out, tmp_path / "repo")
         assert r.returncode == 0
         result = json.loads((out / "pipeline-result.json").read_text())
         assert result["critic_verdict"] == "unavailable"
@@ -2226,7 +2240,8 @@ class TestStep11ReportAuthoring:
         assert "review-record.md" in text
         assert "review-findings.json" in text
         assert "once" in text.lower()
-        assert "no revision loop" in text
+        assert "source-bound handoff" in text.lower()
+        assert "rechecks their fingerprint" in text
 
     def test_names_the_record_as_the_thing_it_must_not_contradict(
         self, mod, tmp_path
@@ -2235,6 +2250,21 @@ class TestStep11ReportAuthoring:
             self._guidance(mod, output_dir=str(tmp_path))["actions"]
         )
         assert "must not contradict" in text
+
+    def test_changed_prepared_source_requires_report_regeneration(
+        self, mod, tmp_path
+    ):
+        guidance = self._guidance(mod, state={
+            "publication_pending": True,
+            "report_handoff_status": "source_changed",
+        }, output_dir=str(tmp_path))
+        text = "\n".join(guidance["actions"] + guidance["handoff"])
+
+        assert guidance["blocks_progress"] is True
+        assert "source changed" in text.lower()
+        assert "regenerate" in text.lower()
+        assert "re-run step 11" in text.lower()
+        assert "terminal `pipeline-result.json` is now published" not in text
 
     def test_includes_pr_mode_defaults_with_the_author_name(self, mod):
         text = "\n".join(self._guidance(

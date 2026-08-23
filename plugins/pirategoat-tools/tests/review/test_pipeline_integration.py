@@ -47,6 +47,23 @@ def mod(pipeline_mod):
     return pipeline_mod
 
 
+def _publish_step_11(output_dir, cwd, mode="pr"):
+    """Prepare without a report, then publish the authored report."""
+    report = Path(output_dir) / "review-report.md"
+    report_text = report.read_text() if report.is_file() else "# Review"
+    report.unlink(missing_ok=True)
+    prepared = run_pipeline(
+        "--step", "11", "--mode", mode,
+        "--output-dir", str(output_dir), cwd=cwd,
+    )
+    assert prepared.returncode == 0, prepared.stderr
+    report.write_text(report_text)
+    return run_pipeline(
+        "--step", "11", "--mode", mode,
+        "--output-dir", str(output_dir), cwd=cwd,
+    )
+
+
 def _review_json(reviewer):
     """Return one complete v1 review artifact accepted by render_markdown()."""
     return {
@@ -1870,6 +1887,9 @@ class TestStep11Orchestration:
         assert not (tmp_path / "pipeline-result.json").exists()
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         assert state["publication_pending"] is True
+        prepared_fingerprint = state["prepared_report_source_fingerprint"]
+        assert len(prepared_fingerprint) == 64
+        assert state["report_handoff_status"] == "report_missing"
         assert 11 not in state["completed_steps"]
         assert not any(
             "review-report.md" in note
@@ -1891,10 +1911,128 @@ class TestStep11Orchestration:
         assert result["report_path"] == str(report)
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         assert state["publication_pending"] is False
+        assert state["prepared_report_source_fingerprint"] == (
+            prepared_fingerprint
+        )
+        assert state["report_handoff_status"] == "published"
+        assert "stale_report_digest" not in state
         assert 11 in state["completed_steps"]
         assert "PIPELINE WAITING" not in published.stdout
         assert "HANDOFF" not in published.stdout
         assert "PIPELINE COMPLETE" in published.stdout
+
+    def test_repaired_adjustment_invalidates_report_until_rewritten(
+        self, tmp_path
+    ):
+        """A report authored from a failed apply cannot publish after the
+        adjustment later changes the ledger and derived verdict."""
+        run_pipeline(
+            "--step", "1", "--mode", "pr", "--pr-number", "42",
+            "--output-dir", str(tmp_path), cwd=tmp_path,
+        )
+        finding = _review_json("review-reconciliator")
+        finding["verdict"] = "request_changes"
+        finding["issues"] = [{
+            "id": "aaaa1111",
+            "category": "general",
+            "severity": "high",
+            "title": "Unescaped output",
+            "file": "a.php",
+            "line": 12,
+            "description": "d",
+            "recommendation": "r",
+            "confidence": 0.9,
+        }]
+        finding["summary"]["total_issues"] = 1
+        finding["summary"]["by_severity"]["high"] = 1
+        write_findings(str(tmp_path), finding)
+        (tmp_path / "decision-critic-verdict.json").write_text(
+            '{"verdict": "REVISE"}'
+        )
+        adjustments = tmp_path / "decision-critic-adjustments.json"
+        adjustments.write_text(json.dumps({
+            "schema": 1,
+            "adjustments": [{
+                "action": "obliterate",
+                "id": "aaaa1111",
+                "fields": {},
+                "rationale": "invalid first attempt",
+            }],
+        }))
+
+        prepared = run_pipeline(
+            "--step", "11", "--mode", "pr",
+            "--output-dir", str(tmp_path), cwd=tmp_path,
+        )
+        assert prepared.returncode == 0, prepared.stderr
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        assert state["publication_pending"] is True
+        assert state["prepared_report_source_fingerprint"]
+        assert any(
+            "critic adjustment apply attempt failed" in note
+            for note in state["degradation_notes"]
+        )
+
+        report = tmp_path / "review-report.md"
+        stale_report = "# Review\nREQUEST_CHANGES: high finding."
+        report.write_text(stale_report)
+        adjustments.write_text(json.dumps({
+            "schema": 1,
+            "adjustments": [{
+                "action": "demote",
+                "id": "aaaa1111",
+                "fields": {"severity": "low"},
+                "rationale": "guarded upstream",
+            }],
+        }))
+        # Even a leftover marker from an interrupted/manual re-entry must
+        # not coexist with a report this pass rejects as stale.
+        (tmp_path / "pipeline-result.json").write_text('{"stale": true}')
+
+        changed = run_pipeline(
+            "--step", "11", "--mode", "pr",
+            "--output-dir", str(tmp_path), cwd=tmp_path,
+        )
+        assert changed.returncode == 0, changed.stderr
+        assert not (tmp_path / "pipeline-result.json").exists()
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        assert state["report_handoff_status"] == "source_changed"
+        assert state["stale_report_digest"]
+        assert state["publication_pending"] is True
+        assert 11 not in state["completed_steps"]
+        assert "regenerate" in changed.stdout.lower()
+        settled = json.loads((tmp_path / "review-findings.json").read_text())
+        assert settled["issues"][0]["severity"] == "low"
+        assert settled["verdict"] == "approve"
+
+        unchanged = run_pipeline(
+            "--step", "11", "--mode", "pr",
+            "--output-dir", str(tmp_path), cwd=tmp_path,
+        )
+        assert unchanged.returncode == 0, unchanged.stderr
+        assert not (tmp_path / "pipeline-result.json").exists()
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        assert state["report_handoff_status"] == "stale_report_unchanged"
+        assert state["publication_pending"] is True
+        assert 11 not in state["completed_steps"]
+
+        report.write_text("# Review\nAPPROVE: settled low finding.")
+        published = run_pipeline(
+            "--step", "11", "--mode", "pr",
+            "--output-dir", str(tmp_path), cwd=tmp_path,
+        )
+        assert published.returncode == 0, published.stderr
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert result["verdict"] == "APPROVE"
+        assert result["status"] == "degraded"
+        assert any(
+            "critic adjustment apply attempt failed" in note
+            for note in result["degradation_notes"]
+        )
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        assert state["publication_pending"] is False
+        assert "stale_report_digest" not in state
+        assert 11 in state["completed_steps"]
 
     def test_interactive_publish_pass_routes_to_cleanup(self, tmp_path):
         run_pipeline(
@@ -1922,15 +2060,33 @@ class TestStep11Orchestration:
         assert "PIPELINE COMPLETE" not in published.stdout
 
     def test_step_11_writes_pipeline_result(self, tmp_path):
-        """Step 11 should write pipeline-result.json."""
+        """A pre-existing unbound report must be rewritten before publish."""
         run_pipeline("--step", "1", "--mode", "pr",
                    "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
-        (tmp_path / "review-report.md").write_text("# Review Report\nFindings here.")
+        report = tmp_path / "review-report.md"
+        report.write_text("# Review Report\nFindings here.")
         (tmp_path / "review-findings.json").write_text('{"verdict": "request_changes", "issues": []}')
         r = run_pipeline("--step", "11", "--mode", "pr",
                        "--output-dir", str(tmp_path), cwd=tmp_path)
         assert r.returncode == 0
         result_path = tmp_path / "pipeline-result.json"
+        assert not result_path.exists()
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        assert state["report_handoff_status"] == "unbound_report"
+        assert state["stale_report_digest"]
+
+        unchanged = run_pipeline(
+            "--step", "11", "--mode", "pr",
+            "--output-dir", str(tmp_path), cwd=tmp_path,
+        )
+        assert unchanged.returncode == 0
+        assert not result_path.exists()
+        report.write_text("# Review Report\nREQUEST_CHANGES: rewritten.")
+        published = run_pipeline(
+            "--step", "11", "--mode", "pr",
+            "--output-dir", str(tmp_path), cwd=tmp_path,
+        )
+        assert published.returncode == 0
         assert result_path.is_file(), "pipeline-result.json was not created"
         result = json.loads(result_path.read_text())
         assert result["verdict"] == "REQUEST_CHANGES"
@@ -1945,8 +2101,7 @@ class TestStep11Orchestration:
                    "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         (tmp_path / "review-report.md").write_text("# Review")
         (tmp_path / "review-findings.json").write_text('{"verdict": "comment", "issues": []}')
-        run_pipeline("--step", "11", "--mode", "pr",
-                   "--output-dir", str(tmp_path), cwd=tmp_path)
+        _publish_step_11(tmp_path, tmp_path)
         findings = json.loads((tmp_path / "review-findings.json").read_text())
         assert findings["verdict"] == "comment"
         result = json.loads((tmp_path / "pipeline-result.json").read_text())
@@ -1958,8 +2113,7 @@ class TestStep11Orchestration:
         run_pipeline("--step", "1", "--mode", "pr",
                    "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         (tmp_path / "review-report.md").write_text("# Review")
-        r = run_pipeline("--step", "11", "--mode", "pr",
-                       "--output-dir", str(tmp_path), cwd=tmp_path)
+        r = _publish_step_11(tmp_path, tmp_path)
         assert r.returncode == 0
         result_path = tmp_path / "pipeline-result.json"
         assert result_path.is_file()
@@ -1974,8 +2128,7 @@ class TestStep11Orchestration:
                    "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         # The report exists, but the findings do not (reconciliation failed)
         (tmp_path / "review-report.md").write_text("# Review\nReport here.")
-        r = run_pipeline("--step", "11", "--mode", "pr",
-                       "--output-dir", str(tmp_path), cwd=tmp_path)
+        r = _publish_step_11(tmp_path, tmp_path)
         assert r.returncode == 0
         result = json.loads((tmp_path / "pipeline-result.json").read_text())
         assert result["status"] == "degraded"
@@ -2110,8 +2263,8 @@ class TestFullSequenceIntegration:
         # reason no real run has.
         write_findings(od, _review_json("reconciliator"))
 
-        # Step 11: present results
-        r = run_pipeline("--step", "11", "--mode", "full", "--output-dir", od, cwd=repo)
+        # Step 11: prepare the source binding, then present results.
+        r = _publish_step_11(od, repo, mode="full")
         assert r.returncode == 0
         assert (Path(od) / "pipeline-result.json").is_file()
         result = json.loads((Path(od) / "pipeline-result.json").read_text())

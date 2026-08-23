@@ -399,6 +399,17 @@ def _seed_step_11(out):
     )
 
 
+def _publish_step_11(out):
+    """Prepare without a report, then publish the authored report."""
+    report = out / "review-report.md"
+    report_text = report.read_text() if report.is_file() else "# report"
+    report.unlink(missing_ok=True)
+    state = {}
+    _orchestrate_step_11("pr", {}, state, {}, str(out))
+    report.write_text(report_text)
+    return _orchestrate_step_11("pr", {}, state, {}, str(out))
+
+
 class TestStepElevenHygieneNotes:
     """Finalize is where the run reports what it left behind.
 
@@ -408,7 +419,7 @@ class TestStepElevenHygieneNotes:
     """
 
     def _step_11(self, out):
-        return _orchestrate_step_11("pr", {}, {}, {}, str(out))
+        return _publish_step_11(out)
 
     def test_seed_alone_finalizes_clean(self, git_repo):
         """Guards the harness: a note below must come from hygiene."""
@@ -538,7 +549,7 @@ class TestStepElevenUsageSnapshot:
     """
 
     def _step_11(self, out):
-        return _orchestrate_step_11("pr", {}, {}, {}, str(out))
+        return _publish_step_11(out)
 
     def _usage_snapshot(self, subagents="complete", orchestrator="partial"):
         def usage(output):

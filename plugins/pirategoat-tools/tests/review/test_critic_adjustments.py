@@ -112,6 +112,17 @@ def _issue(id_, severity="low"):
             "category": "general", "confidence": 0.9}
 
 
+def _publish_step_11(output_dir, state=None):
+    """Prepare without a report, then publish the authored report."""
+    state = {} if state is None else state
+    report = Path(output_dir) / "review-report.md"
+    report_text = report.read_text() if report.is_file() else "# report"
+    report.unlink(missing_ok=True)
+    _orchestrate_step_11("pr", {}, state, {}, str(output_dir))
+    report.write_text(report_text)
+    return _orchestrate_step_11("pr", {}, state, {}, str(output_dir))
+
+
 @pytest.fixture
 def revise_verdict(tmp_path):
     """Write a REVISE verdict so apply_adjustments' gate lets the call through.
@@ -1265,7 +1276,7 @@ class TestDerivedVerdict:
 
     def _finalize(self, tmp_path, state=None):
         state = {} if state is None else state
-        _orchestrate_step_11("pr", {}, state, {}, str(tmp_path))
+        _publish_step_11(tmp_path, state)
         return json.loads((tmp_path / "pipeline-result.json").read_text())
 
     @pytest.mark.parametrize("ledger,published", [
@@ -1365,7 +1376,7 @@ class TestDerivedVerdict:
     ):
         self._seed(tmp_path, "approve")
         state = {}
-        _orchestrate_step_11("pr", {}, state, {}, str(tmp_path))
+        _publish_step_11(tmp_path, state)
         assert state["verdict_source"] == "findings ledger"
         assert state["pipeline_status"] == "success"
         assert state["degradation_notes"] == []
@@ -1398,7 +1409,7 @@ class TestCriticAbsenceHonesty:
             )
 
     def _finalize(self, tmp_path):
-        _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
+        _publish_step_11(tmp_path)
         return json.loads((tmp_path / "pipeline-result.json").read_text())
 
     def test_a_dispatched_critic_that_wrote_nothing_degrades(self, tmp_path):
@@ -1491,7 +1502,7 @@ class TestCriticInputRoundTrip:
         _write_critic_verdict(tmp_path, "REVISE")
         (tmp_path / "review-report.md").write_text("# report")
 
-        _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
+        _publish_step_11(tmp_path)
 
         data = json.loads((tmp_path / "review-findings.json").read_text())
         issue = data["issues"][0]
@@ -1540,7 +1551,7 @@ class TestStepElevenAppliesAdjustments:
 
     def _step_11(self, output_dir):
         """Call the finalize step the way the pipeline facade routes it."""
-        return _orchestrate_step_11("pr", {}, {}, {}, str(output_dir))
+        return _publish_step_11(output_dir)
 
     def test_pending_adjustments_applied_before_the_verdict_is_derived(
         self, tmp_path
@@ -1574,7 +1585,7 @@ class TestStepElevenAppliesAdjustments:
         (tmp_path / "review-report.md").write_text("# report")
         self._step_11(tmp_path)
         result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert any("critic adjustments not applied" in n
+        assert any("critic adjustment apply attempt failed" in n
                    for n in result["degradation_notes"])
         # The note must reach `status` too — appended after the status is
         # computed, it would publish a "success" run carrying a degradation.
@@ -1674,7 +1685,7 @@ class TestStepElevenAppliesAdjustments:
         data = json.loads((tmp_path / "review-findings.json").read_text())
         assert data["issues"][0]["severity"] == "low"
         result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert any("critic verdict is unavailable" in n
+        assert any("critic verdict was unavailable" in n
                    for n in result["degradation_notes"])
 
     def test_settled_adjustments_are_not_suspicious_under_stand(
@@ -1748,7 +1759,7 @@ class TestStepElevenAppliesAdjustments:
         (tmp_path / "review-report.md").write_text("# report")
         self._step_11(tmp_path)
         result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert any("critic adjustments not applied" in n
+        assert any("critic adjustment apply attempt failed" in n
                    for n in result["degradation_notes"])
         assert result["status"] == "degraded"
 
@@ -1769,7 +1780,7 @@ class TestStepElevenRerendersFindingsMarkdown:
         monkeypatch.chdir(tmp_path)
 
     def _step_11(self, output_dir):
-        return _orchestrate_step_11("pr", {}, {}, {}, str(output_dir))
+        return _publish_step_11(output_dir)
 
     def _seed(self, tmp_path, severity="high"):
         issue = _issue("aaaa1111", severity)
@@ -1915,15 +1926,14 @@ class TestStepElevenRerendersFindingsMarkdown:
             "degradation_notes": ["unrelated generic state note"],
         }
 
-        _orchestrate_step_11("pr", {}, state, {}, str(tmp_path))
+        _publish_step_11(tmp_path, state)
 
         result = json.loads((tmp_path / "pipeline-result.json").read_text())
         assert result["status"] == "success"
         assert result["degradation_notes"] == []
 
-    def test_an_already_written_report_still_wins(self, tmp_path):
-        """A re-entered step 11 finds the report already authored; when it
-        exists it is the better answer."""
+    def test_a_report_authored_after_preparation_is_published(self, tmp_path):
+        """A source-bound report wins over non-terminal record fallbacks."""
         self._seed(tmp_path, severity="low")
         _write_critic_verdict(tmp_path, "STAND")
 

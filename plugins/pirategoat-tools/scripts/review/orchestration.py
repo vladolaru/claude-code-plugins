@@ -1,5 +1,6 @@
 """Side-effecting step orchestration for the review pipeline."""
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -1624,6 +1625,102 @@ def _merge_step_11_degradation_notes(state, current_notes):
     return merged
 
 
+def _sha256_bytes(payload):
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _artifact_source_identity(path):
+    """Return a content identity that distinguishes absence from bytes."""
+    try:
+        with open(path, "rb") as artifact:
+            payload = artifact.read()
+    except FileNotFoundError:
+        return {"status": "absent", "sha256": None}
+    except OSError:
+        return {"status": "unreadable", "sha256": None}
+    return {"status": "present", "sha256": _sha256_bytes(payload)}
+
+
+def _report_source_fingerprint(
+    output_dir, findings_status, status, verdict, verdict_source,
+    critic_verdict, degradation_notes,
+):
+    """Bind report source bytes to the settled facts they must present."""
+    source = {
+        "review_record": _artifact_source_identity(
+            os.path.join(output_dir, REVIEW_RECORD_MD)
+        ),
+        "review_findings": {
+            **_artifact_source_identity(
+                os.path.join(output_dir, _FINDINGS_JSON)
+            ),
+            "read_status": findings_status,
+        },
+        "terminal_facts": {
+            "status": status,
+            "verdict": verdict,
+            "verdict_source": verdict_source,
+            "critic_verdict": critic_verdict,
+            "degradation_notes": list(degradation_notes),
+        },
+    }
+    encoded = json.dumps(
+        source, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    ).encode("utf-8")
+    return _sha256_bytes(encoded)
+
+
+def _valid_sha256(value):
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(char in "0123456789abcdef" for char in value)
+    )
+
+
+def _bind_report_handoff(state, report_path, source_fingerprint):
+    """Decide whether this report is bound to the current settlement."""
+    prepared = state.get("prepared_report_source_fingerprint")
+    if not _valid_sha256(prepared):
+        prepared = None
+
+    report_identity = _artifact_source_identity(report_path)
+    report_digest = report_identity["sha256"]
+    stale_digest = state.get("stale_report_digest")
+    if not _valid_sha256(stale_digest):
+        stale_digest = None
+        state.pop("stale_report_digest", None)
+
+    if report_digest is None:
+        state["prepared_report_source_fingerprint"] = source_fingerprint
+        state["report_handoff_status"] = (
+            "report_missing"
+            if report_identity["status"] == "absent"
+            else "report_unreadable"
+        )
+        return True
+
+    if prepared is None:
+        state["prepared_report_source_fingerprint"] = source_fingerprint
+        state["stale_report_digest"] = report_digest
+        state["report_handoff_status"] = "unbound_report"
+        return True
+
+    if prepared != source_fingerprint:
+        state["prepared_report_source_fingerprint"] = source_fingerprint
+        state["stale_report_digest"] = report_digest
+        state["report_handoff_status"] = "source_changed"
+        return True
+
+    if stale_digest == report_digest:
+        state["report_handoff_status"] = "stale_report_unchanged"
+        return True
+
+    state.pop("stale_report_digest", None)
+    state["report_handoff_status"] = "published"
+    return False
+
+
 def _orchestrate_step_11(mode, config, state, context, output_dir):
     # Synthesis-agent lifecycle, adjudicated FIRST and for a hard ordering
     # reason: finalize itself writes review-findings.json (the critic
@@ -1727,7 +1824,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
                 apply_result = critic_adjustments.apply_adjustments(output_dir)
             except (ValueError, OSError, json.JSONDecodeError) as err:
                 degradation_notes.append(
-                    f"critic adjustments not applied: {err}"
+                    f"critic adjustment apply attempt failed: {err}"
                 )
             else:
                 # Belt-and-braces: `critic_verdict` above came from
@@ -1742,7 +1839,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
                 # instead of silently doing nothing.
                 if apply_result.get("status") == "refused":
                     degradation_notes.append(
-                        f"critic adjustments not applied: refused "
+                        f"critic adjustment apply attempt refused: "
                         f"({apply_result.get('reason')})"
                     )
         else:
@@ -1750,14 +1847,14 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
                 pending = critic_adjustments.pending_count(output_dir)
             except (ValueError, OSError, json.JSONDecodeError) as err:
                 degradation_notes.append(
-                    f"critic adjustments not readable: {err}"
+                    f"critic adjustment inspection failed: {err}"
                 )
             else:
                 if pending:
                     degradation_notes.append(
-                        f"critic adjustments present but critic verdict is "
-                        f"{critic_verdict} — not applied (adjustments are a "
-                        f"REVISE-only channel)"
+                        f"critic adjustment apply skipped on this settlement "
+                        f"pass: critic verdict was {critic_verdict} "
+                        f"(adjustments are a REVISE-only channel)"
                     )
 
     # Re-render the derived artifacts from the FINAL ledger — immediately
@@ -1848,9 +1945,10 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # report verbatim, so publishing those two facts separately creates an
     # unrecoverable run.
     report_path = os.path.join(output_dir, "review-report.md")
-    publication_pending = not os.path.isfile(report_path)
     if not os.path.isfile(findings_path):
-        degradation_notes.append("review-findings.json not found")
+        degradation_notes.append(
+            "review-findings.json was absent during step 11 settlement"
+        )
 
     # The published verdict is DERIVED from the findings ledger, not
     # transcribed. It used to travel LLM → review-verdict.json → here, with
@@ -1865,15 +1963,14 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # time finalize reads it. `_LEDGER_TO_REVIEW_VERDICT` (module scope) is
     # the one place the two verdict layers meet.
     ledger_verdict = None
-    if os.path.isfile(findings_path):
-        read = critic_adjustments.read_findings_file(findings_path)
-        raw = (read.findings or {}).get("verdict") if (
-            read.status == critic_adjustments.FINDINGS_READ_OK
-        ) else None
-        if raw:
-            ledger_verdict = _LEDGER_TO_REVIEW_VERDICT.get(
-                str(raw).strip().lower()
-            )
+    findings_read = critic_adjustments.read_findings_file(findings_path)
+    raw = (findings_read.findings or {}).get("verdict") if (
+        findings_read.status == critic_adjustments.FINDINGS_READ_OK
+    ) else None
+    if raw:
+        ledger_verdict = _LEDGER_TO_REVIEW_VERDICT.get(
+            str(raw).strip().lower()
+        )
 
     if critic_verdict == "ESCALATE":
         # The critic's one unilateral power, exercised by the pipeline
@@ -1903,6 +2000,18 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
         state, degradation_notes
     )
     status = "success" if not degradation_notes else "degraded"
+    source_fingerprint = _report_source_fingerprint(
+        output_dir,
+        findings_read.status,
+        status,
+        verdict,
+        verdict_source,
+        critic_verdict,
+        degradation_notes,
+    )
+    publication_pending = _bind_report_handoff(
+        state, report_path, source_fingerprint
+    )
 
     pipeline_result = {
         "status": status,

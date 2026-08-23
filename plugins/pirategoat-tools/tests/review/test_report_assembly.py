@@ -36,6 +36,7 @@ from review import orchestration as orchestration_mod
 from review.agent.output import render_review_body
 from review.orchestration import (
     REVIEW_RECORD_MD,
+    _report_source_fingerprint,
     assemble_review_record,
 )
 
@@ -751,3 +752,44 @@ class TestRecordWriteIsAtomic:
         assert names == sorted([
             critic_adjustments.FINDINGS_FILENAME, REVIEW_RECORD_MD,
         ]), names
+
+
+class TestPreparedReportSourceFingerprint:
+    def _fingerprint(self, out_dir, notes=None):
+        return _report_source_fingerprint(
+            str(out_dir),
+            critic_adjustments.FINDINGS_READ_OK,
+            "degraded" if notes else "success",
+            "REQUEST_CHANGES",
+            "findings ledger",
+            "STAND",
+            notes or [],
+        )
+
+    def test_same_source_and_facts_are_deterministic(self, out_dir):
+        _write_ledger(out_dir)
+        assemble_review_record(str(out_dir), {})
+
+        assert self._fingerprint(out_dir) == self._fingerprint(out_dir)
+
+    def test_exact_record_and_ledger_bytes_are_bound(self, out_dir):
+        _write_ledger(out_dir)
+        assemble_review_record(str(out_dir), {})
+        baseline = self._fingerprint(out_dir)
+
+        record = out_dir / REVIEW_RECORD_MD
+        record.write_bytes(record.read_bytes() + b"\n")
+        assert self._fingerprint(out_dir) != baseline
+
+        assemble_review_record(str(out_dir), {})
+        findings = out_dir / critic_adjustments.FINDINGS_FILENAME
+        findings.write_bytes(findings.read_bytes() + b"\n")
+        assert self._fingerprint(out_dir) != baseline
+
+    def test_ordered_degradation_facts_are_bound(self, out_dir):
+        _write_ledger(out_dir)
+        assemble_review_record(str(out_dir), {})
+
+        first = self._fingerprint(out_dir, ["first", "second"])
+        second = self._fingerprint(out_dir, ["second", "first"])
+        assert first != second

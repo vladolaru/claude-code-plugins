@@ -1410,10 +1410,10 @@ def _step_9_review_report(mode, state, context, config, output_dir):
         actions.append(
             "**Do not edit it, and do not write a report yet.** The record "
             "is the pipeline's own account and stays machine-written; the "
-            "audience-facing `review-report.md` is authored ONCE at step "
-            "11, after the decision critic has run and any adjustments have "
-            "landed. Writing prose now would only be prose that has to be "
-            "corrected later."
+            "audience-facing `review-report.md` is authored from a "
+            "source-bound settlement at step 11, after the decision critic "
+            "has run and any adjustments have landed. Writing prose now "
+            "would only be prose that has to be corrected later."
         )
 
     actions.append("")
@@ -1858,19 +1858,24 @@ def _settlement_lines(state):
 
 
 def _report_authoring_actions(mode, state, context, config, output_dir):
-    """The step-11 block that has the orchestrator author the report ONCE.
+    """The step-11 block that authors or regenerates the bound report.
 
     This is the whole of the review's audience-facing output, and in bot
     mode it IS the posted GitHub PR comment (pirategoat-bot reads the file
     verbatim). It is authored here, at the end, for one reason: nothing
     presentation-shaped exists while the decision critic runs, so there is
-    no stale prose for a REVISE to chase and no revision loop to get
-    wrong. Everything the report needs is settled by now — the ledger has
-    absorbed any adjustments, the record has been re-assembled from it,
-    and the verdict has been derived.
+    no pre-critic prose for a REVISE to chase. Everything the report needs
+    is settled by now — the ledger has absorbed any adjustments, the record
+    has been re-assembled from it, and the verdict has been derived. The
+    source fingerprint handles the exceptional late change by rejecting
+    stale prose and requiring regeneration before publication.
     """
     od = output_dir or "<OUTPUT_DIR>"
     degradation = state.get("degradation", {})
+    handoff_status = state.get("report_handoff_status")
+    regenerate = handoff_status in {
+        "source_changed", "stale_report_unchanged", "unbound_report",
+    }
     actions = []
 
     reconciliation_failed = bool(degradation.get("reconciliation_failed"))
@@ -1881,8 +1886,33 @@ def _report_authoring_actions(mode, state, context, config, output_dir):
         and record_outcome.get("status") == "complete"
     )
 
+    if handoff_status == "source_changed":
+        actions.append(
+            "⚠️ **The prepared report source changed during re-settlement.** "
+            "The existing report is stale and cannot be published. "
+            "Regenerate it from the newly settled record and ledger below."
+        )
+        actions.append("")
+    elif handoff_status == "stale_report_unchanged":
+        actions.append(
+            "⚠️ **The rejected stale report has not changed.** Regenerate "
+            "it from the currently prepared record and ledger below before "
+            "re-running step 11."
+        )
+        actions.append("")
+    elif handoff_status == "unbound_report":
+        actions.append(
+            "⚠️ **The existing report predates a prepared source binding.** "
+            "It is not deliverable as-is. Regenerate it from the settled "
+            "record and ledger below, then re-run step 11."
+        )
+        actions.append("")
+
+    action_verb = "Regenerate" if regenerate else "Author"
     actions.append(
-        f"**Author `{od}/review-report.md` now — once.** This is the "
+        f"**{action_verb} `{od}/review-report.md` now"
+        + (".** " if regenerate else " — once.** ")
+        + "This is the "
         "audience-facing presentation of the review"
         + (
             ", and it is posted verbatim as the PR comment."
@@ -2007,9 +2037,10 @@ def _report_authoring_actions(mode, state, context, config, output_dir):
 
     actions.append("")
     actions.append(
-        "**Write it once.** There is no revision loop after this — the "
-        "critic has already run, the adjustments have already landed, and "
-        "nothing downstream will edit this file. Get it right in one pass."
+        "**This is a source-bound handoff.** Write from the exact settled "
+        "sources above. The next step-11 pass rechecks their fingerprint "
+        "before terminal publication and rejects this report if settlement "
+        "changed underneath it."
     )
     return actions
 
@@ -2020,6 +2051,7 @@ def _step_11_present_results(mode, state, context, config, output_dir):
     is_interactive = config.get("interactive", True)
     critic_verdict = state.get("critic_verdict")
     publication_pending = state.get("publication_pending") is not False
+    handoff_status = state.get("report_handoff_status")
 
     situation = [_PHASE_TRANSITIONS["OUTPUT"]]
     if publication_pending:
@@ -2035,7 +2067,7 @@ def _step_11_present_results(mode, state, context, config, output_dir):
         actions.append("")
         actions.append(
             "After writing the report, verify the file exists and re-run "
-            "step 11 exactly as printed below. The second pass publishes "
+            "step 11 exactly as printed below. A matching pass publishes "
             "`pipeline-result.json`; do not report this run complete before "
             "that pass succeeds."
         )
@@ -2113,10 +2145,17 @@ def _step_11_present_results(mode, state, context, config, output_dir):
         # and fails the delivery if it is absent, so the gate has to be
         # here rather than left implicit.
         "handoff": (
-            [
-                f"Verify `{od}/review-report.md` exists, then re-run step "
-                "11 before reporting the pipeline complete.",
-            ]
+            [(
+                f"Regenerate `{od}/review-report.md` from the newly settled "
+                "source, then re-run step 11 before reporting the pipeline "
+                "complete."
+                if handoff_status in {
+                    "source_changed", "stale_report_unchanged",
+                    "unbound_report",
+                }
+                else f"Verify `{od}/review-report.md` exists, then re-run "
+                     "step 11 before reporting the pipeline complete."
+            )]
             if publication_pending
             else None
         ),
