@@ -278,8 +278,8 @@ def read_findings_file(path):
     Returns a `FindingsRead`. What each caller does with a given state is
     deliberately NOT decided here — the facts are shared, the policy is
     not: the best-effort reader treats every failure as "nothing
-    recorded", the applier re-raises, and the verdict sync maps to its own
-    skipped/failed vocabulary.
+    recorded", the applier re-raises, and step 11's verdict derivation
+    treats anything but OK as "no usable ledger verdict" and falls back.
     """
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -392,10 +392,10 @@ def validate_adjustments(payload):
         if not isinstance(entry, dict):
             problems.append(f"{label} must be an object")
             continue
-        # Checked before the action gate below, and with `continue` on
-        # failure, so a batch is refused for a bad spot_check even on an
-        # entry whose action is also unknown — the orchestrator sees both
-        # problems' cause, not one hiding the other.
+        # Checked BEFORE the action gate below, and deliberately without
+        # a `continue`: an entry whose action is also unknown reports both
+        # problems rather than letting the action gate's own `continue`
+        # swallow the spot_check one.
         if SPOT_CHECK_KEY in entry:
             spot_check = entry[SPOT_CHECK_KEY]
             if spot_check not in SPOT_CHECK_VALUES:

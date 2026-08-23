@@ -1274,25 +1274,34 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     findings_path = os.path.join(output_dir, "review-findings.json")
     degradation_notes = []
 
-    # Critic-absence honesty. `critic_verdict_for_state()` collapses a
-    # missing verdict file and an explicit SKIPPED into "unavailable" — the
-    # right presentation for pirategoat-bot, which shows either as "not
-    # cross-validated" — but it cannot distinguish a critic that was never
-    # dispatched from one that was dispatched and produced nothing. The
-    # dispatch marker is what separates them, and only the second is a
-    # degradation: quick mode skipping the critic is the pipeline working
-    # as designed, while a dispatched critic with no artifact is a run that
-    # lost its stress test. The step-10 quick skip writes the SKIPPED
-    # verdict itself now, so a missing file after a dispatch marker is no
-    # longer an orchestrator that merely forgot to transcribe one.
+    # Critic-absence honesty, keyed on the DISPATCH MARKER and the usable
+    # verdict — never on whether some file exists.
+    #
+    # `critic_verdict_for_state()` collapses a missing verdict file and an
+    # explicit SKIPPED into "unavailable": the right presentation for
+    # pirategoat-bot, which shows either as "not cross-validated", but it
+    # cannot tell a critic that was never dispatched from one that was
+    # dispatched and said nothing usable. The marker is what separates
+    # them, and only the second is a degradation — quick mode skipping the
+    # critic is the pipeline working as designed (its SKIPPED record is
+    # pipeline-written, and that branch writes no marker), while a
+    # dispatched critic with no usable verdict is a run that lost its
+    # stress test.
+    #
+    # Checking `critic_verdict` rather than the artifact's existence is
+    # what makes this honest in BOTH directions. An artifact check degrades
+    # the orchestrator that stopped short and stays silent for the one that
+    # dutifully recorded a SKIPPED stand-in for a crashed critic — rewarding
+    # the compliant run for hiding the same lost stress test. Both rows of
+    # that table are the same fact, so both land here. (The step-10
+    # briefing no longer asks for that stand-in either.)
     critic_dispatched = os.path.isfile(synthesis_lifecycle.marker_path(
         output_dir, synthesis_lifecycle.DECISION_CRITIC
     ))
-    critic_artifact = os.path.join(
-        output_dir, critic_adjustments.CRITIC_VERDICT_FILENAME
-    )
-    if critic_dispatched and not os.path.isfile(critic_artifact):
-        degradation_notes.append("critic produced no verdict artifact")
+    if critic_dispatched and critic_verdict == "unavailable":
+        degradation_notes.append(
+            "critic was dispatched but produced no verdict"
+        )
 
     # Carry any pending critic adjustments into the findings ledger before
     # the verdict is derived from it — but only under REVISE, the one that

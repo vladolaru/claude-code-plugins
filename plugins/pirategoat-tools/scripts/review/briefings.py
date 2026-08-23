@@ -1654,10 +1654,11 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append(f'{{"verdict": "<STAND | REVISE | ESCALATE>"}}')
     actions.append(f"```")
     actions.append(
-        f"If the critic crashed, timed out, or otherwise produced no "
-        f"usable verdict, write `{{\"verdict\": \"SKIPPED\", \"reason\": "
-        f"\"<why>\"}}` instead — never invent a STAND/REVISE/ESCALATE "
-        f"value on the critic's behalf just to satisfy the handoff gate."
+        "Write it only if the critic actually returned one. Never invent a "
+        "value on the critic's behalf, and never record a stand-in for a "
+        "critic that crashed or timed out: a dispatched critic that produced "
+        "no verdict is a run that lost its stress test, and step 11 reports "
+        "it as a degradation. A stand-in would hide exactly that."
     )
     actions.append("")
     actions.append("Act on the critic's verdict:")
@@ -1762,9 +1763,9 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     )
 
     handoff = [
-        f"`{od}/decision-critic-verdict.json` must exist with valid JSON — "
-        f"the critic's own verdict, written verbatim above (or SKIPPED with "
-        f"a reason if it produced none).",
+        f"If the critic returned a verdict, "
+        f"`{od}/decision-critic-verdict.json` holds it verbatim. If it "
+        f"produced none, write nothing — step 11 reports the absence.",
         f"On REVISE: `{od}/review-findings.json` carries the applied "
         f"adjustments, and `{od}/review-report.md` agrees with it.",
     ]
@@ -1817,6 +1818,19 @@ def _derived_markdown_status_line(state, output_dir, *, key, label, suffix=None)
     return f"⚠️ {label}: {detail}; regenerate with: `{command}`."
 
 
+def _run_degraded(state):
+    """Did finalize publish a degraded run?
+
+    One predicate, read by every step that can be a run's last — step 11
+    (bot mode) and step 12 (interactive) — so the completion footer cannot
+    tell one host the truth and the other a checkmark. An unfinalized run
+    reads as not degraded: there is no outcome to report, and claiming one
+    either way would be a fabrication.
+    """
+    status = state.get("pipeline_status")
+    return bool(status) and status != "success"
+
+
 def _projection_lines(state):
     """Render what finalize just published, or None when it never ran.
 
@@ -1847,8 +1861,6 @@ def _step_11_present_results(mode, state, context, config, output_dir):
     od = output_dir or "<OUTPUT_DIR>"
     is_interactive = config.get("interactive", True)
     critic_verdict = state.get("critic_verdict")
-    forced_verdict = state.get("forced_verdict")
-    review_verdict = state.get("review_verdict")
 
     situation = [_PHASE_TRANSITIONS["OUTPUT"]]
     actions = []
@@ -1859,9 +1871,6 @@ def _step_11_present_results(mode, state, context, config, output_dir):
 
         if critic_verdict == "unavailable":
             actions.append("⚠️ Critic verdict unavailable — present review as-is.")
-
-        if forced_verdict:
-            actions.append(f"⚠️ Verdict forced to **{forced_verdict}** — degraded pipeline.")
 
         actions.append("To drill down on a specific topic, re-invoke the reconciliator "
                        "in focused mode.")
@@ -1902,12 +1911,11 @@ def _step_11_present_results(mode, state, context, config, output_dir):
     ))
 
     # What the run actually published, read back from the projection step
-    # 11's orchestration just wrote. Previously the only thing this briefing
-    # said about the outcome was a `forced_verdict` line no writer set, so a
-    # degraded run printed "✅ PIPELINE COMPLETE" with its degradations
-    # sitting unread in a JSON file.
+    # 11's orchestration just wrote. This replaced a `forced_verdict`
+    # warning line no writer under scripts/ ever set — so before it, a
+    # degraded run said nothing about its own degradations here and printed
+    # "✅ PIPELINE COMPLETE" over them.
     projection = _projection_lines(state)
-    degraded = projection is not None and state.get("pipeline_status") != "success"
     if projection:
         actions.append("")
         actions.extend(projection)
@@ -1919,8 +1927,10 @@ def _step_11_present_results(mode, state, context, config, output_dir):
         "actions": actions,
         "handoff": None,
         # Read by pipeline.py's format_output for the completion footer: a
-        # run that degraded must not sign off with a green checkmark.
-        "degraded": degraded,
+        # run that degraded must not sign off with a green checkmark. Step
+        # 12 sets it the same way — it, not this step, is where an
+        # interactive run's footer is printed.
+        "degraded": _run_degraded(state),
     }
 
 
@@ -1954,4 +1964,12 @@ def _step_12_cleanup(mode, state, context, config, output_dir):
         "situation": situation,
         "actions": actions,
         "handoff": None,
+        # Step 12 is the LAST step of an interactive run, so it — not step
+        # 11 — is where `format_output` prints the completion footer there.
+        # Setting the flag only on step 11 made the whole honesty mechanism
+        # bot-only: an interactive run that degraded printed its
+        # degradations at step 11 and then signed off "✅ PIPELINE COMPLETE"
+        # at step 12. `pipeline_status` survives in state from finalize, so
+        # the fact is already here to read.
+        "degraded": _run_degraded(state),
     }

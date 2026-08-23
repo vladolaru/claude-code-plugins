@@ -97,6 +97,16 @@ class TestStructuredDataDiscipline:
         assert "decision-critic-verdict.json" in handoff_text
         assert "review-verdict.json" not in handoff_text
 
+    def test_step_10_never_asks_for_a_stand_in_verdict(self, mod, tmp_path):
+        """A SKIPPED stand-in for a crashed critic hides exactly the lost
+        stress test step 11 now reports. The briefing must not teach one."""
+        g = mod.get_step_guidance(
+            10, "pr", {"completed_steps": []}, {}, output_dir=str(tmp_path)
+        )
+        text = "\n".join(g["actions"])
+        assert '"SKIPPED"' not in text
+        assert "produced no verdict" in text
+
     def test_step_10_uses_schema_not_placeholders(self, mod, tmp_path):
         """Step 10 JSON examples should show options, not copyable defaults."""
         state = {"completed_steps": []}
@@ -2554,6 +2564,31 @@ class TestStep11PresentResults:
 
 
 class TestStep12Cleanup:
+    def test_a_degraded_run_flags_the_footer(self, mod, tmp_path):
+        """Step 12 is the LAST step of an INTERACTIVE run, so it — not step
+        11 — is where the completion footer prints there. Setting the flag
+        only on step 11 made the whole honesty mechanism bot-only: an
+        interactive run printed its degradations at step 11 and then signed
+        off "✅ PIPELINE COMPLETE" at step 12."""
+        state = {"workspace": {"original_branch": "develop"},
+                 "completed_steps": [], "pipeline_status": "degraded"}
+        g = mod.get_step_guidance(12, "pr", state, {})
+        assert g["degraded"] is True
+        assert "DEGRADED" in mod.format_output(12, dict(g, next_step=None))
+
+    def test_a_clean_run_keeps_the_checkmark(self, mod, tmp_path):
+        state = {"workspace": {"original_branch": "develop"},
+                 "completed_steps": [], "pipeline_status": "success"}
+        g = mod.get_step_guidance(12, "pr", state, {})
+        assert g["degraded"] is False
+        assert "✅" in mod.format_output(12, dict(g, next_step=None))
+
+    def test_an_unfinalized_run_claims_nothing(self, mod, tmp_path):
+        """No finalize, no outcome. Claiming either way is a fabrication."""
+        state = {"workspace": {"original_branch": "develop"},
+                 "completed_steps": []}
+        assert mod.get_step_guidance(12, "pr", state, {})["degraded"] is False
+
     def test_asks_user_for_restore(self, mod, tmp_path):
         """Cleanup should ask user, not silently restore."""
         state = {"workspace": {"original_branch": "develop", "stash_ref": "abc"},
@@ -2633,19 +2668,29 @@ class TestDegradedPaths:
         assert "unavailable" in text.lower()
 
     def test_scenario_d_both_failed(self, mod, tmp_path):
-        """Both reconciliation and report failed: verdict forced to COMMENT."""
+        """Both reconciliation and report failed: the run publishes the
+        fallback COMMENT and says so.
+
+        This used to be pinned through a `forced_verdict` state key no
+        writer under `scripts/` ever set, so the assertion passed on a
+        branch production could not reach. It now reads the projection
+        finalize actually records.
+        """
         state = {"completed_steps": [],
                  "degradation": {"reconciliation_failed": True},
-                 "forced_verdict": "COMMENT"}
+                 "pipeline_status": "degraded",
+                 "verdict": "COMMENT",
+                 "verdict_source": "fallback: no usable ledger verdict",
+                 "degradation_notes": ["review-findings.json not found",
+                                       "review-report.md not found"]}
         ctx = {}
         config = {"mode": "pr", "interactive": True}
         g = mod.get_step_guidance(11, "pr", state, ctx, config=config)
         text = "\n".join(g["actions"])
-        assert "COMMENT" in text
-        lower = text.lower()
-        assert any(word in lower for word in ["failed", "degraded", "degradation"]), (
-            "Forced verdict must indicate pipeline degradation"
-        )
+        assert "verdict=COMMENT (fallback: no usable ledger verdict)" in text
+        assert "status=degraded" in text
+        assert "  - review-findings.json not found" in text
+        assert g["degraded"] is True
 
     def test_step_11_briefing_without_a_projection(self, mod, tmp_path):
         """A briefing fetched before finalize ran has no outcome to report.

@@ -1371,33 +1371,67 @@ class TestDerivedVerdict:
 
 
 class TestCriticAbsenceHonesty:
-    """A critic that was dispatched and produced nothing is a run that lost
-    its stress test; a critic that was never dispatched is quick mode
-    working as designed. `critic_verdict_for_state()` collapses both into
-    "unavailable" — right for pirategoat-bot, blind for the run's own
-    status — so the dispatch marker is what separates them."""
+    """A critic that was DISPATCHED and produced no usable verdict is a run
+    that lost its stress test; a critic that was never dispatched is quick
+    mode working as designed.
 
-    def _seed(self, tmp_path):
+    `critic_verdict_for_state()` collapses a missing file and an explicit
+    SKIPPED into "unavailable" — right for pirategoat-bot, blind for the
+    run's own status — so the dispatch marker is what separates the two
+    cases, and the USABLE VERDICT (not the file's existence) is what
+    decides the degradation. Keying on the artifact instead inverted the
+    incentive: the orchestrator that stopped short degraded, while the one
+    that dutifully recorded a SKIPPED stand-in for a crashed critic
+    published success over the same lost stress test.
+    """
+
+    _NOTE = "critic was dispatched but produced no verdict"
+
+    def _seed(self, tmp_path, *, dispatched=False):
         (tmp_path / "review-report.md").write_text("# report")
         _write_findings(tmp_path, [], verdict="approve")
+        if dispatched:
+            from review import synthesis_lifecycle
+            synthesis_lifecycle.mark_dispatched(
+                str(tmp_path), synthesis_lifecycle.DECISION_CRITIC
+            )
 
     def _finalize(self, tmp_path):
         _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
         return json.loads((tmp_path / "pipeline-result.json").read_text())
 
-    def test_a_dispatched_critic_with_no_artifact_degrades(self, tmp_path):
-        from review import synthesis_lifecycle
-        self._seed(tmp_path)
-        synthesis_lifecycle.mark_dispatched(
-            str(tmp_path), synthesis_lifecycle.DECISION_CRITIC
-        )
+    def test_a_dispatched_critic_that_wrote_nothing_degrades(self, tmp_path):
+        self._seed(tmp_path, dispatched=True)
         result = self._finalize(tmp_path)
         assert result["status"] == "degraded"
-        assert "critic produced no verdict artifact" in result["degradation_notes"]
+        assert self._NOTE in result["degradation_notes"]
         # Still falls through to the ledger — a missing critique does not
         # cost the review the verdict its findings earned.
         assert result["verdict"] == "APPROVE"
         assert result["critic_verdict"] == "unavailable"
+
+    def test_a_dispatched_critic_recorded_as_skipped_also_degrades(
+        self, tmp_path
+    ):
+        """The other row of the same table. A SKIPPED stand-in written
+        after a dispatch describes exactly the lost stress test above — it
+        is the crashed critic, spelled out — so it must not buy the run a
+        clean bill of health the run that wrote nothing was denied."""
+        self._seed(tmp_path, dispatched=True)
+        _write_critic_verdict(tmp_path, "SKIPPED")
+        result = self._finalize(tmp_path)
+        assert result["status"] == "degraded"
+        assert self._NOTE in result["degradation_notes"]
+
+    def test_the_quick_skip_is_silent(self, tmp_path):
+        """Quick mode's SKIPPED record is written by the PIPELINE, on the
+        branch that deliberately writes no dispatch marker. Nothing was
+        dispatched, so nothing was lost."""
+        self._seed(tmp_path)
+        _write_critic_verdict(tmp_path, "SKIPPED")
+        result = self._finalize(tmp_path)
+        assert result["status"] == "success"
+        assert result["degradation_notes"] == []
 
     def test_an_undispatched_critic_is_silent(self, tmp_path):
         self._seed(tmp_path)
@@ -1405,26 +1439,20 @@ class TestCriticAbsenceHonesty:
         assert result["status"] == "success"
         assert result["degradation_notes"] == []
 
-    def test_a_dispatched_critic_that_answered_is_silent(self, tmp_path):
-        from review import synthesis_lifecycle
-        self._seed(tmp_path)
-        synthesis_lifecycle.mark_dispatched(
-            str(tmp_path), synthesis_lifecycle.DECISION_CRITIC
-        )
-        _write_critic_verdict(tmp_path, "STAND")
+    @pytest.mark.parametrize("verdict", ["STAND", "REVISE", "ESCALATE"])
+    def test_a_dispatched_critic_that_answered_is_silent(
+        self, tmp_path, verdict
+    ):
+        self._seed(tmp_path, dispatched=True)
+        _write_critic_verdict(tmp_path, verdict)
         assert self._finalize(tmp_path)["degradation_notes"] == []
 
-    def test_an_explicit_skipped_artifact_is_silent(self, tmp_path):
-        """The crashed-critic case the step-10 briefing still asks the
-        orchestrator to record: an artifact that says SKIPPED with a reason
-        is an answer, not an absence."""
-        from review import synthesis_lifecycle
-        self._seed(tmp_path)
-        synthesis_lifecycle.mark_dispatched(
-            str(tmp_path), synthesis_lifecycle.DECISION_CRITIC
-        )
-        _write_critic_verdict(tmp_path, "SKIPPED")
-        assert self._finalize(tmp_path)["degradation_notes"] == []
+    def test_an_unparseable_verdict_after_dispatch_degrades(self, tmp_path):
+        """Artifact-INDEPENDENT: a file exists, but no usable verdict came
+        out of it, which is the same lost stress test."""
+        self._seed(tmp_path, dispatched=True)
+        (tmp_path / "decision-critic-verdict.json").write_text("{not json")
+        assert self._NOTE in self._finalize(tmp_path)["degradation_notes"]
 
 
 

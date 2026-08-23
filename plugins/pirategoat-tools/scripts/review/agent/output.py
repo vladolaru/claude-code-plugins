@@ -399,7 +399,12 @@ def render_markdown(data: Dict) -> str:
         # current.
         md.append("## Assessment\n\n")
         md.append(
-            "No current assessment: the reconciler's summary was withdrawn "
+            # "the standing assessment", not "the reconciler's": on a second
+            # reconciliation-plus-critic round the withdrawn text may be the
+            # orchestrator's own `revised_narrative` from the first round,
+            # and naming an author this section cannot know would be a
+            # claim rather than a description.
+            "No current assessment: the standing assessment was withdrawn "
             "under critic revision and not replaced; see the findings.\n\n"
         )
 
