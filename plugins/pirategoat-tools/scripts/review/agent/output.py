@@ -930,6 +930,48 @@ class ReviewOutputBuilder:
             return None
         return value
 
+    @staticmethod
+    def _progress_snapshot(
+        sidecar: Dict,
+        known_deferred: Optional[frozenset],
+        deferred_reviewed: List[str],
+    ):
+        """Return ``(covered, in_scope)`` only for coherent scope facts.
+
+        Progress is a derived claim, so every input must describe the same
+        disjoint inline/deferred population. Invalid producer state is omitted
+        rather than clamped into a plausible fraction; TARGET and NEXT UNREAD
+        validate their own independent sidecar fields elsewhere.
+        """
+        in_scope = sidecar.get("in_scope_count")
+        diffed = sidecar.get("diffed_count")
+        if (
+            isinstance(in_scope, bool)
+            or not isinstance(in_scope, int)
+            or in_scope <= 0
+            or isinstance(diffed, bool)
+            or not isinstance(diffed, int)
+            or not 0 <= diffed <= in_scope
+            or known_deferred is None
+        ):
+            return None
+
+        deferred_files = sidecar.get("deferred_files")
+        if (
+            not isinstance(deferred_files, list)
+            or not all(isinstance(path, str) for path in deferred_files)
+            or len(deferred_files) != len(known_deferred)
+            or frozenset(deferred_files) != known_deferred
+            or diffed + len(known_deferred) != in_scope
+        ):
+            return None
+
+        claims = frozenset(deferred_reviewed) & known_deferred
+        covered = diffed + len(claims)
+        if not 0 <= covered <= in_scope:
+            return None
+        return covered, in_scope
+
     def _known_deferred_files(self) -> Optional[frozenset]:
         """The deferred set via the env envelope — add-time fast feedback.
 
@@ -1559,20 +1601,16 @@ class ReviewOutputBuilder:
                 # still to read, largest first (the sidecar's own order —
                 # see bootstrap.py's order_by_diffstat_largest_first), so
                 # the very next tool call has an obvious target. Both read
-                # the same schema-2 sidecar as budget_target and are
-                # silently absent on the same schema-1/missing sidecar it
-                # already tolerates.
+                # the same schema-2 sidecar as budget_target. PROGRESS is
+                # additionally omitted when its count snapshot is
+                # incoherent; TARGET and NEXT UNREAD keep following their
+                # own independently valid fields.
                 meta = self._read_deferred_sidecar(output_dir, self.reviewer)
-                in_scope = meta.get("in_scope_count")
-                if (
-                    isinstance(in_scope, int)
-                    and not isinstance(in_scope, bool)
-                    and in_scope > 0
-                ):
-                    covered = (
-                        (meta.get("diffed_count") or 0)
-                        + len(self.deferred_reviewed)
-                    )
+                progress = self._progress_snapshot(
+                    meta, known_deferred, self.deferred_reviewed
+                )
+                if progress is not None:
+                    covered, in_scope = progress
                     print(
                         f"PROGRESS: covered {covered} of {in_scope} "
                         "in-scope files."

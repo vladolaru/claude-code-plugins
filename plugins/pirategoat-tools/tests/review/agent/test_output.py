@@ -2638,6 +2638,89 @@ class TestSaveEchoProgressAndNextUnread:
         assert "  - a.go" in out
         assert "  - b.go" in out
 
+    @pytest.mark.parametrize(
+        ("in_scope_count", "diffed_count", "deferred_files"),
+        [
+            (True, 0, ["a.go"]),
+            (1, False, ["a.go"]),
+            (1, -1, ["a.go"]),
+            (1, 2, ["a.go"]),
+            (3, 1, ["a.go"]),
+        ],
+    )
+    def test_incoherent_progress_facts_do_not_hide_target_or_next_unread(
+        self,
+        tmp_path,
+        monkeypatch,
+        capsys,
+        in_scope_count,
+        diffed_count,
+        deferred_files,
+    ):
+        """Malformed counts and impossible inline/deferred partitions do
+        not produce a plausible progress fraction from unrelated valid facts.
+        """
+        self._clean_env(monkeypatch)
+        self._write_sidecar(
+            tmp_path,
+            deferred_files=deferred_files,
+            review_budget=40,
+            in_scope_count=in_scope_count,
+            diffed_count=diffed_count,
+        )
+        builder = ReviewOutputBuilder("123", "code")
+        builder.add_unreviewed("a.go")
+        builder.save(str(tmp_path))
+        out = capsys.readouterr().out
+
+        assert "TARGET: ~40 tool calls" in out
+        assert "NEXT UNREAD (largest first):" in out
+        assert "  - a.go" in out
+        assert "PROGRESS:" not in out
+
+    def test_claim_overflow_omits_progress_without_clamping(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        self._clean_env(monkeypatch)
+        self._write_sidecar(
+            tmp_path,
+            deferred_files=["a.go", "b.go", "c.go"],
+            review_budget=40,
+            in_scope_count=1,
+            diffed_count=0,
+        )
+        builder = ReviewOutputBuilder("123", "code")
+        builder.add_deferred_reviewed("a.go", "b.go")
+        builder.save(str(tmp_path))
+        out = capsys.readouterr().out
+
+        assert "TARGET: ~40 tool calls" in out
+        assert "NEXT UNREAD (largest first):" in out
+        assert "  - c.go" in out
+        assert "PROGRESS:" not in out
+        assert "covered 1 of 1" not in out
+
+    def test_progress_counts_unique_authoritative_claims(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        self._clean_env(monkeypatch)
+        self._write_sidecar(
+            tmp_path,
+            deferred_files=["a.go", "b.go"],
+            review_budget=40,
+            in_scope_count=2,
+            diffed_count=0,
+        )
+        builder = ReviewOutputBuilder("123", "code")
+        # Defensive against a caller mutating public builder state instead of
+        # using add_deferred_reviewed(), whose API already order-deduplicates.
+        builder.deferred_reviewed = ["a.go", "a.go"]
+        builder.add_unreviewed("b.go")
+        builder.save(str(tmp_path))
+        out = capsys.readouterr().out
+
+        assert "PROGRESS: covered 1 of 2 in-scope files." in out
+
 
 # =============================================================================
 # TestMetaIsNeverFakeZero
