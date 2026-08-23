@@ -13,6 +13,7 @@ try:
         AGENT_WAIT_GRACE_SECONDS,
         CONTEXT_GATHER_TIMEOUT,
         DEFAULT_AGENT_TIMEOUT,
+        REVIEW_RECORD_MD,
         SCRIPTS_DIR,
         _git_output,
         _host,
@@ -43,6 +44,7 @@ except ImportError:
         AGENT_WAIT_GRACE_SECONDS,
         CONTEXT_GATHER_TIMEOUT,
         DEFAULT_AGENT_TIMEOUT,
+        REVIEW_RECORD_MD,
         SCRIPTS_DIR,
         _git_output,
         _host,
@@ -181,13 +183,6 @@ def _materialize_markdown(
 _FINDINGS_JSON = "review-findings.json"
 _FINDINGS_MD = "review-findings.md"
 
-# The machine projection of the ledger: complete, honest, assembled by the
-# pipeline at step 9 and re-assembled at step 11 after the critic
-# adjustments land. No LLM writes or edits it — which is precisely what
-# makes it safe to hand the decision critic as the thing to stress-test,
-# and what lets `review-report.md` be a presentation written ONCE at step
-# 11 rather than a document kept in sync with a moving ledger.
-REVIEW_RECORD_MD = "review-record.md"
 
 # The two verdict layers, and the one place they meet. Reviewers, the
 # reconciliator, and critic batches all speak the per-review vocabulary of
@@ -212,8 +207,13 @@ _LEDGER_TO_REVIEW_VERDICT = {
 # What the step-10 briefing may point the decision critic at, best first.
 # Existence decides, not a flag: the branch this replaced read a
 # `report_synthesis_failed` key no writer under scripts/ ever set.
+#
+# `review-report.md` is deliberately NOT a candidate: it does not exist
+# yet at step 10 — it is authored once at step 11, after this critic has
+# run — and listing a file that cannot be there would make the fallback
+# branch fire on every single run. The record is what the critic reads.
 _CRITIC_SOURCE_CANDIDATES = (
-    "review-report.md", _FINDINGS_MD, _FINDINGS_JSON,
+    REVIEW_RECORD_MD, _FINDINGS_MD, _FINDINGS_JSON,
 )
 
 
@@ -1397,6 +1397,20 @@ def _orchestrate_step_9(mode, config, state, context, output_dir):
     state["inline_coverage_claims"] = claims
     state["inline_coverage_unscoped"] = unscoped
 
+    # Assemble the record LAST, once the coverage populations are in state:
+    # the record carries them, and assembling before they were loaded would
+    # publish a record whose coverage section is silently empty on a run
+    # that had gaps. Same best-effort contract as the findings render — a
+    # record the pipeline could not assemble is a degradation the step-9
+    # briefing reports, never an exception out of the step.
+    record_outcome, record_error = assemble_review_record(output_dir, state)
+    if record_error:
+        print(
+            f"review record assembly failed: {record_error}",
+            file=sys.stderr,
+        )
+    _record_review_record(state, record_outcome)
+
     return context
 
 
@@ -1541,7 +1555,6 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
 
     critic_verdict = state["critic_verdict"]
 
-    report_path = os.path.join(output_dir, "review-report.md")
     findings_path = os.path.join(output_dir, "review-findings.json")
     degradation_notes = []
 
@@ -1636,6 +1649,36 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
                         f"REVISE-only channel)"
                     )
 
+    # Re-render the derived artifacts from the FINAL ledger — immediately
+    # after the adjustments landed and before anything else reads them, so
+    # every downstream consumer in this function and in step 11's briefing
+    # sees the ledger the run actually publishes. This is the seam that
+    # closes the field-proven staleness: every critic REVISE used to leave
+    # the hand-written narrative showing pre-adjustment severities while
+    # the JSON showed post-adjustment ones.
+    #
+    # `review-record.md` matters most here. It is what the step-11 briefing
+    # tells the orchestrator to author the report from, and the report is
+    # the run's whole audience-facing output — a record still describing
+    # the pre-critic ledger would be a post-critic report built on
+    # pre-critic facts.
+    #
+    # Both are best-effort by construction: a render failure is a
+    # degradation note, never an exception out of finalize, and never a
+    # faked file.
+    findings_markdown, render_error = _render_findings_markdown(output_dir)
+    _record_findings_markdown(state, findings_markdown)
+    if render_error:
+        degradation_notes.append(
+            f"review-findings.md render failed: {render_error}"
+        )
+    record_outcome, record_error = assemble_review_record(output_dir, state)
+    _record_review_record(state, record_outcome)
+    if record_error:
+        degradation_notes.append(
+            f"{REVIEW_RECORD_MD} assembly failed: {record_error}"
+        )
+
     # Hygiene: the reviewed repo is the requester's live working tree, so
     # finalize accounts for what the run left in it. The sweep runs here
     # rather than nowhere because a probe that outlived the command that
@@ -1684,10 +1727,27 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # legacy-normal absence must never spend the `status` field.
     usage_summary = _capture_usage_snapshot(output_dir)
 
-    if not os.path.isfile(report_path):
-        degradation_notes.append("review-report.md not found")
-        alt = os.path.join(output_dir, _FINDINGS_MD)
-        report_path = alt if os.path.isfile(alt) else None
+    # The human-readable document this run produced, best first.
+    #
+    # `review-report.md` is normally NOT here yet: it is authored by the
+    # orchestrator from the step-11 briefing this function is about to
+    # render, so on a first pass through finalize the record — written
+    # moments ago, from the final ledger — is the newest complete account
+    # the run has. It is listed anyway because a re-entered step 11 finds
+    # a report already written, and when it exists it is the better answer.
+    #
+    # Its absence is deliberately NOT a degradation any more. When step 9
+    # authored the report, an absent file meant an orchestrator that
+    # stopped short; now it is the expected state at this instant, and
+    # noting it would degrade every run. The step-11 briefing's handoff
+    # gate is what verifies the report got written, and pirategoat-bot
+    # fails the delivery loudly if it did not.
+    report_path = None
+    for candidate in ("review-report.md", REVIEW_RECORD_MD, _FINDINGS_MD):
+        candidate_path = os.path.join(output_dir, candidate)
+        if os.path.isfile(candidate_path):
+            report_path = candidate_path
+            break
     if not os.path.isfile(findings_path):
         degradation_notes.append("review-findings.json not found")
 
@@ -1731,29 +1791,6 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
             "no usable verdict in review-findings.json — verdict fell "
             "back to COMMENT"
         )
-
-    # Re-render review-findings.md from the FINAL ledger — after the critic
-    # adjustments landed, so the
-    # rendering describes the artifact the run actually publishes. This is
-    # the seam that closes the field-proven staleness: every critic REVISE
-    # used to leave the hand-written narrative showing pre-adjustment
-    # severities while the JSON and the report showed post-adjustment ones.
-    # Best-effort by construction — a render failure is a degradation note,
-    # never an exception out of finalize, and never a faked file.
-    findings_markdown, render_error = _render_findings_markdown(output_dir)
-    _record_findings_markdown(state, findings_markdown)
-    if render_error:
-        degradation_notes.append(
-            f"review-findings.md render failed: {render_error}"
-        )
-    # The report fallback above ran before this render, so a run whose
-    # report synthesis failed AND whose step 9 never rendered would have
-    # resolved report_path to None a few lines too early. Re-offer the
-    # freshly rendered ledger rather than publishing no report path at all.
-    if report_path is None:
-        findings_md_path = os.path.join(output_dir, _FINDINGS_MD)
-        if os.path.isfile(findings_md_path):
-            report_path = findings_md_path
 
     # Computed last: every degradation any of the work above discovered has
     # to reach the status it is reported beside, or the run publishes

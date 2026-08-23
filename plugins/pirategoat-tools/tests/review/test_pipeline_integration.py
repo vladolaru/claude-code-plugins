@@ -1522,6 +1522,9 @@ class TestStep9Orchestration:
             },
         }
         (tmp_path / "reconciliation-context.json").write_text(json.dumps(recon))
+        (tmp_path / "review-findings.json").write_text(
+            json.dumps(_review_json("review-reconciliator"))
+        )
         r = run_pipeline("--step", "9", "--mode", "full",
                        "--output-dir", str(tmp_path), cwd=tmp_path)
         assert r.returncode == 0
@@ -1529,8 +1532,11 @@ class TestStep9Orchestration:
         assert state.get("inline_coverage_gaps") == {
             "src/starved.php": ["code-reviewer", "security-reviewer"],
         }
-        # The briefing itself must carry the warning.
-        assert "src/starved.php" in r.stdout
+        # The record the step assembles carries the measurement. The
+        # briefing no longer re-renders it — a second copy is a second
+        # thing to paraphrase.
+        assert state.get("review_record", {}).get("status") == "complete"
+        assert "src/starved.php" in (tmp_path / "review-record.md").read_text()
 
     def test_step_9_tolerates_missing_reconciliation_context(self, tmp_path):
         run_pipeline("--step", "1", "--mode", "full",
@@ -2154,14 +2160,25 @@ class TestStep10CriticSourceRecording:
 
     def test_records_the_first_present_artifact(self, mod, tmp_path):
         self._findings(tmp_path)
-        (tmp_path / "review-report.md").write_text("# report")
+        (tmp_path / "review-record.md").write_text("# record")
         (tmp_path / "review-findings.md").write_text("# findings")
         state = {"resolved_params": {}}
         mod._orchestrate_step(10, "full", {}, state, {}, str(tmp_path))
-        assert state["critic_source"]["target"] == "review-report.md"
+        assert state["critic_source"]["target"] == "review-record.md"
         assert state["critic_source"]["available"] == [
-            "review-report.md", "review-findings.md", "review-findings.json",
+            "review-record.md", "review-findings.md", "review-findings.json",
         ]
+
+    def test_the_report_is_never_a_candidate(self, mod, tmp_path):
+        """`review-report.md` is authored at step 11, after this critic
+        runs. Listing a file that cannot exist yet would fire the fallback
+        branch on every single run."""
+        self._findings(tmp_path)
+        (tmp_path / "review-record.md").write_text("# record")
+        (tmp_path / "review-report.md").write_text("# stale report")
+        state = {"resolved_params": {}}
+        mod._orchestrate_step(10, "full", {}, state, {}, str(tmp_path))
+        assert "review-report.md" not in state["critic_source"]["available"]
 
     def test_falls_through_to_the_markdown_then_the_ledger(
         self, mod, tmp_path

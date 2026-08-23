@@ -10,6 +10,7 @@ try:
     from .pipeline_contract import (
         DEFAULT_AGENT_TIMEOUT,
         HOST_CODEX,
+        REVIEW_RECORD_MD,
         SCRIPTS_DIR,
         _STEP_MAP,
         _codex_agent_instruction,
@@ -39,6 +40,7 @@ except ImportError:
     from review.pipeline_contract import (
         DEFAULT_AGENT_TIMEOUT,
         HOST_CODEX,
+        REVIEW_RECORD_MD,
         SCRIPTS_DIR,
         _STEP_MAP,
         _codex_agent_instruction,
@@ -1222,48 +1224,8 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
 
 
 # ---------------------------------------------------------------------------
-# Step 9: Review Report Synthesis
+# Review coverage rendering (shared by the record assembler and step 11)
 # ---------------------------------------------------------------------------
-
-# Default output instructions for PR mode
-_DEFAULT_OUTPUT_INSTRUCTIONS_PR = """\
-Address the PR author by first name — use a warm, collegial tone.
-Be specific and actionable, not vague.
-Acknowledge intent or effort before raising concerns.
-Frame suggestions collaboratively: "What if we...?" not "You should..."
-Say what's genuinely good, plainly.
-
-STRUCTURE:
-- Brief human recap (3-5 short bullets: what you noticed, what matters)
-- Below a ---, detailed findings in a collapsible <details> block
-- For each finding: the file/line, what's wrong, what to do about it
-- Group findings by severity (critical > important > consider)
-
-Include a clear verdict recommendation and summary of key findings.
-Keep it actionable — every finding should have a concrete recommendation.
-Carry every reconciled finding into the report as a finding — do not demote
-one into narrative-only "tradeoff"/"note to be aware of" prose. Never present
-an unverified likelihood claim ("rare", "narrow corner", "coincidental") as
-fact; if the findings don't verify it, don't assert it.
-"""
-
-_DEFAULT_OUTPUT_INSTRUCTIONS_BRANCH = """\
-Be specific and actionable, not vague.
-Frame suggestions collaboratively.
-
-STRUCTURE:
-- Brief summary of key findings
-- Detailed findings grouped by severity (critical > important > consider)
-- For each finding: the file/line, what's wrong, what to do about it
-
-Include a clear verdict recommendation and summary of key findings.
-Keep it actionable — every finding should have a concrete recommendation.
-Carry every reconciled finding into the report as a finding — do not demote
-one into narrative-only "tradeoff"/"note to be aware of" prose. Never present
-an unverified likelihood claim ("rare", "narrow corner", "coincidental") as
-fact; if the findings don't verify it, don't assert it.
-"""
-
 
 def _has_coverage_gap(gaps, unscoped):
     """True when something is PROVEN uncovered, claims aside.
@@ -1356,8 +1318,23 @@ def _render_review_coverage_section(gaps, claims, unscoped):
     return "\n".join(lines).rstrip("\n")
 
 
+# ---------------------------------------------------------------------------
+# Step 9: Review Record
+# ---------------------------------------------------------------------------
+
 def _step_9_review_report(mode, state, context, config, output_dir):
-    """Step 9: Review Report Synthesis — generate the review report."""
+    """Step 9: Review Record — read what the pipeline assembled.
+
+    This step used to have the orchestrator author `review-report.md` from
+    the ledger, which meant the audience-facing document was born BEFORE
+    the decision critic ran and had to be edited back into agreement with
+    a ledger that moved underneath it. Authoring moved wholesale to step
+    11, after validation. What is left here is a reading step: the
+    pipeline has already assembled `review-record.md` — the complete,
+    machine-written account of the run — and the orchestrator's job is to
+    read it and satisfy itself that it presents a review worth standing
+    behind before the critic starts pulling on it.
+    """
     od = output_dir or "<OUTPUT_DIR>"
     degradation = state.get("degradation", {})
 
@@ -1373,113 +1350,67 @@ def _step_9_review_report(mode, state, context, config, output_dir):
         situation.append(f"**Change purpose (from commits — the reconciled findings, not this framing, are the source of truth):** {'; '.join(commit_messages[:3])}")
 
     if degradation.get("reconciliation_failed"):
-        situation.append("⚠️ Reconciliation failed — working with raw agent output in degraded mode.")
-        actions.append("Read the individual agent review files directly (raw agent output).")
-        actions.append("Synthesize them manually into a coherent review report.")
-        actions.append("")
+        # The sanctioned LLM-authored fallback. With no ledger there is no
+        # record to assemble, so there is nothing for this step to hand
+        # over; the raw agent output is the only material, and step 11
+        # asks for the manual synthesis.
+        situation.append(
+            "⚠️ Reconciliation failed — there is no findings ledger, so the "
+            "pipeline assembled no review record. This run is in degraded "
+            "mode and works from raw agent output."
+        )
+        actions.append(
+            f"Read the individual `{od}/<agent>-review.md` files directly "
+            "(raw agent output) and build your own picture of the change."
+        )
+        actions.append(
+            "You will synthesize `review-report.md` manually at step 11, "
+            "from that raw output. Do not write it now — the decision "
+            "critic runs first."
+        )
+        return {
+            "phase": "SYNTHESIS",
+            "title": "Review Record",
+            "situation": situation,
+            "actions": actions,
+            "handoff": None,
+        }
 
-    # Resolve output instructions
-    output_instructions = config.get("output_instructions")
-    if output_instructions:
-        # Caller-provided override — use verbatim
-        actions.append("**Output instructions (caller override):**")
-        actions.append(output_instructions)
+    record_outcome = state.get("review_record")
+    record_failed = (
+        isinstance(record_outcome, dict)
+        and record_outcome.get("status") != "complete"
+    )
+    if record_failed:
+        situation.append(
+            f"⚠️ The pipeline could not assemble `{od}/{REVIEW_RECORD_MD}`. "
+            f"Read `{od}/review-findings.json` directly instead — it is the "
+            "canonical ledger the record would have projected."
+        )
     else:
-        # Default instructions based on mode
-        if mode == "pr":
-            pr = context.get("pr", {})
-            author_name = pr.get("author_name", "")
-            if author_name:
-                first_name = author_name.split()[0]
-                instructions = _DEFAULT_OUTPUT_INSTRUCTIONS_PR.replace(
-                    "Address the PR author by first name",
-                    f"Address {first_name} by name"
-                )
-            else:
-                instructions = _DEFAULT_OUTPUT_INSTRUCTIONS_PR
-            actions.append("**Output instructions (default — PR mode):**")
-            actions.append(instructions)
-        else:
-            actions.append("**Output instructions (default — branch mode):**")
-            actions.append(_DEFAULT_OUTPUT_INSTRUCTIONS_BRANCH)
-
-    actions.append("")
-    actions.append(f"Write `{od}/review-report.md` with: findings summary, critical/important "
-                   "issues highlighted, and a verdict (APPROVE, REQUEST_CHANGES, or COMMENT).")
-    actions.append(
-        f"Source: `{od}/review-findings.json` (canonical) and "
-        f"`{od}/review-findings.md`, its pipeline-rendered reading copy."
-    )
-    actions.append(
-        f"**What held comes from the ledger, never from memory.** Any "
-        f"\"what we checked and it held\" / \"verified absences\" content "
-        f"in the report is quoted from the `## Clearances (verified "
-        f"absences)` section of `{od}/review-findings.md` — the "
-        f"reconciliator recorded there exactly the clearances that survived "
-        f"its method judgment, with attribution. Do not reconstruct that "
-        f"list from what you recall reviewers saying: a clearance the "
-        f"reconciliator voided as method-inadequate would come back as "
-        f"fact. If that section is absent, nothing was recorded as held — "
-        f"write no such section rather than filling one in."
-    )
-
-    # Host context banner passthrough — if degraded, surface message at top
-    host_context = context.get("host_context")
-    banner = (host_context or {}).get("banner") or {}
-    if banner.get("degraded"):
-        actions.append("")
         actions.append(
-            f"**Host context banner:** prepend this blockquote to the top of "
-            f"`review-report.md` (the pipeline renders the same blockquote "
-            f"onto `review-findings.md` from the findings JSON):"
-        )
-        actions.append("")
-        actions.append(f"> **⚠ Host Context Banner:** {banner.get('message', '')}")
-        actions.append("")
-
-    # Inline coverage — computed deterministically at reconciliation and
-    # loaded into state by _orchestrate_step. A starved review must not
-    # present as a clean one, regardless of reconciliator diligence. The
-    # section is rendered here, complete, and pasted verbatim: an
-    # instruction to *describe* a measurement invites paraphrase, and a
-    # field run turned "skipped by every matching agent's diff budget and
-    # no reviewer reported reviewing them" into "read by nobody" — false
-    # for 8 of 41 files, and the false version propagated into the
-    # critic's context as fact.
-    coverage_section = _render_review_coverage_section(
-        state.get("inline_coverage_gaps"),
-        state.get("inline_coverage_claims"),
-        state.get("inline_coverage_unscoped"),
-    )
-    if coverage_section:
-        fence = _markdown_fence_for(coverage_section)
-        # The verdict sentence rides on a real gap, not on the section
-        # existing: a run whose only entry is a deferred-review CLAIM has
-        # nothing proven uncovered, and telling the orchestrator to
-        # acknowledge a gap there manufactures one out of a claim the
-        # block itself is careful to hedge.
-        gap_clause = (
-            " The verdict must acknowledge this gap."
-            if _has_coverage_gap(
-                state.get("inline_coverage_gaps"),
-                state.get("inline_coverage_unscoped"),
-            )
-            else ""
+            f"**The review record is assembled at `{od}/{REVIEW_RECORD_MD}`.** "
+            "The pipeline wrote it from the findings ledger and this run's "
+            "own measurements — findings, clearances, the reconciler's "
+            "assessment, run notes, and the coverage measurement. Nothing "
+            "in it was authored by an agent."
         )
         actions.append("")
         actions.append(
-            "**⚠ Review coverage — machine-rendered.** Copy the block below "
-            f"VERBATIM into `{od}/review-report.md`. You may add your own "
-            "commentary AFTER the block; never restate, summarize, "
-            "re-count, or edit the machine's sentences — the hedges in them "
-            "are the measurement, and a tighter paraphrase is a false "
-            f"claim.{gap_clause}"
+            "Read it end to end and verify it presents the review you would "
+            "stand behind: the findings are the ones you expect, the "
+            "coverage section matches what the run actually reached, and "
+            "nothing in it surprises you. Then proceed."
         )
         actions.append("")
-        actions.append(f"{fence}markdown")
-        actions.append(coverage_section)
-        actions.append(fence)
-        actions.append("")
+        actions.append(
+            "**Do not edit it, and do not write a report yet.** The record "
+            "is the pipeline's own account and stays machine-written; the "
+            "audience-facing `review-report.md` is authored ONCE at step "
+            "11, after the decision critic has run and any adjustments have "
+            "landed. Writing prose now would only be prose that has to be "
+            "corrected later."
+        )
 
     actions.append("")
     actions.append(
@@ -1492,16 +1423,16 @@ def _step_9_review_report(mode, state, context, config, output_dir):
         "user's uncommitted work."
     )
 
-    handoff = [
-        f"Verify `{od}/review-report.md` exists before proceeding.",
-    ]
-
     return {
         "phase": "SYNTHESIS",
-        "title": "Review Report Synthesis",
+        "title": "Review Record",
         "situation": situation,
         "actions": actions,
-        "handoff": handoff,
+        # No gate: this step asks the orchestrator for no artifact. The
+        # record is the pipeline's own write, and gating on a file the
+        # pipeline just wrote would be theatre — the same reason step 10's
+        # quick-skip branch carries no handoff.
+        "handoff": None,
     }
 
 
@@ -1786,6 +1717,52 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
 # Step 11: Present Results
 # ---------------------------------------------------------------------------
 
+# The report's voice. Bot runs override this wholesale through
+# `output_instructions` in run-config.json (pirategoat-bot seeds it, and
+# the result IS the posted PR comment); interactive runs fall back to the
+# mode-appropriate default below. These live at step 11 because that is
+# where the report is authored — once, from the final post-critic state.
+# Default output instructions for PR mode
+_DEFAULT_OUTPUT_INSTRUCTIONS_PR = """\
+Address the PR author by first name — use a warm, collegial tone.
+Be specific and actionable, not vague.
+Acknowledge intent or effort before raising concerns.
+Frame suggestions collaboratively: "What if we...?" not "You should..."
+Say what's genuinely good, plainly.
+
+STRUCTURE:
+- Brief human recap (3-5 short bullets: what you noticed, what matters)
+- Below a ---, detailed findings in a collapsible <details> block
+- For each finding: the file/line, what's wrong, what to do about it
+- Group findings by severity (critical > important > consider)
+
+Include a clear verdict recommendation and summary of key findings.
+Keep it actionable — every finding should have a concrete recommendation.
+Carry every reconciled finding into the report as a finding — do not demote
+one into narrative-only "tradeoff"/"note to be aware of" prose. Never present
+an unverified likelihood claim ("rare", "narrow corner", "coincidental") as
+fact; if the findings don't verify it, don't assert it.
+"""
+
+_DEFAULT_OUTPUT_INSTRUCTIONS_BRANCH = """\
+Be specific and actionable, not vague.
+Frame suggestions collaboratively.
+
+STRUCTURE:
+- Brief summary of key findings
+- Detailed findings grouped by severity (critical > important > consider)
+- For each finding: the file/line, what's wrong, what to do about it
+
+Include a clear verdict recommendation and summary of key findings.
+Keep it actionable — every finding should have a concrete recommendation.
+Carry every reconciled finding into the report as a finding — do not demote
+one into narrative-only "tradeoff"/"note to be aware of" prose. Never present
+an unverified likelihood claim ("rare", "narrow corner", "coincidental") as
+fact; if the findings don't verify it, don't assert it.
+"""
+
+
+
 def _derived_markdown_status_line(state, output_dir, *, key, label, suffix=None):
     """Summarize one derived-Markdown outcome for a human.
 
@@ -1859,18 +1836,178 @@ def _projection_lines(state):
     return lines
 
 
+def _report_authoring_actions(mode, state, context, config, output_dir):
+    """The step-11 block that has the orchestrator author the report ONCE.
+
+    This is the whole of the review's audience-facing output, and in bot
+    mode it IS the posted GitHub PR comment (pirategoat-bot reads the file
+    verbatim). It is authored here, at the end, for one reason: nothing
+    presentation-shaped exists while the decision critic runs, so there is
+    no stale prose for a REVISE to chase and no revision loop to get
+    wrong. Everything the report needs is settled by now — the ledger has
+    absorbed any adjustments, the record has been re-assembled from it,
+    and the verdict has been derived.
+    """
+    od = output_dir or "<OUTPUT_DIR>"
+    degradation = state.get("degradation", {})
+    actions = []
+
+    reconciliation_failed = bool(degradation.get("reconciliation_failed"))
+    record_outcome = state.get("review_record")
+    record_usable = (
+        not reconciliation_failed
+        and isinstance(record_outcome, dict)
+        and record_outcome.get("status") == "complete"
+    )
+
+    actions.append(
+        f"**Author `{od}/review-report.md` now — once.** This is the "
+        "audience-facing presentation of the review"
+        + (
+            ", and it is posted verbatim as the PR comment."
+            if not config.get("interactive", True)
+            else "."
+        )
+    )
+    actions.append("")
+
+    if reconciliation_failed:
+        actions.append(
+            "⚠️ Reconciliation failed, so there is no ledger and no review "
+            f"record. Synthesize the report manually from the raw "
+            f"`{od}/<agent>-review.md` files — this is the sanctioned "
+            "degraded path. Say plainly in the report that reconciliation "
+            "failed and the findings are unreconciled."
+        )
+    elif record_usable:
+        actions.append(
+            f"**Source:** `{od}/{REVIEW_RECORD_MD}` — the pipeline's own "
+            "machine-assembled account of this run, re-assembled moments "
+            f"ago from the final ledger — and `{od}/review-findings.json`, "
+            "the canonical ledger it projects. The record is the reference "
+            "the report must not contradict: every finding, severity, "
+            "count, clearance, and coverage statement in your report has to "
+            "agree with it."
+        )
+    else:
+        actions.append(
+            f"**Source:** `{od}/review-findings.json` — the canonical "
+            f"ledger. The pipeline could not assemble `{REVIEW_RECORD_MD}` "
+            "for this run, so read the ledger directly."
+        )
+    actions.append("")
+
+    # The report's voice: the caller's override verbatim when one exists
+    # (bot mode seeds it into run-config.json), otherwise the
+    # mode-appropriate default with the PR author's name folded in.
+    output_instructions = config.get("output_instructions")
+    if output_instructions:
+        actions.append("**Output instructions (caller override):**")
+        actions.append(output_instructions)
+    elif mode == "pr":
+        pr = context.get("pr", {})
+        author_name = pr.get("author_name", "")
+        if author_name:
+            first_name = author_name.split()[0]
+            instructions = _DEFAULT_OUTPUT_INSTRUCTIONS_PR.replace(
+                "Address the PR author by first name",
+                f"Address {first_name} by name"
+            )
+        else:
+            instructions = _DEFAULT_OUTPUT_INSTRUCTIONS_PR
+        actions.append("**Output instructions (default — PR mode):**")
+        actions.append(instructions)
+    else:
+        actions.append("**Output instructions (default — branch mode):**")
+        actions.append(_DEFAULT_OUTPUT_INSTRUCTIONS_BRANCH)
+
+    actions.append("")
+    actions.append(
+        "Include a verdict (APPROVE, REQUEST_CHANGES, or COMMENT) matching "
+        f"the one the pipeline derived and printed below — it came from "
+        f"`{od}/review-findings.json`, and the report is a presentation of "
+        "that decision, not a second one."
+    )
+
+    if not reconciliation_failed:
+        actions.append(
+            f"**What held comes from the ledger, never from memory.** Any "
+            f"\"what we checked and it held\" / \"verified absences\" "
+            f"content in the report is quoted from the `## Clearances "
+            f"(verified absences)` section of the record — the "
+            f"reconciliator recorded there exactly the clearances that "
+            f"survived its method judgment, with attribution. Do not "
+            f"reconstruct that list from what you recall reviewers saying: "
+            f"a clearance the reconciliator voided as method-inadequate "
+            f"would come back as fact. If that section is absent, nothing "
+            f"was recorded as held — write no such section rather than "
+            f"filling one in."
+        )
+
+    # Host context banner passthrough — if degraded, surface at the top.
+    banner = (context.get("host_context") or {}).get("banner") or {}
+    if banner.get("degraded"):
+        actions.append("")
+        actions.append(
+            f"**Host context banner:** prepend this blockquote to the top of "
+            f"`review-report.md` (the pipeline renders the same blockquote "
+            f"onto the record from the findings JSON):"
+        )
+        actions.append("")
+        actions.append(f"> **⚠ Host Context Banner:** {banner.get('message', '')}")
+
+    # Coverage. The measurement itself is already rendered, complete and
+    # hedged, in the record — so the report quotes it rather than
+    # re-deriving it. A field run once paraphrased "skipped by every
+    # matching agent's diff budget and no reviewer reported reviewing
+    # them" into "read by nobody", false for 8 of 41 files.
+    if record_usable and _render_review_coverage_section(
+        state.get("inline_coverage_gaps"),
+        state.get("inline_coverage_claims"),
+        state.get("inline_coverage_unscoped"),
+    ):
+        gap_clause = (
+            " The verdict must acknowledge this gap."
+            if _has_coverage_gap(
+                state.get("inline_coverage_gaps"),
+                state.get("inline_coverage_unscoped"),
+            )
+            else ""
+        )
+        actions.append("")
+        actions.append(
+            f"**⚠ Review coverage.** The record carries a `## Review "
+            f"coverage` section. Copy it into `{od}/review-report.md` "
+            "VERBATIM. You may add your own commentary AFTER the block; "
+            "never restate, summarize, re-count, or edit the machine's "
+            "sentences — the hedges in them are the measurement, and a "
+            f"tighter paraphrase is a false claim.{gap_clause}"
+        )
+
+    actions.append("")
+    actions.append(
+        "**Write it once.** There is no revision loop after this — the "
+        "critic has already run, the adjustments have already landed, and "
+        "nothing downstream will edit this file. Get it right in one pass."
+    )
+    return actions
+
+
 def _step_11_present_results(mode, state, context, config, output_dir):
-    """Step 11: Present Results — show review output."""
+    """Step 11: author the report, then present what the run published."""
     od = output_dir or "<OUTPUT_DIR>"
     is_interactive = config.get("interactive", True)
     critic_verdict = state.get("critic_verdict")
 
     situation = [_PHASE_TRANSITIONS["OUTPUT"]]
-    actions = []
+    actions = _report_authoring_actions(
+        mode, state, context, config, output_dir
+    )
+    actions.append("")
 
     if is_interactive:
-        actions.append(f"Read `{od}/review-report.md` and present a formatted summary "
-                       "with verdict and key findings.")
+        actions.append("Then present a formatted summary of the report you "
+                       "just wrote, with verdict and key findings.")
 
         if critic_verdict == "unavailable":
             actions.append("⚠️ Critic verdict unavailable — present review as-is.")
@@ -1883,8 +2020,14 @@ def _step_11_present_results(mode, state, context, config, output_dir):
 
     else:
         # Non-interactive: list output files
-        actions.append("PIPELINE COMPLETE. Output files:")
-        actions.append(f"- `{od}/review-report.md`")
+        actions.append("PIPELINE COMPLETE once the report above is written. "
+                       "Output files:")
+        actions.append(f"- `{od}/review-report.md` — the report you author "
+                       "here; posted verbatim as the PR comment")
+        actions.append(
+            f"- `{od}/{REVIEW_RECORD_MD}` — the pipeline's machine-assembled "
+            "record of the run"
+        )
         actions.append(
             f"- `{od}/review-findings.json` + `review-findings.md` "
             "(rendered from the JSON by the pipeline)"
@@ -1925,10 +2068,17 @@ def _step_11_present_results(mode, state, context, config, output_dir):
 
     return {
         "phase": "OUTPUT",
-        "title": "Present Results",
+        "title": "Author Report + Present Results",
         "situation": situation,
         "actions": actions,
-        "handoff": None,
+        # The one artifact this step asks the orchestrator for, and the one
+        # the run's whole output rests on: pirategoat-bot reads this file
+        # and fails the delivery if it is absent, so the gate has to be
+        # here rather than left implicit.
+        "handoff": [
+            f"Verify `{od}/review-report.md` exists before reporting the "
+            "pipeline complete.",
+        ],
         # Read by pipeline.py's format_output for the completion footer: a
         # run that degraded must not sign off with a green checkmark. Step
         # 12 sets it the same way — it, not this step, is where an

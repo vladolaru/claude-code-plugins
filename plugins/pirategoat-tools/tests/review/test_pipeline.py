@@ -76,14 +76,18 @@ class TestStep1ParseInput:
 class TestStructuredDataDiscipline:
     """Artifact discipline: verification checkpoints, handoff gates, schema-not-placeholders."""
 
-    def test_step_9_has_handoff(self, mod, tmp_path):
-        """Step 9 should gate on review-report.md."""
-        state = {"completed_steps": []}
-        ctx = {}
-        g = mod.get_step_guidance(9, "pr", state, ctx, output_dir=str(tmp_path))
+    def test_step_11_gates_on_the_report(self, mod, tmp_path):
+        """The report's gate followed the report to step 11.
+
+        It was step 9's while step 9 authored it; authoring moved to step
+        11, after validation, and the gate has to move with it — this is
+        the file pirategoat-bot reads and fails the delivery without.
+        """
+        g = mod.get_step_guidance(
+            11, "pr", {"completed_steps": []}, {}, output_dir=str(tmp_path)
+        )
         assert g.get("handoff") is not None
-        handoff_text = "\n".join(g["handoff"])
-        assert "review-report.md" in handoff_text
+        assert "review-report.md" in "\n".join(g["handoff"])
 
     def test_step_10_has_handoff(self, mod, tmp_path):
         """Step 10 gates on the critic's own verdict — and on nothing
@@ -1397,93 +1401,85 @@ class TestStep8ReadinessGate:
         assert "run_in_background" not in text
 
 
-class TestStep9ReviewReport:
-    def test_references_review_findings(self, mod, tmp_path):
-        state = {"completed_steps": []}
-        ctx = {}
-        g = mod.get_step_guidance(9, "full", state, ctx)
-        text = "\n".join(g["actions"])
-        assert "review-findings" in text
+class TestReviewCoverageSection:
+    """The coverage measurement's renderer, tested directly.
 
-    def test_banner_parenthetical_credits_the_pipeline_not_the_agent(
-        self, mod, tmp_path
+    It used to be reachable only through the step-9 briefing, which pasted
+    it into a fenced block for the orchestrator to copy into the report.
+    The record assembler is its primary caller now (step 11's briefing
+    tells the orchestrator to quote it out of the record), so the pins live
+    on the pure function — the one place both callers share.
+    """
+
+    @staticmethod
+    def _render(mod, gaps=None, claims=None, unscoped=None):
+        # Straight at briefings.py: the renderer is shared by the record
+        # assembler and step 11, so the facade is not the seam under test.
+        from review.briefings import _render_review_coverage_section
+
+        return _render_review_coverage_section(gaps, claims, unscoped)
+
+    def test_all_three_populations_get_their_own_honest_sentence(self, mod):
+        """The field failure this pins: a briefing that DESCRIBED a hedged
+        measurement instead of rendering it, and the orchestrator restated
+        "skipped by every matching agent's diff budget and no reviewer
+        reported reviewing them" as "read by nobody" — false for files
+        that were provably read."""
+        text = self._render(
+            mod,
+            gaps={"src/starved.php": ["code-reviewer"]},
+            claims={"src/big.py": ["security-reviewer"]},
+            unscoped=["package-lock.json", ".editorconfig"],
+        )
+
+        assert text.count("## Review coverage") == 1
+
+        assert (
+            "1 changed file(s) were skipped by every matching agent's diff "
+            "budget and no reviewer reported reviewing them from the "
+            "deferred NOT DIFFED queue:" in text
+        )
+        assert "- `src/starved.php` (skipped by: `code-reviewer`)" in text
+
+        assert (
+            "2 changed file(s) matched no reviewer's domain and were "
+            "reviewed by no one" in text
+        )
+        assert "- `package-lock.json`" in text
+        assert "- `.editorconfig`" in text
+
+        assert (
+            "### Reviewed from the deferred queue — claims, not proof of "
+            "read" in text
+        )
+        assert "- `src/big.py` (claimed by: `security-reviewer`)" in text
+
+    def test_unscoped_line_explains_why_it_can_exceed_the_metrics_figure(
+        self, mod
     ):
-        """The reconciliator no longer writes any Markdown, so the step-9
-        banner instruction must not claim it already did."""
-        ctx = {"host_context": {"banner": {
-            "degraded": True, "message": "WooCommerce source unresolved.",
-        }}}
-        g = mod.get_step_guidance(9, "pr", {"completed_steps": []}, ctx)
-        text = "\n".join(g["actions"])
-        assert "Host context banner" in text
-        assert "reconciliator already did the same" not in text
+        """F9: the section counts every changed file; run-level metrics
+        count reviewable files only. Without the clause a reader treats
+        the two figures as one measurement and reads the gap as a bug."""
+        text = self._render(mod, unscoped=["assets/logo.png"])
+        assert (
+            "this counts every changed file, including binaries and "
+            "non-reviewable paths — run-level metrics count reviewable "
+            "files only, so its 'uncovered' figure can be smaller" in text
+        )
 
-    def test_all_modes_have_this_step(self, mod, tmp_path):
-        """Review report synthesis runs for ALL modes (fixes branch flow gap)."""
-        for mode in ("pr", "full", "incremental"):
-            state = {"completed_steps": []}
-            ctx = {}
-            g = mod.get_step_guidance(9, mode, state, ctx)
-            assert g is not None
-            text = "\n".join(g["actions"])
-            assert "review-report.md" in text
-
-    def test_includes_output_instructions_default(self, mod, tmp_path):
-        """Step 9 should include default output instructions when none in config."""
-        state = {"completed_steps": []}
-        ctx = {"pr": {"author_name": "Maria Rodriguez"}}
-        g = mod.get_step_guidance(9, "pr", state, ctx)
-        text = "\n".join(g["actions"])
-        assert "Maria" in text  # default addresses author by name
-        assert "actionable" in text.lower()
-
-    def test_surfaces_inline_coverage_gaps(self, mod, tmp_path):
-        """Files no reviewer saw inline must be forced into the report."""
-        state = {
-            "completed_steps": [],
-            "inline_coverage_gaps": {
-                "src/starved.php": ["code-reviewer", "security-reviewer"],
-            },
-        }
-        g = mod.get_step_guidance(9, "full", state, {})
-        text = "\n".join(g["actions"])
-        assert "## Review coverage" in text
-        assert "`src/starved.php`" in text
+    def test_gaps_name_every_agent_that_skipped_the_file(self, mod):
+        text = self._render(
+            mod,
+            gaps={"src/starved.php": ["code-reviewer", "security-reviewer"]},
+        )
         assert "`code-reviewer`, `security-reviewer`" in text
 
-    def test_surfaces_deferred_claims_as_not_proof(self, mod, tmp_path):
-        """Deferred-review claims stay visible without becoming proof of review."""
-        state = {
-            "completed_steps": [],
-            "inline_coverage_gaps": {},
-            "inline_coverage_claims": {
-                "src/big_module.py": ["security-reviewer"],
-            },
-        }
-        g = mod.get_step_guidance(9, "full", state, {})
-        text = "\n".join(g["actions"])
-        assert "claims" in text.lower()
-        assert "src/big_module.py" in text
-        assert "security-reviewer" in text
-        assert "not proof" in text.lower()
-        assert "`src/big_module.py`" in text
-        assert "`security-reviewer`" in text
-
-    def test_deferred_claims_render_untrusted_values_as_safe_code_spans(
-        self, mod, tmp_path
-    ):
+    def test_untrusted_values_render_as_safe_code_spans(self, mod):
         path = "src/evil``name.py\r\n## injected heading\r\n- injected file`"
         claimant = (
             "`security`reviewer\r\n# injected claimant\r\n* injected agent`"
         )
-        state = {
-            "completed_steps": [],
-            "inline_coverage_gaps": {},
-            "inline_coverage_claims": {path: [claimant]},
-        }
-
-        g = mod.get_step_guidance(9, "full", state, {})
-        text = "\n".join(g["actions"])
+        text = self._render(mod, claims={path: [claimant]})
 
         assert "\n## injected heading" not in text
         assert "\n- injected file" not in text
@@ -1498,326 +1494,155 @@ class TestStep9ReviewReport:
             in text
         )
 
-    def test_malformed_deferred_claims_are_ignored(self, mod, tmp_path):
-        state = {
-            "completed_steps": [],
-            "inline_coverage_gaps": {},
-            "inline_coverage_claims": ["unexpected-list"],
-        }
-        g = mod.get_step_guidance(9, "full", state, {})
-        assert "## Review coverage" not in "\n".join(g["actions"])
+    def test_malformed_populations_are_ignored(self, mod):
+        assert self._render(mod, claims=["unexpected-list"]) == ""
 
-    @pytest.mark.parametrize(
-        "reconciliation_payload",
-        [
-            None,
-            {"inline_coverage": ["malformed"]},
-        ],
-        ids=["missing-context", "malformed-coverage"],
-    )
-    def test_step9_state_loading_clears_stale_deferred_claims(
-        self, mod, tmp_path, reconciliation_payload
-    ):
-        if reconciliation_payload is not None:
-            (tmp_path / "reconciliation-context.json").write_text(
-                json.dumps(reconciliation_payload)
-            )
-        state = {
-            "inline_coverage_gaps": {"src/stale.py": ["code-reviewer"]},
-            "inline_coverage_claims": {
-                "src/stale.py": ["security-reviewer"],
-            },
-        }
+    def test_measured_and_empty_prints_nothing(self, mod):
+        """A zero line would read as a finding."""
+        assert self._render(mod, gaps={}, claims={}, unscoped=[]) == ""
 
-        mod._orchestrate_step(9, "full", {}, state, {}, str(tmp_path))
-
-        assert state["inline_coverage_claims"] == {}
-
-    def test_step9_state_loading_wires_deferred_claims_to_warning(
-        self, mod, tmp_path
-    ):
-        claims = {"src/big_module.py": ["security-reviewer"]}
-        (tmp_path / "reconciliation-context.json").write_text(
-            json.dumps(
-                {
-                    "inline_coverage": {
-                        "files_never_inline": {},
-                        "files_deferred_reviewed": claims,
-                    },
-                }
-            )
-        )
-        state = {}
-
-        mod._orchestrate_step(9, "full", {}, state, {}, str(tmp_path))
-
-        assert state["inline_coverage_claims"] == claims
-        g = mod.get_step_guidance(9, "full", state, {})
-        text = "\n".join(g["actions"])
-        assert "claims, not proof of read" in text
-        assert "`src/big_module.py`" in text
-        assert "`security-reviewer`" in text
-
-    def test_coverage_section_is_one_verbatim_paste_block(self, mod):
-        """All three populations render into ONE fenced, ready-to-paste
-        section, with the copy-verbatim instruction attached.
-
-        The field failure this pins: the briefing described a hedged
-        measurement instead of rendering it, and the orchestrator restated
-        "skipped by every matching agent's diff budget and no reviewer
-        reported reviewing them" as "read by nobody" — false for files
-        that were provably read.
-        """
-        state = {
-            "completed_steps": [],
-            "inline_coverage_gaps": {"src/starved.php": ["code-reviewer"]},
-            "inline_coverage_claims": {"src/big.py": ["security-reviewer"]},
-            "inline_coverage_unscoped": ["package-lock.json", ".editorconfig"],
-        }
-        g = mod.get_step_guidance(9, "full", state, {})
-        text = "\n".join(g["actions"])
-
-        # One paste, one heading, one fence pair.
-        assert text.count("## Review coverage") == 1
-        assert text.count("```markdown") == 1
-
-        # The hedged sentence is rendered, not described.
-        assert (
-            "1 changed file(s) were skipped by every matching agent's diff "
-            "budget and no reviewer reported reviewing them from the "
-            "deferred NOT DIFFED queue:" in text
-        )
-        assert "- `src/starved.php` (skipped by: `code-reviewer`)" in text
-
-        # Unscoped files get their own honest line.
-        assert (
-            "2 changed file(s) matched no reviewer's domain and were "
-            "reviewed by no one" in text
-        )
-        assert "- `package-lock.json`" in text
-        assert "- `.editorconfig`" in text
-
-        # Claims keep their own hedge, in their own subsection.
-        assert (
-            "### Reviewed from the deferred queue — claims, not proof of "
-            "read" in text
-        )
-        assert "- `src/big.py` (claimed by: `security-reviewer`)" in text
-
-        # And the paste instruction forbids paraphrase.
-        assert "VERBATIM" in text
-        assert "never restate, summarize, re-count, or edit" in text
-        assert "commentary AFTER the block" in text
-        assert "verdict must acknowledge this gap" in text
-
-        # ORDER, not just presence: an instruction that arrives after the
-        # block it governs has already been disobeyed. The copy-verbatim
-        # sentence must precede the opening fence, which must precede the
-        # heading, which must precede the closing fence.
-        instruction = text.index("VERBATIM")
-        opening = text.index("```markdown")
-        heading = text.index("## Review coverage")
-        closing = text.index("\n```", opening + len("```markdown"))
-        assert instruction < opening < heading < closing
-
-    def test_verdict_gap_clause_rides_on_a_proven_gap(self, mod):
-        """Claims are hedged as "not proof of read" three lines up.
-
-        Telling the orchestrator that "the verdict must acknowledge this
-        gap" on a claims-only run manufactures a gap out of the one
-        population the block is careful NOT to call one.
-        """
-        claims_only = {
-            "completed_steps": [],
-            "inline_coverage_gaps": {},
-            "inline_coverage_claims": {"src/big.py": ["security-reviewer"]},
-            "inline_coverage_unscoped": [],
-        }
-        text = "\n".join(
-            mod.get_step_guidance(9, "full", claims_only, {})["actions"]
-        )
+    def test_unscoped_files_alone_still_render_the_section(self, mod):
+        """This population reaches no per-agent bucket, so it is the one
+        that would otherwise be invisible."""
+        text = self._render(mod, unscoped=["assets/logo.png"])
         assert "## Review coverage" in text
-        assert "verdict must acknowledge" not in text
-
-    @pytest.mark.parametrize(
-        "population",
-        ["inline_coverage_gaps", "inline_coverage_unscoped"],
-    )
-    def test_either_proven_gap_population_demands_the_verdict_clause(
-        self, mod, population
-    ):
-        value = (
-            {"src/starved.php": ["code-reviewer"]}
-            if population == "inline_coverage_gaps"
-            else ["package-lock.json"]
-        )
-        state = {"completed_steps": [], population: value}
-        text = "\n".join(mod.get_step_guidance(9, "full", state, {})["actions"])
-        assert "verdict must acknowledge this gap" in text
-
-    def test_coverage_section_renders_unscoped_files_alone(self, mod):
-        """A run whose only coverage problem is unrouted files still gets
-        the section — this population reaches no per-agent bucket."""
-        state = {
-            "completed_steps": [],
-            "inline_coverage_gaps": {},
-            "inline_coverage_claims": {},
-            "inline_coverage_unscoped": ["assets/logo.png"],
-        }
-        text = "\n".join(mod.get_step_guidance(9, "full", state, {})["actions"])
-        assert "## Review coverage" in text
-        assert (
-            "1 changed file(s) matched no reviewer's domain and were "
-            "reviewed by no one" in text
-        )
         assert "- `assets/logo.png`" in text
 
-    def test_coverage_section_omits_unscoped_line_when_all_files_scoped(
-        self, mod
-    ):
-        """Measured-and-empty prints nothing — a zero line would read as a
-        finding."""
-        state = {
-            "completed_steps": [],
-            "inline_coverage_gaps": {"src/starved.php": ["code-reviewer"]},
-            "inline_coverage_claims": {},
-            "inline_coverage_unscoped": [],
-        }
-        text = "\n".join(mod.get_step_guidance(9, "full", state, {})["actions"])
+    def test_unscoped_line_omitted_when_all_files_were_scoped(self, mod):
+        text = self._render(mod, gaps={"src/starved.php": ["code-reviewer"]})
         assert "## Review coverage" in text
         assert "matched no reviewer's domain" not in text
 
-    def test_step9_state_loading_wires_unscoped_files(self, mod, tmp_path):
-        (tmp_path / "reconciliation-context.json").write_text(
-            json.dumps({
-                "inline_coverage": {
-                    "files_never_inline": {},
-                    "files_deferred_reviewed": {},
-                    "files_unscoped": ["package-lock.json", 7],
-                },
-            })
-        )
-        state = {}
 
-        mod._orchestrate_step(9, "full", {}, state, {}, str(tmp_path))
+class TestStep9ReviewRecord:
+    """Step 9 is a READING step now — the record is already assembled.
 
-        assert state["inline_coverage_unscoped"] == ["package-lock.json"]
-        text = "\n".join(mod.get_step_guidance(9, "full", state, {})["actions"])
-        assert "`package-lock.json`" in text
+    Report authoring moved wholesale to step 11, after the decision critic
+    has run. What a briefing here must never do again is ask for prose:
+    prose written before validation is prose that has to be corrected
+    after it, and the REVISE edit-the-report dance is exactly what this
+    step's rewrite deleted.
+    """
 
-    def test_step9_state_loading_treats_unmeasured_unscoped_as_no_section(
-        self, mod, tmp_path
-    ):
-        """`files_unscoped: null` is "not measured", not "none found"."""
-        (tmp_path / "reconciliation-context.json").write_text(
-            json.dumps({
-                "inline_coverage": {
-                    "files_never_inline": {},
-                    "files_deferred_reviewed": {},
-                    "files_unscoped": None,
-                },
-            })
-        )
-        state = {"inline_coverage_unscoped": ["stale.py"]}
+    def test_points_at_the_assembled_record(self, mod, tmp_path):
+        state = {"completed_steps": [], "review_record": {
+            "ran": True, "written": 1, "expected": 1, "status": "complete",
+        }}
+        g = mod.get_step_guidance(9, "full", state, {}, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "review-record.md" in text
+        assert "stand behind" in text
 
-        mod._orchestrate_step(9, "full", {}, state, {}, str(tmp_path))
+    def test_all_modes_have_this_step(self, mod, tmp_path):
+        for mode in ("pr", "full", "incremental"):
+            g = mod.get_step_guidance(9, mode, {"completed_steps": []}, {})
+            assert g is not None
+            assert "review-record.md" in "\n".join(g["actions"])
 
-        # None, not [] — the state keeps "nothing was measured" distinct
-        # from "measured, nothing found", because only the second may ever
-        # be reported as a clean coverage result.
-        assert state["inline_coverage_unscoped"] is None
+    def test_asks_for_no_report_and_no_edits(self, mod, tmp_path):
+        """The whole point of the move: nothing presentation-shaped may
+        exist while the critic runs, and the record is machine-written."""
+        state = {"completed_steps": [], "review_record": {
+            "ran": True, "written": 1, "expected": 1, "status": "complete",
+        }}
+        g = mod.get_step_guidance(9, "pr", state, {})
+        text = "\n".join(g["actions"])
+        assert "do not write a report yet" in text.lower()
+        assert "Do not edit it" in text
+        assert "authored ONCE at step" in text
+
+    def test_carries_no_output_instructions(self, mod, tmp_path):
+        """The voice belongs to step 11 now — both the caller override and
+        the mode defaults. A second copy here would drift."""
+        config = {"mode": "pr", "output_instructions": "Custom only."}
+        ctx = {"pr": {"author_name": "Maria Rodriguez"}}
+        text = "\n".join(mod.get_step_guidance(
+            9, "pr", {"completed_steps": []}, ctx, config=config
+        )["actions"])
+        assert "Custom only." not in text
+        assert "Maria" not in text
+        assert "collaboratively" not in text
+
+    def test_carries_no_coverage_paste_block(self, mod, tmp_path):
+        """The record carries the coverage section now; step 9 does not
+        re-render it into a briefing the orchestrator would paste from."""
+        state = {
+            "completed_steps": [],
+            "inline_coverage_gaps": {"src/starved.php": ["code-reviewer"]},
+            "inline_coverage_unscoped": ["package-lock.json"],
+        }
         text = "\n".join(mod.get_step_guidance(9, "full", state, {})["actions"])
         assert "## Review coverage" not in text
+        assert "```markdown" not in text
 
-    def test_what_held_is_sourced_from_the_ledger_not_memory(self, mod):
-        """Step 9's "what held" section must derive from the ledger's
-        rendered clearances — the from-memory rebuild is the failure."""
+    def test_has_no_handoff_gate(self, mod, tmp_path):
+        """It asks the orchestrator for no artifact. Gating on a file the
+        pipeline itself just wrote would be theatre."""
         g = mod.get_step_guidance(9, "full", {"completed_steps": []}, {})
-        text = "\n".join(g["actions"])
-        assert "## Clearances (verified absences)" in text
-        assert "never from memory" in text
-        assert "write no such section" in text
+        assert g["handoff"] is None
 
-    def test_no_coverage_warning_without_gaps(self, mod, tmp_path):
-        state = {"completed_steps": [], "inline_coverage_gaps": {}}
-        g = mod.get_step_guidance(9, "full", state, {})
-        assert "Review coverage" not in "\n".join(g["actions"])
+    def test_reports_a_failed_assembly_and_routes_to_the_ledger(
+        self, mod, tmp_path
+    ):
+        state = {"completed_steps": [], "review_record": {
+            "ran": True, "written": 0, "expected": 1, "status": "failed",
+        }}
+        g = mod.get_step_guidance(9, "full", state, {}, output_dir=str(tmp_path))
+        text = "\n".join(g["situation"])
+        assert "could not assemble" in text
+        assert "review-findings.json" in text
 
-    def test_output_instructions_override_replaces_default(self, mod, tmp_path):
-        """When override is set in run-config.json, default instructions should NOT appear."""
-        config = {"mode": "pr", "output_instructions": "Custom instructions only."}
-        state = {"completed_steps": []}
-        ctx = {"pr": {"author_name": "Maria Rodriguez"}}
-        g = mod.get_step_guidance(9, "pr", state, ctx, config=config)
-        text = "\n".join(g["actions"])
-        assert "Custom instructions only" in text
-        # Default "address by name" should NOT appear when overridden
-        assert "Maria" not in text
+    def test_degraded_reconciliation_keeps_the_manual_fallback(
+        self, mod, tmp_path
+    ):
+        """No ledger means no record. The raw agent output is the only
+        material, and step 11 asks for the synthesis — not this step."""
+        state = {
+            "completed_steps": [],
+            "degradation": {"reconciliation_failed": True},
+        }
+        g = mod.get_step_guidance(9, "full", state, {}, output_dir=str(tmp_path))
+        text = "\n".join(g["situation"] + g["actions"])
+        assert "Reconciliation failed" in text
+        assert "-review.md" in text
+        assert "at step 11" in text
+        assert "Do not write it now" in text
 
-    def test_branch_mode_default_instructions(self, mod, tmp_path):
-        """Branch mode default should NOT reference author by name."""
-        state = {"completed_steps": []}
-        ctx = {}
-        g = mod.get_step_guidance(9, "full", state, ctx)
-        text = "\n".join(g["actions"])
-        assert "actionable" in text.lower()
-        # Branch mode has no PR author
-        assert "first name" not in text.lower()
-
-    def test_report_structure_guidance(self, mod, tmp_path):
-        """Briefing should mention the expected report sections."""
-        state = {"completed_steps": []}
-        ctx = {}
-        g = mod.get_step_guidance(9, "pr", state, ctx)
-        text = "\n".join(g["actions"])
-        assert "summary" in text.lower()
-        assert "critical" in text.lower()
-        assert "verdict" in text.lower()
+    def test_keeps_the_empirical_verification_rules(self, mod, tmp_path):
+        text = "\n".join(mod.get_step_guidance(
+            9, "full", {"completed_steps": []}, {}
+        )["actions"])
+        assert "pirategoat-probe" in text
+        assert "git clean" in text
 
     def test_change_purpose_subordinated_to_findings(self, mod, tmp_path):
-        """Step 9 must present change purpose as author framing subordinate to
-        the reconciled findings, for both the summary and commit fallbacks."""
+        """Both the summary and the commit fallback must present author
+        framing as subordinate to the reconciled findings."""
         for state in (
             {"completed_steps": [], "change_purpose": "Fix retry logic."},
             {"completed_steps": [], "commit_messages": ["fix: retry logic"]},
         ):
             g = mod.get_step_guidance(9, "pr", state, {})
-            text = "\n".join(g["situation"])
-            assert "source of truth" in text
-
-    def test_default_instructions_forbid_prose_demotion(self, mod, tmp_path):
-        """Both default instruction sets must forbid demoting findings into
-        tradeoff prose and asserting unverified likelihood claims as fact."""
-        for mode in ("pr", "full"):
-            state = {"completed_steps": []}
-            ctx = {}
-            g = mod.get_step_guidance(9, mode, state, ctx)
-            text = "\n".join(g["actions"])
-            assert "do not demote" in text.lower(), mode
-            assert "narrow corner" in text, mode
-            assert "verdict" in text.lower(), mode
+            assert "source of truth" in "\n".join(g["situation"])
 
     def test_reinjects_change_purpose(self, mod, tmp_path):
-        """Step 9 should re-inject change purpose to anchor the model."""
         state = {
             "completed_steps": [],
-            "change_purpose": "Adds retry logic to the payment gateway with exponential backoff.",
+            "change_purpose": "Adds retry logic to the payment gateway.",
         }
-        ctx = {}
-        g = mod.get_step_guidance(9, "pr", state, ctx, output_dir=str(tmp_path))
-        text = "\n".join(g["situation"] + g["actions"])
-        assert "retry logic" in text.lower()
+        g = mod.get_step_guidance(9, "pr", state, {}, output_dir=str(tmp_path))
+        assert "retry logic" in "\n".join(g["situation"] + g["actions"]).lower()
 
-    def test_reinjects_commit_messages_when_no_change_purpose(self, mod, tmp_path):
-        """Step 9 should use commit messages as fallback when change-purpose.md is missing."""
+    def test_reinjects_commit_messages_when_no_change_purpose(
+        self, mod, tmp_path
+    ):
         state = {
             "completed_steps": [],
-            "commit_messages": ["feat: add payment retry", "test: add retry tests"],
+            "commit_messages": ["feat: add payment retry"],
         }
-        ctx = {}
-        g = mod.get_step_guidance(9, "pr", state, ctx, output_dir=str(tmp_path))
+        g = mod.get_step_guidance(9, "pr", state, {}, output_dir=str(tmp_path))
         text = "\n".join(g["situation"] + g["actions"])
-        assert "payment retry" in text.lower() or "commit" in text.lower()
+        assert "payment retry" in text.lower()
 
 
 # ===================================================================
@@ -2295,6 +2120,172 @@ class TestStep10CriticSource:
             if not line.lstrip().startswith("#")
         )
         assert "report_synthesis_failed" not in code
+
+
+class TestStep11ReportAuthoring:
+    """The report is authored HERE, once, from the final post-critic state.
+
+    Every one of these pins used to live on step 9. The move is the point:
+    while the report was born before the decision critic ran, a REVISE had
+    to edit it back into agreement with a ledger that had moved underneath
+    it. Written after validation, it cannot be stale — there is nothing
+    left to invalidate it.
+    """
+
+    _COMPLETE_RECORD = {
+        "ran": True, "written": 1, "expected": 1, "status": "complete",
+    }
+
+    def _guidance(self, mod, mode="pr", state=None, ctx=None, config=None,
+                  output_dir=None):
+        base = {"completed_steps": [], "review_record": self._COMPLETE_RECORD}
+        base.update(state or {})
+        return mod.get_step_guidance(
+            11, mode, base, ctx or {}, config=config, output_dir=output_dir,
+        )
+
+    def test_instructs_authoring_once_from_the_record(self, mod, tmp_path):
+        text = "\n".join(
+            self._guidance(mod, output_dir=str(tmp_path))["actions"]
+        )
+        assert "Author" in text and "review-report.md" in text
+        assert "review-record.md" in text
+        assert "review-findings.json" in text
+        assert "once" in text.lower()
+        assert "no revision loop" in text
+
+    def test_names_the_record_as_the_thing_it_must_not_contradict(
+        self, mod, tmp_path
+    ):
+        text = "\n".join(
+            self._guidance(mod, output_dir=str(tmp_path))["actions"]
+        )
+        assert "must not contradict" in text
+
+    def test_includes_pr_mode_defaults_with_the_author_name(self, mod):
+        text = "\n".join(self._guidance(
+            mod, ctx={"pr": {"author_name": "Maria Rodriguez"}},
+        )["actions"])
+        assert "Maria" in text
+        assert "actionable" in text.lower()
+
+    def test_output_instructions_override_replaces_the_default(self, mod):
+        text = "\n".join(self._guidance(
+            mod,
+            ctx={"pr": {"author_name": "Maria Rodriguez"}},
+            config={"mode": "pr", "output_instructions": "Custom only."},
+        )["actions"])
+        assert "Custom only." in text
+        assert "Maria" not in text
+
+    def test_branch_mode_default_never_names_an_author(self, mod):
+        text = "\n".join(self._guidance(mod, mode="full")["actions"])
+        assert "actionable" in text.lower()
+        assert "first name" not in text.lower()
+
+    def test_both_defaults_forbid_prose_demotion(self, mod):
+        for mode in ("pr", "full"):
+            text = "\n".join(self._guidance(mod, mode=mode)["actions"])
+            assert "do not demote" in text.lower(), mode
+            assert "narrow corner" in text, mode
+            assert "verdict" in text.lower(), mode
+
+    def test_report_structure_guidance(self, mod):
+        text = "\n".join(self._guidance(mod)["actions"])
+        assert "summary" in text.lower()
+        assert "critical" in text.lower()
+        assert "verdict" in text.lower()
+
+    def test_what_held_is_sourced_from_the_ledger_not_memory(self, mod):
+        text = "\n".join(self._guidance(mod)["actions"])
+        assert "## Clearances (verified absences)" in text
+        assert "never from memory" in text
+        assert "write no such section" in text
+
+    def test_banner_parenthetical_credits_the_pipeline_not_the_agent(
+        self, mod
+    ):
+        ctx = {"host_context": {"banner": {
+            "degraded": True, "message": "WooCommerce source unresolved.",
+        }}}
+        text = "\n".join(self._guidance(mod, ctx=ctx)["actions"])
+        assert "Host context banner" in text
+        assert "WooCommerce source unresolved." in text
+        assert "reconciliator already did the same" not in text
+
+    def test_coverage_is_quoted_from_the_record_never_re_rendered(self, mod):
+        """The measurement lives in the record. Re-rendering it into the
+        briefing would give the orchestrator a second copy to paraphrase
+        — a field run turned the hedged sentence into "read by nobody"."""
+        state = {
+            "inline_coverage_gaps": {"src/starved.php": ["code-reviewer"]},
+            "inline_coverage_claims": {},
+            "inline_coverage_unscoped": [],
+        }
+        text = "\n".join(self._guidance(mod, state=state)["actions"])
+        assert "Review coverage" in text
+        assert "VERBATIM" in text
+        assert "never restate, summarize, re-count, or edit" in text
+        assert "commentary AFTER the block" in text
+        assert "verdict must acknowledge this gap" in text
+        # The section itself is NOT pasted here — the record carries it.
+        assert "skipped by every matching agent's diff budget" not in text
+
+    def test_verdict_gap_clause_rides_on_a_proven_gap(self, mod):
+        """Claims are hedged as "not proof of read". Demanding the verdict
+        acknowledge a gap on a claims-only run manufactures one."""
+        state = {
+            "inline_coverage_gaps": {},
+            "inline_coverage_claims": {"src/big.py": ["security-reviewer"]},
+            "inline_coverage_unscoped": [],
+        }
+        text = "\n".join(self._guidance(mod, state=state)["actions"])
+        assert "Review coverage" in text
+        assert "verdict must acknowledge" not in text
+
+    @pytest.mark.parametrize(
+        "population",
+        ["inline_coverage_gaps", "inline_coverage_unscoped"],
+    )
+    def test_either_proven_gap_population_demands_the_verdict_clause(
+        self, mod, population
+    ):
+        value = (
+            {"src/starved.php": ["code-reviewer"]}
+            if population == "inline_coverage_gaps"
+            else ["package-lock.json"]
+        )
+        text = "\n".join(self._guidance(mod, state={population: value})["actions"])
+        assert "verdict must acknowledge this gap" in text
+
+    def test_no_coverage_mention_without_a_measurement(self, mod):
+        text = "\n".join(self._guidance(mod)["actions"])
+        assert "Review coverage" not in text
+
+    def test_bot_mode_says_the_report_is_the_posted_comment(self, mod):
+        text = "\n".join(self._guidance(
+            mod, config={"mode": "pr", "interactive": False},
+        )["actions"])
+        assert "posted verbatim as the PR comment" in text
+
+    def test_degraded_reconciliation_authors_from_raw_agent_output(self, mod):
+        """The sanctioned LLM-authored fallback: no ledger, no record, so
+        the report is synthesized by hand — and says so."""
+        text = "\n".join(self._guidance(mod, state={
+            "degradation": {"reconciliation_failed": True},
+            "review_record": None,
+        })["actions"])
+        assert "Reconciliation failed" in text
+        assert "-review.md" in text
+        assert "unreconciled" in text
+        assert "review-record.md" not in text
+
+    def test_failed_record_assembly_routes_to_the_ledger(self, mod):
+        text = "\n".join(self._guidance(mod, state={"review_record": {
+            "ran": True, "written": 0, "expected": 1, "status": "failed",
+        }})["actions"])
+        assert "could not assemble" in text
+        assert "review-findings.json" in text
 
 
 class TestStep11PresentResults:

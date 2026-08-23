@@ -14,6 +14,15 @@ HOST_CLAUDE = "claude"
 HOST_CODEX = "codex"
 SUPPORTED_HOSTS = (HOST_CLAUDE, HOST_CODEX)
 
+# The pipeline's machine projection of the reconciliation ledger, assembled
+# at step 9 and re-assembled at step 11 after the critic adjustments land.
+# Spelled here rather than in `orchestration.py` because BOTH sides need it
+# and only one direction of that import is legal: `orchestration` imports
+# `briefings` (for the coverage renderer), so `briefings` cannot import back.
+# A hand-copied second spelling of an artifact filename is how the writer
+# and the briefing that names it come apart.
+REVIEW_RECORD_MD = "review-record.md"
+
 
 def _host(config):
     """Return the persisted orchestration host."""

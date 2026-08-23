@@ -462,6 +462,67 @@ class TestRecordFailureModes:
         assert error
 
 
+class TestBriefingsAreConstantSize:
+    """Briefings are O(1) in changed-file count; the record is O(n).
+
+    This is the class of guarantee the record artifact buys, not a single
+    fact about step 9. A briefing that grew with the diff put the whole
+    coverage measurement into the orchestrator's context window every time
+    it asked what to do next — and, worse, asked it to copy that growing
+    block into prose it was simultaneously authoring. The measurement now
+    lands in a file, and the briefing names the file.
+    """
+
+    @staticmethod
+    def _coverage_state(count):
+        return {
+            "completed_steps": [],
+            "inline_coverage_gaps": {},
+            "inline_coverage_claims": {},
+            "inline_coverage_unscoped": [
+                f"vendor/generated/module_{i:04d}.lock" for i in range(count)
+            ],
+            "review_record": {
+                "ran": True, "written": 1, "expected": 1,
+                "status": "complete",
+            },
+        }
+
+    def test_step_9_briefing_stays_small_while_the_record_carries_all(
+        self, out_dir
+    ):
+        _write_ledger(out_dir)
+        state = self._coverage_state(500)
+
+        assemble_review_record(str(out_dir), state)
+        record = (out_dir / REVIEW_RECORD_MD).read_text()
+
+        guidance = briefings_mod.get_step_guidance(
+            9, "full", state, {}, output_dir=str(out_dir)
+        )
+        briefing = "\n".join(
+            guidance["situation"] + guidance["actions"]
+            + (guidance["handoff"] or [])
+        )
+
+        assert len(briefing.encode("utf-8")) < 8192, len(briefing)
+        for i in (0, 250, 499):
+            assert f"vendor/generated/module_{i:04d}.lock" in record
+        assert record.count("vendor/generated/module_") == 500
+
+    def test_step_9_briefing_does_not_grow_with_the_diff(self, out_dir):
+        _write_ledger(out_dir)
+
+        def briefing_size(count):
+            guidance = briefings_mod.get_step_guidance(
+                9, "full", self._coverage_state(count), {},
+                output_dir=str(out_dir),
+            )
+            return len("\n".join(guidance["actions"]).encode("utf-8"))
+
+        assert briefing_size(500) == briefing_size(1)
+
+
 class TestRecordWriteIsAtomic:
     def test_a_failing_render_leaves_the_previous_record_intact(
         self, out_dir, monkeypatch

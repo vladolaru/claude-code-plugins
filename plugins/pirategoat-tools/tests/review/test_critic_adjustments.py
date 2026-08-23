@@ -1845,10 +1845,14 @@ class TestStepElevenRerendersFindingsMarkdown:
             "render failed" in n for n in result["degradation_notes"]
         )
 
-    def test_rendered_markdown_serves_the_report_fallback(self, tmp_path):
-        """Step 10's critic fallback and finalize's report fallback both
-        point at review-findings.md — now truthful, because the script
-        renders it here even when report synthesis never happened."""
+    def test_the_record_serves_the_report_path_before_authoring(
+        self, tmp_path
+    ):
+        """`review-report.md` is authored from the step-11 briefing this
+        function is about to render, so it does not exist yet at finalize.
+        The record — assembled moments ago from the final ledger — is the
+        newest complete account the run has, and `report_path` names it
+        rather than publishing null."""
         self._seed(tmp_path, severity="low")
         (tmp_path / "review-report.md").unlink()
         _write_critic_verdict(tmp_path, "STAND")
@@ -1856,7 +1860,24 @@ class TestStepElevenRerendersFindingsMarkdown:
         self._step_11(tmp_path)
 
         result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert result["report_path"] == str(tmp_path / "review-findings.md")
+        assert result["report_path"] == str(tmp_path / "review-record.md")
+        # And its absence is NOT a degradation: at this instant it is the
+        # expected state, and noting it would degrade every single run.
+        assert not any(
+            "review-report.md not found" in note
+            for note in result["degradation_notes"]
+        )
+
+    def test_an_already_written_report_still_wins(self, tmp_path):
+        """A re-entered step 11 finds the report already authored; when it
+        exists it is the better answer."""
+        self._seed(tmp_path, severity="low")
+        _write_critic_verdict(tmp_path, "STAND")
+
+        self._step_11(tmp_path)
+
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert result["report_path"] == str(tmp_path / "review-report.md")
 
 
 class TestNarrativeSummaryInvalidation:
