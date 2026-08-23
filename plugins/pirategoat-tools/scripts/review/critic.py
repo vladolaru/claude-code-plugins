@@ -340,8 +340,19 @@ def _read_json(path, problems, label):
         return None
 
 
+def _invalidate_verdict_commit_marker(output_dir):
+    """Make any prior critic snapshot incomplete before replacing payloads."""
+    path = os.path.join(
+        output_dir, critic_adjustments.CRITIC_VERDICT_FILENAME
+    )
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+
+
 def run_save(args):
-    """Validate and atomically record one critic verdict.
+    """Validate and publish one committed critic snapshot.
 
     The ONLY channel the decision-reviewer agent is allowed to write
     `decision-critic-findings.md`, `decision-critic-adjustments.json`, and
@@ -356,12 +367,16 @@ def run_save(args):
     invalid adjustments batch, and a REVISE/STAND contradiction are all
     independent facts, and reporting only the first would make a caller
     fix one problem at a time instead of seeing the whole rejection at
-    once. On ANY problem, nothing is written — this function's failure
-    mode is silence on disk, never a partial artifact set — and every
-    problem is echoed as its own ``REJECTED: <problem>`` line.
+    once. On ANY validation problem, the previous complete snapshot stays
+    untouched and every problem is echoed as its own ``REJECTED: <problem>``
+    line. Once validation succeeds, the old verdict commit marker is removed
+    before either replacement payload is written. A publication failure may
+    therefore leave partial payloads, but never a readable verdict that makes
+    mixed state authoritative; no verdict means incomplete and resumable.
 
-    Returns the process exit code (0 on success, 1 on rejection) rather
-    than raising, so `main()` can `sys.exit()` it directly.
+    Returns 0 on success and 1 on validation rejection. Publication I/O
+    failures propagate so the caller exits loudly with the commit marker
+    absent.
     """
     problems = []
     verdict = (args.verdict or "").strip().upper()
@@ -392,9 +407,12 @@ def run_save(args):
         return 1
 
     od = args.output_dir
-    # The verdict is the commit artifact for the snapshot before it: findings
-    # first, current adjustments second, verdict last. Validation failures
-    # return above this boundary without touching any of the three.
+    # Invalidate any previous commit before replacing either payload. Only an
+    # absent marker is tolerable; permission and other I/O failures propagate
+    # before the snapshot can be mixed.
+    _invalidate_verdict_commit_marker(od)
+    # The new verdict commits the snapshot before it: findings first, current
+    # adjustments second, verdict last.
     atomic_write_text(
         os.path.join(od, "decision-critic-findings.md"), findings_text
     )
@@ -432,8 +450,8 @@ def main():
         "--save",
         action="store_true",
         help=(
-            "Save mode: validate and atomically record the critic's "
-            "verdict, findings, and (REVISE only) adjustments. Requires "
+            "Save mode: validate and publish a committed critic snapshot "
+            "of findings, adjustments, and verdict. Requires "
             "--verdict, --findings, --output-dir, and optionally "
             "--adjustments. Mutually exclusive with the step-guidance "
             "mode below."

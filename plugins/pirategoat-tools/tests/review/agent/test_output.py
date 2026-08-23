@@ -2939,6 +2939,17 @@ class TestTypeScriptContractLockstep:
         assert match is not None
         assert match.group(1).strip() == "string | null"
 
+    def test_legacy_rejected_spot_check_is_optional(self):
+        schema = (PLUGIN_ROOT / "schemas" / "review-output.ts").read_text()
+        rejected = re.search(
+            r"rejected_critic_adjustments\?: Array<\{(.*?)\}>;",
+            schema,
+            re.DOTALL,
+        )
+        assert rejected is not None
+        assert re.search(r"spot_check\?:\s*'refuted';", rejected.group(1))
+        assert "absent on legacy schema-1 records" in schema
+
 
 # =============================================================================
 # TestNarrativeSummary

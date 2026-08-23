@@ -969,9 +969,14 @@ class TestDecisionReviewerContract:
 
         assert "mechanically assembled" in critic
         assert "no model edits it after assembly" in critic
+        assert "initial findings, assessment, and clearances" in critic
         assert "reconciliator-authored `review-findings.json`" in critic
-        assert "findings, assessment, and clearances" in critic
         assert "pipeline supplies measurements and run notes" in critic
+        assert "`issues[].critic_adjustment`" in critic
+        assert "`applied_critic_adjustments`" in critic
+        assert "`rejected_critic_adjustments`" in critic
+        assert "`withdrawn_narrative_summary`" in critic
+        assert "inspect these audit fields" in critic
         assert "nothing in it was authored by an agent" not in critic
 
 

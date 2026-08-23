@@ -287,7 +287,8 @@ export interface ReviewOutput {
         adjustment_id: string;
         action: string | null;
         target_id: string | null; // null for a rejected `add` (no target)
-        spot_check: 'refuted';
+        // absent on legacy schema-1 records; this bucket implies refuted
+        spot_check?: 'refuted';
         rejection_reason: string;
     }>;
 

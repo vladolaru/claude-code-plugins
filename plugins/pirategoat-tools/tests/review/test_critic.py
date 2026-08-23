@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,6 +12,10 @@ TESTS_DIR = Path(__file__).resolve().parent.parent  # review/ -> tests/
 PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 SCRIPT = SCRIPTS_DIR / "review" / "critic.py"
+sys.path.insert(0, str(SCRIPTS_DIR))
+
+from review import critic as critic_module
+from review.critic_adjustments import read_critic_verdict
 
 
 def run_critic(*args):
@@ -172,8 +177,9 @@ class TestCriticContextArg:
 class TestCriticSave:
     """--save is the ONLY channel the decision-reviewer agent is allowed to
     write decision-critic-* artifacts through (agents/decision-reviewer.md):
-    it validates the whole batch and records verdict + findings +
-    adjustments atomically, or writes nothing at all."""
+    validation preserves the previous snapshot, while publication removes
+    the old verdict marker before replacing either payload and commits the
+    new snapshot by writing its verdict last."""
 
     def _run_save(self, output_dir, *extra_args):
         cmd = [
@@ -192,7 +198,128 @@ class TestCriticSave:
         path.write_text(json.dumps({"schema": 1, "adjustments": adjustments}))
         return path
 
-    def test_critic_save_writes_all_artifacts_atomically(self, tmp_path):
+    @staticmethod
+    def _args(tmp_path, verdict, findings, adjustments=None):
+        return SimpleNamespace(
+            output_dir=str(tmp_path), verdict=verdict,
+            findings=str(findings),
+            adjustments=str(adjustments) if adjustments else None,
+        )
+
+    @staticmethod
+    def _write_complete_snapshot(tmp_path, verdict="REVISE"):
+        paths = {
+            "findings": tmp_path / "decision-critic-findings.md",
+            "adjustments": tmp_path / "decision-critic-adjustments.json",
+            "verdict": tmp_path / "decision-critic-verdict.json",
+        }
+        paths["findings"].write_text("# Previous complete findings\n")
+        entries = [{
+            "adjustment_id": "previous-decision",
+            "action": "promote", "id": "aaaa1111",
+            "fields": {"severity": "high"}, "rationale": "previous",
+        }] if verdict == "REVISE" else []
+        paths["adjustments"].write_text(json.dumps({
+            "schema": 1, "adjustments": entries,
+        }))
+        paths["verdict"].write_text(json.dumps({"verdict": verdict}))
+        return paths
+
+    def test_findings_write_failure_invalidates_previous_commit_marker(
+        self, tmp_path, monkeypatch
+    ):
+        paths = self._write_complete_snapshot(tmp_path)
+        findings = self._write_findings(tmp_path, "# Replacement findings\n")
+
+        def fail_findings_write(_path, _text):
+            raise OSError("injected findings write failure")
+
+        monkeypatch.setattr(
+            critic_module, "atomic_write_text", fail_findings_write
+        )
+
+        with pytest.raises(OSError, match="injected findings write failure"):
+            critic_module.run_save(
+                self._args(tmp_path, "STAND", findings)
+            )
+
+        assert not paths["verdict"].exists()
+        assert read_critic_verdict(str(tmp_path)) is None
+        assert paths["findings"].read_text() == "# Previous complete findings\n"
+
+    def test_adjustment_write_failure_leaves_no_committed_mixed_snapshot(
+        self, tmp_path, monkeypatch
+    ):
+        paths = self._write_complete_snapshot(tmp_path, verdict="STAND")
+        findings = self._write_findings(tmp_path, "# Replacement findings\n")
+        adjustments = self._write_adjustments(tmp_path, [{
+            "adjustment_id": "replacement-decision",
+            "action": "promote", "id": "aaaa1111",
+            "fields": {"severity": "critical"}, "rationale": "replacement",
+        }])
+        real_atomic_write_json = critic_module.atomic_write_json
+
+        def fail_adjustment_write(path, payload):
+            if Path(path).name == "decision-critic-adjustments.json":
+                raise OSError("injected adjustment write failure")
+            real_atomic_write_json(path, payload)
+
+        monkeypatch.setattr(
+            critic_module, "atomic_write_json", fail_adjustment_write
+        )
+
+        with pytest.raises(OSError, match="injected adjustment write failure"):
+            critic_module.run_save(
+                self._args(tmp_path, "REVISE", findings, adjustments)
+            )
+
+        assert paths["findings"].read_text() == "# Replacement findings\n"
+        assert json.loads(paths["adjustments"].read_text()) == {
+            "schema": 1, "adjustments": [],
+        }
+        assert not paths["verdict"].exists()
+        assert read_critic_verdict(str(tmp_path)) is None
+
+    def test_commit_marker_invalidation_error_fails_before_payload_writes(
+        self, tmp_path, monkeypatch
+    ):
+        paths = self._write_complete_snapshot(tmp_path)
+        before = {name: path.read_bytes() for name, path in paths.items()}
+        findings = self._write_findings(tmp_path, "# Replacement findings\n")
+
+        def fail_unlink(_path):
+            raise PermissionError("injected marker invalidation failure")
+
+        monkeypatch.setattr(critic_module.os, "unlink", fail_unlink)
+
+        with pytest.raises(
+            PermissionError, match="injected marker invalidation failure"
+        ):
+            critic_module.run_save(
+                self._args(tmp_path, "STAND", findings)
+            )
+
+        assert {
+            name: path.read_bytes() for name, path in paths.items()
+        } == before
+
+    def test_validation_rejection_preserves_previous_complete_snapshot(
+        self, tmp_path
+    ):
+        paths = self._write_complete_snapshot(tmp_path)
+        before = {name: path.read_bytes() for name, path in paths.items()}
+        findings = self._write_findings(tmp_path, "# Rejected replacement\n")
+
+        result = critic_module.run_save(
+            self._args(tmp_path, "MAYBE", findings)
+        )
+
+        assert result == 1
+        assert {
+            name: path.read_bytes() for name, path in paths.items()
+        } == before
+
+    def test_critic_save_writes_a_complete_snapshot(self, tmp_path):
         findings = self._write_findings(tmp_path)
         adjustments = self._write_adjustments(tmp_path, [{
             "action": "promote", "id": "aaaa1111",
