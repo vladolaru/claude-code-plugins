@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The severity-to-verdict thresholds, in one place.
+"""Channel-aware review verdict derivation, in one place.
 
 Two modules answer "what verdict do these findings carry": `agent/output.py`
 when a reviewer or the reconciliator publishes a review, and
@@ -14,14 +14,19 @@ ledger; with the verdict now DERIVED from the ledger, a stale ledger verdict
 is machine authority for a wrong published verdict, so the thresholds have to
 be a shared rule rather than one module's private ladder.
 
-Counts in, verdict out. No file access, no severity vocabulary of its own,
-nothing that would make this hard to call from either side.
+The threshold ladder remains available for count-based consumers, while
+``derive_review_state()`` owns the issue-population policy shared by both
+writers: complete counts, advisory exclusion from gating, and advisory
+suppression measurement. No file access or write-boundary policy lives here.
 """
 
-# The three severities that gate. `low` and `info` count toward
-# `summary.total_issues` and are rendered, but never move a verdict — a
-# reviewer that records only informational notes still approves.
-GATING_SEVERITIES = ("critical", "high", "medium")
+VALID_SEVERITIES = ("critical", "high", "medium", "low", "info")
+VERDICT_RANK = {
+    "approve": 0,
+    "comment": 1,
+    "request_changes": 2,
+    "block": 3,
+}
 
 
 def verdict_for_counts(counts) -> str:
@@ -50,3 +55,41 @@ def verdict_for_counts(counts) -> str:
     if medium > 0:
         return "comment"
     return "approve"
+
+
+def derive_review_state(issues):
+    """Derive counts, gating verdict, and advisory measurement from issues.
+
+    Every issue must be a dictionary carrying one severity from
+    ``VALID_SEVERITIES``. Advisory issues remain in the complete counts but
+    are excluded from the counts that gate the verdict. The counterfactual
+    verdict over the full population is exposed only when advisory
+    suppression actually softened the gating verdict.
+    """
+    counts = {severity: 0 for severity in VALID_SEVERITIES}
+    blocking_counts = {severity: 0 for severity in VALID_SEVERITIES}
+    advisory_suppressed = 0
+
+    for index, issue in enumerate(issues):
+        if not isinstance(issue, dict):
+            raise ValueError(f"issue at position {index} is not an object")
+        severity = issue.get("severity")
+        if severity not in counts:
+            raise ValueError(
+                f"issue {issue.get('id')!r} has severity {severity!r} "
+                f"outside the vocabulary "
+                f"(allowed: {', '.join(VALID_SEVERITIES)})"
+            )
+        counts[severity] += 1
+        if issue.get("channel") == "advisory":
+            advisory_suppressed += 1
+        else:
+            blocking_counts[severity] += 1
+
+    verdict = verdict_for_counts(blocking_counts)
+    verdict_without_advisory = verdict_for_counts(counts)
+    advisory = {"advisory_suppressed": advisory_suppressed}
+    if VERDICT_RANK[verdict_without_advisory] > VERDICT_RANK[verdict]:
+        advisory["verdict_without_advisory"] = verdict_without_advisory
+
+    return {"counts": counts, "verdict": verdict, "advisory": advisory}

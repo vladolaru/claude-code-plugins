@@ -41,7 +41,11 @@ from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 
 try:
-    from ..verdict_rules import GATING_SEVERITIES, verdict_for_counts
+    from ..verdict_rules import (
+        VALID_SEVERITIES,
+        VERDICT_RANK,
+        derive_review_state,
+    )
 except ImportError:
     # Stand-alone use — `python3 output.py render <file>` runs with no
     # `review` package on sys.path, and the CLI is a supported entry point
@@ -54,7 +58,11 @@ except ImportError:
     )
     if _SCRIPTS_DIR not in sys.path:
         sys.path.insert(0, _SCRIPTS_DIR)
-    from review.verdict_rules import GATING_SEVERITIES, verdict_for_counts
+    from review.verdict_rules import (
+        VALID_SEVERITIES,
+        VERDICT_RANK,
+        derive_review_state,
+    )
 
 
 # The shape schemas/review-output.ts documents. Bump in the SAME commit as
@@ -73,7 +81,7 @@ except ImportError:
 # the TypeScript contract without moving this number.
 REVIEW_OUTPUT_SCHEMA = 1
 
-_VALID_SEVERITIES = ('critical', 'high', 'medium', 'low', 'info')
+_VALID_SEVERITIES = VALID_SEVERITIES
 _VALID_CHANNELS = ('blocking', 'advisory')
 _SEVERITY_RANK = {
     'info': 0,
@@ -82,32 +90,9 @@ _SEVERITY_RANK = {
     'high': 3,
     'critical': 4,
 }
-_VERDICT_RANK = {
-    'approve': 0,
-    'comment': 1,
-    'request_changes': 2,
-    'block': 3,
-}
-
-
-def _verdict_for_issues(issues) -> str:
-    """Calculate a gating verdict for the supplied findings.
-
-    Counting lives here (this is the side that holds issue dicts); the
-    thresholds live in `review/verdict_rules.py`, shared with
-    `critic_adjustments.py`, which recomputes the ledger verdict after an
-    applying critic batch. Two ladders would let a demoted finding publish
-    the pre-demotion verdict — and step 11 now derives the pipeline's
-    published verdict from that ledger.
-    """
-    counts = {severity: 0 for severity in GATING_SEVERITIES}
-
-    for issue in issues:
-        sev = issue['severity']
-        if sev in counts:
-            counts[sev] += 1
-
-    return verdict_for_counts(counts)
+# Backwards-compatible private aliases used by telemetry's artifact
+# validation. Derivation and rank comparison live in verdict_rules.py.
+_VERDICT_RANK = VERDICT_RANK
 
 
 def _coerce_text(value: Any, single_line: bool = False) -> str:
@@ -1337,31 +1322,7 @@ class ReviewOutputBuilder:
         """Auto-calculate verdict from issues."""
         if self._not_applicable:
             return 'not_applicable'
-
-        # Advisory-channel findings are listed but do not gate the verdict.
-        return _verdict_for_issues(
-            issue for issue in self.issues
-            if issue.get('channel') != 'advisory'
-        )
-
-    def _advisory_measurement(self, verdict: str) -> Dict[str, Any]:
-        """Measure exact advisory-tag suppression without changing verdicts."""
-        if self._not_applicable:
-            # The not-applicable verdict short-circuits before channel tags are
-            # consulted, so no finding was excluded from its calculation.
-            return {'advisory_suppressed': 0}
-
-        suppressed = sum(
-            issue.get('channel') == 'advisory' for issue in self.issues
-        )
-        measurement: Dict[str, Any] = {'advisory_suppressed': suppressed}
-        if suppressed == 0:
-            return measurement
-
-        verdict_without_advisory = _verdict_for_issues(self.issues)
-        if _VERDICT_RANK[verdict_without_advisory] > _VERDICT_RANK[verdict]:
-            measurement['verdict_without_advisory'] = verdict_without_advisory
-        return measurement
+        return derive_review_state(self.issues)['verdict']
 
     def to_dict(self, *, output_dir: Optional[str] = None) -> Dict:
         """Build as dictionary, revalidating advisory issues when directed.
@@ -1378,16 +1339,18 @@ class ReviewOutputBuilder:
             self._validate_advisory_serialization(output_dir)
         review_duration = self._review_duration_ms(output_dir)
 
-        severity_counts = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'info': 0}
-        for issue in self.issues:
-            severity_counts[issue['severity']] += 1
-
-        verdict = self._calculate_verdict()
+        derived = derive_review_state(self.issues)
+        verdict = 'not_applicable' if self._not_applicable else derived['verdict']
         summary = {
             'total_issues': len(self.issues),
-            'by_severity': severity_counts,
+            'by_severity': derived['counts'],
         }
-        summary.update(self._advisory_measurement(verdict))
+        if self._not_applicable:
+            # The abstention short-circuits before channel tags are consulted,
+            # so no finding was excluded from its verdict calculation.
+            summary['advisory_suppressed'] = 0
+        else:
+            summary.update(derived['advisory'])
 
         result = {
             'pr_id': self.pr_id,

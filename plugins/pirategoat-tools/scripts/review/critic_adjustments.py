@@ -56,13 +56,13 @@ import uuid
 
 try:
     from .atomic_io import atomic_write_json
-    from .verdict_rules import verdict_for_counts
+    from .verdict_rules import VALID_SEVERITIES, derive_review_state
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
     from review.atomic_io import atomic_write_json
-    from review.verdict_rules import verdict_for_counts
+    from review.verdict_rules import VALID_SEVERITIES, derive_review_state
 
 ACTIONS = ("promote", "demote", "rescope", "correct", "add", "remove")
 # `scope` is deliberately absent: it is derived from `line` to preserve the
@@ -72,8 +72,6 @@ PATCH_FIELDS = ("severity", "title", "description", "recommendation",
                 "file", "line", "category", "confidence")
 ADD_REQUIRED_FIELDS = ("severity", "title", "file", "description",
                        "recommendation")
-VALID_SEVERITIES = ("critical", "high", "medium", "low", "info")
-
 # The orchestrator's per-entry verdict on the critic's claim, written into
 # the adjustments file after it probes each one. A machine-readable seat for
 # a judgment that previously had nowhere to land but the human report: a run
@@ -471,7 +469,7 @@ def _apply_scope_pairing(issue, line_is_null):
 
 
 def _recount_summary(findings, issues):
-    """Rebuild the summary from the population it claims to describe.
+    """Project the shared review-state derivation into the ledger summary.
 
     An out-of-vocabulary severity would silently drop out of
     `by_severity` while still counting in `total_issues`, publishing a
@@ -479,33 +477,19 @@ def _recount_summary(findings, issues):
     module is validated, so the only source is a malformed pre-existing
     ledger — which is worth failing on, not smoothing over.
 
-    Returns the recounted severity counts, which the caller feeds to
-    `verdict_rules.verdict_for_counts()`. This function used to leave
-    `verdict` alone — survivable only while step 11 copied an
-    orchestrator-transcribed verdict over the ledger's. With the published
-    verdict now DERIVED from this ledger, the recount and the verdict have
-    to move together or a demoted-to-low finding list publishes the
-    pre-demotion verdict with machine authority.
+    Returns the complete shared derivation so the caller publishes its gating
+    verdict without choosing a population or applying thresholds itself.
     """
-    counts = {severity: 0 for severity in VALID_SEVERITIES}
-    for index, issue in enumerate(issues):
-        if not isinstance(issue, dict):
-            raise ValueError(
-                f"{FINDINGS_FILENAME}: issue at position {index} is not "
-                f"an object"
-            )
-        severity = issue.get("severity")
-        if severity not in counts:
-            raise ValueError(
-                f"{FINDINGS_FILENAME}: issue {issue.get('id')!r} has "
-                f"severity {severity!r} outside the vocabulary "
-                f"(allowed: {', '.join(VALID_SEVERITIES)})"
-            )
-        counts[severity] += 1
+    try:
+        derived = derive_review_state(issues)
+    except ValueError as error:
+        raise ValueError(f"{FINDINGS_FILENAME}: {error}") from error
     summary = findings.setdefault("summary", {})
     summary["total_issues"] = len(issues)
-    summary["by_severity"] = counts
-    return counts
+    summary["by_severity"] = derived["counts"]
+    summary.pop("verdict_without_advisory", None)
+    summary.update(derived["advisory"])
+    return derived
 
 
 def _applied_record(value):
@@ -996,12 +980,8 @@ def apply_adjustments(output_dir):
         atomic_write_json(adj_path, doc)
 
     if applied:
-        counts = _recount_summary(findings, issues)
-        # Recomputed from the severities this batch just left behind,
-        # through the ladder agent/output.py publishes reviews with — one
-        # rule, so an adjusted ledger and a freshly written one can never
-        # disagree about what their own findings mean.
-        recomputed = verdict_for_counts(counts)
+        derived = _recount_summary(findings, issues)
+        recomputed = derived["verdict"]
         if findings.get("verdict") != recomputed:
             findings.setdefault(
                 VERDICT_BEFORE_ADJUSTMENTS_KEY, findings.get("verdict")

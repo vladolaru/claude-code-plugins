@@ -2570,6 +2570,34 @@ class TestLedgerVerdictRecompute:
         data = json.loads((tmp_path / "review-findings.json").read_text())
         assert data["verdict"] == "block"
 
+    def test_unrelated_adjustment_keeps_advisory_high_non_gating(self, tmp_path):
+        advisory = _issue("aaaa1111", "high")
+        advisory["channel"] = "advisory"
+        _write_findings(
+            tmp_path,
+            [advisory, _issue("bbbb2222", "low")],
+            verdict="request_changes",
+        )
+        _write_adjustments(tmp_path, [{
+            "action": "correct", "id": "bbbb2222",
+            "fields": {"title": "corrected title"},
+            "rationale": "clarify the existing finding",
+        }])
+
+        apply_adjustments(str(tmp_path))
+
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert data["summary"]["by_severity"] == {
+            "critical": 0,
+            "high": 1,
+            "medium": 0,
+            "low": 1,
+            "info": 0,
+        }
+        assert data["verdict"] == "approve"
+        assert data["summary"]["advisory_suppressed"] == 1
+        assert data["summary"]["verdict_without_advisory"] == "request_changes"
+
     def test_the_pre_apply_verdict_is_preserved(self, tmp_path):
         _write_findings(tmp_path, [_issue("aaaa1111", "high")],
                         verdict="request_changes")

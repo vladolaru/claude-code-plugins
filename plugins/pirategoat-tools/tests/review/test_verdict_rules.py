@@ -17,6 +17,7 @@ PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
+from review import verdict_rules
 from review.verdict_rules import verdict_for_counts
 from review.agent import output as output_mod
 
@@ -49,6 +50,29 @@ class TestVerdictForCounts:
         }) == "comment"
 
 
+class TestDeriveReviewState:
+    def test_advisory_issues_count_without_gating(self):
+        issues = [
+            {"severity": "high", "channel": "advisory"},
+            {"severity": "low"},
+        ]
+
+        derived = verdict_rules.derive_review_state(issues)
+
+        assert derived["counts"] == {
+            "critical": 0,
+            "high": 1,
+            "medium": 0,
+            "low": 1,
+            "info": 0,
+        }
+        assert derived["verdict"] == "approve"
+        assert derived["advisory"] == {
+            "advisory_suppressed": 1,
+            "verdict_without_advisory": "request_changes",
+        }
+
+
 class TestOutputBuilderUsesTheSharedLadder:
     """The extraction is a pure refactor: output.py must not keep a second
     copy of the thresholds it can drift from."""
@@ -73,5 +97,5 @@ class TestOutputBuilderUsesTheSharedLadder:
         that re-inlines the ladder in output.py passes every behavioral test
         above on the day it lands and silently diverges later."""
         source = (SCRIPTS_DIR / "review" / "agent" / "output.py").read_text()
-        assert "verdict_for_counts" in source
+        assert "derive_review_state" in source
         assert "return 'block'" not in source and 'return "block"' not in source
