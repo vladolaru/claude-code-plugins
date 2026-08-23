@@ -63,14 +63,14 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 - **a11y scope asks for UI evidence, not extensions** — bare `.ts`/`.js` need evidence in their diff or a bounded repo-rooted disk read; `.tsx`/`.jsx`, components, styles, and templates stay unconditional; triage is untouched.
 - **`agents_reporting` counts agents, not sidecar files.**
 - **Dependency refresh hardened** — refuses dirty or unverifiable worktrees, decodes quoted paths, survives malformed self-reports, and `--refresh-host-context` preserves the rest of `review-context.json`.
-- **Briefing no longer instructs bulk enumeration of unreviewed files** — auto-fill records deferred files not claimed or declared, making explicit enumeration unnecessary and freeing ~1/3 of budget for real analysis.
+- **Briefing no longer instructs bulk enumeration of unreviewed files** — auto-fill records deferred files not claimed or declared, freeing that budget for real analysis instead of bookkeeping.
 - **Measurement honesty sweep** — damaged JSONL records are counted, unmeasured never publishes as zero, availability flags derive from what was actually parsed, findings-ledger readers share the discriminated reader, and a coverage-manifest build failure is distinguishable from legitimate absence.
 - **Dispatch decisions stopped re-parsing bootstrap's rendered text** — each fact now arrives as a structured parameter computed once, upstream.
 - **Reviewer Markdown materializes as each JSON settles**, so a reconciliation failure cannot hide finished output; declarations are validated at publication even without the bootstrap env envelope.
 - **Detection benchmark hardened** — per-entry status is stamped by the producing code path, and reviewer-path matching canonicalizes against the eval root.
 - **Doc-drift guards** pin the AGENTS.md registry reference and README model tiers to `agent_registry.json` in both directions.
 - **Test estate** — 273 redundant pins removed with coverage increased (11 previously-unpinned guards now pinned); every cut mutation-verified.
-- **`schemas/review-output.ts` reconciled** — critic-adjustment provenance added, five never-produced interfaces dropped.
+- **`schemas/review-output.ts` reconciled** — critic-adjustment provenance added; interfaces the pipeline never produced were dropped.
 - **Step handoffs pin a no-truncation rule** — every next-step and blocks-progress footer now tells the orchestrator to run the printed command unfiltered, since piping it through `head`/`tail`/`grep` was eating load-bearing briefing lines.
 - **`wp-architecture-reviewer` requires an actual PHP file** — keyword matches like "hook" or "filter" in commit messages no longer dispatch it into a pure-TS/JS diff.
 

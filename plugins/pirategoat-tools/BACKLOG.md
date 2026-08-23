@@ -89,3 +89,43 @@ It stays because retiring it is not a rename. The decision critic's probe found 
 **Evidence:** run12 audit, Task 12 — `to_markdown()` deletion; the accounting is still pinned by `TestAutofilledUnreviewedAttribution` in `tests/review/test_reconciliation_context.py`.
 **Deferred because:** the split was rendered into a document only one agent ever read, so nothing observably consumed it; adding it to the record's coverage section is a rendering decision, not a measurement fix.
 **Do when:** a run's coverage section is disputed on the grounds of who declared what, or the next time `_render_review_coverage_section` is edited.
+
+### 6. `critic_verdict == "unavailable"` is a pirategoat-bot contract, not a spelling choice
+
+`pirategoat-bot/src/orchestrator-review.js:399` and `src/resume/orchestrator-review.js:532` both branch on the literal string `"unavailable"` to render the bot's "not cross-validated" message. Task 11 deliberately kept that exact value instead of the brief's proposed `"absent"`, carrying the missing/absent distinction through `degradation_notes` instead of the vocabulary. Nothing enforces this from this repo's side — a future rename of the value (not just the field) would silently break the bot's message with no local test to catch it.
+
+**Evidence:** run12 audit, Task 11 Step 3 deviation ("`critic_verdict` vocabulary preserved on purpose").
+**Deferred because:** the value is correct today; this is a coordination trap for later, not a bug now.
+**Do when:** the next pirategoat-bot sync, or before any change to `critic_verdict`'s vocabulary in `pipeline-result.json` — grep the bot first.
+
+### 7. F10 — watch the decision critic's rejection bar across runs
+
+Run11's critic removed a finding via an adjustment on a rationale run12's critic judged wrong, and the finding returned in run12. The field-audit report honestly flagged "0 false positives dropped" as weak evidence of a working false-positive gate. No code change is indicated by a single data point; this is a signal to keep watching, not a fix to make.
+
+**Evidence:** `.claude/docs/analysis/2026-08-22-claude-pokedex-field-audit-run12.md` F10 (INFO).
+**Deferred because:** one cross-run comparison is not a trend; the critic's adjustment rationale is otherwise sound.
+**Do when:** a second run shows the same pattern (a critic reversing a prior run's adjustment on grounds the prior critic would have rejected), or cohort metrics gain a way to compare adjustment rationale across runs.
+
+### 8. Re-entered step 11 cannot tell "report never authored" from "this is the pre-authoring snapshot"
+
+`report_path` in `pipeline-result.json` resolves report → record → findings Markdown, so a normal finalize names the authored report while a crash or interruption between record re-assembly and report authoring leaves a re-entered step 11 naming the record instead. Nothing on the artifact records *which* of those happened — the step-11 handoff gate and pirategoat-bot's own missing-file failure both catch the outcome, but the self-description stays ambiguous to any other reader of `pipeline-result.json`.
+
+**Evidence:** run12 audit, Task 12 report, "Deferred, per the coordinator" section.
+**Deferred because:** the ambiguity is cosmetic today — every path that matters already fails loudly on a missing report; nothing yet reads the field for this distinction.
+**Do when:** a field run shows a report that was never authored while the run still reads as clean, or the next time `pipeline-result.json` gains a field (a natural place to add `report_authored: bool`).
+
+### 9. `scripts/linear/pipeline.py`'s step-handoff footer has no no-truncation note
+
+Task 1 pinned "run the printed command unfiltered" to the review pipeline's step-handoff footer, because piping it through `head`/`tail`/`grep` was eating load-bearing briefing lines. `scripts/linear/pipeline.py:442`'s own `Run: python3 ... pipeline.py --step ...` footer is the same shape and carries no equivalent note — the same failure class, in the sibling pipeline Task 1 never touched.
+
+**Evidence:** run12 audit, Task 14 review of `scripts/linear/pipeline.py` (`_render_guidance`, the `next_step` branch around line 442), compared against Task 1's fix to `scripts/review/briefings.py`.
+**Deferred because:** out of Task 1's scope (review pipeline only); no field evidence yet that the Linear pipeline's briefings get truncated the same way.
+**Do when:** a Linear-issue run shows truncated next-step guidance, or the next time `scripts/linear/pipeline.py`'s footer rendering is edited.
+
+### 10. `require_php_source_file` is an undocumented registry gate
+
+Three registry entries (`wp-architecture-reviewer`, `ecosystem-integration-reviewer`, `woo-regression-reviewer`) carry `require_php_source_file: true`, but the field has no row in AGENTS.md's Agent Registry field table (only `require_triage_keyword_match` does), and only `woo-regression-reviewer.md`'s own prompt explains the gate to the agent it applies to — `wp-architecture-reviewer.md` and `ecosystem-integration-reviewer.md` say nothing about it, so an agent reading either prompt cold has no way to learn why it was skipped on a PHP-less diff.
+
+**Evidence:** run12 audit, Task 14 review of `scripts/review/agent_registry.json` (three carriers) against `AGENTS.md`'s registry field table and the three agents' `.md` prompts.
+**Deferred because:** the gate behaves correctly; this is a discovery gap for future agents extending the registry, not a dispatch bug.
+**Do when:** the next time `agent_registry.json`'s field table in AGENTS.md is edited, or a fourth agent adopts `require_php_source_file` and needs the same explanation copied a third time.
