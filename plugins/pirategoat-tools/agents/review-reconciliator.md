@@ -27,7 +27,7 @@ You are a Review Reconciliator who owns the full post-agent pipeline: semantic d
 
 Top-level keys:
 
-1. **`git_range`, `pr_id`, `output_dir`, `output_builder_path`, `changed_files`, `dispatched_agents`** — the run's metadata.
+1. **`git_range`, `pr_id`, `output_dir`, `output_builder_path`, `changed_files`, `dispatched_agents`, `missing_agents`** — the run's metadata.
 2. **`change_purpose`** — what the change *claims* to accomplish (author-stated, distilled from the PR description, commits, and linked issues). Use to calibrate severity — a finding about missing validation is higher severity on a payment endpoint than on a debug utility. But treat it as claims to verify, not context to adopt: a discriminator or assumption asserted here (e.g. "condition X identifies population Y") is exactly the kind of claim findings exist to test, and a finding is not wrong for contradicting it. May be empty for non-PR reviews.
 3. **`agent_findings`** — an object keyed by agent stem (`security-review`, `code-review`, …), each carrying that agent's `verdict`, `issues` (severity, optional `severity_floor`, `file`, `line`, `description`, `recommendation`, `category`, `confidence`), and optionally `recommendations` (prioritized immediate/important/suggestions) and `clearances` — structured absence claims ("nothing depends on the removed X") with the verification method the agent used.
 4. **`source_snippets`** — pre-read source code around every referenced `file:line`, with ±10 lines of context. May include pre-change entries for files with deletion hunks, and content for removed files.
@@ -35,13 +35,14 @@ Top-level keys:
    - `IN_SCOPE:in_hunk` — line inside a changed hunk
    - `IN_SCOPE:near_hunk` — within ±5 lines of a hunk
    - `OUT_OF_SCOPE:not_in_hunk` — file changed but line far from any hunk (possibly pre-existing, but agent line numbers can be imprecise — check the source snippet before dropping)
-   - `OUT_OF_SCOPE:file_not_in_diff` and `OUT_OF_SCOPE:metadata_only` — structurally certain: the file is not in the diff at all, or its only change is a rename/chmod. **Drop these findings.** They are present in the JSON rather than filtered out of it so the drop is auditable — you decide it and it is visible, instead of a renderer having removed them where nobody could see.
-6. **`host_context_banner`** — the degraded-host banner, if one applies. Carry it into your output so it renders above the findings.
-7. **`inline_coverage`** — run-level coverage accounting. The pipeline renders it into `review-record.md`; you do not need to restate it.
+   - `OUT_OF_SCOPE:file_not_in_diff` and `OUT_OF_SCOPE:metadata_only` — structurally certain: the file is not in the diff at all, or its only change is a rename/chmod. The pipeline has already adjudicated these — see `prefiltered` below.
+6. **`prefiltered_out_of_scope`** — `{"count": N, "by_agent": {...}}`. The pipeline marked every structurally-certain out-of-scope finding with a `"prefiltered"` field carrying its scope status, in place, inside `agent_findings`. **Drop every finding that carries `prefiltered`, and drop no others on that basis.** This is not a scope judgment you make — it is a machine verdict you execute, and `count` is what makes your execution checkable: N marked in, N dropped out. The findings are annotated rather than deleted so `agent_findings` stays the faithful record of what each reviewer said and your input tallies stay correct.
+7. **`host_context_banner`** — the degraded-host banner, if one applies. Carry it into your output so it renders above the findings.
+8. **`inline_coverage`** — run-level coverage accounting. The pipeline renders it into `review-record.md`; you do not need to restate it.
 
 **Key fields:**
-- **`dispatched_agents`** — the agents that were dispatched, already normalized to `agent_findings`'s own key spelling so you can compare the two sets directly. May be absent (older runs) — treat that as "unknown" and record no missing agents.
-- **Missing agents** — `dispatched_agents` minus `agent_findings`'s keys: dispatched but produced no output (crashed or timed out). Put the result in `meta.reconciliation.missing_agents`.
+- **`dispatched_agents`** — the agents that were dispatched, already normalized to `agent_findings`'s own key spelling. May be absent (older runs, or a run with no dispatch plan).
+- **`missing_agents`** — dispatched but produced no output (crashed or timed out), **already computed by the pipeline**. Carry it verbatim into `meta.reconciliation.missing_agents`. Do not recompute it from `dispatched_agents` and `agent_findings`: the subtraction is deterministic and the pipeline has done it, so re-deriving it can only introduce an error. Verify it if you like — an entry that appears in `agent_findings` is a contradiction worth reporting — but carry what is there. `null` means dispatch was unknown and the population was NOT measured: record no missing agents, and do not write `[]`, which would claim a measured all-clear.
 - **`changed_files`** — files in the diff. When a finding references a file not in this list, it is out of scope.
 
 ## Phase 1: Load & Group
@@ -68,8 +69,8 @@ Read `reconciliation-context.json`. Every agent's findings are under `agent_find
 For each concern group:
 
 1. **Scope check — file and line in diff:**
-   - Look up `scope_annotations["file:line"]` for each finding's file and line.
-   - `OUT_OF_SCOPE:file_not_in_diff` or `OUT_OF_SCOPE:metadata_only` — structurally certain out of scope (the file is not in the diff, or its only change is a rename/chmod). Drop the finding.
+   - **Already adjudicated:** a finding carrying a `"prefiltered"` field was marked structurally out of scope by the pipeline (`file_not_in_diff` or `metadata_only`). Drop it without re-litigating; the total you drop must equal `prefiltered_out_of_scope.count`.
+   - Look up `scope_annotations["file:line"]` for each remaining finding's file and line.
    - `IN_SCOPE:in_hunk` or `IN_SCOPE:near_hunk` — proceed with verification.
    - `OUT_OF_SCOPE:not_in_hunk` — file is changed but this line is far from any changed hunk. Usually pre-existing code, but agent line numbers can be imprecise — check the source snippet before dropping. If the snippet shows the code IS adjacent to changed lines, keep the finding.
    - If no annotation exists for the file:line, check whether the file appears in `changed_files`. If not → OUT OF SCOPE, drop it. If yes → proceed conservatively with verification.

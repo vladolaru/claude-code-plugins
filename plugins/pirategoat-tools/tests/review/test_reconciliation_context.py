@@ -1351,6 +1351,8 @@ class TestFullScript:
             "output_builder_path",
             "host_context_banner",
             "inline_coverage",
+            "missing_agents",
+            "prefiltered_out_of_scope",
         }
         assert set(ctx.keys()) == expected_keys
 
@@ -1639,6 +1641,253 @@ class TestFullScript:
         stdout_json = json.loads(result.stdout.strip())
         assert stdout_json["status"] == "ok"
         assert "reviewer_markdown" not in stdout_json
+
+
+class TestMissingAgentDetection:
+    """Missing-agent detection is a MEASUREMENT, not an agent's arithmetic.
+
+    `schemas/review-output.ts` declares `meta.reconciliation.missing_agents`,
+    and a dispatched reviewer that produced no output is exactly the fact a
+    review must not quietly lose. While the retired Markdown projection
+    rendered it, the subtraction was deterministic; asking the reconciliator
+    to redo it from two lists in the JSON would have demoted a machine
+    guarantee to agent prose. `compute_missing_agents()` keeps it machine-side
+    and the JSON carries the answer.
+    """
+
+    def test_dispatched_but_silent_agents_are_named(self, mod):
+        assert mod.compute_missing_agents(
+            ["security-review", "performance-review", "a11y-review"],
+            {"security-review": {}},
+        ) == ["a11y-review", "performance-review"]
+
+    def test_result_is_sorted_not_dispatch_ordered(self, mod):
+        """A stable order, so a diff of two runs shows a real change."""
+        assert mod.compute_missing_agents(
+            ["zz-review", "aa-review", "mm-review"], {},
+        ) == ["aa-review", "mm-review", "zz-review"]
+
+    def test_every_agent_reporting_measures_empty(self, mod):
+        assert mod.compute_missing_agents(
+            ["security-review"], {"security-review": {}},
+        ) == []
+
+    def test_unknown_dispatch_is_unmeasured_not_empty(self, mod):
+        """`None`, never `[]`. A run with no dispatch plan did not measure
+        this population, and "nothing was measured" must never read as
+        "nobody was missing" — the same zero-vs-unknown rule
+        `files_unscoped` follows."""
+        assert mod.compute_missing_agents(None, {"security-review": {}}) is None
+
+    def test_empty_dispatch_measures_empty(self, mod):
+        """An explicitly empty dispatch list IS a measurement: the planner
+        ran and selected zero agents (a docs-only change)."""
+        assert mod.compute_missing_agents([], {}) == []
+
+    def test_an_unexpected_reporter_is_not_subtracted_from_nothing(self, mod):
+        """Output from an agent nobody dispatched is not a missing agent —
+        it is a different anomaly, and this function must not report a
+        negative population or crash on one."""
+        assert mod.compute_missing_agents(
+            ["security-review"], {"security-review": {}, "rogue-review": {}},
+        ) == []
+
+    def test_json_carries_the_measurement(self, mod, tmp_path):
+        review = _make_review_json(reviewer="security")
+        (tmp_path / "security-review.json").write_text(json.dumps(review))
+
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT_PATH),
+             "--output-dir", str(tmp_path),
+             "--git-range", "abc123..HEAD",
+             "--changed-files", "src/app.py",
+             "--dispatched-agents",
+             "security-reviewer,performance-reviewer,a11y-reviewer"],
+            capture_output=True, text=True, cwd=tmp_path,
+        )
+
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        ctx = json.loads(
+            (tmp_path / "reconciliation-context.json").read_text()
+        )
+        assert ctx["missing_agents"] == ["a11y-review", "performance-review"]
+        assert ctx["dispatched_agents"] == [
+            "security-review", "performance-review", "a11y-review",
+        ]
+
+    def test_json_carries_null_when_dispatch_is_unknown(self, mod, tmp_path):
+        review = _make_review_json(reviewer="security")
+        (tmp_path / "security-review.json").write_text(json.dumps(review))
+
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT_PATH),
+             "--output-dir", str(tmp_path),
+             "--git-range", "abc123..HEAD",
+             "--changed-files", "src/app.py"],
+            capture_output=True, text=True, cwd=tmp_path,
+        )
+
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        ctx = json.loads(
+            (tmp_path / "reconciliation-context.json").read_text()
+        )
+        assert ctx["missing_agents"] is None
+        assert "dispatched_agents" not in ctx
+
+
+class TestPrefilterAnnotation:
+    """Structurally-certain out-of-scope findings are adjudicated by the
+    pipeline, not re-derived by the reconciliator.
+
+    `file_not_in_diff` and `metadata_only` are decidable from the diff
+    alone — there is no judgment in them. The retired Markdown projection
+    removed such findings before the agent saw them, which was a machine
+    guarantee but an invisible one: the drop left no trace anywhere. The
+    annotation keeps the guarantee AND the audit trail — the finding stays
+    in the record of what its agent said, carrying the machine's verdict on
+    it, and the agent's job is to obey a flag rather than judge scope.
+    """
+
+    @staticmethod
+    def _run(tmp_path, *extra):
+        return subprocess.run(
+            [sys.executable, str(SCRIPT_PATH),
+             "--output-dir", str(tmp_path),
+             "--git-range", "abc123..HEAD", *extra],
+            capture_output=True, text=True, cwd=tmp_path,
+        )
+
+    def test_out_of_scope_findings_are_annotated_in_place(self, mod, tmp_path):
+        review = _make_review_json(reviewer="security", issues=[
+            _make_issue(file="src/untouched.py", line=10, title="Out"),
+            _make_issue(file="src/app.py", line=42, title="In"),
+        ])
+        (tmp_path / "security-review.json").write_text(json.dumps(review))
+
+        result = self._run(tmp_path, "--changed-files", "src/app.py")
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+
+        ctx = json.loads(
+            (tmp_path / "reconciliation-context.json").read_text()
+        )
+        issues = ctx["agent_findings"]["security-review"]["issues"]
+        by_title = {i["title"]: i for i in issues}
+        assert by_title["Out"]["prefiltered"] == (
+            "OUT_OF_SCOPE:file_not_in_diff"
+        )
+        assert "prefiltered" not in by_title["In"]
+
+    def test_the_finding_is_kept_not_removed(self, mod, tmp_path):
+        """`agent_findings` is the record of what each reviewer said, and
+        the reconciliation metrics are counted from it. Deleting entries
+        would make both silently wrong."""
+        review = _make_review_json(reviewer="security", issues=[
+            _make_issue(file="src/untouched.py", line=10),
+        ])
+        (tmp_path / "security-review.json").write_text(json.dumps(review))
+
+        result = self._run(tmp_path, "--changed-files", "src/app.py")
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+
+        ctx = json.loads(
+            (tmp_path / "reconciliation-context.json").read_text()
+        )
+        assert len(ctx["agent_findings"]["security-review"]["issues"]) == 1
+
+    def test_a_checkable_count_travels_beside_the_annotations(
+        self, mod, tmp_path
+    ):
+        """The agent's drop is verifiable against a number it did not
+        compute: N annotated in, N dropped out."""
+        review = _make_review_json(reviewer="security", issues=[
+            _make_issue(file="src/untouched.py", line=10, title="A"),
+            _make_issue(file="src/other.py", line=1, title="B"),
+            _make_issue(file="src/app.py", line=42, title="C"),
+        ])
+        (tmp_path / "security-review.json").write_text(json.dumps(review))
+
+        result = self._run(tmp_path, "--changed-files", "src/app.py")
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+
+        ctx = json.loads(
+            (tmp_path / "reconciliation-context.json").read_text()
+        )
+        assert ctx["prefiltered_out_of_scope"] == {
+            "count": 2, "by_agent": {"security-review": 2},
+        }
+
+    def test_a_clean_run_reports_a_measured_zero(self, mod, tmp_path):
+        review = _make_review_json(reviewer="security", issues=[
+            _make_issue(file="src/app.py", line=42),
+        ])
+        (tmp_path / "security-review.json").write_text(json.dumps(review))
+
+        result = self._run(tmp_path, "--changed-files", "src/app.py")
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+
+        ctx = json.loads(
+            (tmp_path / "reconciliation-context.json").read_text()
+        )
+        assert ctx["prefiltered_out_of_scope"] == {"count": 0, "by_agent": {}}
+
+    def test_not_in_hunk_is_never_prefiltered(self, mod, tmp_path):
+        """The one out-of-scope status that IS a judgment call: agent line
+        numbers can be imprecise, so the reconciliator checks the snippet
+        before dropping. Annotating it would turn a hedge into a verdict."""
+        annotations = {
+            "src/app.py:42": "OUT_OF_SCOPE:not_in_hunk",
+            "src/gone.py:1": "OUT_OF_SCOPE:file_not_in_diff",
+            "src/meta.py:3": "OUT_OF_SCOPE:metadata_only",
+            "src/app.py:9": "IN_SCOPE:in_hunk",
+        }
+        findings = {"security-review": {"issues": [
+            {"file": "src/app.py", "line": 42},
+            {"file": "src/gone.py", "line": 1},
+            {"file": "src/meta.py", "line": 3},
+            {"file": "src/app.py", "line": 9},
+        ]}}
+
+        summary = mod.annotate_prefiltered_findings(findings, annotations)
+
+        marks = [i.get("prefiltered") for i in findings["security-review"]["issues"]]
+        assert marks == [
+            None, "OUT_OF_SCOPE:file_not_in_diff",
+            "OUT_OF_SCOPE:metadata_only", None,
+        ]
+        assert summary == {"count": 2, "by_agent": {"security-review": 2}}
+
+    def test_a_finding_with_no_line_is_left_alone(self, mod):
+        """File-scoped findings carry `line: null` and have no annotation
+        key; scope for them is "the file is in changed_files", which this
+        function does not measure."""
+        findings = {"a-review": {"issues": [{"file": "src/x.py", "line": None}]}}
+        summary = mod.annotate_prefiltered_findings(findings, {})
+        assert "prefiltered" not in findings["a-review"]["issues"][0]
+        assert summary == {"count": 0, "by_agent": {}}
+
+    def test_a_stale_annotation_from_reused_input_is_cleared(self, mod):
+        """The function OWNS the key: an in-scope finding that arrives
+        carrying a `prefiltered` marker (hand-edited input, a reused dict)
+        must not keep it — a stale marker silently deletes a real finding."""
+        findings = {"a-review": {"issues": [
+            {"file": "src/app.py", "line": 9, "prefiltered": "OUT_OF_SCOPE:metadata_only"},
+        ]}}
+        summary = mod.annotate_prefiltered_findings(
+            findings, {"src/app.py:9": "IN_SCOPE:in_hunk"}
+        )
+        assert "prefiltered" not in findings["a-review"]["issues"][0]
+        assert summary == {"count": 0, "by_agent": {}}
+
+    def test_malformed_shapes_do_not_raise(self, mod):
+        findings = {
+            "a-review": {"issues": "not-a-list"},
+            "b-review": "not-a-dict",
+            "c-review": {"issues": [None, 7, {"file": "src/gone.py", "line": 1}]},
+        }
+        summary = mod.annotate_prefiltered_findings(
+            findings, {"src/gone.py:1": "OUT_OF_SCOPE:file_not_in_diff"}
+        )
+        assert summary == {"count": 1, "by_agent": {"c-review": 1}}
 
 
 class TestAggregateInlineCoverage:

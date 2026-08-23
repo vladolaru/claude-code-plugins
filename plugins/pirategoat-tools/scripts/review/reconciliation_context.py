@@ -600,6 +600,106 @@ def aggregate_inline_coverage(
     }
 
 
+def compute_missing_agents(
+    dispatched_stems: Optional[List[str]],
+    agent_findings: Dict[str, Any],
+) -> Optional[List[str]]:
+    """Which dispatched agents produced no output — measured, not asked for.
+
+    A dispatched reviewer that crashed or timed out is exactly the fact a
+    review must not quietly lose, and `schemas/review-output.ts` gives it a
+    home at `meta.reconciliation.missing_agents`. The subtraction is
+    deterministic, so it belongs here: the reconciliator VERIFIES and
+    carries this list rather than recomputing it from two others, and a
+    model that fumbles a set difference cannot cost the run a missing agent.
+
+    `dispatched_stems` is already in `agent_findings`'s key spelling (see
+    `_review_stem`). Returns:
+
+    * ``None`` when dispatch is unknown (no plan; `--dispatched-agents`
+      omitted) — UNMEASURED, and never `[]`. "Nothing was measured" must
+      not read as "nobody was missing", the same rule `files_unscoped`
+      follows.
+    * a sorted list otherwise, including the measured-empty ``[]`` that an
+      explicitly empty dispatch (a docs-only change) earns.
+
+    Sorted, not dispatch-ordered, so two runs diff on substance. Output
+    from an agent nobody dispatched is not this function's anomaly and is
+    simply not subtracted.
+    """
+    if dispatched_stems is None:
+        return None
+    return sorted(set(dispatched_stems) - set(agent_findings))
+
+
+# The two out-of-scope statuses that carry no judgment: the file is not in
+# the diff at all, or its only change is a rename/chmod. Both are decidable
+# from the diff alone. `not_in_hunk` is deliberately absent — agent line
+# numbers can be imprecise and the ±5 proximity window does not catch every
+# case, so the reconciliator checks the source snippet before dropping one.
+# Annotating it would turn a documented hedge into a machine verdict.
+_PREFILTER_SCOPES = frozenset([
+    "OUT_OF_SCOPE:file_not_in_diff",
+    "OUT_OF_SCOPE:metadata_only",
+])
+
+_PREFILTER_KEY = "prefiltered"
+
+
+def annotate_prefiltered_findings(
+    agent_findings: Dict[str, Any],
+    scope_annotations: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Mark structurally-certain out-of-scope findings, in place.
+
+    Mutates `agent_findings` and returns the audit summary
+    ``{"count": N, "by_agent": {...}}``.
+
+    Why annotate rather than delete. The retired Markdown projection
+    removed these findings before the reconciliator saw them: a real
+    machine guarantee, but an invisible one — the drop left no trace in any
+    artifact, so nobody could audit what had been decided on their behalf.
+    Deleting them from the JSON would be worse still: `agent_findings` is
+    also the record of what each reviewer actually said, and the
+    reconciliation metrics (`input_findings_count`, per-agent tallies) are
+    counted from it, so removals would silently shift numbers nothing else
+    could reconstruct.
+
+    Annotating keeps both properties. The scope verdict stays a MACHINE
+    decision — the reconciliator is told to drop every finding carrying
+    this key, which is obedience, not judgment — and the summary count
+    beside it makes that obedience checkable: N annotated in, N dropped
+    out. The agent's instruction is the backstop; this function is the
+    mechanism.
+
+    This function OWNS the key: an in-scope finding that arrives already
+    carrying one (reused input, a hand edit) has it cleared, because a
+    stale marker silently deletes a real finding. Malformed shapes are
+    skipped rather than raising — reviewer JSON is model-authored, and
+    pipeline step 8 is the whole review.
+    """
+    by_agent: Dict[str, int] = {}
+    for agent, payload in agent_findings.items():
+        if not isinstance(payload, dict):
+            continue
+        issues = payload.get("issues")
+        if not isinstance(issues, list):
+            continue
+        for issue in issues:
+            if not isinstance(issue, dict):
+                continue
+            issue.pop(_PREFILTER_KEY, None)
+            file_path = issue.get("file")
+            line = issue.get("line")
+            if not file_path or not line:
+                continue
+            status = scope_annotations.get(f"{file_path}:{line}")
+            if status in _PREFILTER_SCOPES:
+                issue[_PREFILTER_KEY] = status
+                by_agent[agent] = by_agent.get(agent, 0) + 1
+    return {"count": sum(by_agent.values()), "by_agent": by_agent}
+
+
 def load_agent_findings(
     output_dir: str,
     dispatched_agents: Optional[List[str]] = None,
@@ -1312,6 +1412,20 @@ def main() -> int:
         # 5. Resolve output builder path
         output_builder_path = resolve_output_builder_path()
 
+        # 6. Adjudicate the two structurally-certain out-of-scope statuses
+        #    HERE, so the reconciliator obeys a computed flag instead of
+        #    re-deriving scope. Findings are annotated, never removed:
+        #    `agent_findings` stays the faithful record of what each
+        #    reviewer said, and the count travels beside it so the drop is
+        #    auditable and the agent's compliance is checkable.
+        stems = (
+            [_review_stem(name) for name in dispatched_agents]
+            if dispatched_agents is not None else None
+        )
+        prefiltered = annotate_prefiltered_findings(
+            agent_findings, scope_annotations
+        )
+
         # Build the context object
         context: Dict[str, Any] = {
             "agent_findings": agent_findings,
@@ -1334,15 +1448,22 @@ def main() -> int:
             "inline_coverage": aggregate_inline_coverage(
                 output_dir, changed_files=changed_files
             ),
+            # Dispatched but silent — measured here, not left as arithmetic
+            # for the reconciliator. `None` when dispatch is unknown, which
+            # is a different fact from a measured empty list.
+            "missing_agents": compute_missing_agents(stems, agent_findings),
+            # How many findings the pipeline adjudicated structurally out of
+            # scope, and for whom. The reconciliator drops every finding
+            # carrying `prefiltered`; this count is what makes that
+            # obedience checkable.
+            "prefiltered_out_of_scope": prefiltered,
         }
-        # Include dispatched agents, normalized to match agent_findings keys
-        # (e.g., "security-reviewer" → "security-review") so the
-        # reconciliator can do a direct set comparison to detect agents
-        # that were dispatched but failed to produce output.
-        if dispatched_agents is not None:
-            context["dispatched_agents"] = [
-                _review_stem(name) for name in dispatched_agents
-            ]
+        # Dispatched agents, normalized to match agent_findings keys
+        # (e.g., "security-reviewer" → "security-review"). Present only
+        # when dispatch was actually known — its absence and
+        # `missing_agents: null` say the same thing, in the same run.
+        if stems is not None:
+            context["dispatched_agents"] = stems
 
         # Write to output directory
         output_path = os.path.join(output_dir, "reconciliation-context.json")
