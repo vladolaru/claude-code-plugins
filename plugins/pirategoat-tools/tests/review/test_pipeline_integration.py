@@ -1193,7 +1193,7 @@ class TestStep8Orchestration:
         )
 
         def reconciliation_succeeds(*_args, **_kwargs):
-            (tmp_path / "reconciliation-context.md").write_text("# Context\n")
+            (tmp_path / "reconciliation-context.json").write_text("{}")
             return "", True
 
         monkeypatch.setitem(
@@ -1237,7 +1237,7 @@ class TestStep8Orchestration:
         )
 
         def reconciliation_succeeds(*_args, **_kwargs):
-            (tmp_path / "reconciliation-context.md").write_text("# Context\n")
+            (tmp_path / "reconciliation-context.json").write_text("{}")
             return "", True
 
         monkeypatch.setitem(
@@ -1285,7 +1285,7 @@ class TestStep8Orchestration:
         )
 
         def reconciliation_succeeds(*_args, **_kwargs):
-            (tmp_path / "reconciliation-context.md").write_text("# Context\n")
+            (tmp_path / "reconciliation-context.json").write_text("{}")
             return "", True
 
         monkeypatch.setitem(
@@ -1331,7 +1331,7 @@ class TestStep8Orchestration:
         )
 
         def reconciliation_succeeds(*_args, **_kwargs):
-            (tmp_path / "reconciliation-context.md").write_text("# Context\n")
+            (tmp_path / "reconciliation-context.json").write_text("{}")
             return "", True
 
         monkeypatch.setitem(
@@ -1376,7 +1376,7 @@ class TestStep8Orchestration:
         )
 
         def reconciliation_succeeds(*_args, **_kwargs):
-            (tmp_path / "reconciliation-context.md").write_text("# Context\n")
+            (tmp_path / "reconciliation-context.json").write_text("{}")
             return "", True
 
         monkeypatch.setitem(
@@ -1415,7 +1415,7 @@ class TestStep8Orchestration:
         )
 
         def reconciliation_succeeds(*_args, **_kwargs):
-            (tmp_path / "reconciliation-context.md").write_text("# Context\n")
+            (tmp_path / "reconciliation-context.json").write_text("{}")
             return "", True
 
         monkeypatch.setitem(
@@ -1853,7 +1853,7 @@ class TestStep8AgentPrompt:
         ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py,b.py"}}
         g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
-        assert "reconciliation-context.md" in text  # pre-gathered Markdown context file
+        assert "reconciliation-context.json" in text  # pre-gathered context
         assert str(tmp_path) in text  # concrete output directory
 
 
@@ -2130,7 +2130,7 @@ class TestStep8ReviewFileStems:
         monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: fake_done)
 
         def fake_run_subprocess(cmd, timeout=None, **kwargs):
-            (tmp_path / "reconciliation-context.md").write_text("ctx")
+            (tmp_path / "reconciliation-context.json").write_text("{}")
             return ("", True)
 
         monkeypatch.setattr(

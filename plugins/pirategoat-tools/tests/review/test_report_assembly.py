@@ -412,6 +412,27 @@ class TestRecordSanitization:
 
         assert "**Severity floor:** high" in text
 
+    def test_non_string_finding_fields_do_not_crash_the_assembly(
+        self, out_dir
+    ):
+        """Reviewer JSON is model-authored: a field the schema expects to
+        be a string can arrive as a list, a number, or null. The sanitizer
+        is the record's render boundary and coerces before the regex, so a
+        malformed field costs a rendering nicety, never the artifact.
+        """
+        findings = _ledger()
+        findings["issues"][0]["recommendation"] = ["wrap it", "in esc_html()"]
+        findings["issues"][1]["description"] = None
+        findings["recommendations"]["immediate"] = [["escape", "the notice"]]
+        _write_ledger(out_dir, findings)
+
+        outcome, error = assemble_review_record(str(out_dir), {})
+
+        assert error is None
+        assert outcome["status"] == "complete"
+        text = (out_dir / REVIEW_RECORD_MD).read_text()
+        assert "wrap it\nin esc_html()" in text
+
     def test_sanitization_does_not_touch_the_ledger_on_disk(self, out_dir):
         findings = _ledger()
         findings["issues"][0]["description"] = (

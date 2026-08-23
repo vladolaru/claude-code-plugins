@@ -119,46 +119,54 @@ class TestOutputPathInSynthesis:
 
 
 class TestCriticContextArg:
-    """The --context flag replaces --findings-json for curated Markdown input."""
+    """`--context` carries the structured findings ledger.
+
+    It used to point at `critic-context.md`, a Markdown document built per
+    run purely to merge the report and the ledger for this one agent. The
+    record replaced the merge, so the flag now names `review-findings.json`
+    directly — the file whose ids the critic's adjustments have to resolve
+    against.
+    """
 
     def test_context_surfaced_in_step_1(self):
         result = run_critic(
             "--step-number", "1",
             "--total-steps", "4",
-            "--report", "/tmp/test-report.md",
-            "--context", "/tmp/test-critic-context.md",
+            "--report", "/tmp/review-record.md",
+            "--context", "/tmp/review-findings.json",
             "--output-dir", "/tmp/test-critic",
             "--thoughts", "initial",
         )
         assert result.returncode == 0
-        assert "test-critic-context.md" in result.stdout
+        assert "review-findings.json" in result.stdout
 
     def test_context_surfaced_in_step_2(self):
         """Step 2 should also reference the context path."""
         result = run_critic(
             "--step-number", "2",
             "--total-steps", "4",
-            "--report", "/tmp/test-report.md",
-            "--context", "/tmp/test-critic-context.md",
+            "--report", "/tmp/review-record.md",
+            "--context", "/tmp/review-findings.json",
             "--output-dir", "/tmp/test-critic",
             "--thoughts", "state",
         )
         assert result.returncode == 0
-        assert "test-critic-context.md" in result.stdout
+        assert "review-findings.json" in result.stdout
 
-    def test_step_1_references_finding_ids(self):
-        """Step 1 should reference F1, F2 finding IDs from context."""
+    def test_step_1_keys_claims_to_the_ledger_ids(self):
+        """A positional label is a rendering artifact no ledger contains;
+        an adjustment keyed by one resolves to nothing."""
         result = run_critic(
             "--step-number", "1",
             "--total-steps", "4",
-            "--report", "/tmp/test-report.md",
-            "--context", "/tmp/test-critic-context.md",
+            "--report", "/tmp/review-record.md",
+            "--context", "/tmp/review-findings.json",
             "--output-dir", "/tmp/test-critic",
             "--thoughts", "initial",
         )
         assert result.returncode == 0
-        # Should mention using pre-assigned IDs
-        assert "F1" in result.stdout or "finding IDs" in result.stdout.lower()
+        assert "8-hex" in result.stdout
+        assert "issues[].id" in result.stdout
 
 
 class TestCriticSave:

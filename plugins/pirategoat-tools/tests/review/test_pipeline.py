@@ -1085,7 +1085,9 @@ class TestStep8Reconcile:
         assert "stop" in text.lower() or "TaskStop" in text
 
     def test_reconciliator_prompt_references_context_file(self, mod, tmp_path):
-        """Step 8 should reference pre-gathered reconciliation-context.md instead of individual review files."""
+        """Step 8 points at the pre-gathered JSON context, not at the
+        individual review files (they are inside it) and not at a Markdown
+        projection written for one agent's eyes only."""
         state = self._make_state_with_agents(change_purpose_exists=True)
         state["agents"]["review_files"] = [
             "/tmp/out/code-review.json",
@@ -1094,7 +1096,8 @@ class TestStep8Reconcile:
         ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
         g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
-        assert "reconciliation-context.md" in text
+        assert "reconciliation-context.json" in text
+        assert "reconciliation-context.md" not in text
         # Individual review files are no longer listed — they're inside the context file
         assert "code-review.json" not in text
 
@@ -1689,13 +1692,17 @@ class TestStep10DecisionCritic:
 
         # Per-entry accounting during the spot-check itself.
         assert "PER ENTRY, never in aggregate" in revise
-        assert "`not checked`" in revise
+        assert '"not_checked"' in revise
         assert "never absorbed into a batch-level statement" in revise
 
-        # Per-entry accounting when reporting it.
+        # Per-entry accounting when reporting it. The record renders the
+        # lines from the ledger now, so the instruction points at that
+        # rendering rather than asking for a hand-written list.
         assert "one line per adjustment" in revise
-        assert "`<adjustment_id>: verified | refuted | not checked`" in revise
-        assert "Never an aggregate count" in revise
+        assert (
+            "`<adjustment_id> — verified | refuted | not_checked`" in revise
+        )
+        assert "Never report the batch in aggregate anywhere" in revise
 
     def test_spot_check_instruction_carries_no_aggregate_phrasing(self, mod):
         """An "all N spot-checked" phrase may appear in exactly one place:
@@ -1716,7 +1723,7 @@ class TestStep10DecisionCritic:
         offenders = [
             sentence for sentence in sentences
             if aggregate.search(sentence)
-            and "Never an aggregate count" not in sentence
+            and "Never report the batch in aggregate" not in sentence
         ]
         assert not offenders, offenders
         # The prohibition itself must still be there to be exempted.
@@ -1850,16 +1857,26 @@ class TestStep10DecisionCritic:
             "no changes", "no action", "proceed to writing",
         ]), "STAND must convey no report edits needed"
 
-    def test_builds_critic_context_md_before_dispatch(self, mod, tmp_path):
-        """Step 10 must instruct building critic-context.md before dispatching the critic."""
-        state = {"completed_steps": []}
-        ctx = {}
-        g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
+    def test_builds_no_context_document_before_dispatch(self, mod, tmp_path):
+        """The critic reads the record and the ledger directly.
+
+        A `python3 -c` block used to merge the two into `critic-context.md`
+        before every dispatch. The record renders the ledger through the
+        same renderer that builder reimplemented, ids and all, so the
+        builder had nothing left to add — and a context document nobody
+        but one agent ever read is a projection with no human reader.
+        """
+        g = mod.get_step_guidance(
+            10, "pr", {"completed_steps": []}, {}, output_dir=str(tmp_path)
+        )
         text = "\n".join(g["actions"])
-        assert "critic-context.md" in text
-        # The build step must appear before the dispatch prompt
-        build_pos = text.index("critic-context.md")
-        assert "decision-reviewer" in text[build_pos:]
+        assert "critic-context.md" not in text
+        assert "build_critic_context" not in text
+        # No pre-dispatch build block. (`python3 -c` still appears further
+        # down, in the REVISE branch's prohibition on hand-editing the
+        # ledger with one — a different instruction entirely.)
+        pre_dispatch = text.split("Use this dispatch prompt:", 1)[0]
+        assert "python3 -c" not in pre_dispatch
 
     def test_escalate_instructs_override_to_comment(self, mod, tmp_path):
         """ESCALATE verdict instructions must say to override verdict to COMMENT."""
@@ -1876,50 +1893,53 @@ class TestStep10DecisionCritic:
             "ESCALATE instructions must mention overriding verdict to COMMENT"
         )
 
-    def test_degraded_mode_skips_critic_context_and_passes_report(self, mod, tmp_path):
-        """When reconciliation failed, skip critic-context.md and pass report directly."""
+    def test_degraded_mode_hands_no_structured_findings(self, mod, tmp_path):
+        """When reconciliation failed there is no ledger to hand over."""
         state = {"completed_steps": [], "degradation": {"reconciliation_failed": True}}
-        ctx = {}
-        g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
+        g = mod.get_step_guidance(10, "pr", state, {}, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
-        assert "critic-context.md" not in text
-        assert "review-report.md" in text
-        # Must tell the agent there's no structured findings / no --context
-        assert "without" in text.lower() or "no structured" in text.lower() or "no --context" in text.lower()
+        assert "--context" not in text.split("Act on the critic's verdict:")[0] or (
+            "without --context" in text
+        )
+        assert "no structured findings" in text.lower()
 
-    def test_normal_flow_dispatches_with_critic_context(self, mod, tmp_path):
-        """In normal flow, dispatch prompt references critic-context.md (not raw JSON)."""
-        state = {"completed_steps": []}
-        ctx = {}
-        g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
+    def test_normal_flow_hands_the_critic_the_record_and_the_ledger(
+        self, mod, tmp_path
+    ):
+        """Two paths, both read directly: the record for the prose it is
+        stress-testing, the JSON ledger for the ids it keys adjustments by."""
+        g = mod.get_step_guidance(
+            10, "pr", {"completed_steps": []}, {}, output_dir=str(tmp_path)
+        )
         text = "\n".join(g["actions"])
-        # Dispatch prompt should use critic-context.md
-        assert "critic-context.md" in text
-        # Should NOT reference review-findings.json in the dispatch prompt
-        # (it's consumed during the build step, not passed to the critic).
-        # The slice ends where the prompt ends: the post-dispatch REVISE
-        # actions legitimately name the findings JSON the orchestrator
-        # patches, and that text never reaches the critic.
         dispatch_start = text.index("dispatch prompt")
         dispatch_section = text[dispatch_start:].split(
             "Act on the critic's verdict:", 1
         )[0]
-        assert "review-findings.json" not in dispatch_section
+        assert (
+            f"Review record to stress-test (for critic.py --report): "
+            f"{tmp_path}/review-record.md"
+        ) in dispatch_section
+        assert (
+            f"Structured findings (for critic.py --context): "
+            f"{tmp_path}/review-findings.json"
+        ) in dispatch_section
 
-    def test_normal_flow_includes_report_path_in_dispatch(self, mod, tmp_path):
-        """Normal flow dispatch must include the report path for critic.py --report."""
-        state = {"completed_steps": []}
-        ctx = {}
-        g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
+    def test_normal_flow_includes_the_record_path_in_dispatch(
+        self, mod, tmp_path
+    ):
+        """The path handed to `critic.py --report`."""
+        g = mod.get_step_guidance(
+            10, "pr", {"completed_steps": []}, {}, output_dir=str(tmp_path)
+        )
         text = "\n".join(g["actions"])
-        # The dispatch prompt section (between ``` markers) must have the report path
-        assert "review-report.md" in text
-        assert "report" in text.lower()  # label for the report path
+        assert f"{tmp_path}/review-record.md" in text
+        assert "critic.py --report" in text
 
     def test_absent_report_puts_findings_md_in_the_dispatch_prompt(
         self, mod, tmp_path
     ):
-        """When no review-report.md was written, the report path handed to
+        """When no review-record.md was assembled, the path handed to
         the critic is review-findings.md.
 
         Previously keyed on `degradation["report_synthesis_failed"]`, a flag
@@ -2038,15 +2058,31 @@ class TestStep10CriticSource:
             output_dir=str(tmp_path),
         )
 
-    def test_report_present_is_the_critic_target(self, mod, tmp_path):
+    def test_record_present_is_the_critic_target(self, mod, tmp_path):
         g = self._guidance(mod, tmp_path, critic_source={
-            "target": "review-report.md",
-            "available": ["review-report.md", "review-findings.json"],
+            "target": "review-record.md",
+            "available": ["review-record.md", "review-findings.json"],
             "render_incomplete": False,
         })
         text = "\n".join(g["situation"] + g["actions"])
-        assert f"{tmp_path}/review-report.md" in text
+        assert f"{tmp_path}/review-record.md" in text
         assert "review-findings.md" not in text
+
+    def test_the_report_is_never_the_critic_target(self, mod, tmp_path):
+        """It does not exist yet — step 11 authors it, after this critic.
+
+        The REVISE branch still NAMES it, to say the orchestrator has
+        nothing to bring into agreement; what must not appear is a
+        dispatch line pointing the critic at it.
+        """
+        g = self._guidance(mod, tmp_path, critic_source={
+            "target": "review-record.md",
+            "available": ["review-record.md", "review-findings.json"],
+            "render_incomplete": False,
+        })
+        text = "\n".join(g["situation"] + g["actions"])
+        assert f"{tmp_path}/review-report.md" not in text
+        assert "authored there — once" in text
 
     def test_missing_report_falls_back_to_the_rendered_markdown(
         self, mod, tmp_path
@@ -2057,16 +2093,11 @@ class TestStep10CriticSource:
             "render_incomplete": False,
         })
         text = "\n".join(g["situation"] + g["actions"])
-        # Assert the CRITIC TARGET specifically. `review-report.md` still
-        # appears further down as the file the REVISE flow tells the
-        # orchestrator to bring into agreement with the ledger — a
-        # different instruction, unaffected by which artifact the critic
-        # reads.
         assert (
-            f"Report path (for critic.py --report): "
+            f"Review record to stress-test (for critic.py --report): "
             f"{tmp_path}/review-findings.md"
         ) in text
-        assert "`review-report.md` is missing" in text
+        assert "`review-record.md` is missing" in text
 
     def test_missing_markdown_falls_back_to_the_json_ledger(
         self, mod, tmp_path
@@ -2098,7 +2129,7 @@ class TestStep10CriticSource:
         situation = "\n".join(g["situation"])
         assert "no review artifact" in situation.lower()
 
-    def test_unrecorded_source_keeps_the_nominal_report_target(
+    def test_unrecorded_source_keeps_the_nominal_record_target(
         self, mod, tmp_path
     ):
         """No `critic_source` key at all — older state, or step 10's
@@ -2106,7 +2137,7 @@ class TestStep10CriticSource:
         render as one."""
         g = self._guidance(mod, tmp_path)
         text = "\n".join(g["situation"] + g["actions"])
-        assert f"{tmp_path}/review-report.md" in text
+        assert f"{tmp_path}/review-record.md" in text
         assert "no review artifact" not in text.lower()
 
     def test_the_dead_flag_is_no_longer_consulted(self, mod, tmp_path):

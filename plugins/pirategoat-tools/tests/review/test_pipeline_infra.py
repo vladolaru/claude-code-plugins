@@ -567,6 +567,34 @@ class TestFormatOutput:
         }
         assert "✅ PIPELINE COMPLETE" in mod.format_output(11, guidance)
 
+    def test_an_outstanding_handoff_does_not_sign_off_as_complete(self, mod):
+        """The last step now ASKS for an artifact — `review-report.md`,
+        authored after the critic. Printing "PIPELINE COMPLETE" directly
+        beneath a handoff gate demanding that file contradicts the gate
+        one line above it."""
+        guidance = {
+            "phase": "OUTPUT", "title": "Author Report + Present Results",
+            "situation": [], "actions": ["Author the report."],
+            "handoff": ["Verify `review-report.md` exists."],
+            "next_step": None, "skip_reason": None,
+        }
+        output = mod.format_output(11, guidance)
+        assert "✅ PIPELINE COMPLETE" not in output
+        assert "HANDOFF" in output
+
+    def test_an_outstanding_handoff_on_a_degraded_run_still_reports_degraded(
+        self, mod
+    ):
+        guidance = {
+            "phase": "OUTPUT", "title": "Author Report + Present Results",
+            "situation": [], "actions": ["Author the report."],
+            "handoff": ["Verify `review-report.md` exists."],
+            "next_step": None, "skip_reason": None, "degraded": True,
+        }
+        output = mod.format_output(11, guidance)
+        assert "DEGRADED" in output
+        assert "✅" not in output
+
     def test_blocked_step_does_not_show_complete(self, mod):
         guidance = {
             "phase": "SYNTHESIS", "title": "Reconcile + Verify — WAITING",

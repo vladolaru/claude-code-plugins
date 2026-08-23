@@ -34,7 +34,6 @@ from review.critic_adjustments import (
 from review import critic_adjustments as critic_adjustments_module
 from review import orchestration as orchestration_mod
 from review.orchestration import _orchestrate_step_11
-from review.reconciliation_context import build_critic_context
 
 
 def _write_findings(output_dir, issues, **extra):
@@ -1456,40 +1455,31 @@ class TestCriticAbsenceHonesty:
 
 
 
-class TestCriticContextRoundTrip:
+class TestCriticInputRoundTrip:
     """The full REVISE loop across the two artifacts that must agree.
 
-    Three modules meet here and none of their own tests span the seam:
-    reconciliation_context.py renders the critic's ONLY view of the
-    findings, the critic keys its adjustments off that view, and
-    critic_adjustments.py resolves those keys against review-findings.json.
-    While the context rendered F-labels alone, each module passed its own
-    tests and the loop was still broken end to end — every REVISE run
-    shipped degraded with "no issue with id 'F1'". This test crosses the
-    seam by taking its id the way the critic must: out of the rendered
-    context, never out of the findings file.
+    Three modules meet here and none of their own tests span the seam: the
+    record renders the critic's view of the findings, the critic keys its
+    adjustments off an id, and critic_adjustments.py resolves those keys
+    against review-findings.json. While the critic's view showed only
+    positional F-labels, each module passed its own tests and the loop was
+    still broken end to end — every REVISE run shipped degraded with "no
+    issue with id 'F1'".
+
+    The fix is structural now: the critic is handed the ledger itself, so
+    the only key its view offers IS the ledger key. This crosses the seam
+    by taking its id the way the critic must — out of the artifacts the
+    dispatch prompt names, and asserting the record offers no rival handle.
     """
 
-    # Deliberately regex over the RENDERED context: reading the id from
-    # the findings dict would test the applier against itself and skip
-    # the one hop — render to critic — where the contract broke.
-    ID_IN_HEADING = re.compile(r"^### F\d+ \[id: ([^\]]+)\]:", re.MULTILINE)
-
-    def test_an_id_read_from_the_critic_context_applies(self, tmp_path):
+    def test_an_id_read_from_the_handed_ledger_applies(self, tmp_path):
         _write_findings(tmp_path, [_issue("9f3a1c7d", "low")])
+        # The critic reads this file directly; it is the `--context` path.
         findings = json.loads(
             (tmp_path / "review-findings.json").read_text()
         )
-        context = build_critic_context("# review report", findings)
-        (tmp_path / "critic-context.md").write_text(context)
-
-        # The critic's view is the context document, so the key it can use
-        # is whatever that document shows it.
-        visible_ids = self.ID_IN_HEADING.findall(context)
-        assert visible_ids, (
-            "the critic context shows no ledger id — a critic reading it "
-            "has no key it can put in an adjustment"
-        )
+        visible_ids = [issue["id"] for issue in findings["issues"]]
+        assert visible_ids
 
         _write_adjustments(tmp_path, [{
             "action": "promote", "id": visible_ids[0],
@@ -1512,14 +1502,20 @@ class TestCriticContextRoundTrip:
         assert result["degradation_notes"] == []
         assert result["status"] == "success"
 
-    def test_the_visible_id_is_the_ledger_id(self, tmp_path):
-        """Not just parseable — the same string the findings file stores."""
+    def test_the_record_offers_no_positional_label_to_mistake_for_a_key(
+        self, tmp_path
+    ):
+        """The record titles findings; it never numbers them. And it says
+        where the real key lives, so a reader cannot invent one."""
         _write_findings(tmp_path, [_issue("9f3a1c7d"), _issue("0badf00d")])
-        findings = json.loads((tmp_path / "review-findings.json").read_text())
-        context = build_critic_context("# review report", findings)
-        assert self.ID_IN_HEADING.findall(context) == [
-            issue["id"] for issue in findings["issues"]
-        ]
+        _write_critic_verdict(tmp_path, "STAND")
+
+        _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
+
+        record = (tmp_path / "review-record.md").read_text()
+        assert not re.search(r"^### F\d+\b", record, re.MULTILINE), record
+        assert "8-hex `id` in `review-findings.json` (`issues[].id`)" in record
+        assert "a positional label is not a key" in record
 
 
 class TestStepElevenAppliesAdjustments:

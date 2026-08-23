@@ -521,15 +521,28 @@ def format_output(step, guidance):
         lines.append(_RUN_EXACT_NOTE)
     else:
         lines.append(f"{'─' * 60}")
-        # The checkmark is a claim, and a degraded run must not make it. The
-        # degradations themselves are already printed above (step 11's
-        # projection block); this line is what keeps the last thing the
-        # reader sees from contradicting them.
-        lines.append(
-            "⚠️  PIPELINE COMPLETE (DEGRADED — see notes above)"
-            if guidance.get("degraded")
-            else "✅ PIPELINE COMPLETE"
-        )
+        # The checkmark is a claim, and two things can make it false.
+        #
+        # A degraded run must not make it at all: the degradations are
+        # already printed above (step 11's projection block), and this line
+        # is what keeps the last thing the reader sees from contradicting
+        # them.
+        #
+        # An OUTSTANDING HANDOFF makes it premature. The last step of a bot
+        # run now asks the orchestrator for `review-report.md` — authored
+        # after the critic, from the settled record — so the gate demanding
+        # that file sits one line above this footer. "PIPELINE COMPLETE"
+        # underneath it contradicts the gate, and pirategoat-bot fails the
+        # delivery when the file the gate names is missing.
+        if guidance.get("degraded"):
+            lines.append("⚠️  PIPELINE COMPLETE (DEGRADED — see notes above)")
+        elif guidance.get("handoff"):
+            lines.append(
+                "🏁 PIPELINE STEPS COMPLETE — finish the HANDOFF above "
+                "before reporting the review done."
+            )
+        else:
+            lines.append("✅ PIPELINE COMPLETE")
 
     return "\n".join(lines)
 

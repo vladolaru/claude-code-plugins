@@ -77,9 +77,9 @@ STEP_SEQUENCE = [
     {"step": 6,  "title": "Dispatch Agents",          "phase": "EXECUTION",  "condition": "always"},
     {"step": 7,  "title": "Save Review Baseline",     "phase": "EXECUTION",  "condition": "always"},
     {"step": 8,  "title": "Reconcile + Verify",       "phase": "SYNTHESIS",  "condition": "always"},
-    {"step": 9,  "title": "Review Report Synthesis",  "phase": "SYNTHESIS",  "condition": "always"},
+    {"step": 9,  "title": "Review Record",            "phase": "SYNTHESIS",  "condition": "always"},
     {"step": 10, "title": "Decision Critic",          "phase": "VALIDATION", "condition": "always"},
-    {"step": 11, "title": "Present Results",          "phase": "OUTPUT",     "condition": "always"},
+    {"step": 11, "title": "Author Report + Present Results", "phase": "OUTPUT", "condition": "always"},
     {"step": 12, "title": "Cleanup",                  "phase": "OUTPUT",     "condition": "has_workspace_state_interactive"},
 ]
 

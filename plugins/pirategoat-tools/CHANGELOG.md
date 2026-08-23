@@ -42,6 +42,7 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 - **The final review verdict is derived from the findings ledger** — the orchestrator no longer transcribes one, and `review-verdict.json` is gone; `pipeline-result.json` records which branch produced the verdict under `verdict_source`. A critic ESCALATE still overrides the published verdict to COMMENT.
 - **The pipeline prints what it published** — status, verdict, verdict source, and every degradation — and the completion footer reads DEGRADED instead of showing a checkmark when the run degraded, in interactive runs as well as bot runs.
 - **Decision critic saves through a validating script channel** — `critic.py --save` records the verdict, findings, and (REVISE only) adjustments atomically, rejecting a bad verdict, a missing input, an invalid adjustments batch, or a STAND/ESCALATE verdict paired with adjustments before anything is written.
+- **Agents are handed JSON** — the reconciliator reads `reconciliation-context.json` and the decision critic reads `review-record.md` beside `review-findings.json`; the two Markdown projections written for agent eyes only (`reconciliation-context.md`, `critic-context.md`) are gone, along with the per-run context-building step that produced the second one.
 - **Reconciliator saves the ledger through a validating script channel** — `findings_save.py` records `review-findings.json`, rejecting a bad verdict, a malformed issue, or a summary/issues count mismatch before anything is written.
 
 ### Fixed

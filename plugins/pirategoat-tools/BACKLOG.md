@@ -71,3 +71,21 @@ verified-redundancy trims (−273 tests) already took the safe cut.
 runtime or maintenance friction in the metrics layer actually bites. Enumerate
 and instrument-verify before cutting — estimates overshoot ~2× (twice
 confirmed).
+
+### 4. `review-findings.md` still has no named human reader
+
+Every Markdown projection in a run directory should name a human reader or die — that is the principle `review-record.md` was built on, and it retired both agent-facing projections (`reconciliation-context.md`, `critic-context.md`) in the same batch. `review-findings.md` did not go with them: the record now covers the reading it was doing (it renders the same body, plus coverage and run notes), so its remaining role is a cheap mechanical render nobody has been shown to open.
+
+It stays because retiring it is not a rename. The decision critic's probe found six unlisted consumers — pipeline fallbacks, briefing text, and test fixtures that key on the file — and each has to be audited and migrated before the file can go. That is a batch of its own, not a rider on this one.
+
+**Evidence:** run12 audit, Task 12 (decision record B2, Option A) — projection inventory, `M-six-consumers` amendment.
+**Deferred because:** the migration is wider than the record work it would ride on, and the record artifact has not yet been observed in the field.
+**Do when:** the record has bedded in over a release, AND someone audits the six consumers. If any of them turns out to be a human reading the file, this item is dead — the projection has its reader.
+
+### 5. Declared-vs-autofilled unreviewed attribution reaches no rendered surface
+
+`aggregate_inline_coverage()` splits unreviewed files into `files_declared_unreviewed` (the reviewer's own budget judgment) and `files_autofilled_unreviewed` (the system's save-time backfill), so the system's honesty is never credited to the reviewer. The retired `reconciliation-context.md` rendered the distinction in its gaps section; `review-record.md`'s coverage section does not — it renders gaps, deferred-review claims, and unscoped files, none of which split on attribution. The measurement survives intact in `reconciliation-context.json`; only its rendering is gone.
+
+**Evidence:** run12 audit, Task 12 — `to_markdown()` deletion; the accounting is still pinned by `TestAutofilledUnreviewedAttribution` in `tests/review/test_reconciliation_context.py`.
+**Deferred because:** the split was rendered into a document only one agent ever read, so nothing observably consumed it; adding it to the record's coverage section is a rendering decision, not a measurement fix.
+**Do when:** a run's coverage section is disputed on the grounds of who declared what, or the next time `_render_review_coverage_section` is edited.

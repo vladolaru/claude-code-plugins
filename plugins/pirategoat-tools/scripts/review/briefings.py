@@ -27,12 +27,6 @@ try:
         SKIP_REASON_DIRTY_WORKTREE,
         SKIP_REASON_WORKTREE_STATUS_FAILED,
     )
-    # One fence-width rule for the whole pipeline. The step-9 paste block
-    # below wraps machine-rendered Markdown that carries untrusted paths,
-    # so it needs exactly the widening this already does for the
-    # reconciliation context's fenced blocks; a second copy here is how the
-    # two would drift.
-    from .reconciliation_context import _markdown_fence_for
 except ImportError:
     _scripts_parent = str(Path(__file__).resolve().parent.parent)
     if _scripts_parent not in sys.path:
@@ -57,7 +51,6 @@ except ImportError:
         SKIP_REASON_DIRTY_WORKTREE,
         SKIP_REASON_WORKTREE_STATUS_FAILED,
     )
-    from review.reconciliation_context import _markdown_fence_for
 
 # ---------------------------------------------------------------------------
 # Pipeline Identity
@@ -83,14 +76,15 @@ _PHASE_TRANSITIONS = {
         "truth for remaining steps."
     ),
     "VALIDATION": (
-        "Report is written. The decision critic will challenge your "
-        "conclusions. Act on the critic's verdict: REVISE means revise. "
-        "Persist all verdicts to their files precisely. Deliver a review "
-        "the author can trust."
+        "The record is assembled. The decision critic will challenge your "
+        "conclusions before anything is written for a human to read. Act on "
+        "the critic's verdict: REVISE means revise. Persist all verdicts to "
+        "their files precisely. Deliver a review the author can trust."
     ),
     "OUTPUT": (
-        "Review is validated. Present clearly, confirm all artifacts are "
-        "written, verify the pipeline result is complete. This is what the "
+        "Review is validated. Now write the report — once, from the settled "
+        "record — then present clearly, confirm all artifacts are written, "
+        "and verify the pipeline result is complete. This is what the "
         "author or calling system receives."
     ),
 }
@@ -1182,7 +1176,7 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
     else:
         actions.append("**2. Dispatch `review-reconciliator`** with:")
     actions.extend([
-        f"- **Reconciliation context:** `{od}/reconciliation-context.md` (pre-gathered Markdown briefing: all agent findings, source snippets, scope annotations)",
+        f"- **Reconciliation context:** `{od}/reconciliation-context.json` (pre-gathered: all agent findings, source snippets, scope annotations, run-level coverage)",
         f"- **Output builder path:** `{SCRIPTS_DIR / 'agent' / 'output.py'}`",
         f"- Output directory: `{od}`",
     ])
@@ -1490,25 +1484,27 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     # for a run that had no ledger to render — pointing the critic at a
     # Markdown file nobody wrote.
     #
-    # Order is preference, not availability: the human report first, its
-    # pipeline-rendered stand-in second, and the canonical ledger last —
-    # the critic can read JSON, and a raw findings list is a worse read
-    # than a rendering but an infinitely better one than a missing file.
+    # Order is preference, not availability: the machine-assembled record
+    # first, the pipeline-rendered findings Markdown second, and the
+    # canonical ledger last — the critic can read JSON, and a raw findings
+    # list is a worse read than a rendering but an infinitely better one
+    # than a missing file. `review-report.md` is not in the list at all:
+    # it is authored at step 11, after this critic runs.
     source = state.get("critic_source")
     if isinstance(source, dict):
         target_name = source.get("target")
         if target_name is None:
             # Measured absence: step 10 looked and found none of the three.
-            critic_target = f"{od}/review-report.md"
+            critic_target = f"{od}/{REVIEW_RECORD_MD}"
             situation.append(
-                "⚠️ No review artifact was found to stress-test — neither "
-                "review-report.md, review-findings.md, nor "
+                f"⚠️ No review artifact was found to stress-test — neither "
+                f"{REVIEW_RECORD_MD}, review-findings.md, nor "
                 "review-findings.json is present. The critic has nothing to "
                 "read; expect its verdict to be unusable."
             )
         else:
             critic_target = f"{od}/{target_name}"
-            if target_name != "review-report.md":
+            if target_name != REVIEW_RECORD_MD:
                 reason = (
                     " (the findings Markdown render did not complete)"
                     if target_name == "review-findings.json"
@@ -1516,34 +1512,17 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
                     else ""
                 )
                 situation.append(
-                    f"⚠️ `review-report.md` is missing — critic will review "
-                    f"`{target_name}` instead{reason}."
+                    f"⚠️ `{REVIEW_RECORD_MD}` is missing — critic will "
+                    f"review `{target_name}` instead{reason}."
                 )
     else:
         # No recorded facts at all (older state, or step 10's orchestration
         # never ran). That is not a measured absence and must not render as
         # one, so the nominal target stands.
-        critic_target = f"{od}/review-report.md"
+        critic_target = f"{od}/{REVIEW_RECORD_MD}"
 
     has_findings = not degradation.get("reconciliation_failed")
     findings_path = f"{od}/review-findings.json"
-    critic_context_path = f"{od}/critic-context.md"
-
-    if has_findings:
-        # Build curated critic context before dispatching
-        actions.append("Build the critic context document:")
-        actions.append("```bash")
-        actions.append(
-            f'python3 -c "\nimport sys, json, pathlib\n'
-            f"sys.path.insert(0, str(pathlib.Path('{SCRIPTS_DIR}').parent))\n"
-            f"from review.reconciliation_context import build_critic_context\n"
-            f"report = pathlib.Path('{critic_target}').read_text()\n"
-            f"findings = json.loads(pathlib.Path('{findings_path}').read_text())\n"
-            f"pathlib.Path('{critic_context_path}').write_text(build_critic_context(report, findings))\n"
-            f'"'
-        )
-        actions.append("```")
-        actions.append("")
 
     if _host(config) == HOST_CODEX:
         actions.append(
@@ -1561,11 +1540,22 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append("Use this dispatch prompt:")
     actions.append("```")
     if has_findings:
-        actions.append(f"Critic context (report + structured findings): {critic_context_path}")
-        actions.append(f"Report path (for critic.py --report): {critic_target}")
+        # Two paths, both read directly — no context document is built.
+        # The record IS the curated read (it renders the ledger through the
+        # same renderer, with each finding's 8-hex `id` on it), and the
+        # ledger itself is the machine-readable anchor the critic keys its
+        # adjustments by. A builder that merged them into a third file
+        # existed only because the record did not.
+        actions.append(
+            f"Review record to stress-test (for critic.py --report): "
+            f"{critic_target}"
+        )
+        actions.append(
+            f"Structured findings (for critic.py --context): {findings_path}"
+        )
     else:
-        actions.append(f"Review report to stress-test: {critic_target}")
-        actions.append(f"No structured findings available (reconciliation failed) — critique the report directly without --context.")
+        actions.append(f"Review document to stress-test: {critic_target}")
+        actions.append(f"No structured findings available (reconciliation failed) — critique the document directly without --context.")
     actions.append(f"Output directory: {od}")
     actions.append(f"Context: <one-line summary of PR scope, verdict, and finding count>")
     actions.append(f"Return STAND, REVISE, or ESCALATE with findings written to {od}/decision-critic-findings.md.")
@@ -1667,18 +1657,20 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         "assessment\" — never the withdrawn text presented as current."
     )
     actions.append(
-        f"4) Edit `{od}/review-report.md` so it matches the updated findings — "
-        f"counts, severity table, and finding list must agree with the JSON."
+        f"4) Nothing else to edit. The pipeline re-assembles "
+        f"`{od}/{REVIEW_RECORD_MD}` from the updated ledger at step 11, and "
+        f"`review-report.md` is authored there — once, from that settled "
+        f"record. There is no report to bring back into agreement with the "
+        f"JSON, which is exactly why authoring waits until after you."
     )
     actions.append(
-        "   Where the report or your summary reports the critic pass, list "
-        "each adjustment id with its own outcome from step 2 — one line "
-        "per adjustment, `<adjustment_id>: verified | refuted | not "
-        "checked`. Never an aggregate count — \"all N spot-checked\" over "
-        "a batch where one entry went unprobed publishes that entry as "
-        "verified, which is the exact false claim per-entry accounting "
-        "exists to prevent. A batch where you checked none of the entries "
-        "is reported as N lines of `not checked`."
+        "   Your per-entry accounting from step 2 reaches the record on its "
+        "own: the applier carries each `spot_check` onto the ledger and the "
+        "record renders one line per adjustment, `<adjustment_id> — "
+        "verified | refuted | not_checked`. Never report the batch in "
+        "aggregate anywhere — \"all N spot-checked\" over a batch where one "
+        "entry went unprobed publishes that entry as verified, which is the "
+        "exact false claim per-entry accounting exists to prevent."
     )
     actions.append("")
     actions.append(
@@ -1701,7 +1693,8 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         f"`{od}/decision-critic-verdict.json` holds it verbatim. If it "
         f"produced none, write nothing — step 11 reports the absence.",
         f"On REVISE: `{od}/review-findings.json` carries the applied "
-        f"adjustments, and `{od}/review-report.md` agrees with it.",
+        f"adjustments. Nothing else needs syncing — step 11 re-assembles "
+        f"the record from that ledger before the report is written.",
     ]
 
     return {

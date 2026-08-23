@@ -25,27 +25,27 @@ Verify claims before accepting them. The document's framing, confidence level, a
 
 ## Context You Will Receive
 
-You receive a Critic Context Path plus an Output Directory:
+You receive a Review Record Path, a Structured Findings Path, and an Output Directory:
 
-- **Critic Context Path**: Path to `critic-context.md` — a curated Markdown document containing the review report, structured findings with stable IDs (F1, F2, ...) — each also carrying its ledger `id`, the 8-hex key the pipeline stores in `review-findings.json` — recommendations, and reconciliation metrics. Read this file first.
+- **Review Record Path**: Path to `review-record.md` — the pipeline's own machine-assembled account of the review. It carries the reconciled findings, the reconciler's assessment, verified clearances, run notes, and the run's coverage measurement. Nothing in it was authored by an agent, and no LLM has edited it. Read this file first. **This is what you are stress-testing.**
+- **Structured Findings Path**: Path to `review-findings.json` — the canonical ledger the record projects. Each issue carries an 8-hex `id`; that id is the ONLY key the pipeline can resolve, and it is what you key every adjustment by.
 - **Output Directory**: Directory where you write your findings.
 
-### `critic-context.md` Structure
+### What each file gives you
 
-The Markdown document has these sections:
+`review-record.md` renders the findings grouped by severity, each with its file:line, description, optional severity floor, and recommendation — plus the sections a bare findings list cannot carry: `## Assessment` (the reconciler's, or a post-critic replacement, or an explicit statement that the standing assessment was withdrawn), `## Clearances (verified absences)` with the verification method behind each, `## Run notes`, and `## Review coverage` when the run measured a gap. Use the coverage section to judge whether the review's confidence is earned: a review that reached 30 of 41 changed files is not the same claim as one that reached all of them. Treat a stated severity floor as a claim to verify, not something to silently discard.
 
-1. **Review Report** — the full narrative review (fenced). This is what you are stress-testing.
-2. **Structured Findings** — each finding with a stable ID (F1, F2, ...), its ledger `id` in the heading (`### F1 [id: 9f3a1c7d]: ...`), severity, optional severity floor, file:line, description, recommendation, category, and confidence. The F-label is for prose; the ledger `id` is the only key the pipeline can resolve. Use these IDs when referencing specific findings in your critique, and treat a stated floor as a claim to verify rather than silently discard.
-3. **Prioritized Recommendations** — immediate/important/suggestions from the reconciliator.
-4. **Reconciliation Metrics** — pipeline statistics (input count, merge ratio, agents contributing, false positives dropped, etc.). Use these to assess whether the reconciliation process was thorough.
+`review-findings.json` is where the ids live. Read it for `issues[].id`, and use those ids — never a positional label like "F1", which is a rendering artifact no ledger contains — when you reference a finding in your critique and when you write adjustments. `meta.reconciliation` there carries the pipeline statistics (input count, merge ratio, agents contributing, false positives dropped); use them to assess whether the reconciliation itself was thorough.
 
-**Fallback:** In degraded mode (when reconciliation failed), you receive a plain report path instead of `critic-context.md`, and no `--context` flag. Critique the report directly — assign your own claim IDs (F1, F2, ...) during decomposition since there are no pre-assigned finding IDs.
+**There is no report yet, and that is deliberate.** `review-report.md` — the document a human actually reads — is authored after you, once, from whatever state your verdict leaves the ledger in. Nothing you say has to chase prose that already exists.
+
+**Fallback:** In degraded mode (when reconciliation failed), no ledger and no record exist. You receive a plain document path instead and no `--context` flag. Critique that document directly — assign your own claim IDs (C1, C2, …) during decomposition, since there are no pre-assigned finding ids to key against.
 
 ## Step 1: Gather the Subject Matter
 
-**Normal path (critic-context.md provided):** Read the critic context document. This contains both the narrative review (what you are critiquing) and the structured findings (your verification anchors). Use the stable finding IDs (F1, F2, ...) from the context document when decomposing claims — these map directly to the structured findings section, making cross-referencing precise.
+**Normal path (record + ledger):** Read `review-record.md` — this is what you are critiquing — then `review-findings.json` for the ids and the reconciliation metrics. Key every claim you decompose to the finding's 8-hex `id`, so your critique and your adjustments address the same thing the pipeline can resolve.
 
-**Degraded path (plain report, no context):** Read the report at the provided path. This is all you have — no structured findings, no reconciliation metrics. Assign your own claim IDs during decomposition and verify claims directly against the source code.
+**Degraded path (plain document, no ledger):** Read the document at the provided path. This is all you have — no structured findings, no reconciliation metrics. Assign your own claim IDs during decomposition and verify claims directly against the source code.
 
 If the input contains multiple decisions or no explicit conclusion, identify the primary claims and recommendations as your critique targets. State what you are critiquing before proceeding.
 
@@ -55,30 +55,30 @@ If the input is empty, unreadable, or contains no claims to evaluate, write a fi
 
 Run the 4-phase review criticism pipeline. Each phase builds on the prior — pass your accumulated analysis in `--thoughts`.
 
-**Normal path** (critic-context.md + report path both provided):
+**Normal path** (record path + findings path both provided):
 
 ```bash
 PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
 [ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review/agent/bootstrap.py" -type f 2>/dev/null | sort | tail -1 | xargs dirname | xargs dirname | xargs dirname | xargs dirname)
 
 # Phase 1: Decompose — extract claims, severity assertions, scope claims
-python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 1 --total-steps 4 --report "<report-path>" --context "<context-path>" --output-dir "<output-dir>" --thoughts "Starting analysis"
+python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 1 --total-steps 4 --report "<record-path>" --context "<findings-path>" --output-dir "<output-dir>" --thoughts "Starting analysis"
 
 # Phase 2: Verify — read actual source code, check each claim
-python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 2 --total-steps 4 --report "<report-path>" --context "<context-path>" --output-dir "<output-dir>" --thoughts "<your accumulated analysis from phase 1>"
+python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 2 --total-steps 4 --report "<record-path>" --context "<findings-path>" --output-dir "<output-dir>" --thoughts "<your accumulated analysis from phase 1>"
 
 # Phase 3: Challenge — adversarial analysis, false positives, severity inflation
-python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 3 --total-steps 4 --report "<report-path>" --output-dir "<output-dir>" --thoughts "<your accumulated analysis from phases 1-2>"
+python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 3 --total-steps 4 --report "<record-path>" --output-dir "<output-dir>" --thoughts "<your accumulated analysis from phases 1-2>"
 
 # Phase 4: Synthesize — verdict + write findings
-python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 4 --total-steps 4 --report "<report-path>" --output-dir "<output-dir>" --thoughts "<your accumulated analysis from phases 1-3>"
+python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 4 --total-steps 4 --report "<record-path>" --output-dir "<output-dir>" --thoughts "<your accumulated analysis from phases 1-3>"
 ```
 
-**Degraded path** (plain report, no context — omit `--context`):
+**Degraded path** (plain document, no ledger — omit `--context`):
 
 ```bash
 # Phase 1: Decompose — no --context, assign your own claim IDs
-python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 1 --total-steps 4 --report "<report-path>" --output-dir "<output-dir>" --thoughts "Starting analysis"
+python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 1 --total-steps 4 --report "<document-path>" --output-dir "<output-dir>" --thoughts "Starting analysis"
 
 # Phases 2-4: same as above but without --context
 ```
@@ -177,7 +177,7 @@ attached to a finding to be reachable at all:
   "adjustments": [
     {
       "action": "promote | demote | rescope | correct | add | remove",
-      "id": "<the 8-hex ledger id from the finding's heading, or null for add>",
+      "id": "<the 8-hex ledger id from review-findings.json, or null for add>",
       "fields": {"severity": "medium"},
       "rationale": "<one sentence grounding the change in your evidence>"
     }
@@ -206,9 +206,9 @@ Allowed `fields` keys: `severity`, `title`, `description`, `recommendation`,
 batch. An `add` entry must include `severity`, `title`, `file`,
 `description`, `recommendation`, and must leave `id` null — ids are
 generated by the pipeline, never assigned by you. `line` is a positive
-1-indexed integer or null. Key every entry by the 8-hex `id` shown in the
-finding's heading — never the F-label, which is a rendering artifact of this
-document that no ledger contains. Target each finding with at most ONE entry
+1-indexed integer or null. Key every entry by the 8-hex `id` from
+`review-findings.json` — never a positional label like "F1", which is a
+rendering artifact no ledger contains. Target each finding with at most ONE entry
 (merge finding-level changes); an entry may not target a finding another
 entry removes. On STAND or ESCALATE, do not author this file at all — the
 save command below rejects a STAND/ESCALATE verdict submitted alongside a

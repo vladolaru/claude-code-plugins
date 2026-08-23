@@ -371,7 +371,7 @@ def _step_8_harness(mod, out, monkeypatch):
     )
 
     def reconciliation_succeeds(*_args, **_kwargs):
-        (out / "reconciliation-context.md").write_text("# Context\n")
+        (out / "reconciliation-context.json").write_text("{}")
         return "", True
 
     monkeypatch.setitem(

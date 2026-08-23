@@ -479,6 +479,19 @@ def assemble_review_record(output_dir: str, state: dict) -> tuple:
             "file — it is the reference the audience-facing report must not "
             "contradict.*",
             "",
+            # The one handle this rendering deliberately does not carry.
+            # Findings are addressed by an 8-hex ledger `id`, and the
+            # renderer this body shares with `review-findings.md` titles
+            # each finding rather than numbering it. Saying so here is what
+            # keeps a reader — the decision critic above all — from
+            # inventing a positional label ("F1") as a key: that exact
+            # substitution once failed every adjustment in a REVISE batch
+            # with "no issue with id 'F1'".
+            "*Findings are keyed by the 8-hex `id` in "
+            "`review-findings.json` (`issues[].id`). There are no "
+            "positional labels here, and a positional label is not a key "
+            "anything can resolve.*",
+            "",
             _render_record_body(findings).rstrip("\n"),
             "",
             _render_run_notes(state),
@@ -1301,7 +1314,7 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
         elif os.path.isfile(plan_path):
             recon_ctx_cmd.extend(["--dispatched-agents", ""])
     _, ctx_ok = _run_subprocess(recon_ctx_cmd, timeout=30)
-    recon_ctx_path = os.path.join(output_dir, "reconciliation-context.md")
+    recon_ctx_path = os.path.join(output_dir, "reconciliation-context.json")
     if not ctx_ok or not os.path.isfile(recon_ctx_path):
         raise RuntimeError(
             "reconciliation_context.py failed — cannot proceed to "

@@ -76,20 +76,21 @@ def get_step_guidance(
             "verified or challenged. This decomposition is critical to the quality of the "
             "entire workflow.",
             "",
-            "Read the review report"
+            "Read the review record"
             + (
-                " and critic context document. Extract claims using the stable IDs "
-                "from the context document (F1, F2, ...) that will persist through "
-                "ALL subsequent steps:"
+                " and the structured findings ledger. Key each claim to the "
+                "finding's own 8-hex `id` from the ledger — that id persists "
+                "through ALL subsequent steps and is the only handle the "
+                "pipeline can resolve:"
                 if context_path
                 else ". Extract and assign stable IDs that will persist through ALL "
                 "subsequent steps:"
             ),
             "",
             (
-                "- FACTUAL CLAIMS [use F1, F2, ... IDs from context]: Statements about what the "
-                "code does or doesn't do. Use the pre-assigned finding IDs (F1, F2, ...) from "
-                "the context document — each finding maps to a factual claim to verify."
+                "- FACTUAL CLAIMS [use each finding's 8-hex ledger id]: Statements about what "
+                "the code does or doesn't do. Take the ids from `issues[].id` in the findings "
+                "ledger — each finding maps to a factual claim to verify."
                 if context_path
                 else "- FACTUAL CLAIMS [F1, F2, ...]: Statements about what the code does or "
                 "doesn't do (\"line 54 is missing an is_array guard\", \"the function uses "
@@ -461,13 +462,13 @@ def main():
         "--report",
         type=str,
         default=None,
-        help="Path to the review report being criticized",
+        help="Path to the review document being criticized (normally review-record.md)",
     )
     parser.add_argument(
         "--context",
         type=str,
         default=None,
-        help="Path to critic-context.md (curated Markdown with report + findings)",
+        help="Path to review-findings.json (the structured findings ledger)",
     )
     parser.add_argument(
         "--output-dir",
