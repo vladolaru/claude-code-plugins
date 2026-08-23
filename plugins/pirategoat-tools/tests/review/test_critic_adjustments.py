@@ -2030,6 +2030,30 @@ class TestStepElevenRerendersFindingsMarkdown:
             state, []
         ) == []
 
+    @pytest.mark.parametrize("record", [
+        {
+            "code": "probe_residue_swept",
+            "message": "probe diagnostic",
+            "discriminator": "not-a-provenance-digest",
+        },
+        {
+            "code": "probe_residue_swept",
+            "message": "probe diagnostic",
+            "discriminator": "paths-sha256:" + "A" * 64,
+        },
+        {
+            "code": "findings_markdown_render_failed",
+            "message": "render diagnostic",
+            "discriminator": "paths-sha256:" + "a" * 64,
+        },
+    ])
+    def test_private_degradation_discriminator_is_code_owned(self, record):
+        state = {"step_11_degradation_records": [record]}
+
+        assert orchestration_mod._merge_step_11_degradation_records(
+            state, []
+        ) == []
+
     def test_a_report_authored_after_preparation_is_published(self, tmp_path):
         """A source-bound report wins over non-terminal record fallbacks."""
         self._seed(tmp_path, severity="low")

@@ -118,6 +118,19 @@ class TestHygieneCheck:
         assert result["probe_residue_removed"] == [probe.name]
         assert result["status"] == "clean"
 
+    def test_malformed_prior_probe_paths_are_not_inherited(self, git_repo):
+        repo, out = git_repo
+        _capture_worktree_baseline(str(out))
+        (out / "worktree-hygiene.json").write_text(json.dumps({
+            "schema": 1,
+            "probe_residue_removed": ["../foreign", "/absolute/probe"],
+        }))
+
+        result = _check_worktree_hygiene(str(out))
+
+        assert result["probe_residue_removed"] == []
+        assert result["status"] == "clean"
+
     def test_foreign_new_file_reported_never_deleted(self, git_repo):
         repo, out = git_repo
         _capture_worktree_baseline(str(out))
@@ -516,6 +529,70 @@ class TestStepElevenHygieneNotes:
             "probe residue swept" in note
             for note in result["degradation_notes"]
         )
+
+    def test_new_probe_after_prepare_requires_report_rewrite(self, git_repo):
+        """The report is bound to every distinct probe swept by the run."""
+        repo, out = git_repo
+        _seed_step_11(out)
+        (out / "review-report.md").unlink()
+        _capture_worktree_baseline(str(out))
+        probe_a = repo / f"a_{PROBE_MARKER}_test.go"
+        probe_b = repo / f"b_{PROBE_MARKER}_test.go"
+        probe_a.write_text("package main")
+        state = {}
+
+        _orchestrate_step_11("pr", {}, state, {}, str(out))
+
+        assert state["publication_pending"] is True
+        assert state["degradation_notes"] == [
+            "probe residue swept at finalize: 1 file(s) — a probe should "
+            "be deleted in the same command that created it"
+        ]
+
+        (out / "review-report.md").write_text("# report for probe A")
+        probe_b.write_text("package main")
+        _orchestrate_step_11("pr", {}, state, {}, str(out))
+
+        assert state["report_handoff_status"] == "source_changed"
+        assert state["publication_pending"] is True
+        assert not (out / "pipeline-result.json").exists()
+        assert state["degradation_notes"] == [
+            "probe residue swept at finalize: 2 file(s) — a probe should "
+            "be deleted in the same command that created it"
+        ]
+        probe_records = [
+            record for record in state["step_11_degradation_records"]
+            if record["code"] == "probe_residue_swept"
+        ]
+        assert len(probe_records) == 1
+
+        _orchestrate_step_11("pr", {}, state, {}, str(out))
+
+        assert state["report_handoff_status"] == "stale_report_unchanged"
+        assert not (out / "pipeline-result.json").exists()
+
+        (out / "review-report.md").write_text("# report for probes A and B")
+        _orchestrate_step_11("pr", {}, state, {}, str(out))
+
+        result = json.loads((out / "pipeline-result.json").read_text())
+        assert state["report_handoff_status"] == "published"
+        assert result["worktree_hygiene"]["probe_residue_removed"] == 2
+        assert result["degradation_notes"] == [
+            "probe residue swept at finalize: 2 file(s) — a probe should "
+            "be deleted in the same command that created it"
+        ]
+
+    def test_probe_provenance_is_order_independent_and_deduplicated(self):
+        first = orchestration_mod._probe_residue_provenance([
+            "z/probe.go", "a/probe.go", "z/probe.go",
+        ])
+        reordered = orchestration_mod._probe_residue_provenance([
+            "a/probe.go", "z/probe.go",
+        ])
+
+        assert first == reordered
+        assert first["count"] == 2
+        assert first["discriminator"].startswith("paths-sha256:")
 
     def test_non_git_cwd_adds_no_hygiene_notes(self, git_repo, monkeypatch,
                                                tmp_path):

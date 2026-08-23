@@ -78,6 +78,15 @@ from git_paths import decode_git_c_quoted_path
 # the reviewed repo is the user's live tree and may hold uncommitted work).
 PROBE_MARKER = "pirategoat-probe"
 
+
+def _is_normalized_relative_path(path):
+    if not isinstance(path, str) or not path or os.path.isabs(path):
+        return False
+    return all(
+        component not in ("", ".", "..") for component in path.split("/")
+    )
+
+
 # One spelling of the status arguments for both the step-3 snapshot and the
 # step-11 comparison, so the two can never drift into reporting a format
 # difference as a worktree change. `--untracked-files=all` is load-bearing:
@@ -829,7 +838,10 @@ def _check_worktree_hygiene(output_dir):
         if isinstance(prior, dict) and prior.get("schema") == 1:
             removed = prior.get("probe_residue_removed")
             if isinstance(removed, list):
-                prior_removed = [p for p in removed if isinstance(p, str)]
+                prior_removed = [
+                    path for path in removed
+                    if _is_normalized_relative_path(path)
+                ]
             captured = prior.get("baseline_captured_at")
             if isinstance(captured, str):
                 prior_baseline_captured_at = captured
@@ -1612,10 +1624,24 @@ _STEP_11_DEGRADATION_CODES = frozenset({
     "findings_missing",
     "ledger_verdict_unusable",
 })
+_PROBE_RESIDUE_DISCRIMINATOR_PREFIX = "paths-sha256:"
 
 
 def _degradation_identity(record):
     return record["code"], record.get("discriminator")
+
+
+def _valid_degradation_discriminator(code, discriminator):
+    """Accept only the discriminator shape owned by one known producer."""
+    if code != "probe_residue_swept":
+        return discriminator is None
+    if not isinstance(discriminator, str) or not discriminator.startswith(
+        _PROBE_RESIDUE_DISCRIMINATOR_PREFIX
+    ):
+        return False
+    return _valid_sha256(
+        discriminator[len(_PROBE_RESIDUE_DISCRIMINATOR_PREFIX):]
+    )
 
 
 def _record_step_11_degradation(
@@ -1626,18 +1652,30 @@ def _record_step_11_degradation(
         raise ValueError(f"unknown step-11 degradation code: {code}")
     if not isinstance(message, str) or not message:
         raise ValueError("step-11 degradation message must be non-empty")
-    if discriminator is not None and not (
-        isinstance(discriminator, str) and discriminator
-    ):
-        raise ValueError(
-            "step-11 degradation discriminator must be a non-empty string"
-        )
+    if not _valid_degradation_discriminator(code, discriminator):
+        raise ValueError("invalid step-11 degradation discriminator")
     identity = (code, discriminator)
-    if any(_degradation_identity(record) == identity for record in records):
-        return
     record = {"code": code, "message": message}
     if discriminator is not None:
         record["discriminator"] = discriminator
+
+    # Probe residue is one cumulative fact, not one event per finalize pass.
+    # Replace it in place as the swept set grows so public prose reports only
+    # the current total and its position among other degradation facts stays
+    # stable across re-entry.
+    if code == "probe_residue_swept":
+        matching = [
+            index for index, existing in enumerate(records)
+            if existing.get("code") == code
+        ]
+        if matching:
+            records[matching[0]] = record
+            for index in reversed(matching[1:]):
+                del records[index]
+            return
+
+    if any(_degradation_identity(record) == identity for record in records):
+        return
     records.append(record)
 
 
@@ -1656,9 +1694,8 @@ def _valid_degradation_records(value):
             and isinstance(record.get("message"), str) and record["message"]
         ):
             return []
-        discriminator = record.get("discriminator")
-        if discriminator is not None and not (
-            isinstance(discriminator, str) and discriminator
+        if not _valid_degradation_discriminator(
+            record["code"], record.get("discriminator")
         ):
             return []
     return value
@@ -1701,6 +1738,25 @@ def _degradation_identities(records):
 
 def _sha256_bytes(payload):
     return hashlib.sha256(payload).hexdigest()
+
+
+def _probe_residue_provenance(paths):
+    """Return stable private provenance for cumulative swept repo paths."""
+    normalized = []
+    for path in paths:
+        if not _is_normalized_relative_path(path):
+            raise ValueError("probe residue provenance requires normalized paths")
+        normalized.append(path)
+    normalized = sorted(set(normalized))
+    encoded = json.dumps(
+        normalized, ensure_ascii=False, separators=(",", ":"),
+    ).encode("utf-8")
+    return {
+        "count": len(normalized),
+        "discriminator": (
+            _PROBE_RESIDUE_DISCRIMINATOR_PREFIX + _sha256_bytes(encoded)
+        ),
+    }
 
 
 def _artifact_source_identity(path):
@@ -2005,12 +2061,16 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # participant breaking the rule that a probe is created, run, and
     # deleted by the same command.
     if hygiene.get("probe_residue_removed"):
+        probe_provenance = _probe_residue_provenance(
+            hygiene["probe_residue_removed"]
+        )
         _record_step_11_degradation(
             degradation_records,
             "probe_residue_swept",
             f"probe residue swept at finalize: "
-            f"{len(hygiene['probe_residue_removed'])} file(s) — a probe "
-            "should be deleted in the same command that created it"
+            f"{probe_provenance['count']} file(s) — a probe should be "
+            "deleted in the same command that created it",
+            probe_provenance["discriminator"],
         )
     # "unknown" is silent by construction now: with no verified baseline
     # nothing was swept and nothing was compared, so there is no outcome to
