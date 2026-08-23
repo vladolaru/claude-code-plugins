@@ -126,11 +126,11 @@ The review pipeline tests load `scripts/review/pipeline.py` as the stable compat
 
 `pipeline_mod` preserves the facade's re-export contract for existing callers. Tests that patch a name resolved by orchestration use `orchestration_mod`, so the patch targets the caller's module globals.
 
-###Bootstrap Unit Tests (`review/agent/test_bootstrap.py`)
+### Bootstrap Unit Tests (`review/agent/test_bootstrap.py`)
 
 Deterministic pytest suite. Tests `review/agent/bootstrap.py` pure functions by importing them directly — `extract_protocol_sections`, `build_output`, `compute_review_budget`, `load_pr_intent`, and others. No network or model calls.
 
-###Bootstrap Integration Tests (`review/agent/test_bootstrap_integration.py`)
+### Bootstrap Integration Tests (`review/agent/test_bootstrap_integration.py`)
 
 Integration tests that run `review/agent/bootstrap.py` via subprocess against a temp git repo (created from `multi-file-realistic.diff`, isolated from real repo state). Uses category representatives (principle §6) and right-layer testing (principle §7). Parameterized classes expand into more than one collected test per row (`TestSmokeAllAgents` is one method run over every registered agent) — run `pytest --collect-only` for real counts rather than trusting written numbers here.
 
@@ -153,7 +153,7 @@ Integration tests that run `review/agent/bootstrap.py` via subprocess against a 
 | `TestDismissalDisciplineContract` | Dismissal/mitigation verification applies to ALL findings, not a subset. |
 | `TestCanonicalExecutableBuilderSource` | Bootstrap is the sole executable `ReviewOutputBuilder` command source, and its envelope carries the producing plugin version (read from the run-config stamp, emitted empty when unknown so the envelope's five-assignment shape stays constant for the transcript analyzers). |
 
-###Domain Routing Evals (`review/agent/test_scope_routing.py`)
+### Domain Routing Evals (`review/agent/test_scope_routing.py`)
 
 Deterministic pytest suite that verifies `review/agent/scope.py` domain routing logic by calling `filter_noise()` + `filter_domain()` directly (pure functions, no subprocess). For each fixture, creates a temp git repo, gets the changed file list via `git diff --name-only`, and runs the filter functions for each domain.
 
@@ -163,7 +163,7 @@ Also includes `TestBranchFreshness` — 6 integration tests that run `review/age
 
 **Fixture domain coverage:** See `ROUTING_MATRIX` dict in `review/agent/test_scope_routing.py` for the complete 12×14 matrix. Each entry maps `(fixture, domain) → "OK" | "NO_DOMAIN_FILES"`.
 
-###Command Structure Evals (`commands/test_commands.py`)
+### Command Structure Evals (`commands/test_commands.py`)
 
 Deterministic pytest suite that validates structural properties of command files. Shared helpers live in `helpers/command_helpers.py`. No network or model calls. `TestAllCommandsStructural` is parameterized over every registered command (`ALL_COMMANDS`) — this is where per-command structural checks for `pr-update.md`, `switch-to.md`, and every other non-review command live today; there is no longer a dedicated `TestPrUpdate`/`TestSwitchTo` class per command.
 
@@ -180,7 +180,7 @@ Deterministic pytest suite that validates structural properties of command files
 | `TestUnifiedMission` | All review commands reference the unified pipeline mission |
 | `TestDependencyRefreshFlagDocumented` | Every review command documents the `--refresh-deps` opt-in |
 
-###ReviewOutputBuilder Unit Tests (`review/agent/test_output.py`)
+### ReviewOutputBuilder Unit Tests (`review/agent/test_output.py`)
 
 Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/output.py`. Tests cover initialization, issue addition with validation, recommendations, verdict calculation, serialization (dict, markdown), file output, the NOT DIFFED coverage APIs, advisory-channel accounting, and the reconciliator-facing rendering this class grew once `review-findings.md` became a mechanical render of the JSON (Task 7) rather than reconciliator-written prose.
 
@@ -216,7 +216,7 @@ Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/
 | `TestRemovedByCriticSection` | The ledger deliberately keeps what the critic took out, rendered as an audit section rather than silently vanishing |
 | `TestRendererFaithfulness` | Minors that all share one failure mode: the renderer showing content that contradicts what the JSON actually says (e.g. a header claiming a section exists over content that was dropped) |
 
-###Reconciliation Context Tests (`review/test_reconciliation_context.py`)
+### Reconciliation Context Tests (`review/test_reconciliation_context.py`)
 
 Direct unit tests on `scripts/review/reconciliation_context.py` — agent-finding loading, scope and hunk checking, source-snippet extraction, and severity normalization. The module builds `reconciliation-context.json` and nothing else now: its two Markdown renderers (`to_markdown` for the reconciliator, `build_critic_context` for the decision critic) were projections whose only readers were agents, and both are gone — the agents read the JSON, and the decision critic reads `review-record.md` beside it. The deferred-coverage accounting classes are listed here because they carry the NOT DIFFED honesty contract from reviewer output into the reconciliation view; the remaining classes follow the same direct-unit-test pattern.
 
@@ -229,7 +229,7 @@ Direct unit tests on `scripts/review/reconciliation_context.py` — agent-findin
 | `TestMissingAgentDetection` | `compute_missing_agents()` keeps dispatched-minus-reporting a MEASUREMENT rather than the reconciliator's arithmetic — sorted for stable diffs, `None` (never `[]`) when dispatch is unknown, measured-empty for an explicitly empty dispatch, and no negative population from an undispatched reporter. Crossed through the CLI to the JSON both ways |
 | `TestPrefilterAnnotation` | The two structurally-certain out-of-scope statuses are adjudicated by the pipeline and annotated in place, never deleted (`agent_findings` is the record of what each reviewer said, and its metrics are counted from it). `not_in_hunk` is deliberately never annotated — it is the one out-of-scope status that IS a judgment call. Owns the key, so a stale marker on in-scope input is cleared rather than silently deleting a real finding; malformed shapes are skipped, not raised |
 
-###Review Record Assembly Tests (`review/test_report_assembly.py`)
+### Review Record Assembly Tests (`review/test_report_assembly.py`)
 
 Direct unit tests on `orchestration.assemble_review_record()` — the machine projection of the findings ledger the pipeline writes at step 9 and re-assembles at step 11. No LLM writes or edits `review-record.md`, which is what makes it safe to hand the decision critic and what lets `review-report.md` be authored once, after validation.
 
@@ -242,7 +242,7 @@ Direct unit tests on `orchestration.assemble_review_record()` — the machine pr
 | `TestRecordFailureModes` | A run with no ledger reports a measured zero, not a failure (that is the degraded path step 9 routes to manual synthesis); an unreadable or shape-invalid ledger reports `failed` with the reason and writes nothing |
 | `TestRecordWriteIsAtomic` | The write goes through `atomic_write_text`, a failing render leaves the previous record byte-identical rather than half-replacing it, and no temp file survives a successful assembly |
 
-###Critic Adjustments Tests (`review/test_critic_adjustments.py`)
+### Critic Adjustments Tests (`review/test_critic_adjustments.py`)
 
 Direct unit tests on `scripts/review/critic_adjustments.py` — the sole writer that carries `decision-critic-adjustments.json` into `review-findings.json`. The module is the seam where a critic decision either reaches the machine-readable ledger or silently vanishes, so the classes are split by failure mode rather than by function.
 
@@ -268,7 +268,7 @@ Direct unit tests on `scripts/review/critic_adjustments.py` — the sole writer 
 | `TestClearancePassthrough` | The ledger's `clearances` survives every writer after the reconciliator — `apply_adjustments()`, the whole-document `write_findings()`, and the renderer that produces `## Clearances (verified absences)`. The field run only ever carried `clearances: null`, so a write path that quietly dropped unknown-to-it keys would have looked identical |
 | `TestReconciliatorClearancePin` | The same agent-follows-a-snippet problem one field over: `agents/review-reconciliator.md` must teach `add_clearance(claim, method, evidence)`, must exclude void and method-correlated-duplicate clearances from it, and must list it in the structured-home table. Without this the ledger's `clearances` stays null and step 9 rebuilds "what held" from memory |
 
-###Orchestration Hygiene Tests (`review/test_orchestration_hygiene.py`)
+### Orchestration Hygiene Tests (`review/test_orchestration_hygiene.py`)
 
 Direct unit tests on the finalize-side accounting in `scripts/review/orchestration.py` — the step-3 hygiene baseline snapshot, the step-11 compare-and-sweep, the degradation notes step 11 derives from the result, and the step-11 token-usage capture. Each test runs against a throwaway git repo as CWD, because the hygiene code under test resolves and mutates the repository it is standing in.
 
@@ -279,7 +279,7 @@ Direct unit tests on the finalize-side accounting in `scripts/review/orchestrati
 | `TestStepElevenHygieneNotes` | Only swept probe residue degrades the run — a requester editing their own tree during a review is measured, not blamed, because `status` is a bot contract meaning "the review underperformed". A non-git CWD adds no notes |
 | `TestStepElevenUsageSnapshot` | The capture is a subprocess seam (so `scripts/review/` never imports `scripts/analysis/`) whose failure is deliberately quiet: an absent or unreadable snapshot reads as unmeasured — `usage: null`, status untouched, no note — because a Codex host and every pre-feature run legitimately have no Claude-format transcripts. A measured snapshot projects into the compact `usage` block with both availability halves intact plus `window_closed`, and a measured-missing half publishes nulls rather than zeros |
 
-###Pipeline Infrastructure Tests (`review/test_pipeline_infra.py`)
+### Pipeline Infrastructure Tests (`review/test_pipeline_infra.py`)
 
 Tests on `scripts/review/pipeline.py` and `pipeline_contract.py` — step sequence, routing, state I/O, output formatting, telemetry/Git identity, and the CLI. The step-skip class is documented here because its records are what make a run auditable at all — reconciling 12 contract steps against 9 completions otherwise takes source archaeology; the remaining classes follow the routing/state/CLI split the module table above describes.
 
@@ -287,7 +287,7 @@ Tests on `scripts/review/pipeline.py` and `pipeline_contract.py` — step sequen
 |---|---|
 | `TestSkippedStepRecording` | The router records each step it passes over — number, title, and the gating condition — into `pipeline-state.json` at the moment it decides: a PR-only step passed over in branch mode, a trailing skip recorded by the last active step, one record per step across re-invocations, and never a step the router actually ran |
 
-###Telemetry Tests (`review/test_telemetry.py`)
+### Telemetry Tests (`review/test_telemetry.py`)
 
 Direct unit tests on `scripts/review/telemetry.py` and the run-manifest projections in `manifest_sections.py` — start/step/finalize events, structured filenames, snapshots, and each manifest section beside its availability flag. The skip-ledger, token-usage, synthesis-agent, dependency-refresh, reviewer-Markdown, and findings-Markdown projections are documented here because each carries an audit contract from a run artifact into the manifest; `TestOptionalSectionAvailabilityKeysContract` pins the producer-declared `OPTIONAL_SECTION_AVAILABILITY_KEYS` tuple against what `_build_manifest` actually assigns, in both directions; the remaining classes follow the same direct-unit-test pattern.
 
@@ -303,7 +303,7 @@ Direct unit tests on `scripts/review/telemetry.py` and the run-manifest projecti
 
 **Historical-data note:** `thoughts_length` was removed from live events (`test_telemetry.py::TestNoFabricatedMeasurements`, elsewhere in this file), but manifests and JSONL logs written before that fix still carry `args.thoughts_length: 0` on every `step`/`pipeline_end` event — a measurement that never happened, published as a measured zero, on every pre-fix run. Nothing reads the key today. Any future historical-cohort work over pre-fix logs must treat `thoughts_length` as unmeasured noise, not data — do not average it, do not use its presence/absence to date a run, and do not infer anything from its value being 0.
 
-###Synthesis Agent Lifecycle Tests (`review/test_synthesis_lifecycle.py`)
+### Synthesis Agent Lifecycle Tests (`review/test_synthesis_lifecycle.py`)
 
 Direct unit tests on `scripts/review/synthesis_lifecycle.py` and its five orchestration seams. The review-reconciliator (step 8) and the decision critic (step 10) never run `agent/bootstrap.py`, never write a `<agent>-review.json`, and are never in `dispatch-plan.json` — the only list `agents_status.py` iterates — so the reviewer lifecycle machinery structurally cannot see them. This suite pins the measurement that replaces it.
 
@@ -322,7 +322,7 @@ Direct unit tests on `scripts/review/synthesis_lifecycle.py` and its five orches
 | `TestStepNineObservation` | Step 9 records the reconciliator's completion — the earliest moment the script re-enters after step 8's handoff |
 | `TestStepElevenObservation` | Finalize records the critic's duration and adjudicates stalls, and it observes BEFORE its own write to `review-findings.json` (the adjustments apply): observing after them would report the reconciliator as having finished at finalize time — the run's whole wall clock instead of its synthesis phase |
 
-###Registry Documentation Tests (`review/test_registry_docs.py`)
+### Registry Documentation Tests (`review/test_registry_docs.py`)
 
 Two module-level guards pinning the plugin `AGENTS.md` agent-registry reference to `scripts/review/agent_registry.json` in both directions: every `model_tier` the registry actually uses must appear in the documented vocabulary, and the vocabulary must not teach a tier no agent uses. `"inherit"` is excepted as a routing keyword — legitimate to document with zero users. The row had drifted to `inherit`/`sonnet`/`haiku` while five agents ran at `opus`, so a cold agent reading the canonical reference learned a vocabulary the machine does not use.
 

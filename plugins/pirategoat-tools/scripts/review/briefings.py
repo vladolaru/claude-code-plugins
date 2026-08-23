@@ -1580,19 +1580,29 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append("**Wait for the critic to finish — do not run in background.**")
     actions.append("")
     actions.append(
-        "Write the critic's verdict now — before acting on it, and before "
-        "any adjustments:"
+        "Read the critic's verdict — before acting on it, and before any "
+        "adjustments. The critic saved it itself, through `critic.py "
+        "--save`, the channel that validates the whole artifact set and "
+        "writes it atomically:"
     )
-    actions.append(f"```json")
-    actions.append(f'// Save to: {od}/decision-critic-verdict.json')
-    actions.append(f'{{"verdict": "<STAND | REVISE | ESCALATE>"}}')
-    actions.append(f"```")
+    actions.append("```bash")
+    actions.append(f'cat "{od}/decision-critic-verdict.json"')
+    actions.append("```")
     actions.append(
-        "Write it only if the critic actually returned one. Never invent a "
-        "value on the critic's behalf, and never record a stand-in for a "
-        "critic that crashed or timed out: a dispatched critic that produced "
-        "no verdict is a run that lost its stress test, and step 11 reports "
-        "it as a degradation. A stand-in would hide exactly that."
+        "**You write nothing here.** That file is the critic's own "
+        "artifact and it already exists; a second, hand-written copy would "
+        "be an unvalidated writer of a file three things depend on — the "
+        "REVISE gate inside the adjustments applier, step 11's derived "
+        "verdict, and the critic's measured duration, which is keyed on "
+        "this file's mtime. A mistranscription would overwrite a "
+        "channel-validated verdict with a typo."
+    )
+    actions.append(
+        "If the file is absent, the critic produced no verdict. Write "
+        "nothing in its place and carry on: a dispatched critic that "
+        "produced no verdict is a run that lost its stress test, step 11 "
+        "reports it as a degradation, and a stand-in would hide exactly "
+        "that."
     )
     actions.append("")
     actions.append("Act on the critic's verdict:")
@@ -1640,9 +1650,9 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append("```")
     actions.append(
         f"This refuses — no writes at all — unless "
-        f"`{od}/decision-critic-verdict.json` (written above) says REVISE; "
-        f"the CLI enforces the REVISE-only gate itself, it does not just "
-        f"trust this branch."
+        f"`{od}/decision-critic-verdict.json` (the critic's own saved "
+        f"verdict, read above) says REVISE; the CLI enforces the "
+        f"REVISE-only gate itself, it does not just trust this branch."
     )
     actions.append(
         f"`{od}/decision-critic-adjustments.json` plus this command is the "
@@ -1699,9 +1709,10 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     )
 
     handoff = [
-        f"If the critic returned a verdict, "
-        f"`{od}/decision-critic-verdict.json` holds it verbatim. If it "
-        f"produced none, write nothing — step 11 reports the absence.",
+        f"You have READ `{od}/decision-critic-verdict.json` if the critic "
+        f"saved one, and written nothing verdict-shaped yourself. If the "
+        f"critic produced no verdict, that file is absent and stays "
+        f"absent — step 11 reports it.",
         f"On REVISE: `{od}/review-findings.json` carries the applied "
         f"adjustments. Nothing else needs syncing — step 11 re-assembles "
         f"the record from that ledger before the report is written.",

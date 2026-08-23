@@ -101,6 +101,32 @@ class TestStructuredDataDiscipline:
         assert "decision-critic-verdict.json" in handoff_text
         assert "review-verdict.json" not in handoff_text
 
+    def test_step_10_never_asks_the_orchestrator_to_write_the_verdict(
+        self, mod, tmp_path
+    ):
+        """`decision-critic-verdict.json` is the CRITIC's artifact, saved
+        through `critic.py --save` — the validated, atomic channel
+        `agents/decision-reviewer.md` forbids working around. A briefing
+        that also told the ORCHESTRATOR to write it made a second,
+        unvalidated, non-atomic writer: a mistranscription could overwrite
+        the channel-validated verdict that gates the adjustments applier
+        and feeds step 11's derivation, a crashed-after-prose critic could
+        be papered over, and the rewrite would move the mtime
+        `synthesis_lifecycle.observe()` reads as the critic's completion.
+        """
+        g = mod.get_step_guidance(
+            10, "pr", {"completed_steps": []}, {}, output_dir=str(tmp_path)
+        )
+        text = "\n".join(g["actions"])
+        # Negative: no write instruction for that artifact.
+        assert "Save to: " + str(tmp_path) + "/decision-critic-verdict.json" \
+            not in text
+        assert '{"verdict": "<STAND | REVISE | ESCALATE>"}' not in text
+        # Positive: the orchestrator reads what the critic already saved.
+        assert "decision-critic-verdict.json" in text
+        assert "critic.py --save" in text
+        assert "You write nothing here" in text
+
     def test_step_10_never_asks_for_a_stand_in_verdict(self, mod, tmp_path):
         """A SKIPPED stand-in for a crashed critic hides exactly the lost
         stress test step 11 now reports. The briefing must not teach one."""
