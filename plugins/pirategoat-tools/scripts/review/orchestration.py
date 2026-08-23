@@ -968,7 +968,10 @@ def _check_worktree_hygiene(output_dir):
         result["baseline_captured_at"] = prior_baseline_captured_at
 
     try:
-        atomic_write_json(hygiene_path, result)
+        # Git paths may contain surrogateescape code points for undecodable
+        # bytes. ASCII JSON escapes preserve those path identities while
+        # keeping the UTF-8 artifact write valid on every host.
+        atomic_write_text(hygiene_path, json.dumps(result, indent=2))
     except OSError:
         # The in-process result still reaches step 11's pipeline result, so
         # an unwritable artifact costs the record, not the measurement.
@@ -1749,7 +1752,7 @@ def _probe_residue_provenance(paths):
         normalized.append(path)
     normalized = sorted(set(normalized))
     encoded = json.dumps(
-        normalized, ensure_ascii=False, separators=(",", ":"),
+        normalized, ensure_ascii=True, separators=(",", ":"),
     ).encode("utf-8")
     return {
         "count": len(normalized),

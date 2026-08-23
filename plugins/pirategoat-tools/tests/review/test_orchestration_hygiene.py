@@ -594,6 +594,61 @@ class TestStepElevenHygieneNotes:
         assert first["count"] == 2
         assert first["discriminator"].startswith("paths-sha256:")
 
+    def test_probe_provenance_stably_hashes_surrogateescaped_paths(self):
+        surrogate_path = f"z/{PROBE_MARKER}_\udcff.go"
+
+        first = orchestration_mod._probe_residue_provenance([
+            surrogate_path, "a/probe.go", surrogate_path,
+        ])
+        reordered = orchestration_mod._probe_residue_provenance([
+            "a/probe.go", surrogate_path,
+        ])
+
+        assert first == reordered
+        assert first["count"] == 2
+
+    def test_surrogateescaped_new_probe_invalidates_prepared_report(
+        self, git_repo
+    ):
+        repo, out = git_repo
+        _seed_step_11(out)
+        (out / "review-report.md").unlink()
+        _capture_worktree_baseline(str(out))
+        probe_a = f"a_{PROBE_MARKER}_\udcff.go"
+        probe_b = f"b_{PROBE_MARKER}_\udcfe.go"
+        (out / "worktree-hygiene.json").write_text(json.dumps({
+            "schema": 1,
+            "probe_residue_removed": [probe_a],
+        }))
+        state = {}
+
+        _orchestrate_step_11("pr", {}, state, {}, str(out))
+
+        assert state["publication_pending"] is True
+        assert state["report_handoff_status"] == "report_missing"
+        assert not (out / "pipeline-result.json").exists()
+
+        (out / "review-report.md").write_text("# report for probe A")
+        hygiene = json.loads((out / "worktree-hygiene.json").read_text())
+        hygiene["probe_residue_removed"].append(probe_b)
+        (out / "worktree-hygiene.json").write_text(json.dumps(hygiene))
+        _orchestrate_step_11("pr", {}, state, {}, str(out))
+
+        assert state["publication_pending"] is True
+        assert state["report_handoff_status"] == "source_changed"
+        assert not (out / "pipeline-result.json").exists()
+
+        (out / "review-report.md").write_text("# report for probes A and B")
+        _orchestrate_step_11("pr", {}, state, {}, str(out))
+
+        result = json.loads((out / "pipeline-result.json").read_text())
+        assert state["report_handoff_status"] == "published"
+        assert result["worktree_hygiene"]["probe_residue_removed"] == 2
+        assert result["degradation_notes"] == [
+            "probe residue swept at finalize: 2 file(s) — a probe should "
+            "be deleted in the same command that created it"
+        ]
+
     def test_non_git_cwd_adds_no_hygiene_notes(self, git_repo, monkeypatch,
                                                tmp_path):
         """"unknown" is inert: nothing swept, nothing compared.
