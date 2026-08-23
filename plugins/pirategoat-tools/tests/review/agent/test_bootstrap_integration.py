@@ -963,6 +963,18 @@ class TestNotApplicableCompletionContract:
         assert "severity floor" in critic
 
 
+class TestDecisionReviewerContract:
+    def test_record_content_provenance_is_explicit(self):
+        critic = (PLUGIN_ROOT / "agents/decision-reviewer.md").read_text().lower()
+
+        assert "mechanically assembled" in critic
+        assert "no model edits it after assembly" in critic
+        assert "reconciliator-authored `review-findings.json`" in critic
+        assert "findings, assessment, and clearances" in critic
+        assert "pipeline supplies measurements and run notes" in critic
+        assert "nothing in it was authored by an agent" not in critic
+
+
 class TestAPIContractReviewerReturnSideHooks:
     """Regression guard for caller-side handling of filter return values."""
 
@@ -2173,4 +2185,3 @@ class TestDeferredFilesOrderingEndToEnd:
         assert sidecar["deferred_files"] == [
             "tests/huge_test.py", "src/small_prod.py",
         ]
-

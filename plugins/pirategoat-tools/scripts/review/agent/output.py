@@ -245,6 +245,36 @@ def render_markdown(data: Dict) -> str:
     )
 
 
+def _applied_critic_decision(record):
+    """Normalize one applied-decision record for Markdown projection."""
+    if isinstance(record, str) and record:
+        return record, 'not_checked'
+    if not isinstance(record, dict):
+        return None
+    adjustment_id = record.get('adjustment_id')
+    outcome = record.get('spot_check', 'not_checked')
+    if (
+        not isinstance(adjustment_id, str) or not adjustment_id
+        or outcome not in ('verified', 'refuted', 'not_checked')
+    ):
+        return None
+    return adjustment_id, outcome
+
+
+def _rejected_critic_decision(record):
+    """Normalize one rejected-decision record, including legacy records."""
+    if not isinstance(record, dict):
+        return None
+    adjustment_id = record.get('adjustment_id')
+    outcome = record.get('spot_check')
+    if (
+        not isinstance(adjustment_id, str) or not adjustment_id
+        or outcome not in (None, 'refuted')
+    ):
+        return None
+    return adjustment_id, 'refuted'
+
+
 def render_review_body(data: Dict) -> str:
     """Everything a rendered review says beneath its title.
 
@@ -415,22 +445,32 @@ def render_review_body(data: Dict) -> str:
             "under critic revision and not replaced; see the findings.\n\n"
         )
 
-    # What the orchestrator did with each critic decision, from the ledger's
-    # own record rather than from prose in a report. A batch nobody probed
-    # renders as N lines of `not_checked` — the honest default — instead of
-    # being indistinguishable from one checked entry by entry.
+    # What the orchestrator did with every critic decision, from the ledger's
+    # own applied and rejected records rather than from prose in a report. A
+    # batch nobody probed renders as N lines of `not_checked`; a rejected
+    # decision renders as `refuted`, including legacy rejection records from
+    # before that outcome was explicit on each record.
     applied_adjustments = data.get('applied_critic_adjustments')
-    if isinstance(applied_adjustments, list) and applied_adjustments:
-        md.append("## Critic Adjustments Applied\n\n")
-        for record in applied_adjustments:
-            if isinstance(record, dict):
-                adjustment_id = record.get('adjustment_id', '')
-                spot_check = record.get('spot_check', 'not_checked')
-            else:
-                # The bare-id shape this key held before it carried an
-                # outcome; nothing recorded a check, so nothing claims one.
-                adjustment_id, spot_check = record, 'not_checked'
-            md.append(f"- `{adjustment_id}` — {spot_check}\n")
+    rejected_adjustments = data.get('rejected_critic_adjustments')
+    decisions = []
+    if isinstance(applied_adjustments, list):
+        decisions.extend(
+            decision for decision in (
+                _applied_critic_decision(record)
+                for record in applied_adjustments
+            ) if decision is not None
+        )
+    if isinstance(rejected_adjustments, list):
+        decisions.extend(
+            decision for decision in (
+                _rejected_critic_decision(record)
+                for record in rejected_adjustments
+            ) if decision is not None
+        )
+    if decisions:
+        md.append("## Critic Adjustment Decisions\n\n")
+        for adjustment_id, outcome in decisions:
+            md.append(f"- `{adjustment_id}` — {outcome}\n")
         md.append("\n")
 
     # Issues — every severity that counts toward total_issues must render,

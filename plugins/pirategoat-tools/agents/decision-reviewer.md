@@ -27,7 +27,7 @@ Verify claims before accepting them. The document's framing, confidence level, a
 
 You receive a Review Record Path, a Structured Findings Path, and an Output Directory:
 
-- **Review Record Path**: Path to `review-record.md` — the pipeline's own machine-assembled account of the review. It carries the reconciled findings, the reconciler's assessment, verified clearances, run notes, and the run's coverage measurement. Nothing in it was authored by an agent, and no LLM has edited it. Read this file first. **This is what you are stress-testing.**
+- **Review Record Path**: Path to `review-record.md` — the pipeline's own account of the review. It is mechanically assembled, and no model edits it after assembly. Its findings, assessment, and clearances originate in the reconciliator-authored `review-findings.json`; the pipeline supplies measurements and run notes. Read this file first. **This is what you are stress-testing.**
 - **Structured Findings Path**: Path to `review-findings.json` — the canonical ledger the record projects. Each issue carries an 8-hex `id`; that id is the ONLY key the pipeline can resolve, and it is what you key every adjustment by.
 - **Output Directory**: Directory where you write your findings.
 
@@ -240,17 +240,7 @@ python3 $PLUGIN_ROOT/scripts/review/critic.py --save \
   --output-dir "<Output Directory>"
 ```
 
-The command validates everything before writing anything: an unrecognized
-verdict, a missing or unreadable findings/adjustments file, an invalid
-adjustments batch, REVISE without adjustments, or STAND/ESCALATE with
-adjustments all print one `REJECTED: <problem>` line per problem and exit
-non-zero — with nothing written to the output directory. A clean run prints
-`RECORDED VERDICT: <verdict>` and `RECORDED ADJUSTMENTS: <count>` and writes
-`decision-critic-findings.md`, `decision-critic-verdict.json`, and (REVISE
-only) `decision-critic-adjustments.json` to `<Output Directory>` atomically.
-If it rejects your batch, fix the named problem in your `$TMPDIR` files and
-re-run the same command — do not work around a rejection by writing the
-output directory files yourself.
+The command validates everything before writing anything: an unrecognized verdict, a missing or unreadable findings/adjustments file, an invalid adjustments batch, REVISE without adjustments, or STAND/ESCALATE with adjustments all print one `REJECTED: <problem>` line per problem and exit non-zero — with nothing written to the output directory. A clean run prints `RECORDED VERDICT: <verdict>` and `RECORDED ADJUSTMENTS: <count>` and writes `decision-critic-findings.md`, the current `decision-critic-adjustments.json` snapshot, and `decision-critic-verdict.json` to `<Output Directory>` in that order, with the verdict last as the commit artifact. The snapshot is the validated non-empty document for REVISE and canonical `{"schema": 1, "adjustments": []}` for STAND or ESCALATE. If it rejects your batch, fix the named problem in your `$TMPDIR` files and re-run the same command — do not work around a rejection by writing the output directory files yourself.
 
 ## Return to Caller
 
@@ -259,5 +249,5 @@ DECISION CRITIC COMPLETE
 Verdict: <STAND | REVISE | ESCALATE>
 Key insight: <one-line summary>
 Findings: <Output Directory>/decision-critic-findings.md
-Adjustments: <Output Directory>/decision-critic-adjustments.json (REVISE only)
+Adjustments: <Output Directory>/decision-critic-adjustments.json
 ```

@@ -123,8 +123,8 @@ VERDICT_BEFORE_ADJUSTMENTS_KEY = "verdict_before_adjustments"
 # file apply_adjustments() reads but nothing downstream consults — so a
 # rejected decision left no trace in review-findings.json, the artifact
 # bot mode, baselines, and metrics actually read. This key carries that
-# trace now; no reader consumes it yet, but the fact is at least on the
-# artifact the readers already open, not only on one they never do.
+# trace now, and the shared Markdown renderer projects it alongside applied
+# decisions so the record accounts for every critic decision.
 # apply_adjustments() writes one record per newly-settled rejection here;
 # see _load_rejected_records() for the read side of the idempotence check.
 REJECTED_ADJUSTMENTS_KEY = "rejected_critic_adjustments"
@@ -693,13 +693,13 @@ def apply_adjustments(output_dir):
 
     Rejected entries (`rejected: true` + `rejection_reason`) are never
     applied, but a newly-settled rejection still costs one findings write:
-    its `adjustment_id`, `action`, target id, and `rejection_reason` land
-    in `REJECTED_ADJUSTMENTS_KEY` — before this, a rejection was visible
-    only in decision-critic-adjustments.json, which apply_adjustments()
-    itself is the only reader of. The audit record now lands on the
-    artifact bot mode, baselines, and metrics actually read; no reader
-    consumes the key yet, but the trace exists on the right artifact for
-    when one does. An entry carrying both `applied: true` and
+    its `adjustment_id`, `action`, target id, `spot_check: refuted`, and
+    `rejection_reason` land in `REJECTED_ADJUSTMENTS_KEY` — before this, a
+    rejection was visible only in decision-critic-adjustments.json, which
+    apply_adjustments() itself is the only reader of. The audit record now
+    lands on the artifact bot mode, baselines, and metrics actually read,
+    and its Markdown projection renders the explicit refuted outcome. An
+    entry carrying both `applied: true` and
     `rejected: true` (a hand-edited adjustments doc) is never audited
     here: the applied mutation is ground truth, and recording both would
     publish two contradictory outcomes for one `adjustment_id`. A
@@ -923,6 +923,7 @@ def apply_adjustments(output_dir):
             "adjustment_id": entry["adjustment_id"],
             "action": entry.get("action"),
             "target_id": entry.get("id"),
+            SPOT_CHECK_KEY: SPOT_CHECK_REFUTED,
             "rejection_reason": entry.get("rejection_reason") or "",
         }
         for entry in newly_rejected

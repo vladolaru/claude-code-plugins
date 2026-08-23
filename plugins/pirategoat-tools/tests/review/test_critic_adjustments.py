@@ -366,6 +366,7 @@ class TestRejectionAudit:
         record = records[0]
         assert record["action"] == "promote"
         assert record["target_id"] == "aaaa1111"
+        assert record["spot_check"] == "refuted"
         assert record["rejection_reason"] == "spot-check refuted the claim"
         assert record["adjustment_id"]  # allocated so a re-run can dedupe
 
@@ -2533,8 +2534,45 @@ class TestWithdrawnAssessmentRender:
         assert "aaaa" in md and "verified" in md
         assert "bbbb" in md and "not_checked" in md
 
-    def test_no_applied_adjustments_renders_no_section(self):
-        assert "Critic Adjustments" not in self._render()
+    def test_mixed_applied_and_refuted_decisions_render_per_id(self):
+        md = self._render(
+            applied_critic_adjustments=[
+                {"adjustment_id": "aaaa", "spot_check": "verified"},
+            ],
+            rejected_critic_adjustments=[
+                {"adjustment_id": "bbbb", "rejection_reason": "refuted"},
+            ],
+        )
+        assert "## Critic Adjustment Decisions" in md
+        assert "- `aaaa` — verified" in md
+        assert "- `bbbb` — refuted" in md
+
+    def test_all_refuted_decisions_still_render(self):
+        md = self._render(rejected_critic_adjustments=[
+            {"adjustment_id": "aaaa", "spot_check": "refuted"},
+            {"adjustment_id": "bbbb", "rejection_reason": "not true"},
+        ])
+        assert "## Critic Adjustment Decisions" in md
+        assert "- `aaaa` — refuted" in md
+        assert "- `bbbb` — refuted" in md
+
+    def test_legacy_applied_ids_render_not_checked(self):
+        md = self._render(applied_critic_adjustments=["legacy-id"])
+        assert "- `legacy-id` — not_checked" in md
+
+    def test_malformed_decision_records_are_ignored(self):
+        md = self._render(
+            applied_critic_adjustments=[
+                None, "", {"spot_check": "verified"},
+                {"adjustment_id": 7, "spot_check": "verified"},
+                {"adjustment_id": "bad", "spot_check": []},
+            ],
+            rejected_critic_adjustments=[None, "bad", {}, {"adjustment_id": 7}],
+        )
+        assert "Critic Adjustment Decisions" not in md
+
+    def test_no_critic_decisions_renders_no_section(self):
+        assert "Critic Adjustment Decisions" not in self._render()
 
 
 class TestLedgerVerdictRecompute:

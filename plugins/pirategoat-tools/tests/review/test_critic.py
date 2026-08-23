@@ -263,24 +263,39 @@ class TestCriticSave:
             "a.json", "f.md",
         ], "a rejected save must write nothing"
 
-    def test_critic_save_stand_without_adjustments_succeeds(self, tmp_path):
-        """The success-path counterpart to the rejection tests above: a
-        STAND with no --adjustments is the ordinary case, not just the one
-        that must be refused when adjustments are present."""
+    @pytest.mark.parametrize("verdict", ["STAND", "ESCALATE"])
+    def test_critic_save_without_adjustments_replaces_stale_snapshot(
+        self, tmp_path, verdict
+    ):
+        """A successful verdict is the current snapshot, so a pending
+        REVISE batch from an earlier attempt may not survive it."""
         findings = self._write_findings(tmp_path)
+        snapshot = tmp_path / "decision-critic-adjustments.json"
+        snapshot.write_text(json.dumps({
+            "schema": 1,
+            "adjustments": [{
+                "adjustment_id": "stale-revise",
+                "action": "promote",
+                "id": "aaaa1111",
+                "fields": {"severity": "high"},
+                "rationale": "pending from an earlier attempt",
+            }],
+        }))
 
         result = self._run_save(
-            tmp_path, "--verdict", "STAND", "--findings", str(findings),
+            tmp_path, "--verdict", verdict, "--findings", str(findings),
         )
 
         assert result.returncode == 0, result.stdout + result.stderr
         assert (tmp_path / "decision-critic-findings.md").is_file()
-        assert not (tmp_path / "decision-critic-adjustments.json").exists()
+        assert json.loads(snapshot.read_text()) == {
+            "schema": 1, "adjustments": [],
+        }
         verdict_doc = json.loads(
             (tmp_path / "decision-critic-verdict.json").read_text()
         )
-        assert verdict_doc == {"verdict": "STAND"}
-        assert "RECORDED VERDICT: STAND" in result.stdout
+        assert verdict_doc == {"verdict": verdict}
+        assert f"RECORDED VERDICT: {verdict}" in result.stdout
         assert "RECORDED ADJUSTMENTS: 0" in result.stdout
 
     def test_critic_save_rejects_two_simultaneous_problems(self, tmp_path):

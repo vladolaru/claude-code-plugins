@@ -392,13 +392,24 @@ def run_save(args):
         return 1
 
     od = args.output_dir
+    # The verdict is the commit artifact for the snapshot before it: findings
+    # first, current adjustments second, verdict last. Validation failures
+    # return above this boundary without touching any of the three.
     atomic_write_text(
         os.path.join(od, "decision-critic-findings.md"), findings_text
     )
-    if adjustments is not None:
-        atomic_write_json(
-            os.path.join(od, "decision-critic-adjustments.json"), adjustments
-        )
+    adjustment_snapshot = (
+        adjustments
+        if verdict == "REVISE"
+        else {
+            "schema": critic_adjustments.ADJUSTMENTS_SCHEMA,
+            "adjustments": [],
+        }
+    )
+    atomic_write_json(
+        os.path.join(od, "decision-critic-adjustments.json"),
+        adjustment_snapshot,
+    )
     atomic_write_json(
         os.path.join(od, "decision-critic-verdict.json"), {"verdict": verdict}
     )

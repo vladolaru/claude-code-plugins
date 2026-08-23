@@ -241,7 +241,8 @@ export interface ReviewOutput {
     // here on apply. An entry applied without one is recorded as
     // "not_checked": never required, because step 11's defensive re-run
     // exists for orchestrators that crashed before probing anything.
-    // Rendered as the "## Critic Adjustments Applied" list.
+    // Rendered with rejected decisions in the "## Critic Adjustment
+    // Decisions" list.
     //
     // Readers must tolerate a bare-string entry: that is the shape this key
     // held earlier in the same unreleased window, and apply_adjustments()
@@ -271,9 +272,9 @@ export interface ReviewOutput {
     // true` + `rejection_reason` in decision-critic-adjustments.json).
     // Present after the first batch that settled at least one rejection.
     // A rejected entry is never applied to `issues` — the target finding
-    // is never mutated — so this is the ONLY place a rejection is
-    // auditable. The source file it also lives in is read only by
-    // apply_adjustments() itself, never by a downstream consumer.
+    // is never mutated — so this is the canonical place a rejection is
+    // auditable. The shared Markdown renderer projects each record as an
+    // explicit `adjustment_id — refuted` line.
     // Cumulative across every batch the ledger absorbs, the same way
     // applied_critic_adjustments is; apply_adjustments() dedupes by
     // adjustment_id so a re-run never appends a duplicate. An entry
@@ -286,6 +287,7 @@ export interface ReviewOutput {
         adjustment_id: string;
         action: string | null;
         target_id: string | null; // null for a rejected `add` (no target)
+        spot_check: 'refuted';
         rejection_reason: string;
     }>;
 

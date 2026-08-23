@@ -3299,6 +3299,30 @@ class TestAssessmentProvenance:
         assert "Legacy prose." in rendered
         assert "withdrawn" not in rendered.lower()
 
+    def test_mixed_applied_and_refuted_decisions_render_completely(self):
+        rendered = render_markdown(self._findings(
+            applied_critic_adjustments=[
+                {"adjustment_id": "applied-one", "spot_check": "verified"},
+            ],
+            rejected_critic_adjustments=[
+                {"adjustment_id": "refuted-one", "rejection_reason": "no"},
+            ],
+        ))
+        assert "## Critic Adjustment Decisions" in rendered
+        assert "- `applied-one` — verified" in rendered
+        assert "- `refuted-one` — refuted" in rendered
+
+    def test_all_refuted_decisions_render_without_an_applied_bucket(self):
+        rendered = render_markdown(self._findings(
+            rejected_critic_adjustments=[
+                {"adjustment_id": "refuted-one", "spot_check": "refuted"},
+                {"adjustment_id": "refuted-two", "rejection_reason": "no"},
+            ],
+        ))
+        assert "## Critic Adjustment Decisions" in rendered
+        assert "- `refuted-one` — refuted" in rendered
+        assert "- `refuted-two` — refuted" in rendered
+
 
 # =============================================================================
 # TestRemovedByCriticSection

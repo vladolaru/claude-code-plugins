@@ -379,11 +379,83 @@ class TestRecordIsAProjection:
         assemble_review_record(str(out_dir), {})
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
-        assert "## Critic Adjustments Applied" in text
+        assert "## Critic Adjustment Decisions" in text
         assert "verified" in text
         # An entry with no stated outcome is recorded as unprobed, never
         # absorbed into a batch-level claim.
         assert "not_checked" in text
+
+    def test_reassembly_projects_mixed_applied_and_refuted_decisions(
+        self, out_dir
+    ):
+        _write_ledger(out_dir)
+        self._revise(out_dir, {
+            "schema": 1,
+            "adjustments": [
+                {
+                    "adjustment_id": "applied-decision",
+                    "action": "correct",
+                    "id": "9f3a1c7d",
+                    "fields": {"title": "Escaping is already present"},
+                    "rationale": "verified against the source",
+                    "spot_check": "verified",
+                },
+                {
+                    "adjustment_id": "refuted-decision",
+                    "action": "correct",
+                    "id": "1b2c3d4e",
+                    "fields": {"title": "This change does not apply"},
+                    "rationale": "critic claim",
+                    "rejected": True,
+                    "rejection_reason": "the source contradicts the claim",
+                    "spot_check": "refuted",
+                },
+            ],
+        })
+        critic_adjustments.apply_adjustments(str(out_dir))
+
+        assemble_review_record(str(out_dir), {})
+        text = (out_dir / REVIEW_RECORD_MD).read_text()
+
+        assert "## Critic Adjustment Decisions" in text
+        assert "- `applied-decision` — verified" in text
+        assert "- `refuted-decision` — refuted" in text
+
+    def test_reassembly_projects_an_all_refuted_batch(self, out_dir):
+        _write_ledger(out_dir)
+        self._revise(out_dir, {
+            "schema": 1,
+            "adjustments": [
+                {
+                    "adjustment_id": "refuted-one",
+                    "action": "correct",
+                    "id": "9f3a1c7d",
+                    "fields": {"title": "This change does not apply"},
+                    "rationale": "critic claim",
+                    "rejected": True,
+                    "rejection_reason": "the source contradicts the claim",
+                    "spot_check": "refuted",
+                },
+                {
+                    "adjustment_id": "refuted-two",
+                    "action": "correct",
+                    "id": "1b2c3d4e",
+                    "fields": {"title": "This change does not apply"},
+                    "rationale": "critic claim",
+                    "rejected": True,
+                    "rejection_reason": "the source contradicts the claim",
+                    "spot_check": "refuted",
+                },
+            ],
+        })
+        critic_adjustments.apply_adjustments(str(out_dir))
+
+        assemble_review_record(str(out_dir), {})
+        text = (out_dir / REVIEW_RECORD_MD).read_text()
+
+        assert "## Critic Adjustment Decisions" in text
+        assert "- `refuted-one` — refuted" in text
+        assert "- `refuted-two` — refuted" in text
 
     def test_withdrawn_narrative_renders_the_explicit_absence(self, out_dir):
         _write_ledger(out_dir)
