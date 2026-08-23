@@ -1337,6 +1337,7 @@ class TestDerivedVerdict:
     def test_a_non_object_ledger_does_not_crash_finalize(self, tmp_path):
         """The shape that used to raise AttributeError past the guard and
         kill finalize before pipeline-result.json was ever written."""
+        (tmp_path / "review-report.md").write_text("# report")
         (tmp_path / "review-findings.json").write_text("[1, 2]")
         assert self._finalize(tmp_path)["status"] == "degraded"
 
@@ -1842,28 +1843,31 @@ class TestStepElevenRerendersFindingsMarkdown:
             "render failed" in n for n in result["degradation_notes"]
         )
 
-    def test_the_record_serves_the_report_path_before_authoring(
+    def test_the_record_prepares_state_without_becoming_the_report_path(
         self, tmp_path
     ):
         """`review-report.md` is authored from the step-11 briefing this
-        function is about to render, so it does not exist yet at finalize.
-        The record — assembled moments ago from the final ledger — is the
-        newest complete account the run has, and `report_path` names it
-        rather than publishing null."""
+        function is about to render. Until that handoff lands, neither the
+        record nor findings Markdown may masquerade as the report path."""
         self._seed(tmp_path, severity="low")
         (tmp_path / "review-report.md").unlink()
         _write_critic_verdict(tmp_path, "STAND")
+        state = {}
 
-        self._step_11(tmp_path)
+        _orchestrate_step_11("pr", {}, state, {}, str(tmp_path))
 
-        result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert result["report_path"] == str(tmp_path / "review-record.md")
-        # And its absence is NOT a degradation: at this instant it is the
-        # expected state, and noting it would degrade every single run.
+        assert not (tmp_path / "pipeline-result.json").exists()
+        assert state["publication_pending"] is True
         assert not any(
             "review-report.md not found" in note
-            for note in result["degradation_notes"]
+            for note in state["degradation_notes"]
         )
+
+        (tmp_path / "review-report.md").write_text("# report")
+        _orchestrate_step_11("pr", {}, state, {}, str(tmp_path))
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert result["report_path"] == str(tmp_path / "review-report.md")
+        assert state["publication_pending"] is False
 
     def test_an_already_written_report_still_wins(self, tmp_path):
         """A re-entered step 11 finds the report already authored; when it

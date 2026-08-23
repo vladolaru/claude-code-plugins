@@ -475,6 +475,37 @@ class TestStepElevenHygieneNotes:
         }
         assert not probe.exists()
 
+    def test_publish_pass_preserves_prepare_pass_probe_sweep(self, git_repo):
+        """The sweep is intentionally mutating, so re-entry sees a clean
+        tree; its first-pass evidence must still reach terminal publication."""
+        repo, out = git_repo
+        _seed_step_11(out)
+        (out / "review-report.md").unlink()
+        _capture_worktree_baseline(str(out))
+        probe = repo / f"zz_{PROBE_MARKER}_test.go"
+        probe.write_text("package main")
+        state = {}
+
+        _orchestrate_step_11("pr", {}, state, {}, str(out))
+
+        assert state["publication_pending"] is True
+        assert state["pipeline_status"] == "degraded"
+        assert not probe.exists()
+        assert not (out / "pipeline-result.json").exists()
+
+        (out / "review-report.md").write_text("# report")
+        _orchestrate_step_11("pr", {}, state, {}, str(out))
+
+        result = json.loads((out / "pipeline-result.json").read_text())
+        hygiene = json.loads((out / "worktree-hygiene.json").read_text())
+        assert result["status"] == "degraded"
+        assert result["worktree_hygiene"]["probe_residue_removed"] == 1
+        assert hygiene["probe_residue_removed"] == [probe.name]
+        assert any(
+            "probe residue swept" in note
+            for note in result["degradation_notes"]
+        )
+
     def test_non_git_cwd_adds_no_hygiene_notes(self, git_repo, monkeypatch,
                                                tmp_path):
         """"unknown" is inert: nothing swept, nothing compared.

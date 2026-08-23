@@ -792,6 +792,12 @@ def _check_worktree_hygiene(output_dir):
 
     Writes and returns worktree-hygiene.json.
 
+    Probe-removal evidence is cumulative within one run directory. Step 11
+    has a report-handoff re-entry, and a successful first sweep necessarily
+    makes the second observation clean; carrying the prior removed paths is
+    what makes this mutating check idempotent at the publication boundary.
+    Step 1's stale-artifact sweep removes this file before a new run.
+
     The sweep is gated on a verified baseline. The snapshot records the repo
     root it measured; this function resolves the root it is standing in now
     and deletes nothing unless both exist and name the same repo. No baseline
@@ -813,6 +819,22 @@ def _check_worktree_hygiene(output_dir):
     hold uncommitted work. A probe someone staged is therefore reported, not
     deleted.
     """
+    hygiene_path = os.path.join(output_dir, "worktree-hygiene.json")
+    prior_removed = []
+    prior_baseline_captured_at = None
+    try:
+        with open(hygiene_path, "r", encoding="utf-8") as f:
+            prior = json.load(f)
+        if isinstance(prior, dict) and prior.get("schema") == 1:
+            removed = prior.get("probe_residue_removed")
+            if isinstance(removed, list):
+                prior_removed = [p for p in removed if isinstance(p, str)]
+            captured = prior.get("baseline_captured_at")
+            if isinstance(captured, str):
+                prior_baseline_captured_at = captured
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        pass
+
     result = {
         "schema": 1,
         "status": "unknown",
@@ -923,10 +945,17 @@ def _check_worktree_hygiene(output_dir):
     # its "unknown" default: with nothing to compare against, reporting
     # "clean" would publish an absent measurement as a measured zero.
 
+    result["probe_residue_removed"] = list(dict.fromkeys(
+        prior_removed + result["probe_residue_removed"]
+    ))
+    if (
+        result["baseline_captured_at"] is None
+        and result["probe_residue_removed"]
+    ):
+        result["baseline_captured_at"] = prior_baseline_captured_at
+
     try:
-        atomic_write_json(
-            os.path.join(output_dir, "worktree-hygiene.json"), result
-        )
+        atomic_write_json(hygiene_path, result)
     except OSError:
         # The in-process result still reaches step 11's pipeline result, so
         # an unwritable artifact costs the record, not the measurement.
@@ -1784,27 +1813,17 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # legacy-normal absence must never spend the `status` field.
     usage_summary = _capture_usage_snapshot(output_dir)
 
-    # The human-readable document this run produced, best first.
-    #
-    # `review-report.md` is normally NOT here yet: it is authored by the
-    # orchestrator from the step-11 briefing this function is about to
-    # render, so on a first pass through finalize the record — written
-    # moments ago, from the final ledger — is the newest complete account
-    # the run has. It is listed anyway because a re-entered step 11 finds
-    # a report already written, and when it exists it is the better answer.
-    #
-    # Its absence is deliberately NOT a degradation any more. When step 9
-    # authored the report, an absent file meant an orchestrator that
-    # stopped short; now it is the expected state at this instant, and
-    # noting it would degrade every run. The step-11 briefing's handoff
-    # gate is what verifies the report got written, and pirategoat-bot
-    # fails the delivery loudly if it did not.
-    report_path = None
-    for candidate in ("review-report.md", REVIEW_RECORD_MD, _FINDINGS_MD):
-        candidate_path = os.path.join(output_dir, candidate)
-        if os.path.isfile(candidate_path):
-            report_path = candidate_path
-            break
+    # The audience-facing report is the terminal handoff, not a best-effort
+    # projection. On the first pass it is expected to be absent: settlement
+    # above prepares the state and the briefing asks the orchestrator to
+    # author it. Only a re-entered step 11 may publish the terminal result,
+    # and that result points at this exact file — never review-record.md or
+    # review-findings.md as a fallback. pirategoat-bot treats the result's
+    # existence as "complete" during resume discovery and then reads the
+    # report verbatim, so publishing those two facts separately creates an
+    # unrecoverable run.
+    report_path = os.path.join(output_dir, "review-report.md")
+    publication_pending = not os.path.isfile(report_path)
     if not os.path.isfile(findings_path):
         degradation_notes.append("review-findings.json not found")
 
@@ -1857,7 +1876,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     pipeline_result = {
         "status": status,
         "verdict": verdict,
-        "report_path": report_path if report_path and os.path.isfile(report_path) else None,
+        "report_path": report_path,
         "findings_path": findings_path if os.path.isfile(findings_path) else None,
         "critic_verdict": critic_verdict,
         "degradation_notes": degradation_notes,
@@ -1874,16 +1893,29 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
         "verdict_source": verdict_source,
     }
     result_path = os.path.join(output_dir, "pipeline-result.json")
-    atomic_write_json(result_path, pipeline_result)
 
     state["verdict"] = verdict
     state["review_verdict"] = verdict
     state["pipeline_status"] = status
-    # Carried into state so step 11's briefing can render the projection it
-    # just published without re-reading pipeline-result.json — briefings.py
-    # is pure, the same division that already puts `critic_source` here.
+    # Carried into state so step 11's pure briefing can describe prepared
+    # settlement on pass one and terminal publication on pass two without
+    # re-reading pipeline-result.json — the same division that already puts
+    # `critic_source` here.
     state["verdict_source"] = verdict_source
     state["degradation_notes"] = list(degradation_notes)
+    state["publication_pending"] = publication_pending
+
+    if publication_pending:
+        # Keep the terminal-marker invariant true even if a human deletes
+        # the report and explicitly re-enters this step after an earlier
+        # publication. The normal prepare pass has no result to remove.
+        try:
+            os.remove(result_path)
+        except FileNotFoundError:
+            pass
+        return context
+
+    atomic_write_json(result_path, pipeline_result)
 
     return context
 

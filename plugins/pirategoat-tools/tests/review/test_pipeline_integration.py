@@ -1842,8 +1842,84 @@ class TestStep10Orchestration:
 
 
 class TestStep11Orchestration:
-    """Step 11 main() derives the verdict from review-findings.json and
-    writes pipeline-result.json."""
+    """Step 11 settles state, then publishes after the report handoff."""
+
+    def test_step_11_prepares_then_publishes_after_report_handoff(
+        self, tmp_path
+    ):
+        """The result is the terminal commit marker, so the first pass
+        remains resumable until the orchestrator authors the report."""
+        (tmp_path / "review-context.json").write_text(json.dumps({
+            "git": {"merge_base": "abc", "git_range": "abc..HEAD"},
+        }))
+        run_pipeline(
+            "--step", "1", "--mode", "pr", "--pr-number", "42",
+            "--interactive", "false", "--output-dir", str(tmp_path),
+            cwd=tmp_path,
+        )
+        (tmp_path / "review-findings.json").write_text(
+            '{"verdict": "approve", "issues": []}'
+        )
+
+        prepared = run_pipeline(
+            "--step", "11", "--mode", "pr",
+            "--output-dir", str(tmp_path), cwd=tmp_path,
+        )
+
+        assert prepared.returncode == 0, prepared.stderr
+        assert not (tmp_path / "pipeline-result.json").exists()
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        assert state["publication_pending"] is True
+        assert 11 not in state["completed_steps"]
+        assert not any(
+            "review-report.md" in note
+            for note in state["degradation_notes"]
+        )
+        assert "PIPELINE WAITING" in prepared.stdout
+        assert "--step 11" in prepared.stdout
+        assert "PIPELINE COMPLETE" not in prepared.stdout
+
+        report = tmp_path / "review-report.md"
+        report.write_text("# Review\nAll clear.")
+        published = run_pipeline(
+            "--step", "11", "--mode", "pr",
+            "--output-dir", str(tmp_path), cwd=tmp_path,
+        )
+
+        assert published.returncode == 0, published.stderr
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert result["report_path"] == str(report)
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        assert state["publication_pending"] is False
+        assert 11 in state["completed_steps"]
+        assert "PIPELINE WAITING" not in published.stdout
+        assert "HANDOFF" not in published.stdout
+        assert "PIPELINE COMPLETE" in published.stdout
+
+    def test_interactive_publish_pass_routes_to_cleanup(self, tmp_path):
+        run_pipeline(
+            "--step", "1", "--mode", "full", "--original-branch", "main",
+            "--output-dir", str(tmp_path), cwd=tmp_path,
+        )
+        (tmp_path / "review-findings.json").write_text(
+            '{"verdict": "approve", "issues": []}'
+        )
+
+        prepared = run_pipeline(
+            "--step", "11", "--mode", "full",
+            "--output-dir", str(tmp_path), cwd=tmp_path,
+        )
+        assert "PIPELINE WAITING" in prepared.stdout
+
+        (tmp_path / "review-report.md").write_text("# Review")
+        published = run_pipeline(
+            "--step", "11", "--mode", "full",
+            "--output-dir", str(tmp_path), cwd=tmp_path,
+        )
+
+        assert published.returncode == 0, published.stderr
+        assert "Next: Step 12" in published.stdout
+        assert "PIPELINE COMPLETE" not in published.stdout
 
     def test_step_11_writes_pipeline_result(self, tmp_path):
         """Step 11 should write pipeline-result.json."""
@@ -1881,6 +1957,7 @@ class TestStep11Orchestration:
         says why, rather than crashing or publishing a confident value."""
         run_pipeline("--step", "1", "--mode", "pr",
                    "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
+        (tmp_path / "review-report.md").write_text("# Review")
         r = run_pipeline("--step", "11", "--mode", "pr",
                        "--output-dir", str(tmp_path), cwd=tmp_path)
         assert r.returncode == 0
@@ -1914,8 +1991,13 @@ class TestTelemetryFinalize:
         with patch.dict(os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}):
             run_pipeline("--step", "1", "--mode", "full",
                        "--output-dir", str(tmp_path), cwd=tmp_path)
-            # Step 11 is the last active step for non-interactive full mode
-            # (step 12 needs workspace + interactive)
+            # The first pass prepares settled state and waits for the report
+            # handoff, so it is deliberately not terminal.
+            run_pipeline("--step", "11", "--mode", "full",
+                       "--output-dir", str(tmp_path), cwd=tmp_path)
+            (tmp_path / "review-report.md").write_text("# Review")
+            # The second pass publishes the terminal marker and finalizes
+            # telemetry. Step 12 needs workspace + interactive.
             run_pipeline("--step", "11", "--mode", "full",
                        "--output-dir", str(tmp_path), cwd=tmp_path)
         marker = tmp_path / ".telemetry-log-path"

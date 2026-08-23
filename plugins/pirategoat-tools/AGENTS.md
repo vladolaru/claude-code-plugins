@@ -11,7 +11,7 @@ You are the maintainer of pirategoat-tools, a code review orchestration plugin. 
 | `scripts/review/pipeline.py` | Executable facade for the unified 12-step review pipeline. Owns conditions, routing, state I/O, output formatting, telemetry/Git identity, and the CLI while re-exporting the split pipeline modules. Called by all three review commands with `--mode pr\|full\|incremental` and generated Codex adapters with `--host codex`. |
 | `scripts/review/pipeline_contract.py` | Shared path, host, step-sequence, timeout, and Git vocabulary used across the pipeline modules. |
 | `scripts/review/briefings.py` | Pure curated-context guidance, formatters, mission text, and output templates for the 12 review steps. |
-| `scripts/review/orchestration.py` | Side-effecting per-step work, subprocess execution, dependency-refresh detection, dispatch-plan persistence, readiness-gated derived-Markdown materialization with outcome state (per-reviewer at step 8, `review-findings.md` at steps 9 and 11), and `assemble_review_record()` — the machine projection of the ledger written at steps 9 and 11. |
+| `scripts/review/orchestration.py` | Side-effecting per-step work, subprocess execution, dependency-refresh detection, dispatch-plan persistence, readiness-gated derived-Markdown materialization with outcome state (per-reviewer at step 8, `review-findings.md` at steps 9 and 11), `assemble_review_record()` — the machine projection of the ledger written at steps 9 and 11 — and step 11's two-pass terminal publication gate. |
 | `../../scripts/generate_codex_compat.py` | Repository-level generator that converts canonical Claude Code commands into Codex command-skill adapters and emits this plugin's `.codex-plugin/plugin.json`. |
 | `scripts/review/agent_registry.json` | Agent registry — domain, protocols, dispatch class, triage criteria, model tier. |
 | `scripts/review/agent/bootstrap.py` | Builds the structured prompt each agent receives. Handles plugin root discovery, protocol extraction, scope discovery, and output instructions. When a primary domain matches nothing but a secondary domain does, `resolve_overall_status` flips the status to a scoped `OK` and injects a `COVERAGE NOTE` so the agent reviews the secondary files with an honestly-scoped verdict instead of silently masking the gap. |
@@ -122,11 +122,15 @@ Command (thin wrapper: pr-review.md, full-code-review.md, code-review.md)
   │   └─ Reads review-record.md + review-findings.json → produces
   │      decision-critic-findings.md with STAND/REVISE/ESCALATE verdict
   │
-  └─ Step 11: applies any pending critic adjustments, re-renders review-findings.md and
-     re-assembles review-record.md from the final ledger, DERIVES the published verdict
-     from that ledger, and briefs the orchestrator to author `review-report.md` ONCE
-     from the settled record (the step's handoff gate; in bot mode this file IS the
-     posted PR comment)
+  └─ Step 11, pass 1: idempotently applies any pending critic adjustments, re-renders
+     review-findings.md, re-assembles review-record.md, derives the final verdict, and
+     persists prepared state WITHOUT pipeline-result.json; the blocking briefing has
+     the orchestrator author review-report.md once from the settled record and re-run
+     step 11
+      └─ Step 11, pass 2: repeats settlement idempotently, verifies review-report.md,
+         atomically publishes pipeline-result.json with that exact report_path, closes
+         the handoff, and only then completes the step (bot mode ends; interactive mode
+         routes to step 12 as before)
 ```
 
 ### Pipeline-Wide Containment
@@ -196,6 +200,8 @@ These are variations on the mission, not repetitions. Each connects the mission 
 - `handoff` is the sole gate mechanism. If a step requires an artifact before the next step can proceed, it goes in `handoff`, not buried in `actions`.
 - JSON examples use schema format: `{"verdict": "<APPROVE | REQUEST_CHANGES | COMMENT>"}` — never copyable placeholder values.
 - Steps 3/4, 8, 10, and 11 have `handoff` gates on their output files. Step 9 has none on purpose: it asks the orchestrator for no artifact, and gating on a file the pipeline itself just wrote would be theatre.
+
+Step 11 is intentionally re-entrant. Its first pass records `publication_pending: true`, blocks progress, leaves step 11 out of `completed_steps`, and writes no `pipeline-result.json`; missing `review-report.md` is the expected handoff state, not a degradation. After the report exists, the second pass records `publication_pending: false`, publishes the terminal result atomically, and exposes no open handoff. Prepared guidance may say state is prepared; only the publication pass may call it published or complete. Settlement work repeats idempotently; the one mutating measurement, the probe-residue sweep, accumulates removed paths in `worktree-hygiene.json` so its first-pass degradation cannot disappear when the clean second pass publishes.
 
 **Voice.** Senior reviewer briefing the orchestrator — authority on process, trust on execution. The voice lives within the structural section headers (SITUATION / ACTIONS / HANDOFF). The headers themselves stay rigid as machine-readable landmarks.
 
@@ -453,7 +459,7 @@ Verdict is auto-calculated from issue severities by `verdict_for_counts()` in `s
 - Any medium → `comment`
 - Otherwise → `approve`
 
-The outer-pipeline verdict (`APPROVE`/`COMMENT`/`REQUEST_CHANGES` in `pipeline-result.json`) is DERIVED from the reconciled ledger's verdict at step 11 — `orchestration.py` owns the mapping between the two layers, and `block` maps to `REQUEST_CHANGES`. A critic `ESCALATE` overrides it to `COMMENT`. Nothing transcribes a verdict by hand any more; `review-verdict.json` is gone.
+The outer-pipeline verdict (`APPROVE`/`COMMENT`/`REQUEST_CHANGES` in `pipeline-result.json`) is DERIVED from the reconciled ledger's verdict at step 11 — `orchestration.py` owns the mapping between the two layers, and `block` maps to `REQUEST_CHANGES`. A critic `ESCALATE` overrides it to `COMMENT`. Nothing transcribes a verdict by hand any more; `review-verdict.json` is gone. Derivation settles on the prepare pass, but it is not published until the report handoff completes.
 
 ### Cross-Repo Dependency: pirategoat-bot
 
@@ -462,6 +468,7 @@ The `pirategoat-bot` Slack bot (at `~/Work/a8c/pirategoat-bot`) wraps this plugi
 - **`review-context.json`** — The bot writes this file (orchestrator.js) before spawning the `claude` CLI. This plugin reads and enriches it (review/context.py). Field names, nesting, and required paths must match across both repos.
 - **Outer-pipeline verdict values** — The bot's `pr-review.py` defines outer-pipeline verdicts (`APPROVE`/`COMMENT`/`REQUEST_CHANGES`) and `github.js` maps them to GitHub actions. This plugin has its own per-agent verdict system (`block`/`request_changes`/`comment`/`approve` in `review/agent/output.py`). These are distinct layers — changes to one may need corresponding changes in the other.
 - **Prompt template variables** — The bot's `prompts/pr-review.md` injects variables (`{{MERGE_BASE}}`, `{{GIT_RANGE}}`, etc.) that this plugin's scripts consume via the review context.
+- **Terminal publication marker** — Resume discovery treats any `pipeline-result.json` as already complete, while delivery reads `review-report.md` immediately afterward. Therefore step 11 may create `pipeline-result.json` only after that exact report exists, and `report_path` must name `review-report.md`; `review-record.md` and `review-findings.md` are never terminal report fallbacks.
 
 **Rule: Before changing any integration surface in this plugin, read the corresponding code in pirategoat-bot first.** Do not assume the bot's expectations from this plugin's code alone — check the bot's actual implementation. When in doubt, read:
 - `pirategoat-bot/src/orchestrator.js` (writes review-context.json, reads review output)
@@ -572,7 +579,7 @@ It is a thin projection over `review_metrics.measure_run` (which drives `review_
 
 **Availability doctrine.** An unreadable, absent, or transcript-less run (Codex writes no Claude-format transcripts) still writes the artifact with `missing` and null payloads — a recorded absence, distinct from a run that never attempted the capture and has no artifact. This Codex-host gap is known and permanently unsolved: no re-run of this CLI can measure a host that never wrote a Claude-format transcript in the first place. Per-model buckets key on the DISPATCHED model (`claude-opus-5[1m]`), not the per-message model inside the transcript (`claude-opus-5`), because the bracketed variant is separately priced.
 
-The snapshot reaches two durable surfaces: the run manifest's `usage` section beside `availability.usage`, and a compact `usage` block in `pipeline-result.json` (a pirategoat-bot consumer surface). Both project through `manifest_sections.build_usage_manifest()`, so they cannot disagree about what a usable measurement is. Only the manifest is reprojected by a manual re-run; `pipeline-result.json` is step 11's own point-in-time record and is not revisited outside the pipeline.
+The snapshot reaches two durable surfaces: the run manifest's `usage` section beside `availability.usage`, and a compact `usage` block in `pipeline-result.json` (a pirategoat-bot consumer surface). Both project through `manifest_sections.build_usage_manifest()`, so they cannot disagree about what a usable measurement is. Step 11 may capture twice because its settlement pass is idempotently re-entered, but only the post-report pass publishes the compact block; only the manifest is reprojected by a manual re-run, and `pipeline-result.json` is not revisited outside the pipeline.
 
 Run `pytest plugins/pirategoat-tools/tests/analysis/test_usage_snapshot.py plugins/pirategoat-tools/tests/review/test_orchestration_hygiene.py plugins/pirategoat-tools/tests/review/test_telemetry.py -v` after changing the CLI, its step-11 seam, or `ReviewTelemetry.reproject_usage()`.
 

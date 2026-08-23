@@ -1825,16 +1825,18 @@ def _run_degraded(state):
     return bool(status) and status != "success"
 
 
-def _projection_lines(state):
-    """Render what finalize just published, or None when it never ran.
+def _settlement_lines(state):
+    """Render settled state according to its publication phase.
 
     Reads the facts step 11's orchestration recorded in state rather than
     re-opening pipeline-result.json — this module is pure, the same division
     that already puts `critic_source` in state for step 10.
 
-    A run whose finalize never ran (a briefing fetched on its own, older
-    state) records NO projection rather than a fabricated success line: an
-    unmeasured outcome and a clean one are different facts.
+    A prepare pass may describe state as prepared, but must not call it a
+    projection: pipeline-result.json does not exist yet. A publish pass can
+    say published because the report handoff and terminal marker now exist.
+    A run whose settlement never ran records nothing rather than fabricating
+    a success line.
     """
     status = state.get("pipeline_status")
     if not status:
@@ -1842,7 +1844,12 @@ def _projection_lines(state):
     verdict = state.get("verdict") or "unknown"
     source = state.get("verdict_source")
     source_suffix = f" ({source})" if source else ""
-    lines = [f"Projection: status={status}  verdict={verdict}{source_suffix}"]
+    label = (
+        "Prepared state"
+        if state.get("publication_pending") is not False
+        else "Published"
+    )
+    lines = [f"{label}: status={status}  verdict={verdict}{source_suffix}"]
     notes = state.get("degradation_notes")
     if isinstance(notes, list) and notes:
         lines.append("Degradations:")
@@ -2008,18 +2015,38 @@ def _report_authoring_actions(mode, state, context, config, output_dir):
 
 
 def _step_11_present_results(mode, state, context, config, output_dir):
-    """Step 11: author the report, then present what the run published."""
+    """Step 11: gate report authoring, then present terminal publication."""
     od = output_dir or "<OUTPUT_DIR>"
     is_interactive = config.get("interactive", True)
     critic_verdict = state.get("critic_verdict")
+    publication_pending = state.get("publication_pending") is not False
 
     situation = [_PHASE_TRANSITIONS["OUTPUT"]]
-    actions = _report_authoring_actions(
-        mode, state, context, config, output_dir
-    )
-    actions.append("")
+    if publication_pending:
+        actions = _report_authoring_actions(
+            mode, state, context, config, output_dir
+        )
+        if is_interactive and critic_verdict == "unavailable":
+            actions.append("")
+            actions.append(
+                "⚠️ Critic verdict unavailable — author the report from "
+                "the settled record as-is."
+            )
+        actions.append("")
+        actions.append(
+            "After writing the report, verify the file exists and re-run "
+            "step 11 exactly as printed below. The second pass publishes "
+            "`pipeline-result.json`; do not report this run complete before "
+            "that pass succeeds."
+        )
+    else:
+        actions = [
+            f"Report handoff verified at `{od}/review-report.md`; the "
+            "terminal `pipeline-result.json` is now published.",
+            "",
+        ]
 
-    if is_interactive:
+    if not publication_pending and is_interactive:
         actions.append("Then present a formatted summary of the report you "
                        "just wrote, with verdict and key findings.")
 
@@ -2032,10 +2059,9 @@ def _step_11_present_results(mode, state, context, config, output_dir):
         if mode == "incremental":
             actions.append("Baseline saved. Next `/code-review` reviews only new commits.")
 
-    else:
+    elif not publication_pending:
         # Non-interactive: list output files
-        actions.append("PIPELINE COMPLETE once the report above is written. "
-                       "Output files:")
+        actions.append("Published output files:")
         actions.append(f"- `{od}/review-report.md` — the report you author "
                        "here; posted verbatim as the PR comment")
         actions.append(
@@ -2070,15 +2096,12 @@ def _step_11_present_results(mode, state, context, config, output_dir):
         suffix="review-findings.json",
     ))
 
-    # What the run actually published, read back from the projection step
-    # 11's orchestration just wrote. This replaced a `forced_verdict`
-    # warning line no writer under scripts/ ever set — so before it, a
-    # degraded run said nothing about its own degradations here and printed
-    # "✅ PIPELINE COMPLETE" over them.
-    projection = _projection_lines(state)
-    if projection:
+    # The first pass reports prepared state without implying publication;
+    # the second reports the terminal projection that now exists.
+    settlement = _settlement_lines(state)
+    if settlement:
         actions.append("")
-        actions.extend(projection)
+        actions.extend(settlement)
 
     return {
         "phase": "OUTPUT",
@@ -2089,10 +2112,15 @@ def _step_11_present_results(mode, state, context, config, output_dir):
         # the run's whole output rests on: pirategoat-bot reads this file
         # and fails the delivery if it is absent, so the gate has to be
         # here rather than left implicit.
-        "handoff": [
-            f"Verify `{od}/review-report.md` exists before reporting the "
-            "pipeline complete.",
-        ],
+        "handoff": (
+            [
+                f"Verify `{od}/review-report.md` exists, then re-run step "
+                "11 before reporting the pipeline complete.",
+            ]
+            if publication_pending
+            else None
+        ),
+        "blocks_progress": publication_pending,
         # Read by pipeline.py's format_output for the completion footer: a
         # run that degraded must not sign off with a green checkmark. Step
         # 12 sets it the same way — it, not this step, is where an

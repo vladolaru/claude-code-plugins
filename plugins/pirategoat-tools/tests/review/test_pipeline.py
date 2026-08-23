@@ -2363,6 +2363,79 @@ class TestStep11ReportAuthoring:
 
 
 class TestStep11PresentResults:
+    def test_prepare_pass_blocks_until_the_report_is_handed_off(
+        self, mod, tmp_path
+    ):
+        state = {
+            "completed_steps": [],
+            "publication_pending": True,
+            "pipeline_status": "success",
+            "verdict": "APPROVE",
+            "verdict_source": "findings ledger",
+            "degradation_notes": [],
+        }
+
+        guidance = mod.get_step_guidance(
+            11, "pr", state, {},
+            config={"mode": "pr", "interactive": False},
+            output_dir=str(tmp_path),
+        )
+        rendered = mod.format_output(11, dict(guidance, next_step=None))
+
+        assert guidance["blocks_progress"] is True
+        assert guidance["handoff"]
+        assert "review-report.md" in "\n".join(guidance["handoff"])
+        assert "Prepared state:" in "\n".join(guidance["actions"])
+        assert "Projection:" not in rendered
+        assert "PIPELINE WAITING" in rendered
+        assert "--step 11" in rendered
+        assert "PIPELINE COMPLETE" not in rendered
+
+    def test_publish_pass_closes_the_handoff(self, mod, tmp_path):
+        state = {
+            "completed_steps": [],
+            "publication_pending": False,
+            "pipeline_status": "success",
+            "verdict": "APPROVE",
+            "verdict_source": "findings ledger",
+            "degradation_notes": [],
+        }
+
+        guidance = mod.get_step_guidance(
+            11, "pr", state, {},
+            config={"mode": "pr", "interactive": False},
+            output_dir=str(tmp_path),
+        )
+        rendered = mod.format_output(11, dict(guidance, next_step=None))
+
+        assert guidance.get("blocks_progress") is False
+        assert guidance["handoff"] is None
+        assert "Published: status=success  verdict=APPROVE" in rendered
+        assert "PIPELINE WAITING" not in rendered
+        assert "PIPELINE COMPLETE" in rendered
+
+    def test_legacy_state_never_implies_publication(self, mod, tmp_path):
+        """Only an explicit false pending flag proves the terminal marker
+        was committed; older state with a settled verdict remains pending."""
+        state = {
+            "completed_steps": [],
+            "pipeline_status": "degraded",
+            "verdict": "COMMENT",
+            "verdict_source": "fallback: no usable ledger verdict",
+            "degradation_notes": ["review-findings.json not found"],
+        }
+
+        guidance = mod.get_step_guidance(
+            11, "pr", state, {},
+            config={"mode": "pr", "interactive": False},
+            output_dir=str(tmp_path),
+        )
+        text = "\n".join(guidance["actions"])
+
+        assert guidance["blocks_progress"] is True
+        assert "Prepared state:" in text
+        assert "Published:" not in text
+
     def test_shows_verdict_interactive(self, mod, tmp_path):
         config = {"mode": "pr", "interactive": True}
         state = {"completed_steps": []}
@@ -2577,7 +2650,7 @@ class TestStep11PresentResults:
 
     def test_incremental_mentions_baseline_saved(self, mod, tmp_path):
         config = {"mode": "incremental", "interactive": True}
-        state = {"completed_steps": []}
+        state = {"completed_steps": [], "publication_pending": False}
         ctx = {}
         g = mod.get_step_guidance(11, "incremental", state, ctx, config=config)
         text = "\n".join(g["actions"])
@@ -2621,7 +2694,7 @@ class TestStep11PresentResults:
     def test_incremental_mentions_next_code_review(self, mod, tmp_path):
         """Incremental should mention next /code-review scope."""
         config = {"mode": "incremental", "interactive": True}
-        state = {"completed_steps": []}
+        state = {"completed_steps": [], "publication_pending": False}
         ctx = {}
         g = mod.get_step_guidance(11, "incremental", state, ctx, config=config)
         text = "\n".join(g["actions"])
@@ -2680,7 +2753,7 @@ class TestDegradedPaths:
     def test_pipeline_result_schema(self, mod, tmp_path):
         """Step 11 output should reference all pipeline-result.json fields."""
         config = {"mode": "pr", "interactive": False}
-        state = {"completed_steps": []}
+        state = {"completed_steps": [], "publication_pending": False}
         ctx = {}
         g = mod.get_step_guidance(11, "pr", state, ctx, config=config)
         text = "\n".join(g["actions"])
@@ -3018,7 +3091,7 @@ class TestStep3DependencyRefresh:
 
 
 class TestStep11Projection:
-    """Step 11's briefing reports what finalize just published.
+    """Step 11's briefing distinguishes prepared from published state.
 
     Before this, the only outcome line the briefing carried was a
     `forced_verdict` warning no writer under `scripts/` ever set — so a
@@ -3028,6 +3101,7 @@ class TestStep11Projection:
 
     _STATE = {
         "completed_steps": [],
+        "publication_pending": False,
         "pipeline_status": "degraded",
         "verdict": "REQUEST_CHANGES",
         "verdict_source": "findings ledger",
@@ -3045,7 +3119,7 @@ class TestStep11Projection:
     def test_it_renders_status_verdict_and_source(self, mod):
         _g, text = self._text(mod)
         assert (
-            "Projection: status=degraded  verdict=REQUEST_CHANGES "
+            "Published: status=degraded  verdict=REQUEST_CHANGES "
             "(findings ledger)" in text
         )
 
