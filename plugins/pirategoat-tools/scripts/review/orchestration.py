@@ -315,6 +315,41 @@ def _sanitized_ledger(findings: dict) -> dict:
         if isinstance(entries, list):
             clean[key] = [_clean_issue(entry) for entry in entries]
 
+    # The field list has to match what `render_review_body` actually puts
+    # in the record, not just the findings. What this replaced stripped the
+    # WHOLE report text in one pass, so it could not miss a field; naming
+    # fields is what makes an omission possible, and a rendered field the
+    # strip skips is a marker reaching the critic through the back door.
+    clearances = clean.get("clearances")
+    if isinstance(clearances, list):
+        clean["clearances"] = [
+            {
+                field: (
+                    strip_severity_floor_markers(value)
+                    if field in ("claim", "method", "evidence") and value
+                    else value
+                )
+                for field, value in entry.items()
+            } if isinstance(entry, dict) else entry
+            for entry in clearances
+        ]
+
+    positives = clean.get("positive_observations")
+    if isinstance(positives, list):
+        clean["positive_observations"] = [
+            strip_severity_floor_markers(entry) for entry in positives
+        ]
+
+    observations = clean.get("observations")
+    if isinstance(observations, list):
+        clean["observations"] = [
+            {
+                **entry,
+                "note": strip_severity_floor_markers(entry["note"]),
+            } if isinstance(entry, dict) and entry.get("note") else entry
+            for entry in observations
+        ]
+
     recommendations = clean.get("recommendations")
     if isinstance(recommendations, dict):
         clean["recommendations"] = {
@@ -364,17 +399,26 @@ def _render_run_notes(state: dict) -> str:
         )
     else:
         verification = state.get("dependency_refresh_verification")
-        if isinstance(verification, dict):
+        if not isinstance(verification, dict):
+            lines.append(
+                "- Dependency refresh: requested; no verification recorded."
+            )
+        elif not verification.get("report_present"):
+            # No self-report means nothing states which install commands
+            # actually ran — `commands_allowed` has nothing to validate.
+            # "ran" here would publish an install nobody observed.
+            lines.append(
+                "- Dependency refresh: requested; installs unverified — the "
+                "orchestrator wrote no refresh report, so which commands "
+                "ran is unknown."
+            )
+        else:
             allowed = verification.get("commands_allowed")
             dirty = verification.get("tracked_files_dirty")
             lines.append(
                 f"- Dependency refresh: ran; post-hoc verification — "
                 f"commands allowed: {_tri_state(allowed)}, tracked files "
                 f"dirty: {_tri_state(dirty)}."
-            )
-        else:
-            lines.append(
-                "- Dependency refresh: requested; no verification recorded."
             )
 
     summary = state.get("dispatch_plan_summary")

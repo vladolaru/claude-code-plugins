@@ -250,6 +250,46 @@ class TestRecordAssembly:
         assert "9 skipped" in text
         assert "unrecognized source language: .zig" in text
 
+    def test_run_notes_report_an_unverified_refresh_as_unverified(
+        self, out_dir
+    ):
+        """`report_present: False` means the orchestrator wrote no
+        self-report, so nothing states which install commands ran. Saying
+        "ran" there publishes an install nobody observed."""
+        _write_ledger(out_dir)
+        state = {
+            "dependency_refresh": {"signals": [{"root": "."}]},
+            "dependency_refresh_verification": {
+                "report_present": False,
+                "commands_allowed": None,
+                "tracked_files_dirty": False,
+            },
+        }
+
+        assemble_review_record(str(out_dir), state)
+        text = (out_dir / REVIEW_RECORD_MD).read_text()
+
+        assert "Dependency refresh: requested; installs unverified" in text
+        assert "Dependency refresh: ran" not in text
+
+    def test_run_notes_report_a_verified_refresh_as_ran(self, out_dir):
+        _write_ledger(out_dir)
+        state = {
+            "dependency_refresh": {"signals": [{"root": "."}]},
+            "dependency_refresh_verification": {
+                "report_present": True,
+                "commands_allowed": True,
+                "tracked_files_dirty": False,
+            },
+        }
+
+        assemble_review_record(str(out_dir), state)
+        text = (out_dir / REVIEW_RECORD_MD).read_text()
+
+        assert "Dependency refresh: ran" in text
+        assert "commands allowed: true" in text
+        assert "tracked files dirty: false" in text
+
     def test_run_notes_say_not_requested_when_refresh_was_off(self, out_dir):
         _write_ledger(out_dir)
 
@@ -401,6 +441,53 @@ class TestRecordSanitization:
         assert "see the notice helper." in text
         assert "wrap it in esc_html()." in text
         assert "the admin path is exposed." in text
+
+    def test_every_free_text_field_the_record_renders_is_covered(
+        self, out_dir
+    ):
+        """The builder stripped the WHOLE report text; this strips named
+        fields, so the list has to match what `render_review_body` actually
+        puts in the record — clearances, positives, and observations
+        included. A field the record renders but the strip skips is a
+        marker reaching the critic through the back door."""
+        findings = _ledger()
+        findings["clearances"] = [{
+            "claim": "Severity-floor: high; nothing calls the helper",
+            "method": "Severity-floor: medium - git grep",
+            "evidence": "Severity-floor: low; 0 hits",
+        }]
+        findings["positive_observations"] = [
+            "Severity-floor: high; the retry guard is tidy",
+        ]
+        findings["observations"] = [
+            {"file": "src/a.php", "note": "Severity-floor: low; a tradeoff"},
+        ]
+        _write_ledger(out_dir, findings)
+
+        assemble_review_record(str(out_dir), {})
+        text = (out_dir / REVIEW_RECORD_MD).read_text()
+
+        assert "Severity-floor:" not in text
+        assert "nothing calls the helper" in text
+        assert "git grep" in text
+        assert "0 hits" in text
+        assert "the retry guard is tidy" in text
+        assert "a tradeoff" in text
+
+    def test_removed_by_critic_entries_are_covered(self, out_dir):
+        findings = _ledger()
+        findings["removed_by_critic"] = [{
+            "title": "Severity-floor: high; withdrawn finding",
+            "severity": "high", "file": "src/x.php", "line": 1,
+            "critic_adjustment": {"rationale": "not reachable"},
+        }]
+        _write_ledger(out_dir, findings)
+
+        assemble_review_record(str(out_dir), {})
+        text = (out_dir / REVIEW_RECORD_MD).read_text()
+
+        assert "Severity-floor:" not in text
+        assert "withdrawn finding" in text
 
     def test_structured_severity_floor_still_renders(self, out_dir):
         findings = _ledger()

@@ -534,9 +534,16 @@ def format_output(step, guidance):
         # that file sits one line above this footer. "PIPELINE COMPLETE"
         # underneath it contradicts the gate, and pirategoat-bot fails the
         # delivery when the file the gate names is missing.
-        if guidance.get("degraded"):
+        degraded = guidance.get("degraded")
+        open_handoff = bool(guidance.get("handoff"))
+        if degraded and open_handoff:
+            lines.append(
+                "⚠️  PIPELINE STEPS COMPLETE (DEGRADED — see notes above) — "
+                "finish the HANDOFF above before reporting the review done."
+            )
+        elif degraded:
             lines.append("⚠️  PIPELINE COMPLETE (DEGRADED — see notes above)")
-        elif guidance.get("handoff"):
+        elif open_handoff:
             lines.append(
                 "🏁 PIPELINE STEPS COMPLETE — finish the HANDOFF above "
                 "before reporting the review done."

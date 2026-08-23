@@ -1584,6 +1584,23 @@ class TestStep9ReviewRecord:
         g = mod.get_step_guidance(9, "full", {"completed_steps": []}, {})
         assert g["handoff"] is None
 
+    def test_no_recorded_outcome_makes_no_claim_either_way(
+        self, mod, tmp_path
+    ):
+        """State with no `review_record` key at all — older state, or a
+        briefing fetched on its own — is an UNMEASURED absence. Rendering
+        "The review record is assembled at ..." for it states a positive
+        fact nothing measured, the same failure the `critic_source`
+        no-recorded-facts branch exists to avoid one step later."""
+        g = mod.get_step_guidance(
+            9, "full", {"completed_steps": []}, {}, output_dir=str(tmp_path)
+        )
+        text = "\n".join(g["situation"] + g["actions"])
+        assert "The review record is assembled at" not in text
+        assert "could not assemble" not in text
+        assert "review-record.md" in text
+        assert "if it is there" in text
+
     def test_reports_a_failed_assembly_and_routes_to_the_ledger(
         self, mod, tmp_path
     ):

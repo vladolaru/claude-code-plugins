@@ -1506,6 +1506,100 @@ class TestStep8Orchestration:
         assert repr(None) in message
 
 
+class TestStep9CoverageStateLoading:
+    """Step 9's orchestration loads the three inline-coverage populations
+    out of `reconciliation-context.json` and into pipeline state.
+
+    That block is live, unchanged code — the record assembler and step 11's
+    coverage instruction both read what it puts in state. The pins used to
+    ride on the step-9 briefing's paste block; when the paste block went,
+    they went with it and left the loading itself unasserted. These pin the
+    loading directly, which is where the behavior actually lives.
+    """
+
+    @staticmethod
+    def _load(mod, tmp_path, payload=None, state=None):
+        if payload is not None:
+            (tmp_path / "reconciliation-context.json").write_text(
+                json.dumps(payload)
+            )
+        state = {} if state is None else state
+        mod._orchestrate_step(9, "full", {}, state, {}, str(tmp_path))
+        return state
+
+    def test_all_three_populations_reach_state(self, mod, tmp_path):
+        gaps = {"src/starved.php": ["code-reviewer"]}
+        claims = {"src/big_module.py": ["security-reviewer"]}
+        state = self._load(mod, tmp_path, {"inline_coverage": {
+            "files_never_inline": gaps,
+            "files_deferred_reviewed": claims,
+            "files_unscoped": ["package-lock.json", 7],
+        }})
+
+        assert state["inline_coverage_gaps"] == gaps
+        assert state["inline_coverage_claims"] == claims
+        # Non-string entries are dropped, not carried into a path list.
+        assert state["inline_coverage_unscoped"] == ["package-lock.json"]
+
+    @pytest.mark.parametrize(
+        "payload",
+        [None, {"inline_coverage": ["malformed"]}, {"not_coverage": 1}],
+        ids=["missing-context", "malformed-coverage", "no-coverage-key"],
+    )
+    def test_stale_populations_are_cleared_not_carried(
+        self, mod, tmp_path, payload
+    ):
+        """A re-entered step 9 whose context is gone or malformed must not
+        keep the previous run's gaps standing — the record would then
+        report a coverage problem this run never measured."""
+        stale = {
+            "inline_coverage_gaps": {"src/stale.php": ["code-reviewer"]},
+            "inline_coverage_claims": {"src/stale.py": ["security-reviewer"]},
+        }
+        state = self._load(mod, tmp_path, payload, state=stale)
+
+        assert state["inline_coverage_gaps"] == {}
+        assert state["inline_coverage_claims"] == {}
+
+    def test_unmeasured_unscoped_is_none_not_empty(self, mod, tmp_path):
+        """`files_unscoped: null` is "not measured", not "none found" —
+        only the second may ever render as a clean coverage result."""
+        state = self._load(
+            mod, tmp_path,
+            {"inline_coverage": {
+                "files_never_inline": {},
+                "files_deferred_reviewed": {},
+                "files_unscoped": None,
+            }},
+            state={"inline_coverage_unscoped": ["stale.py"]},
+        )
+        assert state["inline_coverage_unscoped"] is None
+
+    def test_measured_empty_unscoped_is_a_list(self, mod, tmp_path):
+        state = self._load(mod, tmp_path, {"inline_coverage": {
+            "files_never_inline": {},
+            "files_deferred_reviewed": {},
+            "files_unscoped": [],
+        }})
+        assert state["inline_coverage_unscoped"] == []
+
+    def test_the_loaded_populations_reach_the_record(self, mod, tmp_path):
+        """The whole point of loading them: the assembler renders them."""
+        (tmp_path / "review-findings.json").write_text(
+            json.dumps(_review_json("review-reconciliator"))
+        )
+        self._load(mod, tmp_path, {"inline_coverage": {
+            "files_never_inline": {"src/starved.php": ["code-reviewer"]},
+            "files_deferred_reviewed": {"src/big.py": ["security-reviewer"]},
+            "files_unscoped": ["package-lock.json"],
+        }})
+
+        record = (tmp_path / "review-record.md").read_text()
+        assert "`src/starved.php` (skipped by: `code-reviewer`)" in record
+        assert "`src/big.py` (claimed by: `security-reviewer`)" in record
+        assert "- `package-lock.json`" in record
+
+
 class TestStep9Orchestration:
     """Step 9 main() loads inline coverage gaps from reconciliation context."""
 

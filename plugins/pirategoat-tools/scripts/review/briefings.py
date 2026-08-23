@@ -1370,12 +1370,22 @@ def _step_9_review_report(mode, state, context, config, output_dir):
             "handoff": None,
         }
 
+    # Three states, never two — the same discipline step 10's
+    # `critic_source` follows a hundred lines below. A run that recorded
+    # NO assembly outcome (older state, a briefing fetched on its own) has
+    # not been measured, and saying "the record is assembled at <path>" for
+    # it states a fact nothing established. An unmeasured absence and a
+    # measured success are different claims.
     record_outcome = state.get("review_record")
-    record_failed = (
-        isinstance(record_outcome, dict)
-        and record_outcome.get("status") != "complete"
-    )
-    if record_failed:
+    if not isinstance(record_outcome, dict):
+        actions.append(
+            f"**Read `{od}/{REVIEW_RECORD_MD}` if it is there.** This run "
+            "recorded no assembly outcome, so whether the pipeline wrote "
+            "the record is unknown — look, rather than assume either way. "
+            f"If it is absent, read `{od}/review-findings.json` directly; "
+            "it is the canonical ledger the record projects."
+        )
+    elif record_outcome.get("status") != "complete":
         situation.append(
             f"⚠️ The pipeline could not assemble `{od}/{REVIEW_RECORD_MD}`. "
             f"Read `{od}/review-findings.json` directly instead — it is the "
