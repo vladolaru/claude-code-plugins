@@ -1326,7 +1326,10 @@ def _render_review_coverage_section(gaps, claims, unscoped):
         lines.append(
             f"{len(unscoped)} changed file(s) matched no reviewer's domain "
             "and were reviewed by no one — no agent's scope contained them "
-            "in any form:"
+            "in any form (this counts every changed file, including "
+            "binaries and non-reviewable paths — run-level metrics count "
+            "reviewable files only, so its 'uncovered' figure can be "
+            "smaller):"
         )
         lines.append("")
         for f_path in sorted(unscoped):

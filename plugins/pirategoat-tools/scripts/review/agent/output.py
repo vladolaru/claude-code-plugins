@@ -247,16 +247,38 @@ def render_markdown(data: Dict) -> str:
     Keys present in schema 1 are required (missing means KeyError — the
     caller's problem); later schema additions are read with .get() and
     render only when present.
+
+    Title plus ``render_review_body()``, which is everything below it. The
+    split exists because `review-record.md` — the pipeline's machine
+    projection of the reconciliation ledger — needs that body under its own
+    header, and a second copy of these sections is how the record and
+    `review-findings.md` would eventually disagree about a finding.
+    """
+    return (
+        f"# {data['reviewer'].title()} Review - PR #{data['pr_id']}\n\n"
+        + render_review_body(data)
+    )
+
+
+def render_review_body(data: Dict) -> str:
+    """Everything a rendered review says beneath its title.
+
+    Banner, executive summary, assessment, critic accounting, issues,
+    recommendations, clearances, critic removals, positives, observations —
+    the whole document minus the H1. Shared verbatim by
+    ``render_markdown()`` (which supplies the per-reviewer title) and by
+    the review-record assembler in ``orchestration.py`` (which supplies its
+    own). Same contract as ``render_markdown()``: a pure function of the
+    canonical dict, schema-1 keys required, later additions read with
+    ``.get()``.
     """
     md = []
 
-    md.append(f"# {data['reviewer'].title()} Review - PR #{data['pr_id']}\n\n")
-
-    # Degraded host context, directly under the title: reviewers' claims
+    # Degraded host context, first thing in the body: reviewers' claims
     # were scoped by this banner's presence, so a reader must meet it
-    # before any finding. It follows the H1 rather than preceding it
-    # because every rendering this function produces is graded on starting
-    # with "# " (tests/helpers/graders.py) — one rule for one renderer, and
+    # before any finding. It sits below the caller's H1 rather than above
+    # it because every document built from this body is graded on starting
+    # with "# " (tests/helpers/graders.py) — one rule for both callers, and
     # the first thing after the title is prominent enough.
     #
     # Every line carries the quote marker, not just the first: the banner

@@ -127,8 +127,21 @@ def resolve_severity_floor(issue: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _strip_critic_severity_floor_markers(text: Any) -> str:
+def strip_severity_floor_markers(text: Any) -> str:
     """Remove prose floor markers before content reaches the critic.
+
+    A ``Severity-floor:`` marker is a reviewer-to-reconciliator directive.
+    The reconciliator has already acted on it by the time anything
+    downstream renders the finding, and prose that still carries it reads
+    to the decision critic as a standing instruction not to demote — which
+    is exactly the judgment the critic exists to make independently. The
+    STRUCTURED floor still renders (``resolve_structured_severity_floor``);
+    only the prose restatement goes.
+
+    Public because it has two homes now: ``build_critic_context`` here, and
+    ``orchestration.assemble_review_record()``, which renders the record
+    the critic reads. It lives beside the patterns it is compiled from
+    rather than being copied to the caller.
 
     Accepts any type and coerces first — like ``_escape_backtick_runs``, this
     is a regex chokepoint that free-form (model-authored) finding text flows
@@ -1722,7 +1735,7 @@ def build_critic_context(report_text: str, findings: Dict[str, Any]) -> str:
 
     # Fence the report with a dynamic fence to avoid collisions with
     # backtick runs inside the report itself.
-    report_text = _strip_critic_severity_floor_markers(report_text)
+    report_text = strip_severity_floor_markers(report_text)
     fence = _markdown_fence_for(report_text)
     parts.append(fence)
     parts.append(report_text)
@@ -1764,7 +1777,7 @@ def build_critic_context(report_text: str, findings: Dict[str, Any]) -> str:
         recommendation = issue.get("recommendation", "")
 
         conf_str = f", confidence: {confidence}" if confidence else ""
-        title = _strip_critic_severity_floor_markers(title)
+        title = strip_severity_floor_markers(title)
         # The ledger id, beside the F-label the critic uses in prose. The
         # critic keys decision-critic-adjustments.json by this id, and
         # critic_adjustments.py resolves it against review-findings.json —
@@ -1791,13 +1804,13 @@ def build_critic_context(report_text: str, findings: Dict[str, Any]) -> str:
         if severity_floor:
             parts.append(f"- **Severity floor:** {severity_floor}")
         if description:
-            description = _strip_critic_severity_floor_markers(description)
+            description = strip_severity_floor_markers(description)
             desc = _escape_backtick_runs(description)
             desc = _escape_block_syntax(desc)
             desc = desc.replace("\n", "\n  ")
             parts.append(f"- **Description:** {desc}")
         if recommendation:
-            recommendation = _strip_critic_severity_floor_markers(
+            recommendation = strip_severity_floor_markers(
                 recommendation
             )
             rec = _escape_backtick_runs(recommendation)
@@ -1819,7 +1832,7 @@ def build_critic_context(report_text: str, findings: Dict[str, Any]) -> str:
                 items = recommendations.get(priority, [])
                 if isinstance(items, list):
                     for item in items:
-                        item = _strip_critic_severity_floor_markers(item)
+                        item = strip_severity_floor_markers(item)
                         escaped = _escape_backtick_runs(item)
                         escaped = _escape_block_syntax(escaped)
                         escaped = escaped.replace("\n", "\n  ")

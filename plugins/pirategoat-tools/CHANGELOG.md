@@ -24,6 +24,7 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 - **`agents_status.py --wait --max-seconds N`** — blocks until dispatched reviewers finish, replacing improvised polling patterns.
 - **`BACKLOG.md`** — deferred-but-valid findings from audits and reviews now live in a committed home, each with evidence and a do-when condition.
 - **Per-agent budget utilization** — `review_run_metrics.py` reports each agent's tool calls against its budget target, with a run-level median and range in both the JSON output and the table's new `Budget util` column.
+- **`review-record.md`** — a machine projection of the findings ledger, assembled by the pipeline at step 9 and again after the critic adjustments land, carrying the findings, clearances, critic accounting, run notes, and the coverage measurement in one place. No agent writes or edits it, so it cannot drift from the ledger it projects.
 
 ### Changed
 

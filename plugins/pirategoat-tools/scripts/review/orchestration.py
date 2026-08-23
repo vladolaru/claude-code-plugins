@@ -28,8 +28,10 @@ try:
         detect_dependency_refresh,
         verify_dependency_refresh,
     )
-    from .atomic_io import atomic_write_json
+    from .atomic_io import atomic_write_json, atomic_write_text
     from .reviewer_names import derive_reviewer_name
+    from .briefings import _render_review_coverage_section
+    from .reconciliation_context import strip_severity_floor_markers
     from . import critic_adjustments
     from . import manifest_sections
     from . import synthesis_lifecycle
@@ -56,8 +58,10 @@ except ImportError:
         detect_dependency_refresh,
         verify_dependency_refresh,
     )
-    from review.atomic_io import atomic_write_json
+    from review.atomic_io import atomic_write_json, atomic_write_text
     from review.reviewer_names import derive_reviewer_name
+    from review.briefings import _render_review_coverage_section
+    from review.reconciliation_context import strip_severity_floor_markers
     from review import critic_adjustments
     from review import manifest_sections
     from review import synthesis_lifecycle
@@ -142,31 +146,48 @@ def _run_subprocess(cmd, cwd=None, timeout=60):
         return "", False
 
 
-def _materialize_markdown(
-    output_dir: str, output_builder_path: str, suffix: str = "-review.json",
-) -> list:
-    """Render derived Markdown from the settled JSONs in `output_dir`.
+def _load_output_module(output_builder_path: str):
+    """Load agent/output.py by exact adjacent path.
 
-    Loads the output builder by exact adjacent path — the same contract the
-    telemetry and dispatch-status loaders use — so a long-lived process
-    can never render with a foreign checkout's semantics.
-
-    One entry point for both derived families: the per-reviewer
-    `<reviewer>-review.md` the step-8 readiness gate writes (the default
-    suffix) and `review-findings.md`, which steps 9 and 11 render from the
-    reconciliation ledger. The renderer itself lives in output.py; this is
-    only the loader, and there is deliberately no second one.
+    The same contract the telemetry and dispatch-status loaders use, so a
+    long-lived process can never render with a foreign checkout's
+    semantics. Both users of output.py's renderers go through this one
+    loader: `_materialize_markdown` (the derived-Markdown families) and
+    `assemble_review_record` (the record's shared body).
     """
     spec = importlib.util.spec_from_file_location(
         "_pirategoat_review_output", output_builder_path,
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def _materialize_markdown(
+    output_dir: str, output_builder_path: str, suffix: str = "-review.json",
+) -> list:
+    """Render derived Markdown from the settled JSONs in `output_dir`.
+
+    One entry point for both derived families: the per-reviewer
+    `<reviewer>-review.md` the step-8 readiness gate writes (the default
+    suffix) and `review-findings.md`, which steps 9 and 11 render from the
+    reconciliation ledger. The renderer itself lives in output.py; this is
+    only the caller, and there is deliberately no second one.
+    """
+    module = _load_output_module(output_builder_path)
     return module.materialize_markdown(output_dir, suffix=suffix)
 
 
 _FINDINGS_JSON = "review-findings.json"
 _FINDINGS_MD = "review-findings.md"
+
+# The machine projection of the ledger: complete, honest, assembled by the
+# pipeline at step 9 and re-assembled at step 11 after the critic
+# adjustments land. No LLM writes or edits it — which is precisely what
+# makes it safe to hand the decision critic as the thing to stress-test,
+# and what lets `review-report.md` be a presentation written ONCE at step
+# 11 rather than a document kept in sync with a moving ledger.
+REVIEW_RECORD_MD = "review-record.md"
 
 # The two verdict layers, and the one place they meet. Reviewers, the
 # reconciliator, and critic batches all speak the per-review vocabulary of
@@ -253,6 +274,256 @@ def _render_findings_markdown(output_dir: str) -> tuple:
         outcome["status"] = "failed"
         return outcome, f"renderer skipped {_FINDINGS_JSON}"
     return outcome, None
+
+
+# ---------------------------------------------------------------------------
+# Review Record Assembly
+# ---------------------------------------------------------------------------
+
+def _sanitized_ledger(findings: dict) -> dict:
+    """A copy of the ledger with prose severity-floor markers removed.
+
+    Rendered clean AT THE SOURCE, which is where this strip belongs now:
+    it used to live in `build_critic_context`, a Markdown context builder
+    that existed only to merge the report and the ledger for the decision
+    critic. The record replaced that builder, so the protection moved with
+    the reader — a `Severity-floor:` restatement left in prose reads to the
+    critic as an instruction not to demote, and demoting is the judgment
+    the critic exists to make on its own.
+
+    Copies rather than mutates: `review-findings.json` on disk keeps the
+    reviewer's own words, and the structured `severity_floor` field (which
+    `render_review_body` renders as its own line) is untouched.
+    """
+    clean = dict(findings)
+
+    for key in ("narrative_summary", "withdrawn_narrative_summary"):
+        if clean.get(key):
+            clean[key] = strip_severity_floor_markers(clean[key])
+
+    def _clean_issue(issue):
+        if not isinstance(issue, dict):
+            return issue
+        patched = dict(issue)
+        for field in ("title", "description", "recommendation"):
+            if patched.get(field):
+                patched[field] = strip_severity_floor_markers(patched[field])
+        return patched
+
+    for key in ("issues", "removed_by_critic"):
+        entries = clean.get(key)
+        if isinstance(entries, list):
+            clean[key] = [_clean_issue(entry) for entry in entries]
+
+    recommendations = clean.get("recommendations")
+    if isinstance(recommendations, dict):
+        clean["recommendations"] = {
+            priority: [
+                strip_severity_floor_markers(item) for item in entries
+            ] if isinstance(entries, list) else entries
+            for priority, entries in recommendations.items()
+        }
+
+    return clean
+
+
+def _render_record_body(findings: dict) -> str:
+    """The record's findings/clearances body — output.py's own renderer.
+
+    Byte-identical to what `review-findings.md` shows for the same ledger
+    (modulo the prose-marker strip above), because it IS the same function.
+    A second copy of these sections is how the two documents would
+    eventually disagree about a finding.
+    """
+    module = _load_output_module(str(SCRIPTS_DIR / "agent" / "output.py"))
+    return module.render_review_body(_sanitized_ledger(findings))
+
+
+def _render_run_notes(state: dict) -> str:
+    """What the run did to itself, in two lines the ledger cannot carry.
+
+    Both facts already live in pipeline state; nothing is re-derived from
+    the filesystem here. An absent fact says so — "not requested" and "not
+    recorded" are different from a measured clean result, and none of the
+    three may be reported as either of the others.
+    """
+    lines = ["## Run notes", ""]
+
+    refresh = state.get("dependency_refresh")
+    if not isinstance(refresh, dict):
+        lines.append("- Dependency refresh: not requested.")
+    elif refresh.get("detection_failed"):
+        lines.append(
+            "- Dependency refresh: requested, but staleness detection "
+            "failed — dependency freshness is unknown, not clean."
+        )
+    elif refresh.get("skipped_reason"):
+        lines.append(
+            f"- Dependency refresh: refused "
+            f"({refresh['skipped_reason']}) — host context may be degraded."
+        )
+    else:
+        verification = state.get("dependency_refresh_verification")
+        if isinstance(verification, dict):
+            allowed = verification.get("commands_allowed")
+            dirty = verification.get("tracked_files_dirty")
+            lines.append(
+                f"- Dependency refresh: ran; post-hoc verification — "
+                f"commands allowed: {_tri_state(allowed)}, tracked files "
+                f"dirty: {_tri_state(dirty)}."
+            )
+        else:
+            lines.append(
+                "- Dependency refresh: requested; no verification recorded."
+            )
+
+    summary = state.get("dispatch_plan_summary")
+    if isinstance(summary, dict) and summary:
+        lines.append(
+            f"- Dispatch: {summary.get('dispatched', 0)} dispatched, "
+            f"{summary.get('skipped', 0)} skipped "
+            f"({summary.get('conditional', 0)} conditional)."
+        )
+    else:
+        lines.append("- Dispatch: no plan summary recorded for this run.")
+
+    warnings = state.get("dispatch_plan_warnings")
+    if isinstance(warnings, list):
+        for warning in warnings:
+            lines.append(f"- ⚠ Dispatch warning: {warning}")
+
+    return "\n".join(lines)
+
+
+def _tri_state(value) -> str:
+    """`true`/`false`/`unknown` — never a bare `None` printed as "None"."""
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    return "unknown"
+
+
+def _render_record_verdict_line(findings: dict) -> str:
+    """The record's closing verdict, stated at the layer that computed it.
+
+    The ledger verdict is the only one derived from findings. The published
+    APPROVE/COMMENT/REQUEST_CHANGES layer is shown beside it through the
+    module's one mapping, with the single override that can still change it
+    named rather than left as a surprise at finalize.
+    """
+    raw = findings.get("verdict")
+    ledger = str(raw).strip().lower() if raw else ""
+    published = _LEDGER_TO_REVIEW_VERDICT.get(ledger)
+    if not ledger:
+        return (
+            "**Verdict — from the findings ledger: none recorded.** The "
+            "published verdict falls back to COMMENT and the run reports "
+            "the absence as a degradation."
+        )
+    published_clause = (
+        f"{published} at the published layer"
+        if published
+        else "unrecognized at the published layer — the run falls back to "
+             "COMMENT and reports it"
+    )
+    return (
+        f"**Verdict — from the findings ledger: `{ledger}` "
+        f"({published_clause}).** A critic ESCALATE overrides the published "
+        "verdict to COMMENT at finalize; this line reports the ledger, the "
+        "only verdict actually computed from findings."
+    )
+
+
+def assemble_review_record(output_dir: str, state: dict) -> tuple:
+    """Assemble `review-record.md` from the ledger and the run's own facts.
+
+    Returns ``(outcome, error)`` in the same vocabulary the derived-Markdown
+    renders use (``complete`` / ``failed`` with written/expected counts),
+    and never raises: a record the pipeline could not assemble is a
+    degradation to report, never a reason to abort a step.
+
+    ``expected`` is 0 when there is no ledger — a degraded run that never
+    reconciled asked nothing of the assembler, and the step-9 briefing's
+    degraded branch routes it to manual synthesis instead.
+
+    Everything here is composed from renderers that already exist:
+    ``render_review_body`` for the findings/clearances body and
+    ``_render_review_coverage_section`` for coverage, both byte-identical
+    to what their own callers produce. The record's own new prose is three
+    things — its header, the run notes, and the closing verdict line.
+
+    The write is atomic, so a failed assembly leaves the previous record
+    intact rather than replacing it with a half-built one.
+    """
+    findings_path = os.path.join(output_dir, _FINDINGS_JSON)
+    expected = 1 if os.path.isfile(findings_path) else 0
+    outcome = {
+        "ran": True, "written": 0, "expected": expected, "status": "complete",
+    }
+    if not expected:
+        return outcome, None
+
+    read = critic_adjustments.read_findings_file(findings_path)
+    if read.status != critic_adjustments.FINDINGS_READ_OK:
+        outcome["status"] = "failed"
+        return outcome, f"{_FINDINGS_JSON} unreadable ({read.status})"
+
+    findings = read.findings
+    try:
+        sections = [
+            "# Review Record",
+            "",
+            "*Assembled by the review pipeline from `review-findings.json` "
+            "and this run's own measurements. No agent writes or edits this "
+            "file — it is the reference the audience-facing report must not "
+            "contradict.*",
+            "",
+            _render_record_body(findings).rstrip("\n"),
+            "",
+            _render_run_notes(state),
+        ]
+        coverage = _render_review_coverage_section(
+            state.get("inline_coverage_gaps"),
+            state.get("inline_coverage_claims"),
+            state.get("inline_coverage_unscoped"),
+        )
+        if coverage:
+            sections.extend(["", coverage])
+        sections.extend([
+            "",
+            "---",
+            "",
+            _render_record_verdict_line(findings),
+            "",
+        ])
+        atomic_write_text(
+            os.path.join(output_dir, REVIEW_RECORD_MD), "\n".join(sections)
+        )
+    except Exception as err:  # noqa: BLE001 — best-effort by design
+        outcome["status"] = "failed"
+        return outcome, str(err)
+
+    outcome["written"] = 1
+    return outcome, None
+
+
+def _record_review_record(state, outcome):
+    """Record the record-assembly outcome AND its degradation flag together.
+
+    The same paired-fact discipline `_record_findings_markdown` follows for
+    the findings render, and for the same reason: both assembly seams
+    (step 9, step 11) write through here, so a step-9 failure that step 11
+    repaired cannot leave a stale flag standing for a later reader.
+    """
+    state["review_record"] = outcome
+    degradation = state.setdefault("degradation", {})
+    if outcome["status"] == "complete":
+        degradation.pop("review_record_incomplete", None)
+        if not degradation:
+            state.pop("degradation", None)
+    else:
+        degradation["review_record_incomplete"] = True
 
 
 # ---------------------------------------------------------------------------
