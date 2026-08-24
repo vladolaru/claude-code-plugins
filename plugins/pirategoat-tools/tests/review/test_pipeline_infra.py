@@ -1321,6 +1321,14 @@ class TestDependencyRefreshConfig:
             {"review": {"refresh_dependencies": True}}))
         return {**os.environ, "XDG_CONFIG_HOME": str(tmp_path / "xdg")}
 
+    def test_help_describes_adaptive_lockfile_preserving_refresh(self, tmp_path):
+        result = run_pipeline("--help", cwd=tmp_path / "repo")
+
+        assert result.returncode == 0
+        assert "adaptive" in result.stdout
+        assert "lockfile-preserving" in result.stdout
+        assert "frozen-mode" not in result.stdout
+
     def test_flag_stored_in_config(self, tmp_path):
         r = run_pipeline("--step", "1", "--mode", "pr",
                       "--output-dir", str(tmp_path / "out"), "--pr-number", "42",

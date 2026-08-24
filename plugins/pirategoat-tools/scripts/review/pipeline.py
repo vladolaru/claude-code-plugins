@@ -724,8 +724,9 @@ def main():
     parser.add_argument("--refresh-deps", action=argparse.BooleanOptionalAction,
                         default=None,
                         help="Trusted-branch mode: authorize the orchestrator "
-                             "to refresh installed dependencies in the "
-                             "worktree with frozen-mode installs "
+                             "to run adaptive, lockfile-preserving dependency "
+                             "refresh in the worktree after a clean tracked-"
+                             "worktree safety check "
                              "(interactive runs only). Omitted, the "
                              "requester's machine-local config default "
                              "applies (~/.config/pirategoat/config.json)")
