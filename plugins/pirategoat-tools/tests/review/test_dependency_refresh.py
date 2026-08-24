@@ -487,3 +487,31 @@ class TestSaveCli:
             "INVALID dependency refresh report: unknown top-level field: 'extra'",
         ]
         assert not (output_dir / "dependency-refresh.json").exists()
+
+    def test_missing_input_is_an_io_failure_not_invalid_report(
+        self, git_repo, tmp_path
+    ):
+        output_dir = tmp_path / "out"
+        output_dir.mkdir()
+        missing_report = tmp_path / "missing-request.json"
+
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "save",
+                "--output-dir",
+                str(output_dir),
+                "--report",
+                str(missing_report),
+            ],
+            cwd=git_repo,
+            capture_output=True,
+            text=True,
+        )
+
+        assert proc.returncode != 0
+        assert proc.stdout == ""
+        assert "INVALID dependency refresh report:" not in proc.stderr
+        assert "No such file or directory" in proc.stderr
+        assert dependency_refresh.load_dependency_refresh_report(output_dir) is None

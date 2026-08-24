@@ -9002,6 +9002,30 @@ class TestDependencyRefreshSanitize:
 
         assert sanitized["dependency_refresh"]["skipped_reason"] == "invalid"
 
+    @pytest.mark.parametrize(
+        "malformed_reason",
+        [[], {}, None],
+        ids=("list", "object", "null"),
+    )
+    def test_historical_non_string_skip_reason_is_omitted(
+        self, malformed_reason
+    ):
+        manifest = _manifest("run-1")
+        manifest["availability"]["dependency_refresh"] = True
+        manifest["dependency_refresh"] = {
+            "requested": True,
+            "reported": False,
+            "skipped": True,
+            "skipped_reason": malformed_reason,
+            "dirty_files": [],
+        }
+
+        sanitized = sanitize._sanitize_manifest(manifest)
+
+        section = sanitized["dependency_refresh"]
+        assert section["skipped"] is True
+        assert "skipped_reason" not in section
+
     def test_historical_verification_and_a_self_report_remain_measurable(self):
         """Historical manifests retain their retired verification evidence."""
         manifest = _manifest("run-1")
@@ -9074,6 +9098,32 @@ class TestDependencyRefreshSanitize:
         assert sanitized["dependency_refresh"]["commands"] == [
             {"directory": ".", "command": "x", "exit_status": "invalid"},
         ]
+
+    @pytest.mark.parametrize(
+        "malformed_exit_status",
+        [[], {}, None],
+        ids=("list", "object", "null"),
+    )
+    def test_a_non_string_exit_status_reads_as_invalid(
+        self, malformed_exit_status
+    ):
+        manifest = _manifest("run-1")
+        manifest["availability"]["dependency_refresh"] = True
+        manifest["dependency_refresh"] = _dependency_refresh_payload(
+            commands=[{
+                "directory": ".",
+                "command": "x",
+                "exit_status": malformed_exit_status,
+            }],
+        )
+
+        sanitized = sanitize._sanitize_manifest(manifest)
+
+        assert sanitized["dependency_refresh"]["commands"] == [{
+            "directory": ".",
+            "command": "x",
+            "exit_status": "invalid",
+        }]
 
     def test_missing_requested_or_reported_is_a_missing_section(self):
         manifest = _manifest("run-1")

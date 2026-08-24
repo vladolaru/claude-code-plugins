@@ -1374,11 +1374,12 @@ def _sanitize_dependency_refresh(value: object) -> dict[str, Any] | None:
     if value.get("skipped") is True:
         skipped_reason = value.get("skipped_reason")
         result["skipped"] = True
-        result["skipped_reason"] = (
-            skipped_reason
-            if skipped_reason in _HISTORICAL_DEPENDENCY_REFRESH_SKIP_REASONS
-            else "invalid"
-        )
+        if isinstance(skipped_reason, str):
+            result["skipped_reason"] = (
+                skipped_reason
+                if skipped_reason in _HISTORICAL_DEPENDENCY_REFRESH_SKIP_REASONS
+                else "invalid"
+            )
         result["dirty_files"] = _safe_strings(
             value.get("dirty_files")
         )[:_MAX_DIRTY_FILES]
@@ -1435,7 +1436,10 @@ def _sanitize_dependency_refresh(value: object) -> dict[str, Any] | None:
                     "command": _safe_string(entry.get("command")),
                     "exit_status": (
                         exit_status
-                        if exit_status in _DEPENDENCY_REFRESH_EXIT_STATUSES
+                        if (
+                            isinstance(exit_status, str)
+                            and exit_status in _DEPENDENCY_REFRESH_EXIT_STATUSES
+                        )
                         else "invalid"
                     ),
                 })

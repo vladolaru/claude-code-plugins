@@ -76,11 +76,8 @@ def observe_tracked_worktree(
 
 def _read_report_request(path):
     """Return ``(JSON object, problems)`` without interpreting its schema."""
-    try:
-        with Path(path).open("rb") as report_file:
-            report_bytes = report_file.read(_MAX_REPORT_BYTES + 1)
-    except OSError as err:
-        return None, [f"unable to read report: {err}"]
+    with Path(path).open("rb") as report_file:
+        report_bytes = report_file.read(_MAX_REPORT_BYTES + 1)
 
     if len(report_bytes) > _MAX_REPORT_BYTES:
         return None, [f"report must contain at most {_MAX_REPORT_BYTES} bytes"]
@@ -234,9 +231,12 @@ def validate_canonical_report(payload):
 
 def load_dependency_refresh_report(output_dir):
     """Return a complete canonical report, or ``None`` when absent/invalid."""
-    payload, read_problems = _read_report_request(
-        Path(output_dir) / REPORT_FILENAME
-    )
+    try:
+        payload, read_problems = _read_report_request(
+            Path(output_dir) / REPORT_FILENAME
+        )
+    except OSError:
+        return None
     if read_problems or validate_canonical_report(payload):
         return None
     return payload
