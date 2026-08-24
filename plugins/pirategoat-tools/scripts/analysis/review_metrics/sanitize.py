@@ -1121,9 +1121,10 @@ def _sanitize_synthesis_agents(value: object) -> dict[str, Any] | None:
             return None
         rows.append({
             "agent": agent,
-            # Kept because it changes what the duration beside it means:
-            # a "SKIPPED" critic row spans dispatch to
-            # orchestrator-gave-up, not a critique.
+            # Historical SKIPPED rows remain readable and are excluded from
+            # critique-duration statistics. Current quick-mode skips commit
+            # SKIPPED without a dispatch marker, so they create no row; a
+            # dispatched crash has no usable verdict and is stalled instead.
             "verdict": _safe_string(row.get("verdict")),
             "started_at": _safe_string(row.get("started_at")),
             # Artifact mtime — the closest available proxy for when the

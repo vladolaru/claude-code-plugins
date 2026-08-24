@@ -8251,13 +8251,12 @@ class TestSynthesisAgentsShape:
 
 
 class TestSkippedCriticIsNotACritiqueDuration:
-    """A SKIPPED row spans dispatch to orchestrator-gave-up.
+    """Historical SKIPPED rows never become critique durations.
 
-    Quick mode skipping the critic, or the critic crashing and the
-    handoff's fallback verdict being written, both produce a span that is
-    an upper bound on a critique that may never have started. Averaging
-    those into a critic duration statistic drags the cohort mean toward
-    crash-resolution latency.
+    Current quick-mode skips commit SKIPPED without a dispatch marker and
+    therefore produce no row; current dispatched failures have no usable
+    verdict and stall. The reader still accepts historical SKIPPED rows and
+    excludes their non-critique spans from the cohort duration statistic.
     """
 
     def _run(self, run_id, verdict, duration_ms):

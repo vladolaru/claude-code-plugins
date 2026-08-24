@@ -408,12 +408,10 @@ def _aggregate_synthesis_agents(
     the durations they have, and their stalls are counted separately —
     dropping them would delete the only record of a hung synthesis agent.
 
-    A "SKIPPED" row is counted but never averaged. Its span is dispatch to
-    orchestrator-gave-up — quick mode skipping the critic, or the critic
-    crashing and the handoff's fallback verdict being written — which is
-    an upper bound on a critique that may never have started. Folding
-    those into `mean_ms` would drag a critique-duration statistic toward
-    crash-resolution latency, so they get their own `skipped_runs`.
+    Current quick-mode skips commit SKIPPED without a dispatch marker, so
+    they create no lifecycle row. A dispatched crash or missing verdict is
+    stalled/unavailable instead. Historical "SKIPPED" rows remain readable,
+    counted, and excluded from the duration average under `skipped_runs`.
     """
     durations: dict[str, list[int]] = {}
     stalled: Counter = Counter()

@@ -46,6 +46,13 @@ finalize, a marker with no completion artifact records `stalled: true`.
 marker and no `synthesis-agents.json`, so the manifest section is absent
 and its family reads "missing". A never-measured phase must never
 project as a zero-duration one.
+
+Quick mode commits the pipeline's own `SKIPPED` verdict without writing a
+critic dispatch marker, so it produces no critic lifecycle row. Once a
+critic marker exists, a missing or unusable verdict is a dispatched failure:
+finalize records it as stalled, and the pipeline reports the critic as
+unavailable and degrades the run. Historical `SKIPPED` rows remain readable
+for metrics compatibility, but current crash handling never manufactures one.
 """
 
 import json
@@ -121,7 +128,7 @@ DECISION_CRITIC = "decision-reviewer"
 #   the critic. Its mtime remains the completion signal, while the verdict
 #   recorded in the lifecycle row is accepted only from a complete,
 #   schema-versioned, proposal-digest-bound snapshot. The quick-skip branch
-#   dispatches no critic and therefore writes no lifecycle marker.
+#   commits SKIPPED but dispatches no critic and writes no lifecycle marker.
 SYNTHESIS_AGENTS = (
     (RECONCILIATOR, "review-findings.json"),
     (DECISION_CRITIC, "decision-critic-verdict.json"),

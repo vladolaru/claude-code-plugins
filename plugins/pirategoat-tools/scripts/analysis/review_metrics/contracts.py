@@ -210,10 +210,10 @@ _PRODUCER_AGENT_NAME_RE = _DISPATCH_STATUS_CONTRACT.AGENT_NAME_RE
 _WINDOWS_DRIVE_RE = re.compile(r"[A-Za-z]:")
 _CRITIC_VERDICTS = frozenset(_CRITIC_CONTRACT.CRITIC_VERDICTS)
 # Deliberately NOT in _CRITIC_VERDICTS: "SKIPPED" records that no critique
-# happened. The synthesis-agent aggregate needs it by name to keep
-# crash-resolution and quick-mode spans out of critique duration
-# statistics, and reads the producer's constant rather than respelling the
-# literal.
+# happened. Current quick-mode skips commit that verdict without a dispatch
+# marker and therefore create no lifecycle row; a dispatched crash instead
+# has no usable verdict, stalls, and degrades. The aggregate still recognizes
+# historical SKIPPED rows so they stay out of critique-duration statistics.
 _CRITIC_VERDICT_SKIPPED = _CRITIC_CONTRACT.CRITIC_VERDICT_SKIPPED
 # The producer-declared optional-section contract (mirrors the
 # ROW_KEYS pattern just below): the telemetry module names which

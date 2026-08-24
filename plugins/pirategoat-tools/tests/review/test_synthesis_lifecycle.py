@@ -328,8 +328,7 @@ class TestVerdictCapture:
         assert _entry(payload, lifecycle.DECISION_CRITIC)["verdict"] == "REVISE"
 
     def test_a_skipped_critic_is_recorded_as_skipped(self, out):
-        """Its span measures dispatch to orchestrator-gave-up, not a
-        critique — the cohort needs to tell the two apart."""
+        """Historical SKIPPED rows remain readable for cohort exclusion."""
         payload = self._complete_critic(out, "SKIPPED", committed=True)
         assert _entry(payload, lifecycle.DECISION_CRITIC)["verdict"] == (
             "SKIPPED"
