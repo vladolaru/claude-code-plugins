@@ -1409,7 +1409,7 @@ def _sanitize_dependency_refresh(value: object) -> dict[str, Any] | None:
 
     if reported or any(
         key in value
-        for key in ("status", "tracked_files_dirty", "dirty_files", "commands")
+        for key in ("status", "tracked_files_dirty", "commands")
     ):
         status = value.get("status")
         result["status"] = (

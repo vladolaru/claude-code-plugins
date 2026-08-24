@@ -9002,6 +9002,27 @@ class TestDependencyRefreshSanitize:
 
         assert sanitized["dependency_refresh"]["skipped_reason"] == "invalid"
 
+    def test_historical_skip_only_shape_stays_historical(self):
+        manifest = _manifest("run-1")
+        manifest["availability"]["dependency_refresh"] = True
+        manifest["dependency_refresh"] = {
+            "requested": True,
+            "reported": False,
+            "skipped": True,
+            "skipped_reason": "dirty_worktree",
+            "dirty_files": ["composer.lock"],
+        }
+
+        sanitized = sanitize._sanitize_manifest(manifest)
+
+        assert sanitized["dependency_refresh"] == {
+            "requested": True,
+            "reported": False,
+            "skipped": True,
+            "skipped_reason": "dirty_worktree",
+            "dirty_files": ["composer.lock"],
+        }
+
     @pytest.mark.parametrize(
         "malformed_reason",
         [[], {}, None],
