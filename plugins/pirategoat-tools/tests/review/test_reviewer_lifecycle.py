@@ -178,6 +178,10 @@ class TestCandidatePublication:
             "issues",
             "unreviewed",
             "deferred_reviewed",
+            "observations",
+            "recommendations",
+            "positive_observations",
+            "clearances",
             "narrative_summary",
             "meta",
         ],
@@ -205,6 +209,7 @@ class TestCandidatePublication:
             "title",
             "description",
             "file",
+            "line",
             "recommendation",
             "confidence",
         ],
@@ -295,7 +300,12 @@ class TestCandidatePublication:
 
     @pytest.mark.parametrize(
         "required_field",
-        ["unreviewed_autofilled", "review_duration_ms", "confidence_score"],
+        [
+            "unreviewed_autofilled",
+            "review_duration_ms",
+            "confidence_score",
+            "tool_results_used",
+        ],
     )
     def test_missing_required_meta_field_is_rejected_before_publication(
         self, tmp_path, required_field

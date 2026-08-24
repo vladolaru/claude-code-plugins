@@ -1725,6 +1725,10 @@ _REQUIRED_REVIEW_FIELDS = frozenset({
     "issues",
     "unreviewed",
     "deferred_reviewed",
+    "observations",
+    "recommendations",
+    "positive_observations",
+    "clearances",
     "narrative_summary",
     "meta",
 })
@@ -1735,6 +1739,7 @@ _REQUIRED_ISSUE_FIELDS = frozenset({
     "title",
     "description",
     "file",
+    "line",
     "recommendation",
     "confidence",
 })
@@ -1743,6 +1748,7 @@ _REQUIRED_META_FIELDS = frozenset({
     "unreviewed_autofilled",
     "review_duration_ms",
     "confidence_score",
+    "tool_results_used",
 })
 
 
