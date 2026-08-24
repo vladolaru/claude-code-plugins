@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,6 +16,7 @@ PLUGIN_ROOT = TESTS_DIR.parent
 _SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 
 sys.path.insert(0, str(_SCRIPTS_DIR))
+from review import agents_status
 from review.critic_adjustments import write_findings
 
 sys.path.insert(0, str(TESTS_DIR))
@@ -1173,9 +1175,54 @@ class TestStep7Orchestration:
         assert "candidate" in text.lower()
         assert "RUNNING" in text
         assert "completion notification" in text.lower()
-        assert "finalize_command" in text
+        assert "`CANDIDATE`" in text
+        assert "`FINALIZE_COMMAND`" in text
         assert "never authorizes" in text.lower()
         assert "discarded when review intake closes" in text.lower()
+
+    def test_step_7_guidance_uses_real_status_output_labels(
+        self, mod, tmp_path
+    ):
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps({
+            "agents": [
+                {"name": "security-reviewer", "status": "DISPATCH"},
+            ],
+        }))
+        (tmp_path / "security-reviewer.started").write_text(
+            datetime.now(timezone.utc).isoformat()
+        )
+        (tmp_path / "security-review.candidate.json").write_text("{}")
+        status_output = agents_status.format_output(
+            agents_status.check_status(str(tmp_path))
+        )
+        candidate_line = next(
+            line.strip()
+            for line in status_output.splitlines()
+            if line.strip().startswith("CANDIDATE")
+        )
+        finalize_line = next(
+            line.strip()
+            for line in status_output.splitlines()
+            if line.strip().startswith("FINALIZE_COMMAND")
+        )
+        rendered_labels = {
+            candidate_line.split()[0],
+            finalize_line.partition(":")[0],
+        }
+
+        guidance = mod.get_step_guidance(
+            7,
+            "full",
+            {"resolved_params": {"git_range": "abc..HEAD"}},
+            {"git": {"git_range": "abc..HEAD"}},
+            output_dir=str(tmp_path),
+        )
+        text = "\n".join(guidance["actions"])
+
+        assert rendered_labels == {"CANDIDATE", "FINALIZE_COMMAND"}
+        assert all(f"`{label}`" in text for label in rendered_labels)
+        assert "candidate_available" not in text
+        assert "`finalize_command`" not in text
 
 
 class TestStep8Orchestration:
@@ -1222,7 +1269,8 @@ class TestStep8Orchestration:
 
         assert guidance["blocks_progress"] is True
         assert "completion notification" in text.lower()
-        assert "finalize_command" in text
+        assert "`CANDIDATE`" in text
+        assert "`FINALIZE_COMMAND`" in text
         assert "never authorizes" in text.lower()
 
     def test_step_8_reads_change_purpose(self, tmp_path):

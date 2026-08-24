@@ -924,9 +924,9 @@ def _candidate_finalization_guidance():
         "A saved reviewer candidate remains RUNNING; only canonical "
         "`<reviewer>-review.json` is FINISHED.",
         "After a host subagent-completion notification, run agents_status. "
-        "If that returned agent still reports `candidate_available: true`, "
-        "run its exact printed `finalize_command`, then run agents_status "
-        "again.",
+        "If that returned agent's status block contains a `CANDIDATE` line, "
+        "run the exact command printed on its `FINALIZE_COMMAND` line, then "
+        "run agents_status again.",
         "Polling or candidate presence without a host completion notification "
         "never authorizes parent-side finalization.",
         "A TIMED_OUT unfinalized candidate remains timed out and is discarded "
