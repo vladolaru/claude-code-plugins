@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.116.0] - 2026-09-01
+
+### Added
+
+- **Late transforms over foreign collection entries** - `woo-regression-reviewer` now audits callbacks registered at a late priority on a collection filter, where a predicate-selected transform silently rewrites the entries other plugins contributed. "Display-only" no longer clears the concern, since extension-authored copy is the display.
+
 ## [1.115.0] - 2026-09-01
 
 ### Changed
