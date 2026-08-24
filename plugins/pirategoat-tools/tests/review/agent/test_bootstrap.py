@@ -153,6 +153,7 @@ class TestPersistDeferredSidecar:
         )
         assert payload == {
             "schema": 2,
+            "agent_name": "repo-renewals-reviewer",
             "deferred_files": ["src/deferred.php"],
             "review_budget": 80,
             "in_scope_count": 12,
@@ -171,21 +172,23 @@ class TestPersistDeferredSidecar:
         )
         assert payload == {
             "schema": 2,
+            "agent_name": "security-reviewer",
             "deferred_files": [],
             "review_budget": 40,
             "in_scope_count": 5,
             "diffed_count": 5,
         }
 
-    def test_write_errors_fail_open(self, tmp_path):
+    def test_write_errors_are_not_silenced(self, tmp_path):
         output_file = tmp_path / "not-a-directory"
         output_file.write_text("occupied")
 
-        _mod.persist_deferred_sidecar(
-            str(output_file), "security-reviewer", ["src/deferred.php"], [],
-            review_budget=80,
-            in_scope_count=1, diffed_count=0,
-        )
+        with pytest.raises(OSError):
+            _mod.persist_deferred_sidecar(
+                str(output_file), "security-reviewer", ["src/deferred.php"], [],
+                review_budget=80,
+                in_scope_count=1, diffed_count=0,
+            )
 
     def test_dedupes_deferred_files_order_preserving(self, tmp_path):
         """A multi-domain agent's secondary-domain scope render can repeat
@@ -201,7 +204,7 @@ class TestPersistDeferredSidecar:
             ["src/a.php", "src/b.php", "src/a.php"],
             [],
             review_budget=80,
-            in_scope_count=2, diffed_count=2,
+            in_scope_count=4, diffed_count=2,
         )
 
         payload = json.loads(
@@ -209,30 +212,26 @@ class TestPersistDeferredSidecar:
         )
         assert payload == {
             "schema": 2,
+            "agent_name": "security-reviewer",
             "deferred_files": ["src/a.php", "src/b.php"],
             "review_budget": 80,
-            "in_scope_count": 2,
+            "in_scope_count": 4,
             "diffed_count": 2,
         }
 
-    def test_defaults_to_no_budget_and_no_counts_when_omitted(self, tmp_path):
-        """Callers that have not yet computed a budget (unlikely, but the
-        signature must stay safe) still publish a valid schema-2 payload
-        with an absent target rather than crashing."""
-        _mod.persist_deferred_sidecar(
-            str(tmp_path), "security-reviewer", ["src/a.php"], [],
-        )
-
-        payload = json.loads(
-            (tmp_path / "security-deferred-files.json").read_text()
-        )
-        assert payload == {
-            "schema": 2,
-            "deferred_files": ["src/a.php"],
-            "review_budget": None,
-            "in_scope_count": None,
-            "diffed_count": None,
-        }
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"review_budget": 40, "in_scope_count": None, "diffed_count": 0},
+            {"review_budget": 40, "in_scope_count": 1, "diffed_count": None},
+            {"review_budget": 40, "in_scope_count": 1, "diffed_count": 1},
+        ],
+    )
+    def test_rejects_incomplete_or_incoherent_payloads(self, tmp_path, kwargs):
+        with pytest.raises(ValueError):
+            _mod.persist_deferred_sidecar(
+                str(tmp_path), "security-reviewer", ["src/a.php"], [], **kwargs
+            )
 
 
 class TestPartitionScopePaths:

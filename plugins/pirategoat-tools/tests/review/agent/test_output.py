@@ -2395,7 +2395,11 @@ class TestBudgetTargetEcho:
     @staticmethod
     def _write_sidecar(tmp_path, reviewer="code", schema=2, deferred_files=None,
                         **fields):
-        payload = {"schema": schema, "deferred_files": deferred_files or []}
+        payload = {
+            "schema": schema,
+            "agent_name": f"{reviewer}-reviewer",
+            "deferred_files": deferred_files or [],
+        }
         payload.update(fields)
         (tmp_path / f"{reviewer}-deferred-files.json").write_text(
             json.dumps(payload)
@@ -2502,11 +2506,36 @@ class TestSaveEchoProgressAndNextUnread:
     @staticmethod
     def _write_sidecar(tmp_path, reviewer="code", schema=2, deferred_files=None,
                         **fields):
-        payload = {"schema": schema, "deferred_files": deferred_files or []}
+        payload = {
+            "schema": schema,
+            "agent_name": f"{reviewer}-reviewer",
+            "deferred_files": deferred_files or [],
+        }
         payload.update(fields)
         (tmp_path / f"{reviewer}-deferred-files.json").write_text(
             json.dumps(payload)
         )
+
+    def test_save_derives_authoritative_coverage_without_changing_draft_state(
+        self, tmp_path, monkeypatch
+    ):
+        self._clean_env(monkeypatch)
+        self._write_sidecar(
+            tmp_path,
+            deferred_files=["a.go", "b.go"],
+            in_scope_count=4,
+            diffed_count=2,
+        )
+        builder = ReviewOutputBuilder("123", "code")
+        builder.add_deferred_reviewed("b.go")
+
+        assert builder.to_dict()["meta"]["files_reviewed"] is None
+
+        builder.save(str(tmp_path))
+        saved = json.loads((tmp_path / "code-review.json").read_text())
+        assert saved["deferred_reviewed"] == ["b.go"]
+        assert saved["unreviewed"] == ["a.go"]
+        assert saved["meta"]["files_reviewed"] == 3
 
     def test_progress_and_next_unread_appear_with_claims_and_declarations(
         self, tmp_path, monkeypatch, capsys

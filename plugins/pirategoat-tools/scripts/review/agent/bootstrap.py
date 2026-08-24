@@ -43,6 +43,8 @@ if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
 from review.reviewer_names import derive_reviewer_name
+from review.agent.coverage import derive_deferred_coverage
+from review.atomic_io import atomic_write_json
 
 # Import telemetry (parent directory script, best-effort)
 try:
@@ -1428,8 +1430,8 @@ def persist_deferred_sidecar(output_dir, effective_agent_name,
     """Write the authoritative deferred-set sidecar for the output builder.
 
     Written even when empty: with no deferred files, any add_unreviewed()
-    declaration is wrong. Fail-open on write errors (builder falls back
-    to form-only validation).
+    declaration is wrong. This required machine-fact artifact fails closed
+    when it cannot be published.
 
     Schema 2 (was 1): also carries the run's tool-call budget and scope
     counts, replacing the retired env-var budget transport that silently
@@ -1468,30 +1470,20 @@ def persist_deferred_sidecar(output_dir, effective_agent_name,
     # build_coverage_manifest reconciles against claimed+declared+autofilled,
     # while save() reads the same paths as a frozenset and cannot inflate.
     deferred_files = list(dict.fromkeys(deferred_files))
+    payload = {
+        "schema": 2,
+        "agent_name": effective_agent_name,
+        "deferred_files": deferred_files,
+        "review_budget": review_budget,
+        "in_scope_count": in_scope_count,
+        "diffed_count": diffed_count,
+    }
+    derive_deferred_coverage(payload, [])
     deferred_sidecar = os.path.join(
         output_dir,
         f"{derive_reviewer_name(effective_agent_name)}-deferred-files.json",
     )
-    try:
-        with open(deferred_sidecar, "w", encoding="utf-8") as f:
-            json.dump({
-                "schema": 2,
-                "deferred_files": deferred_files,
-                # Tool-call budget, persisted where save() already reads:
-                # run12's retired env-var transport silently died for any
-                # agent that rebuilt its save command — the worst
-                # under-spender (15% of target) never saw the TARGET echo.
-                # The effective (override-applied) number is written here,
-                # never recomputed downstream.
-                "review_budget": review_budget,
-                # Scope counts for the save echo's PROGRESS line — counts,
-                # not lists: the scope-summary sidecar keeps the lists for
-                # coverage aggregation.
-                "in_scope_count": in_scope_count,
-                "diffed_count": diffed_count,
-            }, f)
-    except OSError:
-        pass
+    atomic_write_json(deferred_sidecar, payload)
 
 
 def persist_advisory_entitlement_sidecar(

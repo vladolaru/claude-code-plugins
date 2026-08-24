@@ -29,7 +29,6 @@ Usage:
 import contextlib
 import json
 import os
-import posixpath
 import sys
 import uuid
 
@@ -39,6 +38,16 @@ except ImportError:  # non-POSIX host — publish without the completion-publica
     fcntl = None
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
+
+try:
+    from .coverage import CoverageError, derive_deferred_coverage, normalize_deferred_path
+except ImportError:
+    _SCRIPTS_DIR = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    )
+    if _SCRIPTS_DIR not in sys.path:
+        sys.path.insert(0, _SCRIPTS_DIR)
+    from review.agent.coverage import CoverageError, derive_deferred_coverage, normalize_deferred_path
 
 try:
     from ..verdict_rules import (
@@ -970,48 +979,6 @@ class ReviewOutputBuilder:
             return None
         return value
 
-    @staticmethod
-    def _progress_snapshot(
-        sidecar: Dict,
-        known_deferred: Optional[frozenset],
-        deferred_reviewed: List[str],
-    ):
-        """Return ``(covered, in_scope)`` only for coherent scope facts.
-
-        Progress is a derived claim, so every input must describe the same
-        disjoint inline/deferred population. Invalid producer state is omitted
-        rather than clamped into a plausible fraction; TARGET and NEXT UNREAD
-        validate their own independent sidecar fields elsewhere.
-        """
-        in_scope = sidecar.get("in_scope_count")
-        diffed = sidecar.get("diffed_count")
-        if (
-            isinstance(in_scope, bool)
-            or not isinstance(in_scope, int)
-            or in_scope <= 0
-            or isinstance(diffed, bool)
-            or not isinstance(diffed, int)
-            or not 0 <= diffed <= in_scope
-            or known_deferred is None
-        ):
-            return None
-
-        deferred_files = sidecar.get("deferred_files")
-        if (
-            not isinstance(deferred_files, list)
-            or not all(isinstance(path, str) for path in deferred_files)
-            or len(deferred_files) != len(known_deferred)
-            or frozenset(deferred_files) != known_deferred
-            or diffed + len(known_deferred) != in_scope
-        ):
-            return None
-
-        claims = frozenset(deferred_reviewed) & known_deferred
-        covered = diffed + len(claims)
-        if not 0 <= covered <= in_scope:
-            return None
-        return covered, in_scope
-
     def _known_deferred_files(self) -> Optional[frozenset]:
         """The deferred set via the env envelope — add-time fast feedback.
 
@@ -1046,19 +1013,10 @@ class ReviewOutputBuilder:
         """
         if not isinstance(file, str) or not file.strip():
             raise ValueError(f"{api_name} requires a non-empty file path.")
-        path = posixpath.normpath(file.strip().replace("\\", "/"))
-        if (
-            path.startswith("/")
-            or path == "."
-            or path == ".."
-            or path.startswith("../")
-            or (len(path) >= 2 and path[1] == ":" and path[0].isalpha())
-        ):
-            raise ValueError(
-                f"{api_name} requires a repository-relative path exactly "
-                f"as shown in the NOT DIFFED listing, got {file!r}."
-            )
-        return path
+        try:
+            return normalize_deferred_path(file, api_name)
+        except CoverageError as exc:
+            raise ValueError(str(exc)) from exc
 
     @staticmethod
     def _reject_unknown_deferred(
@@ -1545,10 +1503,27 @@ class ReviewOutputBuilder:
             self.unreviewed_autofilled = []
 
         known_deferred = self._validate_deferred_serialization(output_dir)
+        coverage = None
+        sidecar = self._read_deferred_sidecar(output_dir, self.reviewer)
+        if sidecar:
+            try:
+                coverage = derive_deferred_coverage(
+                    sidecar, self.deferred_reviewed
+                )
+            except CoverageError:
+                pass
         # Close the silent third state: every deferred file must end up
         # claimed, declared, or auto-declared. Auto-fill is marked so
         # metrics can separate agent honesty from system honesty.
-        if known_deferred is not None:
+        if coverage is not None:
+            declared = set(self.unreviewed)
+            self.deferred_reviewed = list(coverage.deferred_reviewed)
+            self.unreviewed = list(coverage.unreviewed)
+            self.unreviewed_autofilled = [
+                path for path in coverage.unreviewed if path not in declared
+            ]
+            self.files_reviewed = coverage.files_reviewed
+        elif known_deferred is not None:
             unaccounted = sorted(
                 known_deferred
                 - set(self.deferred_reviewed)
@@ -1646,13 +1621,9 @@ class ReviewOutputBuilder:
                 # incoherent; TARGET and NEXT UNREAD keep following their
                 # own independently valid fields.
                 meta = self._read_deferred_sidecar(output_dir, self.reviewer)
-                progress = self._progress_snapshot(
-                    meta, known_deferred, self.deferred_reviewed
-                )
-                if progress is not None:
-                    covered, in_scope = progress
+                if coverage is not None:
                     print(
-                        f"PROGRESS: covered {covered} of {in_scope} "
+                        f"PROGRESS: covered {coverage.files_reviewed} of {coverage.in_scope_count} "
                         "in-scope files."
                     )
                 deferred_files_ordered = meta.get("deferred_files")
