@@ -1,68 +1,48 @@
 #!/usr/bin/env python3
-"""Carry decision-critic adjustments into review-findings.json.
+"""Validate, adjudicate, and apply source-bound decision-critic proposals.
 
-The decision critic records finding-level decisions (promote, demote,
-rescope, correct, add, remove) in decision-critic-adjustments.json. This
-module is the sole writer that applies them to review-findings.json —
-with per-finding provenance, so the reconciled state stays visible under
-the change — and the report is edited AFTER this runs, so the human
-prose always describes a ledger that already contains the critic's
-outcome. Mirrors the dispatch-plan pattern: original decision preserved,
-override recorded beside it.
+The lifecycle has three owners and one channel per transition. The critic
+authors proposal-only fields through ``critic.py --save``; this module assigns
+stable adjustment IDs and digest-binds the immutable proposal to the committed
+verdict marker. The orchestrator submits only verified IDs, refuted IDs with
+reasons, and a revised narrative through :func:`settle`; the script derives the
+unchecked complement and persists a complete adjudication checkpoint. Finally,
+``_apply_adjustments_locked()`` is the sole post-reconciliation ledger mutator,
+carrying provenance, narrative replacement, recounting, and verdict derivation
+into ``review-findings.json``.
 
-A half-applied batch must never exist on disk, which takes more than
-validating first. Each file is replaced atomically via atomic_io's shared
-`atomic_write_json` (temp file in the same directory, then os.replace),
-and application is recorded on BOTH sides: every pending entry carries a
-stable `adjustment_id`, and review-findings.json lists the decisions it
-already contains under `applied_critic_adjustments`, one record per id.
-Ids are allocated and persisted before the findings write, so every crash point converges
-on the next run: if the findings write landed, its recorded ids make the
-entries skip and only their flags catch up; if it did not, nothing was
-recorded and the batch applies normally. Without that record, a crash
-between the two writes would re-apply patches onto an already-patched
-findings file and `prior` would report the critic's own output as the
-reconciled state.
-
-decision-critic-adjustments.json is also the ONLY sanctioned way to
-change review-findings.json, and this module owns the write path that
-says so. `write_findings()` replaces that file atomically, addressed by
-output directory so no caller can misname it; both of the ledger's
-writers — the review-reconciliator's first write (through
-`findings_save.py`) and `apply_adjustments()` here — go through it. An
-orchestrator's ad-hoc `python3 -c` edit is out of channel and forbidden:
-a change worth making is worth making as an adjustment entry, where it
-carries provenance.
-
-Adjustments are a REVISE-only channel: `apply_adjustments()` refuses to
-read the adjustments file or write anything unless
-decision-critic-verdict.json on disk says REVISE. This gate lives here,
-not in a caller, so every apply path — the CLI, step 11's defensive
-re-run, and any future caller — shares one authority check instead of
-each re-implementing it. A refusal returns `{"status": "refused",
-"applied": 0, "reason": "no_verdict" | "verdict_not_revise (<VERDICT>)"}`
-and touches no file. The CLI prints the reason and exits
-`REFUSAL_EXIT_CODE` (3) — distinct from 0 (success) and 1 (validation/IO
-error) — so a script depending on this command notices a refusal instead
-of reading a silent no-op.
+Settlement deliberately checkpoints before ledger application. Both writes are
+atomic individually and the whole transition holds ``output_dir_lock()``, but
+there is no pretend cross-file transaction: a crash after the checkpoint is
+resumed exactly once by public :func:`apply_adjustments`. That public entry point
+is an explicit recovery path; if an older orchestrator reaches it without a
+checkpoint, it first records an honest ``defensive_apply`` adjudication with all
+entries ``not_checked`` and no invented narrative.
 """
 
 import argparse
 import collections
+import copy
+import hashlib
 import json
 import os
+import re
 import sys
 import uuid
+from datetime import datetime, timezone
+from typing import Mapping
 
 try:
-    from .atomic_io import atomic_write_json
+    from . import atomic_io
     from .verdict_rules import VALID_SEVERITIES, derive_review_state
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
-    from review.atomic_io import atomic_write_json
+    from review import atomic_io
     from review.verdict_rules import VALID_SEVERITIES, derive_review_state
+
+atomic_write_json = atomic_io.atomic_write_json
 
 ACTIONS = ("promote", "demote", "rescope", "correct", "add", "remove")
 # `scope` is deliberately absent: it is derived from `line` to preserve the
@@ -72,18 +52,9 @@ PATCH_FIELDS = ("severity", "title", "description", "recommendation",
                 "file", "line", "category", "confidence")
 ADD_REQUIRED_FIELDS = ("severity", "title", "file", "description",
                        "recommendation")
-# The orchestrator's per-entry verdict on the critic's claim, written into
-# the adjustments file after it probes each one. A machine-readable seat for
-# a judgment that previously had nowhere to land but the human report: a run
-# whose orchestrator never probed anything published a batch nothing could
-# tell apart from one checked entry by entry.
-#
-# NEVER required at apply. Step 11's defensive re-run exists precisely for
-# orchestrators that crashed before doing the step-10 work, and requiring the
-# key there would turn the honest default into a hard failure for exactly the
-# runs the re-run is meant to converge. An entry applied without one is
-# recorded as SPOT_CHECK_NOT_CHECKED — the honest default, which the ledger's
-# Markdown render then shows per id.
+# Script-derived per-entry outcomes from the orchestrator's exact settlement
+# request. The request names only positive verified/refuted claims; omitted
+# committed IDs become SPOT_CHECK_NOT_CHECKED.
 SPOT_CHECK_KEY = "spot_check"
 SPOT_CHECK_VERIFIED = "verified"
 SPOT_CHECK_REFUTED = "refuted"
@@ -92,8 +63,8 @@ SPOT_CHECK_VALUES = (
     SPOT_CHECK_VERIFIED, SPOT_CHECK_REFUTED, SPOT_CHECK_NOT_CHECKED,
 )
 
-# The orchestrator's post-critic assessment, top-level on the adjustments
-# document. An applying batch withdraws the reconciler's `narrative_summary`
+# The orchestrator's post-critic assessment, inside the script-owned
+# adjudication checkpoint. An applying batch withdraws the reconciler's
 # (see WITHDRAWN_SUMMARY_KEY below) and nothing used to replace it, so a
 # REVISE run published a ledger whose Assessment section was a pointer to
 # prose only a human could read. This is that assessment's machine-readable
@@ -130,13 +101,50 @@ VERDICT_BEFORE_ADJUSTMENTS_KEY = "verdict_before_adjustments"
 REJECTED_ADJUSTMENTS_KEY = "rejected_critic_adjustments"
 
 # The only `schema` value ADJUSTMENTS_FILENAME is accepted under.
-# decision-reviewer.md's taught template always writes `"schema": 1`
-# alongside `"adjustments"`; a doc carrying any other value — or none —
+# decision-reviewer.md's proposal template writes `"schema": 1` alongside
+# `"adjustments"`; a doc carrying any other value — or none —
 # is out of that template and refused whole, the same all-or-nothing way
 # an unknown action or an unaddressable id is: a critic decision written
 # against a contract this module does not honor must fail loudly rather
 # than being silently accepted and possibly misread.
 ADJUSTMENTS_SCHEMA = 1
+VERDICT_MARKER_SCHEMA = 1
+ADJUDICATION_SCHEMA = 1
+VALID_CRITIC_VERDICTS = ("STAND", "REVISE", "ESCALATE", "SKIPPED")
+ADJUDICATION_SOURCE_ORCHESTRATOR = "orchestrator"
+ADJUDICATION_SOURCE_DEFENSIVE = "defensive_apply"
+ADJUDICATION_SOURCES = (
+    ADJUDICATION_SOURCE_ORCHESTRATOR,
+    ADJUDICATION_SOURCE_DEFENSIVE,
+)
+ADJUDICATION_KEY = "adjudication"
+PROPOSAL_DIGEST_KEY = "proposal_digest"
+RECORDED_AT_KEY = "recorded_at"
+
+_PROPOSAL_TOP_LEVEL_KEYS = frozenset({"schema", "adjustments"})
+_PROPOSAL_ENTRY_KEYS = frozenset({"action", "id", "fields", "rationale"})
+_LIFECYCLE_ENTRY_KEYS = frozenset({
+    "adjustment_id",
+    SPOT_CHECK_KEY,
+    "rejected",
+    "rejection_reason",
+    "applied",
+})
+_ADJUDICATION_KEYS = frozenset({
+    "schema",
+    "source",
+    PROPOSAL_DIGEST_KEY,
+    RECORDED_AT_KEY,
+    REVISED_NARRATIVE_KEY,
+})
+_SETTLEMENT_REQUEST_KEYS = frozenset({
+    "schema",
+    "verified",
+    "refuted",
+    REVISED_NARRATIVE_KEY,
+})
+_REFUTED_REQUEST_KEYS = frozenset({"adjustment_id", "rejection_reason"})
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 # Discriminated outcomes of reading the findings ledger off disk, shared
 # by every caller that reads it (see `read_findings_file()`). The states
@@ -187,10 +195,9 @@ NARRATIVE_SUMMARY_KEY = "narrative_summary"
 # fixed literal, not a set that varies.
 REVISE_VERDICT = "REVISE"
 
-# Refusal reasons returned by apply_adjustments() under the gate. Both
-# collapse a missing file and an unparseable one into the same reason
-# because read_critic_verdict() cannot distinguish them either — from the
-# gate's perspective there is simply no usable verdict to act on.
+# Refusal reasons returned by apply_adjustments() under the gate. A missing,
+# malformed, schema-invalid, or unbound snapshot collapses to the same reason:
+# from the gate's perspective there is simply no usable verdict to act on.
 REFUSAL_NO_VERDICT = "no_verdict"
 REFUSAL_VERDICT_NOT_REVISE = "verdict_not_revise"
 
@@ -199,50 +206,400 @@ REFUSAL_VERDICT_NOT_REVISE = "verdict_not_revise"
 REFUSAL_EXIT_CODE = 3
 
 
-def read_verdict_file(path):
-    """Parse a verdict-shaped JSON file (``{"verdict": "<STRING>"}``) to
-    its verdict string, or ``None`` if the file is absent, unreadable, not
-    valid JSON, not a JSON object, or has no string ``verdict`` field.
+class AdjustmentValidationError(ValueError):
+    """One rejected lifecycle request, carrying every independent problem."""
 
-    The shape-parsing core behind `read_critic_verdict()` below. It was
-    shared with orchestration.py's read of review-verdict.json until that
-    artifact was retired — step 11 derives the published verdict from the
-    findings ledger now rather than reading a transcribed one — and it
-    stays a named function rather than being inlined into its one
-    remaining caller because the guard it encodes is what a second reader
-    gets wrong: a well-formed-JSON-but-non-object file (`[1, 2]`,
-    `"hello"`, `5`) sails past a `(json.JSONDecodeError, OSError)` tuple,
-    and the `.get()` behind it raises `AttributeError`.
-    """
-    if not os.path.isfile(path):
-        return None
+    def __init__(self, problems):
+        self.problems = list(problems)
+        super().__init__("\n".join(self.problems))
+
+
+def _schema_is(value, expected):
+    return isinstance(value, int) and not isinstance(value, bool) and value == expected
+
+
+def _extra_key_problems(value, allowed, label):
+    if not isinstance(value, dict):
+        return []
+    return [
+        f"{label}: extra key {key!r} is not allowed"
+        for key in sorted(set(value) - set(allowed))
+    ]
+
+
+def _validate_proposal_entry(entry, label, *, require_adjustment_id):
+    """Validate the immutable proposal half of one lifecycle entry."""
+    if not isinstance(entry, dict):
+        return [f"{label} must be an object"]
+
+    allowed = set(_PROPOSAL_ENTRY_KEYS)
+    if require_adjustment_id:
+        allowed.update(_LIFECYCLE_ENTRY_KEYS)
+    problems = _extra_key_problems(entry, allowed, label)
+    action = entry.get("action")
+    if action not in ACTIONS:
+        problems.append(
+            f"{label}: unknown action {action!r} "
+            f"(allowed: {', '.join(ACTIONS)})"
+        )
+
+    rationale = entry.get("rationale")
+    if not isinstance(rationale, str) or not rationale.strip():
+        problems.append(f"{label}: 'rationale' must be a non-empty string")
+
+    fields = entry.get("fields")
+    if fields is None and action == "remove":
+        fields = {}
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError):
+        _validate_fields(fields, label)
+    except ValueError as error:
+        problems.append(str(error))
+    else:
+        if action == "add":
+            missing = [key for key in ADD_REQUIRED_FIELDS if key not in fields]
+            if missing:
+                problems.append(
+                    f"{label}: add requires fields {', '.join(missing)}"
+                )
+        if action == "remove" and fields:
+            problems.append(f"{label}: remove does not accept replacement fields")
+
+    target_id = entry.get("id")
+    if action == "add":
+        if target_id is not None:
+            problems.append(
+                f"{label}: ids are generated, not assigned — the critic "
+                f"must not invent ids"
+            )
+    elif action in ACTIONS and (
+        not isinstance(target_id, str) or not target_id
+    ):
+        problems.append(f"{label}: 'id' must be a non-empty target id")
+
+    if require_adjustment_id:
+        adjustment_id = entry.get("adjustment_id")
+        if not isinstance(adjustment_id, str) or not adjustment_id:
+            problems.append(
+                f"{label}: 'adjustment_id' must be a non-empty string"
+            )
+    return problems
+
+
+def validate_proposal_input(payload: Mapping[str, object]):
+    """Return every problem in a critic-authored proposal input."""
+    if not isinstance(payload, dict):
+        return [f"{ADJUSTMENTS_FILENAME} must be a JSON object"]
+    problems = _extra_key_problems(
+        payload, _PROPOSAL_TOP_LEVEL_KEYS, ADJUSTMENTS_FILENAME
+    )
+    schema = payload.get("schema")
+    if not _schema_is(schema, ADJUSTMENTS_SCHEMA):
+        problems.append(
+            f"{ADJUSTMENTS_FILENAME}: 'schema' must be "
+            f"{ADJUSTMENTS_SCHEMA}, got {schema!r}"
+        )
+    adjustments = payload.get("adjustments")
+    if not isinstance(adjustments, list):
+        problems.append(
+            f"{ADJUSTMENTS_FILENAME}: 'adjustments' must be a list"
+        )
+        return problems
+    for index, entry in enumerate(adjustments):
+        problems.extend(_validate_proposal_entry(
+            entry, f"adjustment[{index}]", require_adjustment_id=False
+        ))
+    return problems
+
+
+def prepare_proposal(payload: Mapping[str, object]) -> dict[str, object]:
+    """Validate critic-authored proposal fields and assign stable IDs."""
+    problems = validate_proposal_input(payload)
+    if problems:
+        raise AdjustmentValidationError(problems)
+    document = copy.deepcopy(payload)
+    used_ids = set()
+    for entry in document["adjustments"]:
+        if entry.get("fields") is None and entry.get("action") == "remove":
+            entry["fields"] = {}
+        adjustment_id = uuid.uuid4().hex
+        while adjustment_id in used_ids:
+            adjustment_id = uuid.uuid4().hex
+        entry["adjustment_id"] = adjustment_id
+        used_ids.add(adjustment_id)
+    return document
+
+
+def immutable_proposal_projection(document: Mapping[str, object]):
+    """Return only the proposal facts committed by the verdict marker."""
+    adjustments = document.get("adjustments") if isinstance(document, dict) else None
+    projected = []
+    if isinstance(adjustments, list):
+        for entry in adjustments:
+            if not isinstance(entry, dict):
+                projected.append(entry)
+                continue
+            projected.append({
+                key: copy.deepcopy(entry[key])
+                for key in (
+                    "adjustment_id", "action", "id", "fields", "rationale"
+                )
+                if key in entry
+            })
+    return {
+        "schema": document.get("schema") if isinstance(document, dict) else None,
+        "adjustments": projected,
+    }
+
+
+def proposal_digest(document: Mapping[str, object]) -> str:
+    immutable = immutable_proposal_projection(document)
+    encoded = json.dumps(
+        immutable,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _valid_recorded_at(value):
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None
+
+
+def validate_adjustments_document(payload):
+    """Validate a persisted proposal/adjudication/application document."""
+    if not isinstance(payload, dict):
+        return [f"{ADJUSTMENTS_FILENAME} must be a JSON object"]
+    allowed_top = set(_PROPOSAL_TOP_LEVEL_KEYS) | {ADJUDICATION_KEY}
+    problems = _extra_key_problems(payload, allowed_top, ADJUSTMENTS_FILENAME)
+    schema = payload.get("schema")
+    if not _schema_is(schema, ADJUSTMENTS_SCHEMA):
+        problems.append(
+            f"{ADJUSTMENTS_FILENAME}: 'schema' must be "
+            f"{ADJUSTMENTS_SCHEMA}, got {schema!r}"
+        )
+    adjustments = payload.get("adjustments")
+    if not isinstance(adjustments, list):
+        problems.append(
+            f"{ADJUSTMENTS_FILENAME}: 'adjustments' must be a list"
+        )
+        return problems
+
+    seen_ids = {}
+    adjudication = payload.get(ADJUDICATION_KEY)
+    is_settled = adjudication is not None
+    for index, entry in enumerate(adjustments):
+        label = f"adjustment[{index}]"
+        problems.extend(_validate_proposal_entry(
+            entry, label, require_adjustment_id=True
+        ))
+        if not isinstance(entry, dict):
+            continue
+        adjustment_id = entry.get("adjustment_id")
+        if isinstance(adjustment_id, str) and adjustment_id:
+            if adjustment_id in seen_ids:
+                problems.append(
+                    f"{label}: duplicate adjustment_id {adjustment_id!r} "
+                    f"(also adjustment[{seen_ids[adjustment_id]}])"
+                )
+            else:
+                seen_ids[adjustment_id] = index
+
+        lifecycle_keys = set(entry) & _LIFECYCLE_ENTRY_KEYS
+        lifecycle_keys.discard("adjustment_id")
+        if not is_settled and lifecycle_keys:
+            for key in sorted(lifecycle_keys):
+                problems.append(
+                    f"{label}: {key!r} requires a committed adjudication"
+                )
+            continue
+        if not is_settled:
+            continue
+
+        spot_check = entry.get(SPOT_CHECK_KEY)
+        if spot_check not in SPOT_CHECK_VALUES:
+            problems.append(
+                f"{label}: {SPOT_CHECK_KEY!r} must be one of "
+                f"{', '.join(SPOT_CHECK_VALUES)}"
+            )
+        rejected_present = "rejected" in entry
+        reason_present = "rejection_reason" in entry
+        if spot_check == SPOT_CHECK_REFUTED:
+            if entry.get("rejected") is not True:
+                problems.append(f"{label}: refuted entries require rejected: true")
+            reason = entry.get("rejection_reason")
+            if not isinstance(reason, str) or not reason.strip():
+                problems.append(
+                    f"{label}: refuted entries require a non-empty "
+                    f"'rejection_reason'"
+                )
+            if "applied" in entry:
+                problems.append(f"{label}: a refuted entry cannot be applied")
+        else:
+            if rejected_present:
+                problems.append(
+                    f"{label}: rejected is present only on refuted entries"
+                )
+            if reason_present:
+                problems.append(
+                    f"{label}: rejection_reason is present only on refuted entries"
+                )
+            if "applied" in entry and entry.get("applied") is not True:
+                problems.append(f"{label}: applied may only be true when present")
+
+    if not is_settled:
+        return problems
+    if not isinstance(adjudication, dict):
+        problems.append(f"{ADJUDICATION_KEY!r} must be an object")
+        return problems
+    problems.extend(_extra_key_problems(
+        adjudication, _ADJUDICATION_KEYS, ADJUDICATION_KEY
+    ))
+    if not _schema_is(adjudication.get("schema"), ADJUDICATION_SCHEMA):
+        problems.append(
+            f"{ADJUDICATION_KEY}: 'schema' must be {ADJUDICATION_SCHEMA}"
+        )
+    source = adjudication.get("source")
+    if source not in ADJUDICATION_SOURCES:
+        problems.append(
+            f"{ADJUDICATION_KEY}: unknown source {source!r}"
+        )
+    stored_digest = adjudication.get(PROPOSAL_DIGEST_KEY)
+    if not isinstance(stored_digest, str) or not _SHA256_RE.fullmatch(
+        stored_digest
+    ):
+        problems.append(
+            f"{ADJUDICATION_KEY}: {PROPOSAL_DIGEST_KEY!r} must be a sha256"
+        )
+    elif stored_digest != proposal_digest(payload):
+        problems.append(
+            f"{ADJUDICATION_KEY}: proposal digest does not match the proposal"
+        )
+    if not _valid_recorded_at(adjudication.get(RECORDED_AT_KEY)):
+        problems.append(
+            f"{ADJUDICATION_KEY}: {RECORDED_AT_KEY!r} must be an aware "
+            f"RFC 3339 timestamp"
+        )
+    revised = adjudication.get(REVISED_NARRATIVE_KEY)
+    if source == ADJUDICATION_SOURCE_ORCHESTRATOR:
+        if not isinstance(revised, str) or not revised.strip():
+            problems.append(
+                f"{ADJUDICATION_KEY}: orchestrator revised_narrative must "
+                f"be a non-empty string"
+            )
+    elif source == ADJUDICATION_SOURCE_DEFENSIVE and revised is not None:
+        problems.append(
+            f"{ADJUDICATION_KEY}: defensive_apply revised_narrative must be null"
+        )
+    if source == ADJUDICATION_SOURCE_DEFENSIVE and any(
+        isinstance(entry, dict)
+        and entry.get(SPOT_CHECK_KEY) != SPOT_CHECK_NOT_CHECKED
+        for entry in adjustments
+    ):
+        problems.append(
+            f"{ADJUDICATION_KEY}: defensive_apply entries must all be not_checked"
+        )
+    return problems
+
+
+def write_adjustments(output_dir, document):
+    """The single atomic writer for decision-critic-adjustments.json."""
+    problems = validate_adjustments_document(document)
+    if problems:
+        raise AdjustmentValidationError(problems)
+    atomic_write_json(os.path.join(output_dir, ADJUSTMENTS_FILENAME), document)
+
+
+def _read_json_object(path, label):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            value = json.load(handle)
+    except FileNotFoundError:
+        raise
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"{label} is not readable JSON: {error}") from error
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be a JSON object")
+    return value
+
+
+def _validate_verdict_marker(marker):
+    if not isinstance(marker, dict):
+        return [f"{CRITIC_VERDICT_FILENAME} must be a JSON object"]
+    problems = _extra_key_problems(
+        marker,
+        {"schema", "verdict", PROPOSAL_DIGEST_KEY},
+        CRITIC_VERDICT_FILENAME,
+    )
+    if not _schema_is(marker.get("schema"), VERDICT_MARKER_SCHEMA):
+        problems.append(
+            f"{CRITIC_VERDICT_FILENAME}: 'schema' must be "
+            f"{VERDICT_MARKER_SCHEMA}"
+        )
+    verdict = marker.get("verdict")
+    if verdict not in VALID_CRITIC_VERDICTS:
+        problems.append(
+            f"{CRITIC_VERDICT_FILENAME}: unknown verdict {verdict!r}"
+        )
+    digest = marker.get(PROPOSAL_DIGEST_KEY)
+    if not isinstance(digest, str) or not _SHA256_RE.fullmatch(digest):
+        problems.append(
+            f"{CRITIC_VERDICT_FILENAME}: {PROPOSAL_DIGEST_KEY!r} must be a sha256"
+        )
+    return problems
+
+
+def _load_committed_snapshot(output_dir):
+    marker = _read_json_object(
+        os.path.join(output_dir, CRITIC_VERDICT_FILENAME),
+        CRITIC_VERDICT_FILENAME,
+    )
+    marker_problems = _validate_verdict_marker(marker)
+    if marker_problems:
+        raise AdjustmentValidationError(marker_problems)
+    document = _read_json_object(
+        os.path.join(output_dir, ADJUSTMENTS_FILENAME), ADJUSTMENTS_FILENAME
+    )
+    document_problems = validate_adjustments_document(document)
+    if document_problems:
+        raise AdjustmentValidationError(document_problems)
+    digest = proposal_digest(document)
+    if marker[PROPOSAL_DIGEST_KEY] != digest:
+        raise ValueError(
+            f"proposal digest mismatch: {CRITIC_VERDICT_FILENAME} commits "
+            f"{marker[PROPOSAL_DIGEST_KEY]}, current proposal is {digest}"
+        )
+    if marker["verdict"] != REVISE_VERDICT and document["adjustments"]:
+        raise ValueError(
+            f"{marker['verdict']} may not commit a non-empty proposal"
+        )
+    return marker, document
+
+
+def read_verdict_file(path):
+    """Return a critic verdict only from a complete digest-bound snapshot."""
+    output_dir = os.path.dirname(path) or "."
+    try:
+        marker, _document = _load_committed_snapshot(output_dir)
+    except (OSError, ValueError, json.JSONDecodeError):
         return None
-    if not isinstance(data, dict):
-        return None
-    verdict = data.get("verdict")
-    if not isinstance(verdict, str):
-        return None
-    return verdict
+    return marker["verdict"]
 
 
 def read_critic_verdict(output_dir):
-    """Read the critic's raw verdict string from CRITIC_VERDICT_FILENAME.
+    """Read the verdict from a complete source-bound critic snapshot.
 
-    Returns the `verdict` field as-is (e.g. "STAND", "REVISE", "SKIPPED",
-    or any other string the critic wrote) or None if the file is absent,
-    unreadable, not valid JSON, not a JSON object, or has no string
-    `verdict` field — see `read_verdict_file()`, the shared parser this
-    wraps. This reader is deliberately permissive — it answers "what does
-    the file say", not "is that an acceptable value" — the caller decides
-    what to do with the result. `apply_adjustments()`'s gate below only
-    ever proceeds on the literal "REVISE"; the presentation mapping
-    downstream consumers need instead — "SKIPPED" and a missing/
-    unparseable file both reading as "unavailable" — lives next door in
-    `critic_verdict_for_state()`, not here.
+    Returns the validated verdict, or ``None`` when the marker or adjacent
+    proposal is absent, malformed, schema-invalid, or digest-mismatched. The
+    presentation mapping downstream consumers need instead — ``SKIPPED`` and
+    an unusable snapshot both reading as ``unavailable`` — lives next door in
+    :func:`critic_verdict_for_state`.
     """
     return read_verdict_file(os.path.join(output_dir, CRITIC_VERDICT_FILENAME))
 
@@ -341,114 +698,6 @@ def _validate_fields(fields, entry_label):
                 f"{entry_label}: line must be a positive (1-indexed) "
                 f"integer or null, got {value!r}"
             )
-
-
-def validate_adjustments(payload):
-    """Validate the batch SHAPE of a decision-critic adjustments document,
-    without resolving any id against an actual findings ledger.
-
-    Returns a list of human-readable problems; an empty list means valid.
-    This is the "does this batch make grammatical sense" check — document
-    is an object, schema is exactly ADJUSTMENTS_SCHEMA, 'adjustments' is a
-    list, and every entry has a recognized action, an adjustable field set
-    (via `_validate_fields()`), a required-field-complete `add`, and no
-    critic-supplied id on `add` — shared by two callers with two different
-    amounts of context available: `critic.py`'s save gate, which runs
-    BEFORE any findings ledger exists to check ids against, and
-    `apply_adjustments()` below, which re-checks the same shape
-    defensively right before it goes on to do the ledger-dependent checks
-    (does an id name a real issue, is a target removed earlier in this
-    batch) that only it has the context to make.
-
-    Deliberately excludes anything that needs `review-findings.json`: an
-    entry's target existing, per-batch duplicate targets, and a target
-    removed earlier in the same batch all stay in `apply_adjustments()`,
-    which is the only caller with a ledger to check them against.
-    """
-    if not isinstance(payload, dict):
-        return [f"{ADJUSTMENTS_FILENAME} must be a JSON object"]
-    schema = payload.get("schema")
-    if schema != ADJUSTMENTS_SCHEMA:
-        return [
-            f"{ADJUSTMENTS_FILENAME}: 'schema' must be {ADJUSTMENTS_SCHEMA}, "
-            f"got {schema!r}"
-        ]
-    adjustments = payload.get("adjustments")
-    if not isinstance(adjustments, list):
-        return [f"{ADJUSTMENTS_FILENAME}: 'adjustments' must be a list"]
-
-    problems = []
-    revised = payload.get(REVISED_NARRATIVE_KEY)
-    if revised is not None and not isinstance(revised, str):
-        problems.append(
-            f"{ADJUSTMENTS_FILENAME}: {REVISED_NARRATIVE_KEY!r} must be a "
-            f"string"
-        )
-    seen_ids = {}
-    for idx, entry in enumerate(adjustments):
-        label = f"adjustment[{idx}]"
-        if not isinstance(entry, dict):
-            problems.append(f"{label} must be an object")
-            continue
-        # Checked BEFORE the action gate below, and deliberately without
-        # a `continue`: an entry whose action is also unknown reports both
-        # problems rather than letting the action gate's own `continue`
-        # swallow the spot_check one.
-        if SPOT_CHECK_KEY in entry:
-            spot_check = entry[SPOT_CHECK_KEY]
-            if spot_check not in SPOT_CHECK_VALUES:
-                problems.append(
-                    f"{label}: unknown spot_check {spot_check!r} "
-                    f"(allowed: {', '.join(SPOT_CHECK_VALUES)})"
-                )
-            elif (
-                entry.get("rejected") is True
-                and spot_check != SPOT_CHECK_REFUTED
-            ):
-                problems.append(
-                    f"{label}: a rejected entry's spot_check must be "
-                    f"{SPOT_CHECK_REFUTED!r} — rejecting a decision IS "
-                    f"refuting it, and {spot_check!r} claims the opposite"
-                )
-        adjustment_id = entry.get("adjustment_id")
-        if adjustment_id is not None:
-            if not isinstance(adjustment_id, str) or not adjustment_id:
-                problems.append(
-                    f"{label}: 'adjustment_id' must be a non-empty string"
-                )
-            elif adjustment_id in seen_ids:
-                problems.append(
-                    f"{label}: duplicate adjustment_id {adjustment_id!r} "
-                    f"(also adjustment[{seen_ids[adjustment_id]}]) — ids "
-                    f"identify which decisions a ledger already contains"
-                )
-            else:
-                seen_ids[adjustment_id] = idx
-        action = entry.get("action")
-        if action not in ACTIONS:
-            problems.append(
-                f"{label}: unknown action {action!r} "
-                f"(allowed: {', '.join(ACTIONS)})"
-            )
-            continue
-        fields = entry.get("fields") or {}
-        try:
-            _validate_fields(fields, label)
-        except ValueError as err:
-            problems.append(str(err))
-            continue
-        if action == "add":
-            missing = [k for k in ADD_REQUIRED_FIELDS if k not in fields]
-            if missing:
-                problems.append(
-                    f"{label}: add requires fields {', '.join(missing)}"
-                )
-            if entry.get("id") is not None:
-                problems.append(
-                    f"{label}: ids are generated, not assigned — the "
-                    f"critic must not invent ids"
-                )
-    return problems
 
 
 def _apply_scope_pairing(issue, line_is_null):
@@ -618,6 +867,184 @@ def _recorded_ids_best_effort(output_dir):
     return {record["adjustment_id"] for record in records if record}
 
 
+def settlement_counts(document):
+    """Derive settlement counts from per-entry facts; never trust a caller."""
+    counts = {
+        SPOT_CHECK_VERIFIED: 0,
+        SPOT_CHECK_REFUTED: 0,
+        SPOT_CHECK_NOT_CHECKED: 0,
+    }
+    adjustments = document.get("adjustments") if isinstance(document, dict) else []
+    for entry in adjustments if isinstance(adjustments, list) else []:
+        if isinstance(entry, dict) and entry.get(SPOT_CHECK_KEY) in counts:
+            counts[entry[SPOT_CHECK_KEY]] += 1
+    return counts
+
+
+def _validate_settlement_request(request, known_ids):
+    if not isinstance(request, dict):
+        return ["adjudication request must be a JSON object"], {}
+    problems = _extra_key_problems(
+        request, _SETTLEMENT_REQUEST_KEYS, "adjudication request"
+    )
+    if not _schema_is(request.get("schema"), ADJUDICATION_SCHEMA):
+        problems.append(
+            f"adjudication request: 'schema' must be {ADJUDICATION_SCHEMA}"
+        )
+    revised = request.get(REVISED_NARRATIVE_KEY)
+    if not isinstance(revised, str) or not revised.strip():
+        problems.append(
+            "adjudication request: 'revised_narrative' must be a non-empty "
+            "string"
+        )
+
+    verified = request.get("verified")
+    decisions = {}
+    if not isinstance(verified, list):
+        problems.append("adjudication request: 'verified' must be a list")
+        verified = []
+    for index, adjustment_id in enumerate(verified):
+        if not isinstance(adjustment_id, str) or not adjustment_id:
+            problems.append(
+                f"verified[{index}] must be a non-empty string adjustment id"
+            )
+            continue
+        if adjustment_id in decisions:
+            problems.append(
+                f"verified[{index}]: duplicate adjustment id {adjustment_id!r}"
+            )
+            continue
+        decisions[adjustment_id] = (SPOT_CHECK_VERIFIED, None)
+
+    refuted = request.get("refuted")
+    if not isinstance(refuted, list):
+        problems.append("adjudication request: 'refuted' must be a list")
+        refuted = []
+    seen_refuted = set()
+    for index, item in enumerate(refuted):
+        label = f"refuted[{index}]"
+        if not isinstance(item, dict):
+            problems.append(f"{label} must be an object")
+            continue
+        extras = _extra_key_problems(item, _REFUTED_REQUEST_KEYS, label)
+        problems.extend(extras)
+        adjustment_id = item.get("adjustment_id")
+        if not isinstance(adjustment_id, str) or not adjustment_id:
+            problems.append(f"{label}: adjustment_id must be a non-empty string")
+            continue
+        if adjustment_id in seen_refuted:
+            problems.append(
+                f"{label}: duplicate adjustment id {adjustment_id!r}"
+            )
+            continue
+        seen_refuted.add(adjustment_id)
+        reason = item.get("rejection_reason")
+        if not isinstance(reason, str) or not reason.strip():
+            problems.append(
+                f"{label}: rejection_reason must be a non-empty string"
+            )
+        if adjustment_id in decisions:
+            problems.append(
+                f"{adjustment_id!r} is both verified and refuted"
+            )
+            continue
+        decisions[adjustment_id] = (SPOT_CHECK_REFUTED, reason)
+
+    for adjustment_id in decisions:
+        if adjustment_id not in known_ids:
+            problems.append(f"unknown adjustment id {adjustment_id!r}")
+    return problems, decisions
+
+
+def _build_adjudication_checkpoint(document, decisions, narrative, *, source):
+    checkpoint = copy.deepcopy(document)
+    digest = proposal_digest(checkpoint)
+    for entry in checkpoint["adjustments"]:
+        adjustment_id = entry["adjustment_id"]
+        outcome, reason = decisions.get(
+            adjustment_id, (SPOT_CHECK_NOT_CHECKED, None)
+        )
+        entry[SPOT_CHECK_KEY] = outcome
+        if outcome == SPOT_CHECK_REFUTED:
+            entry["rejected"] = True
+            entry["rejection_reason"] = reason
+    checkpoint[ADJUDICATION_KEY] = {
+        "schema": ADJUDICATION_SCHEMA,
+        "source": source,
+        PROPOSAL_DIGEST_KEY: digest,
+        RECORDED_AT_KEY: datetime.now(timezone.utc).isoformat(),
+        REVISED_NARRATIVE_KEY: narrative,
+    }
+    return checkpoint
+
+
+def _checkpoint_matches_request(document, decisions, narrative):
+    adjudication = document.get(ADJUDICATION_KEY)
+    if not isinstance(adjudication, dict):
+        return False
+    if adjudication.get("source") != ADJUDICATION_SOURCE_ORCHESTRATOR:
+        return False
+    if adjudication.get(REVISED_NARRATIVE_KEY) != narrative:
+        return False
+    for entry in document["adjustments"]:
+        expected, reason = decisions.get(
+            entry["adjustment_id"], (SPOT_CHECK_NOT_CHECKED, None)
+        )
+        if entry.get(SPOT_CHECK_KEY) != expected:
+            return False
+        if expected == SPOT_CHECK_REFUTED:
+            if entry.get("rejected") is not True:
+                return False
+            if entry.get("rejection_reason") != reason:
+                return False
+        elif "rejected" in entry or "rejection_reason" in entry:
+            return False
+    return True
+
+
+def settle(output_dir, request):
+    """Commit orchestrator adjudication, then apply it under one lock."""
+    with atomic_io.output_dir_lock(output_dir):
+        marker, document = _load_committed_snapshot(output_dir)
+        if marker["verdict"] != REVISE_VERDICT:
+            raise ValueError(
+                f"cannot settle critic proposal under {marker['verdict']} verdict"
+            )
+        known_ids = {
+            entry["adjustment_id"] for entry in document["adjustments"]
+        }
+        problems, decisions = _validate_settlement_request(request, known_ids)
+        if problems:
+            raise AdjustmentValidationError(problems)
+        narrative = request[REVISED_NARRATIVE_KEY]
+        existing = document.get(ADJUDICATION_KEY)
+        if existing is not None:
+            if not _checkpoint_matches_request(document, decisions, narrative):
+                raise ValueError(
+                    "critic proposal is already settled with a different "
+                    "adjudication request"
+                )
+            settlement_status = "already_settled"
+        else:
+            document = _build_adjudication_checkpoint(
+                document,
+                decisions,
+                narrative,
+                source=ADJUDICATION_SOURCE_ORCHESTRATOR,
+            )
+            write_adjustments(output_dir, document)
+            settlement_status = "settled"
+
+        counts = settlement_counts(document)
+        apply_result = _apply_adjustments_locked(output_dir)
+        return {
+            "status": settlement_status,
+            "counts": counts,
+            PROPOSAL_DIGEST_KEY: proposal_digest(document),
+            "apply": apply_result,
+        }
+
+
 def pending_count(output_dir):
     """Count adjustments that have not landed yet, without applying any.
 
@@ -629,16 +1056,11 @@ def pending_count(output_dir):
     gate exists to close, so this shares the predicate instead of the
     write path.
     """
-    adj_path = os.path.join(output_dir, ADJUSTMENTS_FILENAME)
-    if not os.path.isfile(adj_path):
+    adjustments_path = os.path.join(output_dir, ADJUSTMENTS_FILENAME)
+    if not os.path.isfile(adjustments_path):
         return 0
-    with open(adj_path, "r", encoding="utf-8") as f:
-        doc = json.load(f)
-    adjustments = doc.get("adjustments") if isinstance(doc, dict) else None
-    if not isinstance(adjustments, list):
-        raise ValueError(
-            f"{ADJUSTMENTS_FILENAME}: 'adjustments' must be a list"
-        )
+    _marker, doc = _load_committed_snapshot(output_dir)
+    adjustments = doc["adjustments"]
     already_recorded = _recorded_ids_best_effort(output_dir)
     count = 0
     for entry in adjustments:
@@ -678,8 +1100,8 @@ def _withdraw_narrative_summary(findings, recorded_ids):
     findings[WITHDRAWN_SUMMARY_KEY] = withdrawn
 
 
-def apply_adjustments(output_dir):
-    """Apply pending critic adjustments once; return a result dict.
+def _apply_adjustments_locked(output_dir):
+    """Apply a settled critic document once while the caller holds the lock.
 
     Idempotent from either side: an entry is skipped when its flag says
     it was applied or the orchestrator rejected it, and also when the
@@ -717,50 +1139,43 @@ def apply_adjustments(output_dir):
     own outcome for that decision, defaulting to SPOT_CHECK_NOT_CHECKED —
     lands beside its id in `APPLIED_IDS_KEY`.
 
-    Gated on the critic's verdict, checked before anything else is read
-    or written: adjustments are a REVISE-only channel (see module
-    docstring), so any other verdict — or none on file — refuses the
-    whole call and returns `{"status": "refused", ...}` instead of
-    touching a file. This is the one gate every caller shares: the CLI,
-    step 11's defensive re-run, and any future caller all go through this
-    function, so none of them can apply adjustments a STAND or ESCALATE
-    verdict never sanctioned.
+    Gated on the complete source-bound critic snapshot before mutation:
+    adjustments are a REVISE-only channel (see the module docstring), so any
+    other verdict refuses the whole call. Public callers enter through
+    :func:`apply_adjustments`, which owns lock acquisition and the defensive
+    checkpoint; :func:`settle` calls this function only after committing the
+    orchestrator checkpoint while holding the same lock.
     """
-    verdict = read_critic_verdict(output_dir)
-    # Two independent checks, not one combined condition: a missing or
-    # unparseable verdict file and a present-but-wrong verdict are
-    # different failure modes with different reasons, and keeping them as
-    # separate `if`s means a defect in either check only ever manifests
-    # against the scenario it guards.
-    if verdict is None:
-        return {"status": "refused", "applied": 0, "reason": REFUSAL_NO_VERDICT}
+    marker, doc = _load_committed_snapshot(output_dir)
+    verdict = marker["verdict"]
     if verdict != REVISE_VERDICT:
         return {
             "status": "refused", "applied": 0,
             "reason": f"{REFUSAL_VERDICT_NOT_REVISE} ({verdict})",
         }
 
-    adj_path = os.path.join(output_dir, ADJUSTMENTS_FILENAME)
     findings_path = os.path.join(output_dir, FINDINGS_FILENAME)
-    if not os.path.isfile(adj_path):
-        return {"status": "no_adjustments", "applied": 0}
-    with open(adj_path, "r", encoding="utf-8") as f:
-        doc = json.load(f)
-    # Shape-check the WHOLE document before any field inside it, mirroring
-    # read_findings_file()'s FINDINGS_READ_NOT_OBJECT twenty lines below:
-    # a non-object doc ([], "hello", 5 — all valid JSON) is a distinct
-    # diagnosis from "an object with the wrong schema", and collapsing the
-    # two would misreport a shape defect as a content defect (a critic
-    # fixing 'schema' on a payload that isn't even a dict yet gets nowhere).
-    # `validate_adjustments()` is the shared batch-shape check (see its own
-    # docstring): the critic's own save gate runs it before any findings
-    # ledger exists, and this is the SAME check run again here, defensively,
-    # right before the ledger-dependent checks below that only this
-    # function has the context to make.
-    problems = validate_adjustments(doc)
+    adjustments = doc["adjustments"]
+    if not adjustments:
+        return {
+            "status": "no_adjustments",
+            "applied": 0,
+            "rejected": 0,
+            "adjudication_source": None,
+            "counts": {
+                SPOT_CHECK_VERIFIED: 0,
+                SPOT_CHECK_REFUTED: 0,
+                SPOT_CHECK_NOT_CHECKED: 0,
+            },
+        }
+    problems = validate_adjustments_document(doc)
     if problems:
-        raise ValueError(problems[0])
-    adjustments = doc.get("adjustments")
+        raise AdjustmentValidationError(problems)
+    adjudication = doc.get(ADJUDICATION_KEY)
+    if not isinstance(adjudication, dict):
+        raise ValueError(
+            f"{ADJUSTMENTS_FILENAME} has no adjudication checkpoint"
+        )
     read = read_findings_file(findings_path)
     # This path is about to WRITE against what it reads, so every failure
     # is loud. Absent, unreadable, and unparseable re-raise the original
@@ -844,21 +1259,10 @@ def apply_adjustments(output_dir):
             catch_up.append(entry)
             continue
         action = entry.get("action")
-        # DEFENSIVE RE-CHECK, not independent coverage, from here through
-        # the `add` branch below: validate_adjustments() (called above,
-        # before this loop even starts) already verified action-in-ACTIONS,
-        # `fields` vocabulary/severity/line shape, add's required fields,
-        # and add's id-must-be-None rule against the WHOLE document — it is
-        # a strict superset of these checks, gating before any entry here
-        # is reached. A future caller (including step 11) must not assume
-        # this loop is where those facts are independently established;
-        # they are only re-verified here so a hand-edited adjustments.json
-        # that somehow slipped past the earlier gate still fails per-entry
-        # instead of silently applying. The `else` branch below — id
-        # resolution against `by_id`/`seen_targets`/`removed_in_batch` — is
-        # DIFFERENT: it needs the findings ledger, which
-        # validate_adjustments() never sees, so those checks remain the
-        # actual (non-redundant) authority.
+        # The lifecycle document validator already established the action
+        # and replacement-field grammar for the whole batch. These checks
+        # stay close to mutation as a defensive assertion; target resolution
+        # against the findings ledger remains authoritative only here.
         if action not in ACTIONS:
             raise ValueError(
                 f"{label}: unknown action {action!r} "
@@ -903,20 +1307,6 @@ def apply_adjustments(output_dir):
             if action == "remove":
                 removed_in_batch[target_id] = idx
         pending.append((entry, action, fields))
-
-    # Allocate ids before the findings write, so the record the findings
-    # file keeps stays resolvable against this file after a crash. Newly
-    # rejected entries need one too — the rejection audit record is keyed
-    # on it the same way an applied record is keyed on `pending`'s.
-    newly_allocated = False
-    for entry, _action, _fields in pending:
-        if not entry.get("adjustment_id"):
-            entry["adjustment_id"] = uuid.uuid4().hex
-            newly_allocated = True
-    for entry in newly_rejected:
-        if not entry.get("adjustment_id"):
-            entry["adjustment_id"] = uuid.uuid4().hex
-            newly_allocated = True
 
     rejection_records = [
         {
@@ -973,13 +1363,6 @@ def apply_adjustments(output_dir):
         batch_ids.append(entry["adjustment_id"])
         applied += 1
 
-    if newly_allocated:
-        # Ids only — the applied flags and this call's other bookkeeping
-        # belong after the findings write, same crash-safety ordering as
-        # the applied-ids record: a crash after this line but before the
-        # findings write below still leaves the id resolvable on retry.
-        atomic_write_json(adj_path, doc)
-
     if applied:
         derived = _recount_summary(findings, issues)
         recomputed = derived["verdict"]
@@ -997,7 +1380,7 @@ def apply_adjustments(output_dir):
         # withdrawal just emptied. The withdrawal record stays: replacement
         # is not erasure, and the reconciler's retracted words remain
         # readable beside the ids that cost them their standing.
-        revised = doc.get(REVISED_NARRATIVE_KEY)
+        revised = adjudication.get(REVISED_NARRATIVE_KEY)
         if isinstance(revised, str) and revised.strip():
             findings[NARRATIVE_SUMMARY_KEY] = revised
     if rejection_records:
@@ -1014,34 +1397,142 @@ def apply_adjustments(output_dir):
             entry["applied"] = True
         for entry in catch_up:
             entry["applied"] = True
-        atomic_write_json(adj_path, doc)
-    return {"status": "applied" if applied else "nothing_pending",
-            "applied": applied}
+        write_adjustments(output_dir, doc)
+    return {
+        "status": "applied" if applied else "nothing_pending",
+        "applied": applied,
+        "rejected": len(rejection_records),
+        "adjudication_source": adjudication["source"],
+        "counts": settlement_counts(doc),
+    }
+
+
+def _read_marker_for_gate(output_dir):
+    """Read only enough marker state to preserve the public refusal API."""
+    path = os.path.join(output_dir, CRITIC_VERDICT_FILENAME)
+    try:
+        marker = _read_json_object(path, CRITIC_VERDICT_FILENAME)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    if _validate_verdict_marker(marker):
+        return None
+    return marker
+
+
+def apply_adjustments(output_dir):
+    """Explicit recovery path; checkpoint missing adjudication honestly."""
+    with atomic_io.output_dir_lock(output_dir):
+        marker = _read_marker_for_gate(output_dir)
+        if marker is None:
+            return {
+                "status": "refused",
+                "applied": 0,
+                "reason": REFUSAL_NO_VERDICT,
+            }
+        verdict = marker["verdict"]
+        if verdict != REVISE_VERDICT:
+            return {
+                "status": "refused",
+                "applied": 0,
+                "reason": f"{REFUSAL_VERDICT_NOT_REVISE} ({verdict})",
+            }
+        _marker, document = _load_committed_snapshot(output_dir)
+        if not document["adjustments"]:
+            return {
+                "status": "no_adjustments",
+                "applied": 0,
+                "rejected": 0,
+                "adjudication_source": None,
+                "counts": {
+                    SPOT_CHECK_VERIFIED: 0,
+                    SPOT_CHECK_REFUTED: 0,
+                    SPOT_CHECK_NOT_CHECKED: 0,
+                },
+            }
+        if ADJUDICATION_KEY not in document:
+            document = _build_adjudication_checkpoint(
+                document,
+                {},
+                None,
+                source=ADJUDICATION_SOURCE_DEFENSIVE,
+            )
+            write_adjustments(output_dir, document)
+        return _apply_adjustments_locked(output_dir)
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Apply decision-critic adjustments to review-findings.json",
+        description=(
+            "Settle critic proposals or explicitly recover their ledger apply"
+        ),
         epilog=(
-            "Exit codes: 0 = applied (or nothing pending); "
+            "Exit codes: 0 = settled/applied (or idempotent); "
             "1 = validation/IO error; "
             f"{REFUSAL_EXIT_CODE} = refused — {CRITIC_VERDICT_FILENAME} does "
             "not say REVISE, so nothing was written."
         ),
     )
-    parser.add_argument("--output-dir", required=True)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    settle_parser = subparsers.add_parser(
+        "settle", help="Record orchestrator adjudication from stdin and apply it"
+    )
+    settle_parser.add_argument("--output-dir", required=True)
+    apply_parser = subparsers.add_parser(
+        "apply", help="Explicit recovery for a committed proposal"
+    )
+    apply_parser.add_argument("--output-dir", required=True)
     args = parser.parse_args()
     try:
-        result = apply_adjustments(args.output_dir)
-    except (ValueError, OSError, json.JSONDecodeError) as err:
-        print(f"ERROR: {err}", file=sys.stderr)
+        if args.command == "settle":
+            try:
+                request = json.load(sys.stdin)
+            except json.JSONDecodeError as error:
+                raise AdjustmentValidationError([
+                    f"adjudication request is not valid JSON: {error}"
+                ]) from error
+            result = settle(args.output_dir, request)
+        else:
+            result = apply_adjustments(args.output_dir)
+    except AdjustmentValidationError as error:
+        for problem in error.problems:
+            if args.command == "settle":
+                print(f"REJECTED: {problem}")
+            else:
+                print(f"ERROR: {problem}", file=sys.stderr)
         sys.exit(1)
-    # One parser handles every status: the result JSON always goes to
-    # stdout, whether applied, nothing pending, or refused. Refused
-    # additionally gets a human-readable stderr line and the distinct
-    # exit code — `.get()`, not a subscript, so a refusal result that
-    # somehow lacks `reason` still reports and exits 3 instead of
-    # crashing on a KeyError on its way out the door.
+    except (ValueError, OSError, json.JSONDecodeError) as error:
+        if args.command == "settle":
+            print(f"REJECTED: {error}")
+        else:
+            print(f"ERROR: {error}", file=sys.stderr)
+        sys.exit(1)
+
+    if args.command == "settle":
+        counts = result["counts"]
+        if result["status"] == "already_settled":
+            print("ALREADY SETTLED")
+        else:
+            print(f"RECORDED ADJUDICATION: {sum(counts.values())}")
+        print(
+            f"VERIFIED: {counts[SPOT_CHECK_VERIFIED]} | "
+            f"REFUTED: {counts[SPOT_CHECK_REFUTED]} | "
+            f"NOT_CHECKED: {counts[SPOT_CHECK_NOT_CHECKED]}"
+        )
+        print("REVISED NARRATIVE: present")
+        print(f"PROPOSAL DIGEST: {result[PROPOSAL_DIGEST_KEY]}")
+        apply_result = result["apply"]
+        if (
+            result["status"] == "already_settled"
+            and apply_result.get("status") == "nothing_pending"
+        ):
+            print("ALREADY APPLIED")
+        else:
+            print(
+                f"APPLY: applied {apply_result.get('applied', 0)} | "
+                f"rejected {apply_result.get('rejected', 0)}"
+            )
+        return
+
     print(json.dumps(result))
     if result.get("status") == "refused":
         print(f"REFUSED: {result.get('reason', 'unknown')}", file=sys.stderr)

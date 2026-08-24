@@ -40,6 +40,25 @@ def _publish_step_11(output_dir, cwd, mode="pr"):
     )
 
 
+def _write_critic_snapshot(output_dir, verdict):
+    """Publish one live digest-bound critic snapshot for pipeline tests."""
+    from review import critic_adjustments
+    from review.atomic_io import atomic_write_json
+
+    proposal = critic_adjustments.prepare_proposal({
+        "schema": 1, "adjustments": [],
+    })
+    critic_adjustments.write_adjustments(str(output_dir), proposal)
+    atomic_write_json(
+        str(Path(output_dir) / critic_adjustments.CRITIC_VERDICT_FILENAME),
+        {
+            "schema": 1,
+            "verdict": verdict,
+            "proposal_digest": critic_adjustments.proposal_digest(proposal),
+        },
+    )
+
+
 class TestStep1ParseInput:
     """Step 1: Parse Input — all modes."""
 
@@ -1750,18 +1769,11 @@ class TestStep10DecisionCritic:
         g = mod.get_step_guidance(10, "pr", {"completed_steps": []}, {})
         revise = self._revise_section(g)
 
-        # Per-entry accounting during the spot-check itself.
         assert "PER ENTRY, never in aggregate" in revise
-        assert '"not_checked"' in revise
-        assert "never absorbed into a batch-level statement" in revise
-
-        # Per-entry accounting when reporting it. The record renders the
-        # lines from the ledger now, so the instruction points at that
-        # rendering rather than asking for a hand-written list.
-        assert "one line per adjustment" in revise
-        assert (
-            "`<adjustment_id> — verified | refuted | not_checked`" in revise
-        )
+        assert '"verified"' in revise
+        assert '"refuted"' in revise
+        assert "omitted" in revise and "not_checked" in revise
+        assert "Do not enumerate `not_checked`" in revise
         assert "Never report the batch in aggregate anywhere" in revise
 
     def test_spot_check_instruction_carries_no_aggregate_phrasing(self, mod):
@@ -1820,8 +1832,8 @@ class TestStep10DecisionCritic:
         assert "wait" in text.lower() or "do not" in text.lower()
         assert "background" in text.lower()
 
-    def test_revise_instructs_report_edit(self, mod, tmp_path):
-        """REVISE verdict instructions must explicitly mention editing review-report.md."""
+    def test_revise_leaves_report_authoring_to_step_11(self, mod, tmp_path):
+        """Step 10 settles data; step 11 authors prose from that state."""
         state = {"completed_steps": []}
         ctx = {}
         g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
@@ -1841,14 +1853,13 @@ class TestStep10DecisionCritic:
             elif in_revise:
                 revise_lines.append(line)
         revise_text = "\n".join(revise_lines)
-        # REVISE section must mention review-report.md with a concrete action verb
+        # The report may be named as the later product, but step 10 must not
+        # tell the orchestrator to edit it.
         assert "review-report.md" in revise_text, (
-            "REVISE instructions must explicitly mention editing review-report.md"
+            "REVISE instructions should name the report step 11 will author"
         )
         lower = revise_text.lower()
-        assert any(verb in lower for verb in ["edit", "update", "fix", "correct", "reframe"]), (
-            "REVISE instructions must use a concrete action verb (edit/update/fix/correct/reframe)"
-        )
+        assert "nothing else to edit" in lower
 
     def test_revise_routes_through_the_adjustments_ledger(self, mod, tmp_path):
         """REVISE must apply the critic's adjustments, not only edit prose.
@@ -1869,12 +1880,29 @@ class TestStep10DecisionCritic:
             "REVISE must invoke the module that carries adjustments into "
             "review-findings.json"
         )
-        assert "--output-dir" in revise_text, (
-            "the apply command must be runnable as written"
+        assert "settle" in revise_text and "--output-dir" in revise_text
+        assert '"verified"' in revise_text
+        assert '"refuted"' in revise_text
+        assert '"revised_narrative"' in revise_text
+        assert '"adjustment_id"' in revise_text
+        assert "RECORDED ADJUDICATION" in revise_text
+        assert "PROPOSAL DIGEST" in revise_text
+
+    def test_revise_forbids_raw_settlement_mutation(self, mod, tmp_path):
+        state = {"completed_steps": []}
+        guidance = mod.get_step_guidance(
+            10, "pr", state, {}, output_dir=str(tmp_path)
         )
-        assert "rejected" in revise_text, (
-            "a refuted adjustment must be marked rejected, not deleted"
-        )
+        revise_text = self._revise_section(guidance)
+
+        assert 'give every entry a `"spot_check"` field' not in revise_text
+        assert 'mark any adjustment' not in revise_text
+        assert 'top-level `"revised_narrative"`' not in revise_text
+        assert (
+            f'critic_adjustments.py --output-dir "{tmp_path}"'
+            not in revise_text
+        ), "the retired bare implicit-apply command must stay absent"
+        assert "never edits the committed proposal" in revise_text.lower()
 
     def test_revise_updates_the_ledger_before_the_report(self, mod, tmp_path):
         """Ordering is the contract: JSON first, then prose that matches it."""
@@ -1888,8 +1916,7 @@ class TestStep10DecisionCritic:
 
         assert read_adjustments < apply_adjustments < edit_report, (
             "REVISE must read the adjustments, apply them to the findings "
-            "JSON, and only then edit the report to match — a report edited "
-            "first would describe a ledger the critic never reached"
+            "JSON before step 11 authors the report"
         )
 
     def test_critic_dispatch_prompt_requires_the_adjustments_file(
@@ -2049,7 +2076,7 @@ class TestCriticVerdictPersistence:
                    "--output-dir", str(out), "--pr-number", "42", cwd=tmp_path / "repo")
         (out / "review-report.md").write_text("# Review")
         (out / "review-findings.json").write_text('{"verdict": "APPROVE", "issues": []}')
-        (out / "decision-critic-verdict.json").write_text('{"verdict": "STAND"}')
+        _write_critic_snapshot(out, "STAND")
         r = _publish_step_11(out, tmp_path / "repo")
         assert r.returncode == 0
         result = json.loads((out / "pipeline-result.json").read_text())
@@ -2074,9 +2101,7 @@ class TestCriticVerdictPersistence:
                    "--output-dir", str(out), "--pr-number", "42", cwd=tmp_path / "repo")
         (out / "review-report.md").write_text("# Review")
         (out / "review-findings.json").write_text('{"verdict": "approve", "issues": []}')
-        (out / "decision-critic-verdict.json").write_text(
-            '{"verdict": "SKIPPED", "reason": "quick mode, reconciliation verdict: approve"}'
-        )
+        _write_critic_snapshot(out, "SKIPPED")
         r = _publish_step_11(out, tmp_path / "repo")
         assert r.returncode == 0
         result = json.loads((out / "pipeline-result.json").read_text())
@@ -3203,12 +3228,22 @@ class TestStep10WritesItsOwnSkipVerdict:
 
     @pytest.mark.parametrize("recon", ["approve", "comment", "COMMENT"])
     def test_the_skip_verdict_lands_on_disk(self, mod, tmp_path, recon):
-        self._run_step_10(mod, tmp_path, recon)
+        state = self._run_step_10(mod, tmp_path, recon)
+        proposal = json.loads(
+            (tmp_path / "decision-critic-adjustments.json").read_text()
+        )
         written = json.loads(
             (tmp_path / "decision-critic-verdict.json").read_text()
         )
-        assert written["verdict"] == "SKIPPED"
-        assert recon in written["reason"]
+        from review import critic_adjustments
+
+        assert proposal == {"schema": 1, "adjustments": []}
+        assert written == {
+            "schema": 1,
+            "verdict": "SKIPPED",
+            "proposal_digest": critic_adjustments.proposal_digest(proposal),
+        }
+        assert recon in state["step_decisions"]["10"]["reason"]
 
     def test_a_dispatched_critic_gets_no_pipeline_written_verdict(
         self, mod, tmp_path

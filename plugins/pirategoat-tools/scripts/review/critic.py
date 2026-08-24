@@ -19,14 +19,15 @@ import sys
 from typing import Optional
 
 try:
-    from . import critic_adjustments
-    from .atomic_io import atomic_write_json, atomic_write_text
+    from . import atomic_io, critic_adjustments
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
-    from review import critic_adjustments
-    from review.atomic_io import atomic_write_json, atomic_write_text
+    from review import atomic_io, critic_adjustments
+
+atomic_write_json = atomic_io.atomic_write_json
+atomic_write_text = atomic_io.atomic_write_text
 
 
 TOTAL_STEPS = 4
@@ -42,8 +43,8 @@ TOTAL_STEPS = 4
 CRITIC_VERDICTS = ("STAND", "REVISE", "ESCALATE")
 # Deliberately NOT a member of CRITIC_VERDICTS above: it is not a critique
 # outcome, it is the record that no critique happened — the step-10
-# briefing has the orchestrator write it when quick mode skips the critic
-# and when the critic crashed, timed out, or produced nothing usable.
+# pipeline writes it when quick mode skips the critic. A crashed, timed-out,
+# or unusable critic leaves no committed verdict and is reported honestly.
 # Consumers that measure critique quality must exclude it; consumers that
 # measure whether a critic ran must not. critic_adjustments.py spells the
 # same literal separately for its own presentation mapping.
@@ -362,17 +363,21 @@ def run_save(args):
     a hand-written artifact after the fact.
 
     Every problem is collected before anything is decided, the same
-    all-or-nothing style `critic_adjustments.validate_adjustments()` and
-    `apply_adjustments()` use: a bad verdict, a missing findings file, an
+    all-or-nothing style `critic_adjustments.prepare_proposal()` and
+    `settle()` use: a bad verdict, a missing findings file, an
     invalid adjustments batch, and a REVISE/STAND contradiction are all
     independent facts, and reporting only the first would make a caller
     fix one problem at a time instead of seeing the whole rejection at
-    once. On ANY validation problem, the previous complete snapshot stays
+    once. Proposal normalization assigns the stable adjustment IDs before
+    publication; settlement fields are not accepted from the critic. On ANY
+    validation problem, the previous complete snapshot stays
     untouched and every problem is echoed as its own ``REJECTED: <problem>``
     line. Once validation succeeds, the old verdict commit marker is removed
     before either replacement payload is written. A publication failure may
     therefore leave partial payloads, but never a readable verdict that makes
-    mixed state authoritative; no verdict means incomplete and resumable.
+    mixed state authoritative. The schema-versioned verdict marker commits
+    the proposal digest, so no marker means incomplete and any later proposal
+    edit makes the snapshot unusable.
 
     Returns 0 on success and 1 on validation rejection. Publication I/O
     failures propagate so the caller exits loudly with the commit marker
@@ -387,10 +392,16 @@ def run_save(args):
         )
     findings_text = _read_required(args.findings, problems, "findings")
     adjustments = None
+    adjustment_snapshot = None
     if args.adjustments:
         adjustments = _read_json(args.adjustments, problems, "adjustments")
         if adjustments is not None:
-            problems.extend(critic_adjustments.validate_adjustments(adjustments))
+            try:
+                adjustment_snapshot = critic_adjustments.prepare_proposal(
+                    adjustments
+                )
+            except critic_adjustments.AdjustmentValidationError as error:
+                problems.extend(error.problems)
     adjustments_doc = adjustments if isinstance(adjustments, dict) else {}
     entries = adjustments_doc.get("adjustments") or []
     if verdict == "REVISE" and not entries:
@@ -406,39 +417,43 @@ def run_save(args):
             print(f"REJECTED: {p}")
         return 1
 
-    od = args.output_dir
-    # Invalidate any previous commit before replacing either payload. Only an
-    # absent marker is tolerable; permission and other I/O failures propagate
-    # before the snapshot can be mixed.
-    _invalidate_verdict_commit_marker(od)
-    # The new verdict commits the snapshot before it: findings first, current
-    # adjustments second, verdict last.
-    atomic_write_text(
-        os.path.join(od, "decision-critic-findings.md"), findings_text
-    )
-    adjustment_snapshot = (
-        adjustments
-        if verdict == "REVISE"
-        else {
+    if verdict != "REVISE":
+        adjustment_snapshot = critic_adjustments.prepare_proposal({
             "schema": critic_adjustments.ADJUSTMENTS_SCHEMA,
             "adjustments": [],
-        }
-    )
-    atomic_write_json(
-        os.path.join(od, "decision-critic-adjustments.json"),
-        adjustment_snapshot,
-    )
-    atomic_write_json(
-        os.path.join(od, "decision-critic-verdict.json"), {"verdict": verdict}
-    )
+        })
+    digest = critic_adjustments.proposal_digest(adjustment_snapshot)
+    od = args.output_dir
+    with atomic_io.output_dir_lock(od):
+        # Invalidate any previous commit before replacing either payload. Only
+        # an absent marker is tolerable; permission and other I/O failures
+        # propagate before the snapshot can be mixed. The shared lock keeps a
+        # concurrent settle from observing this incomplete publication.
+        _invalidate_verdict_commit_marker(od)
+        atomic_write_text(
+            os.path.join(od, "decision-critic-findings.md"), findings_text
+        )
+        critic_adjustments.write_adjustments(od, adjustment_snapshot)
+        atomic_write_json(
+            os.path.join(od, critic_adjustments.CRITIC_VERDICT_FILENAME),
+            {
+                "schema": critic_adjustments.VERDICT_MARKER_SCHEMA,
+                "verdict": verdict,
+                "proposal_digest": digest,
+            },
+        )
     print(f"RECORDED VERDICT: {verdict}")
+    recorded_entries = adjustment_snapshot["adjustments"]
     print(
-        f"RECORDED ADJUSTMENTS: {len(entries)}"
+        f"RECORDED ADJUSTMENTS: {len(recorded_entries)}"
         + (
-            " — " + ", ".join(e.get("adjustment_id", "?") for e in entries)
-            if entries else ""
+            " — " + ", ".join(
+                entry["adjustment_id"] for entry in recorded_entries
+            )
+            if recorded_entries else ""
         )
     )
+    print(f"PROPOSAL DIGEST: {digest}")
     return 0
 
 

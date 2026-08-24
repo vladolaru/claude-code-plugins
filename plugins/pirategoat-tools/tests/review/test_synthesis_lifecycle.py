@@ -23,7 +23,9 @@ PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
+from review import critic_adjustments
 from review import synthesis_lifecycle as lifecycle
+from review.atomic_io import atomic_write_json
 
 
 T0 = datetime(2026, 8, 19, 12, 0, 0, tzinfo=timezone.utc)
@@ -53,6 +55,22 @@ def _entry(payload, name):
         if entry["agent"] == name:
             return entry
     return None
+
+
+def _critic_snapshot(out, verdict):
+    """Publish the live digest-bound critic snapshot used by readers."""
+    proposal = critic_adjustments.prepare_proposal({
+        "schema": 1,
+        "adjustments": [],
+    })
+    critic_adjustments.write_adjustments(str(out), proposal)
+    path = out / critic_adjustments.CRITIC_VERDICT_FILENAME
+    atomic_write_json(str(path), {
+        "schema": 1,
+        "verdict": verdict,
+        "proposal_digest": critic_adjustments.proposal_digest(proposal),
+    })
+    return path
 
 
 @pytest.fixture
@@ -132,8 +150,7 @@ class TestCompletionObservation:
         comes from the artifact's mtime — observation-time would inflate
         it by however long finalize took to get here."""
         lifecycle.mark_dispatched(str(out), lifecycle.DECISION_CRITIC, now=T0)
-        verdict = out / "decision-critic-verdict.json"
-        verdict.write_text('{"verdict": "STAND"}')
+        verdict = _critic_snapshot(out, "STAND")
         _set_mtime(verdict, T0 + timedelta(seconds=665))
 
         payload = lifecycle.observe(str(out), finalize=True)
@@ -216,8 +233,7 @@ class TestIdempotence:
         first = lifecycle.observe(str(out))
 
         lifecycle.mark_dispatched(str(out), lifecycle.DECISION_CRITIC, now=T0 + timedelta(seconds=60))
-        verdict = out / "decision-critic-verdict.json"
-        verdict.write_text('{"verdict": "STAND"}')
+        verdict = _critic_snapshot(out, "STAND")
         _set_mtime(verdict, T0 + timedelta(seconds=700))
         second = lifecycle.observe(str(out), finalize=True)
 
@@ -271,8 +287,7 @@ class TestArtifactEnvelope:
         step cadence already bounds the observation lag, so the second
         number answered a question nobody asked."""
         lifecycle.mark_dispatched(str(out), lifecycle.DECISION_CRITIC, now=T0)
-        verdict = out / "decision-critic-verdict.json"
-        verdict.write_text('{"verdict": "STAND"}')
+        verdict = _critic_snapshot(out, "STAND")
         _set_mtime(verdict, T0 + timedelta(seconds=665))
 
         payload = lifecycle.observe(str(out), finalize=True)
@@ -298,23 +313,24 @@ class TestArtifactEnvelope:
 class TestVerdictCapture:
     """The verdict is what makes the duration beside it interpretable."""
 
-    def _complete_critic(self, out, verdict_payload):
+    def _complete_critic(self, out, verdict_payload, *, committed=False):
         lifecycle.mark_dispatched(str(out), lifecycle.DECISION_CRITIC, now=T0)
-        verdict = out / "decision-critic-verdict.json"
-        verdict.write_text(verdict_payload)
+        if committed:
+            verdict = _critic_snapshot(out, verdict_payload)
+        else:
+            verdict = out / "decision-critic-verdict.json"
+            verdict.write_text(verdict_payload)
         _set_mtime(verdict, T0 + timedelta(seconds=665))
         return lifecycle.observe(str(out), finalize=True)
 
     def test_the_critics_verdict_rides_the_row(self, out):
-        payload = self._complete_critic(out, '{"verdict": "REVISE"}')
+        payload = self._complete_critic(out, "REVISE", committed=True)
         assert _entry(payload, lifecycle.DECISION_CRITIC)["verdict"] == "REVISE"
 
     def test_a_skipped_critic_is_recorded_as_skipped(self, out):
         """Its span measures dispatch to orchestrator-gave-up, not a
         critique — the cohort needs to tell the two apart."""
-        payload = self._complete_critic(
-            out, '{"verdict": "SKIPPED", "reason": "crashed"}'
-        )
+        payload = self._complete_critic(out, "SKIPPED", committed=True)
         assert _entry(payload, lifecycle.DECISION_CRITIC)["verdict"] == (
             "SKIPPED"
         )
@@ -326,6 +342,29 @@ class TestVerdictCapture:
     def test_an_unreadable_verdict_is_none(self, out, payload):
         result = self._complete_critic(out, payload)
         assert _entry(result, lifecycle.DECISION_CRITIC)["verdict"] is None
+
+    def test_malformed_versioned_marker_completes_but_is_not_usable(self, out):
+        lifecycle.mark_dispatched(str(out), lifecycle.DECISION_CRITIC, now=T0)
+        proposal = critic_adjustments.prepare_proposal({
+            "schema": 1, "adjustments": [],
+        })
+        critic_adjustments.write_adjustments(str(out), proposal)
+        marker = out / critic_adjustments.CRITIC_VERDICT_FILENAME
+        atomic_write_json(str(marker), {
+            "schema": 1,
+            "verdict": "STAND",
+            "proposal_digest": critic_adjustments.proposal_digest(proposal),
+            "unexpected": True,
+        })
+        _set_mtime(marker, T0 + timedelta(seconds=665))
+
+        payload = lifecycle.observe(str(out), finalize=True)
+        entry = _entry(payload, lifecycle.DECISION_CRITIC)
+
+        assert entry["completed_at"] is not None
+        assert entry["duration_ms"] == 665_000
+        assert entry["stalled"] is False
+        assert entry["verdict"] is None
 
     def test_the_reconciliators_verdict_rides_its_row_too(self, out):
         lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
@@ -342,8 +381,7 @@ class TestVerdictCapture:
         output, so attaching its conclusion to the live dispatch would
         pair a stale verdict with a live phase."""
         lifecycle.mark_dispatched(str(out), lifecycle.DECISION_CRITIC, now=T0)
-        verdict = out / "decision-critic-verdict.json"
-        verdict.write_text('{"verdict": "STAND"}')
+        verdict = _critic_snapshot(out, "STAND")
         _set_mtime(verdict, T0 - timedelta(minutes=5))
         payload = lifecycle.observe(str(out), finalize=True)
         entry = _entry(payload, lifecycle.DECISION_CRITIC)
@@ -477,8 +515,7 @@ class TestStepTenReEntryDoesNotManufactureAStall:
         dispatched = datetime.fromisoformat(
             _marker(out, lifecycle.DECISION_CRITIC).read_text()
         )
-        verdict = out / "decision-critic-verdict.json"
-        verdict.write_text('{"verdict": "REVISE"}')
+        verdict = _critic_snapshot(out, "REVISE")
         _set_mtime(verdict, dispatched + timedelta(seconds=665))
 
         # Step 10 is RE-ENTERED, then finalize runs.
@@ -544,8 +581,7 @@ class TestStepTenReEntryDoesNotManufactureAStall:
         dispatched = datetime.fromisoformat(
             _marker(out, lifecycle.DECISION_CRITIC).read_text()
         )
-        verdict = out / "decision-critic-verdict.json"
-        verdict.write_text('{"verdict": "REVISE"}')
+        verdict = _critic_snapshot(out, "REVISE")
         _set_mtime(verdict, dispatched + timedelta(seconds=665))
         write_findings(str(out), {"verdict": "request_changes", "issues": []})
 
@@ -576,8 +612,7 @@ class TestStepNineObservation:
 class TestStepElevenObservation:
     def test_finalize_records_the_critic_duration(self, out):
         lifecycle.mark_dispatched(str(out), lifecycle.DECISION_CRITIC, now=T0)
-        verdict = out / "decision-critic-verdict.json"
-        verdict.write_text('{"verdict": "STAND"}')
+        verdict = _critic_snapshot(out, "STAND")
         _set_mtime(verdict, T0 + timedelta(seconds=665))
 
         orchestration_mod._orchestrate_step_11(

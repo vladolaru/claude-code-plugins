@@ -10,8 +10,8 @@ gap this module exists to close, because nothing downstream validates a
 hand-written ledger after the fact.
 
 Every problem is collected before anything is decided, the same
-all-or-nothing style ``critic_adjustments.validate_adjustments()`` and
-``critic.py``'s ``run_save()`` use: a bad verdict, a missing required issue
+all-or-nothing style ``critic_adjustments.validate_adjustments_document()``
+and ``critic.py``'s ``run_save()`` use: a bad verdict, a missing required issue
 field, and a summary/issues count mismatch are independent facts, and
 reporting only the first would make a caller fix one problem at a time
 instead of seeing the whole rejection at once. On ANY problem, nothing is

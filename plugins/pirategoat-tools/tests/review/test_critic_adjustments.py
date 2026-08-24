@@ -7,6 +7,10 @@ import os
 import re
 import subprocess
 import sys
+import threading
+import time
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -28,7 +32,7 @@ from review.critic_adjustments import (
     apply_adjustments,
     pending_count,
     read_critic_verdict,
-    validate_adjustments,
+    validate_proposal_input,
     write_findings,
 )
 from review import critic_adjustments as critic_adjustments_module
@@ -85,16 +89,127 @@ def _write_findings(output_dir, issues, **extra):
     return data
 
 
-def _write_adjustments(output_dir, adjustments):
-    (Path(output_dir) / "decision-critic-adjustments.json").write_text(
-        json.dumps({"schema": 1, "adjustments": adjustments})
+def _write_snapshot_document(output_dir, document, verdict="REVISE"):
+    """One fixture for the live digest-bound critic snapshot.
+
+    Invalid-document tests deliberately pass malformed lifecycle content;
+    this factory still binds the marker to those bytes so the production
+    validator, rather than an obsolete marker shape, is what rejects them.
+    """
+    output_dir = Path(output_dir)
+    (output_dir / "decision-critic-adjustments.json").write_text(
+        json.dumps(document)
     )
+    atomic_write_json(
+        str(output_dir / "decision-critic-verdict.json"),
+        {
+            "schema": 1,
+            "verdict": verdict,
+            "proposal_digest": critic_adjustments_module.proposal_digest(
+                document
+            ),
+        },
+    )
+    return document
+
+
+def _write_adjustments(output_dir, adjustments, **document_extra):
+    entries = json.loads(json.dumps(adjustments))
+    used_ids = {
+        entry.get("adjustment_id")
+        for entry in entries
+        if isinstance(entry, dict) and entry.get("adjustment_id")
+    }
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("action") == "remove" and "fields" not in entry:
+            entry["fields"] = {}
+        if not entry.get("adjustment_id"):
+            candidate = uuid.uuid4().hex
+            while candidate in used_ids:
+                candidate = uuid.uuid4().hex
+            entry["adjustment_id"] = candidate
+            used_ids.add(candidate)
+
+    lifecycle = any(
+        isinstance(entry, dict)
+        and ({"spot_check", "rejected", "rejection_reason", "applied"} & set(entry))
+        for entry in entries
+    ) or "revised_narrative" in document_extra
+    document = {"schema": 1, "adjustments": entries}
+    if lifecycle:
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("rejected") is True:
+                entry.setdefault("spot_check", "refuted")
+            else:
+                entry.setdefault("spot_check", "not_checked")
+        narrative = document_extra.pop(
+            "revised_narrative", "Fixture post-critic assessment."
+        )
+        document["adjudication"] = {
+            "schema": 1,
+            "source": "orchestrator",
+            "proposal_digest": critic_adjustments_module.proposal_digest(
+                document
+            ),
+            "recorded_at": "2026-08-24T10:00:00+00:00",
+            "revised_narrative": narrative,
+        }
+    document.update(document_extra)
+    return _write_snapshot_document(output_dir, document)
 
 
 def _write_critic_verdict(output_dir, verdict):
-    (Path(output_dir) / "decision-critic-verdict.json").write_text(
-        json.dumps({"verdict": verdict})
+    output_dir = Path(output_dir)
+    adjustments_path = output_dir / "decision-critic-adjustments.json"
+    if verdict == "REVISE" and adjustments_path.is_file():
+        document = json.loads(adjustments_path.read_text())
+    else:
+        document = {"schema": 1, "adjustments": []}
+    return _write_snapshot_document(output_dir, document, verdict=verdict)
+
+
+def _commit_critic_snapshot(output_dir, adjustments, verdict="REVISE"):
+    """Publish the live marker/proposal pair through the production helpers."""
+    proposal = critic_adjustments_module.prepare_proposal({
+        "schema": 1,
+        "adjustments": adjustments if verdict == "REVISE" else [],
+    })
+    critic_adjustments_module.write_adjustments(str(output_dir), proposal)
+    atomic_write_json(
+        str(Path(output_dir) / "decision-critic-verdict.json"),
+        {
+            "schema": 1,
+            "verdict": verdict,
+            "proposal_digest": critic_adjustments_module.proposal_digest(
+                proposal
+            ),
+        },
     )
+    return proposal
+
+
+def _settlement_request(
+    proposal, *, verified=(), refuted=(), narrative="Settled assessment."
+):
+    ids = [entry["adjustment_id"] for entry in proposal["adjustments"]]
+    verified_ids = [ids[index] for index in verified]
+    refuted_entries = [
+        {
+            "adjustment_id": ids[index],
+            "rejection_reason": reason,
+        }
+        for index, reason in refuted
+    ]
+    return {
+        "schema": 1,
+        "verified": verified_ids,
+        "refuted": refuted_entries,
+        "revised_narrative": narrative,
+    }
 
 
 def _applied_ids(findings):
@@ -142,7 +257,8 @@ class TestApplyAdjustments:
     def test_no_adjustments_file_is_a_noop(self, tmp_path):
         _write_findings(tmp_path, [_issue("aaaa1111")])
         result = apply_adjustments(str(tmp_path))
-        assert result == {"status": "no_adjustments", "applied": 0}
+        assert result["status"] == "no_adjustments"
+        assert result["applied"] == 0
 
     def test_promote_patches_severity_with_provenance(self, tmp_path):
         _write_findings(tmp_path, [_issue("aaaa1111", "low")])
@@ -268,7 +384,8 @@ class TestApplyAdjustments:
              "rationale": "critic found it independently"},
         ])
         result = apply_adjustments(str(tmp_path))
-        assert result == {"status": "applied", "applied": 3}
+        assert result["status"] == "applied"
+        assert result["applied"] == 3
 
         data = json.loads((tmp_path / "review-findings.json").read_text())
         assert data["summary"]["total_issues"] == 3
@@ -302,7 +419,8 @@ class TestApplyAdjustments:
             "rationale": "critic found it independently",
         }])
         result = apply_adjustments(str(tmp_path))
-        assert result == {"status": "applied", "applied": 1}
+        assert result["status"] == "applied"
+        assert result["applied"] == 1
 
         data = json.loads((tmp_path / "review-findings.json").read_text())
         assert len(data["issues"]) == 2
@@ -334,14 +452,16 @@ class TestApplyAdjustments:
             "rationale": "critic found it independently",
         }])
         first = apply_adjustments(str(tmp_path))
-        assert first == {"status": "applied", "applied": 1}
+        assert first["status"] == "applied"
+        assert first["applied"] == 1
         after_first = json.loads(
             (tmp_path / "review-findings.json").read_text()
         )
         assert len(after_first["issues"]) == 2
 
         second = apply_adjustments(str(tmp_path))
-        assert second == {"status": "nothing_pending", "applied": 0}
+        assert second["status"] == "nothing_pending"
+        assert second["applied"] == 0
         after_second = json.loads(
             (tmp_path / "review-findings.json").read_text()
         )
@@ -395,7 +515,8 @@ class TestRejectionAudit:
         assert len(first[REJECTED_ADJUSTMENTS_KEY]) == 1
 
         second_result = apply_adjustments(str(tmp_path))
-        assert second_result == {"status": "nothing_pending", "applied": 0}
+        assert second_result["status"] == "nothing_pending"
+        assert second_result["applied"] == 0
         second = json.loads((tmp_path / "review-findings.json").read_text())
         assert second == first, "an idempotent re-run must not rewrite the ledger"
         assert len(second[REJECTED_ADJUSTMENTS_KEY]) == 1
@@ -439,7 +560,8 @@ class TestRejectionAudit:
             "rejected": True, "rejection_reason": "refuted",
         }])
         result = apply_adjustments(str(tmp_path))
-        assert result == {"status": "nothing_pending", "applied": 0}
+        assert result["status"] == "nothing_pending"
+        assert result["applied"] == 0
 
     def test_mixed_batch_applies_one_and_audits_the_other(self, tmp_path):
         _write_findings(
@@ -453,7 +575,8 @@ class TestRejectionAudit:
              "rejected": True, "rejection_reason": "refuted"},
         ])
         result = apply_adjustments(str(tmp_path))
-        assert result == {"status": "applied", "applied": 1}
+        assert result["status"] == "applied"
+        assert result["applied"] == 1
         data = json.loads((tmp_path / "review-findings.json").read_text())
         assert data["issues"][0]["severity"] == "high"
         assert data["issues"][1]["severity"] == "low"  # rejected, untouched
@@ -483,14 +606,11 @@ class TestRejectionAudit:
         data = json.loads((tmp_path / "review-findings.json").read_text())
         assert REJECTED_ADJUSTMENTS_KEY not in data  # nothing written
 
-    def test_applied_and_rejected_on_the_same_entry_keeps_the_applied_record_only(
+    def test_applied_entry_cannot_be_rewritten_as_rejected_after_commit(
         self, tmp_path
     ):
-        """A hand edit that adds `rejected: true` to an already-applied
-        entry is tampering with decision-critic-adjustments.json, not a
-        second decision — the applied mutation is ground truth, and
-        auditing the coexisting rejected flag would publish two
-        contradictory outcomes for one adjustment_id."""
+        """The marker binds immutable facts and lifecycle validation rejects
+        contradictory post-hoc settlement flags before touching the ledger."""
         _write_findings(tmp_path, [_issue("aaaa1111", "low")])
         _write_adjustments(tmp_path, [{
             "action": "promote", "id": "aaaa1111",
@@ -509,8 +629,8 @@ class TestRejectionAudit:
         doc["adjustments"][0]["rejection_reason"] = "hand-edited after apply"
         adj_path.write_text(json.dumps(doc))
 
-        result = apply_adjustments(str(tmp_path))
-        assert result == {"status": "nothing_pending", "applied": 0}
+        with pytest.raises(ValueError):
+            apply_adjustments(str(tmp_path))
         after_second = json.loads(
             (tmp_path / "review-findings.json").read_text()
         )
@@ -638,7 +758,7 @@ class TestBatchCoherence:
             "action": "promote", "fields": {"severity": "high"},
             "rationale": "r",
         }])
-        with pytest.raises(ValueError, match="no issue with id None"):
+        with pytest.raises(ValueError, match="non-empty target id"):
             apply_adjustments(str(tmp_path))
 
     def test_findings_issue_without_an_id_is_not_addressable(self, tmp_path):
@@ -650,7 +770,7 @@ class TestBatchCoherence:
             "rationale": "r",
         }])
         # A None target must not silently match an id-less issue.
-        with pytest.raises(ValueError, match="no issue with id None"):
+        with pytest.raises(ValueError, match="non-empty target id"):
             apply_adjustments(str(tmp_path))
 
     def test_add_rejects_a_critic_supplied_id_in_both_spellings(
@@ -709,20 +829,14 @@ class TestBatchCoherence:
         doc = json.loads(
             (tmp_path / "decision-critic-adjustments.json").read_text()
         )
-        assert "adjustment_id" not in doc["adjustments"][0]  # nothing written
+        assert "applied" not in doc["adjustments"][0]  # nothing written
 
 
-class TestValidateAdjustments:
-    """Direct unit coverage for the shared batch-shape validator extracted
-    from apply_adjustments(). Every OTHER exercise of this logic goes
-    through apply_adjustments() (which only ever raises `problems[0]`) or
-    through critic.py's save tests (which each trigger exactly one
-    problem) — neither pins the load-bearing "collect every problem,
-    don't stop at the first" property, so it must be pinned here, calling
-    validate_adjustments() directly."""
+class TestValidateProposalInput:
+    """Direct unit coverage for the critic-owned proposal validator."""
 
     def test_valid_batch_returns_no_problems(self):
-        assert validate_adjustments({
+        assert validate_proposal_input({
             "schema": 1,
             "adjustments": [{
                 "action": "promote", "id": "aaaa1111",
@@ -731,56 +845,43 @@ class TestValidateAdjustments:
         }) == []
 
     def test_non_object_payload_is_a_problem(self):
-        assert validate_adjustments([1, 2, 3]) == [
+        assert validate_proposal_input([1, 2, 3]) == [
             "decision-critic-adjustments.json must be a JSON object"
         ]
 
     def test_wrong_schema_is_a_problem(self):
-        problems = validate_adjustments({"schema": 2, "adjustments": []})
+        problems = validate_proposal_input({"schema": 2, "adjustments": []})
         assert len(problems) == 1
         assert "'schema' must be 1" in problems[0]
 
     def test_adjustments_not_a_list_is_a_problem(self):
-        assert validate_adjustments({"schema": 1, "adjustments": "nope"}) == [
+        assert validate_proposal_input({"schema": 1, "adjustments": "nope"}) == [
             "decision-critic-adjustments.json: 'adjustments' must be a list"
         ]
 
     def test_missing_adjustments_key_is_a_problem(self):
-        assert validate_adjustments({"schema": 1}) == [
+        assert validate_proposal_input({"schema": 1}) == [
             "decision-critic-adjustments.json: 'adjustments' must be a list"
         ]
 
     def test_entry_not_an_object_is_a_problem(self):
-        assert validate_adjustments({
+        assert validate_proposal_input({
             "schema": 1, "adjustments": ["not-a-dict"],
         }) == ["adjustment[0] must be an object"]
 
-    def test_duplicate_adjustment_id_is_a_problem(self):
-        problems = validate_adjustments({
-            "schema": 1,
-            "adjustments": [
-                {"adjustment_id": "dup", "action": "promote", "id": "aaaa1111",
-                 "fields": {"severity": "high"}, "rationale": "r"},
-                {"adjustment_id": "dup", "action": "promote", "id": "bbbb2222",
-                 "fields": {"severity": "high"}, "rationale": "r"},
-            ],
-        })
-        assert any("duplicate adjustment_id" in p for p in problems)
-
-    def test_blank_adjustment_id_is_a_problem(self):
-        problems = validate_adjustments({
+    def test_adjustment_id_is_not_a_proposal_field(self):
+        problems = validate_proposal_input({
             "schema": 1,
             "adjustments": [{
-                "adjustment_id": "", "action": "promote", "id": "aaaa1111",
+                "adjustment_id": "caller-owned", "action": "promote",
+                "id": "aaaa1111",
                 "fields": {"severity": "high"}, "rationale": "r",
             }],
         })
-        assert any(
-            "'adjustment_id' must be a non-empty string" in p for p in problems
-        )
+        assert any("adjustment_id" in problem for problem in problems)
 
     def test_unknown_action_is_a_problem(self):
-        problems = validate_adjustments({
+        problems = validate_proposal_input({
             "schema": 1,
             "adjustments": [{
                 "action": "obliterate", "id": "aaaa1111",
@@ -790,7 +891,7 @@ class TestValidateAdjustments:
         assert any("unknown action" in p and "obliterate" in p for p in problems)
 
     def test_invalid_field_is_a_problem(self):
-        problems = validate_adjustments({
+        problems = validate_proposal_input({
             "schema": 1,
             "adjustments": [{
                 "action": "correct", "id": "aaaa1111",
@@ -800,7 +901,7 @@ class TestValidateAdjustments:
         assert any("not adjustable" in p for p in problems)
 
     def test_add_missing_required_fields_is_a_problem(self):
-        problems = validate_adjustments({
+        problems = validate_proposal_input({
             "schema": 1,
             "adjustments": [{
                 "action": "add", "id": None,
@@ -810,7 +911,7 @@ class TestValidateAdjustments:
         assert any("add requires fields" in p for p in problems)
 
     def test_add_with_a_critic_supplied_id_is_a_problem(self):
-        problems = validate_adjustments({
+        problems = validate_proposal_input({
             "schema": 1,
             "adjustments": [{
                 "action": "add", "id": "cccc3333",
@@ -822,11 +923,11 @@ class TestValidateAdjustments:
         assert any("ids are generated" in p for p in problems)
 
     def test_two_independent_problems_are_both_reported(self):
-        """The load-bearing property under test: validate_adjustments()
+        """The proposal validator collects every independent problem
         collects every problem instead of stopping at the first one it
         finds. apply_adjustments() only ever surfaces `problems[0]`, so
         this can only be pinned by calling the validator directly."""
-        problems = validate_adjustments({
+        problems = validate_proposal_input({
             "schema": 1,
             "adjustments": [
                 {"action": "obliterate", "id": "aaaa1111",
@@ -856,15 +957,13 @@ class TestAdjustmentsSchemaValidation:
 
     def test_schema_1_proceeds(self, tmp_path):
         _write_findings(tmp_path, [_issue("aaaa1111", "low")])
-        self._write_raw_adjustments(tmp_path, {
-            "schema": 1,
-            "adjustments": [{
-                "action": "promote", "id": "aaaa1111",
-                "fields": {"severity": "high"}, "rationale": "r",
-            }],
-        })
+        _write_adjustments(tmp_path, [{
+            "action": "promote", "id": "aaaa1111",
+            "fields": {"severity": "high"}, "rationale": "r",
+        }])
         result = apply_adjustments(str(tmp_path))
-        assert result == {"status": "applied", "applied": 1}
+        assert result["status"] == "applied"
+        assert result["applied"] == 1
 
     def test_schema_2_refuses_the_whole_batch(self, tmp_path):
         _write_findings(tmp_path, [_issue("aaaa1111", "low")])
@@ -1038,7 +1137,13 @@ class TestCLI:
 
     def _run(self, output_dir):
         return subprocess.run(
-            [sys.executable, str(SCRIPT_PATH), "--output-dir", str(output_dir)],
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "apply",
+                "--output-dir",
+                str(output_dir),
+            ],
             capture_output=True, text=True, timeout=60,
         )
 
@@ -1050,7 +1155,10 @@ class TestCLI:
         }])
         proc = self._run(tmp_path)
         assert proc.returncode == 0, proc.stderr
-        assert json.loads(proc.stdout) == {"status": "applied", "applied": 1}
+        result = json.loads(proc.stdout)
+        assert result["status"] == "applied"
+        assert result["applied"] == 1
+        assert result["adjudication_source"] == "defensive_apply"
         data = json.loads((tmp_path / "review-findings.json").read_text())
         assert data["issues"][0]["severity"] == "medium"
 
@@ -1102,6 +1210,7 @@ class TestCriticVerdictGate:
             "action": "promote", "id": "aaaa1111",
             "fields": {"severity": "critical"}, "rationale": "r",
         }])
+        (tmp_path / "decision-critic-verdict.json").unlink()
         before = (tmp_path / "review-findings.json").read_bytes()
 
         result = apply_adjustments(str(tmp_path))
@@ -1155,10 +1264,8 @@ class TestCriticVerdictGate:
         result = apply_adjustments(str(tmp_path))
 
         assert result["status"] == "refused"
-        assert result["reason"].startswith(REFUSAL_VERDICT_NOT_REVISE), (
-            f"a near-miss spelling must refuse with the "
-            f"{REFUSAL_VERDICT_NOT_REVISE!r} reason, not be silently "
-            f"normalized into REVISE"
+        assert result["reason"] == REFUSAL_NO_VERDICT, (
+            "a malformed marker must not become a usable verdict"
         )
         assert (tmp_path / "review-findings.json").read_bytes() == before, (
             "a refusal must write nothing, even for a near-miss spelling"
@@ -1190,7 +1297,9 @@ class TestCriticVerdictGate:
 
         result = apply_adjustments(str(tmp_path))
 
-        assert result == {"status": "applied", "applied": 1}
+        assert result["status"] == "applied"
+        assert result["applied"] == 1
+        assert result["adjudication_source"] == "defensive_apply"
         data = json.loads((tmp_path / "review-findings.json").read_text())
         assert data["issues"][0]["severity"] == "critical"
 
@@ -1203,7 +1312,13 @@ class TestCriticVerdictGate:
         _write_critic_verdict(tmp_path, "STAND")
 
         proc = subprocess.run(
-            [sys.executable, str(SCRIPT_PATH), "--output-dir", str(tmp_path)],
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "apply",
+                "--output-dir",
+                str(tmp_path),
+            ],
             capture_output=True, text=True, timeout=60,
         )
 
@@ -1226,8 +1341,8 @@ class TestCriticVerdictGate:
 
 class TestReadCriticVerdict:
     """Unit coverage for the reader apply_adjustments' gate is built on —
-    it is deliberately permissive (returns the raw string or None) and
-    lets the caller decide what None or an unexpected string means."""
+    it returns an allowed verdict only from a complete source-bound snapshot
+    and otherwise collapses the unusable snapshot to ``None``."""
 
     def test_missing_file_returns_none(self, tmp_path):
         assert read_critic_verdict(str(tmp_path)) is None
@@ -1493,12 +1608,15 @@ class TestCriticInputRoundTrip:
         visible_ids = [issue["id"] for issue in findings["issues"]]
         assert visible_ids
 
-        _write_adjustments(tmp_path, [{
+        proposal = _write_adjustments(tmp_path, [{
             "action": "promote", "id": visible_ids[0],
             "fields": {"severity": "high"},
             "rationale": "the exploit path is reachable from the REST route",
         }])
-        _write_critic_verdict(tmp_path, "REVISE")
+        critic_adjustments_module.settle(
+            str(tmp_path),
+            _settlement_request(proposal, verified=(0,)),
+        )
         (tmp_path / "review-report.md").write_text("# report")
 
         _publish_step_11(tmp_path)
@@ -1573,6 +1691,38 @@ class TestStepElevenAppliesAdjustments:
         result = json.loads((tmp_path / "pipeline-result.json").read_text())
         assert result["verdict"] == "REQUEST_CHANGES"
         assert result["verdict_source"] == "findings ledger"
+        assert result["status"] == "degraded"
+        assert result["degradation_notes"] == [
+            "critic adjustments were applied without orchestrator adjudication"
+        ]
+
+    def test_defensive_apply_degradation_is_stable_on_refinalize(
+        self, tmp_path
+    ):
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        _write_adjustments(tmp_path, [{
+            "action": "promote",
+            "id": "aaaa1111",
+            "fields": {"severity": "high"},
+            "rationale": "r",
+        }])
+        (tmp_path / "review-report.md").write_text("# report")
+        state = {}
+
+        _publish_step_11(tmp_path, state)
+        _publish_step_11(tmp_path, state)
+
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert result["degradation_notes"] == [
+            "critic adjustments were applied without orchestrator adjudication"
+        ]
+        assert state["step_11_degradation_records"] == [{
+            "code": "critic_adjudication_missing",
+            "message": (
+                "critic adjustments were applied without orchestrator "
+                "adjudication"
+            ),
+        }]
 
     def test_invalid_adjustments_degrade_instead_of_crashing(self, tmp_path):
         _write_findings(tmp_path, [_issue("aaaa1111", "low")])
@@ -1584,7 +1734,7 @@ class TestStepElevenAppliesAdjustments:
         (tmp_path / "review-report.md").write_text("# report")
         self._step_11(tmp_path)
         result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert any("critic adjustment apply attempt failed" in n
+        assert any("critic adjustment inspection failed" in n
                    for n in result["degradation_notes"])
         # The note must reach `status` too — appended after the status is
         # computed, it would publish a "success" run carrying a degradation.
@@ -1652,7 +1802,10 @@ class TestStepElevenAppliesAdjustments:
             "action": "promote", "id": "aaaa1111",
             "fields": {"severity": "critical"}, "rationale": "r",
         }])
-        _write_critic_verdict(tmp_path, "STAND")
+        document = json.loads(
+            (tmp_path / "decision-critic-adjustments.json").read_text()
+        )
+        _write_snapshot_document(tmp_path, document, verdict="STAND")
         (tmp_path / "review-report.md").write_text("# report")
         self._step_11(tmp_path)
 
@@ -1662,10 +1815,9 @@ class TestStepElevenAppliesAdjustments:
         assert APPLIED_IDS_KEY not in data
 
         result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert any("REVISE-only channel" in n
+        assert any("critic adjustment inspection failed" in n
                    for n in result["degradation_notes"]), (
-            "a pending file under a non-REVISE verdict must be surfaced, "
-            "not silently dropped"
+            "a non-REVISE marker cannot commit a non-empty proposal"
         )
         assert result["status"] == "degraded"
 
@@ -1678,13 +1830,14 @@ class TestStepElevenAppliesAdjustments:
             "action": "promote", "id": "aaaa1111",
             "fields": {"severity": "critical"}, "rationale": "r",
         }])
+        (tmp_path / "decision-critic-verdict.json").unlink()
         (tmp_path / "review-report.md").write_text("# report")
         self._step_11(tmp_path)
 
         data = json.loads((tmp_path / "review-findings.json").read_text())
         assert data["issues"][0]["severity"] == "low"
         result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert any("critic verdict was unavailable" in n
+        assert any("critic adjustment inspection failed" in n
                    for n in result["degradation_notes"])
 
     def test_settled_adjustments_are_not_suspicious_under_stand(
@@ -2444,73 +2597,93 @@ class TestReconciliatorWritePathPin:
 # =============================================================================
 
 class TestSpotCheckVocabulary:
-    """`spot_check` is the orchestrator's per-entry verdict on the critic's
-    claim, written into the adjustments file rather than left as prose.
+    """Settlement vocabulary is script-derived lifecycle state."""
 
-    Before it existed, the step-10 briefing asked for per-entry accounting
-    and the only place it could land was the human report — so a run whose
-    orchestrator skipped the probe published a batch nothing could tell
-    apart from one that was checked entry by entry.
-
-    Deliberately NEVER required at apply: step 11's defensive re-run exists
-    for orchestrators that crashed before doing the step-10 work, and
-    requiring the key there would turn the honest default into a hard
-    failure for exactly the runs the re-run is meant to converge.
-    """
-
-    def _batch(self, **entry_extra):
+    def _document(self, **entry_extra):
         entry = {
+            "adjustment_id": "script-owned",
             "action": "demote", "id": "aaaa1111",
             "fields": {"severity": "low"}, "rationale": "guarded upstream",
         }
         entry.update(entry_extra)
-        return {"schema": 1, "adjustments": [entry]}
+        document = {"schema": 1, "adjustments": [entry]}
+        document["adjudication"] = {
+            "schema": 1,
+            "source": "orchestrator",
+            "proposal_digest": critic_adjustments_module.proposal_digest(
+                document
+            ),
+            "recorded_at": "2026-08-24T10:00:00+00:00",
+            "revised_narrative": "Settled assessment.",
+        }
+        return document
 
     @pytest.mark.parametrize("value", ["verified", "refuted", "not_checked"])
     def test_each_vocabulary_value_is_accepted(self, value):
-        assert validate_adjustments(self._batch(spot_check=value)) == []
+        lifecycle = {"spot_check": value}
+        if value == "refuted":
+            lifecycle.update({
+                "rejected": True,
+                "rejection_reason": "The source probe refuted it.",
+            })
+        assert critic_adjustments_module.validate_adjustments_document(
+            self._document(**lifecycle)
+        ) == []
 
-    def test_an_absent_spot_check_is_not_a_problem(self):
-        assert validate_adjustments(self._batch()) == []
+    def test_a_settled_entry_requires_a_spot_check(self):
+        problems = critic_adjustments_module.validate_adjustments_document(
+            self._document()
+        )
+        assert problems and "spot_check" in problems[0]
 
     @pytest.mark.parametrize("value", [
         "checked", "VERIFIED", "not checked", "", True, 1, None,
     ])
     def test_an_unknown_value_rejects_the_batch(self, value):
-        problems = validate_adjustments(self._batch(spot_check=value))
+        problems = critic_adjustments_module.validate_adjustments_document(
+            self._document(spot_check=value)
+        )
         assert problems and "spot_check" in problems[0]
 
     def test_a_rejected_entry_may_not_claim_verified(self):
-        problems = validate_adjustments(self._batch(
-            rejected=True, rejection_reason="probe refuted it",
-            spot_check="verified",
-        ))
-        assert problems and "refuted" in problems[0]
+        problems = critic_adjustments_module.validate_adjustments_document(
+            self._document(
+                rejected=True,
+                rejection_reason="probe refuted it",
+                spot_check="verified",
+            )
+        )
+        assert any("rejected is present only" in problem for problem in problems)
 
     def test_a_rejected_entry_marked_refuted_is_accepted(self):
-        assert validate_adjustments(self._batch(
-            rejected=True, rejection_reason="probe refuted it",
-            spot_check="refuted",
-        )) == []
+        assert critic_adjustments_module.validate_adjustments_document(
+            self._document(
+                rejected=True,
+                rejection_reason="probe refuted it",
+                spot_check="refuted",
+            )
+        ) == []
 
-    def test_a_rejected_entry_without_a_spot_check_is_accepted(self):
-        """`rejected: true` already means refuted; the key is redundant
-        there, not mandatory."""
-        assert validate_adjustments(self._batch(
-            rejected=True, rejection_reason="probe refuted it",
-        )) == []
-
-    def test_the_gate_the_critic_saves_through_shares_this_check(self, tmp_path):
-        """validate_adjustments is the seam critic.py --save and
-        apply_adjustments both run — a rejection here is a rejection on
-        both paths, with no second implementation to keep in step."""
-        _write_critic_verdict(tmp_path, "REVISE")
-        _write_findings(tmp_path, [_issue("aaaa1111", "high")])
-        (tmp_path / "decision-critic-adjustments.json").write_text(
-            json.dumps(self._batch(spot_check="probably fine"))
+    def test_a_rejected_entry_without_a_spot_check_is_rejected(self):
+        problems = critic_adjustments_module.validate_adjustments_document(
+            self._document(
+                rejected=True, rejection_reason="probe refuted it"
+            )
         )
-        with pytest.raises(ValueError, match="spot_check"):
-            apply_adjustments(str(tmp_path))
+        assert any("spot_check" in problem for problem in problems)
+
+    def test_the_critic_proposal_gate_rejects_spot_check(self):
+        problems = validate_proposal_input({
+            "schema": 1,
+            "adjustments": [{
+                "action": "demote",
+                "id": "aaaa1111",
+                "fields": {"severity": "low"},
+                "rationale": "guarded upstream",
+                "spot_check": "verified",
+            }],
+        })
+        assert any("spot_check" in problem for problem in problems)
 
 
 class TestSpotCheckRecordedInTheLedger:
@@ -2600,25 +2773,32 @@ class TestRevisedNarrative:
         )
 
     def _write_doc(self, tmp_path, **doc_extra):
-        doc = {"schema": 1, "adjustments": [{
+        entry = {
             "action": "demote", "id": "aaaa1111",
             "fields": {"severity": "low"}, "rationale": "guarded upstream",
-        }]}
-        doc.update(doc_extra)
-        (tmp_path / "decision-critic-adjustments.json").write_text(
-            json.dumps(doc)
-        )
+        }
+        _write_adjustments(tmp_path, [entry], **doc_extra)
 
     def test_a_non_string_revised_narrative_rejects_the_batch(self):
-        problems = validate_adjustments({
+        problems = validate_proposal_input({
             "schema": 1, "adjustments": [], "revised_narrative": ["a", "b"],
         })
         assert problems and "revised_narrative" in problems[0]
 
-    def test_a_string_revised_narrative_is_accepted(self):
-        assert validate_adjustments({
-            "schema": 1, "adjustments": [], "revised_narrative": "text",
-        }) == []
+    def test_a_string_revised_narrative_is_accepted_in_adjudication(self):
+        document = {"schema": 1, "adjustments": []}
+        document["adjudication"] = {
+            "schema": 1,
+            "source": "orchestrator",
+            "proposal_digest": critic_adjustments_module.proposal_digest(
+                document
+            ),
+            "recorded_at": "2026-08-24T10:00:00+00:00",
+            "revised_narrative": "text",
+        }
+        assert critic_adjustments_module.validate_adjustments_document(
+            document
+        ) == []
 
     def test_it_becomes_the_ledger_assessment(self, tmp_path):
         self._seed(tmp_path)
@@ -2636,14 +2816,15 @@ class TestRevisedNarrative:
         data = json.loads((tmp_path / "review-findings.json").read_text())
         assert data[WITHDRAWN_SUMMARY_KEY][0]["text"] == self._SUMMARY
 
-    def test_a_blank_revised_narrative_leaves_the_summary_withdrawn(
+    def test_a_blank_revised_narrative_is_rejected_without_mutation(
         self, tmp_path
     ):
         self._seed(tmp_path)
         self._write_doc(tmp_path, revised_narrative="   ")
-        apply_adjustments(str(tmp_path))
+        with pytest.raises(ValueError, match="revised_narrative"):
+            apply_adjustments(str(tmp_path))
         data = json.loads((tmp_path / "review-findings.json").read_text())
-        assert data["narrative_summary"] is None
+        assert data["narrative_summary"] == self._SUMMARY
 
     def test_a_batch_that_applies_nothing_never_replaces_the_summary(
         self, tmp_path
@@ -2654,7 +2835,6 @@ class TestRevisedNarrative:
             (tmp_path / "decision-critic-adjustments.json").read_text()
         )
         doc["adjustments"][0]["applied"] = True
-        doc["adjustments"][0]["adjustment_id"] = "already-landed"
         (tmp_path / "decision-critic-adjustments.json").write_text(
             json.dumps(doc)
         )
@@ -2881,3 +3061,713 @@ class TestLedgerVerdictRecompute:
         data = json.loads((tmp_path / "review-findings.json").read_text())
         assert data["verdict"] == "request_changes"
         assert "verdict_before_adjustments" not in data
+
+
+# =============================================================================
+# Source-bound critic proposal -> adjudication -> ledger lifecycle
+# =============================================================================
+
+
+class TestProposalPreparation:
+    def _entry(self, **extra):
+        entry = {
+            "action": "demote",
+            "id": "aaaa1111",
+            "fields": {"severity": "medium"},
+            "rationale": "The claimed impact is narrower than stated.",
+        }
+        entry.update(extra)
+        return entry
+
+    def test_prepare_assigns_unique_stable_ids(self):
+        payload = {
+            "schema": 1,
+            "adjustments": [self._entry(), {
+                **self._entry(), "id": "bbbb2222",
+            }],
+        }
+
+        proposal = critic_adjustments_module.prepare_proposal(payload)
+
+        ids = [entry["adjustment_id"] for entry in proposal["adjustments"]]
+        assert all(ids)
+        assert len(ids) == len(set(ids)) == 2
+        assert payload["adjustments"][0].get("adjustment_id") is None, (
+            "normalization must not mutate the critic's temp input"
+        )
+
+    def test_prepare_retries_the_improbable_uuid_collision(self, monkeypatch):
+        values = iter(("same", "same", "different"))
+
+        class FakeUuid:
+            def __init__(self, value):
+                self.hex = value
+
+        monkeypatch.setattr(
+            critic_adjustments_module.uuid,
+            "uuid4",
+            lambda: FakeUuid(next(values)),
+        )
+
+        proposal = critic_adjustments_module.prepare_proposal({
+            "schema": 1,
+            "adjustments": [self._entry(), {
+                **self._entry(), "id": "bbbb2222",
+            }],
+        })
+
+        assert [
+            entry["adjustment_id"] for entry in proposal["adjustments"]
+        ] == ["same", "different"]
+
+    @pytest.mark.parametrize(
+        "forbidden,value",
+        [
+            ("adjustment_id", "critic-owned"),
+            ("spot_check", "verified"),
+            ("rejected", True),
+            ("rejection_reason", "caller-owned"),
+            ("applied", True),
+        ],
+    )
+    def test_prepare_rejects_lifecycle_fields(self, forbidden, value):
+        with pytest.raises(ValueError, match=forbidden):
+            critic_adjustments_module.prepare_proposal({
+                "schema": 1,
+                "adjustments": [self._entry(**{forbidden: value})],
+            })
+
+    @pytest.mark.parametrize(
+        "payload,problem",
+        [
+            (
+                {"schema": 1, "adjustments": [], "revised_narrative": "x"},
+                "revised_narrative",
+            ),
+            (
+                {"schema": 1, "adjustments": [], "adjudication": {}},
+                "adjudication",
+            ),
+            (
+                {"schema": 1, "adjustments": [], "counts": {}},
+                "counts",
+            ),
+        ],
+    )
+    def test_prepare_rejects_non_proposal_top_level_fields(
+        self, payload, problem
+    ):
+        with pytest.raises(ValueError, match=problem):
+            critic_adjustments_module.prepare_proposal(payload)
+
+    def test_proposal_digest_ignores_adjudication_and_apply_state(self):
+        proposal = critic_adjustments_module.prepare_proposal({
+            "schema": 1,
+            "adjustments": [self._entry()],
+        })
+        before = critic_adjustments_module.proposal_digest(proposal)
+        proposal["adjustments"][0].update({
+            "spot_check": "verified",
+            "applied": True,
+        })
+        proposal["adjudication"] = {
+            "schema": 1,
+            "source": "orchestrator",
+            "proposal_digest": before,
+            "recorded_at": "2026-08-24T10:00:00+00:00",
+            "revised_narrative": "Settled assessment.",
+        }
+
+        assert critic_adjustments_module.proposal_digest(proposal) == before
+
+    def test_persisted_document_requires_unique_script_assigned_ids(self):
+        entry = self._entry()
+        missing = {"schema": 1, "adjustments": [entry]}
+        duplicate = {
+            "schema": 1,
+            "adjustments": [
+                {"adjustment_id": "dup", **entry},
+                {"adjustment_id": "dup", **entry, "id": "bbbb2222"},
+            ],
+        }
+
+        assert any(
+            "adjustment_id" in problem
+            for problem in critic_adjustments_module.validate_adjustments_document(
+                missing
+            )
+        )
+        assert any(
+            "duplicate adjustment_id" in problem
+            for problem in critic_adjustments_module.validate_adjustments_document(
+                duplicate
+            )
+        )
+
+
+class TestAdjudicationRequest:
+    ENTRIES = [
+        {
+            "action": "demote",
+            "id": "aaaa1111",
+            "fields": {"severity": "medium"},
+            "rationale": "Narrower than stated.",
+        },
+        {
+            "action": "promote",
+            "id": "bbbb2222",
+            "fields": {"severity": "critical"},
+            "rationale": "The source confirms a wider impact.",
+        },
+        {
+            "action": "correct",
+            "id": "cccc3333",
+            "fields": {"title": "Corrected title"},
+            "rationale": "The original title overstates the mechanism.",
+        },
+    ]
+
+    def _seed(self, tmp_path):
+        _write_findings(tmp_path, [
+            _issue("aaaa1111", "high"),
+            _issue("bbbb2222", "medium"),
+            _issue("cccc3333", "low"),
+        ])
+        return _commit_critic_snapshot(tmp_path, self.ENTRIES)
+
+    def test_settle_derives_the_unchecked_complement(self, tmp_path):
+        proposal = self._seed(tmp_path)
+        request = _settlement_request(
+            proposal,
+            verified=(0,),
+            refuted=((1, "Refuted by the source probe."),),
+            narrative="One proposal landed and one was rejected.",
+        )
+
+        result = critic_adjustments_module.settle(str(tmp_path), request)
+
+        doc = json.loads(
+            (tmp_path / "decision-critic-adjustments.json").read_text()
+        )
+        assert [entry["spot_check"] for entry in doc["adjustments"]] == [
+            "verified", "refuted", "not_checked",
+        ]
+        assert doc["adjustments"][1]["rejected"] is True
+        assert doc["adjustments"][1]["rejection_reason"] == (
+            "Refuted by the source probe."
+        )
+        assert "rejected" not in doc["adjustments"][0]
+        assert "rejected" not in doc["adjustments"][2]
+        assert doc["adjudication"]["source"] == "orchestrator"
+        assert doc["adjudication"]["proposal_digest"] == (
+            critic_adjustments_module.proposal_digest(doc)
+        )
+        assert doc["adjudication"]["revised_narrative"] == (
+            "One proposal landed and one was rejected."
+        )
+        assert result["counts"] == {
+            "verified": 1, "refuted": 1, "not_checked": 1,
+        }
+        assert not ({"verified", "refuted", "not_checked", "counts"} & set(doc))
+
+    @pytest.mark.parametrize(
+        "mutate,problem",
+        [
+            (
+                lambda request, ids: request.update({"not_checked": [ids[2]]}),
+                "not_checked",
+            ),
+            (
+                lambda request, ids: request.update({"counts": {}}),
+                "counts",
+            ),
+            (
+                lambda request, ids: request.update({
+                    "recorded_at": "2026-08-24T10:00:00+00:00"
+                }),
+                "recorded_at",
+            ),
+            (
+                lambda request, ids: request.update({
+                    "spot_check": "verified"
+                }),
+                "spot_check",
+            ),
+            (
+                lambda request, ids: request.update({"applied": True}),
+                "applied",
+            ),
+            (
+                lambda request, ids: request["verified"].append(7),
+                "string",
+            ),
+            (
+                lambda request, ids: request["verified"].append(ids[0]),
+                "duplicate",
+            ),
+            (
+                lambda request, ids: request["refuted"].append({
+                    "adjustment_id": ids[0],
+                    "rejection_reason": "overlap",
+                }),
+                "both verified and refuted",
+            ),
+            (
+                lambda request, ids: request["verified"].append("unknown-id"),
+                "unknown",
+            ),
+            (
+                lambda request, ids: request["refuted"].append({
+                    "adjustment_id": ids[1],
+                    "rejection_reason": " ",
+                }),
+                "rejection_reason",
+            ),
+            (
+                lambda request, ids: request["refuted"].append({
+                    "adjustment_id": ids[1],
+                    "rejection_reason": "reason",
+                    "rejected": True,
+                }),
+                "extra",
+            ),
+            (
+                lambda request, ids: request.update({
+                    "revised_narrative": " "
+                }),
+                "revised_narrative",
+            ),
+        ],
+        ids=[
+            "caller-not-checked", "caller-counts", "caller-timestamp",
+            "caller-spot-check", "caller-apply-state", "non-string-verified",
+            "duplicate-verified", "overlap", "unknown-id", "blank-reason",
+            "refuted-extra-key", "blank-narrative",
+        ],
+    )
+    def test_invalid_request_leaves_checkpoint_and_ledger_byte_identical(
+        self, tmp_path, mutate, problem
+    ):
+        proposal = self._seed(tmp_path)
+        ids = [entry["adjustment_id"] for entry in proposal["adjustments"]]
+        request = _settlement_request(proposal, verified=(0,))
+        mutate(request, ids)
+        adj_path = tmp_path / "decision-critic-adjustments.json"
+        findings_path = tmp_path / "review-findings.json"
+        before = (adj_path.read_bytes(), findings_path.read_bytes())
+
+        with pytest.raises(ValueError, match=problem):
+            critic_adjustments_module.settle(str(tmp_path), request)
+
+        assert (adj_path.read_bytes(), findings_path.read_bytes()) == before
+
+
+class TestSourceBindingAndRecovery:
+    ENTRIES = [
+        {
+            "action": "demote",
+            "id": "aaaa1111",
+            "fields": {"severity": "low"},
+            "rationale": "Guarded upstream.",
+        },
+        {
+            "action": "correct",
+            "id": "bbbb2222",
+            "fields": {"title": "Corrected title"},
+            "rationale": "The source uses a narrower mechanism.",
+        },
+    ]
+
+    def _seed(self, tmp_path):
+        _write_findings(tmp_path, [
+            _issue("aaaa1111", "high"), _issue("bbbb2222", "low")
+        ], narrative_summary="The original assessment.")
+        return _commit_critic_snapshot(tmp_path, self.ENTRIES)
+
+    @pytest.mark.parametrize(
+        "mutate",
+        [
+            lambda entry: entry.update({"adjustment_id": "raw-edit"}),
+            lambda entry: entry.update({"action": "promote"}),
+            lambda entry: entry.update({"id": "bbbb2222"}),
+            lambda entry: entry.update({"fields": {"severity": "critical"}}),
+            lambda entry: entry.update({"rationale": "Raw edit."}),
+        ],
+        ids=["assigned-id", "action", "target", "fields", "rationale"],
+    )
+    def test_immutable_edit_breaks_the_committed_digest(
+        self, tmp_path, mutate
+    ):
+        proposal = self._seed(tmp_path)
+        request = _settlement_request(proposal, verified=(0,))
+        adj_path = tmp_path / "decision-critic-adjustments.json"
+        doc = json.loads(adj_path.read_text())
+        mutate(doc["adjustments"][0])
+        adj_path.write_text(json.dumps(doc))
+        findings_path = tmp_path / "review-findings.json"
+        before = (adj_path.read_bytes(), findings_path.read_bytes())
+
+        with pytest.raises(ValueError, match="proposal digest"):
+            critic_adjustments_module.settle(str(tmp_path), request)
+
+        assert (adj_path.read_bytes(), findings_path.read_bytes()) == before
+
+    def test_checkpoint_is_written_before_the_ledger_applier(
+        self, tmp_path, monkeypatch
+    ):
+        proposal = self._seed(tmp_path)
+        request = _settlement_request(proposal, verified=(0,))
+
+        def inspect_checkpoint(output_dir):
+            doc = json.loads(
+                (Path(output_dir) / "decision-critic-adjustments.json").read_text()
+            )
+            assert doc["adjudication"]["source"] == "orchestrator"
+            assert all("spot_check" in entry for entry in doc["adjustments"])
+            raise OSError("injected after checkpoint")
+
+        monkeypatch.setattr(
+            critic_adjustments_module,
+            "_apply_adjustments_locked",
+            inspect_checkpoint,
+        )
+
+        with pytest.raises(OSError, match="after checkpoint"):
+            critic_adjustments_module.settle(str(tmp_path), request)
+
+        ledger = json.loads((tmp_path / "review-findings.json").read_text())
+        assert "critic_adjustment" not in ledger["issues"][0]
+
+    def test_crash_after_checkpoint_converges_through_public_apply(
+        self, tmp_path, monkeypatch
+    ):
+        proposal = self._seed(tmp_path)
+        request = _settlement_request(proposal, verified=(0,))
+        real_apply = critic_adjustments_module._apply_adjustments_locked
+
+        def raise_after_checkpoint(_output_dir):
+            raise OSError("injected after checkpoint")
+
+        monkeypatch.setattr(
+            critic_adjustments_module,
+            "_apply_adjustments_locked",
+            raise_after_checkpoint,
+        )
+        with pytest.raises(OSError, match="after checkpoint"):
+            critic_adjustments_module.settle(str(tmp_path), request)
+        checkpoint = json.loads(
+            (tmp_path / "decision-critic-adjustments.json").read_text()
+        )
+        assert checkpoint["adjudication"]["source"] == "orchestrator"
+        assert "applied" not in checkpoint["adjustments"][0]
+
+        monkeypatch.setattr(
+            critic_adjustments_module,
+            "_apply_adjustments_locked",
+            real_apply,
+        )
+        recovered = critic_adjustments_module.apply_adjustments(str(tmp_path))
+
+        assert recovered["status"] == "applied"
+        assert recovered["applied"] == 2
+        ledger = json.loads((tmp_path / "review-findings.json").read_text())
+        assert len(ledger[APPLIED_IDS_KEY]) == 2
+
+    def test_identical_retry_is_byte_stable_and_does_not_duplicate_provenance(
+        self, tmp_path
+    ):
+        proposal = self._seed(tmp_path)
+        request = _settlement_request(proposal, verified=(0,))
+        critic_adjustments_module.settle(str(tmp_path), request)
+        adj_path = tmp_path / "decision-critic-adjustments.json"
+        findings_path = tmp_path / "review-findings.json"
+        before = (adj_path.read_bytes(), findings_path.read_bytes())
+
+        retry = critic_adjustments_module.settle(str(tmp_path), request)
+
+        assert retry["status"] == "already_settled"
+        assert retry["apply"]["status"] == "nothing_pending"
+        assert (adj_path.read_bytes(), findings_path.read_bytes()) == before
+        ledger = json.loads(findings_path.read_text())
+        assert len(ledger[APPLIED_IDS_KEY]) == 2
+
+    def test_different_request_after_checkpoint_is_rejected(self, tmp_path):
+        proposal = self._seed(tmp_path)
+        request = _settlement_request(proposal, verified=(0,))
+        critic_adjustments_module.settle(str(tmp_path), request)
+        adj_path = tmp_path / "decision-critic-adjustments.json"
+        findings_path = tmp_path / "review-findings.json"
+        before = (adj_path.read_bytes(), findings_path.read_bytes())
+        changed = _settlement_request(proposal, verified=(1,))
+
+        with pytest.raises(ValueError, match="already settled"):
+            critic_adjustments_module.settle(str(tmp_path), changed)
+
+        assert (adj_path.read_bytes(), findings_path.read_bytes()) == before
+
+    def test_defensive_apply_records_an_honest_checkpoint(self, tmp_path):
+        proposal = self._seed(tmp_path)
+
+        result = critic_adjustments_module.apply_adjustments(str(tmp_path))
+
+        doc = json.loads(
+            (tmp_path / "decision-critic-adjustments.json").read_text()
+        )
+        assert doc["adjudication"]["source"] == "defensive_apply"
+        assert doc["adjudication"]["revised_narrative"] is None
+        assert [entry["spot_check"] for entry in doc["adjustments"]] == [
+            "not_checked", "not_checked",
+        ]
+        assert doc["adjudication"]["proposal_digest"] == (
+            critic_adjustments_module.proposal_digest(proposal)
+        )
+        assert doc["adjudication"]["recorded_at"].endswith("+00:00")
+        assert result["adjudication_source"] == "defensive_apply"
+        assert result["counts"] == {
+            "verified": 0, "refuted": 0, "not_checked": 2,
+        }
+
+    def test_public_apply_acquires_one_lock_for_checkpoint_and_recovery(
+        self, tmp_path, monkeypatch
+    ):
+        self._seed(tmp_path)
+        active = False
+        lock_entries = 0
+        real_apply = critic_adjustments_module._apply_adjustments_locked
+
+        @contextmanager
+        def observed_lock(_output_dir):
+            nonlocal active, lock_entries
+            lock_entries += 1
+            active = True
+            try:
+                yield
+            finally:
+                active = False
+
+        def observed_apply(output_dir):
+            assert active, "public recovery must hold the output lock"
+            return real_apply(output_dir)
+
+        monkeypatch.setattr(
+            critic_adjustments_module.atomic_io,
+            "output_dir_lock",
+            observed_lock,
+        )
+        monkeypatch.setattr(
+            critic_adjustments_module,
+            "_apply_adjustments_locked",
+            observed_apply,
+        )
+
+        result = critic_adjustments_module.apply_adjustments(str(tmp_path))
+
+        assert result["status"] == "applied"
+        assert lock_entries == 1
+
+    def test_settle_holds_one_lock_across_checkpoint_and_apply(
+        self, tmp_path, monkeypatch
+    ):
+        proposal = self._seed(tmp_path)
+        request = _settlement_request(proposal, verified=(0,))
+        active = False
+        lock_entries = 0
+
+        @contextmanager
+        def observed_lock(_output_dir):
+            nonlocal active, lock_entries
+            lock_entries += 1
+            active = True
+            try:
+                yield
+            finally:
+                active = False
+
+        def observed_apply(_output_dir):
+            assert active, "the checkpoint and ledger apply share one lock"
+            return {"status": "nothing_pending", "applied": 0}
+
+        monkeypatch.setattr(
+            critic_adjustments_module.atomic_io,
+            "output_dir_lock",
+            observed_lock,
+        )
+        monkeypatch.setattr(
+            critic_adjustments_module,
+            "_apply_adjustments_locked",
+            observed_apply,
+        )
+
+        critic_adjustments_module.settle(str(tmp_path), request)
+
+        assert lock_entries == 1
+
+    def test_save_and_settle_cannot_interleave_snapshots(
+        self, tmp_path, monkeypatch
+    ):
+        from review import critic as critic_module
+
+        _write_findings(tmp_path, [
+            _issue("aaaa1111", "high"), _issue("bbbb2222", "low")
+        ])
+        old = _commit_critic_snapshot(tmp_path, self.ENTRIES)
+        old_request = _settlement_request(old, verified=(0,))
+        findings_source = tmp_path / "new-critic-findings.md"
+        findings_source.write_text("# New findings\n")
+        proposal_source = tmp_path / "new-proposal.json"
+        proposal_source.write_text(json.dumps({
+            "schema": 1,
+            "adjustments": [{
+                "action": "promote",
+                "id": "bbbb2222",
+                "fields": {"severity": "high"},
+                "rationale": "New source evidence.",
+            }],
+        }))
+        lock = threading.Lock()
+        save_inside_write = threading.Event()
+        release_save = threading.Event()
+        real_write = critic_adjustments_module.write_adjustments
+
+        @contextmanager
+        def thread_lock(_output_dir):
+            with lock:
+                yield
+
+        def blocking_write(output_dir, document):
+            if threading.current_thread().name == "critic-save":
+                save_inside_write.set()
+                assert release_save.wait(timeout=2)
+            return real_write(output_dir, document)
+
+        monkeypatch.setattr(
+            critic_adjustments_module.atomic_io,
+            "output_dir_lock",
+            thread_lock,
+        )
+        monkeypatch.setattr(
+            critic_adjustments_module, "write_adjustments", blocking_write
+        )
+        results = {}
+
+        def run_save():
+            results["save"] = critic_module.run_save(type("Args", (), {
+                "output_dir": str(tmp_path),
+                "verdict": "REVISE",
+                "findings": str(findings_source),
+                "adjustments": str(proposal_source),
+            })())
+
+        def run_settle():
+            try:
+                results["settle"] = critic_adjustments_module.settle(
+                    str(tmp_path), old_request
+                )
+            except ValueError as error:
+                results["settle_error"] = str(error)
+
+        save_thread = threading.Thread(target=run_save, name="critic-save")
+        settle_thread = threading.Thread(target=run_settle, name="settle")
+        save_thread.start()
+        assert save_inside_write.wait(timeout=2)
+        settle_thread.start()
+        time.sleep(0.05)
+        assert "settle" not in results and "settle_error" not in results
+        release_save.set()
+        save_thread.join(timeout=2)
+        settle_thread.join(timeout=2)
+
+        assert results["save"] == 0
+        assert "settle_error" in results
+        proposal = json.loads(
+            (tmp_path / "decision-critic-adjustments.json").read_text()
+        )
+        marker = json.loads(
+            (tmp_path / "decision-critic-verdict.json").read_text()
+        )
+        assert marker["proposal_digest"] == (
+            critic_adjustments_module.proposal_digest(proposal)
+        )
+
+
+class TestAdjudicationCLI:
+    def _seed(self, tmp_path):
+        _write_findings(tmp_path, [_issue("aaaa1111", "high")])
+        return _commit_critic_snapshot(tmp_path, [{
+            "action": "demote",
+            "id": "aaaa1111",
+            "fields": {"severity": "low"},
+            "rationale": "Guarded upstream.",
+        }])
+
+    def test_settle_echoes_derived_counts_digest_and_apply_result(self, tmp_path):
+        proposal = self._seed(tmp_path)
+        request = _settlement_request(proposal, verified=(0,))
+
+        result = subprocess.run(
+            [
+                sys.executable, str(SCRIPT_PATH), "settle",
+                "--output-dir", str(tmp_path),
+            ],
+            input=json.dumps(request),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "RECORDED ADJUDICATION: 1" in result.stdout
+        assert "VERIFIED: 1 | REFUTED: 0 | NOT_CHECKED: 0" in result.stdout
+        assert "REVISED NARRATIVE: present" in result.stdout
+        assert "PROPOSAL DIGEST:" in result.stdout
+        assert "APPLY: applied 1 | rejected 0" in result.stdout
+
+    def test_repeated_cli_settlement_reports_both_idempotent_states(
+        self, tmp_path
+    ):
+        proposal = self._seed(tmp_path)
+        request = json.dumps(_settlement_request(proposal, verified=(0,)))
+        cmd = [
+            sys.executable, str(SCRIPT_PATH), "settle",
+            "--output-dir", str(tmp_path),
+        ]
+        first = subprocess.run(
+            cmd, input=request, capture_output=True, text=True, timeout=10
+        )
+        assert first.returncode == 0, first.stdout + first.stderr
+
+        second = subprocess.run(
+            cmd, input=request, capture_output=True, text=True, timeout=10
+        )
+
+        assert second.returncode == 0, second.stdout + second.stderr
+        assert "ALREADY SETTLED" in second.stdout
+        assert "ALREADY APPLIED" in second.stdout
+
+    def test_bare_implicit_apply_cli_is_retired(self, tmp_path):
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT_PATH), "--output-dir", str(tmp_path)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        assert result.returncode != 0
+
+    def test_apply_remains_an_explicit_recovery_command(self, tmp_path):
+        self._seed(tmp_path)
+
+        result = subprocess.run(
+            [
+                sys.executable, str(SCRIPT_PATH), "apply",
+                "--output-dir", str(tmp_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert json.loads(result.stdout)["adjudication_source"] == (
+            "defensive_apply"
+        )

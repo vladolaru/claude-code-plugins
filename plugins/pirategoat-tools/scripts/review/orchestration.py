@@ -30,6 +30,7 @@ try:
         detect_dependency_refresh,
         verify_dependency_refresh,
     )
+    from . import atomic_io
     from .atomic_io import atomic_write_json, atomic_write_text
     from .reviewer_lifecycle import close_review_intake
     from .reviewer_names import derive_reviewer_name
@@ -62,6 +63,7 @@ except ImportError:
         detect_dependency_refresh,
         verify_dependency_refresh,
     )
+    from review import atomic_io
     from review.atomic_io import atomic_write_json, atomic_write_text
     from review.reviewer_lifecycle import close_review_intake
     from review.reviewer_names import derive_reviewer_name
@@ -1558,8 +1560,9 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
     #    preserved verbatim.
     #
     # 2. It closes the REVISE window on the RECONCILIATOR. The
-    #    orchestrator applies critic adjustments to review-findings.json
-    #    between step 10 and step 11, so on a run whose step 9 never
+    #    orchestrator settles critic adjustments, whose internal applier
+    #    updates review-findings.json between step 10 and step 11, so on a
+    #    run whose step 9 never
     #    observed, finalize alone would read the apply's mtime and fold
     #    the critic's phase into the reconciliator's duration. Reading
     #    here — before the critic is even dispatched, and on BOTH the
@@ -1621,12 +1624,25 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
         # A fact the pipeline knows is a fact the pipeline writes, and that
         # separation is what lets finalize read a missing artifact beside a
         # dispatch marker as the real degradation it is.
-        atomic_write_json(
-            os.path.join(
-                output_dir, critic_adjustments.CRITIC_VERDICT_FILENAME
-            ),
-            {"verdict": "SKIPPED", "reason": reason},
+        proposal = critic_adjustments.prepare_proposal({
+            "schema": critic_adjustments.ADJUSTMENTS_SCHEMA,
+            "adjustments": [],
+        })
+        digest = critic_adjustments.proposal_digest(proposal)
+        marker_path = os.path.join(
+            output_dir, critic_adjustments.CRITIC_VERDICT_FILENAME
         )
+        with atomic_io.output_dir_lock(output_dir):
+            try:
+                os.unlink(marker_path)
+            except FileNotFoundError:
+                pass
+            critic_adjustments.write_adjustments(output_dir, proposal)
+            atomic_write_json(marker_path, {
+                "schema": critic_adjustments.VERDICT_MARKER_SCHEMA,
+                "verdict": "SKIPPED",
+                "proposal_digest": digest,
+            })
     else:
         # Dispatch marker for the critic, written on exactly the branch
         # whose briefing dispatches one. The skip branch writes no marker
@@ -1642,6 +1658,7 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
 
 
 _STEP_11_DEGRADATION_CODES = frozenset({
+    "critic_adjudication_missing",
     "critic_unavailable_after_dispatch",
     "critic_adjustment_apply_failed",
     "critic_adjustment_apply_refused",
@@ -1884,8 +1901,8 @@ def _bind_report_handoff(state, report_path, source_fingerprint):
 
 def _orchestrate_step_11(mode, config, state, context, output_dir):
     # Synthesis-agent lifecycle, adjudicated FIRST and for a hard ordering
-    # reason: finalize itself writes review-findings.json (the critic
-    # adjustments apply), and that write moves the mtime this measurement
+    # reason: finalize itself may recover an apply to review-findings.json,
+    # and that write moves the mtime this measurement
     # reads as the reconciliator's
     # completion. Observing after that write would report the
     # reconciliator as having finished at finalize time — the run's whole
@@ -1899,8 +1916,8 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     #             reconciliator's own write.
     #   step 10 — reads it again before the critic is dispatched, which
     #             is what covers a run whose step 9 never observed: the
-    #             orchestrator's REVISE adjustment apply lands on that
-    #             ledger between step 10 and here, and without step 10's
+    #             orchestrator's REVISE settlement lands on that ledger
+    #             between step 10 and here, and without step 10's
     #             reading finalize would fold the critic's phase into the
     #             reconciliator's duration.
     #   step 11 — this call, which adds the critic's own completion and
@@ -1961,8 +1978,8 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # Carry any pending critic adjustments into the findings ledger before
     # the verdict is derived from it — but only under REVISE, the one that
     # sanctions them. The step-10 REVISE briefing has the orchestrator
-    # spot-check each entry and mark the refuted ones `rejected` before
-    # running this same apply, so here it is the defensive re-run: any
+    # spot-check each entry and submit only positive verified/refuted claims
+    # through settle, so here it is the defensive re-run: any
     # orchestrator — bot or interactive — can stop short of the step-10
     # briefing's instructions (a crash, an early return, a main
     # orchestrator that skips ahead), and this re-run is what still
@@ -2008,6 +2025,15 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
                         "critic_adjustment_apply_refused",
                         f"critic adjustment apply attempt refused: "
                         f"({apply_result.get('reason')})"
+                    )
+                elif apply_result.get("adjudication_source") == (
+                    critic_adjustments.ADJUDICATION_SOURCE_DEFENSIVE
+                ):
+                    _record_step_11_degradation(
+                        degradation_records,
+                        "critic_adjudication_missing",
+                        "critic adjustments were applied without "
+                        "orchestrator adjudication",
                     )
         else:
             try:

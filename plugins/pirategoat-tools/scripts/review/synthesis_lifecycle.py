@@ -53,6 +53,7 @@ import os
 from datetime import datetime, timezone
 
 try:
+    from . import critic_adjustments
     from .atomic_io import atomic_write_json
 except ImportError:  # pragma: no cover - direct-path import fallback
     import sys
@@ -61,6 +62,7 @@ except ImportError:  # pragma: no cover - direct-path import fallback
     _scripts_parent = str(Path(__file__).resolve().parent.parent)
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
+    from review import critic_adjustments
     from review.atomic_io import atomic_write_json
 
 
@@ -115,12 +117,11 @@ DECISION_CRITIC = "decision-reviewer"
 #
 # - review-findings.json is the reconciliator's ONLY artifact (step 8's
 #   briefing says so in as many words, and its handoff verifies it).
-# - decision-critic-verdict.json is required by step 10's handoff in BOTH
-#   briefing branches, and the briefing explicitly requires it even when
-#   the critic crashed or timed out (`{"verdict": "SKIPPED", ...}`).
-#   decision-critic-findings.md is the critic's own richer output but only
-#   exists when the critic actually produced a critique, so keying
-#   completion on it would report a crashed critic as still running.
+# - decision-critic-verdict.json is required by the branch that dispatches
+#   the critic. Its mtime remains the completion signal, while the verdict
+#   recorded in the lifecycle row is accepted only from a complete,
+#   schema-versioned, proposal-digest-bound snapshot. The quick-skip branch
+#   dispatches no critic and therefore writes no lifecycle marker.
 SYNTHESIS_AGENTS = (
     (RECONCILIATOR, "review-findings.json"),
     (DECISION_CRITIC, "decision-critic-verdict.json"),
@@ -186,16 +187,14 @@ def _read_marker(output_dir, name):
 def _artifact_verdict(path):
     """The completion artifact's own `verdict` string, or None.
 
-    Read at observation because it changes what a duration MEANS. A critic
-    row carrying "SKIPPED" is not a critique that took N seconds — quick
-    mode skipped it, or it crashed and the orchestrator wrote the
-    handoff's fallback — so its span measures dispatch to
-    orchestrator-gave-up, an upper bound on a critique that may never have
-    started. Blending those into a critic duration statistic would drag
-    the cohort mean toward crash-resolution latency, so the aggregate
-    counts them apart. None is the honest answer for an absent,
-    unreadable, non-object, or verdict-less artifact.
+    Read at observation because it changes what a duration means. For the
+    critic, the verdict is usable only when its marker schema and proposal
+    digest validate against the adjacent committed proposal; the marker's
+    existence and mtime remain the completion signal. None is the honest
+    answer for an absent, unreadable, malformed, or unbound artifact.
     """
+    if os.path.basename(path) == critic_adjustments.CRITIC_VERDICT_FILENAME:
+        return critic_adjustments.read_verdict_file(path)
     try:
         with open(path) as handle:
             data = json.load(handle)
@@ -339,4 +338,3 @@ def observe(output_dir, *, finalize=False):
     except OSError:
         return None
     return payload
-

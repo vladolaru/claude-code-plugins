@@ -170,11 +170,11 @@ export interface ReviewOutput {
     // rather than "never written".
     //
     // Non-null BESIDE a withdrawal record means the orchestrator supplied a
-    // post-critic assessment through the adjustments channel
-    // (`revised_narrative` on decision-critic-adjustments.json), which
-    // apply_adjustments() moves into this field. The renderer attributes it
-    // accordingly — the reconciler's marker would credit prose that was
-    // retracted a step earlier.
+    // post-critic assessment through the validated adjudication request. The
+    // settle command checkpoints it under `adjudication.revised_narrative`,
+    // and apply_adjustments() moves it into this field. The renderer
+    // attributes it accordingly — the reconciler's marker would credit prose
+    // that was retracted a step earlier.
     narrative_summary: string | null;
 
     // Clearances (optional) — auditable absence claims ("nothing depends on
@@ -227,11 +227,11 @@ export interface ReviewOutput {
     // One record per adjustment this ledger already contains. Present after
     // the first applied batch. `adjustment_id` is the idempotence
     // bookkeeping — a crash between the two writes converges on it —
-    // and `spot_check` is the orchestrator's own outcome for that decision,
-    // written into decision-critic-adjustments.json at step 10 and carried
-    // here on apply. An entry applied without one is recorded as
-    // "not_checked": never required, because step 11's defensive re-run
-    // exists for orchestrators that crashed before probing anything.
+    // and `spot_check` is script-derived from the orchestrator's exact
+    // settlement request, checkpointed in decision-critic-adjustments.json,
+    // and carried here on apply. IDs omitted from the positive verified and
+    // refuted claims are derived as "not_checked". Step 11's defensive
+    // recovery records every entry that way when no adjudication exists.
     // Rendered with rejected decisions in the "## Critic Adjustment
     // Decisions" list.
     //
@@ -259,8 +259,9 @@ export interface ReviewOutput {
     // the "## Removed by the Decision Critic" section.
     removed_by_critic?: Issue[];
 
-    // Critic decisions the orchestrator's spot-check refuted (`rejected:
-    // true` + `rejection_reason` in decision-critic-adjustments.json).
+    // Critic decisions the orchestrator's adjudication request refuted. The
+    // settle command derives `rejected: true` plus `rejection_reason` in the
+    // checkpointed decision-critic-adjustments.json document.
     // Present after the first batch that settled at least one rejection.
     // A rejected entry is never applied to `issues` — the target finding
     // is never mutated — so this is the canonical place a rejection is
@@ -268,12 +269,7 @@ export interface ReviewOutput {
     // explicit `adjustment_id — refuted` line.
     // Cumulative across every batch the ledger absorbs, the same way
     // applied_critic_adjustments is; apply_adjustments() dedupes by
-    // adjustment_id so a re-run never appends a duplicate. An entry
-    // carrying BOTH `applied: true` and `rejected: true` (a post-hoc hand
-    // edit of decision-critic-adjustments.json) is never recorded here —
-    // the applied mutation is ground truth, and auditing the coexisting
-    // rejected flag would publish two contradictory outcomes for one
-    // adjustment_id.
+    // adjustment_id so a resumed or repeated apply never appends a duplicate.
     rejected_critic_adjustments?: Array<{
         adjustment_id: string;
         action: string | null;

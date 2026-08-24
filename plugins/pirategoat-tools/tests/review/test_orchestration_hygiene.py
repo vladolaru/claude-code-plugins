@@ -21,7 +21,9 @@ PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
+from review import critic_adjustments
 from review import orchestration as orchestration_mod
+from review.atomic_io import atomic_write_json
 from review.critic_adjustments import write_findings
 from review.orchestration import (
     PROBE_MARKER,
@@ -406,8 +408,17 @@ def _seed_step_11(out):
             "tool_results_used": None,
         },
     })
-    (out / "decision-critic-verdict.json").write_text(
-        json.dumps({"verdict": "STAND"})
+    proposal = critic_adjustments.prepare_proposal({
+        "schema": 1, "adjustments": [],
+    })
+    critic_adjustments.write_adjustments(str(out), proposal)
+    atomic_write_json(
+        str(out / critic_adjustments.CRITIC_VERDICT_FILENAME),
+        {
+            "schema": 1,
+            "verdict": "STAND",
+            "proposal_digest": critic_adjustments.proposal_digest(proposal),
+        },
     )
 
 

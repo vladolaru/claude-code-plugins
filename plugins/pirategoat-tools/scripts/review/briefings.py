@@ -1595,10 +1595,13 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append(f"Context: <one-line summary of PR scope, verdict, and finding count>")
     actions.append(f"Return STAND, REVISE, or ESCALATE with findings written to {od}/decision-critic-findings.md.")
     actions.append(
-        f"On REVISE, also record every finding-level adjustment in "
-        f"{od}/decision-critic-adjustments.json, per your agent instructions — "
-        f"a recommendation that exists only as prose cannot reach the "
-        f"machine-readable ledger."
+        "On REVISE, also author every finding-level adjustment in the "
+        "proposal-only temp input `decision-critic-adjustments.json` and "
+        "publish it through `critic.py --save`, "
+        "per your agent instructions. Never write the output artifact "
+        "directly: a recommendation that exists only as prose cannot reach "
+        "the machine-readable ledger, while a raw write bypasses its "
+        "source-bound commit."
     )
     actions.append("```")
     actions.append("")
@@ -1641,65 +1644,74 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         "**REVISE** — the machine-readable ledger updates first, the prose second:"
     )
     actions.append(
-        f"1) Read the critic's recommendations AND "
-        f"`{od}/decision-critic-adjustments.json`."
+        f"1) Read the critic's recommendations, the committed proposal IDs "
+        f"in `{od}/decision-critic-adjustments.json`, the source-bound marker "
+        f"in `{od}/decision-critic-verdict.json`, the current "
+        f"`{od}/review-findings.json` ledger, and the source files needed to "
+        f"probe each material claim."
     )
     actions.append(
-        f"2) Spot-check the claims with `git grep`/`Read`. Mark any adjustment "
-        f'the spot-check refutes with `"rejected": true` plus a '
-        f"`rejection_reason` — a refuted decision stays visible as rejected, "
-        f"it is not deleted. `rejection_reason` is enforced, not optional: "
-        f"a `rejected: true` entry with a missing or blank reason refuses "
-        f"the whole batch — the reason is the entire audit trail for why "
-        f"the decision did not land."
+        "2) Spot-check the claims with `git grep`/`Read`, then author ONLY "
+        "this schema-1 adjudication request under `$TMPDIR` (create the "
+        "directory first if needed):"
+    )
+    actions.append("```json")
+    actions.append("{")
+    actions.append('  "schema": 1,')
+    actions.append('  "verified": ["<script-assigned-adjustment-id>"],')
+    actions.append('  "refuted": [')
+    actions.append("    {")
+    actions.append(
+        '      "adjustment_id": "<another-script-assigned-adjustment-id>",'
     )
     actions.append(
-        "   Account for the batch PER ENTRY, never in aggregate, and write "
-        "that accounting INTO the adjustments file: give every entry a "
-        "`\"spot_check\"` field — `\"verified\"` (you ran a probe and it "
-        "held), `\"refuted\"` (you rejected it above), or `\"not_checked\"` "
-        "(you did not individually probe it). An entry you did not "
-        "individually probe is `not_checked` — it is never absorbed into a "
-        "batch-level statement. The field is the machine-readable seat for "
-        "this judgment: the applier carries it onto the findings ledger, so "
-        "an unstated outcome is recorded as `not_checked` rather than "
-        "silently reading as checked."
+        '      "rejection_reason": "<what the source probe disproved>"'
+    )
+    actions.append("    }")
+    actions.append("  ],")
+    actions.append(
+        '  "revised_narrative": "<post-critic assessment of the settled ledger>"'
+    )
+    actions.append("}")
+    actions.append("```")
+    actions.append(
+        "   Account for positive claims PER ENTRY, never in aggregate. Put "
+        "only individually confirmed IDs in `\"verified\"` and only "
+        "individually disproved IDs in `\"refuted\"`, each refutation with "
+        "its non-empty reason. Every committed ID omitted from both lists is "
+        "derived as `not_checked`. Do not enumerate `not_checked`, counts, "
+        "timestamps, serialized `spot_check` values, rejection flags, or "
+        "application state. The orchestrator never edits the committed "
+        "proposal."
     )
     actions.append(
-        f"3) Carry the surviving adjustments into `{od}/review-findings.json`:"
+        "3) Save the request as `$TMPDIR/critic-adjudication.json`, then run "
+        "the validating settle channel exactly once:"
     )
     actions.append("```bash")
     actions.append(
-        f'python3 {SCRIPTS_DIR}/critic_adjustments.py --output-dir "{od}"'
+        f'python3 {SCRIPTS_DIR}/critic_adjustments.py settle '
+        f'--output-dir "{od}" < "$TMPDIR/critic-adjudication.json"'
     )
     actions.append("```")
     actions.append(
-        f"This refuses — no writes at all — unless "
-        f"`{od}/decision-critic-verdict.json` (the critic's own saved "
-        f"verdict, read above) says REVISE; the CLI enforces the "
-        f"REVISE-only gate itself, it does not just trust this branch."
+        "A successful handoff reports `RECORDED ADJUDICATION`, the derived "
+        "`VERIFIED | REFUTED | NOT_CHECKED` counts, `REVISED NARRATIVE: "
+        "present`, the `PROPOSAL DIGEST`, and the `APPLY` result. On any "
+        "`REJECTED:` line, correct only the temp request and resubmit it; "
+        "never edit the output artifact or bypass `settle`."
     )
     actions.append(
-        f"`{od}/decision-critic-adjustments.json` plus this command is the "
-        f"ONLY write path into the findings ledger. Do not hand-edit "
-        f"`{od}/review-findings.json` — not with an editor, not with an "
-        f"ad-hoc `python3 -c`, not to \"just fix\" a title or a "
-        f"recommendation. The adjustments ledger is the only sanctioned "
-        f"write path; a hand edit is out of channel and forbidden. A "
-        f"change worth making is worth making as an adjustment entry, "
-        f"where it carries provenance."
+        f"The settle channel verifies `{od}/decision-critic-verdict.json` "
+        f"against the committed proposal digest, records the complete "
+        f"adjudication checkpoint, and then applies the settled decisions "
+        f"to `{od}/review-findings.json` through the ledger's sole writer."
     )
     actions.append(
-        "An applying batch also WITHDRAWS the reconciler's "
-        "`narrative_summary` — its adjustments can correct any finding but "
-        "not ledger-level prose, so an assessment the batch may have "
-        "contradicted is retracted (kept under "
-        "`withdrawn_narrative_summary`) rather than left standing. Write "
-        "your post-critic assessment as a top-level `\"revised_narrative\"` "
-        "string on the adjustments file BEFORE running the command above, "
-        "and the applier moves it into the ledger's `narrative_summary`. "
-        "Leave it out and the ledger honestly renders \"No current "
-        "assessment\" — never the withdrawn text presented as current."
+        "Never hand-edit `review-findings.json` either: the application "
+        "phase carries provenance, withdraws the reconciler's prior "
+        "assessment, installs the request's revised narrative, recounts "
+        "findings, and derives the final ledger verdict."
     )
     actions.append(
         f"4) Nothing else to edit. The pipeline re-assembles "
@@ -1709,13 +1721,11 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         f"JSON, which is exactly why authoring waits until after you."
     )
     actions.append(
-        "   Your per-entry accounting from step 2 reaches the record on its "
-        "own: the applier carries each `spot_check` onto the ledger and the "
-        "record renders one line per adjustment, `<adjustment_id> — "
-        "verified | refuted | not_checked`. Never report the batch in "
-        "aggregate anywhere — \"all N spot-checked\" over a batch where one "
-        "entry went unprobed publishes that entry as verified, which is the "
-        "exact false claim per-entry accounting exists to prevent."
+        "   The script-derived per-entry settlement reaches the record on "
+        "its own. Never report the batch in aggregate anywhere — \"all N "
+        "spot-checked\" over a batch where one entry went unprobed publishes "
+        "that entry as verified, which is the exact false claim per-entry "
+        "accounting exists to prevent."
     )
     actions.append("")
     actions.append(

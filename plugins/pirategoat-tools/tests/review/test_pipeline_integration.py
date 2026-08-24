@@ -16,7 +16,8 @@ PLUGIN_ROOT = TESTS_DIR.parent
 _SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 
 sys.path.insert(0, str(_SCRIPTS_DIR))
-from review import agents_status
+from review import agents_status, critic_adjustments
+from review.atomic_io import atomic_write_json
 from review.critic_adjustments import write_findings
 
 sys.path.insert(0, str(TESTS_DIR))
@@ -42,6 +43,31 @@ _output_spec = importlib.util.spec_from_file_location(
 _output_mod = importlib.util.module_from_spec(_output_spec)
 _output_spec.loader.exec_module(_output_mod)
 _render_markdown = _output_mod.render_markdown
+
+
+def _write_critic_snapshot(output_dir, adjustments, *, validate=True):
+    """Publish one digest-bound REVISE snapshot for integration tests."""
+    payload = {"schema": 1, "adjustments": adjustments}
+    if validate:
+        document = critic_adjustments.prepare_proposal(payload)
+        critic_adjustments.write_adjustments(str(output_dir), document)
+    else:
+        document = json.loads(json.dumps(payload))
+        for index, entry in enumerate(document["adjustments"]):
+            if isinstance(entry, dict):
+                entry.setdefault("adjustment_id", f"invalid-{index}")
+        (Path(output_dir) / critic_adjustments.ADJUSTMENTS_FILENAME).write_text(
+            json.dumps(document)
+        )
+    atomic_write_json(
+        str(Path(output_dir) / critic_adjustments.CRITIC_VERDICT_FILENAME),
+        {
+            "schema": 1,
+            "verdict": "REVISE",
+            "proposal_digest": critic_adjustments.proposal_digest(document),
+        },
+    )
+    return document
 
 
 def _write_required_sidecar(output_dir, reviewer, agent_name=None):
@@ -2160,19 +2186,12 @@ class TestStep11Orchestration:
         finding["summary"]["total_issues"] = 1
         finding["summary"]["by_severity"]["high"] = 1
         write_findings(str(tmp_path), finding)
-        (tmp_path / "decision-critic-verdict.json").write_text(
-            '{"verdict": "REVISE"}'
-        )
-        adjustments = tmp_path / "decision-critic-adjustments.json"
-        adjustments.write_text(json.dumps({
-            "schema": 1,
-            "adjustments": [{
-                "action": "obliterate",
-                "id": "aaaa1111",
-                "fields": {},
-                "rationale": "invalid first attempt",
-            }],
-        }))
+        _write_critic_snapshot(tmp_path, [{
+            "action": "obliterate",
+            "id": "aaaa1111",
+            "fields": {},
+            "rationale": "invalid first attempt",
+        }], validate=False)
 
         prepared = run_pipeline(
             "--step", "11", "--mode", "pr",
@@ -2183,22 +2202,19 @@ class TestStep11Orchestration:
         assert state["publication_pending"] is True
         assert state["prepared_report_source_fingerprint"]
         assert any(
-            "critic adjustment apply attempt failed" in note
+            "critic adjustment inspection failed" in note
             for note in state["degradation_notes"]
         )
 
         report = tmp_path / "review-report.md"
         stale_report = "# Review\nREQUEST_CHANGES: high finding."
         report.write_text(stale_report)
-        adjustments.write_text(json.dumps({
-            "schema": 1,
-            "adjustments": [{
-                "action": "demote",
-                "id": "aaaa1111",
-                "fields": {"severity": "low"},
-                "rationale": "guarded upstream",
-            }],
-        }))
+        _write_critic_snapshot(tmp_path, [{
+            "action": "demote",
+            "id": "aaaa1111",
+            "fields": {"severity": "low"},
+            "rationale": "guarded upstream",
+        }])
         # Even a leftover marker from an interrupted/manual re-entry must
         # not coexist with a report this pass rejects as stale.
         (tmp_path / "pipeline-result.json").write_text('{"stale": true}')
@@ -2240,7 +2256,11 @@ class TestStep11Orchestration:
         assert result["verdict"] == "APPROVE"
         assert result["status"] == "degraded"
         assert any(
-            "critic adjustment apply attempt failed" in note
+            "critic adjustment inspection failed" in note
+            for note in result["degradation_notes"]
+        )
+        assert any(
+            "without orchestrator adjudication" in note
             for note in result["degradation_notes"]
         )
         state = json.loads((tmp_path / "pipeline-state.json").read_text())

@@ -11,7 +11,7 @@ The contract these tests pin:
 
 * the record is a projection — re-assembling after a critic batch reflects
   the post-adjustment severities, the recomputed verdict, and the
-  orchestrator's `revised_narrative`;
+  checkpointed adjudication narrative;
 * the shared bodies are byte-identical to what their own renderers produce,
   so a record can never disagree with `review-findings.md` about a finding
   or with the step-9 coverage measurement about a file;
@@ -33,6 +33,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 from review import briefings as briefings_mod
 from review import critic_adjustments
 from review import orchestration as orchestration_mod
+from review.atomic_io import atomic_write_json
 from review.agent.output import render_review_body
 from review.orchestration import (
     REVIEW_RECORD_MD,
@@ -313,13 +314,46 @@ class TestRecordIsAProjection:
     """Re-assembly after `apply_adjustments` shows the post-critic ledger."""
 
     @staticmethod
-    def _revise(out_dir, adjustments):
-        (out_dir / critic_adjustments.CRITIC_VERDICT_FILENAME).write_text(
-            json.dumps({"verdict": "REVISE"})
+    def _revise(
+        out_dir,
+        adjustments,
+        *,
+        verified=(),
+        refuted=(),
+        narrative="Post-critic assessment.",
+        settle=True,
+    ):
+        proposal = critic_adjustments.prepare_proposal({
+            "schema": 1,
+            "adjustments": adjustments,
+        })
+        critic_adjustments.write_adjustments(str(out_dir), proposal)
+        atomic_write_json(
+            str(out_dir / critic_adjustments.CRITIC_VERDICT_FILENAME),
+            {
+                "schema": 1,
+                "verdict": "REVISE",
+                "proposal_digest": critic_adjustments.proposal_digest(
+                    proposal
+                ),
+            },
         )
-        (out_dir / critic_adjustments.ADJUSTMENTS_FILENAME).write_text(
-            json.dumps(adjustments)
-        )
+        if not settle:
+            return proposal, critic_adjustments.apply_adjustments(str(out_dir))
+        ids = [entry["adjustment_id"] for entry in proposal["adjustments"]]
+        request = {
+            "schema": 1,
+            "verified": [ids[index] for index in verified],
+            "refuted": [
+                {
+                    "adjustment_id": ids[index],
+                    "rejection_reason": reason,
+                }
+                for index, reason in refuted
+            ],
+            "revised_narrative": narrative,
+        }
+        return proposal, critic_adjustments.settle(str(out_dir), request)
 
     def test_reassembly_reflects_adjusted_severity_and_verdict(self, out_dir):
         _write_ledger(out_dir)
@@ -327,20 +361,12 @@ class TestRecordIsAProjection:
         before = (out_dir / REVIEW_RECORD_MD).read_text()
         assert "**Verdict:** REQUEST_CHANGES" in before
 
-        self._revise(out_dir, {
-            "schema": 1,
-            "revised_narrative": "Only one real problem after the probe.",
-            "adjustments": [
-                {
-                    "action": "demote",
-                    "id": "9f3a1c7d",
-                    "fields": {"severity": "low"},
-                    "rationale": "the value is escaped one frame up",
-                    "spot_check": "verified",
-                },
-            ],
-        })
-        critic_adjustments.apply_adjustments(str(out_dir))
+        self._revise(out_dir, [{
+            "action": "demote",
+            "id": "9f3a1c7d",
+            "fields": {"severity": "low"},
+            "rationale": "the value is escaped one frame up",
+        }], verified=(0,), narrative="Only one real problem after the probe.")
 
         assemble_review_record(str(out_dir), {})
         after = (out_dir / REVIEW_RECORD_MD).read_text()
@@ -356,26 +382,21 @@ class TestRecordIsAProjection:
         self, out_dir
     ):
         _write_ledger(out_dir)
-        self._revise(out_dir, {
-            "schema": 1,
-            "adjustments": [
-                {
-                    "action": "demote",
-                    "id": "9f3a1c7d",
-                    "fields": {"severity": "low"},
-                    "rationale": "escaped one frame up",
-                    "spot_check": "verified",
-                },
-                {
-                    "action": "correct",
-                    "id": "1b2c3d4e",
-                    "fields": {"title": "Retry loop has no ceiling (v2)"},
-                    "rationale": "clearer title",
-                },
-            ],
-        })
-        result = critic_adjustments.apply_adjustments(str(out_dir))
-        assert result.get("status") != "refused", result
+        _proposal, result = self._revise(out_dir, [
+            {
+                "action": "demote",
+                "id": "9f3a1c7d",
+                "fields": {"severity": "low"},
+                "rationale": "escaped one frame up",
+            },
+            {
+                "action": "correct",
+                "id": "1b2c3d4e",
+                "fields": {"title": "Retry loop has no ceiling (v2)"},
+                "rationale": "clearer title",
+            },
+        ], verified=(0,))
+        assert result["apply"].get("status") != "refused", result
 
         assemble_review_record(str(out_dir), {})
         text = (out_dir / REVIEW_RECORD_MD).read_text()
@@ -390,89 +411,65 @@ class TestRecordIsAProjection:
         self, out_dir
     ):
         _write_ledger(out_dir)
-        self._revise(out_dir, {
-            "schema": 1,
-            "adjustments": [
-                {
-                    "adjustment_id": "applied-decision",
-                    "action": "correct",
-                    "id": "9f3a1c7d",
-                    "fields": {"title": "Escaping is already present"},
-                    "rationale": "verified against the source",
-                    "spot_check": "verified",
-                },
-                {
-                    "adjustment_id": "refuted-decision",
-                    "action": "correct",
-                    "id": "1b2c3d4e",
-                    "fields": {"title": "This change does not apply"},
-                    "rationale": "critic claim",
-                    "rejected": True,
-                    "rejection_reason": "the source contradicts the claim",
-                    "spot_check": "refuted",
-                },
-            ],
-        })
-        critic_adjustments.apply_adjustments(str(out_dir))
+        proposal, _result = self._revise(out_dir, [
+            {
+                "action": "correct",
+                "id": "9f3a1c7d",
+                "fields": {"title": "Escaping is already present"},
+                "rationale": "verified against the source",
+            },
+            {
+                "action": "correct",
+                "id": "1b2c3d4e",
+                "fields": {"title": "This change does not apply"},
+                "rationale": "critic claim",
+            },
+        ], verified=(0,), refuted=((1, "the source contradicts the claim"),))
+        ids = [entry["adjustment_id"] for entry in proposal["adjustments"]]
 
         assemble_review_record(str(out_dir), {})
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert "## Critic Adjustment Decisions" in text
-        assert "- `applied-decision` — verified" in text
-        assert "- `refuted-decision` — refuted" in text
+        assert f"- `{ids[0]}` — verified" in text
+        assert f"- `{ids[1]}` — refuted" in text
 
     def test_reassembly_projects_an_all_refuted_batch(self, out_dir):
         _write_ledger(out_dir)
-        self._revise(out_dir, {
-            "schema": 1,
-            "adjustments": [
-                {
-                    "adjustment_id": "refuted-one",
-                    "action": "correct",
-                    "id": "9f3a1c7d",
-                    "fields": {"title": "This change does not apply"},
-                    "rationale": "critic claim",
-                    "rejected": True,
-                    "rejection_reason": "the source contradicts the claim",
-                    "spot_check": "refuted",
-                },
-                {
-                    "adjustment_id": "refuted-two",
-                    "action": "correct",
-                    "id": "1b2c3d4e",
-                    "fields": {"title": "This change does not apply"},
-                    "rationale": "critic claim",
-                    "rejected": True,
-                    "rejection_reason": "the source contradicts the claim",
-                    "spot_check": "refuted",
-                },
-            ],
-        })
-        critic_adjustments.apply_adjustments(str(out_dir))
+        proposal, _result = self._revise(out_dir, [
+            {
+                "action": "correct",
+                "id": "9f3a1c7d",
+                "fields": {"title": "This change does not apply"},
+                "rationale": "critic claim",
+            },
+            {
+                "action": "correct",
+                "id": "1b2c3d4e",
+                "fields": {"title": "This change does not apply"},
+                "rationale": "critic claim",
+            },
+        ], refuted=(
+            (0, "the source contradicts the claim"),
+            (1, "the source contradicts the claim"),
+        ))
+        ids = [entry["adjustment_id"] for entry in proposal["adjustments"]]
 
         assemble_review_record(str(out_dir), {})
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert "## Critic Adjustment Decisions" in text
-        assert "- `refuted-one` — refuted" in text
-        assert "- `refuted-two` — refuted" in text
+        assert f"- `{ids[0]}` — refuted" in text
+        assert f"- `{ids[1]}` — refuted" in text
 
     def test_withdrawn_narrative_renders_the_explicit_absence(self, out_dir):
         _write_ledger(out_dir)
-        self._revise(out_dir, {
-            "schema": 1,
-            "adjustments": [
-                {
-                    "action": "demote",
-                    "id": "9f3a1c7d",
-                    "fields": {"severity": "low"},
-                    "rationale": "escaped one frame up",
-                    "spot_check": "verified",
-                },
-            ],
-        })
-        critic_adjustments.apply_adjustments(str(out_dir))
+        self._revise(out_dir, [{
+            "action": "demote",
+            "id": "9f3a1c7d",
+            "fields": {"severity": "low"},
+            "rationale": "escaped one frame up",
+        }], settle=False)
 
         assemble_review_record(str(out_dir), {})
         text = (out_dir / REVIEW_RECORD_MD).read_text()

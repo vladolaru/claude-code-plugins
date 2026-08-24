@@ -165,11 +165,13 @@ entirely — the save command below rejects a STAND/ESCALATE verdict submitted
 alongside a non-empty adjustments batch, since that is a contradiction, not a
 degraded case to quarantine downstream.
 
-The channel reaches findings, not ledger-level prose: every field of every
-finding is adjustable, and nothing else is. The reconciler's overall
-assessment in particular cannot be corrected by an adjustment — an applying
-batch withdraws it wholesale — so a claim you want changed has to be
-attached to a finding to be reachable at all:
+The proposal reaches findings, not ledger-level prose: every field of every
+finding is adjustable, and nothing else is. You author only the action-specific
+target/fields plus a rationale. Do not supply `adjustment_id`, `spot_check`,
+`rejected`, `rejection_reason`, `applied`, `adjudication`, or
+`revised_narrative`; the save and settlement scripts own that lifecycle state.
+The reconciler's overall assessment is settled later by the orchestrator, so a
+finding change you recommend must stay attached to a finding here:
 
 ```json
 {
@@ -215,12 +217,11 @@ save command below rejects a STAND/ESCALATE verdict submitted alongside a
 non-empty adjustments batch.
 
 **3c. Save through the script.** This is the only write path into your own
-`decision-critic-*` artifacts AND into `review-findings.json` downstream:
-never write `decision-critic-findings.md`, `decision-critic-adjustments.json`,
-or `decision-critic-verdict.json` yourself, and never ask the caller to
-hand-edit `review-findings.json` — a hand edit of any of these is out of
-channel and forbidden. A change worth making is worth making as an
-adjustment entry, where it carries its rationale and its provenance.
+`decision-critic-*` artifacts. Never write `decision-critic-findings.md`,
+`decision-critic-adjustments.json`, or `decision-critic-verdict.json` yourself,
+and never ask the caller to hand-edit `review-findings.json`; the orchestrator's
+separate settlement channel validates its spot checks before the ledger applier
+carries your proposal downstream.
 
 ```bash
 PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
@@ -240,7 +241,7 @@ python3 $PLUGIN_ROOT/scripts/review/critic.py --save \
   --output-dir "<Output Directory>"
 ```
 
-The command validates everything before writing anything: an unrecognized verdict, a missing or unreadable findings/adjustments file, an invalid adjustments batch, REVISE without adjustments, or STAND/ESCALATE with adjustments all print one `REJECTED: <problem>` line per problem and exit non-zero — with the previous complete snapshot untouched. After validation, it invalidates any previous verdict commit marker, then writes `decision-critic-findings.md`, the current `decision-critic-adjustments.json` snapshot, and `decision-critic-verdict.json` to `<Output Directory>` in that order. The verdict commits the two preceding payloads; an interrupted publication has no readable verdict and is safe to resume by rerunning the command. The snapshot is the validated non-empty document for REVISE and canonical `{"schema": 1, "adjustments": []}` for STAND or ESCALATE. A clean run prints `RECORDED VERDICT: <verdict>` and `RECORDED ADJUSTMENTS: <count>`. If validation rejects your batch, fix the named problem in your `$TMPDIR` files and re-run the same command — do not work around a rejection by writing the output directory files yourself.
+The command validates everything before writing anything: an unrecognized verdict, a missing or unreadable findings/adjustments file, a non-proposal field, an invalid adjustments batch, REVISE without adjustments, or STAND/ESCALATE with adjustments all print one `REJECTED: <problem>` line per problem and exit non-zero with the previous complete snapshot untouched. On REVISE it assigns a unique stable `adjustment_id` to every accepted entry, then under the shared output-directory lock invalidates the old marker, writes `decision-critic-findings.md`, writes the normalized proposal through the adjustments module's sole writer, and commits both payloads by writing `decision-critic-verdict.json` last as `{"schema": 1, "verdict": "<VERDICT>", "proposal_digest": "<sha256>"}`. STAND and ESCALATE commit the digest of canonical `{"schema": 1, "adjustments": []}`. A clean run prints `RECORDED VERDICT`, every assigned ID under `RECORDED ADJUSTMENTS`, and `PROPOSAL DIGEST`; an interrupted publication has no readable marker and is safe to retry. If validation rejects your batch, fix the named problem in your `$TMPDIR` files and re-run the same command — do not work around a rejection by writing output artifacts yourself.
 
 ## Return to Caller
 
