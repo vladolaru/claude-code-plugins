@@ -34,6 +34,18 @@ from review.agent.output import (
 )
 
 
+def _write_required_sidecar(output_dir, reviewer):
+    Path(output_dir, f"{reviewer}-deferred-files.json").write_text(
+        json.dumps({
+            "schema": 2,
+            "agent_name": f"{reviewer}-reviewer",
+            "deferred_files": [],
+            "diffed_count": 0,
+            "in_scope_count": 0,
+        })
+    )
+
+
 # =============================================================================
 # TestAddIssue
 # =============================================================================
@@ -532,6 +544,7 @@ class TestToDict:
         monkeypatch.setenv("PIRATEGOAT_PLUGIN_VERSION", "1.114.0")
         b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
         b.set_files_reviewed(1)
+        _write_required_sidecar(tmp_path, "pr")
         b.save(str(tmp_path))
         saved = json.loads((tmp_path / "pr-review.json").read_text())
         assert saved["plugin_version"] == "1.114.0"
@@ -695,6 +708,7 @@ class TestMaterializeMarkdown:
             for reviewer in ("security", "performance"):
                 b = ReviewOutputBuilder(pr_id="1", reviewer=reviewer)
                 b.add_issue("high", "T", "f.py", "d", "r", line=1)
+                _write_required_sidecar(d, reviewer)
                 b.save(d)
             written = materialize_markdown(d)
             assert sorted(os.path.basename(p) for p in written) == [
@@ -708,6 +722,7 @@ class TestMaterializeMarkdown:
     def test_is_idempotent(self):
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
+            _write_required_sidecar(d, "security")
             b.save(d)
             first = materialize_markdown(d)
             second = materialize_markdown(d)
@@ -717,6 +732,7 @@ class TestMaterializeMarkdown:
     def test_skips_malformed_json_without_raising(self):
         with tempfile.TemporaryDirectory() as d:
             Path(d, "broken-review.json").write_text("{ not json")
+            _write_required_sidecar(d, "security")
             ReviewOutputBuilder(pr_id="1", reviewer="security").save(d)
             written = materialize_markdown(d)
             assert [os.path.basename(p) for p in written] == ["security-review.md"]
@@ -736,6 +752,7 @@ class TestMaterializeMarkdown:
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
             b.add_issue("high", "CLI Title", "f.py", "d", "r", line=1)
+            _write_required_sidecar(d, "security")
             b.save(d)
             result = subprocess.run(
                 [sys.executable, str(output_py), "render",
@@ -751,6 +768,7 @@ class TestMaterializeMarkdown:
         assert output_py.is_file(), output_py
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
+            _write_required_sidecar(d, "security")
             b.save(d)
             md_path = Path(d, "security-review.md")
             assert not md_path.exists()  # save() publishes the JSON only
@@ -775,6 +793,7 @@ class TestSave:
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
             b.add_issue("high", "Title", "f.py", "desc", "rec", line=1)
+            _write_required_sidecar(d, "security")
             b.save(d)
             assert os.path.isfile(os.path.join(d, "security-review.json"))
             # Markdown is derived from the JSON on demand (render/
@@ -792,6 +811,7 @@ class TestSave:
                 f.write(datetime.now(timezone.utc).isoformat())
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
             b.add_issue("high", "Title", "f.py", "desc", "rec", line=1)
+            _write_required_sidecar(d, "security")
             b.save(d)
             with open(os.path.join(d, "security-review.json")) as f:
                 saved = json.load(f)
@@ -809,6 +829,7 @@ class TestSave:
     def test_return_value_has_correct_paths(self):
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="arch")
+            _write_required_sidecar(d, "arch")
             result = b.save(d)
             assert result == {"json": os.path.join(d, "arch-review.json")}
 
@@ -821,6 +842,7 @@ class TestSave:
             b.add_issue("high", "A", "a.py", "d", "r", line=1)
             b.add_issue("medium", "B", "b.py", "d", "r", line=2)
             b.add_observation("c.py", "FYI note")
+            _write_required_sidecar(d, "security")
             b.save(d)
             out = capsys.readouterr().out
             assert "RECORDED COUNTS: critical: 0, high: 1, medium: 1, low: 0, info: 0" in out
@@ -832,6 +854,7 @@ class TestSave:
         """An empty save is echoed too — '0 issues recorded' must be visible."""
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
+            _write_required_sidecar(d, "security")
             b.save(d)
             out = capsys.readouterr().out
             assert "RECORDED ISSUES: 0" in out
@@ -861,6 +884,7 @@ class TestSave:
         )
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
+            _write_required_sidecar(d, "security")
             b.save(d)
             assert seen["json_visible_at_telemetry"] is False
             assert seen["reviewer"] == "security-reviewer"
@@ -902,6 +926,7 @@ class TestSave:
         import review.agent.output as output_mod
 
         with tempfile.TemporaryDirectory() as d:
+            _write_required_sidecar(d, "security")
             raced = self._race_a_retry_at_lock_acquisition(
                 monkeypatch, output_mod, d,
                 lambda: ReviewOutputBuilder(pr_id="1", reviewer="security").save(d),
@@ -948,6 +973,7 @@ class TestSave:
             output_mod, "_log_agent_complete_telemetry", _record
         )
         with tempfile.TemporaryDirectory() as d:
+            _write_required_sidecar(d, "security")
             raced = self._race_a_retry_at_lock_acquisition(
                 monkeypatch, output_mod, d,
                 lambda: _builder_with_issues(2).save(d),
@@ -978,6 +1004,8 @@ class TestSave:
             str(output_dir), log_dir=str(tmp_path / "logs")
         )
         log_path = telemetry.start(run_id="run-1")
+
+        _write_required_sidecar(output_dir, "security")
 
         ReviewOutputBuilder(pr_id="1", reviewer="security").save(
             str(output_dir)
@@ -1010,6 +1038,7 @@ class TestSave:
             output_mod, "_log_agent_complete_telemetry", _boom
         )
         with tempfile.TemporaryDirectory() as d:
+            _write_required_sidecar(d, "security")
             with pytest.raises(RuntimeError):
                 ReviewOutputBuilder(pr_id="1", reviewer="security").save(d)
             assert not os.path.exists(os.path.join(d, "security-review.json"))
@@ -1820,6 +1849,7 @@ class TestAdvisoryChannel:
         (tmp_path / "reconciliator-advisory-entitlement.json").write_text(
             json.dumps({"schema": 1, "advisory_entitled": False})
         )
+        _write_required_sidecar(tmp_path, "reconciliator")
 
         with pytest.raises(ValueError, match="advisory.*not entitled"):
             b.to_dict(output_dir=str(tmp_path))
@@ -1873,6 +1903,7 @@ class TestAdvisoryChannel:
         (tmp_path / "reconciliator-advisory-entitlement.json").write_text(
             json.dumps({"schema": 1, "advisory_entitled": False})
         )
+        _write_required_sidecar(tmp_path, "reconciliator")
 
         with pytest.raises(ValueError, match="advisory.*not entitled"):
             b.save(str(tmp_path))
@@ -2107,6 +2138,13 @@ class TestSaveTimeDeferredValidation:
         monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
         builder = ReviewOutputBuilder("123", "go-tests")
         builder.add_unreviewed("anything/form-valid.go")
+        with pytest.raises(ValueError, match="missing authoritative deferred coverage"):
+            builder.save(str(tmp_path))
+        assert not (tmp_path / "go-tests-review.json").exists()
+
+    def test_plain_save_rejects_a_missing_authoritative_sidecar(self, tmp_path):
+        builder = ReviewOutputBuilder("123", "go-tests")
+
         with pytest.raises(ValueError, match="missing authoritative deferred coverage"):
             builder.save(str(tmp_path))
         assert not (tmp_path / "go-tests-review.json").exists()
@@ -2752,6 +2790,7 @@ class TestMetaIsNeverFakeZero:
         silent = ReviewOutputBuilder(pr_id="1", reviewer="security")
         stated = ReviewOutputBuilder(pr_id="1", reviewer="security")
         stated.set_files_reviewed(0)
+        _write_required_sidecar(tmp_path, "security")
         silent.save(str(tmp_path))
         silent_json = json.loads(
             (tmp_path / "security-review.json").read_text()
@@ -2760,7 +2799,7 @@ class TestMetaIsNeverFakeZero:
         stated_json = json.loads(
             (tmp_path / "security-review.json").read_text()
         )
-        assert silent_json["meta"]["files_reviewed"] is None
+        assert silent_json["meta"]["files_reviewed"] == 0
         assert stated_json["meta"]["files_reviewed"] == 0
 
     @pytest.mark.parametrize("bad", [None, "3", 2.0, True, -1])
@@ -3169,6 +3208,7 @@ class TestMaterializeFindingsMarkdown:
 
     def test_default_suffix_ignores_the_findings_artifact(self):
         with tempfile.TemporaryDirectory() as d:
+            _write_required_sidecar(d, "security")
             ReviewOutputBuilder(pr_id="1", reviewer="security").save(d)
             Path(d, "review-findings.json").write_text(
                 json.dumps(
@@ -3213,6 +3253,7 @@ class TestMaterializeFindingsMarkdown:
             / "output.py"
         )
         with tempfile.TemporaryDirectory() as d:
+            _write_required_sidecar(d, "security")
             ReviewOutputBuilder(pr_id="1", reviewer="security").save(d)
             Path(d, "review-findings.json").write_text(
                 json.dumps(

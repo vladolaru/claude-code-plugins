@@ -1104,10 +1104,10 @@ class ReviewOutputBuilder:
     def _validate_deferred_serialization(self, output_dir: str):
         """Return the required authoritative coverage for publication.
 
-        A save that carries a deferred coverage claim must use this path;
-        the explicit output directory makes the check independent of the
-        optional environment envelope. The contradiction guard runs first
-        because it is self-contained and produces the more actionable error.
+        Every save uses this path; the explicit output directory makes the
+        check independent of the optional environment envelope. The
+        contradiction guard runs first because it is self-contained and
+        produces the more actionable error.
 
         The seam differs from its advisory sibling on purpose: advisory
         entitlement revalidates at to_dict(output_dir=...) (serialization),
@@ -1517,25 +1517,17 @@ class ReviewOutputBuilder:
             ]
             self.unreviewed_autofilled = []
 
-        sidecar_path = os.path.join(
-            output_dir, f"{self.reviewer}-deferred-files.json"
-        )
-        coverage = (
-            self._validate_deferred_serialization(output_dir)
-            if self.unreviewed or self.deferred_reviewed or os.path.exists(sidecar_path)
-            else None
-        )
+        coverage = self._validate_deferred_serialization(output_dir)
         # Close the silent third state: every deferred file must end up
         # claimed, declared, or auto-declared. Auto-fill is marked so
         # metrics can separate agent honesty from system honesty.
-        if coverage is not None:
-            declared = set(self.unreviewed)
-            self.deferred_reviewed = list(coverage.deferred_reviewed)
-            self.unreviewed = list(coverage.unreviewed)
-            self.unreviewed_autofilled = [
-                path for path in coverage.unreviewed if path not in declared
-            ]
-            self.files_reviewed = coverage.files_reviewed
+        declared = set(self.unreviewed)
+        self.deferred_reviewed = list(coverage.deferred_reviewed)
+        self.unreviewed = list(coverage.unreviewed)
+        self.unreviewed_autofilled = [
+            path for path in coverage.unreviewed if path not in declared
+        ]
+        self.files_reviewed = coverage.files_reviewed
 
         json_path = os.path.join(output_dir, f"{self.reviewer}-review.json")
         serialized = self.to_json(output_dir=output_dir)
