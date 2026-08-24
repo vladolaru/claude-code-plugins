@@ -1922,15 +1922,23 @@ def main():
     # Written after the override is applied: the sidecar's review_budget is
     # the effective (post-override) number save() echoes back, never a
     # scope-only figure a downstream reader would have to recompute.
-    persist_deferred_sidecar(
-        output_dir,
-        effective_agent_name,
-        not_diffed_paths,
-        list_only_paths,
-        review_budget=review_budget,
-        in_scope_count=len(progress_scope_paths),
-        diffed_count=len(scope_files_for_budget),
-    )
+    try:
+        persist_deferred_sidecar(
+            output_dir,
+            effective_agent_name,
+            not_diffed_paths,
+            list_only_paths,
+            review_budget=review_budget,
+            in_scope_count=len(progress_scope_paths),
+            diffed_count=len(scope_files_for_budget),
+        )
+    except (OSError, ValueError) as exc:
+        print(build_error_output(
+            effective_agent_name,
+            f"Could not publish authoritative deferred coverage: {exc}",
+            plugin_root,
+        ))
+        sys.exit(1)
 
     # Telemetry: log agent start (best-effort, after budget is finalized)
     if ReviewTelemetry is not None:

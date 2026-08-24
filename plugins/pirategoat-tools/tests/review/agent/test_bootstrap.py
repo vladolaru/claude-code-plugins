@@ -366,6 +366,32 @@ class TestPartitionScopePaths:
         assert 0 <= covered <= payload["in_scope_count"]
         assert "PROGRESS: covered 4 of 5 in-scope files." in capsys.readouterr().out
 
+    def test_main_reports_sidecar_publication_failure_as_structured_error(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.setattr(_mod, "find_plugin_root", lambda: str(PLUGIN_ROOT))
+        monkeypatch.setattr(_mod, "read_file", lambda _path: "# rules")
+        monkeypatch.setattr(
+            _mod, "run_scope_discovery", lambda *_args, **_kwargs: (0, "STATUS: OK\n=== FILES ===\nsrc/a.py  (+1 -0)\n")
+        )
+        monkeypatch.setattr(
+            _mod,
+            "persist_deferred_sidecar",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")),
+        )
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["bootstrap.py", "--agent", "security-reviewer", "--output-dir", str(tmp_path)],
+        )
+
+        with pytest.raises(SystemExit, match="1"):
+            _mod.main()
+
+        output = capsys.readouterr().out
+        assert "STATUS: ERROR" in output
+        assert "Could not publish authoritative deferred coverage: disk full" in output
+
 
 class TestExtractFileDiffstat:
     """Per-file size, parsed from any stat-shaped scope.py line."""

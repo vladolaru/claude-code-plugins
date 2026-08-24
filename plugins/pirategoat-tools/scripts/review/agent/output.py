@@ -1101,17 +1101,13 @@ class ReviewOutputBuilder:
             raise ValueError("; ".join(parts))
         return normalized
 
-    def _validate_deferred_serialization(
-        self, output_dir: str
-    ) -> Optional[frozenset]:
-        """Authoritative deferred-set validation at publication time.
+    def _validate_deferred_serialization(self, output_dir: str):
+        """Return the required authoritative coverage for publication.
 
-        Runs on EVERY save regardless of how the builder was invoked —
-        save() already knows the output directory and reviewer, so the
-        check cannot be bypassed by skipping the env envelope. Returns the
-        known set (None preserves fail-open for genuinely sidecar-less use).
-        Fail-open is membership-only: the contradiction guard below runs
-        before it, because it needs no sidecar to be right.
+        A save that carries a deferred coverage claim must use this path;
+        the explicit output directory makes the check independent of the
+        optional environment envelope. The contradiction guard runs first
+        because it is self-contained and produces the more actionable error.
 
         The seam differs from its advisory sibling on purpose: advisory
         entitlement revalidates at to_dict(output_dir=...) (serialization),
@@ -1126,12 +1122,8 @@ class ReviewOutputBuilder:
         # overriding the explicit claim. The reviewer is the only one who
         # knows which it meant.
         #
-        # This runs ABOVE the fail-open return below because it compares the
-        # reviewer's two lists against each other, not against the sidecar:
-        # self-consistency needs no authority. Fail-open covers MEMBERSHIP
-        # ("is this path a deferred file of this review?") — the one question
-        # only the sidecar can answer — so a missing sidecar must not turn a
-        # contradiction into a published artifact.
+        # This runs before reading the sidecar because it compares the
+        # reviewer's two lists against each other, not against the sidecar.
         #
         # Only the reviewer's own statements reach here: save() strips the
         # previous auto-fill before calling this, so the sanctioned
@@ -1147,9 +1139,32 @@ class ReviewOutputBuilder:
                 "A file is one or the other — make only one of the two calls "
                 "for this path in your builder script and run it again."
             )
-        known = self._load_deferred_files(output_dir, self.reviewer)
-        if known is None:
-            return None
+        sidecar_path = os.path.join(
+            output_dir, f"{self.reviewer}-deferred-files.json"
+        )
+        try:
+            with open(sidecar_path, "r", encoding="utf-8") as handle:
+                sidecar = json.load(handle)
+        except FileNotFoundError as exc:
+            raise ValueError(
+                "missing authoritative deferred coverage sidecar: "
+                f"{sidecar_path}"
+            ) from exc
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                "malformed authoritative deferred coverage sidecar: "
+                f"{sidecar_path}"
+            ) from exc
+        try:
+            baseline = derive_deferred_coverage(sidecar, [])
+        except CoverageError as exc:
+            raise ValueError(
+                "malformed authoritative deferred coverage sidecar: "
+                f"{exc}"
+            ) from exc
+        known = frozenset(
+            (*baseline.deferred_reviewed, *baseline.unreviewed)
+        )
         unknown = [path for path in self.unreviewed if path not in known]
         if unknown:
             self._reject_unknown_deferred(
@@ -1170,7 +1185,7 @@ class ReviewOutputBuilder:
             self._reject_unknown_deferred(
                 unknown_claims, known, "add_deferred_reviewed", "claim"
             )
-        return known
+        return derive_deferred_coverage(sidecar, self.deferred_reviewed)
 
     @staticmethod
     def _load_advisory_entitlement(
@@ -1502,16 +1517,14 @@ class ReviewOutputBuilder:
             ]
             self.unreviewed_autofilled = []
 
-        known_deferred = self._validate_deferred_serialization(output_dir)
-        coverage = None
-        sidecar = self._read_deferred_sidecar(output_dir, self.reviewer)
-        if sidecar:
-            try:
-                coverage = derive_deferred_coverage(
-                    sidecar, self.deferred_reviewed
-                )
-            except CoverageError:
-                pass
+        sidecar_path = os.path.join(
+            output_dir, f"{self.reviewer}-deferred-files.json"
+        )
+        coverage = (
+            self._validate_deferred_serialization(output_dir)
+            if self.unreviewed or self.deferred_reviewed or os.path.exists(sidecar_path)
+            else None
+        )
         # Close the silent third state: every deferred file must end up
         # claimed, declared, or auto-declared. Auto-fill is marked so
         # metrics can separate agent honesty from system honesty.
@@ -1523,15 +1536,6 @@ class ReviewOutputBuilder:
                 path for path in coverage.unreviewed if path not in declared
             ]
             self.files_reviewed = coverage.files_reviewed
-        elif known_deferred is not None:
-            unaccounted = sorted(
-                known_deferred
-                - set(self.deferred_reviewed)
-                - set(self.unreviewed)
-            )
-            self.unreviewed_autofilled = unaccounted
-            if unaccounted:
-                self.unreviewed.extend(unaccounted)
 
         json_path = os.path.join(output_dir, f"{self.reviewer}-review.json")
         serialized = self.to_json(output_dir=output_dir)
@@ -1578,9 +1582,9 @@ class ReviewOutputBuilder:
                 unreviewed_line += (
                     f" (+{len(self.unreviewed_autofilled)} auto-filled)"
                 )
-            if known_deferred is not None:
+            if coverage is not None:
                 unreviewed_line += (
-                    f" / {len(known_deferred)} deferred | "
+                    f" / {len(coverage.deferred_reviewed) + len(coverage.unreviewed)} deferred | "
                     f"CLAIMED REVIEWED: {len(self.deferred_reviewed)}"
                 )
             print(unreviewed_line)
@@ -1621,11 +1625,10 @@ class ReviewOutputBuilder:
                 # incoherent; TARGET and NEXT UNREAD keep following their
                 # own independently valid fields.
                 meta = self._read_deferred_sidecar(output_dir, self.reviewer)
-                if coverage is not None:
-                    print(
-                        f"PROGRESS: covered {coverage.files_reviewed} of {coverage.in_scope_count} "
-                        "in-scope files."
-                    )
+                print(
+                    f"PROGRESS: covered {coverage.files_reviewed} of {coverage.in_scope_count} "
+                    "in-scope files."
+                )
                 deferred_files_ordered = meta.get("deferred_files")
                 if isinstance(deferred_files_ordered, list):
                     # Only a CLAIM (add_deferred_reviewed) removes a file
