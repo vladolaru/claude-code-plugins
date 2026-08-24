@@ -17,10 +17,8 @@ try:
     from .dependency_refresh import (
         EXIT_STATUSES,
         REPORT_STATUSES,
-        _MAX_COMMAND_CHARS,
         _MAX_DIRTY_FILES,
         _MAX_DIRTY_FILE_CHARS,
-        _MAX_DIRECTORY_CHARS,
         _MAX_REPORTED_COMMANDS,
         load_dependency_refresh_report,
     )
@@ -43,10 +41,8 @@ except ImportError:
     from review.dependency_refresh import (
         EXIT_STATUSES,
         REPORT_STATUSES,
-        _MAX_COMMAND_CHARS,
         _MAX_DIRTY_FILES,
         _MAX_DIRTY_FILE_CHARS,
-        _MAX_DIRECTORY_CHARS,
         _MAX_REPORTED_COMMANDS,
         load_dependency_refresh_report,
     )
@@ -65,8 +61,6 @@ except ImportError:
 _DEPENDENCY_REFRESH_STATUSES = frozenset(REPORT_STATUSES)
 _DEPENDENCY_REFRESH_EXIT_STATUSES = frozenset(EXIT_STATUSES)
 _MAX_DEPENDENCY_REFRESH_COMMANDS = _MAX_REPORTED_COMMANDS
-_MAX_DEPENDENCY_REFRESH_DIRECTORY_CHARS = _MAX_DIRECTORY_CHARS
-_MAX_DEPENDENCY_REFRESH_COMMAND_CHARS = _MAX_COMMAND_CHARS
 # Shared by both derived-Markdown families (reviewer_markdown, step 8's
 # per-reviewer render; findings_markdown, steps 9/11's review-findings.md
 # render) — the same vocabulary `briefings.py`'s

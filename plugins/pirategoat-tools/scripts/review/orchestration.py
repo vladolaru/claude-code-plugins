@@ -660,8 +660,8 @@ def _resolve_current_repo_root():
 def _git_status_lines(repo_root):
     """Porcelain status of `repo_root`, or None when git could not answer.
 
-    Pinned to an explicit root with `git -C`, the same way
-    dependency_refresh.py's `_tracked_worktree_status()` pins its own probe,
+    Pinned to an explicit root with `git -C`, the same way dependency
+    refresh's `observe_tracked_worktree()` pins its own probe,
     so the measurement never silently describes whatever repo the process
     happened to be standing in.
     """
