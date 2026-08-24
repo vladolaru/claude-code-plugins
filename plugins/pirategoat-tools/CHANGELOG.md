@@ -59,7 +59,7 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 - **The reconciled ledger carries what held** — the reconciliator records clearances surviving its universal method judgment, and step 9 sources "what was verified and held" from the ledger, never memory.
 - **The transcript analyzer stopped inventing missing evidence** — results it mines nothing from (WebSearch, WebFetch, MCP) resolve on pairing, unresolved is reserved for genuine record damage, and usage availability no longer consults tool-call warnings, so `subagents: complete` is earnable again.
 - **Cohort spend math buckets on the dispatched model spelling** (`claude-opus-5[1m]`) everywhere, and the availability gate certifies the field the grouping actually reads.
-- **`agent_complete` events carry `resave`**, with the last-wins-per-outstanding-execution-slot contract documented where it is resolved; nothing counts completion events as agents.
+- **Reviewer saves are provisional until explicit validation and finalization**, so agents can act on continuation feedback without racing reconciliation against a mutable snapshot.
 - **a11y scope asks for UI evidence, not extensions** — bare `.ts`/`.js` need evidence in their diff or a bounded repo-rooted disk read; `.tsx`/`.jsx`, components, styles, and templates stay unconditional; triage is untouched.
 - **`agents_reporting` counts agents, not sidecar files.**
 - **Dependency refresh hardened** — refuses dirty or unverifiable worktrees, decodes quoted paths, survives malformed self-reports, and `--refresh-host-context` preserves the rest of `review-context.json`.

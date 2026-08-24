@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from review.atomic_io import atomic_write_json, atomic_write_text
+from review.atomic_io import atomic_write_json, atomic_write_text, output_dir_lock
 
 TESTS_DIR = Path(__file__).resolve().parent.parent  # review/ -> tests/
 PLUGIN_ROOT = TESTS_DIR.parent
@@ -80,6 +80,16 @@ class TestSameDirectoryTempFile:
         atomic_write_json(str(target), {"ok": True})
 
         assert seen_dirs == [str(tmp_path)]
+
+
+class TestOutputDirectoryLock:
+    def test_lock_uses_directory_descriptor_without_creating_artifact(self, tmp_path):
+        before = list(tmp_path.iterdir())
+
+        with output_dir_lock(str(tmp_path)):
+            assert list(tmp_path.iterdir()) == before
+
+        assert list(tmp_path.iterdir()) == before
 
 
 def _calls_os_replace(source_path):

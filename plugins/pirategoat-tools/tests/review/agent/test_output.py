@@ -29,6 +29,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 from review.agent.output import (
     ReviewOutputBuilder,
+    finalize_candidate,
     materialize_markdown,
     render_markdown,
 )
@@ -44,6 +45,14 @@ def _write_required_sidecar(output_dir, reviewer):
             "in_scope_count": 0,
         })
     )
+
+
+def _save_and_finalize(builder, output_dir):
+    saved = builder.save(str(output_dir))
+    finalize_candidate(
+        str(output_dir), builder.reviewer, saved["candidate_digest"]
+    )
+    return saved
 
 
 # =============================================================================
@@ -546,7 +555,7 @@ class TestToDict:
         b.set_files_reviewed(1)
         _write_required_sidecar(tmp_path, "pr")
         b.save(str(tmp_path))
-        saved = json.loads((tmp_path / "pr-review.json").read_text())
+        saved = json.loads((tmp_path / "pr-review.candidate.json").read_text())
         assert saved["plugin_version"] == "1.114.0"
 
     def test_schema_is_the_documented_shape_number(self):
@@ -709,7 +718,7 @@ class TestMaterializeMarkdown:
                 b = ReviewOutputBuilder(pr_id="1", reviewer=reviewer)
                 b.add_issue("high", "T", "f.py", "d", "r", line=1)
                 _write_required_sidecar(d, reviewer)
-                b.save(d)
+                _save_and_finalize(b, d)
             written = materialize_markdown(d)
             assert sorted(os.path.basename(p) for p in written) == [
                 "performance-review.md", "security-review.md",
@@ -723,7 +732,7 @@ class TestMaterializeMarkdown:
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
             _write_required_sidecar(d, "security")
-            b.save(d)
+            _save_and_finalize(b, d)
             first = materialize_markdown(d)
             second = materialize_markdown(d)
             assert first == second
@@ -733,7 +742,9 @@ class TestMaterializeMarkdown:
         with tempfile.TemporaryDirectory() as d:
             Path(d, "broken-review.json").write_text("{ not json")
             _write_required_sidecar(d, "security")
-            ReviewOutputBuilder(pr_id="1", reviewer="security").save(d)
+            _save_and_finalize(
+                ReviewOutputBuilder(pr_id="1", reviewer="security"), d
+            )
             written = materialize_markdown(d)
             assert [os.path.basename(p) for p in written] == ["security-review.md"]
             assert not Path(d, "broken-review.md").exists()
@@ -753,7 +764,7 @@ class TestMaterializeMarkdown:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
             b.add_issue("high", "CLI Title", "f.py", "d", "r", line=1)
             _write_required_sidecar(d, "security")
-            b.save(d)
+            _save_and_finalize(b, d)
             result = subprocess.run(
                 [sys.executable, str(output_py), "render",
                  os.path.join(d, "security-review.json")],
@@ -769,7 +780,7 @@ class TestMaterializeMarkdown:
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
             _write_required_sidecar(d, "security")
-            b.save(d)
+            _save_and_finalize(b, d)
             md_path = Path(d, "security-review.md")
             assert not md_path.exists()  # save() publishes the JSON only
             result = subprocess.run(
@@ -787,18 +798,18 @@ class TestMaterializeMarkdown:
 
 
 class TestSave:
-    """save publishes the review JSON — the single canonical artifact."""
+    """save publishes a replaceable candidate and continuation feedback."""
 
-    def test_creates_only_the_canonical_json(self):
+    def test_creates_only_the_candidate_json(self):
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
             b.add_issue("high", "Title", "f.py", "desc", "rec", line=1)
             _write_required_sidecar(d, "security")
             b.save(d)
-            assert os.path.isfile(os.path.join(d, "security-review.json"))
-            # Markdown is derived from the JSON on demand (render/
-            # materialize) — save() writing it would resurrect the
-            # artifact-pair consistency problem this contract removed.
+            assert os.path.isfile(
+                os.path.join(d, "security-review.candidate.json")
+            )
+            assert not os.path.exists(os.path.join(d, "security-review.json"))
             assert not os.path.exists(os.path.join(d, "security-review.md"))
 
     def test_json_content_matches_to_dict(self, monkeypatch):
@@ -813,7 +824,7 @@ class TestSave:
             b.add_issue("high", "Title", "f.py", "desc", "rec", line=1)
             _write_required_sidecar(d, "security")
             b.save(d)
-            with open(os.path.join(d, "security-review.json")) as f:
+            with open(os.path.join(d, "security-review.candidate.json")) as f:
                 saved = json.load(f)
             live = b.to_dict()
 
@@ -831,7 +842,10 @@ class TestSave:
             b = ReviewOutputBuilder(pr_id="1", reviewer="arch")
             _write_required_sidecar(d, "arch")
             result = b.save(d)
-            assert result == {"json": os.path.join(d, "arch-review.json")}
+            assert result["candidate"] == os.path.join(
+                d, "arch-review.candidate.json"
+            )
+            assert re.fullmatch(r"[0-9a-f]{64}", result["candidate_digest"])
 
     def test_prints_recorded_counts_to_stdout(self, capsys):
         """save() echoes the SAVED state so agents can reconcile their
@@ -860,188 +874,22 @@ class TestSave:
             assert "RECORDED ISSUES: 0" in out
             assert "VERDICT: approve" in out
 
-    def test_completion_telemetry_precedes_the_readiness_artifact(
-        self, monkeypatch
-    ):
-        """The review JSON is the readiness signal agents_status.py polls;
-        the pipeline may finalize the telemetry manifest as soon as it
-        appears. agent_complete must therefore be durable BEFORE the JSON
-        exists, or a racing finalize records the agent permanently
-        incomplete."""
-        import review.agent.output as output_mod
-
-        seen = {}
-
-        def _record(output_dir, reviewer, verdict, issue_count, severities,
-                    resave):
-            seen["json_visible_at_telemetry"] = os.path.isfile(
-                os.path.join(output_dir, "security-review.json")
-            )
-            seen["reviewer"] = reviewer
-
-        monkeypatch.setattr(
-            output_mod, "_log_agent_complete_telemetry", _record
-        )
-        with tempfile.TemporaryDirectory() as d:
-            b = ReviewOutputBuilder(pr_id="1", reviewer="security")
-            _write_required_sidecar(d, "security")
-            b.save(d)
-            assert seen["json_visible_at_telemetry"] is False
-            assert seen["reviewer"] == "security-reviewer"
-            assert os.path.isfile(os.path.join(d, "security-review.json"))
-            assert not list(Path(d).glob("*.tmp"))
-
-    @staticmethod
-    def _race_a_retry_at_lock_acquisition(monkeypatch, output_mod, d, retry_save):
-        """Run retry_save() inside the outer save's window between staging
-        and publication — triggered at the outer save's os.open of the
-        output dir (its lock acquisition), i.e. just BEFORE it takes the
-        publication lock. Injecting from inside the lock (the old telemetry
-        hook point) would deadlock now that completion telemetry runs under
-        the lock: flock treats a second fd as an independent owner. Returns
-        the mutable raced list; callers MUST assert it is non-empty or lock
-        primitive drift turns the race test into a no-op."""
-        if output_mod.fcntl is None:
-            pytest.skip("publication lock requires fcntl (POSIX)")
-        real_open = os.open
-        raced = []
-
-        def _open_hook(path, *args, **kwargs):
-            if not raced and str(path) == str(d):
-                raced.append(True)
-                retry_save()
-            return real_open(path, *args, **kwargs)
-
-        monkeypatch.setattr(output_mod.os, "open", _open_hook)
-        return raced
-
-    def test_overlapping_saves_of_the_same_reviewer_do_not_collide(
-        self, monkeypatch
-    ):
-        """The lifecycle supports retrying a reviewer before its prior
-        invocation finishes, so two saves for the same reviewer can be
-        in flight at once. A shared staging name lets the faster save's
-        os.replace() consume the slower save's staged JSON, crashing it
-        with FileNotFoundError."""
-        import review.agent.output as output_mod
-
-        with tempfile.TemporaryDirectory() as d:
-            _write_required_sidecar(d, "security")
-            raced = self._race_a_retry_at_lock_acquisition(
-                monkeypatch, output_mod, d,
-                lambda: ReviewOutputBuilder(pr_id="1", reviewer="security").save(d),
-            )
-            ReviewOutputBuilder(pr_id="1", reviewer="security").save(d)
-            assert raced, (
-                "Race hook never fired; lock acquisition no longer goes through "
-                "os.open(output_dir); update injection point."
-            )
-            assert os.path.isfile(os.path.join(d, "security-review.json"))
-            assert not list(Path(d).glob("*.tmp"))
-
-    def test_latest_completion_telemetry_matches_the_published_json(
-        self, monkeypatch
-    ):
-        """Scheduling reads the manifest's latest agent_complete as the
-        agent's final execution. When saves overlap, the completion logged
-        last and the JSON published last must belong to the SAME execution
-        — telemetry logged outside the publication lock let a slower save
-        publish its artifacts after a faster retry logged its completion."""
-        import review.agent.output as output_mod
-
-        def _builder_with_issues(count):
-            b = ReviewOutputBuilder(pr_id="1", reviewer="security")
-            for index in range(count):
-                b.add_issue(
-                    severity="low",
-                    category="test",
-                    title=f"Finding {index}",
-                    description="d",
-                    file="src/f.py",
-                    line=index + 1,
-                    recommendation="r",
-                )
-            return b
-
-        completions = []
-
-        def _record(output_dir, reviewer, verdict, issue_count, severities,
-                    resave):
-            completions.append(issue_count)
-
-        monkeypatch.setattr(
-            output_mod, "_log_agent_complete_telemetry", _record
-        )
-        with tempfile.TemporaryDirectory() as d:
-            _write_required_sidecar(d, "security")
-            raced = self._race_a_retry_at_lock_acquisition(
-                monkeypatch, output_mod, d,
-                lambda: _builder_with_issues(2).save(d),
-            )
-            _builder_with_issues(1).save(d)
-            assert raced, (
-                "Race hook never fired; lock acquisition no longer goes through "
-                "os.open(output_dir); update injection point."
-            )
-
-            with open(os.path.join(d, "security-review.json")) as f:
-                published_count = len(json.load(f)["issues"])
-            assert completions[-1] == published_count
-
-    def test_resave_flag_distinguishes_correction_from_first_save(
-        self, tmp_path
-    ):
-        """Through the REAL save path and the REAL telemetry backend: the
-        save echo invites a correction re-save, so multiple successful
-        saves are sanctioned and each logs its own completion. The raw
-        event stream must say which is which, or an event tally reads as
-        an agent tally (a 19-reviewer field run logged 21 completions)."""
-        from review.telemetry import ReviewTelemetry
-
-        output_dir = tmp_path / "pr-review-42"
-        output_dir.mkdir()
-        telemetry = ReviewTelemetry(
-            str(output_dir), log_dir=str(tmp_path / "logs")
-        )
-        log_path = telemetry.start(run_id="run-1")
-
-        _write_required_sidecar(output_dir, "security")
-
-        ReviewOutputBuilder(pr_id="1", reviewer="security").save(
-            str(output_dir)
-        )
-        ReviewOutputBuilder(pr_id="1", reviewer="security").save(
-            str(output_dir)
-        )
-
-        completions = [
-            json.loads(line)
-            for line in Path(log_path).read_text().splitlines()
-            if line.strip() and json.loads(line)["event"] == "agent_complete"
-        ]
-        assert [event["agent"] for event in completions] == [
-            "security-reviewer",
-            "security-reviewer",
-        ]
-        assert [event["resave"] for event in completions] == [False, True]
-
     def test_failed_save_removes_its_staged_file(self, monkeypatch):
-        """Unique staging names never self-overwrite the way the old fixed
-        name did, so a save that dies before publishing must clean up its
-        own orphan."""
+        """A failed candidate replace removes the nonce staging file."""
         import review.agent.output as output_mod
 
         def _boom(*args):
-            raise RuntimeError("telemetry backend exploded")
+            raise OSError("candidate replace failed")
 
-        monkeypatch.setattr(
-            output_mod, "_log_agent_complete_telemetry", _boom
-        )
+        monkeypatch.setattr(output_mod.os, "replace", _boom)
         with tempfile.TemporaryDirectory() as d:
             _write_required_sidecar(d, "security")
-            with pytest.raises(RuntimeError):
+            with pytest.raises(OSError):
                 ReviewOutputBuilder(pr_id="1", reviewer="security").save(d)
             assert not os.path.exists(os.path.join(d, "security-review.json"))
+            assert not os.path.exists(
+                os.path.join(d, "security-review.candidate.json")
+            )
             assert not list(Path(d).glob("*.tmp"))
 
 
@@ -1403,7 +1251,7 @@ class TestAddUnreviewed:
         b.add_unreviewed("src/a.py")
         b.save(str(tmp_path))  # src/auto.py gets auto-declared
         md = render_markdown(
-            json.loads((tmp_path / "sec-review.json").read_text())
+            json.loads((tmp_path / "sec-review.candidate.json").read_text())
         )
         assert "**Not reviewed (budget):** `src/a.py`\n" in md
         assert (
@@ -1601,7 +1449,9 @@ class TestAddDeferredReviewed:
             b.add_deferred_reviewed("src/a.py", "src/bogus.py")
         b.add_deferred_reviewed("src/c.py")
         b.save(str(tmp_path))
-        with open(tmp_path / "sec-review.json", encoding="utf-8") as f:
+        with open(
+            tmp_path / "sec-review.candidate.json", encoding="utf-8"
+        ) as f:
             data = json.load(f)
         assert data["deferred_reviewed"] == ["src/c.py"]
         assert data["meta"]["unreviewed_autofilled"] == ["src/a.py"]
@@ -2130,7 +1980,9 @@ class TestSaveTimeDeferredValidation:
         builder = ReviewOutputBuilder("123", "go-tests")
         builder.add_unreviewed("pkg/real_test.go")
         builder.save(str(tmp_path))
-        data = json.loads((tmp_path / "go-tests-review.json").read_text())
+        data = json.loads(
+            (tmp_path / "go-tests-review.candidate.json").read_text()
+        )
         assert data["unreviewed"] == ["pkg/real_test.go"]
 
     def test_save_rejects_a_missing_authoritative_sidecar(self, tmp_path, monkeypatch):
@@ -2156,7 +2008,7 @@ class TestSaveTimeDeferredValidation:
         builder = ReviewOutputBuilder("123", "code")
         builder.add_deferred_reviewed("a.go", "./b.go")  # normalizes ./b.go
         builder.save(str(tmp_path))
-        data = json.loads((tmp_path / "code-review.json").read_text())
+        data = json.loads((tmp_path / "code-review.candidate.json").read_text())
         assert data["deferred_reviewed"] == ["a.go", "b.go"]
 
     def test_out_of_set_claim_rejected_at_save(self, tmp_path, monkeypatch):
@@ -2219,7 +2071,9 @@ class TestSaveTimeDeferredValidation:
         builder.add_deferred_reviewed("a.md")
         builder.add_unreviewed("b.md")
         builder.save(str(tmp_path))
-        data = json.loads((tmp_path / "docs-drift-review.json").read_text())
+        data = json.loads(
+            (tmp_path / "docs-drift-review.candidate.json").read_text()
+        )
         assert sorted(data["unreviewed"]) == ["b.md", "c.md"]
         assert data["meta"]["unreviewed_autofilled"] == ["c.md"]
         out = capsys.readouterr().out
@@ -2236,7 +2090,7 @@ class TestSaveTimeDeferredValidation:
         builder = ReviewOutputBuilder("123", "code")
         builder.add_deferred_reviewed("a.go")
         builder.save(str(tmp_path))
-        data = json.loads((tmp_path / "code-review.json").read_text())
+        data = json.loads((tmp_path / "code-review.candidate.json").read_text())
         assert data["unreviewed"] is None
         assert data["meta"]["unreviewed_autofilled"] is None
         assert "WARNING" not in capsys.readouterr().out
@@ -2246,7 +2100,7 @@ class TestSaveTimeDeferredValidation:
 
         This holds under both sticky and derived semantics, so it is a
         no-duplication guard only — the redesign to derived state is pinned
-        by test_claim_after_warning_clears_autofill_on_resave.
+        by test_claim_after_warning_clears_autofill_on_second_save.
         """
         monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
         monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
@@ -2255,11 +2109,11 @@ class TestSaveTimeDeferredValidation:
         builder.add_deferred_reviewed("a.go")
         builder.save(str(tmp_path))
         builder.save(str(tmp_path))
-        data = json.loads((tmp_path / "code-review.json").read_text())
+        data = json.loads((tmp_path / "code-review.candidate.json").read_text())
         assert data["unreviewed"] == ["b.go"]
         assert data["meta"]["unreviewed_autofilled"] == ["b.go"]
 
-    def test_claim_after_warning_clears_autofill_on_resave(
+    def test_claim_after_warning_clears_autofill_on_second_save(
         self, tmp_path, monkeypatch, capsys
     ):
         """The remediation the WARNING teaches must actually work — and
@@ -2273,7 +2127,7 @@ class TestSaveTimeDeferredValidation:
         builder.save(str(tmp_path))          # b.go auto-filled, WARNING
         builder.add_deferred_reviewed("b.go")
         builder.save(str(tmp_path))          # the WARNING's own remediation
-        data = json.loads((tmp_path / "code-review.json").read_text())
+        data = json.loads((tmp_path / "code-review.candidate.json").read_text())
         assert data["unreviewed"] is None
         assert data["meta"]["unreviewed_autofilled"] is None
         assert sorted(data["deferred_reviewed"]) == ["a.go", "b.go"]
@@ -2295,7 +2149,7 @@ class TestSaveTimeDeferredValidation:
         builder.save(str(tmp_path))          # b.go auto-filled, WARNING
         builder.add_unreviewed("b.go")       # the agent owns the gap
         builder.save(str(tmp_path))
-        data = json.loads((tmp_path / "code-review.json").read_text())
+        data = json.loads((tmp_path / "code-review.candidate.json").read_text())
         assert data["unreviewed"] == ["b.go"]
         assert data["meta"]["unreviewed_autofilled"] is None
         out = capsys.readouterr().out
@@ -2368,7 +2222,7 @@ class TestSaveTimeDeferredValidation:
         builder.save(str(tmp_path))          # b.go auto-filled
         self._write_sidecar(tmp_path, "code", ["a.go", "c.go"])
         builder.save(str(tmp_path))          # must NOT blame the agent for b.go
-        data = json.loads((tmp_path / "code-review.json").read_text())
+        data = json.loads((tmp_path / "code-review.candidate.json").read_text())
         assert data["unreviewed"] == ["c.go"]
         assert data["meta"]["unreviewed_autofilled"] == ["c.go"]
 
@@ -2526,7 +2380,7 @@ class TestBudgetTargetEcho:
 class TestSaveEchoProgressAndNextUnread:
     """The TARGET echo names the continuation: a progress fraction plus the
     first unread NOT DIFFED files, largest first — run12 showed that
-    exhortation without a concrete next action moves resaves but not
+    exhortation without a concrete next action moves repeated saves but not
     utilization. Both lines ride the same gate as TARGET (unreviewed files
     declared and a real budget) and read from the same schema-2 sidecar.
     """
@@ -2568,7 +2422,7 @@ class TestSaveEchoProgressAndNextUnread:
         assert builder.to_dict()["meta"]["files_reviewed"] is None
 
         builder.save(str(tmp_path))
-        saved = json.loads((tmp_path / "code-review.json").read_text())
+        saved = json.loads((tmp_path / "code-review.candidate.json").read_text())
         assert saved["deferred_reviewed"] == ["b.go"]
         assert saved["unreviewed"] == ["a.go"]
         assert saved["meta"]["files_reviewed"] == 3
@@ -2793,11 +2647,11 @@ class TestMetaIsNeverFakeZero:
         _write_required_sidecar(tmp_path, "security")
         silent.save(str(tmp_path))
         silent_json = json.loads(
-            (tmp_path / "security-review.json").read_text()
+            (tmp_path / "security-review.candidate.json").read_text()
         )
         stated.save(str(tmp_path))
         stated_json = json.loads(
-            (tmp_path / "security-review.json").read_text()
+            (tmp_path / "security-review.candidate.json").read_text()
         )
         assert silent_json["meta"]["files_reviewed"] == 0
         assert stated_json["meta"]["files_reviewed"] == 0
@@ -3209,7 +3063,9 @@ class TestMaterializeFindingsMarkdown:
     def test_default_suffix_ignores_the_findings_artifact(self):
         with tempfile.TemporaryDirectory() as d:
             _write_required_sidecar(d, "security")
-            ReviewOutputBuilder(pr_id="1", reviewer="security").save(d)
+            _save_and_finalize(
+                ReviewOutputBuilder(pr_id="1", reviewer="security"), d
+            )
             Path(d, "review-findings.json").write_text(
                 json.dumps(
                     ReviewOutputBuilder(
@@ -3254,7 +3110,9 @@ class TestMaterializeFindingsMarkdown:
         )
         with tempfile.TemporaryDirectory() as d:
             _write_required_sidecar(d, "security")
-            ReviewOutputBuilder(pr_id="1", reviewer="security").save(d)
+            _save_and_finalize(
+                ReviewOutputBuilder(pr_id="1", reviewer="security"), d
+            )
             Path(d, "review-findings.json").write_text(
                 json.dumps(
                     ReviewOutputBuilder(

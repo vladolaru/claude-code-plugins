@@ -569,20 +569,17 @@ def _lifecycle_summary(manifest: dict[str, Any]) -> dict[str, Any] | None:
     if not all(isinstance(items, list) for items in (started, completed, incomplete)):
         return None
     # `started`/`completed` are the manifest's PROJECTED lifecycle arrays,
-    # never the raw JSONL. `project_agent_lifecycle` has already applied
-    # last-wins per outstanding EXECUTION SLOT: a reviewer that started
-    # once and published twice logged two `agent_complete` events and
-    # appears here once, while a reviewer that started twice keeps both
-    # completions, because overlapping executions are supported. So every
-    # count below is an EXECUTION count — equal to the agent count only
-    # when every agent ran once, and under retries it exceeds it.
+    # never the raw JSONL. Current completions mean immutable reviewer
+    # finalizations. The shared projection retains last-wins support for
+    # pre-finalization history, where one execution could log multiple
+    # `agent_complete` save revisions; retry executions still keep one row
+    # per start. Every count below is therefore an EXECUTION count.
     #
     # The `*_events` names are historical and now inaccurate in both
     # directions: as event counts they understate (re-saves are already
     # collapsed), as agent counts they overstate (retries add rows).
-    # Reading them as executions is the only correct reading. Do not
-    # "fix" them by counting raw log lines — that is what would have
-    # reported a 19-reviewer field run as 21 completions.
+    # Reading them as executions is the only correct reading. Do not count
+    # raw historical log lines, where save revisions inflated completions.
     starts_by_agent = Counter(event["agent"] for event in started)
     incomplete_by_agent = Counter(incomplete)
     extra_starts_by_agent = {

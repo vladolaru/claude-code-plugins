@@ -17,7 +17,8 @@ Usage:
         recommendation="..."
     )
     json_output = builder.to_json()
-    builder.save(output_dir)  # persists the canonical JSON artifact
+    saved = builder.save(output_dir)  # publishes a replaceable candidate
+    finalize_candidate(output_dir, "security", saved["candidate_digest"])
 
     Markdown is derived from the canonical JSON: render one dict with
     render_markdown(data), or from the shell via the CLI —
@@ -26,16 +27,12 @@ Usage:
     <reviewer>-review.md beside every *-review.json.
 """
 
-import contextlib
+import hashlib
 import json
 import os
+import shlex
 import sys
 import uuid
-
-try:
-    import fcntl
-except ImportError:  # non-POSIX host — publish without the completion-publication lock
-    fcntl = None
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 
@@ -48,6 +45,23 @@ except ImportError:
     if _SCRIPTS_DIR not in sys.path:
         sys.path.insert(0, _SCRIPTS_DIR)
     from review.agent.coverage import CoverageError, derive_deferred_coverage, normalize_deferred_path
+
+try:
+    from ..atomic_io import output_dir_lock
+    from ..reviewer_lifecycle import (
+        require_not_finalized,
+        require_review_intake_open,
+        reviewer_paths,
+    )
+    from ..reviewer_names import derive_reviewer_name
+except ImportError:
+    from review.atomic_io import output_dir_lock
+    from review.reviewer_lifecycle import (
+        require_not_finalized,
+        require_review_intake_open,
+        reviewer_paths,
+    )
+    from review.reviewer_names import derive_reviewer_name
 
 try:
     from ..verdict_rules import (
@@ -199,36 +213,50 @@ def _actor_start_time(
     return None
 
 
-def _log_agent_complete_telemetry(output_dir, reviewer, verdict, issue_count,
-                                  severities, resave):
-    """Best-effort telemetry logging on agent completion. Never raises.
+def _telemetry_for_output(output_dir):
+    """Load telemetry lazily so output.py remains a standalone CLI."""
+    import importlib.util
 
-    `resave` is this save's own observation of whether a review JSON for
-    this reviewer was already published when it reached publication — see
-    save() for why it is taken under the publication lock, and for why
-    that is narrower than "this is a correction". It is a required
-    argument, not a defaulted one: the only caller is the save path, which
-    always knows the answer, and a default would let a future caller
-    publish an unobserved `false`.
-    """
-    try:
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            "review_telemetry",
-            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "telemetry.py"),
-        )
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        t = mod.ReviewTelemetry(output_dir)
-        t.log_agent_complete(
-            agent_name=reviewer,
-            verdict=verdict,
-            issue_count=issue_count,
-            severities=severities,
-            resave=resave,
-        )
-    except Exception:
-        pass
+    spec = importlib.util.spec_from_file_location(
+        "review_telemetry",
+        os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "telemetry.py",
+        ),
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.ReviewTelemetry(output_dir)
+
+
+def _log_agent_save_telemetry(output_dir, agent_name, artifact_digest):
+    telemetry = _telemetry_for_output(output_dir)
+    telemetry.log_agent_save(
+        agent_name=agent_name, artifact_digest=artifact_digest
+    )
+
+
+def _completion_was_logged(output_dir, agent_name, artifact_digest):
+    telemetry = _telemetry_for_output(output_dir)
+    return any(
+        event.get("event") == "agent_complete"
+        and event.get("agent") == agent_name
+        and event.get("artifact_digest") == artifact_digest
+        for event in telemetry._read_events()
+    )
+
+
+def _log_agent_complete_telemetry(
+    output_dir, agent_name, verdict, issue_count, severities, artifact_digest
+):
+    telemetry = _telemetry_for_output(output_dir)
+    telemetry.log_agent_complete(
+        agent_name=agent_name,
+        verdict=verdict,
+        issue_count=issue_count,
+        severities=severities,
+        artifact_digest=artifact_digest,
+    )
 
 
 def render_markdown(data: Dict) -> str:
@@ -1484,14 +1512,12 @@ class ReviewOutputBuilder:
         return render_markdown(self.to_dict())
 
     def save(self, output_dir: str):
-        """Publish the review JSON — the single canonical artifact.
+        """Publish a replaceable review candidate for explicit finalization.
 
-        Markdown is derived from this JSON on demand (render_markdown /
-        materialize_markdown; the pipeline materializes it for humans at
-        the step-8 readiness gate), so there is no artifact pair to keep
-        consistent: an
-        interrupted re-save simply leaves the previous complete JSON
-        visible, the normal semantics of an atomic single-file write.
+        The candidate remains mutable so a reviewer can act on continuation
+        feedback and save a stronger snapshot. Only ``finalize_candidate``
+        promotes validated bytes to the immutable canonical JSON consumed by
+        readiness and reconciliation.
         """
         os.makedirs(output_dir, exist_ok=True)
 
@@ -1529,24 +1555,20 @@ class ReviewOutputBuilder:
         ]
         self.files_reviewed = coverage.files_reviewed
 
-        json_path = os.path.join(output_dir, f"{self.reviewer}-review.json")
+        paths = reviewer_paths(output_dir, self.reviewer)
         serialized = self.to_json(output_dir=output_dir)
         output = json.loads(serialized)
+        serialized_bytes = serialized.encode("utf-8")
+        candidate_digest = hashlib.sha256(serialized_bytes).hexdigest()
 
-        # The review JSON is the readiness signal agents_status.py polls,
-        # and the pipeline may finalize the telemetry manifest the moment
-        # every agent looks finished. Completion must therefore be durable
-        # BEFORE the JSON becomes visible — otherwise a finalize racing
-        # this save records the agent permanently incomplete.
-        # The staging name carries a nonce because the lifecycle supports
-        # overlapping executions of the same reviewer (retry before the
-        # prior invocation finishes): a shared staging file would let one
-        # execution's os.replace() consume the other's staged artifact.
+        # The staging name carries a nonce because overlapping executions of
+        # one reviewer are supported. A shared staging name lets one save's
+        # replace consume another save's bytes.
         nonce = uuid.uuid4().hex
-        staged_json_path = f"{json_path}.{nonce}.tmp"
+        staged_json_path = f"{paths.candidate}.{nonce}.tmp"
         try:
-            with open(staged_json_path, 'w') as f:
-                f.write(serialized)
+            with open(staged_json_path, "wb") as f:
+                f.write(serialized_bytes)
 
             # Echo the RECORDED state so the calling agent reconciles its
             # self-reported COUNTS against what was actually saved, not its
@@ -1644,50 +1666,20 @@ class ReviewOutputBuilder:
                             print(f"  - {p}")
                         if rest:
                             print(f"  (+{len(rest)} more)")
-            # Completion telemetry and publication run under one exclusive
-            # lock so {log, publish} is a single atomic unit per execution:
-            # the manifest's latest agent_complete always describes the
-            # JSON published last, never a slower overlapping save's. The
-            # log still precedes the replace — completion must be durable
-            # before the readiness signal a racing finalize would trust
-            # becomes visible. The lock is the output directory's own fd
-            # (no lock file to leave behind; flock auto-releases if the
-            # process dies); where flock is unavailable (non-POSIX) the
-            # two steps still run back-to-back.
-            with contextlib.ExitStack() as stack:
-                if fcntl is not None:
-                    lock_fd = os.open(output_dir, os.O_RDONLY)
-                    stack.callback(os.close, lock_fd)
-                    fcntl.flock(lock_fd, fcntl.LOCK_EX)
-                # Was a review JSON for this reviewer already published
-                # when this save reached publication? That is the whole
-                # claim — not "this is a correction". The echo above
-                # invites a correction re-save, so multiple successful
-                # saves are sanctioned and each logs its own completion,
-                # and the raw event stream therefore holds one event per
-                # SAVE, not one per AGENT. This observation is what makes
-                # that legible without replaying the projection.
-                #
-                # It is NOT a correction count and NOT an agent-count
-                # discriminator: a second execution's first save reports
-                # True (a prior execution published), and a save following
-                # a failed os.replace() reports False (nothing is there).
-                #
-                # Observed HERE, under the same lock that serializes
-                # {log, publish}: outside it, an overlapping execution's
-                # os.replace() could land between the test and this save's
-                # own publication and make the answer describe a race
-                # rather than this save.
-                resave = os.path.exists(json_path)
-                _log_agent_complete_telemetry(
-                    output_dir,
-                    f"{self.reviewer}-reviewer",
-                    output['verdict'],
-                    output['summary']['total_issues'],
-                    output['summary']['by_severity'],
-                    resave,
-                )
-                os.replace(staged_json_path, json_path)
+            with output_dir_lock(output_dir):
+                require_review_intake_open(output_dir)
+                require_not_finalized(paths)
+                os.replace(staged_json_path, paths.candidate)
+                try:
+                    _log_agent_save_telemetry(
+                        output_dir, coverage.agent_name, candidate_digest
+                    )
+                except Exception as exc:
+                    print(
+                        "WARNING: candidate published, but agent_save "
+                        f"telemetry failed: {exc}",
+                        file=sys.stderr,
+                    )
         finally:
             # A unique staging name never self-overwrites, so a failed save
             # must remove its orphan (replace already consumed it on
@@ -1697,7 +1689,164 @@ class ReviewOutputBuilder:
             except FileNotFoundError:
                 pass
 
-        return {'json': json_path}
+        print(f"CANDIDATE DIGEST: {candidate_digest}")
+        builder_script = os.path.abspath(__file__)
+        print(
+            f"FINALIZE: python3 {shlex.quote(builder_script)} finalize "
+            f"--output-dir {shlex.quote(output_dir)} "
+            f"--reviewer {shlex.quote(self.reviewer)} "
+            f"--candidate-digest {candidate_digest}"
+        )
+        return {
+            "candidate": paths.candidate,
+            "candidate_digest": candidate_digest,
+        }
+
+
+def _read_json_object(path, label):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            value = json.load(handle)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"malformed {label}: {path}") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"malformed {label}: expected an object")
+    return value
+
+
+def _validate_candidate(output_dir, reviewer, paths, candidate_bytes):
+    """Validate one exact candidate snapshot and return telemetry facts."""
+    try:
+        candidate = json.loads(candidate_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as exc:
+        raise ValueError("malformed review candidate JSON") from exc
+    if not isinstance(candidate, dict):
+        raise ValueError("malformed review candidate: expected an object")
+    if candidate.get("schema") != REVIEW_OUTPUT_SCHEMA:
+        raise ValueError("review candidate schema does not match the live contract")
+    if candidate.get("reviewer") != reviewer:
+        raise ValueError("review candidate reviewer does not match finalization request")
+
+    issues = candidate.get("issues")
+    summary = candidate.get("summary")
+    if not isinstance(issues, list) or not isinstance(summary, dict):
+        raise ValueError("review candidate issues/summary are malformed")
+    try:
+        derived = derive_review_state(issues)
+    except ValueError as exc:
+        raise ValueError(f"review candidate issues are malformed: {exc}") from exc
+    expected_verdict = derived["verdict"]
+    if candidate.get("verdict") == "not_applicable":
+        if issues or not isinstance(candidate.get("skip_reason"), str):
+            raise ValueError("review candidate not_applicable verdict is malformed")
+        expected_verdict = "not_applicable"
+    if candidate.get("verdict") != expected_verdict:
+        raise ValueError("review candidate verdict does not match its issues")
+    expected_summary = {
+        "total_issues": len(issues),
+        "by_severity": derived["counts"],
+        **derived["advisory"],
+    }
+    if (
+        type(summary.get("total_issues")) is not int
+        or summary != expected_summary
+    ):
+        raise ValueError("review candidate summary does not match its issues")
+
+    sidecar = _read_json_object(paths.sidecar, "coverage sidecar")
+    claims = candidate.get("deferred_reviewed")
+    if not isinstance(claims, list):
+        raise ValueError("review candidate deferred_reviewed must be a list")
+    try:
+        coverage = derive_deferred_coverage(sidecar, claims)
+    except CoverageError as exc:
+        raise ValueError(f"review candidate coverage is malformed: {exc}") from exc
+    if derive_reviewer_name(coverage.agent_name) != reviewer:
+        raise ValueError("coverage sidecar agent_name does not match reviewer")
+    expected_unreviewed = list(coverage.unreviewed) or None
+    meta = candidate.get("meta")
+    autofilled = (
+        meta.get("unreviewed_autofilled") if isinstance(meta, dict) else None
+    )
+    if (
+        candidate.get("deferred_reviewed") != list(coverage.deferred_reviewed)
+        or candidate.get("unreviewed") != expected_unreviewed
+        or not isinstance(meta, dict)
+        or meta.get("files_reviewed") != coverage.files_reviewed
+        or (
+            autofilled is not None
+            and (
+                not isinstance(autofilled, list)
+                or not all(isinstance(path, str) for path in autofilled)
+                or len(autofilled) != len(set(autofilled))
+                or not set(autofilled) <= set(coverage.unreviewed)
+            )
+        )
+    ):
+        raise ValueError("review candidate derived coverage fields do not match sidecar")
+    return candidate, coverage.agent_name
+
+
+def finalize_candidate(output_dir: str, reviewer: str, candidate_digest: str):
+    """Validate and atomically promote exactly one observed candidate."""
+    if (
+        not isinstance(candidate_digest, str)
+        or len(candidate_digest) != 64
+        or any(ch not in "0123456789abcdef" for ch in candidate_digest)
+    ):
+        raise ValueError("candidate digest must be a lowercase SHA-256")
+    paths = reviewer_paths(output_dir, reviewer)
+    already_finalized = False
+    with output_dir_lock(output_dir):
+        require_review_intake_open(output_dir)
+        if os.path.exists(paths.canonical):
+            with open(paths.canonical, "rb") as canonical_handle:
+                canonical_bytes = canonical_handle.read()
+            canonical_digest = hashlib.sha256(canonical_bytes).hexdigest()
+            if canonical_digest != candidate_digest:
+                raise ValueError(
+                    "candidate digest conflicts with the finalized review"
+                )
+            candidate, agent_name = _validate_candidate(
+                output_dir, reviewer, paths, canonical_bytes
+            )
+            already_finalized = True
+            try:
+                os.unlink(paths.candidate)
+            except FileNotFoundError:
+                pass
+        else:
+            try:
+                with open(paths.candidate, "rb") as candidate_handle:
+                    candidate_bytes = candidate_handle.read()
+            except OSError as exc:
+                raise ValueError("review candidate is absent") from exc
+            actual_digest = hashlib.sha256(candidate_bytes).hexdigest()
+            if actual_digest != candidate_digest:
+                raise ValueError(
+                    "candidate digest no longer matches the published candidate"
+                )
+            candidate, agent_name = _validate_candidate(
+                output_dir, reviewer, paths, candidate_bytes
+            )
+            os.replace(paths.candidate, paths.canonical)
+
+        if not _completion_was_logged(
+            output_dir, agent_name, candidate_digest
+        ):
+            _log_agent_complete_telemetry(
+                output_dir,
+                agent_name,
+                candidate["verdict"],
+                candidate["summary"]["total_issues"],
+                candidate["summary"]["by_severity"],
+                candidate_digest,
+            )
+    return {
+        "json": paths.canonical,
+        "artifact_digest": candidate_digest,
+        "already_finalized": already_finalized,
+    }
 
 if __name__ == '__main__':
     import argparse
@@ -1725,12 +1874,32 @@ if __name__ == '__main__':
             "prints when that render failed."
         ),
     )
+    finalize_cmd = sub.add_parser(
+        "finalize", help="Validate and publish one candidate review"
+    )
+    finalize_cmd.add_argument("--output-dir", required=True)
+    finalize_cmd.add_argument("--reviewer", required=True)
+    finalize_cmd.add_argument("--candidate-digest", required=True)
     cli_args = parser.parse_args()
     if cli_args.command == "render":
         with open(cli_args.json_path, encoding="utf-8") as cli_handle:
             print(render_markdown(json.load(cli_handle)))
-    else:
+    elif cli_args.command == "materialize":
         for written_path in materialize_markdown(
             cli_args.output_dir, suffix=cli_args.suffix
         ):
             print(written_path)
+    else:
+        try:
+            finalized = finalize_candidate(
+                cli_args.output_dir,
+                cli_args.reviewer,
+                cli_args.candidate_digest,
+            )
+        except (OSError, ValueError) as exc:
+            print(f"REJECTED: {exc}", file=sys.stderr)
+            raise SystemExit(1)
+        if finalized["already_finalized"]:
+            print(f"ALREADY FINALIZED: {finalized['json']}")
+        else:
+            print(f"FINALIZED: {finalized['json']}")

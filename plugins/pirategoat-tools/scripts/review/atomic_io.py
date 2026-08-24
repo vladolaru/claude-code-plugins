@@ -25,16 +25,42 @@ reconciliator's first write via ``findings_save.py``, and the critic
 adjustments applier — so a bare write here would be a SECOND write path
 (see the one-write-path rule in the plugin's AGENTS.md).
 
-The one deliberate exception is agent/output.py's staged-nonce two-file
-write for ``<reviewer>-review.json``. That protocol coordinates BETWEEN
-processes — an agent's own write racing the step 8 readiness gate's read —
-not a single writer's crash safety against itself, so it is a different
-problem and intentionally stays on its own implementation.
+Reviewer candidate publication and finalization use staged nonce files and
+the shared ``output_dir_lock()`` below. Their state transitions coordinate
+between processes, while this module deliberately knows nothing about
+reviewer filenames or lifecycle states.
 """
 
+import contextlib
 import json
 import os
 import tempfile
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - exercised only on non-POSIX hosts
+    fcntl = None
+
+
+@contextlib.contextmanager
+def output_dir_lock(output_dir):
+    """Exclusively lock an output directory without creating an artifact.
+
+    The directory's own descriptor is the lock target, so there is no lock
+    file to leak into artifact discovery or cleanup. ``flock`` releases when
+    the descriptor closes, including after process death. Non-POSIX hosts
+    retain the context-manager boundary but cannot provide cross-process
+    exclusion.
+    """
+    if fcntl is None:
+        yield
+        return
+    lock_fd = os.open(output_dir, os.O_RDONLY)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(lock_fd)
 
 
 def _atomic_write(path, write_payload):

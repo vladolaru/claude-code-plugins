@@ -365,6 +365,22 @@ def _agent_complete(
     }
 
 
+def _agent_save(
+    agent: str = "code-reviewer",
+    *,
+    run_id: str = "run-1",
+    timestamp: str = "2026-07-19T10:00:15+00:00",
+) -> dict:
+    return {
+        "schema": contracts._SUPPORTED_MANIFEST_SCHEMA,
+        "run_id": run_id,
+        "event": "agent_save",
+        "timestamp": timestamp,
+        "agent": agent,
+        "artifact_digest": "a" * 64,
+    }
+
+
 def _planner_only_dispatch(count: int = 1) -> dict:
     return {
         "planner_baseline_available": True,
@@ -739,24 +755,77 @@ class TestLoadRuns:
         ):
             assert private_value not in serialized
 
-    def test_running_sidecar_overlays_latest_completion_revision(self, tmp_path):
-        telemetry_mod = _load_telemetry_module()
-        output_dir = tmp_path / "output"
-        output_dir.mkdir()
-        telemetry = telemetry_mod.ReviewTelemetry(
-            str(output_dir), log_dir=str(tmp_path)
+    def test_running_overlay_validates_and_ignores_candidate_save_events(
+        self, tmp_path
+    ):
+        manifest = _running_manifest("running-run")
+        _write_manifest(tmp_path / "review.manifest.json", manifest)
+        _write_jsonl(
+            tmp_path / "review.jsonl",
+            [
+                _pipeline_start("running-run"),
+                _agent_start("code-reviewer", run_id="running-run"),
+                _agent_save("code-reviewer", run_id="running-run"),
+                _agent_complete("code-reviewer", run_id="running-run"),
+            ],
         )
-        telemetry.start(run_id="revision-run")
-        telemetry.log_agent_start(agent_name="code-reviewer", domain="code")
-        telemetry.log_agent_complete(
-            agent_name="code-reviewer",
+
+        [run] = load_runs(tmp_path)
+
+        assert run["availability"]["lifecycle"] is True
+        assert [event["event"] for event in run["agents"]["completed"]] == [
+            "agent_complete"
+        ]
+
+    def test_malformed_candidate_save_invalidates_only_running_lifecycle(
+        self, tmp_path
+    ):
+        manifest = _running_manifest("running-run")
+        _write_manifest(tmp_path / "review.manifest.json", manifest)
+        malformed = _agent_save("code-reviewer", run_id="running-run")
+        malformed["artifact_digest"] = "not-a-digest"
+        _write_jsonl(
+            tmp_path / "review.jsonl",
+            [_pipeline_start("running-run"), malformed],
+        )
+
+        [run] = load_runs(tmp_path)
+
+        assert run["availability"]["lifecycle"] is False
+        assert "running_lifecycle_overlay_invalid" in run["warnings"]
+
+    def test_running_sidecar_reads_historical_resave_completions(self, tmp_path):
+        """Pre-finalization logs used repeated completion events for saves.
+
+        The current producer emits one completion only when a candidate is
+        finalized, but analysis must keep reading historical multi-completion
+        logs with their old ``resave`` marker and retain the latest revision.
+        """
+        manifest = _running_manifest("revision-run")
+        _write_manifest(tmp_path / "review.manifest.json", manifest)
+        first_completion = _agent_complete(
+            run_id="revision-run",
+            timestamp="2026-07-19T10:00:20+00:00",
+        )
+        first_completion.update(
             verdict="comment",
             issue_count=1,
             severities={"medium": 1},
+            resave=False,
         )
-        telemetry.log_step(step=6, phase="EXECUTION", title="Run Reviewers")
-        telemetry.log_agent_complete(
-            agent_name="code-reviewer", verdict="approve", issue_count=0
+        latest_completion = _agent_complete(
+            run_id="revision-run",
+            timestamp="2026-07-19T10:00:30+00:00",
+        )
+        latest_completion["resave"] = True
+        _write_jsonl(
+            tmp_path / "review.jsonl",
+            [
+                _pipeline_start("revision-run"),
+                _agent_start("code-reviewer", run_id="revision-run"),
+                first_completion,
+                latest_completion,
+            ],
         )
 
         [run] = load_runs(tmp_path)
@@ -766,11 +835,9 @@ class TestLoadRuns:
         assert measured["lifecycle"]["started_events"] == 1
         assert measured["lifecycle"]["completed_events"] == 1
         assert run["agents"]["incomplete"] == []
-        assert run["agents"]["completed"][0]["timestamp"] == [
-            event["timestamp"]
-            for event in _read_jsonl_for_test(Path(telemetry.log_path))
-            if event["event"] == "agent_complete"
-        ][-1]
+        assert run["agents"]["completed"][0]["timestamp"] == (
+            latest_completion["timestamp"]
+        )
         assert run["agents"]["completed"][0]["verdict"] == "unavailable"
 
     def test_running_overlay_preserves_validated_numeric_measurements(
@@ -797,6 +864,7 @@ class TestLoadRuns:
         )
         telemetry.log_agent_complete(
             agent_name="code-reviewer",
+            artifact_digest="a" * 64,
             verdict="comment",
             issue_count=2,
             severities={"high": 1, "medium": 1},

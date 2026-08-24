@@ -702,7 +702,8 @@ class TestRunManifest:
             agent_name="performance-reviewer", domain="performance"
         )
         telemetry.log_agent_complete(
-            agent_name="security-reviewer", verdict="approve"
+            agent_name="security-reviewer", artifact_digest=FINAL_DIGEST,
+            verdict="approve",
         )
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
@@ -722,7 +723,8 @@ class TestRunManifest:
         telemetry.log_agent_start(agent_name="code-reviewer", domain="code")
         telemetry.log_agent_start(agent_name="code-reviewer", domain="code")
         telemetry.log_agent_complete(
-            agent_name="code-reviewer", verdict="approve"
+            agent_name="code-reviewer", artifact_digest=FINAL_DIGEST,
+            verdict="approve",
         )
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
@@ -730,54 +732,17 @@ class TestRunManifest:
             "code-reviewer"
         ]
 
-    def test_repeated_completions_are_latest_save_revisions(self, telemetry, mod):
-        telemetry.start(run_id="run-1")
-        telemetry.log_agent_start(agent_name="code-reviewer", domain="code")
-        telemetry.log_agent_complete(
-            agent_name="code-reviewer",
-            verdict="comment",
-            issue_count=1,
-            severities={"medium": 1},
-        )
-        telemetry.log_agent_complete(
-            agent_name="code-reviewer",
-            verdict="approve",
-            issue_count=0,
-        )
-        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
-
-        raw_completions = [
-            event for event in _read_events(telemetry.log_path)
-            if event["event"] == "agent_complete"
-        ]
-        assert len(raw_completions) == 2
-        assert [event["verdict"] for event in raw_completions] == [
-            "comment",
-            "approve",
-        ]
-        assert _read_manifest(telemetry)["agents"]["completed"] == [
-            {
-                "schema": mod.EVENT_SCHEMA,
-                "run_id": "run-1",
-                "event": "agent_complete",
-                "timestamp": raw_completions[-1]["timestamp"],
-                "agent": "code-reviewer",
-                "duration_ms": None,
-                "verdict": "approve",
-                "issue_count": 0,
-                "severities": {},
-            }
-        ]
-
     def test_start_after_completion_creates_a_retry_execution(self, telemetry):
         telemetry.start(run_id="run-1")
         telemetry.log_agent_start(agent_name="code-reviewer", domain="code")
         telemetry.log_agent_complete(
-            agent_name="code-reviewer", verdict="approve"
+            agent_name="code-reviewer", artifact_digest=FINAL_DIGEST,
+            verdict="approve",
         )
         telemetry.log_agent_start(agent_name="code-reviewer", domain="code")
         telemetry.log_agent_complete(
-            agent_name="code-reviewer", verdict="comment",
+            agent_name="code-reviewer", artifact_digest="b" * 64,
+            verdict="comment",
             issue_count=1, severities={"medium": 1},
         )
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
@@ -799,10 +764,12 @@ class TestRunManifest:
         telemetry.log_agent_start(agent_name="code-reviewer", domain="code")
         telemetry.log_agent_start(agent_name="code-reviewer", domain="code")
         telemetry.log_agent_complete(
-            agent_name="code-reviewer", verdict="approve"
+            agent_name="code-reviewer", artifact_digest=FINAL_DIGEST,
+            verdict="approve",
         )
         telemetry.log_agent_complete(
-            agent_name="code-reviewer", verdict="comment",
+            agent_name="code-reviewer", artifact_digest="b" * 64,
+            verdict="comment",
             issue_count=1, severities={"medium": 1},
         )
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
@@ -815,41 +782,13 @@ class TestRunManifest:
         ]
         assert agents["incomplete"] == []
 
-    def test_completion_beyond_outstanding_starts_is_a_corrected_save(
-        self, telemetry
-    ):
-        """Once every start is matched, a further completion revises the
-        latest one instead of inventing an execution."""
-        telemetry.start(run_id="run-1")
-        telemetry.log_agent_start(agent_name="code-reviewer", domain="code")
-        telemetry.log_agent_start(agent_name="code-reviewer", domain="code")
-        telemetry.log_agent_complete(
-            agent_name="code-reviewer", verdict="approve"
-        )
-        telemetry.log_agent_complete(
-            agent_name="code-reviewer", verdict="comment",
-            issue_count=1, severities={"medium": 1},
-        )
-        telemetry.log_agent_complete(
-            agent_name="code-reviewer", verdict="request_changes",
-            issue_count=2, severities={"high": 2},
-        )
-        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
-
-        agents = _read_manifest(telemetry)["agents"]
-        assert len(agents["started"]) == 2
-        assert [event["verdict"] for event in agents["completed"]] == [
-            "approve",
-            "request_changes",
-        ]
-        assert agents["incomplete"] == []
-
     def test_completion_without_start_remains_visible_for_strict_validation(
         self, telemetry
     ):
         telemetry.start(run_id="run-1")
         telemetry.log_agent_complete(
-            agent_name="code-reviewer", verdict="approve"
+            agent_name="code-reviewer", artifact_digest=FINAL_DIGEST,
+            verdict="approve",
         )
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
@@ -866,7 +805,8 @@ class TestRunManifest:
 
         telemetry.log_agent_start(agent_name="code-reviewer", domain="code")
         telemetry.log_agent_complete(
-            agent_name="code-reviewer", verdict="approve"
+            agent_name="code-reviewer", artifact_digest=FINAL_DIGEST,
+            verdict="approve",
         )
 
         assert manifest_path.read_bytes() == initial_manifest
@@ -895,7 +835,8 @@ class TestRunManifest:
             telemetry.log_agent_start(agent_name=agent_name, domain="code")
         for agent_name in completion_order:
             telemetry.log_agent_complete(
-                agent_name=agent_name, verdict="approve"
+                agent_name=agent_name, artifact_digest=FINAL_DIGEST,
+                verdict="approve",
             )
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
@@ -912,7 +853,8 @@ class TestRunManifest:
         telemetry.log_agent_start(agent_name="code-reviewer", domain="code")
         telemetry.log_agent_start(agent_name="code-reviewer", domain="code")
         telemetry.log_agent_complete(
-            agent_name="code-reviewer", verdict="approve"
+            agent_name="code-reviewer", artifact_digest=FINAL_DIGEST,
+            verdict="approve",
         )
         telemetry.log_step(
             step=6,
@@ -938,6 +880,7 @@ class TestRunManifest:
         )
         telemetry.log_agent_complete(
             agent_name="security-reviewer",
+            artifact_digest=FINAL_DIGEST,
             verdict="comment",
             issue_count=1,
             severities={
@@ -1663,7 +1606,7 @@ class TestRunManifest:
         a hand-crafted fixture — proving the producer reads the SAME
         shape `save()` actually emits, including its own derivation of
         `unreviewed`/`meta.unreviewed_autofilled` from silence."""
-        from review.agent.output import ReviewOutputBuilder
+        from review.agent.output import ReviewOutputBuilder, finalize_candidate
 
         _write_coverage_inputs(
             output_dir,
@@ -1672,17 +1615,23 @@ class TestRunManifest:
             agents=[{"name": "security-reviewer", "status": "DISPATCH"}],
         )
         (output_dir / "security-deferred-files.json").write_text(json.dumps({
-            "schema": 1, "deferred_files": ["a.py", "b.py", "c.py"],
+            "schema": 2,
+            "agent_name": "security-reviewer",
+            "deferred_files": ["a.py", "b.py", "c.py"],
+            "diffed_count": 0,
+            "in_scope_count": 3,
         }))
+        telemetry.start(run_id="run-1")
+        telemetry.log_agent_start(
+            "security-reviewer", scope_paths=["a.py", "b.py", "c.py"]
+        )
         builder = ReviewOutputBuilder("42", "security")
         builder.add_deferred_reviewed("a.py")
         builder.add_unreviewed("b.py")
         # "c.py" is left unaccounted — save() must auto-fill it.
-        builder.save(str(output_dir))
-
-        telemetry.start(run_id="run-1")
-        telemetry.log_agent_start(
-            "security-reviewer", scope_paths=["a.py", "b.py", "c.py"]
+        saved = builder.save(str(output_dir))
+        finalize_candidate(
+            str(output_dir), "security", saved["candidate_digest"]
         )
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
@@ -1704,7 +1653,7 @@ class TestRunManifest:
         for save() to auto-fill (autofilled == 0) — the complementary
         case to the auto-fill-heavy shape above, still from a real
         `save()`-produced artifact."""
-        from review.agent.output import ReviewOutputBuilder
+        from review.agent.output import ReviewOutputBuilder, finalize_candidate
 
         _write_coverage_inputs(
             output_dir,
@@ -1713,17 +1662,23 @@ class TestRunManifest:
             agents=[{"name": "docs-reviewer", "status": "DISPATCH"}],
         )
         (output_dir / "docs-deferred-files.json").write_text(json.dumps({
-            "schema": 1, "deferred_files": ["a.py", "b.py", "c.py"],
+            "schema": 2,
+            "agent_name": "docs-reviewer",
+            "deferred_files": ["a.py", "b.py", "c.py"],
+            "diffed_count": 0,
+            "in_scope_count": 3,
         }))
+        telemetry.start(run_id="run-1")
+        telemetry.log_agent_start(
+            "docs-reviewer", scope_paths=["a.py", "b.py", "c.py"]
+        )
         builder = ReviewOutputBuilder("42", "docs")
         builder.add_unreviewed("a.py")
         builder.add_unreviewed("b.py")
         builder.add_unreviewed("c.py")
-        builder.save(str(output_dir))
-
-        telemetry.start(run_id="run-1")
-        telemetry.log_agent_start(
-            "docs-reviewer", scope_paths=["a.py", "b.py", "c.py"]
+        saved = builder.save(str(output_dir))
+        finalize_candidate(
+            str(output_dir), "docs", saved["candidate_digest"]
         )
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
@@ -3174,7 +3129,29 @@ class TestLogAgentStart:
         assert "budget_target" not in start_event
 
 
-# ── log_agent_complete() ─────────────────────────────────────────
+# ── reviewer publication events ──────────────────────────────────
+
+
+FINAL_DIGEST = "a" * 64
+
+
+class TestLogAgentSave:
+    def test_records_digest_bound_candidate_evidence(self, telemetry, mod):
+        telemetry.start(run_id="run-1")
+
+        telemetry.log_agent_save(
+            agent_name="security-reviewer", artifact_digest=FINAL_DIGEST
+        )
+
+        event = _read_events(telemetry.log_path)[-1]
+        assert event == {
+            "event": "agent_save",
+            "timestamp": event["timestamp"],
+            "agent": "security-reviewer",
+            "artifact_digest": FINAL_DIGEST,
+            "schema": mod.EVENT_SCHEMA,
+            "run_id": "run-1",
+        }
 
 
 class TestLogAgentComplete:
@@ -3187,7 +3164,8 @@ class TestLogAgentComplete:
         )
         time.sleep(0.05)
         telemetry.log_agent_complete(
-            agent_name="security-reviewer", verdict="comment",
+            agent_name="security-reviewer", artifact_digest=FINAL_DIGEST,
+            verdict="comment",
             issue_count=2, severities={"high": 1, "medium": 1},
         )
         events = _read_events(telemetry.log_path)
@@ -3200,7 +3178,8 @@ class TestLogAgentComplete:
             datetime.now(timezone.utc).isoformat()
         )
         telemetry.log_agent_complete(
-            agent_name="security-reviewer", verdict="comment",
+            agent_name="security-reviewer", artifact_digest=FINAL_DIGEST,
+            verdict="comment",
             issue_count=2, severities={"high": 1, "medium": 1},
         )
         events = _read_events(telemetry.log_path)
@@ -3214,66 +3193,80 @@ class TestLogAgentComplete:
             datetime.now(timezone.utc).isoformat()
         )
         time.sleep(0.05)
-        telemetry.log_agent_complete(agent_name="security-reviewer", verdict="approve")
+        telemetry.log_agent_complete(
+            agent_name="security-reviewer", artifact_digest=FINAL_DIGEST,
+            verdict="approve",
+        )
         events = _read_events(telemetry.log_path)
         assert events[-1]["duration_ms"] is not None
         assert events[-1]["duration_ms"] >= 40
 
     def test_duration_none_without_started_file(self, telemetry):
         telemetry.start(pr_number="42")
-        telemetry.log_agent_complete(agent_name="security-reviewer", verdict="approve")
+        telemetry.log_agent_complete(
+            agent_name="security-reviewer", artifact_digest=FINAL_DIGEST,
+            verdict="approve",
+        )
         events = _read_events(telemetry.log_path)
         assert events[-1]["duration_ms"] is None
 
     def test_noop_without_start(self, mod, output_dir, tmp_path):
         log_dir = tmp_path / "logs"
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
-        t.log_agent_complete(agent_name="security-reviewer", verdict="approve")
+        t.log_agent_complete(
+            agent_name="security-reviewer", artifact_digest=FINAL_DIGEST,
+            verdict="approve",
+        )
         assert t.log_path is None
 
-    def test_resave_flag_is_always_present_and_defaults_false(self, telemetry):
+    def test_completion_carries_finalized_artifact_digest(self, telemetry):
         telemetry.start(pr_number="42")
         telemetry.log_agent_complete(
-            agent_name="security-reviewer", verdict="approve"
+            agent_name="security-reviewer", artifact_digest=FINAL_DIGEST,
+            verdict="approve",
         )
-        assert _read_events(telemetry.log_path)[-1]["resave"] is False
-
-    def test_resave_flag_records_a_correction(self, telemetry):
-        telemetry.start(pr_number="42")
-        telemetry.log_agent_complete(
-            agent_name="security-reviewer", verdict="approve", resave=True
-        )
-        assert _read_events(telemetry.log_path)[-1]["resave"] is True
+        event = _read_events(telemetry.log_path)[-1]
+        assert event["artifact_digest"] == FINAL_DIGEST
 
 
-class TestCompletionEventsAreNotAgentCounts:
-    """Field shape: 19 reviewers, 2 sanctioned re-saves, 21 raw events.
+class TestHistoricalCompletionEventsAreNotAgentCounts:
+    """Pre-finalization history: 19 reviewers, 2 saves, 21 completions.
 
-    The event stream is one record per SAVE; the projection is last-wins
-    per outstanding EXECUTION SLOT. Every reviewer here started exactly
-    once, which is the case where executions and identities coincide — so
-    a consumer reading the projection sees 19, and the later save wins.
-    The retry case where they DIVERGE (two starts keep two completions) is
-    pinned by TestRunManifest above
-    (test_overlapping_executions_each_keep_their_completion,
-    test_completion_beyond_outstanding_starts_is_a_corrected_save);
-    this class must not be read as claiming identities always collapse.
+    Historical producers wrote one completion per save; the current producer
+    does not. The compatibility projection is last-wins per outstanding
+    execution slot. Every reviewer here started exactly once, so executions
+    and identities coincide: a reader sees 19 and the later revision wins.
+    Retry coverage elsewhere keeps one projected row per started execution,
+    so this fixture must not be read as claiming identities always collapse.
     """
+
+    @staticmethod
+    def _append_historical_completion(
+        telemetry, agent, *, verdict="approve", issue_count=0,
+        severities=None, resave=False
+    ):
+        telemetry._append({
+            "event": "agent_complete",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "agent": agent,
+            "duration_ms": None,
+            "verdict": verdict,
+            "issue_count": issue_count,
+            "severities": severities or {},
+            "resave": resave,
+        })
 
     def test_twentyone_events_project_to_nineteen_completions(self, telemetry):
         telemetry.start(run_id="run-1")
         names = [f"agent-{index:02d}-reviewer" for index in range(19)]
         for name in names:
             telemetry.log_agent_start(agent_name=name, domain="code")
-            telemetry.log_agent_complete(
-                agent_name=name, verdict="approve", resave=False
-            )
-        # Two reviewers correct themselves — the save echo invites exactly
-        # this, so both re-saves are sanctioned behavior.
+            self._append_historical_completion(telemetry, name)
+        # Two pre-finalization reviewers corrected their saved snapshots.
         for name in names[:2]:
-            telemetry.log_agent_complete(
-                agent_name=name, verdict="comment",
-                issue_count=1, severities={"medium": 1}, resave=True,
+            self._append_historical_completion(
+                telemetry, name, verdict="comment", issue_count=1,
+                severities={"medium": 1}, resave=True,
             )
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
@@ -3298,17 +3291,13 @@ class TestCompletionEventsAreNotAgentCounts:
         assert by_agent[names[2]] == "approve"
 
     def test_manifest_rows_never_carry_the_raw_resave_flag(self, telemetry):
-        """The projection collapsed the revisions, so no manifest row is a
-        superseded save to flag — leaking `resave` there would invite
-        reading a projected row as a raw event."""
+        """Historical revisions collapse without leaking the old raw flag."""
         telemetry.start(run_id="run-1")
         telemetry.log_agent_start(agent_name="code-reviewer", domain="code")
-        telemetry.log_agent_complete(
-            agent_name="code-reviewer", verdict="approve", resave=False
-        )
-        telemetry.log_agent_complete(
-            agent_name="code-reviewer", verdict="comment",
-            issue_count=1, severities={"medium": 1}, resave=True,
+        self._append_historical_completion(telemetry, "code-reviewer")
+        self._append_historical_completion(
+            telemetry, "code-reviewer", verdict="comment", issue_count=1,
+            severities={"medium": 1}, resave=True,
         )
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
@@ -4611,7 +4600,10 @@ class TestSynthesisAgentsManifest:
             for index in range(19):
                 name = f"agent-{index:02d}-reviewer"
                 t.log_agent_start(name, domain="code", model_tier="sonnet")
-                t.log_agent_complete(name, verdict="approve", issue_count=0)
+                t.log_agent_complete(
+                    name, artifact_digest=FINAL_DIGEST,
+                    verdict="approve", issue_count=0,
+                )
             t.finalize(step=11, phase="OUTPUT", title="Present Results")
             return _read_manifest(t)
 

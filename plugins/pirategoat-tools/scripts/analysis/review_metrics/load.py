@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .contracts import (
+    _PRODUCER_AGENT_NAME_RE,
     _SUPPORTED_MANIFEST_SCHEMA,
     _incomplete_agent_executions,
     _parse_time,
@@ -31,6 +32,27 @@ from .sanitize import (
     _supported_manifest_envelope,
     _valid_manifest,
 )
+
+
+def _strict_agent_save_event(
+    value: object, *, run_id: str
+) -> bool:
+    """Validate current candidate-save evidence without retaining it."""
+    if not isinstance(value, dict):
+        return False
+    digest = value.get("artifact_digest")
+    return (
+        type(value.get("schema")) is int
+        and value.get("schema") == _SUPPORTED_MANIFEST_SCHEMA
+        and value.get("run_id") == run_id
+        and value.get("event") == "agent_save"
+        and _parse_time(value.get("timestamp")) is not None
+        and type(value.get("agent")) is str
+        and _PRODUCER_AGENT_NAME_RE.fullmatch(value["agent"]) is not None
+        and type(digest) is str
+        and len(digest) == 64
+        and all(character in "0123456789abcdef" for character in digest)
+    )
 
 
 def _read_json(path: Path) -> object | None:
@@ -246,6 +268,7 @@ def _overlay_running_lifecycle(
                 "pipeline_start",
                 "step",
                 "agent_start",
+                "agent_save",
                 "agent_complete",
                 "pipeline_end",
             }
@@ -267,6 +290,9 @@ def _overlay_running_lifecycle(
             if safe is None:
                 return _invalid_running_lifecycle_overlay(manifest)
             raw_lifecycle.append((False, safe))
+        elif event_name == "agent_save":
+            if not _strict_agent_save_event(event, run_id=run_id):
+                return _invalid_running_lifecycle_overlay(manifest)
         elif event_name == "agent_complete":
             safe = _strict_lifecycle_event(
                 event, completed=True, run_id=run_id
