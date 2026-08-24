@@ -702,6 +702,24 @@ class TestRenderMarkdown:
         assert "# Security Review" in rendered
         assert "Advisory suppression" not in rendered
 
+    def test_renders_a_non_empty_derived_coverage_gap(self):
+        data = self._rich_builder().to_dict()
+        data["unreviewed"] = ["src/unread.py", "docs/not checked.md"]
+
+        rendered = render_markdown(data)
+
+        assert (
+            "**Not reviewed (budget):** `src/unread.py`, "
+            "`docs/not checked.md`\n\n"
+        ) in rendered
+
+    @pytest.mark.parametrize("unreviewed", [[], None], ids=["empty", "none"])
+    def test_omits_an_empty_derived_coverage_gap(self, unreviewed):
+        data = self._rich_builder().to_dict()
+        data["unreviewed"] = unreviewed
+
+        assert "**Not reviewed (budget):**" not in render_markdown(data)
+
 
 # =============================================================================
 # TestMaterializeMarkdown
