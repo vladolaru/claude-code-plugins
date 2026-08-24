@@ -280,21 +280,18 @@ _DEFERRED_HONESTY_FIELDS = ("deferred_reviewed", "unreviewed")
 def _aggregate_deferred_honesty(
     runs: list[dict[str, Any]], availability: dict[str, dict[str, int]]
 ) -> dict[str, Any]:
-    """Sum the agent-vs-system NOT DIFFED honesty split across measured runs.
+    """Sum derived NOT DIFFED claim/gap populations across measured runs.
 
     Reuses the "coverage" family (the closest existing family, per its own
     availability gate) but additionally requires the run to actually carry
     `deferred_honesty_by_agent` — a run with complete coverage but no such
     key predates this feature and must not count as a measured zero.
 
-    A run whose `deferred_honesty_by_agent` is present but EMPTY (`{}`) is
-    a further distinct case: every dispatched reviewer was a legacy
-    producer (no claims-capable output), so the key exists but nothing
-    about the split was actually measurable. `measured_runs` only counts
-    when at least one agent contributed real counts — an all-legacy run
-    must not read as "measured, zero", the exact confusion this feature
-    exists to eliminate one level up. `measured_agents`/`unmeasured_agents`
-    make that same distinction visible at agent granularity: unmeasured
+    A run whose `deferred_honesty_by_agent` is present but EMPTY (`{}`) has
+    no finalized reviewer row to measure. `measured_runs` only counts when
+    at least one agent contributed real counts, so missing evidence never
+    reads as "measured, zero". `measured_agents`/`unmeasured_agents` make
+    that same distinction visible at agent granularity: unmeasured
     agents are those in `deferred_total_by_agent` (the system saw a
     deferred-files sidecar for them) but absent from
     `deferred_honesty_by_agent` (their own review JSON never claimed

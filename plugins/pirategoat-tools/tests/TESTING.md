@@ -145,7 +145,7 @@ Integration tests that run `review/agent/bootstrap.py` via subprocess against a 
 | `TestDynamicDispatchRisk` | dead-code-reviewer gets DYNAMIC_DISPATCH_RISK from the caller's `has_php` fact (PHP → high, no PHP → low); rendered scope text can't drive the decision in either direction (direct `build_output()` call); 3 end-to-end subprocess tests cover `main()`'s own `has_php` derivation, which the direct calls can't reach — including that a domain-excluded PHP test file (under `=== SKIPPED ===`) must not force `high` |
 | `TestOutputFilenameConsistency` | Output filenames from `save()` match bootstrap expectations (direct `build_output()` call) |
 | `TestBootstrapImportDoesNotBreakTelemetry` | Importing `review.agent.bootstrap` first (package-qualified) must leave a working `ReviewTelemetry` — pins the exact import-cycle regression `derive_reviewer_name`'s extraction to `reviewer_names.py` fixed (a same-package caller importing the name FROM bootstrap re-entered bootstrap mid-initialization and silently broke the telemetry load). Runs in a fresh subprocess since in-process `sys.modules` caching from other tests would mask it. |
-| `TestNotDiffedContractIsDelivered` | The NOT DIFFED handling contract survives protocol stripping — it must be delivered by `build_output()`, never by a section the skip-list removes. Guards the 1.108.0 failure where a mandatory contract reached zero agents. Also pins the declare-vs-claim contradiction sentence, moved here from reviewer-protocol.md's equally-stripped `## ReviewOutputBuilder API` section — the old sentence must be gone from the protocol file, not left behind as a second, still-inert copy. |
+| `TestNotDiffedContractIsDelivered` | The NOT DIFFED positive-claim/derived-complement contract survives protocol stripping through `build_output()`, while rendered scope and source guidance never instruct reviewers to declare gaps. Guards the 1.108.0 failure where a mandatory contract reached zero agents. |
 | `TestEmpiricalProbeContract` | The `pirategoat-probe` naming convention survives protocol stripping into built prompts, and the section is not on the skip-list. The step-11 residue sweep only ever fires on files an agent named this way, so a stripped section makes the enforcement half inert. |
 | `TestNotApplicableCompletionContract` | The shared protocol is the sole executable abstention recipe — a reviewer that finds nothing must abstain the one prescribed way. |
 | `TestRepoRuleAndRefModeSelection` | Repo rules reach the reviewers they target (effective identity, complete scope); adapter instances receive their declared path scope; an explicit isolation request never runs inline. |
@@ -196,8 +196,8 @@ Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/
 | `TestToDict` | All top-level keys, severity counts, meta structure, None for empty fields, `schema: 1` (no retired `version` string), and `plugin_version` resolution — envelope variable first, then the run-config stamp for envelope-bypassing callers, null when neither is readable |
 | `TestToMarkdown` | Header format, issues grouped by severity, positive observations |
 | `TestRenderMarkdown` | Markdown is a pure function of the canonical JSON dict — same dict in, same Markdown out |
-| `TestMaterializeMarkdown` | The on-demand `materialize` CLI/function reads a saved JSON and writes its derived Markdown |
-| `TestSave` | `save()` publishes the review JSON as the single canonical artifact; creates both files, JSON matches to_dict(), return paths correct |
+| `TestMaterializeMarkdown` | The on-demand `materialize` CLI/function reads finalized canonical JSON and writes its derived Markdown |
+| `TestSave` | `save()` publishes a replaceable candidate JSON, echoes its exact finalization command, and returns the candidate path plus digest; it never publishes canonical JSON or Markdown |
 | `TestFileScopedIssues` | `line=None` records a first-class file-scoped issue (`scope: "file"`) that still counts toward the verdict — no silent demotion |
 | `TestLineRequired` | Invalid line values still raise for point defects — the file-scoped path never becomes a way to skip validation |
 | `TestAddObservation` | `add_observation()` stores file-level notes outside the finding pipeline, in insertion order |
@@ -358,7 +358,7 @@ class GradeResult:
 
 Offline grading tool for review output files — not part of the pytest suite.
 
-- **`--grade-only /path/to/output`** — Scans an existing output directory for `*-review.json` files and grades each json/md pair, materializing the Markdown from each JSON first (`save()` publishes the JSON only; Markdown is a derived artifact). Fast, no model calls. Use after a real review run to validate agent output format.
+- **`--grade-only /path/to/output`** — Scans an existing output directory for finalized `*-review.json` files and grades each JSON/Markdown pair, materializing the derived Markdown from canonical JSON first. Fast, no model calls. Use after a real review run to validate agent output format.
 
 ### Detection Benchmark (live model calls)
 

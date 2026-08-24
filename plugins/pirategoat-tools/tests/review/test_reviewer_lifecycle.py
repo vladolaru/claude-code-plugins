@@ -324,6 +324,32 @@ class TestCandidatePublication:
 
         assert not (tmp_path / "code-review.json").exists()
 
+    @pytest.mark.parametrize(
+        ("container", "retired_key"),
+        [
+            ("meta", "unreviewed_" + "autofilled"),
+            ("review", "declared_" + "unreviewed"),
+            ("review", "files_declared_" + "unreviewed"),
+            ("review", "files_autofilled_" + "unreviewed"),
+        ],
+    )
+    def test_retired_coverage_key_is_rejected_before_publication(
+        self, tmp_path, container, retired_key
+    ):
+        _write_sidecar(tmp_path)
+        _builder().save(str(tmp_path))
+
+        def _inject_retired_key(payload):
+            target = payload["meta"] if container == "meta" else payload
+            target[retired_key] = []
+
+        digest = _edit_candidate(tmp_path, _inject_retired_key)
+
+        with pytest.raises(ValueError, match="unexpected"):
+            finalize_candidate(str(tmp_path), "code", digest)
+
+        assert not (tmp_path / "code-review.json").exists()
+
     @pytest.mark.parametrize("skip_reason", [None, "", "   "])
     def test_not_applicable_requires_nonempty_skip_reason(
         self, tmp_path, skip_reason

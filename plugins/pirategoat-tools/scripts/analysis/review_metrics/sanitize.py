@@ -1008,8 +1008,8 @@ def _sanitize_coverage(value: object) -> dict[str, Any] | None:
         "semantics": "generated_scope_not_proof_of_model_read",
     }
 
-    # Agent-vs-system honesty split for NOT DIFFED (budget-deferred)
-    # files — backlog #19. Both keys are OPTIONAL within this section,
+    # Derived positive-claim/gap populations for NOT DIFFED files. Both keys
+    # are OPTIONAL within this section,
     # unlike everything above: a manifest whose coverage predates this
     # feature carries neither, and that must read as unmeasured, never
     # as a measured zero, so an absent key here stays absent in the
@@ -1056,8 +1056,12 @@ def _sanitize_coverage(value: object) -> dict[str, Any] | None:
             safe_total[name] = safe_count
         result["deferred_total_by_agent"] = safe_total
 
-    # Reconciliation: for every agent present in BOTH populations, the
-    # agent's own derived accounting must sum exactly to the system's
+    # Reconciliation: every measured agent row requires its independently
+    # sourced deferred-file total, and its derived accounting must sum exactly
+    # to that denominator. A row without its denominator is missing evidence,
+    # never a measured zero.
+    #
+    # The agent's own derived accounting must sum exactly to the system's
     # independently-sourced deferred-file total — the identity
     # `ReviewOutputBuilder.save()` itself enforces against the very same
     # sidecar this total is read from. A mismatch means the two sources disagree about a fact
@@ -1069,8 +1073,12 @@ def _sanitize_coverage(value: object) -> dict[str, Any] | None:
     # landed in the right population.
     honesty_by_agent = result.get("deferred_honesty_by_agent")
     total_by_agent = result.get("deferred_total_by_agent")
-    if isinstance(honesty_by_agent, dict) and isinstance(total_by_agent, dict):
-        for name in set(honesty_by_agent) & set(total_by_agent):
+    if isinstance(honesty_by_agent, dict) and honesty_by_agent:
+        if not isinstance(total_by_agent, dict):
+            return None
+        if not set(honesty_by_agent) <= set(total_by_agent):
+            return None
+        for name in honesty_by_agent:
             counts = honesty_by_agent[name]
             accounted = (
                 counts["deferred_reviewed"]

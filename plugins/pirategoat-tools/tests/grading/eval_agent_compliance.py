@@ -475,8 +475,7 @@ SCENARIOS = {
 
 
 def _materialize_missing_markdown(output_dir: str) -> None:
-    """Render md for any *-review.json lacking one — save() publishes the
-    JSON only; Markdown is a derived artifact (see review/agent/output.py)."""
+    """Render Markdown missing beside finalized canonical review JSON."""
     spec = importlib.util.spec_from_file_location(
         "_pirategoat_review_output", str(OUTPUT_MODULE),
     )

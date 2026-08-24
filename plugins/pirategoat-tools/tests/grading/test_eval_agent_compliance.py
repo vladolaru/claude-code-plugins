@@ -108,12 +108,9 @@ class TestGradeOnlyMode:
         assert "security" in result.stdout
 
     def test_grade_only_materializes_missing_markdown(self, tmp_path):
-        """Output dirs from fresh runs hold only the JSON — save() publishes the
-        canonical JSON and Markdown is derived. Grading renders the missing
-        Markdown from the JSON before grading the pair instead of failing the
-        md grader on absence."""
+        """Finalized runs may lack derived Markdown until materialization."""
         _write_review_pair(tmp_path)
-        assert not (tmp_path / "security-review.md").is_file()  # save() = JSON only
+        assert not (tmp_path / "security-review.md").is_file()
 
         results = run_grade_only(str(tmp_path))
         assert "security" in results

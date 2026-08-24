@@ -64,7 +64,7 @@ The script outputs structured text. Parse these key fields from the header:
 
 **On `STATUS: OK`:** The `=== DIFFS ===` section contains filtered diffs for matched files within the context budget. Files are sorted by budget priority (production code before tests for mixed domains), largest-first within each tier. One oversized leading file may be admitted in full as a protected exception; the remaining files share the normal budget.
 
-**On `BUDGET_EXCEEDED` / `=== NOT DIFFED ===`:** These files matched your domain but their diffs were NOT given to you. The handling contract — claim or declare, and what a declaration costs — is delivered by bootstrap's `=== REVIEW BUDGET ===` section, which knows your actual budget. It is deliberately not repeated here: this section is stripped before you receive the protocol.
+**On `BUDGET_EXCEEDED` / `=== NOT DIFFED ===`:** These files matched your domain but their diffs were NOT given to you. Claim every file you actually read through the positive-claim API; the builder validates those claims and derives every remaining path as unreviewed. Bootstrap's `=== REVIEW BUDGET ===` section delivers the executable contract because this section is stripped before you receive the protocol.
 
 ### When You Need More Context
 

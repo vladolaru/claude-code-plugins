@@ -1494,6 +1494,8 @@ _REQUIRED_REVIEW_FIELDS = frozenset({
     "narrative_summary",
     "meta",
 })
+_OPTIONAL_REVIEW_FIELDS = frozenset({"skip_reason"})
+_ALLOWED_REVIEW_FIELDS = _REQUIRED_REVIEW_FIELDS | _OPTIONAL_REVIEW_FIELDS
 _REQUIRED_ISSUE_FIELDS = frozenset({
     "id",
     "category",
@@ -1511,6 +1513,8 @@ _REQUIRED_META_FIELDS = frozenset({
     "confidence_score",
     "tool_results_used",
 })
+_OPTIONAL_META_FIELDS = frozenset()
+_ALLOWED_META_FIELDS = _REQUIRED_META_FIELDS | _OPTIONAL_META_FIELDS
 
 
 def _is_confidence(value):
@@ -1652,6 +1656,11 @@ def _validate_candidate_shape(candidate, reviewer):
         raise ValueError(
             "review candidate is missing required fields: " + ", ".join(missing)
         )
+    unexpected = sorted(set(candidate) - _ALLOWED_REVIEW_FIELDS)
+    if unexpected:
+        raise ValueError(
+            "review candidate has unexpected fields: " + ", ".join(unexpected)
+        )
     if type(candidate["schema"]) is not int or candidate["schema"] != REVIEW_OUTPUT_SCHEMA:
         raise ValueError("review candidate schema does not match the live contract")
     if not isinstance(candidate["reviewer"], str) or candidate["reviewer"] != reviewer:
@@ -1691,6 +1700,12 @@ def _validate_candidate_shape(candidate, reviewer):
         raise ValueError(
             "review candidate meta is missing required fields: "
             + ", ".join(missing_meta)
+        )
+    unexpected_meta = sorted(set(meta) - _ALLOWED_META_FIELDS)
+    if unexpected_meta:
+        raise ValueError(
+            "review candidate meta has unexpected fields: "
+            + ", ".join(unexpected_meta)
         )
     duration = meta["review_duration_ms"]
     if duration is not None and (type(duration) is not int or duration < 0):

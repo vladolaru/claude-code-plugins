@@ -779,7 +779,7 @@ class TestMaterializeMarkdown:
             _write_required_sidecar(d, "security")
             _save_and_finalize(b, d)
             md_path = Path(d, "security-review.md")
-            assert not md_path.exists()  # save() publishes the JSON only
+            assert not md_path.exists()  # finalization publishes canonical JSON only
             result = subprocess.run(
                 [sys.executable, str(output_py), "materialize", d],
                 capture_output=True, text=True,

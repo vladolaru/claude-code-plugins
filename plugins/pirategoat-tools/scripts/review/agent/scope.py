@@ -1703,7 +1703,10 @@ def format_text_output(scope: dict) -> str:
                 f"first: review with 'git diff {scope.get('range', '')} -- <file>' "
                 "while tool budget"
             )
-            lines.append("remains, and declare only the files you genuinely cannot reach.")
+            lines.append(
+                "remains. Claim every NOT DIFFED file you actually read; "
+                "the builder derives the rest as unreviewed."
+            )
             # Sort budget-exceeded by size descending so agent sees biggest changes first
             budget_sorted = sorted(
                 budget_files,

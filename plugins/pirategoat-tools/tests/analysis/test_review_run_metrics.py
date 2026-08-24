@@ -4303,6 +4303,17 @@ class TestDeferredHonestyCoverage:
         assert measured["coverage"] is None
         assert measured["metric_availability"]["coverage"] == "missing"
 
+    def test_missing_denominator_fails_coverage_closed(self, tmp_path):
+        manifest = _manifest()
+        manifest["coverage"]["deferred_honesty_by_agent"] = {
+            "code-reviewer": {"deferred_reviewed": 1, "unreviewed": 1},
+        }
+
+        measured = measure_run(manifest, tmp_path, include_transcripts=False)
+
+        assert measured["coverage"] is None
+        assert measured["metric_availability"]["coverage"] == "missing"
+
     def test_retired_three_way_shape_is_rejected(self, tmp_path):
         manifest = _manifest()
         manifest["coverage"]["deferred_honesty_by_agent"] = {
@@ -4312,6 +4323,7 @@ class TestDeferredHonestyCoverage:
                 "unreviewed_" + "autofilled": 0,
             },
         }
+        manifest["coverage"]["deferred_total_by_agent"] = {"code-reviewer": 2}
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
@@ -4330,6 +4342,7 @@ class TestDeferredHonestyCoverage:
         manifest["coverage"]["deferred_honesty_by_agent"] = {
             "code-reviewer": counts
         }
+        manifest["coverage"]["deferred_total_by_agent"] = {"code-reviewer": 2}
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
@@ -4338,10 +4351,11 @@ class TestDeferredHonestyCoverage:
     def test_cohort_aggregates_both_populations(self):
         measured_a = _measured_manifest_with_coverage({
             "code-reviewer": {"deferred_reviewed": 2, "unreviewed": 1},
-        })
+        }, deferred_total_by_agent={"code-reviewer": 3})
         measured_b = _measured_manifest_with_coverage(
             {"code-reviewer": {"deferred_reviewed": 1, "unreviewed": 2}},
             run_id="run-2",
+            deferred_total_by_agent={"code-reviewer": 3},
         )
 
         cohort = aggregate_cohort([measured_a, measured_b])

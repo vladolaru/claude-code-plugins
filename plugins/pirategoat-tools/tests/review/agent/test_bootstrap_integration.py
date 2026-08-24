@@ -21,6 +21,7 @@ BOOTSTRAP_SCRIPT = SCRIPTS_DIR / "review" / "agent" / "bootstrap.py"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from review.agent.output import ReviewOutputBuilder
+from review.agent.scope import format_text_output
 
 # Import AGENT_CONFIG to derive ALL_AGENTS
 _spec = importlib.util.spec_from_file_location("bootstrap_reviewer", str(BOOTSTRAP_SCRIPT))
@@ -1874,11 +1875,11 @@ class TestOutputFilenameConsistency:
         assert not os.path.exists(os.path.join(str(tmp_path), "dead-code-review.md"))
 
     def test_bootstrap_output_matches_save_filenames(self, tmp_path):
-        """Bootstrap OUTPUT_FILES must name exactly the artifact save() publishes:
-        the review JSON, and no md the pipeline derives elsewhere.
+        """Bootstrap OUTPUT_FILES must name the finalized canonical JSON,
+        and no Markdown the pipeline derives elsewhere.
 
         This checks the briefing TEXT only (what the agent is told to produce);
-        the save() filesystem contract is covered by the tests above.
+        the candidate/finalization filesystem contract is covered above.
         """
         output = build_output(
             agent_name="dead-code-reviewer",
@@ -2024,6 +2025,29 @@ class TestNotDiffedContractIsDelivered:
         """Each clause of the contract appears in the delivered briefing."""
         output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, not_diffed_count=1)
         assert phrase in output
+
+    def test_scope_and_guidance_never_teach_gap_declarations(self, tmp_path):
+        scope_output = format_text_output({
+            "status": "OK",
+            "range": "base..head",
+            "domain": "code",
+            "files": ["src/inline.py"],
+            "diffs": {"src/inline.py": "diff --git"},
+            "diffstat": {
+                "src/inline.py": (2, 1),
+                "src/deferred.py": (20, 2),
+            },
+            "skipped_files": {"budget": ["src/deferred.py"]},
+        })
+        output = self._build(tmp_path, scope_output, not_diffed_count=1)
+        protocol = (
+            PLUGIN_ROOT / "agents" / "shared" / "reviewer-protocol.md"
+        ).read_text()
+
+        for delivered in (scope_output, output, protocol):
+            assert "declare only the files" not in delivered.lower()
+            assert "claim or declare" not in delivered.lower()
+            assert "what a declaration costs" not in delivered.lower()
 
     @pytest.mark.parametrize(
         "phrase",
