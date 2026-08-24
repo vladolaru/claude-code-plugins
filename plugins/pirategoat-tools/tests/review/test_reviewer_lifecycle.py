@@ -1,9 +1,11 @@
 """Reviewer candidate publication and immutable finalization contracts."""
 
+import contextlib
 import hashlib
 import json
 import subprocess
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -16,6 +18,7 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from review.agent.output import ReviewOutputBuilder, finalize_candidate
+from review.reviewer_lifecycle import close_review_intake
 from review.telemetry import ReviewTelemetry
 
 
@@ -362,23 +365,20 @@ class TestCandidatePublication:
 
     def test_closed_intake_rejects_candidate_publication(self, tmp_path):
         _write_sidecar(tmp_path)
-        (tmp_path / "review-intake.json").write_text(
-            json.dumps({"schema": 1, "closed_at": "2026-08-24T12:00:00+00:00"})
-        )
+        close_review_intake(str(tmp_path), ["code-reviewer"])
 
         with pytest.raises(ValueError, match="intake"):
             _builder().save(str(tmp_path))
 
         assert not (tmp_path / "code-review.candidate.json").exists()
+        assert not list(tmp_path.glob("code-review.candidate.json.*.tmp"))
 
     def test_closed_intake_rejects_finalization_without_losing_candidate(
         self, tmp_path
     ):
         _write_sidecar(tmp_path)
         saved = _builder().save(str(tmp_path))
-        (tmp_path / "review-intake.json").write_text(
-            json.dumps({"schema": 1, "closed_at": "2026-08-24T12:00:00+00:00"})
-        )
+        close_review_intake(str(tmp_path), ["security-reviewer"])
 
         with pytest.raises(ValueError, match="intake"):
             finalize_candidate(
@@ -478,6 +478,150 @@ class TestCandidatePublication:
 
         with pytest.raises(OSError, match="replace unavailable"):
             _builder().save(str(tmp_path))
+
+        assert not (tmp_path / "code-review.candidate.json").exists()
+        assert not list(tmp_path.glob("code-review.candidate.json.*.tmp"))
+
+
+class TestReviewIntakeClose:
+    def test_close_discards_only_recognized_dispatched_candidates(
+        self, tmp_path
+    ):
+        _write_sidecar(tmp_path)
+        _builder().save(str(tmp_path))
+        unrelated = tmp_path / "foreign-review.candidate.json"
+        unrelated.write_text("{}")
+        arbitrary = tmp_path / "notes.candidate.json"
+        arbitrary.write_text("{}")
+
+        closed = close_review_intake(
+            str(tmp_path), ["code-reviewer", "security-reviewer"]
+        )
+
+        assert closed["schema"] == 1
+        assert closed["status"] == "closed"
+        assert closed["discarded_candidates"] == ["code-reviewer"]
+        assert isinstance(closed["closed_at"], str)
+        assert json.loads((tmp_path / "review-intake.json").read_text()) == closed
+        assert not (tmp_path / "code-review.candidate.json").exists()
+        assert unrelated.exists()
+        assert arbitrary.exists()
+
+    def test_repeated_close_unions_discards_and_finishes_interrupted_cleanup(
+        self, tmp_path, monkeypatch
+    ):
+        import review.reviewer_lifecycle as lifecycle_mod
+
+        _write_sidecar(tmp_path)
+        _builder().save(str(tmp_path))
+        original_unlink = lifecycle_mod.os.unlink
+        failed = {"once": False}
+
+        def fail_once(path):
+            if path.endswith("code-review.candidate.json") and not failed["once"]:
+                failed["once"] = True
+                raise OSError("simulated interrupted cleanup")
+            return original_unlink(path)
+
+        monkeypatch.setattr(lifecycle_mod.os, "unlink", fail_once)
+        with pytest.raises(OSError, match="interrupted cleanup"):
+            close_review_intake(str(tmp_path), ["code-reviewer"])
+
+        first = json.loads((tmp_path / "review-intake.json").read_text())
+        assert first["discarded_candidates"] == ["code-reviewer"]
+        assert (tmp_path / "code-review.candidate.json").exists()
+
+        monkeypatch.undo()
+        closed = close_review_intake(str(tmp_path), ["code-reviewer"])
+
+        assert closed == first
+        assert not (tmp_path / "code-review.candidate.json").exists()
+
+    def test_close_preserves_canonical_and_repairs_missing_completion(
+        self, tmp_path, monkeypatch
+    ):
+        import review.agent.output as output_mod
+
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        telemetry = _start_telemetry(tmp_path, output_dir)
+        _write_sidecar(output_dir)
+        saved = _builder().save(str(output_dir))
+
+        def fail_completion(*_args, **_kwargs):
+            raise OSError("simulated completion append failure")
+
+        monkeypatch.setattr(
+            output_mod, "_log_agent_complete_telemetry", fail_completion
+        )
+        with pytest.raises(OSError, match="completion append"):
+            finalize_candidate(
+                str(output_dir), "code", saved["candidate_digest"]
+            )
+        canonical = output_dir / "code-review.json"
+        canonical_bytes = canonical.read_bytes()
+        assert not [
+            event for event in telemetry._read_events()
+            if event["event"] == "agent_complete"
+        ]
+
+        monkeypatch.undo()
+        close_review_intake(str(output_dir), ["code-reviewer"])
+
+        assert canonical.read_bytes() == canonical_bytes
+        [completion] = [
+            event for event in telemetry._read_events()
+            if event["event"] == "agent_complete"
+        ]
+        assert completion["agent"] == "code-reviewer"
+        assert completion["artifact_digest"] == saved["candidate_digest"]
+
+        with pytest.raises(ValueError, match="intake"):
+            finalize_candidate(
+                str(output_dir), "code", saved["candidate_digest"]
+            )
+
+    def test_close_and_save_serialize_on_the_same_directory_lock(
+        self, tmp_path, monkeypatch
+    ):
+        import review.agent.output as output_mod
+        import review.reviewer_lifecycle as lifecycle_mod
+
+        assert output_mod.output_dir_lock is lifecycle_mod.output_dir_lock
+        _write_sidecar(tmp_path)
+        mutex = threading.Lock()
+        close_holds_lock = threading.Event()
+        release_close = threading.Event()
+        save_reached_lock = threading.Event()
+
+        @contextlib.contextmanager
+        def close_lock(_output_dir):
+            with mutex:
+                close_holds_lock.set()
+                assert release_close.wait(timeout=5)
+                yield
+
+        @contextlib.contextmanager
+        def save_lock(_output_dir):
+            save_reached_lock.set()
+            with mutex:
+                yield
+
+        monkeypatch.setattr(lifecycle_mod, "output_dir_lock", close_lock)
+        monkeypatch.setattr(output_mod, "output_dir_lock", save_lock)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            close_future = executor.submit(
+                close_review_intake, str(tmp_path), ["code-reviewer"]
+            )
+            assert close_holds_lock.wait(timeout=5)
+            save_future = executor.submit(_builder().save, str(tmp_path))
+            assert save_reached_lock.wait(timeout=5)
+            assert not save_future.done()
+            release_close.set()
+            close_future.result(timeout=5)
+            with pytest.raises(ValueError, match="intake"):
+                save_future.result(timeout=5)
 
         assert not (tmp_path / "code-review.candidate.json").exists()
         assert not list(tmp_path.glob("code-review.candidate.json.*.tmp"))

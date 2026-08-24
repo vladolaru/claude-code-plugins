@@ -29,8 +29,10 @@ text differs, since it now also documents --wait/--max-seconds.
 """
 
 import argparse
+import hashlib
 import json
 import os
+import shlex
 import sys
 import time
 from collections import Counter
@@ -66,6 +68,34 @@ def _reviewer_filename(agent_name: str) -> str:
     'code-reviewer' -> 'code-review.json'
     """
     return f"{derive_reviewer_name(agent_name)}-review.json"
+
+
+def candidate_evidence(output_dir: str, agent_name: str) -> dict:
+    """Return digest-bound finalization evidence for a saved candidate."""
+    reviewer = derive_reviewer_name(agent_name)
+    candidate_path = os.path.join(
+        output_dir, f"{reviewer}-review.candidate.json"
+    )
+    try:
+        with open(candidate_path, "rb") as candidate_handle:
+            candidate_bytes = candidate_handle.read()
+    except OSError:
+        return {}
+    candidate_digest = hashlib.sha256(candidate_bytes).hexdigest()
+    output_script = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "agent", "output.py"
+    )
+    finalize_command = (
+        f"python3 {shlex.quote(output_script)} finalize "
+        f"--output-dir {shlex.quote(output_dir)} "
+        f"--reviewer {shlex.quote(reviewer)} "
+        f"--candidate-digest {candidate_digest}"
+    )
+    return {
+        "candidate_available": True,
+        "candidate_digest": candidate_digest,
+        "finalize_command": finalize_command,
+    }
 
 
 def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
@@ -145,16 +175,18 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
 
             if elapsed > timeout_seconds:
                 timed_out += 1
-                agents.append({
+                agent_state = {
                     "name": name, "status": "TIMED_OUT",
                     "elapsed_seconds": elapsed,
-                })
+                }
             else:
                 running += 1
-                agents.append({
+                agent_state = {
                     "name": name, "status": "RUNNING",
                     "elapsed_seconds": elapsed,
-                })
+                }
+            agent_state.update(candidate_evidence(output_dir, name))
+            agents.append(agent_state)
         else:
             not_dispatched += 1
             agents.append({"name": name, "status": "NOT_DISPATCHED"})
@@ -240,6 +272,13 @@ def format_output(result: dict) -> str:
             lines.append(f"  {name:30s} TIMED_OUT ({elapsed} — exceeded timeout)")
         elif st == "NOT_DISPATCHED":
             lines.append(f"  {name:30s} NOT_DISPATCHED (never started — LLM may have failed to dispatch)")
+        if a.get("candidate_available"):
+            lines.append(
+                f"  {'':30s} CANDIDATE  digest={a['candidate_digest']}"
+            )
+            lines.append(
+                f"  {'':30s} FINALIZE_COMMAND: {a['finalize_command']}"
+            )
     lines.append("")
     lines.append(f"ALL_DONE: {'true' if result['all_done'] else 'false'}")
     if result["not_dispatched"] > 0:

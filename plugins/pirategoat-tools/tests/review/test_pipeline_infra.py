@@ -247,6 +247,10 @@ class TestCleanStaleArtifacts:
         (d / "review-context.json").write_text("{}")  # and this
         (d / "als.patch").write_text("x")
         (d / "unpredicted-scratch.txt").write_text("x")
+        (d / "review-intake.json").write_text(
+            json.dumps({"schema": 1, "status": "closed"})
+        )
+        (d / "code-review.candidate.json").write_text("{}")
         (d / "subdir").mkdir()
         (d / "subdir" / "y").write_text("x")
         mod.clean_stale_artifacts(str(d))

@@ -31,6 +31,7 @@ try:
         verify_dependency_refresh,
     )
     from .atomic_io import atomic_write_json, atomic_write_text
+    from .reviewer_lifecycle import close_review_intake
     from .reviewer_names import derive_reviewer_name
     from .briefings import _render_review_coverage_section
     from .reconciliation_context import strip_severity_floor_markers
@@ -62,6 +63,7 @@ except ImportError:
         verify_dependency_refresh,
     )
     from review.atomic_io import atomic_write_json, atomic_write_text
+    from review.reviewer_lifecycle import close_review_intake
     from review.reviewer_names import derive_reviewer_name
     from review.briefings import _render_review_coverage_section
     from review.reconciliation_context import strip_severity_floor_markers
@@ -1270,6 +1272,36 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
         # avoid carrying stale waiting state forward.
         state.pop("waiting_on_agents", None)
 
+    # Freeze exactly the dispatched reviewer identities before any consumer
+    # renders or loads canonical JSON. Candidate publication/finalization and
+    # this close share the output-directory lock, so no candidate can cross
+    # this boundary after the status gate decides to proceed.
+    plan_path = os.path.join(output_dir, "dispatch-plan.json")
+    dispatch_plan = None
+    dispatched_names = []
+    if os.path.isfile(plan_path):
+        dispatch_plan = _load_dispatch_plan(plan_path)
+        dispatched_names = [
+            agent["name"] for agent in dispatch_plan["agents"]
+            if agent.get("status") in DISPATCHED_STATUSES
+        ]
+    try:
+        review_intake = close_review_intake(output_dir, dispatched_names)
+    except Exception as exc:
+        raise RuntimeError(
+            "review intake could not be closed — reconciliation inputs "
+            "are not frozen"
+        ) from exc
+    state["review_intake"] = review_intake
+    discarded_candidates = review_intake["discarded_candidates"]
+    degradation = state.setdefault("degradation", {})
+    if discarded_candidates:
+        degradation["reviewer_candidates_discarded"] = True
+    else:
+        degradation.pop("reviewer_candidates_discarded", None)
+        if not degradation:
+            state.pop("degradation", None)
+
     # Materialize human-facing Markdown from every settled canonical JSON
     # before reconciliation begins. This also runs when the best-effort status
     # checker fails: its failure does not make published JSON unsafe to render.
@@ -1344,14 +1376,8 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
         if log_out:
             state["commit_messages"] = log_out.strip().split("\n")
 
-    plan_path = os.path.join(output_dir, "dispatch-plan.json")
-    if os.path.isfile(plan_path):
+    if dispatch_plan is not None:
         try:
-            plan = _load_dispatch_plan(plan_path)
-            dispatched_names = [
-                a["name"] for a in plan["agents"]
-                if a.get("status") in DISPATCHED_STATUSES
-            ]
             review_files = []
             completed = []
             for name in dispatched_names:
@@ -1368,7 +1394,7 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
             state["agents"] = {
                 "dispatched": dispatched_names,
                 "completed": completed,
-                "failed": [],
+                "failed": discarded_candidates,
                 "review_files": review_files,
             }
         except (json.JSONDecodeError, OSError):

@@ -16,6 +16,8 @@ SCRIPT_PATH = PLUGIN_ROOT / "scripts" / "review" / "agents_status.py"
 
 from review import dispatch_status
 from review import synthesis_lifecycle
+from review.agent.output import ReviewOutputBuilder, finalize_candidate
+from review.reconciliation_context import load_agent_findings
 
 
 def _load_module():
@@ -51,6 +53,16 @@ def _reviewer_filename(agent_name: str) -> str:
 def _finish_agent(tmp_path, name, issues=None, verdict="APPROVE"):
     (tmp_path / _reviewer_filename(name)).write_text(json.dumps({
         "issues": issues or [], "verdict": verdict,
+    }))
+
+
+def _write_sidecar(tmp_path, reviewer, agent_name, deferred_files):
+    (tmp_path / f"{reviewer}-deferred-files.json").write_text(json.dumps({
+        "schema": 2,
+        "agent_name": agent_name,
+        "deferred_files": deferred_files,
+        "diffed_count": 1,
+        "in_scope_count": 1 + len(deferred_files),
     }))
 
 
@@ -168,6 +180,80 @@ class TestCheckStatus:
         assert result["all_done"] is True
         assert result["finished"] == 1
         assert result["timed_out"] == 1
+
+    def test_replaceable_candidates_do_not_finish_until_exact_finalization(
+        self, mod, tmp_path
+    ):
+        """Removing the canonical-only branch would let candidate A or B
+        race reconciliation; this sequence pins the final B snapshot all
+        the way through the real reconciliation loader."""
+        _write_plan(tmp_path, [
+            {"name": "a11y-reviewer", "status": "DISPATCH"},
+        ])
+        _start_agent(tmp_path, "a11y-reviewer")
+        _write_sidecar(
+            tmp_path, "a11y", "a11y-reviewer", ["src/late.ts"]
+        )
+        builder = ReviewOutputBuilder(pr_id="13", reviewer="a11y")
+
+        first = builder.save(str(tmp_path))
+        first_status = mod.check_status(str(tmp_path))
+        assert first_status["all_done"] is False
+        assert first_status["agents"][0]["status"] == "RUNNING"
+        assert first_status["agents"][0]["candidate_available"] is True
+        assert first_status["agents"][0]["candidate_digest"] == (
+            first["candidate_digest"]
+        )
+
+        builder.add_deferred_reviewed("src/late.ts")
+        second = builder.save(str(tmp_path))
+        second_status = mod.check_status(str(tmp_path))
+        assert second_status["all_done"] is False
+        assert second_status["agents"][0]["candidate_digest"] == (
+            second["candidate_digest"]
+        )
+        assert first["candidate_digest"] != second["candidate_digest"]
+        formatted = mod.format_output(second_status)
+        assert f"CANDIDATE  digest={second['candidate_digest']}" in formatted
+        assert "FINALIZE_COMMAND:" in formatted
+        assert second_status["agents"][0]["finalize_command"] in formatted
+
+        finalize_candidate(
+            str(tmp_path), "a11y", second["candidate_digest"]
+        )
+        assert mod.check_status(str(tmp_path))["all_done"] is True
+        findings = load_agent_findings(
+            str(tmp_path), dispatched_agents=["a11y-reviewer"]
+        )
+        assert findings["a11y-review"]["deferred_reviewed"] == [
+            "src/late.ts"
+        ]
+
+    def test_timed_out_candidate_stays_timed_out_with_finalize_evidence(
+        self, mod, tmp_path
+    ):
+        """Candidate evidence must enrich TIMED_OUT, not create a new
+        terminal status or turn it back into RUNNING."""
+        _write_plan(tmp_path, [
+            {"name": "slow-reviewer", "status": "DISPATCH"},
+        ])
+        _start_agent(tmp_path, "slow-reviewer", minutes_ago=25)
+        candidate = tmp_path / "slow-review.candidate.json"
+        candidate.write_bytes(b'{"snapshot":"late"}')
+
+        result = mod.check_status(str(tmp_path))
+
+        assert result["all_done"] is True
+        assert result["timed_out"] == 1
+        [slow] = result["agents"]
+        assert slow["status"] == "TIMED_OUT"
+        assert slow["candidate_available"] is True
+        assert len(slow["candidate_digest"]) == 64
+        assert "--reviewer slow" in slow["finalize_command"]
+        assert (
+            f"--candidate-digest {slow['candidate_digest']}"
+            in slow["finalize_command"]
+        )
 
     def test_reads_timeout_from_context_file(self, mod, tmp_path):
         """Timeout should come from review-context.json if present."""

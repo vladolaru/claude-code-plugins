@@ -919,6 +919,21 @@ def _step_6_dispatch_agents(mode, state, context, config, output_dir):
 # Step 7: Save Review Baseline
 # ---------------------------------------------------------------------------
 
+def _candidate_finalization_guidance():
+    return [
+        "A saved reviewer candidate remains RUNNING; only canonical "
+        "`<reviewer>-review.json` is FINISHED.",
+        "After a host subagent-completion notification, run agents_status. "
+        "If that returned agent still reports `candidate_available: true`, "
+        "run its exact printed `finalize_command`, then run agents_status "
+        "again.",
+        "Polling or candidate presence without a host completion notification "
+        "never authorizes parent-side finalization.",
+        "A TIMED_OUT unfinalized candidate remains timed out and is discarded "
+        "when review intake closes.",
+        "",
+    ]
+
 def _step_7_save_baseline(mode, state, context, config, output_dir):
     """Step 7: Save Review Baseline — script writes file internally."""
     git = context.get("git", {})
@@ -948,6 +963,7 @@ def _step_7_save_baseline(mode, state, context, config, output_dir):
     actions.append("")
     actions.append("**Wait for agents before step 8.**")
     actions.append("")
+    actions.extend(_candidate_finalization_guidance())
 
     if _host(config) == HOST_CODEX:
         actions.extend([
@@ -1068,7 +1084,7 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
             remaining_budget = max(1, int(escalation_threshold - elapsed))
 
             if _host(config) == HOST_CODEX:
-                actions = [
+                actions = _candidate_finalization_guidance() + [
                     "Poll for completion once a minute — the wait lives "
                     "inside the script, so each call blocks for up to 60 "
                     "seconds before returning control to you:",
@@ -1084,7 +1100,7 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
                     "after waiting began.",
                 ]
             else:
-                actions = [
+                actions = _candidate_finalization_guidance() + [
                     "Sequence matters here — do these two things IN ORDER, "
                     "not in parallel:",
                     "",
@@ -1143,6 +1159,15 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
     ]
     if failed:
         situation.append(f"**Agents failed:** {', '.join(failed)}")
+
+    intake = state.get("review_intake", {})
+    if intake.get("status") == "closed":
+        discarded = intake.get("discarded_candidates", [])
+        situation.append(
+            "**Review intake:** closed before synthesis; discarded "
+            + (", ".join(discarded) if discarded else "no candidates")
+            + "."
+        )
 
     if change_purpose:
         situation.append(f"**Change purpose (author-stated — claims to verify, not established fact):** {change_purpose}")

@@ -42,6 +42,26 @@ _output_spec.loader.exec_module(_output_mod)
 _render_markdown = _output_mod.render_markdown
 
 
+def _write_required_sidecar(output_dir, reviewer, agent_name=None):
+    Path(output_dir, f"{reviewer}-deferred-files.json").write_text(json.dumps({
+        "schema": 2,
+        "agent_name": agent_name or f"{reviewer}-reviewer",
+        "deferred_files": [],
+        "diffed_count": 1,
+        "in_scope_count": 1,
+    }))
+
+
+def _save_and_finalize(output_dir, reviewer, agent_name=None):
+    _write_required_sidecar(output_dir, reviewer, agent_name)
+    saved = _output_mod.ReviewOutputBuilder(
+        pr_id="42", reviewer=reviewer
+    ).save(str(output_dir))
+    return _output_mod.finalize_candidate(
+        str(output_dir), reviewer, saved["candidate_digest"]
+    )
+
+
 @pytest.fixture(scope="module")
 def mod(pipeline_mod):
     return pipeline_mod
@@ -1138,6 +1158,25 @@ class TestStep7Orchestration:
         result = grade_review_baseline(str(baseline_path))
         assert result.passed, f"Baseline grading failed: {result.failures}"
 
+    def test_step_7_requires_host_completion_before_candidate_finalization(
+        self, mod, tmp_path
+    ):
+        guidance = mod.get_step_guidance(
+            7,
+            "full",
+            {"resolved_params": {"git_range": "abc..HEAD"}},
+            {"git": {"git_range": "abc..HEAD"}},
+            output_dir=str(tmp_path),
+        )
+        text = "\n".join(guidance["actions"])
+
+        assert "candidate" in text.lower()
+        assert "RUNNING" in text
+        assert "completion notification" in text.lower()
+        assert "finalize_command" in text
+        assert "never authorizes" in text.lower()
+        assert "discarded when review intake closes" in text.lower()
+
 
 class TestStep8Orchestration:
     """Step 8 main() reads change-purpose.md and agent completion status."""
@@ -1156,6 +1195,35 @@ class TestStep8Orchestration:
             "expected": 0,
             "status": "not_run",
         }
+
+    def test_step_8_waiting_repeats_candidate_finalization_authority(
+        self, mod, tmp_path
+    ):
+        state = {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "waiting_on_agents": {
+                "running": ["security-reviewer"],
+                "not_dispatched": [],
+            },
+            "agents": {
+                "dispatched": ["security-reviewer"],
+                "completed": [],
+                "failed": [],
+            },
+        }
+        guidance = mod.get_step_guidance(
+            8,
+            "full",
+            state,
+            {"git": {"git_range": "abc..HEAD"}},
+            output_dir=str(tmp_path),
+        )
+        text = "\n".join(guidance["actions"])
+
+        assert guidance["blocks_progress"] is True
+        assert "completion notification" in text.lower()
+        assert "finalize_command" in text
+        assert "never authorizes" in text.lower()
 
     def test_step_8_reads_change_purpose(self, tmp_path):
         """Step 8 should read change-purpose.md into state."""
@@ -1182,8 +1250,8 @@ class TestStep8Orchestration:
             "git_range": "abc..HEAD",
         }
         (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
-        # Simulate code-reviewer finished, security-reviewer not
-        (tmp_path / "code-review.json").write_text('{"verdict": "approve", "issues": []}')
+        # Simulate code-reviewer finalized, security-reviewer not.
+        _save_and_finalize(tmp_path, "code")
         ctx = {"git": {"git_range": "abc..HEAD"}}
         (tmp_path / "review-context.json").write_text(json.dumps(ctx))
         r = run_pipeline("--step", "8", "--mode", "full",
@@ -1238,6 +1306,104 @@ class TestStep8Orchestration:
             "expected": 2,
             "status": "complete",
         }
+
+    def test_step_8_closes_intake_before_materialization_and_reconciliation(
+        self, mod, tmp_path, monkeypatch
+    ):
+        plan = {"agents": [
+            {"name": "code-reviewer", "status": "DISPATCH"},
+        ]}
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
+        events = []
+        monkeypatch.setattr(
+            mod.subprocess,
+            "run",
+            lambda *args, **kwargs: subprocess.CompletedProcess(
+                args=args[0], returncode=0, stdout="", stderr=""
+            ),
+        )
+
+        def close_intake(output_dir, dispatched):
+            events.append(("close", list(dispatched)))
+            return {
+                "schema": 1,
+                "status": "closed",
+                "closed_at": "2026-08-24T12:00:00+00:00",
+                "discarded_candidates": ["code-reviewer"],
+            }
+
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "close_review_intake",
+            close_intake,
+        )
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "_materialize_markdown",
+            lambda *_args, **_kwargs: events.append(("materialize", [])) or [],
+        )
+
+        def reconciliation_succeeds(*_args, **_kwargs):
+            events.append(("reconciliation", []))
+            (tmp_path / "reconciliation-context.json").write_text("{}")
+            return "", True
+
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "_run_subprocess",
+            reconciliation_succeeds,
+        )
+        state = {"resolved_params": {}}
+
+        mod._orchestrate_step(8, "full", {}, state, {}, str(tmp_path))
+
+        assert events == [
+            ("close", ["code-reviewer"]),
+            ("materialize", []),
+            ("reconciliation", []),
+        ]
+        assert state["review_intake"]["discarded_candidates"] == [
+            "code-reviewer"
+        ]
+        assert state["degradation"]["reviewer_candidates_discarded"] is True
+
+    def test_step_8_close_failure_blocks_materialization_and_reconciliation(
+        self, mod, tmp_path, monkeypatch
+    ):
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps({"agents": []}))
+        monkeypatch.setattr(
+            mod.subprocess,
+            "run",
+            lambda *args, **kwargs: subprocess.CompletedProcess(
+                args=args[0], returncode=0, stdout="", stderr=""
+            ),
+        )
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "close_review_intake",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                OSError("intake marker unavailable")
+            ),
+        )
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "_materialize_markdown",
+            lambda *_args, **_kwargs: pytest.fail(
+                "materialization ran before intake froze"
+            ),
+        )
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "_run_subprocess",
+            lambda *_args, **_kwargs: pytest.fail(
+                "reconciliation ran before intake froze"
+            ),
+        )
+
+        with pytest.raises(RuntimeError, match="review intake"):
+            mod._orchestrate_step(
+                8, "full", {}, {"resolved_params": {}}, {}, str(tmp_path)
+            )
 
     def test_step_8_materializes_when_status_checker_crashes(
         self, mod, tmp_path, monkeypatch

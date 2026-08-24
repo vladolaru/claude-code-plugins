@@ -3045,6 +3045,16 @@ class TestReconciliationSectionsRender:
 class TestMaterializeFindingsMarkdown:
     """One materializer, parameterized — never a second render path."""
 
+    def test_default_suffix_ignores_unfinalized_reviewer_candidates(self):
+        with tempfile.TemporaryDirectory() as d:
+            _write_required_sidecar(d, "security")
+            ReviewOutputBuilder(
+                pr_id="1", reviewer="security"
+            ).save(d)
+
+            assert materialize_markdown(d) == []
+            assert not Path(d, "security-review.md").exists()
+
     def test_suffix_selects_the_findings_artifact(self):
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")

@@ -2103,6 +2103,46 @@ def finalize_candidate(output_dir: str, reviewer: str, candidate_digest: str):
         "already_finalized": already_finalized,
     }
 
+
+def repair_finalized_completion(output_dir: str, reviewer: str):
+    """Repair telemetry for one canonical review during intake close.
+
+    This is not an alternate finalization channel: it never promotes a
+    candidate and does nothing after intake close unless canonical JSON
+    already exists. The caller holds the shared output-directory lock.
+    """
+    telemetry = _telemetry_for_output(output_dir)
+    if telemetry.log_path is None:
+        return None
+
+    paths = reviewer_paths(output_dir, reviewer)
+    try:
+        with open(paths.canonical, "rb") as canonical_handle:
+            canonical_bytes = canonical_handle.read()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise ValueError("finalized review is unreadable") from exc
+
+    artifact_digest = hashlib.sha256(canonical_bytes).hexdigest()
+    candidate, agent_name = _validate_candidate(
+        output_dir, reviewer, paths, canonical_bytes
+    )
+    if not _completion_was_logged(output_dir, agent_name, artifact_digest):
+        _log_agent_complete_telemetry(
+            output_dir,
+            agent_name,
+            candidate["verdict"],
+            candidate["summary"]["total_issues"],
+            candidate["summary"]["by_severity"],
+            artifact_digest,
+        )
+    return {
+        "json": paths.canonical,
+        "artifact_digest": artifact_digest,
+        "agent_name": agent_name,
+    }
+
 if __name__ == '__main__':
     import argparse
 
