@@ -85,6 +85,7 @@ Check EVERY changed file for:
 - [ ] Dynamic content changes announced via `speak()` or `aria-live`. *(WordPress: prefer `speak()` from `@wordpress/a11y`)*
 - [ ] Correct politeness: `assertive` only for errors/critical actions.
 - [ ] Disabled buttons use `aria-disabled="true"` when they should be discoverable.
+- [ ] When activation of an `aria-disabled` control is intercepted, announce the current reason for every blocked attempt and associate any correction target that receives focus with that error; a `role="alert"` fired when the error first appeared is not sufficient.
 - [ ] Composite widgets (tabs, menus, toolbars) are single Tab stops with arrow key navigation.
 - [ ] Programmatic `.focus()` calls check `contains(document.activeElement)` first.
 - [ ] Escape in nested menus uses `event.stopPropagation()`.
