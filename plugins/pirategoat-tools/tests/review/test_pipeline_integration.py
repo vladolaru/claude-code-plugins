@@ -1792,6 +1792,9 @@ class TestStep8Orchestration:
         """Step 8 should read change-purpose.md into state."""
         run_pipeline("--step", "1", "--mode", "full",
                    "--output-dir", str(tmp_path), cwd=tmp_path)
+        (tmp_path / "dispatch-plan.json").write_text(
+            json.dumps({"agents": []})
+        )
         (tmp_path / "change-purpose.md").write_text("Adds retry logic to payment gateway.")
         ctx = {"git": {"git_range": "abc..HEAD"}}
         (tmp_path / "review-context.json").write_text(json.dumps(ctx))
@@ -1968,12 +1971,59 @@ class TestStep8Orchestration:
                 8, "full", {}, {"resolved_params": {}}, {}, str(tmp_path)
             )
 
-    def test_step_8_materializes_when_status_checker_crashes(
+    @pytest.mark.parametrize("returncode", [1, 17], ids=["error", "unexpected"])
+    def test_step_8_status_checker_failure_preserves_open_intake(
+        self, mod, tmp_path, monkeypatch, returncode
+    ):
+        (tmp_path / "dispatch-plan.json").write_text(
+            json.dumps({
+                "agents": [{"name": "code-reviewer", "status": "DISPATCH"}],
+            })
+        )
+        candidate = tmp_path / "code-review.candidate.json"
+        candidate.write_bytes(b'{"candidate":true}\n')
+        events = []
+        monkeypatch.setattr(
+            mod.subprocess,
+            "run",
+            lambda *args, **_kwargs: subprocess.CompletedProcess(
+                args=args[0],
+                returncode=returncode,
+                stdout="status failed",
+                stderr="checker error",
+            ),
+        )
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "_materialize_markdown",
+            lambda *_args, **_kwargs: events.append("materialize") or [],
+        )
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "_run_subprocess",
+            lambda *_args, **_kwargs: events.append("reconciliation")
+            or ("", True),
+        )
+        state = {"resolved_params": {}}
+
+        with pytest.raises(RuntimeError, match="status checker"):
+            mod._orchestrate_step(8, "full", {}, state, {}, str(tmp_path))
+
+        assert candidate.read_bytes() == b'{"candidate":true}\n'
+        assert not (tmp_path / "review-intake.json").exists()
+        assert events == []
+
+    def test_step_8_status_checker_exception_preserves_open_intake(
         self, mod, tmp_path, monkeypatch
     ):
-        (tmp_path / "security-review.json").write_text(
-            json.dumps(_review_json("security"))
+        (tmp_path / "dispatch-plan.json").write_text(
+            json.dumps({
+                "agents": [{"name": "code-reviewer", "status": "DISPATCH"}],
+            })
         )
+        candidate = tmp_path / "code-review.candidate.json"
+        candidate.write_bytes(b'{"candidate":true}\n')
+        events = []
         monkeypatch.setattr(
             mod.subprocess,
             "run",
@@ -1981,25 +2031,26 @@ class TestStep8Orchestration:
                 OSError("checker crashed")
             ),
         )
-
-        def reconciliation_succeeds(*_args, **_kwargs):
-            (tmp_path / "reconciliation-context.json").write_text("{}")
-            return "", True
-
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "_materialize_markdown",
+            lambda *_args, **_kwargs: events.append("materialize") or [],
+        )
         monkeypatch.setitem(
             mod._orchestrate_step_8.__globals__,
             "_run_subprocess",
-            reconciliation_succeeds,
-        )
-        state = {"resolved_params": {}}
-
-        result = mod._orchestrate_step(
-            8, "full", {}, state, {}, str(tmp_path)
+            lambda *_args, **_kwargs: events.append("reconciliation")
+            or ("", True),
         )
 
-        assert result == {}
-        assert (tmp_path / "security-review.md").is_file()
-        assert state["reviewer_markdown"]["status"] == "complete"
+        with pytest.raises(RuntimeError, match="status checker"):
+            mod._orchestrate_step(
+                8, "full", {}, {"resolved_params": {}}, {}, str(tmp_path)
+            )
+
+        assert candidate.read_bytes() == b'{"candidate":true}\n'
+        assert not (tmp_path / "review-intake.json").exists()
+        assert events == []
 
     def test_step_8_uses_post_render_snapshot_when_json_arrives_during_materialization(
         self, mod, tmp_path, monkeypatch
@@ -2010,8 +2061,8 @@ class TestStep8Orchestration:
         monkeypatch.setattr(
             mod.subprocess,
             "run",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(
-                OSError("checker crashed")
+            lambda *args, **_kwargs: subprocess.CompletedProcess(
+                args=args[0], returncode=0, stdout="", stderr=""
             ),
         )
         original_materialize = mod._orchestrate_step_8.__globals__[
@@ -2233,7 +2284,7 @@ class TestStep8Orchestration:
             mod.subprocess,
             "run",
             lambda *args, **kwargs: subprocess.CompletedProcess(
-                args=args[0], returncode=1, stdout="", stderr="invalid plan"
+                args=args[0], returncode=0, stdout="", stderr=""
             ),
         )
 

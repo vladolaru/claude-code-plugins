@@ -1172,57 +1172,68 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
     ]
     try:
         r = subprocess.run(status_cmd, capture_output=True, text=True, timeout=30)
-        if r.returncode == 2:
-            previous_waiting = state.get("waiting_on_agents", {})
-            # Agents still running — parse text output for names
-            running = []
-            not_dispatched = []
-            for line in r.stdout.splitlines():
-                stripped = line.strip()
-                if "RUNNING" in stripped and "NOT_DISPATCHED" not in stripped:
-                    # Lines look like: "agent-name           RUNNING   (3m 42s)"
-                    name = stripped.split()[0]
-                    running.append(name)
-                elif "NOT_DISPATCHED" in stripped:
-                    name = stripped.split()[0]
-                    not_dispatched.append(name)
-            state["waiting_on_agents"] = {
-                "running": running,
-                "not_dispatched": not_dispatched,
-                "status_output": r.stdout.strip(),
-            }
-            if previous_waiting.get("first_waiting_at"):
-                state["waiting_on_agents"]["first_waiting_at"] = previous_waiting["first_waiting_at"]
-            else:
-                state["waiting_on_agents"]["first_waiting_at"] = datetime.now(timezone.utc).isoformat()
-            # Read per-agent timeout for escalation threshold
-            agent_timeout = DEFAULT_AGENT_TIMEOUT
-            ctx_path = os.path.join(output_dir, "review-context.json")
-            if os.path.isfile(ctx_path):
-                try:
-                    with open(ctx_path) as f:
-                        ctx_data = json.load(f)
-                    agent_timeout = ctx_data.get("review", {}).get(
-                        "agent_timeout_seconds", DEFAULT_AGENT_TIMEOUT
-                    )
-                except (json.JSONDecodeError, OSError):
-                    pass
-            state["waiting_on_agents"]["agent_timeout_seconds"] = agent_timeout
-            try:
-                first_waiting = datetime.fromisoformat(
-                    state["waiting_on_agents"]["first_waiting_at"]
-                )
-                elapsed = (datetime.now(timezone.utc) - first_waiting).total_seconds()
-            except (ValueError, KeyError):
-                elapsed = 0
-            if elapsed < agent_timeout + AGENT_WAIT_GRACE_SECONDS:
-                return context
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+        raise RuntimeError(
+            "reviewer status checker failed — review intake remains open"
+        ) from exc
+
+    if r.returncode == 2:
+        previous_waiting = state.get("waiting_on_agents", {})
+        # Agents still running — parse text output for names
+        running = []
+        not_dispatched = []
+        for line in r.stdout.splitlines():
+            stripped = line.strip()
+            if "RUNNING" in stripped and "NOT_DISPATCHED" not in stripped:
+                # Lines look like: "agent-name           RUNNING   (3m 42s)"
+                name = stripped.split()[0]
+                running.append(name)
+            elif "NOT_DISPATCHED" in stripped:
+                name = stripped.split()[0]
+                not_dispatched.append(name)
+        state["waiting_on_agents"] = {
+            "running": running,
+            "not_dispatched": not_dispatched,
+            "status_output": r.stdout.strip(),
+        }
+        if previous_waiting.get("first_waiting_at"):
+            state["waiting_on_agents"]["first_waiting_at"] = previous_waiting[
+                "first_waiting_at"
+            ]
         else:
-            state.pop("waiting_on_agents", None)
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        # Gate is best-effort; if checker fails, proceed normally and
-        # avoid carrying stale waiting state forward.
+            state["waiting_on_agents"]["first_waiting_at"] = datetime.now(
+                timezone.utc
+            ).isoformat()
+        # Read per-agent timeout for escalation threshold
+        agent_timeout = DEFAULT_AGENT_TIMEOUT
+        ctx_path = os.path.join(output_dir, "review-context.json")
+        if os.path.isfile(ctx_path):
+            try:
+                with open(ctx_path) as f:
+                    ctx_data = json.load(f)
+                agent_timeout = ctx_data.get("review", {}).get(
+                    "agent_timeout_seconds", DEFAULT_AGENT_TIMEOUT
+                )
+            except (json.JSONDecodeError, OSError):
+                pass
+        state["waiting_on_agents"]["agent_timeout_seconds"] = agent_timeout
+        try:
+            first_waiting = datetime.fromisoformat(
+                state["waiting_on_agents"]["first_waiting_at"]
+            )
+            elapsed = (datetime.now(timezone.utc) - first_waiting).total_seconds()
+        except (ValueError, KeyError):
+            elapsed = 0
+        if elapsed < agent_timeout + AGENT_WAIT_GRACE_SECONDS:
+            return context
+    elif r.returncode == 0:
         state.pop("waiting_on_agents", None)
+    else:
+        detail = r.stderr.strip() or r.stdout.strip() or "no diagnostic output"
+        raise RuntimeError(
+            "reviewer status checker failed "
+            f"with exit {r.returncode}: {detail}; review intake remains open"
+        )
 
     # Freeze exactly the dispatched reviewer identities before any consumer
     # renders or loads canonical JSON. Candidate publication/finalization and
@@ -1255,8 +1266,7 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
             state.pop("degradation", None)
 
     # Materialize human-facing Markdown from every settled canonical JSON
-    # before reconciliation begins. This also runs when the best-effort status
-    # checker fails: its failure does not make published JSON unsafe to render.
+    # after the status gate confirms readiness or its wait window elapses.
     reviewer_markdown = {
         "ran": True,
         "written": 0,
