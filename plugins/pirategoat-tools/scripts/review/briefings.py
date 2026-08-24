@@ -1552,13 +1552,19 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         actions.append(f"No structured findings available (reconciliation failed) — critique the document directly without --context.")
     actions.append(f"Output directory: {od}")
     actions.append(f"Context: <one-line summary of PR scope, verdict, and finding count>")
-    actions.append(f"Return STAND, REVISE, or ESCALATE with findings written to {od}/decision-critic-findings.md.")
     actions.append(
-        "On REVISE, also author every finding-level adjustment in the "
-        "proposal-only temp input `decision-critic-adjustments.json` and "
-        "publish it through `critic.py --save`, "
-        "per your agent instructions. Never write the output artifact "
-        "directly: a recommendation that exists only as prose cannot reach "
+        "Return STAND, REVISE, or ESCALATE. Author findings first at "
+        "`$TMPDIR/decision-critic-findings.md`, then publish the findings "
+        "and verdict through `critic.py --save` for every verdict. Never "
+        "write a canonical `decision-critic-*` artifact directly."
+    )
+    actions.append(
+        "On REVISE, also author every finding-level adjustment in "
+        "`$TMPDIR/decision-critic-adjustments.json` and pass it to the "
+        "same `critic.py --save` command, "
+        "per your agent instructions. "
+        "On STAND or ESCALATE, invoke that command without an adjustments "
+        "file. A recommendation that exists only as prose cannot reach "
         "the machine-readable ledger, while a raw write bypasses its "
         "source-bound commit."
     )

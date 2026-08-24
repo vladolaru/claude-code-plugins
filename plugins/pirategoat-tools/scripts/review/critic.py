@@ -249,8 +249,12 @@ def get_step_guidance(
                 "BORDERLINE: When between STAND and REVISE, favor REVISE (cheaper to refine "
                 "than to ship an unfair review).",
                 "",
-                f"Write findings to `{output_dir}/decision-critic-findings.md` using the format "
-                "specified in the agent definition.",
+                "Author findings in `$TMPDIR/decision-critic-findings.md` "
+                "using the format specified in the agent definition; never "
+                f"write `{output_dir}/decision-critic-findings.md` directly.",
+                "Invoke `critic.py --save` for the final STAND, REVISE, or "
+                "ESCALATE verdict. Pass the temp adjustments file only for "
+                "REVISE, as specified in the agent definition.",
                 "",
                 state_requirement,
             ],

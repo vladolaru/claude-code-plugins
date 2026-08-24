@@ -122,6 +122,14 @@ class TestOutputPathInSynthesis:
         )
         assert "/tmp/test-critic-output" in result.stdout
         assert "decision-critic-findings.md" in result.stdout
+        assert "$TMPDIR/decision-critic-findings.md" in result.stdout
+        assert "critic.py --save" in result.stdout
+        assert "STAND, REVISE, or ESCALATE" in result.stdout
+        assert (
+            "Write findings to "
+            "`/tmp/test-critic-output/decision-critic-findings.md`"
+            not in result.stdout
+        )
 
 
 class TestCriticContextArg:

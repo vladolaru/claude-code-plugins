@@ -173,6 +173,26 @@ class TestStructuredDataDiscipline:
         assert '"SKIPPED"' not in text
         assert "produced no verdict" in text
 
+    def test_step_10_routes_every_critic_verdict_through_save(
+        self, mod, tmp_path
+    ):
+        g = mod.get_step_guidance(
+            10, "pr", {"completed_steps": []}, {}, output_dir=str(tmp_path)
+        )
+        text = "\n".join(g["actions"])
+
+        assert "$TMPDIR/decision-critic-findings.md" in text
+        assert "critic.py --save" in text
+        assert "STAND, REVISE, or ESCALATE" in text
+        assert (
+            f"findings written to {tmp_path}/decision-critic-findings.md"
+            not in text
+        )
+        assert (
+            f"Write findings to `{tmp_path}/decision-critic-findings.md`"
+            not in text
+        )
+
     def test_step_10_uses_schema_not_placeholders(self, mod, tmp_path):
         """Step 10 JSON examples should show options, not copyable defaults."""
         state = {"completed_steps": []}
