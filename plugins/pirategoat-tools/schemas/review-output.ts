@@ -130,15 +130,14 @@ export interface ReviewOutput {
     // Issues
     issues: Issue[]; // Findings recorded by the producer, possibly carrying a critic_adjustment (see Issue above) if a critic round has touched them.
 
-    // Declared coverage gap (null when nothing declared) — canonical
-    // repo-relative paths of in-scope NOT DIFFED files the reviewer could
-    // not reach at budget exhaustion. Never counts toward the verdict.
+    // Builder-derived complement of the authoritative deferred sidecar and
+    // validated positive claims (null when the complement is empty).
+    // Canonical repo-relative paths; never affects the verdict.
     unreviewed: string[] | null;
 
-    // Explicit deferred-review claims — ALWAYS present (never null; [] means
-    // "claimed nothing"). Key presence distinguishes explicit-claims output
-    // from legacy output where silence was read as a claim. A claim is a
-    // statement, not proof of read, and never counts toward the verdict.
+    // Validated positive deferred-review claims — ALWAYS present (never null;
+    // [] means "claimed nothing"). A claim is a statement, not proof of read,
+    // and never affects the verdict.
     deferred_reviewed: string[];
 
     // Recommendations (optional)
@@ -186,17 +185,9 @@ export interface ReviewOutput {
 
     // Metadata
     meta: {
-        // Null until the reviewer states a count via set_files_reviewed().
-        // A recorded 0 is therefore always an explicit "I read nothing",
-        // never an unset default — consumers must keep the two apart.
-        files_reviewed: number | null;
-        // Subset of `unreviewed` the builder auto-declared at save time
-        // because the reviewer neither claimed nor declared those deferred
-        // files (null when nothing was auto-filled). Marked so metrics can
-        // separate agent honesty from system honesty. Required going
-        // forward; artifacts produced before save-time auto-fill carry no
-        // such key, so consumers must tolerate its absence.
-        unreviewed_autofilled: string[] | null;
+        // Derived by the builder as inline files plus validated positive
+        // deferred-review claims. Reviewers never state this count.
+        files_reviewed: number;
         // Milliseconds from this actor's dispatch marker to serialization.
         // Null when no marker was found (hand-rolled builder, standalone
         // use, unreadable stamp) — the builder has no clock of its own that

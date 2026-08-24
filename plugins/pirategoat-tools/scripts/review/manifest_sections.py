@@ -12,6 +12,7 @@ from collections import Counter
 from typing import Any, Dict, List, Optional
 
 try:
+    from .agent.coverage import CoverageError, derive_deferred_coverage
     from .reviewer_names import derive_reviewer_name
     from .dependency_refresh import (
         _MAX_DIRTY_FILES,
@@ -32,6 +33,7 @@ except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
+    from review.agent.coverage import CoverageError, derive_deferred_coverage
     from review.reviewer_names import derive_reviewer_name
     from review.dependency_refresh import (
         _MAX_DIRTY_FILES,
@@ -366,55 +368,21 @@ def build_dispatch_manifest(output_dir: str, final_info: dict) -> dict:
 
 
 def _load_deferred_honesty(output_dir: str, agent: str) -> Optional[Dict[str, int]]:
-    """Read one agent's own NOT DIFFED accounting from its review JSON.
-
-    Three counts, all derived straight from the fields
-    `scripts/review/agent/output.py`'s `save()` owns:
-    ``deferred_reviewed`` (the agent's claim to have read a deferred
-    file), ``declared_unreviewed`` (files the agent itself declared
-    unreviewed — ``unreviewed`` minus the autofilled subset), and
-    ``unreviewed_autofilled`` (files `save()` backfilled because the
-    agent said nothing). ``unreviewed_autofilled`` is always a SUBSET of
-    the serialized ``unreviewed`` list, never disjoint from it — `save()`
-    extends ``unreviewed`` with the autofilled paths rather than keeping
-    two separate lists — so ``declared_unreviewed`` is computed by
-    subtracting, not by reading a field that does not exist.
-
-    Every count is a SET size, not a raw `len()` of the serialized list:
-    `add_unreviewed()`/`add_deferred_reviewed()` already de-duplicate on
-    the write path, so a `save()`-produced artifact never carries a
-    duplicate here, but a hand-rolled or malformed producer that bypassed
-    the builder could — and an inflated count from a repeated path is the
-    exact same class of bug `persist_deferred_sidecar`'s own dedupe fixes
-    on the denominator side (`_load_deferred_total`).
-
-    Returns None when the review JSON is unreadable OR predates the
-    ``deferred_reviewed`` key: that key is unconditionally serialized by
-    every current producer (an empty list, never omitted or null), so its
-    absence is the signal of a legacy/hand-rolled producer that had no
-    way to state claims at all — key presence, not a zero count, is what
-    distinguishes "claims-capable and claimed nothing" from "cannot say."
-    """
-    data = read_json_file(output_dir, f"{derive_reviewer_name(agent)}-review.json")
-    if data is None or "deferred_reviewed" not in data:
+    """Derive one finalized review's deferred claim/gap counts."""
+    stem = derive_reviewer_name(agent)
+    review = read_json_file(output_dir, f"{stem}-review.json")
+    sidecar = read_json_file(output_dir, f"{stem}-deferred-files.json")
+    if review is None or sidecar is None or "deferred_reviewed" not in review:
         return None
-
-    def _string_set(value: Any) -> set:
-        if not isinstance(value, list):
-            return set()
-        return {item for item in value if isinstance(item, str)}
-
-    claimed = _string_set(data.get("deferred_reviewed"))
-    unreviewed = _string_set(data.get("unreviewed"))
-    meta = data.get("meta")
-    autofilled = _string_set(
-        meta.get("unreviewed_autofilled") if isinstance(meta, dict) else None
-    )
-    declared = unreviewed - autofilled
+    try:
+        coverage = derive_deferred_coverage(sidecar, review["deferred_reviewed"])
+    except (CoverageError, TypeError):
+        return None
+    if coverage.agent_name != agent:
+        return None
     return {
-        "deferred_reviewed": len(claimed),
-        "declared_unreviewed": len(declared),
-        "unreviewed_autofilled": len(autofilled),
+        "deferred_reviewed": len(coverage.deferred_reviewed),
+        "unreviewed": len(coverage.unreviewed),
     }
 
 
@@ -429,21 +397,19 @@ def _load_deferred_total(output_dir: str, agent: str) -> Optional[int]:
     the sidecar is absent, unreadable, or malformed: a run predating the
     sidecar, or one where the reviewer never ran.
 
-    Counted as a SET, mirroring `save()`'s own `frozenset` read of this
-    same sidecar (`_load_deferred_files`) — `persist_deferred_sidecar`
-    dedupes at write time, but this is the second, independent line of
-    defense: a sidecar written before that fix, or by any future producer
-    that forgets it, must still report the same total `save()` itself
-    reconciled against, not an inflated `len()` of a list that may carry
-    duplicates.
+    The shared coverage authority validates the complete schema-2 sidecar
+    before the denominator is published.
     """
     data = read_json_file(output_dir, f"{derive_reviewer_name(agent)}-deferred-files.json")
     if data is None:
         return None
-    files = data.get("deferred_files")
-    if not isinstance(files, list) or not all(isinstance(p, str) for p in files):
+    try:
+        coverage = derive_deferred_coverage(data, [])
+    except CoverageError:
         return None
-    return len(set(files))
+    if coverage.agent_name != agent:
+        return None
+    return len(coverage.unreviewed)
 
 
 def build_coverage_manifest(
@@ -525,7 +491,7 @@ def build_coverage_manifest(
             path for paths in by_agent_sets.values() for path in paths
         )
 
-        # Agent-vs-system honesty split for NOT DIFFED (budget-deferred)
+        # Derived positive-claim/gap populations for NOT DIFFED files
         # files, read straight off durable per-reviewer sidecars — never
         # derived from the events already folded into by_agent above,
         # which only carry generated SCOPE (assigned files), not the

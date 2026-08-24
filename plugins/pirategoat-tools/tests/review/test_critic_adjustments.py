@@ -75,7 +75,6 @@ def _write_findings(output_dir, issues, **extra):
         "narrative_summary": None,
         "meta": {
             "files_reviewed": 1,
-            "unreviewed_autofilled": None,
             "review_duration_ms": 10,
             "confidence_score": 0.9,
             "tool_results_used": None,
@@ -2686,8 +2685,8 @@ class TestWithdrawnAssessmentRender:
             "unreviewed": None, "deferred_reviewed": [], "observations": None,
             "recommendations": None, "positive_observations": None,
             "clearances": None,
-            "meta": {"files_reviewed": 1, "unreviewed_autofilled": None,
-                     "review_duration_ms": 1, "confidence_score": 0.9},
+            "meta": {"files_reviewed": 1, "review_duration_ms": 1,
+                     "confidence_score": 0.9},
         }
         data.update(overrides)
         return render_markdown(data)

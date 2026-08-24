@@ -304,7 +304,6 @@ class TestCandidatePublication:
     @pytest.mark.parametrize(
         "required_field",
         [
-            "unreviewed_autofilled",
             "review_duration_ms",
             "confidence_score",
             "tool_results_used",
@@ -441,9 +440,9 @@ class TestCandidatePublication:
         assert rejected.returncode == 1
         assert "REJECTED" in rejected.stderr
         assert finalized.returncode == 0
-        assert "FINALIZED" in finalized.stdout
+        assert "RECORDED FINAL:" in finalized.stdout
         assert retried.returncode == 0
-        assert "ALREADY FINALIZED" in retried.stdout
+        assert "RECORDED FINAL (ALREADY FINALIZED):" in retried.stdout
         assert (tmp_path / "code-review.json").exists()
 
     def test_concurrent_same_reviewer_saves_leave_one_complete_candidate(

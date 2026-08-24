@@ -9,6 +9,7 @@ Zero external dependencies beyond stdlib + pytest.
 """
 
 import json
+import hashlib
 import os
 import re
 import subprocess
@@ -552,7 +553,6 @@ class TestToDict:
     def test_saved_artifact_carries_the_version(self, monkeypatch, tmp_path):
         monkeypatch.setenv("PIRATEGOAT_PLUGIN_VERSION", "1.114.0")
         b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        b.set_files_reviewed(1)
         _write_required_sidecar(tmp_path, "pr")
         b.save(str(tmp_path))
         saved = json.loads((tmp_path / "pr-review.candidate.json").read_text())
@@ -575,12 +575,11 @@ class TestToDict:
 
     def test_meta_structure(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        b.set_files_reviewed(10)
         b.set_confidence(0.8)
         b.add_tool_result("grep")
         d = b.to_dict()
         meta = d["meta"]
-        assert meta["files_reviewed"] == 10
+        assert meta["files_reviewed"] is None
         assert meta["confidence_score"] == 0.8
         assert meta["tool_results_used"] == ["grep"]
         assert "review_duration_ms" in meta
@@ -660,8 +659,6 @@ class TestRenderMarkdown:
         b.add_observation("c.py", "an observation")
         b.add_positive("something good")
         b.add_clearance(claim="no X remains", method="grep -rn X", evidence="0 hits")
-        b.add_unreviewed("z.py")
-        b.set_files_reviewed(3)
         return b
 
     def test_matches_builder_to_markdown(self):
@@ -833,8 +830,12 @@ class TestSave:
             # assertion straddle a millisecond. Assert it independently
             # and compare the rest exactly.
             assert isinstance(saved["meta"]["review_duration_ms"], int)
+            assert saved["meta"]["files_reviewed"] == 0
+            assert live["meta"]["files_reviewed"] is None
             saved["meta"].pop("review_duration_ms")
             live["meta"].pop("review_duration_ms")
+            saved["meta"].pop("files_reviewed")
+            live["meta"].pop("files_reviewed")
             assert saved == live
 
     def test_return_value_has_correct_paths(self):
@@ -1031,265 +1032,6 @@ class TestAddObservation:
 
 
 # =============================================================================
-# TestAddUnreviewed
-# =============================================================================
-
-
-class TestAddUnreviewed:
-    """add_unreviewed declares NOT DIFFED coverage gaps through the builder.
-
-    Add-time enforcement only — the authoritative save-time check that does
-    not need the env envelope lives in TestSaveTimeDeferredValidation, and
-    the sibling claims API is covered by TestAddDeferredReviewed."""
-
-    def test_stores_and_dedupes_paths(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_unreviewed("src/a.py")
-        b.add_unreviewed("  src/b.py  ")
-        b.add_unreviewed("src/a.py")
-        assert b.unreviewed == ["src/a.py", "src/b.py"]
-
-    def test_declares_every_path_of_a_multi_path_call(self):
-        """The signature mirrors its sibling because agents assume it does.
-
-        Two reviewers in one field run called add_unreviewed(*paths) on the
-        symmetry with add_deferred_reviewed() and got "takes 2 positional
-        arguments but 126 were given"; one then spent a tool call reading
-        output.py to discover the asymmetry.
-        """
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_unreviewed("src/a.py", "./src/b.py", "src/a.py")
-        assert b.unreviewed == ["src/a.py", "src/b.py"]
-
-    def test_single_path_calls_still_work(self):
-        """Every taught example and every existing caller passes one path."""
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_unreviewed("src/a.py")
-        assert b.unreviewed == ["src/a.py"]
-
-    def test_zero_arguments_raises(self):
-        """A declaration of nothing is a silent no-op, not a declaration."""
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        with pytest.raises(ValueError, match="at least one file path"):
-            b.add_unreviewed()
-
-    def test_one_bad_path_rejects_the_whole_batch(self):
-        """All-or-nothing, the same as the claims API: a partially recorded
-        declaration is a coverage statement the reviewer never made."""
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        with pytest.raises(ValueError):
-            b.add_unreviewed("src/a.py", "/abs/b.py")
-        assert b.unreviewed == []
-
-    def test_multi_path_declaration_still_contradicts_a_claim(
-        self, tmp_path, monkeypatch
-    ):
-        """Per-path enforcement does not loosen when the call is variadic:
-        save() must still reject declaring and claiming the same file."""
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
-        (tmp_path / "sec-deferred-files.json").write_text(
-            json.dumps({"schema": 1, "deferred_files": ["a.py", "b.py"]})
-        )
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_unreviewed("a.py", "b.py")
-        b.add_deferred_reviewed("b.py")
-        with pytest.raises(ValueError) as excinfo:
-            b.save(str(tmp_path))
-        assert "b.py" in str(excinfo.value)
-
-    def test_multi_path_membership_is_checked_per_path(
-        self, tmp_path, monkeypatch
-    ):
-        """A batch is not a bypass — every path is membership-checked, and
-        one raise names every offender rather than one per retry."""
-        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
-        monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "sec")
-        (tmp_path / "sec-deferred-files.json").write_text(
-            json.dumps({"schema": 1, "deferred_files": ["a.py"]})
-        )
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        with pytest.raises(ValueError) as excinfo:
-            b.add_unreviewed("a.py", "typo.py", "other-typo.py")
-        message = str(excinfo.value)
-        assert "add_unreviewed received 2 declaration(s)" in message
-        assert "typo.py" in message and "other-typo.py" in message
-        assert b.unreviewed == []
-
-    def test_normalizes_equivalent_paths_to_canonical_form(self):
-        """"./src/a.py" and "src//a.py" declare the same scope path — the
-        stored form must match what the scope sidecars emit."""
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_unreviewed("./src/a.py")
-        b.add_unreviewed("src//a.py")
-        assert b.unreviewed == ["src/a.py"]
-
-    @pytest.mark.parametrize("bad", ["", "   ", None, 42, ["src/a.py"]])
-    def test_rejects_non_path_values(self, bad):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        with pytest.raises(ValueError):
-            b.add_unreviewed(bad)
-
-    def test_normalizes_backslash_separators(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_unreviewed("src\\a.py")
-        assert b.unreviewed == ["src/a.py"]
-
-    @pytest.mark.parametrize(
-        "bad",
-        [
-            "/abs/a.py", "../outside.py", "..", "C:/win.py", "c:win.py",
-            # These normalize to "." — a form no scope summary can contain.
-            ".", "./", "foo/..",
-        ],
-    )
-    def test_rejects_non_repo_relative_paths(self, bad):
-        """Forms that can never match a canonical scope path must fail
-        loudly — an unmatched declaration inverts into a reviewed claim."""
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        with pytest.raises(ValueError):
-            b.add_unreviewed(bad)
-
-    def _arm_deferred_sidecar(self, tmp_path, monkeypatch, deferred):
-        """Simulate the bootstrap-written authoritative deferred set."""
-        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
-        monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "sec")
-        (tmp_path / "sec-deferred-files.json").write_text(
-            json.dumps({"schema": 2, "agent_name": "sec-reviewer", "deferred_files": deferred, "diffed_count": 0, "in_scope_count": len(deferred)})
-        )
-
-    def test_declaration_in_deferred_set_is_accepted(
-        self, tmp_path, monkeypatch
-    ):
-        self._arm_deferred_sidecar(tmp_path, monkeypatch, ["src/deferred.py"])
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_unreviewed("./src/deferred.py")  # normalized before matching
-        assert b.unreviewed == ["src/deferred.py"]
-
-    def test_declaration_outside_deferred_set_is_rejected(
-        self, tmp_path, monkeypatch
-    ):
-        """A well-formed but wrong path (typo, wrong root) must fail loudly
-        at write time — downstream it would silently count as a reviewed
-        claim for every genuinely deferred file."""
-        self._arm_deferred_sidecar(tmp_path, monkeypatch, ["src/email.py"])
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        with pytest.raises(ValueError, match="src/email.py"):
-            b.add_unreviewed("src/emails.py")
-
-    def test_empty_deferred_set_rejects_every_declaration(
-        self, tmp_path, monkeypatch
-    ):
-        self._arm_deferred_sidecar(tmp_path, monkeypatch, [])
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        with pytest.raises(ValueError, match="no deferred files"):
-            b.add_unreviewed("src/a.py")
-
-    def test_missing_sidecar_falls_back_to_form_only(
-        self, tmp_path, monkeypatch
-    ):
-        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
-        monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "sec")
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_unreviewed("src/a.py")
-        assert b.unreviewed == ["src/a.py"]
-
-    def test_malformed_sidecar_falls_back_to_form_only(
-        self, tmp_path, monkeypatch
-    ):
-        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
-        monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "sec")
-        (tmp_path / "sec-deferred-files.json").write_text("{not json")
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_unreviewed("src/a.py")
-        assert b.unreviewed == ["src/a.py"]
-
-    def test_unreviewed_in_dict_output(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_unreviewed("src/a.py")
-        assert b.to_dict()["unreviewed"] == ["src/a.py"]
-
-    def test_unreviewed_null_when_empty(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        assert b.to_dict()["unreviewed"] is None
-
-    def test_deferred_reviewed_key_always_present(self):
-        """The sibling key deliberately does NOT null out when empty: its
-        presence is what tells a consumer this output states its claims."""
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        assert b.to_dict()["deferred_reviewed"] == []
-
-    def test_unreviewed_does_not_affect_verdict(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_unreviewed("src/a.py")
-        assert b._calculate_verdict() == "approve"
-
-    def test_unreviewed_renders_contract_line_in_markdown(self):
-        """The Markdown line must match the bootstrap-mandated declaration
-        format so the supported API satisfies the NOT DIFFED contract."""
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_unreviewed("src/a.py")
-        b.add_unreviewed("src/b.py")
-        md = b.to_markdown()
-        assert "**Not reviewed (budget):** `src/a.py`, `src/b.py`" in md
-
-    def test_markdown_omits_line_when_nothing_declared(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        assert "Not reviewed (budget)" not in b.to_markdown()
-
-    def test_markdown_separates_declared_from_autofilled(self, tmp_path):
-        """Budget exhaustion is not why an auto-declared file went
-        unreviewed, so the human artifact must not file it under that
-        label — the JSON can tell agent honesty from system backfill and
-        the Markdown has to as well."""
-        (tmp_path / "sec-deferred-files.json").write_text(
-            json.dumps(
-                {"schema": 2, "agent_name": "sec-reviewer", "deferred_files": ["src/a.py", "src/auto.py"], "diffed_count": 0, "in_scope_count": 2}
-            )
-        )
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_unreviewed("src/a.py")
-        b.save(str(tmp_path))  # src/auto.py gets auto-declared
-        md = render_markdown(
-            json.loads((tmp_path / "sec-review.candidate.json").read_text())
-        )
-        assert "**Not reviewed (budget):** `src/a.py`\n" in md
-        assert (
-            "**Not reviewed (unaccounted — auto-declared at save):** "
-            "`src/auto.py`\n"
-        ) in md
-        # Membership must not leak across the two lines.
-        budget_line = next(
-            line for line in md.splitlines()
-            if line.startswith("**Not reviewed (budget):**")
-        )
-        assert "src/auto.py" not in budget_line
-
-    def test_markdown_renders_old_shape_without_autofill_key(self):
-        """Outputs produced before save-time auto-fill carry no meta key;
-        they must keep rendering exactly as they did."""
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_unreviewed("src/a.py")
-        data = b.to_dict()
-        del data["meta"]["unreviewed_autofilled"]
-        md = render_markdown(data)
-        assert "**Not reviewed (budget):** `src/a.py`" in md
-        assert "auto-declared" not in md
-
-    def test_markdown_ignores_malformed_autofill_marker(self):
-        """A non-list marker says nothing usable about membership; the
-        paths keep their existing label rather than being split by a
-        set of characters."""
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_unreviewed("src/a.py")
-        data = b.to_dict()
-        data["meta"]["unreviewed_autofilled"] = "src/a.py"
-        md = render_markdown(data)
-        assert "**Not reviewed (budget):** `src/a.py`" in md
-        assert "auto-declared" not in md
-
-
-# =============================================================================
 # TestAddDeferredReviewed
 # =============================================================================
 
@@ -1297,10 +1039,9 @@ class TestAddUnreviewed:
 class TestAddDeferredReviewed:
     """add_deferred_reviewed claims NOT DIFFED files as actually reviewed.
 
-    Add-time enforcement only, mirroring TestAddUnreviewed (its declaring
-    sibling — both APIs share one path grammar, so the form cases here and
-    there must stay in lockstep). The authoritative save-time check lives
-    in TestSaveTimeDeferredValidation."""
+    The positive-claim API validates one complete batch against the
+    authoritative sidecar. Coverage gaps and reviewed counts are derived
+    later; reviewers never state either population directly."""
 
     def _arm_deferred_sidecar(self, tmp_path, monkeypatch, deferred):
         """Simulate the bootstrap-written authoritative deferred set."""
@@ -1439,8 +1180,7 @@ class TestAddDeferredReviewed:
     ):
         """The consequence that matters: after a rejected batch, save()'s
         accounting is exactly as if the call never happened — the
-        unclaimed file lands in the auto-fill gap record, never as a
-        claim."""
+        unclaimed file lands in the derived gap record, never as a claim."""
         self._arm_deferred_sidecar(
             tmp_path, monkeypatch, ["src/a.py", "src/c.py"]
         )
@@ -1454,7 +1194,7 @@ class TestAddDeferredReviewed:
         ) as f:
             data = json.load(f)
         assert data["deferred_reviewed"] == ["src/c.py"]
-        assert data["meta"]["unreviewed_autofilled"] == ["src/a.py"]
+        assert data["unreviewed"] == ["src/a.py"]
 
     def test_duplicate_within_batch_dedupes(self, tmp_path, monkeypatch):
         """Pinning current semantics: a batch repeating one path collapses
@@ -1863,401 +1603,86 @@ class TestAdvisoryChannel:
 # =============================================================================
 
 
-class TestSaveTimeDeferredValidation:
-    """save() validates declarations against the on-disk sidecar even when
-    the PIRATEGOAT_* env envelope is absent (the bypass path 3/19 agents
-    took in the 2026-08-14 live-fire run).
+class TestDerivedDeferredCoverage:
+    """Candidate and final coverage are sidecar-derived from positive claims."""
 
-    The env-envelope add-time path this backstops is TestAddUnreviewed."""
-
-    def _write_sidecar(self, output_dir, reviewer, files):
-        sidecar = Path(output_dir) / f"{reviewer}-deferred-files.json"
-        sidecar.write_text(json.dumps({
+    @staticmethod
+    def _write_sidecar(tmp_path, deferred, *, diffed_count=0, reviewer="code"):
+        (tmp_path / f"{reviewer}-deferred-files.json").write_text(json.dumps({
             "schema": 2,
             "agent_name": f"{reviewer}-reviewer",
-            "deferred_files": files,
-            "diffed_count": 0,
-            "in_scope_count": len(files),
+            "deferred_files": deferred,
+            "diffed_count": diffed_count,
+            "in_scope_count": diffed_count + len(deferred),
         }))
 
-    def test_save_rejects_out_of_set_declaration_without_env(
-        self, tmp_path, monkeypatch
-    ):
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
-        self._write_sidecar(tmp_path, "go-tests", ["pkg/real_test.go"])
-        builder = ReviewOutputBuilder("123", "go-tests")
-        # Form-valid but out-of-set — the exact garbage shape that shipped:
-        builder.add_unreviewed("pkg/real_test.go (450 lines not diffed)")
-        with pytest.raises(ValueError, match="NOT DIFFED file"):
-            builder.save(str(tmp_path))
-        assert not (tmp_path / "go-tests-review.json").exists()
-        # Validation must precede staging, not just the final replace.
-        assert not list(Path(tmp_path).glob("*.tmp"))
-
-    def test_save_reports_every_offender_in_one_raise(
-        self, tmp_path, monkeypatch
-    ):
-        """The motivating run shipped 23 bad declarations; reporting them
-        one per save would cost 23 round trips to clean up."""
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
-        self._write_sidecar(tmp_path, "go-tests", ["pkg/real_test.go"])
-        builder = ReviewOutputBuilder("123", "go-tests")
-        builder.add_unreviewed("pkg/real_test.go")  # the one legitimate entry
-        builder.add_unreviewed("pkg/bogus_one.go")
-        builder.add_unreviewed("pkg/bogus_two.go")
-        builder.add_unreviewed("pkg/bogus_three.go")
-        with pytest.raises(ValueError) as excinfo:
-            builder.save(str(tmp_path))
-        message = str(excinfo.value)
-        assert "add_unreviewed received 3 declaration" in message
-        for offender in ("bogus_one", "bogus_two", "bogus_three"):
-            assert offender in message
-        # The legitimate entry appears only in the valid-paths tail, never
-        # among the offenders the message opens with.
-        offenders, _, valid_paths = message.partition("Valid paths:")
-        assert "pkg/real_test.go" in valid_paths
-        assert "pkg/real_test.go" not in offenders
-
-    def test_save_rejects_declaration_when_deferred_set_is_empty(
-        self, tmp_path, monkeypatch
-    ):
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
-        self._write_sidecar(tmp_path, "go-tests", [])
-        builder = ReviewOutputBuilder("123", "go-tests")
-        builder.add_unreviewed("pkg/anything.go")
-        with pytest.raises(ValueError, match="no deferred files"):
-            builder.save(str(tmp_path))
-        assert not (tmp_path / "go-tests-review.json").exists()
-
-    def test_save_rejects_paths_appended_around_add_unreviewed(
-        self, tmp_path, monkeypatch
-    ):
-        """Defense in depth is deliberate: the check reads the published
-        list, so bypassing the add-time API does not buy a free pass."""
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
-        self._write_sidecar(tmp_path, "go-tests", ["pkg/real_test.go"])
-        builder = ReviewOutputBuilder("123", "go-tests")
-        builder.unreviewed.append("bogus.go")
-        with pytest.raises(ValueError, match="NOT DIFFED file"):
-            builder.save(str(tmp_path))
-
-    def test_save_rejects_a_malformed_authoritative_sidecar(
-        self, tmp_path, monkeypatch
-    ):
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
-        (tmp_path / "go-tests-deferred-files.json").write_text("{not json")
-        builder = ReviewOutputBuilder("123", "go-tests")
-        builder.add_unreviewed("anything/form-valid.go")
-        with pytest.raises(ValueError, match="malformed authoritative deferred coverage"):
-            builder.save(str(tmp_path))
-        assert not (tmp_path / "go-tests-review.json").exists()
-
-    def test_save_rejects_an_undecodable_authoritative_sidecar(
-        self, tmp_path, monkeypatch
-    ):
-        """Undecodable bytes are a corrupt sidecar, not a declaration
-        offense — the catch must match the advisory loader's."""
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
-        (tmp_path / "go-tests-deferred-files.json").write_bytes(b"\xff\xfe\x00")
-        builder = ReviewOutputBuilder("123", "go-tests")
-        builder.add_unreviewed("anything/form-valid.go")
-        with pytest.raises(ValueError, match="malformed authoritative deferred coverage"):
-            builder.save(str(tmp_path))
-        assert not (tmp_path / "go-tests-review.json").exists()
-
-    def test_save_accepts_in_set_declaration_without_env(
-        self, tmp_path, monkeypatch
-    ):
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
-        self._write_sidecar(tmp_path, "go-tests", ["pkg/real_test.go"])
-        builder = ReviewOutputBuilder("123", "go-tests")
-        builder.add_unreviewed("pkg/real_test.go")
-        builder.save(str(tmp_path))
-        data = json.loads(
-            (tmp_path / "go-tests-review.candidate.json").read_text()
+    def test_candidate_derives_gaps_and_counts_from_claims(self, tmp_path):
+        self._write_sidecar(
+            tmp_path, ["src/read.ts", "src/unread.ts"], diffed_count=3
         )
-        assert data["unreviewed"] == ["pkg/real_test.go"]
-
-    def test_save_rejects_a_missing_authoritative_sidecar(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
-        builder = ReviewOutputBuilder("123", "go-tests")
-        builder.add_unreviewed("anything/form-valid.go")
-        with pytest.raises(ValueError, match="missing authoritative deferred coverage"):
-            builder.save(str(tmp_path))
-        assert not (tmp_path / "go-tests-review.json").exists()
-
-    def test_plain_save_rejects_a_missing_authoritative_sidecar(self, tmp_path):
-        builder = ReviewOutputBuilder("123", "go-tests")
-
-        with pytest.raises(ValueError, match="missing authoritative deferred coverage"):
-            builder.save(str(tmp_path))
-        assert not (tmp_path / "go-tests-review.json").exists()
-
-    def test_claims_serialize_and_validate_membership(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
-        self._write_sidecar(tmp_path, "code", ["a.go", "b.go"])
         builder = ReviewOutputBuilder("123", "code")
-        builder.add_deferred_reviewed("a.go", "./b.go")  # normalizes ./b.go
+        builder.add_deferred_reviewed("src/read.ts")
+
         builder.save(str(tmp_path))
-        data = json.loads((tmp_path / "code-review.candidate.json").read_text())
-        assert data["deferred_reviewed"] == ["a.go", "b.go"]
 
-    def test_out_of_set_claim_rejected_at_save(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
-        self._write_sidecar(tmp_path, "code", ["a.go"])
-        builder = ReviewOutputBuilder("123", "code")
-        builder.add_deferred_reviewed("not-deferred.go")
-        with pytest.raises(ValueError, match="add_deferred_reviewed"):
-            builder.save(str(tmp_path))
-        assert not (tmp_path / "code-review.json").exists()
-        assert not list(Path(tmp_path).glob("*.tmp"))
-
-    def test_bad_declarations_and_bad_claims_stay_attributable(
-        self, tmp_path, monkeypatch
-    ):
-        """A declaration offense and a claim offense are different errors.
-
-        Both mean "this path is not in the deferred set", but the fix
-        differs — one is a wrongly declared gap, the other a wrongly
-        claimed read — so each raise names the API that produced it and
-        never blames its sibling.
-        """
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
-        self._write_sidecar(tmp_path, "code", ["a.go"])
-        builder = ReviewOutputBuilder("123", "code")
-        builder.add_unreviewed("bogus-declaration.go")
-        builder.add_deferred_reviewed("bogus-claim.go")
-
-        # Declarations are checked first and own the raise alone.
-        with pytest.raises(ValueError) as excinfo:
-            builder.save(str(tmp_path))
-        message = str(excinfo.value)
-        assert "add_unreviewed received 1 declaration" in message
-        assert "bogus-declaration.go" in message
-        assert "add_deferred_reviewed" not in message
-
-        # With the declaration fixed, the claim raises under its own name.
-        builder.unreviewed.clear()
-        with pytest.raises(ValueError) as excinfo:
-            builder.save(str(tmp_path))
-        message = str(excinfo.value)
-        assert "add_deferred_reviewed" in message
-        assert "bogus-claim.go" in message
-        # The noun, not just the API name, carries the attribution: an
-        # offense reported as a "declaration" under the claims API name
-        # sends the reader to the wrong fix.
-        assert "claim(s)" in message
-        assert "add_unreviewed" not in message
-        assert not (tmp_path / "code-review.json").exists()
-
-    def test_unaccounted_deferred_files_autofill_as_unreviewed(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
-        self._write_sidecar(tmp_path, "docs-drift", ["a.md", "b.md", "c.md"])
-        builder = ReviewOutputBuilder("123", "docs-drift")
-        builder.add_deferred_reviewed("a.md")
-        builder.add_unreviewed("b.md")
-        builder.save(str(tmp_path))
-        data = json.loads(
-            (tmp_path / "docs-drift-review.candidate.json").read_text()
+        saved = json.loads(
+            (tmp_path / "code-review.candidate.json").read_text()
         )
-        assert sorted(data["unreviewed"]) == ["b.md", "c.md"]
-        assert data["meta"]["unreviewed_autofilled"] == ["c.md"]
-        out = capsys.readouterr().out
-        assert "UNREVIEWED: 1 declared (+1 auto-filled) / 3 deferred" in out
-        assert "CLAIMED REVIEWED: 1" in out
-        assert "WARNING" in out
+        assert saved["deferred_reviewed"] == ["src/read.ts"]
+        assert saved["unreviewed"] == ["src/unread.ts"]
+        assert saved["meta"]["files_reviewed"] == 4
+        assert "unreviewed_" + "autofilled" not in saved["meta"]
 
-    def test_fully_accounted_save_has_no_autofill(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
-        self._write_sidecar(tmp_path, "code", ["a.go"])
+    def test_candidate_resave_recomputes_complement_from_scratch(self, tmp_path):
+        self._write_sidecar(tmp_path, ["src/a.ts", "src/b.ts"])
         builder = ReviewOutputBuilder("123", "code")
-        builder.add_deferred_reviewed("a.go")
+        builder.add_deferred_reviewed("src/a.ts")
         builder.save(str(tmp_path))
-        data = json.loads((tmp_path / "code-review.candidate.json").read_text())
-        assert data["unreviewed"] is None
-        assert data["meta"]["unreviewed_autofilled"] is None
-        assert "WARNING" not in capsys.readouterr().out
-
-    def test_double_save_autofill_is_idempotent(self, tmp_path, monkeypatch):
-        """An unchanged re-save must not duplicate the fill or the marker.
-
-        This holds under both sticky and derived semantics, so it is a
-        no-duplication guard only — the redesign to derived state is pinned
-        by test_claim_after_warning_clears_autofill_on_second_save.
-        """
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
-        self._write_sidecar(tmp_path, "code", ["a.go", "b.go"])
-        builder = ReviewOutputBuilder("123", "code")
-        builder.add_deferred_reviewed("a.go")
-        builder.save(str(tmp_path))
-        builder.save(str(tmp_path))
-        data = json.loads((tmp_path / "code-review.candidate.json").read_text())
-        assert data["unreviewed"] == ["b.go"]
-        assert data["meta"]["unreviewed_autofilled"] == ["b.go"]
-
-    def test_claim_after_warning_clears_autofill_on_second_save(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        """The remediation the WARNING teaches must actually work — and
-        must not trip the declare-plus-claim contradiction guard, which is
-        why the previous fill is stripped BEFORE validation runs."""
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
-        self._write_sidecar(tmp_path, "code", ["a.go", "b.go"])
-        builder = ReviewOutputBuilder("123", "code")
-        builder.add_deferred_reviewed("a.go")
-        builder.save(str(tmp_path))          # b.go auto-filled, WARNING
-        builder.add_deferred_reviewed("b.go")
-        builder.save(str(tmp_path))          # the WARNING's own remediation
-        data = json.loads((tmp_path / "code-review.candidate.json").read_text())
-        assert data["unreviewed"] is None
-        assert data["meta"]["unreviewed_autofilled"] is None
-        assert sorted(data["deferred_reviewed"]) == ["a.go", "b.go"]
-        out = capsys.readouterr().out
-        assert out.count("WARNING") == 1  # first save only
-
-    def test_explicit_declaration_promotes_out_of_autofill(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        """Declaring a path the system had auto-filled is the agent taking
-        ownership of the gap — the second legal answer to the WARNING. It
-        must stop counting as backfill, or the marker lies about who
-        accounted for the file in exactly the case it exists to measure."""
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
-        self._write_sidecar(tmp_path, "code", ["a.go", "b.go"])
-        builder = ReviewOutputBuilder("123", "code")
-        builder.add_deferred_reviewed("a.go")
-        builder.save(str(tmp_path))          # b.go auto-filled, WARNING
-        builder.add_unreviewed("b.go")       # the agent owns the gap
-        builder.save(str(tmp_path))
-        data = json.loads((tmp_path / "code-review.candidate.json").read_text())
-        assert data["unreviewed"] == ["b.go"]
-        assert data["meta"]["unreviewed_autofilled"] is None
-        out = capsys.readouterr().out
-        assert out.count("WARNING") == 1  # first save only
-        assert "UNREVIEWED: 1 declared / 2 deferred" in out
-
-    def test_declared_and_claimed_path_rejected_at_save(
-        self, tmp_path, monkeypatch
-    ):
-        """Declaring a file unreviewed and claiming it reviewed are
-        contradictory statements about the same file. Serializing both
-        would put the path in two arrays and inflate the accounting to
-        three statements about two files."""
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
-        self._write_sidecar(tmp_path, "code", ["a.go", "b.go"])
-        builder = ReviewOutputBuilder("123", "code")
-        builder.add_unreviewed("b.go")
-        builder.add_deferred_reviewed("b.go")
-        with pytest.raises(ValueError) as excinfo:
-            builder.save(str(tmp_path))
-        message = str(excinfo.value)
-        assert "1 path(s) are both declared unreviewed" in message
-        assert "b.go" in message
-        assert not (tmp_path / "code-review.json").exists()
-        assert not list(Path(tmp_path).glob("*.tmp"))
-
-    def test_declared_and_claimed_path_rejected_without_a_sidecar(
-        self, tmp_path, monkeypatch
-    ):
-        """Fail-open is about MEMBERSHIP, not self-consistency.
-
-        Without a sidecar nobody can say whether a path is a deferred file
-        of this review — so declarations and claims go unchecked. But
-        "declared unreviewed" and "claimed reviewed" contradict each other
-        no matter what the deferred set is, and the builder holds both
-        lists. Letting the contradiction publish here also hides itself:
-        the accounting echo omits the claimed count when no sidecar is
-        readable, so the doubled path is visible in neither the receipt nor
-        any warning.
-        """
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
-        builder = ReviewOutputBuilder("123", "code")  # no sidecar written
-        builder.add_unreviewed("b.go")
-        builder.add_deferred_reviewed("b.go")
-        with pytest.raises(ValueError) as excinfo:
-            builder.save(str(tmp_path))
-        assert "1 path(s) are both declared unreviewed" in str(excinfo.value)
-        assert not (tmp_path / "code-review.json").exists()
-        assert not list(Path(tmp_path).glob("*.tmp"))
-
-    def test_sidecar_replacement_between_saves_rederives_cleanly(
-        self, tmp_path, monkeypatch
-    ):
-        """A replaced sidecar must not make the system blame the agent.
-
-        The previous save's auto-fill is derived from the old deferred set.
-        If the new derivation ran before that stale fill was stripped, the
-        agent would be told its own add_unreviewed() call "matches no NOT
-        DIFFED file" for a path it never declared — an error about the
-        system's bookkeeping, addressed to the wrong party and unfixable by
-        the party receiving it.
-        """
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
-        self._write_sidecar(tmp_path, "code", ["a.go", "b.go"])
-        builder = ReviewOutputBuilder("123", "code")
-        builder.add_deferred_reviewed("a.go")
-        builder.save(str(tmp_path))          # b.go auto-filled
-        self._write_sidecar(tmp_path, "code", ["a.go", "c.go"])
-        builder.save(str(tmp_path))          # must NOT blame the agent for b.go
-        data = json.loads((tmp_path / "code-review.candidate.json").read_text())
-        assert data["unreviewed"] == ["c.go"]
-        assert data["meta"]["unreviewed_autofilled"] == ["c.go"]
-
-    def test_missing_sidecar_cannot_publish_a_review(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        """Publication must not invent coverage when its authority is absent."""
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
-        builder = ReviewOutputBuilder("123", "code")
-        builder.add_unreviewed("some/file.go")
-        with pytest.raises(ValueError, match="missing authoritative deferred coverage"):
-            builder.save(str(tmp_path))
-        assert not (tmp_path / "code-review.json").exists()
-
-    def test_sidecar_with_no_deferred_files_echoes_zeros(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        """A review that deferred nothing still reports its accounting —
-        the line is the agent's receipt, not an exception path."""
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
-        self._write_sidecar(tmp_path, "code", [])
-        builder = ReviewOutputBuilder("123", "code")
-        builder.save(str(tmp_path))
-        out = capsys.readouterr().out
-        assert (
-            "UNREVIEWED: 0 declared / 0 deferred | CLAIMED REVIEWED: 0" in out
+        first = json.loads(
+            (tmp_path / "code-review.candidate.json").read_text()
         )
-        assert "WARNING" not in out
+        assert first["unreviewed"] == ["src/b.ts"]
 
+        builder.add_deferred_reviewed("src/b.ts")
+        builder.save(str(tmp_path))
 
-# =============================================================================
-# TestBudgetTargetEcho
-# =============================================================================
+        second = json.loads(
+            (tmp_path / "code-review.candidate.json").read_text()
+        )
+        assert second["deferred_reviewed"] == ["src/a.ts", "src/b.ts"]
+        assert second["unreviewed"] is None
+        assert second["meta"]["files_reviewed"] == 2
+
+    def test_finalized_json_preserves_derived_coverage(self, tmp_path):
+        self._write_sidecar(
+            tmp_path, ["src/read.ts", "src/unread.ts"], diffed_count=2
+        )
+        builder = ReviewOutputBuilder("123", "code")
+        builder.add_deferred_reviewed("src/read.ts")
+
+        saved = builder.save(str(tmp_path))
+        finalize_candidate(str(tmp_path), "code", saved["candidate_digest"])
+
+        final = json.loads((tmp_path / "code-review.json").read_text())
+        assert final["deferred_reviewed"] == ["src/read.ts"]
+        assert final["unreviewed"] == ["src/unread.ts"]
+        assert final["meta"]["files_reviewed"] == 3
+
+    def test_finalization_rejects_a_raw_claim_list(self, tmp_path):
+        self._write_sidecar(tmp_path, ["src/read.ts"])
+        builder = ReviewOutputBuilder("123", "code")
+        saved = builder.save(str(tmp_path))
+        candidate_path = tmp_path / "code-review.candidate.json"
+        candidate = json.loads(candidate_path.read_text())
+        candidate["deferred_reviewed"] = "src/read.ts"
+        candidate_bytes = json.dumps(candidate).encode()
+        candidate_path.write_bytes(candidate_bytes)
+        digest = hashlib.sha256(candidate_bytes).hexdigest()
+
+        with pytest.raises(
+            ValueError, match="deferred_reviewed must be a list"
+        ):
+            finalize_candidate(str(tmp_path), "code", digest)
 
 
 class TestBudgetTargetEcho:
@@ -2273,7 +1698,7 @@ class TestBudgetTargetEcho:
     (schema 2), not an env var: the retired env-var budget transport
     silently died for any agent that rebuilt its save command, so the
     sidecar is now the only carrier — the same one output.py already reads
-    for NOT DIFFED auto-fill.
+    for derived NOT DIFFED coverage.
     """
 
     @staticmethod
@@ -2299,7 +1724,6 @@ class TestBudgetTargetEcho:
 
     def _save_with_unreviewed(self, tmp_path, monkeypatch, capsys):
         builder = ReviewOutputBuilder("123", "code")
-        builder.add_unreviewed("some/file.go")
         builder.save(str(tmp_path))
         return capsys.readouterr().out
 
@@ -2358,12 +1782,10 @@ class TestBudgetTargetEcho:
         out = self._save_with_unreviewed(tmp_path, monkeypatch, capsys)
         assert "TARGET:" not in out
 
-    def test_autofilled_only_still_gets_the_target(
+    def test_derived_gap_still_gets_the_target(
         self, tmp_path, monkeypatch, capsys
     ):
-        """Auto-filled gaps are exactly the case the nudge exists for: the
-        agent declared nothing, so only the echo can tell it there is
-        unread work left."""
+        """Derived gaps are exactly the case the nudge exists for."""
         self._clean_env(monkeypatch)
         self._write_sidecar(tmp_path, deferred_files=["a.go"], review_budget=40)
         builder = ReviewOutputBuilder("123", "code")
@@ -2381,8 +1803,8 @@ class TestSaveEchoProgressAndNextUnread:
     """The TARGET echo names the continuation: a progress fraction plus the
     first unread NOT DIFFED files, largest first — run12 showed that
     exhortation without a concrete next action moves repeated saves but not
-    utilization. Both lines ride the same gate as TARGET (unreviewed files
-    declared and a real budget) and read from the same schema-2 sidecar.
+    utilization. Both lines ride the same gate as TARGET (derived unreviewed
+    files and a real budget) and read from the same schema-2 sidecar.
     """
 
     @staticmethod
@@ -2427,7 +1849,7 @@ class TestSaveEchoProgressAndNextUnread:
         assert saved["unreviewed"] == ["a.go"]
         assert saved["meta"]["files_reviewed"] == 3
 
-    def test_progress_and_next_unread_appear_with_claims_and_declarations(
+    def test_progress_and_next_unread_appear_with_claims(
         self, tmp_path, monkeypatch, capsys
     ):
         self._clean_env(monkeypatch)
@@ -2438,21 +1860,17 @@ class TestSaveEchoProgressAndNextUnread:
         )
         builder = ReviewOutputBuilder("123", "code")
         builder.add_deferred_reviewed(*deferred[:3])  # claimed — read
-        builder.add_unreviewed(*deferred[3:5])  # declared — NOT read
         builder.save(str(tmp_path))
         out = capsys.readouterr().out
 
         # 10 diffed + 3 claimed = 13 of 30.
         assert "PROGRESS: covered 13 of 30 in-scope files." in out
         assert "NEXT UNREAD (largest first):" in out
-        # 20 deferred - 3 claimed = 17 remaining (declared files are still
-        # unread and stay in the list — controller ruling: declared != read).
-        # Capped at 10 with the rest counted.
+        # 20 deferred - 3 claimed = 17 remaining, capped at 10.
         assert out.count("\n  - ") == 10
         assert "(+7 more)" in out
         # Replays the sidecar's own order (largest first), not re-sorted or
-        # re-derived: the first listed file is the largest remaining one,
-        # and the two declared-but-unclaimed files (index 3, 4) reappear.
+        # re-derived: the first listed file is the largest remaining one.
         next_unread_block = out.split("NEXT UNREAD (largest first):\n", 1)[1]
         listed = [
             line[len("  - "):] for line in next_unread_block.splitlines()
@@ -2463,8 +1881,7 @@ class TestSaveEchoProgressAndNextUnread:
     def test_no_progress_or_next_unread_without_unreviewed_files(
         self, tmp_path, monkeypatch, capsys
     ):
-        """Nothing declared or auto-filled means the TARGET gate never
-        opens, so its two extensions must not appear either."""
+        """An empty derived complement keeps the TARGET gate closed."""
         self._clean_env(monkeypatch)
         self._write_sidecar(
             tmp_path, review_budget=80, in_scope_count=30, diffed_count=30,
@@ -2483,19 +1900,14 @@ class TestSaveEchoProgressAndNextUnread:
             tmp_path, schema=1, deferred_files=["some/file.go"],
         )
         builder = ReviewOutputBuilder("123", "code")
-        builder.add_unreviewed("some/file.go")
         with pytest.raises(ValueError, match="schema must be 2"):
             builder.save(str(tmp_path))
 
     def test_next_unread_omitted_only_when_every_deferred_file_is_claimed(
         self, tmp_path, monkeypatch, capsys
     ):
-        """Only a CLAIM (add_deferred_reviewed) removes a file from NEXT
-        UNREAD — a DECLARATION (add_unreviewed) states the file was NOT
-        read, so it must stay in the list (controller ruling: declared !=
-        read; run12's bulk-declaring cohort is exactly who this targets).
-        With every deferred file claimed there is nothing left to declare
-        or auto-fill, so self.unreviewed stays empty and the whole
+        """Only a positive claim removes a file from NEXT UNREAD. With every
+        deferred file claimed there is no derived gap, so the whole
         TARGET/PROGRESS/NEXT UNREAD block never runs."""
         self._clean_env(monkeypatch)
         self._write_sidecar(
@@ -2510,27 +1922,6 @@ class TestSaveEchoProgressAndNextUnread:
         assert "PROGRESS:" not in out
         assert "NEXT UNREAD" not in out
 
-    def test_declared_file_reappears_in_next_unread(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        """A declared-but-unclaimed file is still unread — it must keep
-        the NEXT UNREAD list alive rather than being silenced, which is
-        the exact behavior a bulk-declaring reviewer would otherwise get
-        a free pass from."""
-        self._clean_env(monkeypatch)
-        self._write_sidecar(
-            tmp_path, deferred_files=["a.go", "b.go"], review_budget=40,
-            in_scope_count=5, diffed_count=3,
-        )
-        builder = ReviewOutputBuilder("123", "code")
-        builder.add_deferred_reviewed("a.go")
-        builder.add_unreviewed("b.go")
-        builder.save(str(tmp_path))
-        out = capsys.readouterr().out
-        assert "NEXT UNREAD (largest first):" in out
-        assert "  - b.go" in out
-        assert "  - a.go" not in out
-
     def test_missing_scope_counts_reject_progress_publication(
         self, tmp_path, monkeypatch, capsys
     ):
@@ -2540,7 +1931,6 @@ class TestSaveEchoProgressAndNextUnread:
             in_scope_count=None,
         )
         builder = ReviewOutputBuilder("123", "code")
-        builder.add_unreviewed("a.go")
         with pytest.raises(ValueError, match="in_scope_count"):
             builder.save(str(tmp_path))
 
@@ -2572,7 +1962,6 @@ class TestSaveEchoProgressAndNextUnread:
             diffed_count=diffed_count,
         )
         builder = ReviewOutputBuilder("123", "code")
-        builder.add_unreviewed("a.go")
         with pytest.raises(ValueError, match="malformed authoritative deferred coverage"):
             builder.save(str(tmp_path))
 
@@ -2607,7 +1996,6 @@ class TestSaveEchoProgressAndNextUnread:
         # Defensive against a caller mutating public builder state instead of
         # using add_deferred_reviewed(), whose API already order-deduplicates.
         builder.deferred_reviewed = ["a.go", "a.go"]
-        builder.add_unreviewed("b.go")
         builder.save(str(tmp_path))
         out = capsys.readouterr().out
 
@@ -2635,33 +2023,6 @@ class TestMetaIsNeverFakeZero:
         monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
         meta = ReviewOutputBuilder(pr_id="1", reviewer="security").to_dict()["meta"]
         assert meta["files_reviewed"] is None
-
-    def test_explicit_zero_is_distinguishable_from_unset(
-        self, tmp_path, monkeypatch
-    ):
-        """The whole point: 0 means "I read nothing", null means silence."""
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        silent = ReviewOutputBuilder(pr_id="1", reviewer="security")
-        stated = ReviewOutputBuilder(pr_id="1", reviewer="security")
-        stated.set_files_reviewed(0)
-        _write_required_sidecar(tmp_path, "security")
-        silent.save(str(tmp_path))
-        silent_json = json.loads(
-            (tmp_path / "security-review.candidate.json").read_text()
-        )
-        stated.save(str(tmp_path))
-        stated_json = json.loads(
-            (tmp_path / "security-review.candidate.json").read_text()
-        )
-        assert silent_json["meta"]["files_reviewed"] == 0
-        assert stated_json["meta"]["files_reviewed"] == 0
-
-    @pytest.mark.parametrize("bad", [None, "3", 2.0, True, -1])
-    def test_set_files_reviewed_rejects_non_counts(self, bad):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="security")
-        with pytest.raises(ValueError):
-            b.set_files_reviewed(bad)
-        assert b.to_dict()["meta"]["files_reviewed"] is None
 
     def test_duration_is_null_without_a_marker(self, tmp_path, monkeypatch):
         """No marker, no clock. The builder is constructed inside the final

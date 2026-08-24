@@ -99,9 +99,9 @@ Scan the diff hunks (changed lines, not just file names): **does anything relate
 ```python
 builder.mark_not_applicable("No changes relevant to [your domain] — diff contains only [brief description]")
 builder.add_positive("Diff scanned — no changes relevant to [your domain]")
-builder.set_files_reviewed(N)  # count of files you scanned
 result = builder.save(OUTPUT_DIR)
-# Then return STATUS: FINISHED signal as normal
+# Inspect the echo, then run its exact FINALIZE command in a separate tool turn.
+# Return STATUS: FINISHED only after that command prints RECORDED FINAL.
 ```
 
 This backstops false-positive dispatch — triage matched on file paths/keywords, but the actual changes may not warrant your review.
@@ -226,13 +226,11 @@ This is a non-executable API reference. Bootstrap's **OUTPUT INSTRUCTIONS** bloc
 - `builder.add_issue(severity, title, file, description, recommendation, category="general", line=<required for point defects>, confidence=0.9)` - Add diff-anchored finding. Pass `line=None` ONLY for findings that are line-less by nature (missing test coverage, precedent, cross-file architecture) — recorded as a verdict-counting file-scoped issue
 - `builder.add_observation(file, note, category="general")` - Add informational file-level note (doesn't affect verdict — do NOT use for real findings)
 - `builder.add_clearance(claim, method, evidence=None)` - Record an absence claim ("nothing depends on the removed X") with the exact searches/reads that ground it. Required for any blast-radius clear — see "Absence Claims" section
-- `builder.add_unreviewed(*files)` - Declare NOT DIFFED in-scope files you genuinely could not reach at budget exhaustion; one call takes several paths, the same as `add_deferred_reviewed()` (renders the "Not reviewed (budget)" summary line; never affects the verdict)
-- `builder.add_deferred_reviewed(*files)` - Claim NOT DIFFED files you actually read from the deferred queue (a statement, not proof — surfaced as a claim downstream). Deferred files left unclaimed and undeclared are auto-declared unreviewed at save time. (The declare-vs-claim contradiction rule lives in bootstrap's `=== REVIEW BUDGET ===` section, not here — this section is stripped before reviewers receive the protocol; policy belongs in build_output().)
-- `builder.set_files_reviewed(N)` - Track files reviewed
+- `builder.add_deferred_reviewed(*files)` - Claim NOT DIFFED files you actually read from the deferred queue (a statement, not proof — surfaced as a claim downstream). The builder validates this entire batch against the authoritative sidecar, derives every unclaimed path as unreviewed, and derives the reviewed-file count from inline files plus validated claims.
 - `builder.add_tool_result("ToolName")` - Track tools used
 - `builder.set_confidence(0.0-1.0)` - Set overall confidence
 - `builder.add_positive("observation")` - Note good patterns
-- `builder.save(output_dir)` - Write the review JSON, print the RECORDED COUNTS echo, return the path (use this — not manual `to_json()`/`to_markdown()` writes; the pipeline derives the Markdown from your JSON later)
+- `builder.save(output_dir)` - Publish a replaceable candidate and print its RECORDED COUNTS plus an exact FINALIZE command. Inspect the echo and optionally continue; in a separate tool turn run that exact command, and treat the review as finished only after it prints RECORDED FINAL.
 
 **Valid severities:** `critical`, `high`, `medium`, `low`, `info`
 

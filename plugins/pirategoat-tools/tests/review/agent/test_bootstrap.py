@@ -134,7 +134,7 @@ class TestPersistDeferredSidecar:
     budget and scope counts, replacing the retired env-var budget transport
     that silently died for any agent that rebuilt its save command —
     output.py's save() reads these fields through the same sidecar it
-    already reads for NOT DIFFED auto-fill.
+    already reads for derived NOT DIFFED coverage.
     """
 
     def test_writes_only_authoritative_deferred_files(self, tmp_path):
@@ -197,7 +197,7 @@ class TestPersistDeferredSidecar:
         budget_exceeded_files without deduping. persist_deferred_sidecar
         must not publish that duplicate: it inflates len(deferred_files),
         the total manifest_sections.build_coverage_manifest reconciles
-        the agent's own claimed+declared+autofilled accounting against."""
+        the agent's derived positive-claim/gap populations against."""
         _mod.persist_deferred_sidecar(
             str(tmp_path),
             "security-reviewer",

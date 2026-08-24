@@ -401,7 +401,6 @@ def _seed_step_11(out):
         "narrative_summary": None,
         "meta": {
             "files_reviewed": 1,
-            "unreviewed_autofilled": None,
             "review_duration_ms": 10,
             "confidence_score": 0.9,
             "tool_results_used": None,

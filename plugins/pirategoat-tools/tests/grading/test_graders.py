@@ -35,7 +35,7 @@ from helpers.graders import (
     aggregate_detection_trials,
 )
 
-from review.agent.output import ReviewOutputBuilder
+from review.agent.output import ReviewOutputBuilder, finalize_candidate
 
 
 @pytest.fixture
@@ -55,11 +55,18 @@ def _make_valid_json(tmp_dir: str, reviewer: str = "security") -> str:
         recommendation="Use prepared statements",
         line=42,
     )
-    builder.set_files_reviewed(3)
-
+    sidecar = os.path.join(tmp_dir, f"{reviewer}-deferred-files.json")
+    with open(sidecar, "w") as f:
+        json.dump({
+            "schema": 2,
+            "agent_name": f"{reviewer}-reviewer",
+            "deferred_files": [],
+            "diffed_count": 3,
+            "in_scope_count": 3,
+        }, f)
+    candidate = builder.save(tmp_dir)
+    finalize_candidate(tmp_dir, reviewer, candidate["candidate_digest"])
     path = os.path.join(tmp_dir, f"{reviewer}-review.json")
-    with open(path, "w") as f:
-        f.write(builder.to_json())
     return path
 
 

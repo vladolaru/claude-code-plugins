@@ -12,7 +12,7 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 ### Added
 
 - **`--refresh-deps`** — opt-in per run or standing via `~/.config/pirategoat/config.json`, lets interactive runs install stale or missing worktree dependencies before dispatch; defaults off, never for bots.
-- **Deferred-review claims** — `add_deferred_reviewed()` records a NOT DIFFED file actually read; `save()` validates claims against declarations and the deferred sidecar, and auto-declares anything left unaccounted.
+- **Deferred-review coverage** — `add_deferred_reviewed()` records a NOT DIFFED file actually read; each candidate save validates those positive claims and derives every remaining gap and the reviewed-file count from the authoritative sidecar.
 - **Save echo names the continuation** — when unreviewed files remain, the echo prints reachable PROGRESS derived from disjoint inline and claimable-deferred paths plus a NEXT UNREAD list of the largest remaining deferred files; list-only paths stay in telemetry scope without making 100% progress unreachable.
 - **Structured critic adjustments** — REVISE decisions land in `decision-critic-adjustments.json` and are applied to `review-findings.json` with provenance by a single writer.
 - **Detection benchmark** — the compliance eval grades reviewer findings against per-scenario answer keys (`--trials N`, `--report-out`).
@@ -34,8 +34,7 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 - **One containment invariant** — `scripts/containment.py` backs both advisory-host and repo-contributed rule/reviewer resolution.
 - **One atomic-write primitive** — `scripts/review/atomic_io.py` replaces the hand-rolled temp-file-then-replace copies.
 - **One integer `schema` field** across review artifacts, telemetry events, and the manifest, replacing the never-bumped `version: "1.0.0"` string and the separate `schema_version` name.
-- **Budget pressure moved to the save echo** — the unenforceable under-budget "protocol violation" rule is deleted, and the target now echoes back at save time whenever unreviewed files are declared, read from the deferred-files sidecar (schema bumped 1→2 to carry it) bootstrap writes rather than an env var so the echo survives a reviewer rebuilding its own save command; the enforced half (auto-fill; no silent APPROVE) is unchanged.
-- **`add_unreviewed()` is variadic**, sharing one batch validator with `add_deferred_reviewed()`.
+- **Budget pressure moved to the save echo** — the unenforceable under-budget "protocol violation" rule is deleted, and the target now echoes back whenever the derived complement is non-empty, read from the schema-2 deferred-files sidecar rather than an environment variable.
 - **OUTPUT_DIR is taught as artifact-only**; scratch work goes to `$TMPDIR`.
 - **The output-dir sweep is an allowlist, not a blocklist** — every run's own artifacts survive by name, everything else is deleted, and a non-empty directory with no pipeline identity marker refuses to be swept.
 - **`review-report.md` is authored at step 11 from a source-bound post-critic settlement** — the report is written from the settled record instead of being drafted at step 9 and edited after every critic REVISE, while a deterministic source fingerprint rejects pre-existing or newly stale prose until it is regenerated. Terminal `pipeline-result.json` is published only after the exact report is bound to unchanged settlement state, keeping bot delivery and resume aligned.
@@ -48,7 +47,7 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 
 ### Fixed
 
-- **Builder `meta` stopped fake-zeroing** — `files_reviewed` and `review_duration_ms` report a measurement or `null`, with duration derived from the actor's dispatch marker instead of timing the final heredoc.
+- **Builder `meta` records derived facts** — `files_reviewed` is the inline scope plus validated deferred claims, while `review_duration_ms` derives from the actor's dispatch marker instead of timing the final heredoc.
 - **Coverage accounting is complete and honest** — files matching no reviewer's domain surface as `files_unscoped` (`null` when unmeasured; an absent changed-file list never reads as clean), sidecars publish `in_scope_files` in every mode so `--base-ref-only`/`--summary` workloads count, and both sides of the comparison share one path grammar (`git_paths.py`).
 - **Git C-quoted (non-ASCII) paths decode everywhere paths are consumed** — scope enumeration (such a file used to match no domain and be reviewed by nobody), diffstat budget keys, coverage comparisons, and the step-11 probe sweep, via one `git_path_cmd()` helper.
 - **The coverage measurement is machine-rendered into the review record** and quoted verbatim into the report with commentary only after it (a field run had paraphrased the hedged measurement into a false "read by nobody"); the verdict acknowledges a gap only when one exists, the ledger records it once rather than per file, and rendered paths are escaped. Its unscoped-file line now says why its figure can exceed the run-level metrics figure — it counts every changed file, while metrics count reviewable files only.
@@ -63,10 +62,10 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 - **a11y scope asks for UI evidence, not extensions** — bare `.ts`/`.js` need evidence in their diff or a bounded repo-rooted disk read; `.tsx`/`.jsx`, components, styles, and templates stay unconditional; triage is untouched.
 - **`agents_reporting` counts agents, not sidecar files.**
 - **Dependency refresh hardened** — refuses dirty or unverifiable worktrees, decodes quoted paths, survives malformed self-reports, and `--refresh-host-context` preserves the rest of `review-context.json`.
-- **Briefing no longer instructs bulk enumeration of unreviewed files** — auto-fill records deferred files not claimed or declared, freeing that budget for real analysis instead of bookkeeping.
+- **Briefing no longer instructs bulk enumeration of unreviewed files** — the builder derives every unclaimed deferred path, freeing that budget for real analysis instead of bookkeeping.
 - **Measurement honesty sweep** — damaged JSONL records are counted, unmeasured never publishes as zero, availability flags derive from what was actually parsed, findings-ledger readers share the discriminated reader, and a coverage-manifest build failure is distinguishable from legitimate absence.
 - **Dispatch decisions stopped re-parsing bootstrap's rendered text** — each fact now arrives as a structured parameter computed once, upstream.
-- **Reviewer Markdown materializes as each JSON settles**, so a reconciliation failure cannot hide finished output; declarations are validated at publication even without the bootstrap env envelope.
+- **Reviewer Markdown materializes as each JSON settles**, so a reconciliation failure cannot hide finished output; positive deferred claims are validated at publication against the required sidecar.
 - **Detection benchmark hardened** — per-entry status is stamped by the producing code path, and reviewer-path matching canonicalizes against the eval root.
 - **Doc-drift guards** pin the AGENTS.md registry reference and README model tiers to `agent_registry.json` in both directions.
 - **Test estate** — 273 redundant pins removed with coverage increased (11 previously-unpinned guards now pinned); every cut mutation-verified.

@@ -82,15 +82,7 @@ It stays because retiring it is not a rename. The decision critic's probe found 
 **Deferred because:** the migration is wider than the record work it would ride on, and the record artifact has not yet been observed in the field.
 **Do when:** the record has bedded in over a release, AND someone audits the six consumers. If any of them turns out to be a human reading the file, this item is dead — the projection has its reader.
 
-### 5. Declared-vs-autofilled unreviewed attribution reaches no rendered surface
-
-`aggregate_inline_coverage()` splits unreviewed files into `files_declared_unreviewed` (the reviewer's own budget judgment) and `files_autofilled_unreviewed` (the system's save-time backfill), so the system's honesty is never credited to the reviewer. The retired `reconciliation-context.md` rendered the distinction in its gaps section; `review-record.md`'s coverage section does not — it renders gaps, deferred-review claims, and unscoped files, none of which split on attribution. The measurement survives intact in `reconciliation-context.json`; only its rendering is gone.
-
-**Evidence:** run12 audit, Task 12 — `to_markdown()` deletion; the accounting is still pinned by `TestAutofilledUnreviewedAttribution` in `tests/review/test_reconciliation_context.py`.
-**Deferred because:** the split was rendered into a document only one agent ever read, so nothing observably consumed it; adding it to the record's coverage section is a rendering decision, not a measurement fix.
-**Do when:** a run's coverage section is disputed on the grounds of who declared what, or the next time `_render_review_coverage_section` is edited.
-
-### 6. `critic_verdict == "unavailable"` is a pirategoat-bot contract, not a spelling choice
+### 5. `critic_verdict == "unavailable"` is a pirategoat-bot contract, not a spelling choice
 
 `pirategoat-bot/src/orchestrator-review.js:399` and `src/resume/orchestrator-review.js:532` both branch on the literal string `"unavailable"` to render the bot's "not cross-validated" message. Task 11 deliberately kept that exact value instead of the brief's proposed `"absent"`, carrying the missing/absent distinction through `degradation_notes` instead of the vocabulary. Nothing enforces this from this repo's side — a future rename of the value (not just the field) would silently break the bot's message with no local test to catch it.
 

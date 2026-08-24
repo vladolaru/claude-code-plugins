@@ -1488,124 +1488,9 @@ class TestRunManifest:
         assert manifest["availability"]["coverage"] is False
         assert manifest["coverage"] is None
 
-    def test_coverage_carries_the_deferred_honesty_split_per_reviewer(
+    def test_coverage_carries_two_derived_populations_per_reviewer(
         self, telemetry, output_dir
     ):
-        """Producer-side pin: claims/declared/autofilled counts, read
-        straight off a reviewer's own review JSON, plus the independent
-        deferred-file total from bootstrap's sidecar — backlog #19."""
-        _write_coverage_inputs(
-            output_dir,
-            changed=["src/a.py", "src/b.py", "src/c.py"],
-            reviewable=["src/a.py", "src/b.py", "src/c.py"],
-            agents=[
-                {"name": "security-reviewer", "status": "DISPATCH"},
-                {"name": "docs-reviewer", "status": "DISPATCH"},
-            ],
-        )
-        (output_dir / "security-review.json").write_text(json.dumps({
-            "deferred_reviewed": ["src/a.py"],
-            "unreviewed": ["src/b.py", "src/c.py"],
-            "meta": {"unreviewed_autofilled": ["src/c.py"]},
-        }))
-        (output_dir / "security-deferred-files.json").write_text(json.dumps({
-            "schema": 1,
-            "deferred_files": ["src/a.py", "src/b.py", "src/c.py"],
-        }))
-        # docs-reviewer's own review.json predates the claims key — a
-        # legacy producer, unmeasured rather than a measured zero.
-        (output_dir / "docs-review.json").write_text(json.dumps({
-            "unreviewed": ["src/a.py"],
-        }))
-        telemetry.start(run_id="run-1")
-        telemetry.log_agent_start(
-            "security-reviewer", scope_paths=["src/a.py", "src/b.py", "src/c.py"]
-        )
-        telemetry.log_agent_start("docs-reviewer", scope_paths=["src/a.py"])
-        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
-
-        coverage = _read_manifest(telemetry)["coverage"]
-        assert coverage["deferred_honesty_by_agent"] == {
-            "security-reviewer": {
-                "deferred_reviewed": 1,
-                "declared_unreviewed": 1,
-                "unreviewed_autofilled": 1,
-            },
-        }
-        assert coverage["deferred_total_by_agent"] == {
-            "security-reviewer": 3,
-        }
-
-    def test_coverage_deferred_honesty_defaults_to_empty_not_absent(
-        self, telemetry, output_dir
-    ):
-        """No reviewer wrote a review JSON at all: the split is measured
-        and empty (`{}`), never omitted — omission is reserved for
-        manifests predating this feature entirely."""
-        _write_coverage_inputs(
-            output_dir, changed=[], reviewable=[], agents=[]
-        )
-        telemetry.start(run_id="run-1")
-
-        coverage = _read_manifest(telemetry)["coverage"]
-        assert coverage["deferred_honesty_by_agent"] == {}
-        assert coverage["deferred_total_by_agent"] == {}
-
-    def test_duplicate_bearing_deferred_sidecar_reports_correct_total(
-        self, telemetry, output_dir
-    ):
-        """A duplicate path in the deferred-files sidecar — the shape a
-        multi-domain agent's secondary-domain scope render can produce
-        before persist_deferred_sidecar's dedupe — must not inflate the
-        total, and must not kill the whole coverage section: counting the
-        sidecar as a SET (mirroring save()'s own frozenset read) keeps
-        the reconciliation honest against an already-deduped
-        deferred_honesty_by_agent, whether or not the sidecar itself was
-        written pre- or post-dedupe-fix."""
-        _write_coverage_inputs(
-            output_dir,
-            changed=["src/a.py", "src/b.py"],
-            reviewable=["src/a.py", "src/b.py"],
-            agents=[{"name": "security-reviewer", "status": "DISPATCH"}],
-        )
-        (output_dir / "security-review.json").write_text(json.dumps({
-            "deferred_reviewed": ["src/a.py"],
-            "unreviewed": ["src/b.py"],
-            "meta": {"unreviewed_autofilled": []},
-        }))
-        # Duplicate "src/a.py" — as if load_scope_facts() concatenated two
-        # scope-summary sidecars that both listed it as budget-exceeded.
-        (output_dir / "security-deferred-files.json").write_text(json.dumps({
-            "schema": 1,
-            "deferred_files": ["src/a.py", "src/b.py", "src/a.py"],
-        }))
-        telemetry.start(run_id="run-1")
-        telemetry.log_agent_start(
-            "security-reviewer", scope_paths=["src/a.py", "src/b.py"]
-        )
-        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
-
-        manifest = _read_manifest(telemetry)
-        coverage = manifest["coverage"]
-        assert manifest["availability"]["coverage"] is True
-        assert coverage is not None
-        assert coverage["deferred_total_by_agent"] == {"security-reviewer": 2}
-        assert coverage["deferred_honesty_by_agent"] == {
-            "security-reviewer": {
-                "deferred_reviewed": 1,
-                "declared_unreviewed": 1,
-                "unreviewed_autofilled": 0,
-            },
-        }
-
-    def test_deferred_honesty_reads_a_real_save_produced_artifact(
-        self, telemetry, output_dir
-    ):
-        """End-to-end attribution pin: the counts come from a
-        `ReviewOutputBuilder.save()`-produced `security-review.json`, not
-        a hand-crafted fixture — proving the producer reads the SAME
-        shape `save()` actually emits, including its own derivation of
-        `unreviewed`/`meta.unreviewed_autofilled` from silence."""
         from review.agent.output import ReviewOutputBuilder, finalize_candidate
 
         _write_coverage_inputs(
@@ -1627,8 +1512,6 @@ class TestRunManifest:
         )
         builder = ReviewOutputBuilder("42", "security")
         builder.add_deferred_reviewed("a.py")
-        builder.add_unreviewed("b.py")
-        # "c.py" is left unaccounted — save() must auto-fill it.
         saved = builder.save(str(output_dir))
         finalize_candidate(
             str(output_dir), "security", saved["candidate_digest"]
@@ -1639,96 +1522,41 @@ class TestRunManifest:
         assert coverage["deferred_honesty_by_agent"] == {
             "security-reviewer": {
                 "deferred_reviewed": 1,
-                "declared_unreviewed": 1,
-                "unreviewed_autofilled": 1,
+                "unreviewed": 2,
             },
         }
-        assert coverage["deferred_total_by_agent"] == {"security-reviewer": 3}
+        assert coverage["deferred_total_by_agent"] == {
+            "security-reviewer": 3
+        }
 
-    def test_deferred_honesty_all_declared_no_autofill_second_shape(
+    def test_coverage_omits_unfinalized_candidate_counts(
         self, telemetry, output_dir
     ):
-        """Second attribution shape: every deferred file explicitly
-        declared unreviewed (declared > 1), nothing claimed, nothing left
-        for save() to auto-fill (autofilled == 0) — the complementary
-        case to the auto-fill-heavy shape above, still from a real
-        `save()`-produced artifact."""
-        from review.agent.output import ReviewOutputBuilder, finalize_candidate
+        from review.agent.output import ReviewOutputBuilder
 
         _write_coverage_inputs(
             output_dir,
-            changed=["a.py", "b.py", "c.py"],
-            reviewable=["a.py", "b.py", "c.py"],
-            agents=[{"name": "docs-reviewer", "status": "DISPATCH"}],
-        )
-        (output_dir / "docs-deferred-files.json").write_text(json.dumps({
-            "schema": 2,
-            "agent_name": "docs-reviewer",
-            "deferred_files": ["a.py", "b.py", "c.py"],
-            "diffed_count": 0,
-            "in_scope_count": 3,
-        }))
-        telemetry.start(run_id="run-1")
-        telemetry.log_agent_start(
-            "docs-reviewer", scope_paths=["a.py", "b.py", "c.py"]
-        )
-        builder = ReviewOutputBuilder("42", "docs")
-        builder.add_unreviewed("a.py")
-        builder.add_unreviewed("b.py")
-        builder.add_unreviewed("c.py")
-        saved = builder.save(str(output_dir))
-        finalize_candidate(
-            str(output_dir), "docs", saved["candidate_digest"]
-        )
-        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
-
-        coverage = _read_manifest(telemetry)["coverage"]
-        assert coverage["deferred_honesty_by_agent"] == {
-            "docs-reviewer": {
-                "deferred_reviewed": 0,
-                "declared_unreviewed": 3,
-                "unreviewed_autofilled": 0,
-            },
-        }
-        assert coverage["deferred_total_by_agent"] == {"docs-reviewer": 3}
-
-    def test_deferred_honesty_dedupes_duplicate_paths_in_review_json(
-        self, telemetry, output_dir
-    ):
-        """A duplicate path directly inside a hand-crafted review.json's
-        `deferred_reviewed`/`unreviewed` lists (the builder's own
-        add_*() calls already dedupe, so this shape only reaches a
-        malformed or hand-rolled producer) must not inflate the count —
-        every count is a SET size, matching the total's own dedupe."""
-        _write_coverage_inputs(
-            output_dir,
-            changed=["a.py", "b.py"],
-            reviewable=["a.py", "b.py"],
+            changed=["a.py"],
+            reviewable=["a.py"],
             agents=[{"name": "security-reviewer", "status": "DISPATCH"}],
         )
-        (output_dir / "security-review.json").write_text(json.dumps({
-            "deferred_reviewed": ["a.py", "a.py"],
-            "unreviewed": ["b.py", "b.py"],
-            "meta": {"unreviewed_autofilled": []},
-        }))
         (output_dir / "security-deferred-files.json").write_text(json.dumps({
-            "schema": 1, "deferred_files": ["a.py", "b.py"],
+            "schema": 2,
+            "agent_name": "security-reviewer",
+            "deferred_files": ["a.py"],
+            "diffed_count": 0,
+            "in_scope_count": 1,
         }))
         telemetry.start(run_id="run-1")
-        telemetry.log_agent_start(
-            "security-reviewer", scope_paths=["a.py", "b.py"]
-        )
+        telemetry.log_agent_start("security-reviewer", scope_paths=["a.py"])
+        ReviewOutputBuilder("42", "security").save(str(output_dir))
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
         coverage = _read_manifest(telemetry)["coverage"]
-        assert coverage["deferred_honesty_by_agent"] == {
-            "security-reviewer": {
-                "deferred_reviewed": 1,
-                "declared_unreviewed": 1,
-                "unreviewed_autofilled": 0,
-            },
+        assert coverage["deferred_honesty_by_agent"] == {}
+        assert coverage["deferred_total_by_agent"] == {
+            "security-reviewer": 1
         }
-        assert coverage["deferred_total_by_agent"] == {"security-reviewer": 2}
 
     def test_manifest_path_resolves_from_marker_in_fresh_instance(
         self, telemetry, mod, output_dir, tmp_path

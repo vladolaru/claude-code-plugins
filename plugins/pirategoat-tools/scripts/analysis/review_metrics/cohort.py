@@ -274,7 +274,7 @@ def _aggregate_coverage(
     }
 
 
-_DEFERRED_HONESTY_FIELDS = ("deferred_reviewed", "declared_unreviewed", "unreviewed_autofilled")
+_DEFERRED_HONESTY_FIELDS = ("deferred_reviewed", "unreviewed")
 
 
 def _aggregate_deferred_honesty(

@@ -1134,45 +1134,22 @@ def build_output(
             # This contract lives here, not in reviewer-protocol.md: bootstrap
             # strips '## Scope Discovery', so policy placed there never reaches
             # a reviewer. See REVIEWER_PROTOCOL_SKIP_SECTIONS. The
-            # declare-vs-claim contradiction sentence below was moved here
-            # from that same protocol's '## ReviewOutputBuilder API' section
-            # for the identical reason — also skip-listed, also reaching
-            # zero reviewers — rather than copied, so there is exactly one
-            # taught home for it.
             lines.append(
-                "Before writing output, every NOT DIFFED file must be either "
-                "claimed or declared — an APPROVE that silently ignores them is "
-                "a protocol violation. Claim each deferred file you actually "
+                "Claim each NOT DIFFED file you actually "
                 'read with builder.add_deferred_reviewed("<path>"). '
-                "Never spend tool calls enumerating unreviewed files: any "
-                "deferred file you neither claim nor declare is auto-declared "
-                "unreviewed at save time and marked auto-filled — that is the "
-                "sanctioned way to record bulk gaps, not a mistake to prevent. "
-                'Use builder.add_unreviewed("<path>") only to flag a file '
-                "deliberately — e.g. an inline-diffed FILES-section file you "
-                "consciously skipped, which sits outside the deferred set and "
-                "auto-fill cannot cover. Both claim and declare calls take "
-                "several paths per call. A declaration records the gap in the JSON output, "
-                "which the pipeline-derived Markdown renders as the "
-                "`**Not reviewed (budget):**` line; never count a "
-                "declared-unreviewed file toward your verdict. "
-                "Anything you leave in neither list is auto-declared unreviewed "
-                "at save time and marked auto-filled: silence records a "
-                "coverage gap, it never counts as review. "
-                "A file is one or the other: declaring it with "
-                "add_unreviewed() and ALSO claiming it with "
-                "add_deferred_reviewed() is a contradiction save() rejects "
-                "outright, not a way to hedge — call exactly one of the two "
-                "for a given path."
+                "The builder validates those positive claims against the "
+                "authoritative deferred sidecar, derives every unclaimed path "
+                "as unreviewed, and counts inline files automatically. Never "
+                "count a derived unreviewed file toward your verdict."
             )
-            # A sentence calling an under-budget declaration a "protocol
+            # A sentence calling an under-budget completion a "protocol
             # violation" and a "false statement" used to close this
             # paragraph. It was deleted, not softened: it conditioned on a
             # quantity no reviewer is ever shown at the moment it decides
             # (models keep no running tool-call tally), and a 19-agent
             # field run delivered it verbatim to every one of them with
             # zero effect — median 44% of budget used, nine agents
-            # declaring 100+ files while under half budget. The same run
+            # leaving 100+ files while under half budget. The same run
             # falsified its premise: under-spend did not predict weak
             # output. Salience at the decision point replaced it — save()
             # echoes the target back when unreviewed files are recorded,
@@ -1291,7 +1268,7 @@ def build_output(
     # for any agent that rebuilt its save command (run12's worst under-spender,
     # 15% of target, never saw it). save() now reads the effective number from
     # the deferred-files sidecar bootstrap writes below — the one per-agent
-    # file the builder already provably locates for auto-fill.
+    # file the builder already provably locates for derived coverage.
     lines.append(
         f"PIRATEGOAT_PLUGIN_ROOT={shlex.quote(plugin_root)} "
         f"PIRATEGOAT_OUTPUT_DIR={shlex.quote(output_dir)} "
@@ -1319,13 +1296,9 @@ def build_output(
     lines.append(f'builder.add_clearance(claim="Nothing depends on the removed X",')
     lines.append(f'    method="exact searches run / files read",  # REQUIRED — see Absence Claims rules')
     lines.append(f'    evidence="hit counts, file:line list")     # optional')
-    lines.append(f'builder.add_unreviewed("path/unreached.py", "path/unreached2.py")  # ONLY at budget exhaustion — declares NOT DIFFED coverage gaps')
-    lines.append(f'builder.add_deferred_reviewed("path/read1.py", "path/read2.py")  # claim each NOT DIFFED file you actually read')
-    lines.append(
-        'builder.set_files_reviewed(N)  # REQUIRED: replace N with the actual number of files you reviewed'
-    )
+    lines.append(f'# builder.add_deferred_reviewed("path/read1.py", "path/read2.py")  # uncomment with actual NOT DIFFED paths you read')
     lines.append(f'builder.set_confidence(0.85)')
-    lines.append(f'result = builder.save(output_dir)  # returns {{"json": path}}')
+    lines.append(f'result = builder.save(output_dir)  # publishes a replaceable candidate')
     lines.append("PY")
     lines.append(f"")
     lines.append(f"line= MUST be the SOURCE FILE line number (from @@ hunk headers),")
@@ -1343,8 +1316,11 @@ def build_output(
     lines.append(f"  save() prints the RECORDED COUNTS / RECORDED ISSUES / VERDICT of what was")
     lines.append(f"  actually saved. Copy your COUNTS signal from that echo — NOT from memory of")
     lines.append(f"  what you intended to file. If the echo differs from your intent (e.g. an")
-    lines.append(f"  issue you added is missing), investigate and fix BEFORE declaring FINISHED.")
-    lines.append(f"  Do NOT read the output file back to verify — the echo is the confirmation.")
+    lines.append(f"  issue you added is missing), investigate, fix, and save a new candidate.")
+    lines.append(f"  Do NOT read the output file back to verify — inspect the save() echo.")
+    lines.append(f"  In a separate tool turn, run the exact FINALIZE command printed by save().")
+    lines.append(f"  Only after that command prints RECORDED FINAL is the review immutable.")
+    lines.append(f"  Only then return the FINISHED signal below.")
     lines.append("")
     lines.append("Return signal format:")
     lines.append("  STATUS: FINISHED")
@@ -1429,19 +1405,17 @@ def persist_deferred_sidecar(output_dir, effective_agent_name,
                              in_scope_count=None, diffed_count=None):
     """Write the authoritative deferred-set sidecar for the output builder.
 
-    Written even when empty: with no deferred files, any add_unreviewed()
-    declaration is wrong. This required machine-fact artifact fails closed
-    when it cannot be published.
+    Written even when the deferred set is empty. This required machine-fact
+    artifact fails closed when it cannot be published.
 
     Schema 2 (was 1): also carries the run's tool-call budget and scope
     counts, replacing the retired env-var budget transport that silently
     died for any agent that rebuilt its save command. This is the
     one per-agent sidecar output.py's save() already provably locates (it
-    reads it for NOT DIFFED auto-fill), and the effective (override-applied)
-    number bootstrap computed is never recomputed downstream. review_budget
-    defaults to None so callers that have not yet computed a budget
-    (unlikely, but keeps the signature safe) still write a valid schema-2
-    payload with an absent target.
+    reads it for derived NOT DIFFED coverage), and the effective
+    (override-applied) number bootstrap computed is never recomputed
+    downstream. Scope counts are required by the shared coverage authority;
+    omitted counts do not form a valid schema-2 sidecar.
 
     Schema 2 originally also carried ``budget_capped``, dropped here (still
     within 1.114.0's unreleased window, so no schema bump): nothing ever
@@ -1467,8 +1441,7 @@ def persist_deferred_sidecar(output_dir, effective_agent_name,
     # main() passes the normalized deferred population from
     # partition_scope_paths(). Keep this order-preserving dedupe as defense
     # for direct callers: an undeduped sidecar inflates the deferred total
-    # build_coverage_manifest reconciles against claimed+declared+autofilled,
-    # while save() reads the same paths as a frozenset and cannot inflate.
+    # build_coverage_manifest reconciles against claimed+unreviewed.
     deferred_files = list(dict.fromkeys(deferred_files))
     payload = {
         "schema": 2,

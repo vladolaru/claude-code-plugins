@@ -919,13 +919,11 @@ def _sanitize_dispatch(value: object) -> dict[str, Any] | None:
     return result
 
 
-# The per-agent honesty-split row shape `_sanitize_coverage` requires
-# whenever `deferred_honesty_by_agent` is present — mirrors the three
-# fields `manifest_sections._load_deferred_honesty` derives from a
-# review JSON's own `deferred_reviewed`/`unreviewed`/
-# `meta.unreviewed_autofilled` fields.
+# The per-agent deferred row shape `_sanitize_coverage` requires whenever
+# `deferred_honesty_by_agent` is present. Both populations are derived from
+# the same authoritative sidecar and validated positive claims.
 _DEFERRED_HONESTY_FIELDS = frozenset({
-    "deferred_reviewed", "declared_unreviewed", "unreviewed_autofilled",
+    "deferred_reviewed", "unreviewed",
 })
 
 
@@ -1059,20 +1057,16 @@ def _sanitize_coverage(value: object) -> dict[str, Any] | None:
         result["deferred_total_by_agent"] = safe_total
 
     # Reconciliation: for every agent present in BOTH populations, the
-    # agent's own three-way accounting must sum exactly to the system's
+    # agent's own derived accounting must sum exactly to the system's
     # independently-sourced deferred-file total — the identity
-    # `ReviewOutputBuilder.save()` itself enforces when it derives
-    # `unreviewed_autofilled` against the very same sidecar this total is
-    # read from. A mismatch means the two sources disagree about a fact
+    # `ReviewOutputBuilder.save()` itself enforces against the very same
+    # sidecar this total is read from. A mismatch means the two sources disagree about a fact
     # `save()` guarantees, so the section fails closed rather than
     # publish self-contradictory numbers.
     #
-    # This is a COUNT checksum, not a set identity: it proves the three
-    # buckets add up to the right total, not that any individual file
-    # landed in the right bucket — a file counted as declared instead of
-    # autofilled (or vice versa) still sums correctly, so this check
-    # alone cannot catch a mis-attribution between the two, only a
-    # mis-count against the total.
+    # This is a COUNT checksum, not a set identity: it proves the two
+    # populations add up to the right total, not that any individual file
+    # landed in the right population.
     honesty_by_agent = result.get("deferred_honesty_by_agent")
     total_by_agent = result.get("deferred_total_by_agent")
     if isinstance(honesty_by_agent, dict) and isinstance(total_by_agent, dict):
@@ -1080,8 +1074,7 @@ def _sanitize_coverage(value: object) -> dict[str, Any] | None:
             counts = honesty_by_agent[name]
             accounted = (
                 counts["deferred_reviewed"]
-                + counts["declared_unreviewed"]
-                + counts["unreviewed_autofilled"]
+                + counts["unreviewed"]
             )
             if accounted != total_by_agent[name]:
                 return None

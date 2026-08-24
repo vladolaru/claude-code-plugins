@@ -284,7 +284,7 @@ class TestCategoryRepresentatives:
         )
         assert agent_start["model_tier"] == "sonnet"
 
-    def test_deferred_sidecar_backs_add_unreviewed_validation(self, tmp_path):
+    def test_deferred_sidecar_backs_claim_validation(self, tmp_path):
         """Bootstrap persists the authoritative NOT DIFFED set so the
         builder can reject declarations that match no deferred file."""
         result = run_bootstrap(
@@ -590,6 +590,9 @@ class TestCanonicalExecutableBuilderSource:
         assert "MUST NOT create or write a temporary builder script" in prompt
         assert "generic filenames collide" in prompt
         assert "RECORDED COUNTS" in prompt
+        assert "run the exact FINALIZE command printed by save()" in prompt
+        assert "RECORDED FINAL" in prompt
+        assert "Only then return the FINISHED signal" in prompt
         assert "Return signal format:" in prompt
         assert "STATUS: FINISHED" in prompt
         assert f"{tmp_path}/security-review.json" in prompt
@@ -740,6 +743,8 @@ class TestNotApplicableCompletionContract:
 
         assert "builder.mark_not_applicable(" in prompt
         assert "builder.save(OUTPUT_DIR)" in prompt
+        assert "FINALIZE" in prompt
+        assert "RECORDED FINAL" in prompt
         assert "STATUS: FINISHED" in prompt
 
     def test_output_instructions_require_collision_safe_builder_invocation(self, tmp_path):
@@ -805,6 +810,16 @@ class TestNotApplicableCompletionContract:
         invocations = []
         for agent_name in ("security-reviewer", "performance-reviewer"):
             reviewer_name = derive_reviewer_name(agent_name)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            (output_dir / f"{reviewer_name}-deferred-files.json").write_text(
+                json.dumps({
+                    "schema": 2,
+                    "agent_name": agent_name,
+                    "deferred_files": [],
+                    "diffed_count": 2,
+                    "in_scope_count": 2,
+                })
+            )
             prompt = build_output(
                 agent_name=agent_name,
                 plugin_root=str(PLUGIN_ROOT),
@@ -821,12 +836,7 @@ class TestNotApplicableCompletionContract:
             )
             start = prompt.index("PIRATEGOAT_PLUGIN_ROOT=")
             end = prompt.index("\nPY", start) + len("\nPY")
-            invocations.append(
-                prompt[start:end].replace(
-                    "builder.set_files_reviewed(N)",
-                    "builder.set_files_reviewed(2)",
-                )
-            )
+            invocations.append(prompt[start:end])
 
         def run_invocation(invocation):
             return subprocess.run(
@@ -844,10 +854,22 @@ class TestNotApplicableCompletionContract:
             result.stderr for result in results
         ]
         assert all("RECORDED COUNTS:" in result.stdout for result in results)
-        assert sorted(path.name for path in output_dir.iterdir()) == [
-            "performance-review.json",
-            "security-review.json",
-        ]
+        finalize_results = []
+        for result in results:
+            finalize_command = next(
+                line.removeprefix("FINALIZE: ")
+                for line in result.stdout.splitlines()
+                if line.startswith("FINALIZE: ")
+            )
+            finalize_results.append(subprocess.run(
+                ["bash", "-c", finalize_command],
+                cwd=tmp_path,
+                timeout=30,
+                capture_output=True,
+                text=True,
+            ))
+        assert all(result.returncode == 0 for result in finalize_results)
+        assert all("RECORDED FINAL" in result.stdout for result in finalize_results)
         for reviewer_name in ("security", "performance"):
             saved = json.loads(
                 (output_dir / f"{reviewer_name}-review.json").read_text()
@@ -861,6 +883,14 @@ class TestNotApplicableCompletionContract:
         plugin_root = tmp_path / "plugin root's copy"
         shutil.copytree(PLUGIN_ROOT / "scripts", plugin_root / "scripts")
         output_dir = tmp_path / "reviewer's output folder"
+        output_dir.mkdir(parents=True)
+        (output_dir / "security-deferred-files.json").write_text(json.dumps({
+            "schema": 2,
+            "agent_name": "security-reviewer",
+            "deferred_files": [],
+            "diffed_count": 3,
+            "in_scope_count": 3,
+        }))
         prompt = build_output(
             agent_name="security-reviewer",
             plugin_root=str(plugin_root),
@@ -878,10 +908,6 @@ class TestNotApplicableCompletionContract:
         start = prompt.index("PIRATEGOAT_PLUGIN_ROOT=")
         end = prompt.index("\nPY", start) + len("\nPY")
         shell_example = prompt[start:end]
-        shell_example = shell_example.replace(
-            "builder.set_files_reviewed(N)",
-            "builder.set_files_reviewed(3)",
-        )
         python_files_before = set(tmp_path.rglob("*.py"))
 
         result = subprocess.run(
@@ -893,9 +919,19 @@ class TestNotApplicableCompletionContract:
 
         assert result.returncode == 0, result.stderr
         assert "RECORDED COUNTS:" in result.stdout
-        assert sorted(path.name for path in output_dir.iterdir()) == [
-            "security-review.json",
-        ]
+        finalize_command = next(
+            line.removeprefix("FINALIZE: ")
+            for line in result.stdout.splitlines()
+            if line.startswith("FINALIZE: ")
+        )
+        final = subprocess.run(
+            ["bash", "-c", finalize_command],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+        )
+        assert final.returncode == 0, final.stderr
+        assert "RECORDED FINAL" in final.stdout
         saved = json.loads((output_dir / "security-review.json").read_text())
         assert saved["meta"]["files_reviewed"] == 3
         assert set(tmp_path.rglob("*.py")) == python_files_before
@@ -1277,12 +1313,11 @@ class TestReviewOutputBuilderAPIExample:
         assert "save(" in output
         assert str(tmp_path) in output
 
-    def test_output_contains_set_files_reviewed(self, tmp_path):
-        """The example must require the actual reviewed-file count."""
+    def test_output_uses_positive_claims_as_the_only_coverage_input(self, tmp_path):
         output = self._build(tmp_path)
-        assert "builder.set_files_reviewed(N)" in output
-        assert "REQUIRED: replace N with the actual number of files you reviewed" in output
-        assert "builder.set_files_reviewed(1)" not in output
+        assert 'builder.add_deferred_reviewed("path/read1.py", "path/read2.py")' in output
+        assert "builder.add_un" + "reviewed" not in output
+        assert "builder.set_files_" + "reviewed" not in output
 
     def test_output_contains_set_confidence(self, tmp_path):
         """The usage example must show set_confidence()."""
@@ -1817,15 +1852,25 @@ class TestOutputFilenameConsistency:
     """Output filenames from ReviewOutputBuilder.save() match bootstrap expectations."""
 
     def test_save_uses_review_suffix(self, tmp_path):
-        """save() should write {reviewer}-review.json only."""
-        from review.agent.output import ReviewOutputBuilder
+        """save() stages a candidate; finalization publishes the review."""
+        from review.agent.output import ReviewOutputBuilder, finalize_candidate
 
+        (tmp_path / "dead-code-deferred-files.json").write_text(json.dumps({
+            "schema": 2,
+            "agent_name": "dead-code-reviewer",
+            "deferred_files": [],
+            "diffed_count": 1,
+            "in_scope_count": 1,
+        }))
         builder = ReviewOutputBuilder(pr_id="42", reviewer="dead-code")
         result = builder.save(str(tmp_path))
 
-        assert set(result) == {"json"}
-        assert result["json"].endswith("dead-code-review.json"), f"Got: {result['json']}"
-        assert os.path.isfile(result["json"])
+        assert set(result) == {"candidate", "candidate_digest"}
+        assert result["candidate"].endswith("dead-code-review.candidate.json")
+        finalize_candidate(
+            str(tmp_path), "dead-code", result["candidate_digest"]
+        )
+        assert (tmp_path / "dead-code-review.json").is_file()
         assert not os.path.exists(os.path.join(str(tmp_path), "dead-code-review.md"))
 
     def test_bootstrap_output_matches_save_filenames(self, tmp_path):
@@ -1969,14 +2014,10 @@ class TestNotDiffedContractIsDelivered:
     @pytest.mark.parametrize(
         "phrase",
         [
-            "Not reviewed (budget):",          # the declaration format
-            'builder.add_unreviewed("<path>")',  # the supported API for it
-            # The one enforced violation: save() auto-fills the gap, so an
-            # APPROVE cannot silently swallow deferred files.
-            "an APPROVE that silently ignores them is a protocol violation",
-            "never count a declared-unreviewed file",
-            "is a contradiction save() rejects",  # declare-vs-claim, moved from
-                                                   # '## ReviewOutputBuilder API'
+            'builder.add_deferred_reviewed("<path>")',
+            "authoritative deferred sidecar",
+            "derives every unclaimed path as unreviewed",
+            "Never count a derived unreviewed file toward your verdict",
         ],
     )
     def test_contract_reaches_reviewer(self, tmp_path, phrase):
@@ -2009,11 +2050,10 @@ class TestNotDiffedContractIsDelivered:
         assert phrase not in output
 
     def test_contract_absent_without_not_diffed_files(self, tmp_path):
-        """No NOT DIFFED files means no declaration contract to deliver."""
+        """No NOT DIFFED files means no positive-claim contract to deliver."""
         clean_scope = "=== REVIEW SCOPE ===\n=== FILES ===\nsrc/a.py  (+5 -1)\n"
         output = self._build(tmp_path, clean_scope, not_diffed_count=0)
-        assert "Not reviewed (budget):" not in output
-        assert "is a contradiction save() rejects" not in output
+        assert "authoritative deferred sidecar" not in output
 
     def test_contract_is_not_sourced_from_stripped_protocol(self):
         """The stripped protocol must not be the contract's only home.
@@ -2025,30 +2065,9 @@ class TestNotDiffedContractIsDelivered:
         delivered = _mod.extract_protocol_sections(
             protocol, _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
         )
-        assert "Not reviewed (budget):" not in delivered, (
+        assert "authoritative deferred sidecar" not in delivered, (
             "Contract text placed in a stripped protocol section never reaches "
             "a reviewer — keep it in build_output()'s REVIEW BUDGET block."
-        )
-        assert "is a contradiction save() rejects" not in delivered, (
-            "The declare-vs-claim contradiction is policy, not mechanics "
-            "bootstrap performs — keep it in build_output()'s REVIEW BUDGET "
-            "block, the same as the rest of this contract."
-        )
-
-    def test_declare_claim_contradiction_was_moved_not_copied(self):
-        """Regression guard: the contradiction rule used to live ONLY in
-        reviewer-protocol.md's '## ReviewOutputBuilder API' section, which
-        bootstrap also strips (see REVIEWER_PROTOCOL_SKIP_SECTIONS) — so it
-        reached zero reviewers despite being taught. The fix moves the
-        teaching into build_output(); the source sentence must not survive
-        in the protocol file as a second, still-inert copy.
-        """
-        protocol = (
-            PLUGIN_ROOT / "agents" / "shared" / "reviewer-protocol.md"
-        ).read_text()
-        assert "declaring and claiming the same path is rejected" not in protocol, (
-            "the old sentence should have moved into build_output(), not "
-            "been left behind as a dead copy in a stripped section"
         )
 
     def test_renamed_scope_header_cannot_suppress_a_real_count(self, tmp_path):
@@ -2070,8 +2089,8 @@ class TestNotDiffedContractIsDelivered:
         )
         assert "NOT DIFFED" not in renamed_header_scope  # the old regex's anchor is gone
         output = self._build(tmp_path, renamed_header_scope, not_diffed_count=1)
-        assert "Not reviewed (budget):" in output
-        assert "protocol violation" in output
+        assert "authoritative deferred sidecar" in output
+        assert "derives every unclaimed path as unreviewed" in output
 
     def test_original_header_text_alone_no_longer_drives_the_contract(self, tmp_path):
         """The rendered header text must never re-enable the contract by itself.
@@ -2082,16 +2101,15 @@ class TestNotDiffedContractIsDelivered:
         decision, the contract would incorrectly appear. It must not.
         """
         output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, not_diffed_count=0)
-        assert "Not reviewed (budget):" not in output
+        assert "authoritative deferred sidecar" not in output
 
     def test_briefing_never_commands_bulk_unreviewed_enumeration(self, tmp_path):
         """run12: performance-reviewer burned ~1/3 of its calls hand-assembling
         254 unreviewed paths because the briefing said 'Declare each file you
-        could not reach' — auto-fill already records them for free."""
+        could not reach' — the builder already derives them for free."""
         output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, not_diffed_count=3)
         assert "Declare each file you could not reach" not in output
-        assert "Never spend tool calls enumerating unreviewed files" in output
-        assert "auto-declared" in output
+        assert "derives every unclaimed path as unreviewed" in output
 
 
 class TestDeferredFilesOrderingEndToEnd:

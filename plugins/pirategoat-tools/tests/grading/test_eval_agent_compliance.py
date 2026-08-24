@@ -22,7 +22,7 @@ PLUGIN_ROOT = TESTS_DIR.parent
 EVAL_SCRIPT = TESTS_DIR / "grading" / "eval_agent_compliance.py"
 
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
-from review.agent.output import ReviewOutputBuilder
+from review.agent.output import ReviewOutputBuilder, finalize_candidate
 
 # Same precedent as grading/test_graders.py: add tests/ to sys.path so the
 # `helpers` package resolves, then import graders directly from their real
@@ -53,8 +53,17 @@ def _write_review_pair(output_dir: Path, reviewer: str = "security") -> None:
         category="xss",
         line=42,
     )
-    builder.set_files_reviewed(1)
-    builder.save(str(output_dir))
+    (output_dir / f"{reviewer}-deferred-files.json").write_text(json.dumps({
+        "schema": 2,
+        "agent_name": f"{reviewer}-reviewer",
+        "deferred_files": [],
+        "diffed_count": 1,
+        "in_scope_count": 1,
+    }))
+    candidate = builder.save(str(output_dir))
+    finalize_candidate(
+        str(output_dir), reviewer, candidate["candidate_digest"]
+    )
 
 
 def _run_eval(*args: str, cwd: Path) -> subprocess.CompletedProcess:
@@ -567,4 +576,3 @@ class TestDispatchIdentity:
             assert model is None or model == "inherit" or (
                 model in _eval_mod._DISPATCHABLE_MODELS
             ), f"{agent}: frontmatter model {model!r} is not dispatchable"
-
