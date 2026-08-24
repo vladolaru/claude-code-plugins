@@ -1346,7 +1346,6 @@ def _build_apply_plan(document, findings):
                     f"the ledger records it as applied"
                 )
             if rejected_record is None:
-                _validate_unlanded_entry(entry, by_id, label)
                 newly_rejected.append(entry)
             else:
                 _validate_rejection_provenance(entry, rejected_record, label)

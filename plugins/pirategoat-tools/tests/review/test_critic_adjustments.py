@@ -3562,26 +3562,65 @@ class TestAdjudicationRequest:
 
         assert (adj_path.read_bytes(), findings_path.read_bytes()) == before
 
-    def test_refuted_noop_is_still_rejected_before_checkpoint(self, tmp_path):
+    @pytest.mark.parametrize(
+        "target_id,fields,rejection_reason",
+        [
+            (
+                "aaaa1111",
+                {"severity": "high"},
+                "The proposed mutation is a no-op.",
+            ),
+            (
+                "missing-id",
+                {"severity": "critical"},
+                "The proposed target does not exist.",
+            ),
+            (
+                "aaaa1111",
+                {"severity": "medium"},
+                "The proposed promotion moves severity downward.",
+            ),
+        ],
+        ids=["no-op", "missing-target", "wrong-direction"],
+    )
+    def test_refuted_proposal_need_not_be_applicable(
+        self, tmp_path, target_id, fields, rejection_reason
+    ):
         _write_findings(tmp_path, [_issue("aaaa1111", "high")])
         proposal = _commit_critic_snapshot(tmp_path, [{
             "action": "promote",
-            "id": "aaaa1111",
-            "fields": {"severity": "high"},
-            "rationale": "This proposal changes nothing.",
+            "id": target_id,
+            "fields": fields,
+            "rationale": "The orchestrator probe will reject this proposal.",
         }])
         request = _settlement_request(
             proposal,
-            refuted=((0, "The proposed mutation is a no-op."),),
+            refuted=((0, rejection_reason),),
         )
-        adj_path = tmp_path / "decision-critic-adjustments.json"
-        findings_path = tmp_path / "review-findings.json"
-        before = (adj_path.read_bytes(), findings_path.read_bytes())
 
-        with pytest.raises(ValueError, match="promote would not change"):
-            critic_adjustments_module.settle(str(tmp_path), request)
+        result = critic_adjustments_module.settle(str(tmp_path), request)
 
-        assert (adj_path.read_bytes(), findings_path.read_bytes()) == before
+        document = json.loads(
+            (tmp_path / "decision-critic-adjustments.json").read_text()
+        )
+        findings = json.loads(
+            (tmp_path / "review-findings.json").read_text()
+        )
+        adjustment_id = proposal["adjustments"][0]["adjustment_id"]
+        assert result["counts"] == {
+            "verified": 0,
+            "refuted": 1,
+            "not_checked": 0,
+        }
+        assert document["adjustments"][0]["spot_check"] == "refuted"
+        assert findings["issues"] == [_issue("aaaa1111", "high")]
+        assert findings[REJECTED_ADJUSTMENTS_KEY] == [{
+            "adjustment_id": adjustment_id,
+            "action": "promote",
+            "target_id": target_id,
+            "spot_check": "refuted",
+            "rejection_reason": rejection_reason,
+        }]
 
     @pytest.mark.parametrize(
         "action,current,fields,problem",
