@@ -1850,9 +1850,11 @@ class TestRepoRuleAndRefModeSelection:
 
 
 class TestOutputFilenameConsistency:
-    """Output filenames from ReviewOutputBuilder.save() match bootstrap expectations."""
+    """Candidate save and canonical finalization use distinct filenames."""
 
-    def test_save_uses_review_suffix(self, tmp_path):
+    def test_save_stages_candidate_then_finalization_publishes_canonical(
+        self, tmp_path
+    ):
         """save() stages a candidate; finalization publishes the review."""
         from review.agent.output import ReviewOutputBuilder, finalize_candidate
 
@@ -1868,13 +1870,20 @@ class TestOutputFilenameConsistency:
 
         assert set(result) == {"candidate", "candidate_digest"}
         assert result["candidate"].endswith("dead-code-review.candidate.json")
-        finalize_candidate(
+        candidate = Path(result["candidate"])
+        canonical = tmp_path / "dead-code-review.json"
+        assert candidate.is_file()
+        assert not canonical.exists()
+
+        finalized = finalize_candidate(
             str(tmp_path), "dead-code", result["candidate_digest"]
         )
-        assert (tmp_path / "dead-code-review.json").is_file()
+        assert finalized["json"] == str(canonical)
+        assert canonical.is_file()
+        assert not candidate.exists()
         assert not os.path.exists(os.path.join(str(tmp_path), "dead-code-review.md"))
 
-    def test_bootstrap_output_matches_save_filenames(self, tmp_path):
+    def test_bootstrap_output_names_finalized_file_not_candidate(self, tmp_path):
         """Bootstrap OUTPUT_FILES must name the finalized canonical JSON,
         and no Markdown the pipeline derives elsewhere.
 
@@ -1896,7 +1905,20 @@ class TestOutputFilenameConsistency:
             has_php=False,
         )
         assert f"{tmp_path}/dead-code-review.json" in output
+        assert f"{tmp_path}/dead-code-review.candidate.json" not in output
+        assert "run the exact FINALIZE command printed by save()" in output
         assert f"{tmp_path}/dead-code-review.md" not in output
+
+    def test_testing_inventory_names_two_phase_filename_contract(self):
+        testing_doc = (TESTS_DIR / "TESTING.md").read_text()
+        row = next(
+            line for line in testing_doc.splitlines()
+            if "`TestOutputFilenameConsistency`" in line
+        )
+
+        assert "candidate" in row
+        assert "finalization" in row
+        assert "match bootstrap expectations" not in row
 
 
 class TestBootstrapImportDoesNotBreakTelemetry:
