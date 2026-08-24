@@ -1,22 +1,13 @@
 #!/usr/bin/env python3
-"""Deterministic detection of dependency roots needing a trusted-branch refresh.
+"""Validate and atomically publish one dependency-refresh report.
 
-The review pipeline never installs dependencies itself (the 1.113.0 release
-removed manifest-driven installation as a security boundary). When the
-requester explicitly opts in (run-config.json ``refresh_dependencies``), this
-module detects which dependency roots look stale relative to the reviewed
-range so the main orchestrator can refresh them adaptively with frozen-mode
-installs. Detection is deterministic and side-effect free; execution belongs
-to the orchestrator, never this module.
-
-A root signals when its manifest and lockfile both exist AND either a
-manifest/lockfile in that directory changed within the reviewed range, or the
-installed state (``vendor/`` or ``node_modules/``) is missing. Detection is
-bounded: only the repo root and directories containing changed manifest files
-are examined. A manifest without a lockfile never signals — no frozen-mode
-install exists for it.
+The interactive orchestrator decides whether dependency work is needed and
+what commands to run. This module owns only the closed report schema, a
+bounded observation of final tracked Git state, and canonical publication.
+Reported command strings are evidence, not execution attestation.
 """
 
+import argparse
 import json
 import os
 import subprocess
@@ -24,285 +15,302 @@ import sys
 from pathlib import Path
 
 try:
-    from .dispatch_status import AGENT_NAME_RE  # noqa: F401 — path setup probe
+    from .atomic_io import atomic_write_json
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
+    from review.atomic_io import atomic_write_json
 
-from git_paths import decode_git_c_quoted_path
 
-# Node managers in priority order — a more specific lockfile beats npm's.
-_NODE_SPECS = (
-    {
-        "manager": "pnpm",
-        "lockfile": "pnpm-lock.yaml",
-        "suggested_command": "pnpm install --frozen-lockfile --ignore-scripts",
-    },
-    {
-        "manager": "yarn",
-        "lockfile": "yarn.lock",
-        "suggested_command": "yarn install --immutable --mode=skip-build",
-    },
-    {
-        "manager": "npm",
-        "lockfile": "package-lock.json",
-        "suggested_command": "npm ci --ignore-scripts --no-audit --no-fund",
-    },
-)
-
-_COMPOSER_SPEC = {
-    "manager": "composer",
-    "lockfile": "composer.lock",
-    "suggested_command": (
-        "composer install --no-scripts --no-plugins --prefer-dist --no-interaction"
-    ),
-}
-
-_MANIFEST_BASENAMES = frozenset(
-    {"composer.json", "composer.lock", "package.json"}
-    | {spec["lockfile"] for spec in _NODE_SPECS}
-)
-
-# Verification vocabulary for the trusted-branch refresh; bases are accepted
-# openings, flags accepted extra tokens.
-ALLOWED_INSTALL_BASES = (
-    ("composer", "install"),
-    ("npm", "ci"),
-    ("pnpm", "install"),
-    ("yarn", "install"),
-)
-ALLOWED_INSTALL_FLAGS = frozenset({
-    "--ignore-scripts", "--no-scripts", "--no-plugins", "--prefer-dist",
-    "--no-interaction", "--no-audit", "--no-fund", "--frozen-lockfile",
-    "--immutable", "--mode=skip-build",
-})
+REPORT_SCHEMA = 1
+REPORT_STATUSES = ("not_needed", "completed", "partial", "failed")
+EXIT_STATUSES = ("ok", "failed")
+REPORT_FILENAME = "dependency-refresh.json"
 
 _MAX_DIRTY_FILES = 20
+_MAX_DIRTY_FILE_CHARS = 500
 _MAX_REPORT_BYTES = 1024 * 1024
-_MAX_REPORTED_COMMANDS = 128
-SKIP_REASON_DIRTY_WORKTREE = "dirty_worktree"
-SKIP_REASON_WORKTREE_STATUS_FAILED = "worktree_status_failed"
-DEPENDENCY_REFRESH_SKIP_REASONS = frozenset({
-    SKIP_REASON_DIRTY_WORKTREE,
-    SKIP_REASON_WORKTREE_STATUS_FAILED,
-})
+_MAX_REPORTED_COMMANDS = 32
+_MAX_DIRECTORY_CHARS = 200
+_MAX_COMMAND_CHARS = 500
+_REQUEST_FIELDS = frozenset({"schema", "status", "commands"})
+_SCRIPT_OWNED_FIELDS = frozenset({"tracked_files_dirty", "dirty_files"})
+_CANONICAL_FIELDS = _REQUEST_FIELDS | _SCRIPT_OWNED_FIELDS
+_COMMAND_FIELDS = frozenset({"directory", "command", "exit_status"})
 
 
-def detect_dependency_refresh(repo_root, changed_files):
-    """Describe dependency roots to refresh and whether refresh is safe.
-
-    ``changed_files`` are repo-relative paths from the reviewed range (Git
-    C-quoted spellings tolerated; malformed entries are skipped). A dirty or
-    unknowable tracked worktree returns a fail-closed ``skipped_reason`` while
-    preserving the detected signals. Read-only.
-    """
-    root = Path(repo_root)
-    changed_by_dir = {}
-    for raw in changed_files or []:
-        if not isinstance(raw, str) or not raw:
-            continue
-        decoded, _was_git_quoted = decode_git_c_quoted_path(raw)
-        if decoded is None:
-            continue
-        path = decoded.strip('"').replace("\\", "/")
-        segments = path.split("/")
-        # Only repo-relative paths can name a dependency root we may touch.
-        if path.startswith("/") or ".." in segments or "" in segments:
-            continue
-        basename = segments[-1]
-        if basename not in _MANIFEST_BASENAMES:
-            continue
-        directory = "/".join(segments[:-1]) or "."
-        changed_by_dir.setdefault(directory, set()).add(basename)
-
-    candidate_dirs = {"."} | set(changed_by_dir)
-    signals = []
-    for directory in sorted(candidate_dirs):
-        base = root if directory == "." else root / directory
-        if not base.is_dir():
-            continue
-        changed_here = changed_by_dir.get(directory, set())
-
-        if (base / "composer.json").is_file() and \
-                (base / _COMPOSER_SPEC["lockfile"]).is_file():
-            signal = _signal(
-                directory,
-                _COMPOSER_SPEC,
-                changed_here & {"composer.json", _COMPOSER_SPEC["lockfile"]},
-                (base / "vendor").is_dir(),
-            )
-            if signal:
-                signals.append(signal)
-
-        if (base / "package.json").is_file():
-            for spec in _NODE_SPECS:
-                if (base / spec["lockfile"]).is_file():
-                    signal = _signal(
-                        directory,
-                        spec,
-                        changed_here & {"package.json", spec["lockfile"]},
-                        (base / "node_modules").is_dir(),
-                    )
-                    if signal:
-                        signals.append(signal)
-                    break
-
-    result = {"signals": signals}
-    if not signals:
-        return result
-    dirty_files, status_failed = _tracked_worktree_status(root)
-    if status_failed:
-        result.update({
-            "skipped_reason": SKIP_REASON_WORKTREE_STATUS_FAILED,
-            "dirty_files": [],
-        })
-    elif dirty_files:
-        result.update({
-            "skipped_reason": SKIP_REASON_DIRTY_WORKTREE,
-            "dirty_files": dirty_files,
-        })
-    return result
-
-
-def _signal(directory, spec, changed, installed):
-    """Build one signal dict, or None when the root needs no refresh."""
-    reasons = []
-    if changed:
-        reasons.append("changed_in_range")
-    if not installed:
-        reasons.append("installed_state_missing")
-    if not reasons:
-        return None
-    return {
-        "manager": spec["manager"],
-        "directory": directory,
-        "reasons": reasons,
-        "changed_files": sorted(changed),
-        "installed_state_present": installed,
-        "suggested_command": spec["suggested_command"],
-    }
-
-
-def _tracked_worktree_status(repo_root):
-    """Return ``(bounded_dirty_files, failed)`` for tracked Git state."""
+def observe_tracked_worktree(
+    repo_root: os.PathLike[str] | str,
+) -> dict[str, object]:
+    """Return bounded tracked state without treating untracked files as dirty."""
     try:
-        git_status = subprocess.run(
+        proc = subprocess.run(
             [
-                "git", "-C", str(repo_root), "status", "--porcelain",
-                "--untracked-files=no", "--ignore-submodules=untracked",
+                "git",
+                "-C",
+                os.fspath(repo_root),
+                "status",
+                "--porcelain",
+                "--untracked-files=no",
+                "--ignore-submodules=untracked",
             ],
             capture_output=True,
             text=True,
             timeout=30,
         )
-        if git_status.returncode != 0:
-            raise OSError(git_status.stderr.strip())
+        if proc.returncode != 0:
+            raise OSError(proc.stderr.strip())
         dirty_files = [
-            line[3:]
-            for line in git_status.stdout.splitlines()
+            line[3:][:_MAX_DIRTY_FILE_CHARS]
+            for line in proc.stdout.splitlines()
             if line and not line.startswith("??")
-        ]
-        return dirty_files[:_MAX_DIRTY_FILES], False
+        ][:_MAX_DIRTY_FILES]
+        return {
+            "tracked_files_dirty": bool(dirty_files),
+            "dirty_files": dirty_files,
+        }
     except (OSError, subprocess.SubprocessError, UnicodeError):
-        return [], True
+        return {"tracked_files_dirty": None, "dirty_files": []}
 
 
-def _command_allowed(command):
-    """Return whether a reported command matches the frozen-install grammar."""
-    if not isinstance(command, str):
-        return False
-    if not command.isprintable():
-        return False
-    if any(character in command for character in "&;|`$><"):
-        return False
+def _read_report_request(path):
+    """Return ``(JSON object, problems)`` without interpreting its schema."""
+    try:
+        with Path(path).open("rb") as report_file:
+            report_bytes = report_file.read(_MAX_REPORT_BYTES + 1)
+    except OSError as err:
+        return None, [f"unable to read report: {err}"]
 
-    tokens = command.split()
-    for base in ALLOWED_INSTALL_BASES:
-        if tuple(tokens[:len(base)]) != base:
-            continue
-        return all(token in ALLOWED_INSTALL_FLAGS for token in tokens[len(base):])
-    return False
+    if len(report_bytes) > _MAX_REPORT_BYTES:
+        return None, [f"report must contain at most {_MAX_REPORT_BYTES} bytes"]
+    try:
+        report_text = report_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return None, ["report must contain valid UTF-8"]
+    try:
+        payload = json.loads(report_text)
+    except (json.JSONDecodeError, ValueError, RecursionError, MemoryError):
+        return None, ["report must contain valid JSON"]
+    if not isinstance(payload, dict):
+        return None, ["report must be a JSON object"]
+    return payload, []
+
+
+def _validate_string(value, label, max_chars):
+    problems = []
+    if not isinstance(value, str):
+        return [f"{label} must be a string"]
+    if not value:
+        problems.append(f"{label} must not be empty")
+    if len(value) > max_chars:
+        problems.append(f"{label} must contain at most {max_chars} characters")
+    if not value.isprintable():
+        problems.append(f"{label} must be printable")
+    return problems
+
+
+def _validate_request_fields(payload, *, reject_script_owned):
+    problems = []
+    for field in ("schema", "status", "commands"):
+        if field not in payload:
+            problems.append(f"missing required field: '{field}'")
+
+    if reject_script_owned:
+        for field in sorted(_SCRIPT_OWNED_FIELDS & payload.keys()):
+            problems.append(f"'{field}' is script-owned")
+
+    # Script-owned fields receive their own actionable diagnostic on requests;
+    # do not report the same field a second time as merely unknown.
+    allowed_fields = _CANONICAL_FIELDS
+    for field in sorted(payload.keys() - allowed_fields):
+        problems.append(f"unknown top-level field: '{field}'")
+
+    if (
+        "schema" in payload
+        and (
+            not isinstance(payload["schema"], int)
+            or isinstance(payload["schema"], bool)
+            or payload["schema"] != REPORT_SCHEMA
+        )
+    ):
+        problems.append(f"'schema' must be {REPORT_SCHEMA}")
+    status = payload.get("status")
+    if "status" in payload and status not in REPORT_STATUSES:
+        problems.append(
+            "'status' must be one of: " + ", ".join(REPORT_STATUSES)
+        )
+
+    commands = payload.get("commands")
+    if "commands" in payload and not isinstance(commands, list):
+        problems.append("'commands' must be a list")
+        commands = None
+    if isinstance(commands, list):
+        if len(commands) > _MAX_REPORTED_COMMANDS:
+            problems.append(
+                f"'commands' must contain at most {_MAX_REPORTED_COMMANDS} entries"
+            )
+        for index, command_entry in enumerate(commands[:_MAX_REPORTED_COMMANDS]):
+            if not isinstance(command_entry, dict):
+                problems.append(f"commands[{index}] must be an object")
+                continue
+            for field in ("directory", "command", "exit_status"):
+                if field not in command_entry:
+                    problems.append(
+                        f"commands[{index}] missing required field: '{field}'"
+                    )
+            for field in sorted(command_entry.keys() - _COMMAND_FIELDS):
+                problems.append(
+                    f"unknown commands[{index}] field: '{field}'"
+                )
+            if "directory" in command_entry:
+                problems.extend(_validate_string(
+                    command_entry["directory"],
+                    f"commands[{index}].directory",
+                    _MAX_DIRECTORY_CHARS,
+                ))
+            if "command" in command_entry:
+                problems.extend(_validate_string(
+                    command_entry["command"],
+                    f"commands[{index}].command",
+                    _MAX_COMMAND_CHARS,
+                ))
+            exit_status = command_entry.get("exit_status")
+            if (
+                "exit_status" in command_entry
+                and exit_status not in EXIT_STATUSES
+            ):
+                problems.append(
+                    f"commands[{index}].exit_status must be one of: "
+                    + ", ".join(EXIT_STATUSES)
+                )
+        if status == "not_needed" and commands:
+            problems.append("'not_needed' requires an empty 'commands' list")
+    return problems
+
+
+def validate_report_request(payload):
+    """Return every schema problem in an orchestrator-authored request."""
+    if not isinstance(payload, dict):
+        return ["report must be a JSON object"]
+    return _validate_request_fields(payload, reject_script_owned=True)
+
+
+def validate_canonical_report(payload):
+    """Return every schema problem in a script-published canonical report."""
+    if not isinstance(payload, dict):
+        return ["report must be a JSON object"]
+
+    problems = _validate_request_fields(payload, reject_script_owned=False)
+    for field in ("tracked_files_dirty", "dirty_files"):
+        if field not in payload:
+            problems.append(f"missing required field: '{field}'")
+
+    tracked_files_dirty = payload.get("tracked_files_dirty")
+    if (
+        "tracked_files_dirty" in payload
+        and tracked_files_dirty is not None
+        and not isinstance(tracked_files_dirty, bool)
+    ):
+        problems.append("'tracked_files_dirty' must be a boolean or null")
+
+    dirty_files = payload.get("dirty_files")
+    if "dirty_files" in payload and not isinstance(dirty_files, list):
+        problems.append("'dirty_files' must be a list")
+        dirty_files = None
+    if isinstance(dirty_files, list):
+        if len(dirty_files) > _MAX_DIRTY_FILES:
+            problems.append(
+                f"'dirty_files' must contain at most {_MAX_DIRTY_FILES} entries"
+            )
+        for index, dirty_file in enumerate(dirty_files[:_MAX_DIRTY_FILES]):
+            problems.extend(_validate_string(
+                dirty_file,
+                f"dirty_files[{index}]",
+                _MAX_DIRTY_FILE_CHARS,
+            ))
+    return problems
 
 
 def load_dependency_refresh_report(output_dir):
-    """Return ``(report, load_failed)`` for the orchestrator self-report.
-
-    A missing report is not itself a failure. Unreadable, oversized,
-    malformed, non-object, or parser-exhausting reports are failures and do
-    not return evidence.
-    """
-    report_path = Path(output_dir) / "dependency-refresh.json"
-    try:
-        with report_path.open("rb") as report_file:
-            report_bytes = report_file.read(_MAX_REPORT_BYTES + 1)
-    except FileNotFoundError:
-        return None, False
-    except OSError:
-        return None, True
-
-    if len(report_bytes) > _MAX_REPORT_BYTES:
-        return None, True
-
-    try:
-        report = json.loads(report_bytes.decode("utf-8"))
-    except (
-        UnicodeDecodeError,
-        json.JSONDecodeError,
-        ValueError,
-        RecursionError,
-        MemoryError,
-    ):
-        return None, True
-    if not isinstance(report, dict):
-        return None, True
-    return report, False
+    """Return a complete canonical report, or ``None`` when absent/invalid."""
+    payload, read_problems = _read_report_request(
+        Path(output_dir) / REPORT_FILENAME
+    )
+    if read_problems or validate_canonical_report(payload):
+        return None
+    return payload
 
 
-def verify_dependency_refresh(repo_root, output_dir):
-    """Independently verify a dependency refresh report and tracked Git state."""
-    result = {
-        "report_present": False,
-        "commands_allowed": None,
-        "disallowed_commands": [],
-        "tracked_files_dirty": None,
-        "dirty_files": [],
-        "verification_failed": False,
+def save_report(output_dir, report_path, repo_root):
+    """Validate a request, add final tracked state, and publish atomically."""
+    payload, problems = _read_report_request(report_path)
+    if not problems:
+        problems = validate_report_request(payload)
+    if problems:
+        return problems
+
+    observation = observe_tracked_worktree(repo_root)
+    canonical = {
+        "schema": payload["schema"],
+        "status": payload["status"],
+        "commands": [dict(command) for command in payload["commands"]],
+        "tracked_files_dirty": observation["tracked_files_dirty"],
+        "dirty_files": list(observation["dirty_files"]),
     }
+    atomic_write_json(Path(output_dir) / REPORT_FILENAME, canonical)
+    return []
 
-    report, report_load_failed = load_dependency_refresh_report(output_dir)
-    if report_load_failed:
-        result["verification_failed"] = True
 
-    if isinstance(report, dict):
-        result["report_present"] = True
-        commands = report.get("commands")
-        commands_schema_valid = (
-            isinstance(commands, list)
-            and len(commands) <= _MAX_REPORTED_COMMANDS
-            and all(
-                isinstance(entry, dict)
-                and isinstance(entry.get("command"), str)
-                for entry in commands
-            )
+def _resolve_repo_root():
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
-        if commands_schema_valid:
-            for entry in commands:
-                command = entry.get("command")
-                if not _command_allowed(command):
-                    result["disallowed_commands"].append(str(command)[:500])
-            result["disallowed_commands"] = result["disallowed_commands"][
-                :_MAX_DIRTY_FILES
-            ]
-            result["commands_allowed"] = not result["disallowed_commands"]
-        else:
-            result["verification_failed"] = True
+        if proc.returncode == 0 and proc.stdout.strip():
+            return proc.stdout.strip()
+    except (OSError, subprocess.SubprocessError, UnicodeError):
+        pass
+    return os.getcwd()
 
-    dirty_files, status_failed = _tracked_worktree_status(repo_root)
-    if not status_failed:
-        result["tracked_files_dirty"] = bool(dirty_files)
-        result["dirty_files"] = dirty_files
-    else:
-        result["verification_failed"] = True
 
-    return result
+def run_save(args):
+    """Run the save subcommand and return its process exit status."""
+    problems = save_report(
+        output_dir=args.output_dir,
+        report_path=args.report,
+        repo_root=_resolve_repo_root(),
+    )
+    if problems:
+        for problem in problems:
+            print(
+                f"INVALID dependency refresh report: {problem}",
+                file=sys.stderr,
+            )
+        return 1
+    print(f"SAVED {REPORT_FILENAME}")
+    return 0
+
+
+def _build_parser():
+    parser = argparse.ArgumentParser(
+        description="Validate and save a dependency-refresh report."
+    )
+    subparsers = parser.add_subparsers(dest="action", required=True)
+    save_parser = subparsers.add_parser("save")
+    save_parser.add_argument("--output-dir", required=True)
+    save_parser.add_argument("--report", required=True)
+    save_parser.set_defaults(handler=run_save)
+    return parser
+
+
+def main(argv=None):
+    args = _build_parser().parse_args(argv)
+    return args.handler(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

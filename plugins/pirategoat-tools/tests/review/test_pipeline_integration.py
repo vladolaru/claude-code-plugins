@@ -16,7 +16,7 @@ PLUGIN_ROOT = TESTS_DIR.parent
 _SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 
 sys.path.insert(0, str(_SCRIPTS_DIR))
-from review import agents_status, critic_adjustments
+from review import agents_status, critic_adjustments, dependency_refresh
 from review.atomic_io import atomic_write_json
 from review.critic_adjustments import write_findings
 
@@ -534,23 +534,13 @@ class TestStep3Orchestration:
         # Output should point to step 4, not step 5
         assert "Step 4" in r.stdout
 
-    def test_step_3_detects_stale_dependency_roots_when_opted_in(self, tmp_path):
+    def test_step_3_records_clean_dependency_refresh_precheck_when_opted_in(
+        self, tmp_path
+    ):
         repo = tmp_path / "repo"
         repo.mkdir()
         _init_git_repo(repo)
-        # Commit a composer root, then change the lockfile in a second commit
-        # so HEAD~1..HEAD contains a manifest change.
-        (repo / "composer.json").write_text("{}\n")
-        (repo / "composer.lock").write_text("{}\n")
-        subprocess.run(["git", "add", "."], cwd=repo,
-                       capture_output=True, check=True)
-        subprocess.run(["git", "commit", "-m", "Add composer root"],
-                       cwd=repo, capture_output=True, check=True)
-        (repo / "composer.lock").write_text('{"changed": true}\n')
-        subprocess.run(["git", "add", "composer.lock"], cwd=repo,
-                       capture_output=True, check=True)
-        subprocess.run(["git", "commit", "-m", "Bump lock"],
-                       cwd=repo, capture_output=True, check=True)
+        _add_commit(repo)
 
         out_dir = tmp_path / "out"
         run_pipeline("--step", "1", "--mode", "full",
@@ -563,10 +553,10 @@ class TestStep3Orchestration:
 
         assert r.returncode == 0
         state = json.loads((out_dir / "pipeline-state.json").read_text())
-        detection = state.get("dependency_refresh")
-        assert detection is not None
-        managers = [s["manager"] for s in detection["signals"]]
-        assert "composer" in managers
+        assert state["dependency_refresh_precheck"] == {
+            "tracked_files_dirty": False,
+            "dirty_files": [],
+        }
 
     def test_step_3_skips_detection_without_opt_in(self, tmp_path):
         repo = tmp_path / "repo"
@@ -585,11 +575,10 @@ class TestStep3Orchestration:
 
         assert r.returncode == 0
         state = json.loads((out_dir / "pipeline-state.json").read_text())
-        assert "dependency_refresh" not in state
+        assert "dependency_refresh_precheck" not in state
 
-    def test_step_3_detection_outside_git_repo_degrades_honestly(self, tmp_path):
-        # No git repo: detection cannot resolve a repo root. The step must
-        # still succeed and record a failed detection, not a clean empty one.
+    def test_step_3_precheck_outside_git_repo_records_unknown(self, tmp_path):
+        # No git repo: the precheck must preserve uncertainty as evidence.
         # GIT_CEILING_DIRECTORIES stops rev-parse walking up into a parent
         # repository that may contain tmp_path on some machines.
         env = hermetic_env(GIT_CEILING_DIRECTORIES=str(tmp_path.parent))
@@ -602,8 +591,38 @@ class TestStep3Orchestration:
 
         assert r.returncode == 0
         state = json.loads((out_dir / "pipeline-state.json").read_text())
-        detection = state.get("dependency_refresh")
-        assert detection == {"signals": [], "detection_failed": True}
+        assert state["dependency_refresh_precheck"] == {
+            "tracked_files_dirty": None,
+            "dirty_files": [],
+        }
+
+    def test_step_3_dirty_precheck_refuses_refresh_actions(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_git_repo(repo)
+        _add_commit(repo)
+        (repo / "README.md").write_text("dirty\n", encoding="utf-8")
+
+        out_dir = tmp_path / "out"
+        run_pipeline(
+            "--step", "1", "--mode", "full",
+            "--output-dir", str(out_dir), "--refresh-deps",
+            cwd=repo, env=hermetic_env(),
+        )
+        result = run_pipeline(
+            "--step", "3", "--mode", "full",
+            "--output-dir", str(out_dir),
+            cwd=repo, env=hermetic_env(),
+        )
+
+        assert result.returncode == 0
+        state = json.loads((out_dir / "pipeline-state.json").read_text())
+        assert state["dependency_refresh_precheck"] == {
+            "tracked_files_dirty": True,
+            "dirty_files": ["README.md"],
+        }
+        assert "will not run dependency commands" in result.stdout
+        assert "SAVED dependency-refresh.json" not in result.stdout
 
 
 class TestStep8WaitingRouting:
@@ -684,7 +703,7 @@ class TestStep5Orchestration:
         assert 5 in state["completed_steps"]
         assert "dispatch_plan_summary" in state
 
-    def test_step_5_writes_dependency_refresh_verification_when_opted_in(
+    def test_step_5_loads_valid_saved_dependency_refresh_report(
         self, tmp_path
     ):
         repo = self._make_repo(tmp_path)
@@ -694,11 +713,17 @@ class TestStep5Orchestration:
             "--output-dir", str(out), "--git-range", "HEAD~1..HEAD",
             "--refresh-deps", cwd=str(repo),
         )
-        (out / "dependency-refresh.json").write_text(json.dumps({
+        request = tmp_path / "dependency-refresh-request.json"
+        request.write_text(json.dumps({
+            "schema": 1,
             "status": "completed",
-            "commands": [],
-            "tracked_files_dirty": False,
+            "commands": [{
+                "directory": ".",
+                "command": "custom sync --locked",
+                "exit_status": "ok",
+            }],
         }))
+        assert dependency_refresh.save_report(out, request, repo) == []
 
         result = run_pipeline(
             "--step", "5", "--mode", "full",
@@ -706,14 +731,13 @@ class TestStep5Orchestration:
         )
 
         assert result.returncode == 0
-        verification = json.loads(
-            (out / "dependency-refresh-verification.json").read_text()
-        )
-        assert verification["report_present"] is True
+        report = dependency_refresh.load_dependency_refresh_report(out)
         state = json.loads((out / "pipeline-state.json").read_text())
-        assert state["dependency_refresh_verification"] == verification
+        assert state["dependency_refresh_report"] == report
+        assert list(out.glob("*verification*.json")) == []
+        assert not any("verification" in key for key in state)
 
-    def test_step_5_records_skip_without_running_refresh_verification(
+    def test_step_5_records_missing_report_without_replacement_artifact(
         self, tmp_path
     ):
         repo = self._make_repo(tmp_path)
@@ -723,14 +747,6 @@ class TestStep5Orchestration:
             "--output-dir", str(out), "--git-range", "HEAD~1..HEAD",
             "--refresh-deps", cwd=str(repo),
         )
-        state_path = out / "pipeline-state.json"
-        state = json.loads(state_path.read_text())
-        state["dependency_refresh"] = {
-            "signals": [{"manager": "npm"}],
-            "skipped_reason": "dirty_worktree",
-            "dirty_files": ["tracked.txt"],
-        }
-        state_path.write_text(json.dumps(state))
 
         result = run_pipeline(
             "--step", "5", "--mode", "full",
@@ -738,19 +754,13 @@ class TestStep5Orchestration:
         )
 
         assert result.returncode == 0
-        skipped = json.loads(
-            (out / "dependency-refresh-verification.json").read_text()
-        )
-        assert skipped == {
-            "dirty_files": ["tracked.txt"],
-            "skipped": True,
-            "skipped_reason": "dirty_worktree",
-        }
-        state = json.loads(state_path.read_text())
-        assert state["dependency_refresh_verification"] == skipped
-        assert "verified clean" not in result.stdout.lower()
+        state = json.loads((out / "pipeline-state.json").read_text())
+        assert state["dependency_refresh_report"] is None
+        assert not (out / "dependency-refresh.json").exists()
+        assert list(out.glob("*verification*.json")) == []
+        assert not any("verification" in key for key in state)
 
-    def test_step_5_skips_dependency_refresh_verification_without_opt_in(
+    def test_step_5_does_not_load_dependency_refresh_without_opt_in(
         self, tmp_path
     ):
         repo = self._make_repo(tmp_path)
@@ -760,11 +770,6 @@ class TestStep5Orchestration:
             "--output-dir", str(out), "--git-range", "HEAD~1..HEAD",
             "--no-refresh-deps", cwd=str(repo),
         )
-        (out / "dependency-refresh.json").write_text(json.dumps({
-            "status": "completed",
-            "commands": [],
-            "tracked_files_dirty": False,
-        }))
 
         result = run_pipeline(
             "--step", "5", "--mode", "full",
@@ -772,97 +777,33 @@ class TestStep5Orchestration:
         )
 
         assert result.returncode == 0
-        assert not (out / "dependency-refresh-verification.json").exists()
         state = json.loads((out / "pipeline-state.json").read_text())
-        assert "dependency_refresh_verification" not in state
-
-    def test_step_5_dependency_refresh_verification_warns_before_dispatch(
-        self, mod, tmp_path
-    ):
-        guidance = mod._step_5_dispatch_plan(
-            "full",
-            {
-                "dependency_refresh_verification": {
-                    "report_present": True,
-                    "commands_allowed": True,
-                    "disallowed_commands": [],
-                    "tracked_files_dirty": True,
-                    "dirty_files": ["src/changed.py"],
-                    "verification_failed": False,
-                }
-            },
-            {},
-            {"refresh_dependencies": True},
-            str(tmp_path),
-        )
-
-        situation = "\n".join(guidance["situation"])
-        normalized = situation.lower()
-        assert guidance["situation"][0].startswith("⚠️")
-        assert "`src/changed.py`" in situation
-        assert "inspect each listed change" in normalized
-        assert "preserve or back up intentional edits" in normalized
-        assert "git checkout -- <path>" in situation
-        assert "only after confirming" in normalized
-        assert "caused solely by the dependency refresh" in normalized
-        assert "dependency-refresh.json" in situation
-        assert "BEFORE dispatch" in situation
-
-    def test_step_5_dependency_refresh_verification_reports_combined_evidence(
-        self, mod, tmp_path
-    ):
-        guidance = mod._step_5_dispatch_plan(
-            "full",
-            {
-                "dependency_refresh_verification": {
-                    "report_present": True,
-                    "commands_allowed": False,
-                    "disallowed_commands": ["npm install"],
-                    "tracked_files_dirty": True,
-                    "dirty_files": ["src/changed.py"],
-                    "verification_failed": True,
-                }
-            },
-            {},
-            {"refresh_dependencies": True},
-            str(tmp_path),
-        )
-
-        situation = "\n".join(guidance["situation"]).lower()
-        assert sum(
-            line.startswith("⚠️") for line in guidance["situation"]
-        ) == 2
-        assert "modified tracked files" in situation
-        assert "reported command outside the allowlist" in situation
-        assert "verification itself failed" in situation
+        assert "dependency_refresh_report" not in state
+        assert not any("verification" in key for key in state)
+        assert list(out.glob("*verification*.json")) == []
 
     @pytest.mark.parametrize(
-        "verification",
+        "tracked_files_dirty",
         [
-            {
-                "report_present": True,
-                "commands_allowed": False,
-                "disallowed_commands": ["npm install"],
-                "tracked_files_dirty": False,
-                "dirty_files": [],
-                "verification_failed": False,
-            },
-            {
-                "report_present": True,
-                "commands_allowed": True,
-                "disallowed_commands": [],
-                "tracked_files_dirty": False,
-                "dirty_files": [],
-                "verification_failed": True,
-            },
+            True,
+            None,
         ],
     )
-    def test_step_5_dependency_refresh_verification_degradation_is_honest(
-        self, mod, tmp_path, verification
+    def test_step_5_warns_on_dirty_or_unknown_final_tracked_state(
+        self, mod, tmp_path, tracked_files_dirty
     ):
+        report = {
+            "schema": 1,
+            "status": "partial",
+            "commands": [],
+            "tracked_files_dirty": tracked_files_dirty,
+            "dirty_files": (
+                ["src/changed.py"] if tracked_files_dirty is True else []
+            ),
+        }
         guidance = mod._step_5_dispatch_plan(
             "full",
-            {"dependency_refresh_verification": verification},
+            {"dependency_refresh_report": report},
             {},
             {"refresh_dependencies": True},
             str(tmp_path),
@@ -870,9 +811,22 @@ class TestStep5Orchestration:
 
         situation = "\n".join(guidance["situation"])
         assert guidance["situation"][0].startswith("⚠️")
-        assert "could not be verified clean" in situation
-        assert "proceeding is allowed" in situation
-        assert "manifest records" in situation
+        assert "final tracked state" in situation
+        assert "dirty" in situation.lower() or "unknown" in situation.lower()
+        assert "reported command" not in situation.lower()
+
+    def test_step_5_warns_when_requested_report_is_missing(self, mod, tmp_path):
+        guidance = mod._step_5_dispatch_plan(
+            "full",
+            {"dependency_refresh_report": None},
+            {},
+            {"refresh_dependencies": True},
+            str(tmp_path),
+        )
+
+        situation = "\n".join(guidance["situation"])
+        assert guidance["situation"][0].startswith("⚠️")
+        assert "missing or malformed" in situation
 
     def test_step_5_preserves_initial_plan_before_orchestrator_adjustment(
         self, tmp_path

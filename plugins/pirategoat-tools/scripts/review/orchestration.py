@@ -25,10 +25,8 @@ try:
         validate_dispatch_plan_agents,
     )
     from .dependency_refresh import (
-        _MAX_DIRTY_FILES,
-        DEPENDENCY_REFRESH_SKIP_REASONS,
-        detect_dependency_refresh,
-        verify_dependency_refresh,
+        load_dependency_refresh_report,
+        observe_tracked_worktree,
     )
     from . import atomic_io
     from .atomic_io import atomic_write_json, atomic_write_text
@@ -58,10 +56,8 @@ except ImportError:
         validate_dispatch_plan_agents,
     )
     from review.dependency_refresh import (
-        _MAX_DIRTY_FILES,
-        DEPENDENCY_REFRESH_SKIP_REASONS,
-        detect_dependency_refresh,
-        verify_dependency_refresh,
+        load_dependency_refresh_report,
+        observe_tracked_worktree,
     )
     from review import atomic_io
     from review.atomic_io import atomic_write_json, atomic_write_text
@@ -398,41 +394,32 @@ def _render_run_notes(state: dict) -> str:
     """
     lines = ["## Run notes", ""]
 
-    refresh = state.get("dependency_refresh")
-    if not isinstance(refresh, dict):
+    precheck = state.get("dependency_refresh_precheck")
+    if not isinstance(precheck, dict):
         lines.append("- Dependency refresh: not requested.")
-    elif refresh.get("detection_failed"):
+    elif precheck.get("tracked_files_dirty") is True:
         lines.append(
-            "- Dependency refresh: requested, but staleness detection "
-            "failed — dependency freshness is unknown, not clean."
+            "- Dependency refresh: refused before execution because the "
+            "tracked worktree was dirty."
         )
-    elif refresh.get("skipped_reason"):
+    elif precheck.get("tracked_files_dirty") is not False:
         lines.append(
-            f"- Dependency refresh: refused "
-            f"({refresh['skipped_reason']}) — host context may be degraded."
+            "- Dependency refresh: refused before execution because the "
+            "tracked worktree state was unknown."
         )
     else:
-        verification = state.get("dependency_refresh_verification")
-        if not isinstance(verification, dict):
+        report = state.get("dependency_refresh_report")
+        if not isinstance(report, dict):
             lines.append(
-                "- Dependency refresh: requested; no verification recorded."
-            )
-        elif not verification.get("report_present"):
-            # No self-report means nothing states which install commands
-            # actually ran — `commands_allowed` has nothing to validate.
-            # "ran" here would publish an install nobody observed.
-            lines.append(
-                "- Dependency refresh: requested; installs unverified — the "
-                "orchestrator wrote no refresh report, so which commands "
-                "ran is unknown."
+                "- Dependency refresh: requested but not recorded."
             )
         else:
-            allowed = verification.get("commands_allowed")
-            dirty = verification.get("tracked_files_dirty")
+            commands = report.get("commands")
+            command_count = len(commands) if isinstance(commands, list) else 0
             lines.append(
-                f"- Dependency refresh: ran; post-hoc verification — "
-                f"commands allowed: {_tri_state(allowed)}, tracked files "
-                f"dirty: {_tri_state(dirty)}."
+                f"- Dependency refresh: {report.get('status')}; "
+                f"{command_count} command(s) reported; final tracked files "
+                f"dirty: {_tri_state(report.get('tracked_files_dirty'))}."
             )
 
     summary = state.get("dispatch_plan_summary")
@@ -601,23 +588,15 @@ def _record_review_record(state, outcome):
 # Step Orchestration (side effects — subprocesses, file I/O)
 # ---------------------------------------------------------------------------
 
-def _detect_dependency_refresh_state(context):
-    """Run stale-dependency detection against the reviewed repo root.
-
-    Failure is honest, never silent: a missing repo root or a crashed
-    detection reports detection_failed instead of an empty clean result.
-    """
+def _dependency_refresh_safety_state():
+    """Observe the tracked baseline that gates optional refresh actions."""
     try:
         repo_root = _git_output("rev-parse", "--show-toplevel")
         if not repo_root:
-            return {"signals": [], "detection_failed": True}
-        changed = context.get("git", {}).get("changed_files") or []
-        result = detect_dependency_refresh(repo_root, changed)
-        if not isinstance(result, dict) or "signals" not in result:
-            return {"signals": [], "detection_failed": True}
-        return result
+            repo_root = os.getcwd()
     except Exception:
-        return {"signals": [], "detection_failed": True}
+        repo_root = os.getcwd()
+    return observe_tracked_worktree(repo_root)
 
 
 def _orchestrate_step_2(mode, config, state, context, output_dir):
@@ -1018,11 +997,10 @@ def _orchestrate_step_3(mode, config, state, context, output_dir):
     if git.get("git_range"):
         state["resolved_params"]["git_range"] = git["git_range"]
 
-    # Trusted-branch dependency refresh — deterministic detection only.
-    # Execution belongs to the orchestrator via the step 3 briefing; the
-    # script never installs anything.
+    # Trusted-branch dependency refresh — one tracked-state custody gate.
+    # The interactive orchestrator decides whether and what to install.
     if config.get("refresh_dependencies"):
-        state["dependency_refresh"] = _detect_dependency_refresh_state(context)
+        state["dependency_refresh_precheck"] = _dependency_refresh_safety_state()
 
     # Baseline for the step-11 hygiene comparison. Taken at the end of
     # context gathering — the earliest point the run has a settled view of
@@ -1037,39 +1015,11 @@ def _orchestrate_step_3(mode, config, state, context, output_dir):
 
 def _orchestrate_step_5(mode, config, state, context, output_dir):
     if config.get("refresh_dependencies"):
-        detection = state.get("dependency_refresh") or {}
-        skipped_reason = detection.get("skipped_reason")
-        if skipped_reason in DEPENDENCY_REFRESH_SKIP_REASONS:
-            dirty_files = detection.get("dirty_files")
-            verification = {
-                "skipped": True,
-                "skipped_reason": skipped_reason,
-                "dirty_files": [
-                    path for path in (
-                        dirty_files if isinstance(dirty_files, list) else []
-                    )
-                    if isinstance(path, str)
-                ][:_MAX_DIRTY_FILES],
-            }
-        else:
-            try:
-                repo_root = _git_output("rev-parse", "--show-toplevel")
-                verification = verify_dependency_refresh(repo_root, output_dir)
-            except Exception:
-                verification = {
-                    "report_present": False,
-                    "commands_allowed": None,
-                    "disallowed_commands": [],
-                    "tracked_files_dirty": None,
-                    "dirty_files": [],
-                    "verification_failed": True,
-                }
-        with open(
-            os.path.join(output_dir, "dependency-refresh-verification.json"),
-            "w",
-        ) as verification_file:
-            json.dump(verification, verification_file, indent=2, sort_keys=True)
-        state["dependency_refresh_verification"] = verification
+        try:
+            report = load_dependency_refresh_report(output_dir)
+        except Exception:
+            report = None
+        state["dependency_refresh_report"] = report
 
     # Run plan_dispatch.py to determine which agents to dispatch
     git = context.get("git", {})

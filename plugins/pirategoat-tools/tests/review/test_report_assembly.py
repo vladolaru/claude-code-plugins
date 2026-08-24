@@ -231,11 +231,16 @@ class TestRecordAssembly:
     def test_run_notes_carry_dependency_refresh_and_dispatch(self, out_dir):
         _write_ledger(out_dir)
         state = {
-            "dependency_refresh": {"signals": [], "skipped_reason": None},
-            "dependency_refresh_verification": {
-                "report_present": True,
-                "commands_allowed": True,
+            "dependency_refresh_precheck": {
                 "tracked_files_dirty": False,
+                "dirty_files": [],
+            },
+            "dependency_refresh_report": {
+                "schema": 1,
+                "status": "completed",
+                "commands": [],
+                "tracked_files_dirty": False,
+                "dirty_files": [],
             },
             "dispatch_plan_summary": {
                 "dispatched": 12, "skipped": 9, "conditional": 4,
@@ -252,45 +257,69 @@ class TestRecordAssembly:
         assert "9 skipped" in text
         assert "unrecognized source language: .zig" in text
 
-    def test_run_notes_report_an_unverified_refresh_as_unverified(
+    def test_run_notes_report_a_requested_but_unrecorded_refresh(self, out_dir):
+        _write_ledger(out_dir)
+        state = {
+            "dependency_refresh_precheck": {
+                "tracked_files_dirty": False,
+                "dirty_files": [],
+            }
+        }
+
+        assemble_review_record(str(out_dir), state)
+        text = (out_dir / REVIEW_RECORD_MD).read_text()
+
+        assert "Dependency refresh: requested but not recorded" in text
+
+    def test_run_notes_report_declared_status_command_count_and_final_state(
         self, out_dir
     ):
-        """`report_present: False` means the orchestrator wrote no
-        self-report, so nothing states which install commands ran. Saying
-        "ran" there publishes an install nobody observed."""
         _write_ledger(out_dir)
         state = {
-            "dependency_refresh": {"signals": [{"root": "."}]},
-            "dependency_refresh_verification": {
-                "report_present": False,
-                "commands_allowed": None,
+            "dependency_refresh_precheck": {
                 "tracked_files_dirty": False,
+                "dirty_files": [],
+            },
+            "dependency_refresh_report": {
+                "schema": 1,
+                "status": "partial",
+                "commands": [{
+                    "directory": ".",
+                    "command": "custom sync",
+                    "exit_status": "failed",
+                }],
+                "tracked_files_dirty": None,
+                "dirty_files": [],
             },
         }
 
         assemble_review_record(str(out_dir), state)
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
-        assert "Dependency refresh: requested; installs unverified" in text
-        assert "Dependency refresh: ran" not in text
+        assert "Dependency refresh: partial" in text
+        assert "1 command(s) reported" in text
+        assert "final tracked files dirty: unknown" in text
 
-    def test_run_notes_report_a_verified_refresh_as_ran(self, out_dir):
+    @pytest.mark.parametrize(
+        ("tracked_files_dirty", "reason"),
+        [(True, "tracked worktree was dirty"), (None, "tracked worktree state was unknown")],
+    )
+    def test_run_notes_report_precheck_refusal(
+        self, out_dir, tracked_files_dirty, reason
+    ):
         _write_ledger(out_dir)
         state = {
-            "dependency_refresh": {"signals": [{"root": "."}]},
-            "dependency_refresh_verification": {
-                "report_present": True,
-                "commands_allowed": True,
-                "tracked_files_dirty": False,
+            "dependency_refresh_precheck": {
+                "tracked_files_dirty": tracked_files_dirty,
+                "dirty_files": [],
             },
         }
 
         assemble_review_record(str(out_dir), state)
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
-        assert "Dependency refresh: ran" in text
-        assert "commands allowed: true" in text
-        assert "tracked files dirty: false" in text
+        assert "Dependency refresh: refused before execution" in text
+        assert reason in text
 
     def test_run_notes_say_not_requested_when_refresh_was_off(self, out_dir):
         _write_ledger(out_dir)

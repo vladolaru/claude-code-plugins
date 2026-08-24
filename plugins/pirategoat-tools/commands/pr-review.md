@@ -34,13 +34,7 @@ add `--quick` to the first `pipeline.py` call. Examples:
 - `/pr-review quick mode https://github.com/.../pull/42` → add `--quick`
 - `/pr-review 42` → do NOT add `--quick` (standard review)
 
-**Detect dependency refresh mode:** If the user's input clearly asks to
-refresh or install dependencies before the review (e.g., "refresh deps",
-"refresh dependencies", "update dependencies first", "install deps first"),
-add `--refresh-deps` to the first `pipeline.py` call. This is trusted-branch
-mode: the pipeline will detect stale dependency roots and brief you to run
-frozen-mode installs in the worktree — only add the flag when the user
-asked. Examples:
+**Detect dependency refresh mode:** If the user's input clearly asks to refresh or install dependencies before the review (e.g., "refresh deps", "refresh dependencies", "update dependencies first", "install deps first"), add `--refresh-deps` to the first `pipeline.py` call. This is trusted-branch mode: after a clean-tracked-worktree safety check, the interactive orchestrator inspects the trusted worktree and refreshes dependencies adaptively — only add the flag when the user asked. Examples:
 - `/pr-review 42 refresh deps` → add `--refresh-deps`
 - `/pr-review 42 with fresh dependencies` → add `--refresh-deps`
 - `/pr-review 42` → omit the flag

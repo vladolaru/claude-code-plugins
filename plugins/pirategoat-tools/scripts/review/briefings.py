@@ -23,10 +23,6 @@ try:
         SKIPPED_QUICK_MODE,
         SKIPPED_STATUSES,
     )
-    from .dependency_refresh import (
-        SKIP_REASON_DIRTY_WORKTREE,
-        SKIP_REASON_WORKTREE_STATUS_FAILED,
-    )
 except ImportError:
     _scripts_parent = str(Path(__file__).resolve().parent.parent)
     if _scripts_parent not in sys.path:
@@ -46,10 +42,6 @@ except ImportError:
         DISPATCHED_STATUSES,
         SKIPPED_QUICK_MODE,
         SKIPPED_STATUSES,
-    )
-    from review.dependency_refresh import (
-        SKIP_REASON_DIRTY_WORKTREE,
-        SKIP_REASON_WORKTREE_STATUS_FAILED,
     )
 
 # ---------------------------------------------------------------------------
@@ -405,106 +397,77 @@ def _change_purpose_handoff(output_dir):
 def _dependency_refresh_briefing(state, config, output_dir):
     """Situation/actions/handoff lines for trusted-branch dependency refresh.
 
-    All three lists are empty when the requester did not opt in. Detection
-    failure and empty detection each get one honest situation line so the
-    orchestrator never has to guess why no refresh instructions appeared.
+    Opt-in establishes execution trust; the tracked precheck establishes the
+    separate worktree-custody boundary. Only a measured clean baseline offers
+    adaptive execution and the validating save handoff.
     """
     if not (config or {}).get("refresh_dependencies"):
         return [], [], []
     od = output_dir or "<OUTPUT_DIR>"
-    detection = state.get("dependency_refresh") or {}
-    signals = detection.get("signals") or []
+    precheck = state.get("dependency_refresh_precheck") or {}
+    tracked_files_dirty = precheck.get("tracked_files_dirty")
 
-    if detection.get("detection_failed"):
+    if tracked_files_dirty is True:
         return (
-            ["**Dependency refresh:** enabled, but stale-dependency "
-             "detection failed — treat dependency staleness as unknown and "
-             "proceed without refreshing.", ""],
+            ["**Dependency refresh:** enabled, but the pipeline will not run "
+             "dependency commands against an unsafe tracked baseline. The "
+             "tracked worktree is dirty; preserve the requester's work and "
+             "continue with the existing host context.", ""],
             [],
             [],
         )
-    if not signals:
+    if tracked_files_dirty is not False:
         return (
-            ["**Dependency refresh:** enabled — no stale dependency roots "
-             "detected; nothing to refresh.", ""],
+            ["**Dependency refresh:** enabled, but the pipeline will not run "
+             "dependency commands while the tracked baseline is unknown. "
+             "Continue with the existing host context.", ""],
             [],
             [],
         )
-    if detection.get("skipped_reason") == SKIP_REASON_DIRTY_WORKTREE:
-        return (
-            ["**Dependency refresh:** enabled, but refresh skipped — stale "
-             "dependency roots were detected and the tracked worktree has "
-             "pre-existing tracked changes. The review will proceed with "
-             "degraded host context; the requester can commit or stash those "
-             "changes, then re-run.", ""],
-            [],
-            [],
-        )
-    if detection.get("skipped_reason") == SKIP_REASON_WORKTREE_STATUS_FAILED:
-        return (
-            ["**Dependency refresh:** enabled, but refresh skipped — stale "
-             "dependency roots were detected, but the pipeline could not "
-             "verify that the tracked worktree is clean. The review will "
-             "proceed with degraded host context; resolve the Git status "
-             "failure and re-run.",
-             ""],
-            [],
-            [],
-        )
+
     situation = [
         "**Dependency refresh (trusted-branch mode):** the requester "
-        "authorized refreshing installed dependencies in this worktree. "
-        "Stale dependency roots detected:",
+        "authorized adaptive dependency refresh in this worktree, and the "
+        "tracked baseline is clean.",
     ]
-    for s in signals:
-        reasons = ", ".join(s.get("reasons", []))
-        presence = (
-            "installed state present"
-            if s.get("installed_state_present")
-            else "installed state missing"
-        )
-        situation.append(
-            f"- {s.get('manager')} in `{s.get('directory')}` ({reasons}; "
-            f"{presence}) — suggested: `{s.get('suggested_command')}`"
-        )
     situation.append("")
 
     actions = [
-        "Refresh the stale dependency roots BEFORE writing the "
-        "change-purpose summary, so host context reflects what reviewers "
-        "will read:",
-        "1. Run each suggested command in its listed directory. Commands "
-        "disable lifecycle scripts on purpose; do not strip flags. Classic "
-        "Yarn v1 spelling is `yarn install --frozen-lockfile "
-        "--ignore-scripts`.",
-        "- NEVER run update/upgrade/add/require, never chain commands "
-        "(`&&`, `;`); install must not modify tracked files. Pipeline "
-        "independently verifies reported commands and worktree state at "
-        "next step.",
-        # Detection proves cleanliness only at the start of step 3. The
-        # retained post-install check catches tracked edits introduced in the
-        # TOCTOU window before or during the orchestrator's install attempts.
-        "2. After all install attempts, even when an install command fails, "
-        "run `git status --porcelain --untracked-files=no` again. If tracked "
-        "changes appear, first record them as dependency-refresh failure "
-        "evidence. The tracked worktree was verified clean before installs, "
-        "so restore the refresh-created tracked changes with "
-        "`git restore --source=HEAD --staged --worktree -- <path>`.",
-        "3. Re-resolve host context so reviewers see the refreshed state: "
+        "1. Inspect the repository and reviewed change, then decide whether "
+        "dependency installation is needed. Do not infer work from a fixed "
+        "manager list.",
+        "2. When refresh work is needed, run the appropriate "
+        "lockfile-preserving commands adaptively in the relevant directories "
+        "within the requester's effective opt-in. Record every attempted "
+        "command and whether it exited successfully.",
+        "3. After any install attempt, re-resolve host context so reviewers "
+        "see the resulting state: "
         f"`python3 {SCRIPTS_DIR / 'context.py'} --output-dir {od} "
         "--refresh-host-context`",
+        "4. Prepare the exact schema-1 request at "
+        "`$TMPDIR/dependency-refresh-report.json`. When inspection finds no "
+        "refresh work, report `not_needed` with an empty command list.",
         "",
     ]
 
     handoff = [
-        f"Write `{od}/dependency-refresh.json` recording what you ran:",
+        "Prepare one of these request shapes under `$TMPDIR`:",
         "```json",
-        '{"status": "<completed | partial | failed>",',
-        ' "commands": [{"directory": "<dir>", "command": "<command run>", '
-        '"exit_status": "<ok | failed>"}],',
-        ' "tracked_files_dirty": <true | false>}',
+        '{"schema": 1, "status": "not_needed", "commands": []}',
         "```",
-        "Verify the file exists before proceeding.",
+        "or, when commands were attempted:",
+        "```json",
+        '{"schema": 1, "status": "<completed | partial | failed>",',
+        ' "commands": [{"directory": "<dir>", "command": "<command run>", '
+        '"exit_status": "<ok | failed>"}]}',
+        "```",
+        "Publish it only through the validating save channel:",
+        f"`python3 {SCRIPTS_DIR / 'dependency_refresh.py'} save "
+        f"--output-dir {od} --report "
+        '"$TMPDIR/dependency-refresh-report.json"`',
+        "Proceed only when the command prints literal `SAVED "
+        "dependency-refresh.json` and the canonical file exists in the "
+        "output directory.",
     ]
     return situation, actions, handoff
 
@@ -653,34 +616,30 @@ def _step_5_dispatch_plan(mode, state, context, config, output_dir):
     situation = []
     actions = []
 
-    verification = state.get("dependency_refresh_verification") or {}
-    if verification.get("tracked_files_dirty") is True:
-        situation.append(
-            "⚠️  Dependency refresh verification found modified tracked files:"
-        )
-        for path in verification.get("dirty_files", []):
-            if isinstance(path, str):
-                situation.append(f"- `{path}`")
-        situation.extend([
-            "Inspect each listed change and preserve or back up intentional "
-            "edits. Use `git checkout -- <path>` only after confirming that "
-            "specific change was caused solely by the dependency refresh. "
-            f"Then update `{od}/dependency-refresh.json` BEFORE dispatch.",
-            "",
-        ])
-
-    verification_reasons = []
-    if verification.get("disallowed_commands"):
-        verification_reasons.append("reported command outside the allowlist")
-    if verification.get("verification_failed") is True:
-        verification_reasons.append("verification itself failed")
-    if verification_reasons:
-        situation.extend([
-            "⚠️  Dependency refresh could not be verified clean; proceeding is "
-            "allowed, and the telemetry manifest records the verification "
-            f"evidence honestly. Reasons: {'; '.join(verification_reasons)}.",
-            "",
-        ])
+    if (config or {}).get("refresh_dependencies"):
+        report = state.get("dependency_refresh_report")
+        if not isinstance(report, dict):
+            situation.extend([
+                "⚠️  The requested dependency-refresh report is missing or "
+                "malformed. Reviewer dispatch may proceed, but dependency "
+                "freshness is not recorded.",
+                "",
+            ])
+        elif report.get("tracked_files_dirty") is True:
+            situation.append(
+                "⚠️  The dependency-refresh report records a dirty final "
+                "tracked state before reviewer dispatch."
+            )
+            for path in report.get("dirty_files", []):
+                if isinstance(path, str):
+                    situation.append(f"- `{path}`")
+            situation.append("")
+        elif report.get("tracked_files_dirty") is not False:
+            situation.extend([
+                "⚠️  The dependency-refresh report records an unknown final "
+                "tracked state before reviewer dispatch.",
+                "",
+            ])
 
     situation.extend([_PHASE_TRANSITIONS["EXECUTION"], ""])
 

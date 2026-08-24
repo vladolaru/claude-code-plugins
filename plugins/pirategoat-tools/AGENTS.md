@@ -11,7 +11,7 @@ You are the maintainer of pirategoat-tools, a code review orchestration plugin. 
 | `scripts/review/pipeline.py` | Executable facade for the unified 12-step review pipeline. Owns conditions, routing, state I/O, output formatting, telemetry/Git identity, and the CLI while re-exporting the split pipeline modules. Called by all three review commands with `--mode pr\|full\|incremental` and generated Codex adapters with `--host codex`. |
 | `scripts/review/pipeline_contract.py` | Shared path, host, step-sequence, timeout, and Git vocabulary used across the pipeline modules. |
 | `scripts/review/briefings.py` | Pure curated-context guidance, formatters, mission text, and output templates for the 12 review steps. |
-| `scripts/review/orchestration.py` | Side-effecting per-step work, subprocess execution, dependency-refresh detection, dispatch-plan persistence, readiness-gated derived-Markdown materialization with outcome state (per-reviewer at step 8, `review-findings.md` at steps 9 and 11), `assemble_review_record()` — the machine projection of the ledger written at steps 9 and 11 — and step 11's two-pass terminal publication gate. |
+| `scripts/review/orchestration.py` | Side-effecting per-step work, subprocess execution, the dependency-refresh safety precheck and adaptive briefing, dispatch-plan persistence, readiness-gated derived-Markdown materialization with outcome state (per-reviewer at step 8, `review-findings.md` at steps 9 and 11), `assemble_review_record()` — the machine projection of the ledger written at steps 9 and 11 — and step 11's two-pass terminal publication gate. |
 | `../../scripts/generate_codex_compat.py` | Repository-level generator that converts canonical Claude Code commands into Codex command-skill adapters and emits this plugin's `.codex-plugin/plugin.json`. |
 | `scripts/review/agent_registry.json` | Agent registry — domain, protocols, dispatch class, triage criteria, model tier. |
 | `scripts/review/agent/bootstrap.py` | Builds the structured prompt each agent receives. Handles plugin root discovery, protocol extraction, scope discovery, and output instructions. When a primary domain matches nothing but a secondary domain does, `resolve_overall_status` flips the status to a scoped `OK` and injects a `COVERAGE NOTE` so the agent reviews the secondary files with an honestly-scoped verdict instead of silently masking the gap. |
@@ -20,7 +20,7 @@ You are the maintainer of pirategoat-tools, a code review orchestration plugin. 
 | `scripts/review/plan_dispatch.py` | Deterministic dispatch planning. Reads agent registry + changed files → produces which agents to run, skip, and why. Called internally by review/orchestration.py. Also runs the unrecognized-source safety net (`detect_unrecognized_source`) that emits a `warnings[]` entry when a changed source language no domain covers — so coverage gaps fail loudly instead of producing a clean review. |
 | `scripts/review/dispatch_status.py` | Canonical producer/consumer dispatch-status vocabulary and dispatch-plan agent validator. Consumers classify dispatched and skipped states only through its explicit sets; hand-edited invalid statuses fail with the offending agent and value. |
 | `scripts/review/context.py` | Unified Ring 1 context collection. Fills git context, PR metadata, reviews, linked issues, staleness, and author name. `--refresh-host-context` re-runs only host-context discovery against the existing review-context.json (used after a trusted-branch dependency refresh). |
-| `scripts/review/dependency_refresh.py` | Deterministic stale-dependency-root and clean-tracked-baseline detection for trusted-branch refresh (opt-in `--refresh-deps`). Side-effect free: signals composer/npm/pnpm/yarn roots whose manifest/lockfile changed in range or whose installed state is missing, bounded to repo root + directories containing changed manifest files, then refuses refresh when tracked state is dirty or cannot be inspected. Execution belongs to the step 3 briefing, never this module. |
+| `scripts/review/dependency_refresh.py` | The validating save channel for trusted-branch dependency refresh: one bounded tracked-Git observation, strict schema-1 request and canonical validators, and atomic publication of `dependency-refresh.json`. The interactive orchestrator decides whether refresh work is needed and what commands to run; reported commands are evidence, not execution attestation. |
 | `scripts/review/user_settings.py` | Requester-side machine-local settings (`~/.config/pirategoat/config.json` / `$XDG_CONFIG_HOME`). Owns the standing trust declaration `review.refresh_dependencies: true` that defaults trusted-branch refresh on for every interactive run. Deliberately separate from the reviewed repo's `.pirategoat/config.json`: trust is the requester's to declare, never the repo's. |
 | `scripts/review/agent/output.py` | ReviewOutputBuilder — `add_issue()`, `add_recommendation()`, `add_positive()`, and the sole NOT DIFFED coverage claim API `add_deferred_reviewed()`. Every candidate publication validates positive claims against the required `<reviewer>-deferred-files.json` sidecar and derives `deferred_reviewed`, its `unreviewed` complement, and `meta.files_reviewed`; the candidate becomes canonical only through the exact printed `finalize` command, and only `RECORDED FINAL` marks completion. Also owns verdict calculation, canonical JSON publication, and the derived Markdown `render\|materialize` CLI. `review_duration_ms` is derived from the actor's dispatch marker (`<agent>.started` for reviewers, `<agent>.synthesis-started` for synthesis agents), null when no marker is readable. |
 | `scripts/review/critic.py` | The decision critic's validating `--save` channel. Accepts proposal-only fields, delegates normalization and stable ID allocation to `critic_adjustments.prepare_proposal()`, and commits findings plus the proposal under the shared output-directory lock by writing the schema-versioned, proposal-digest-bound verdict marker last. |
@@ -165,7 +165,7 @@ module is exempt — do not add inline containment checks or an allowlist.
 
 The key is always the integer `schema` — never `schema_version`, never a `version` string. Both of those existed and were retired in 1.114.0.
 
-Not every JSON file in a run directory carries one, and this rule does not ask you to add it to them. `pipeline-state.json`, `dispatch-plan.json`, `reconciliation-context.json`, and the critic / dependency-refresh reports carry no `schema` and are read only by this plugin within a single run. `pipeline-result.json` and `run-config.json` also carry no `schema` even though pirategoat-bot parses the former and writes the latter (see Cross-Repo Dependency: pirategoat-bot below) — that cross-repo contract is tracked by reading the bot's source before changing either file, not by the schema mechanism. The field earns its place where an artifact **outlives the run that wrote it, or is parsed by a different consumer within this plugin that did not write it** — that is the criterion for deciding whether a new artifact needs one. The families that meet it today:
+Not every JSON file in a run directory carries one, and this rule does not ask you to add it to them. `pipeline-state.json`, `dispatch-plan.json`, `reconciliation-context.json`, and the critic reports carry no `schema` and are read only by this plugin within a single run. `dependency-refresh.json` is also one-run data, but it crosses a validating producer/consumer boundary between the orchestrator's request and the pipeline's canonical reader, so it carries schema 1. `pipeline-result.json` and `run-config.json` carry no `schema` even though pirategoat-bot parses the former and writes the latter (see Cross-Repo Dependency: pirategoat-bot below) — that cross-repo contract is tracked by reading the bot's source before changing either file, not by the schema mechanism. The field earns its place where an artifact **outlives the run that wrote it, or crosses a validating producer/consumer boundary whose reader did not write it** — that is the criterion for deciding whether a new artifact needs one. The families that meet it today:
 
 | Artifact | Producing constant |
 |---|---|
@@ -173,6 +173,7 @@ Not every JSON file in a run directory carries one, and this rule does not ask y
 | Telemetry JSONL events + `<log>.manifest.json` | `EVENT_SCHEMA` — `scripts/review/telemetry.py` |
 | `synthesis-agents.json` | `LIFECYCLE_SCHEMA` — `scripts/review/synthesis_lifecycle.py` |
 | `usage-snapshot.json` | `SNAPSHOT_SCHEMA` — `scripts/analysis/usage_snapshot.py` |
+| `dependency-refresh.json` | `REPORT_SCHEMA` — `scripts/review/dependency_refresh.py` |
 | `observed_reads` payload in transcript enrichment | `_OBSERVED_READS_SCHEMA` — `scripts/analysis/review_transcript.py`. The same-named constant in `review_metrics/contracts.py` is the *consumer's* expected value, and must be bumped in lockstep |
 | `review_run_metrics.py --format json` report | `_REPORT_SCHEMA` — `scripts/analysis/review_metrics/contracts.py` |
 | `<reviewer>-deferred-files.json` | literal `2` at the write site (`persist_deferred_sidecar()` — `scripts/review/agent/bootstrap.py`) — 1.114.0 bumped it from 1 to add `review_budget`, `in_scope_count`, `diffed_count` (a fourth field, `budget_capped`, was added and then deleted within the same unreleased window — nothing ever read it back out of the sidecar) |
@@ -218,74 +219,17 @@ Before reconciliation, step 8 checks if all dispatched agents have finished via 
 
 ### Trusted-Branch Dependency Refresh (opt-in)
 
-The pipeline never installs dependencies itself (1.113.0 removed
-manifest-driven installation — package managers execute configuration as
-code). When the requester opts in — per run with `--refresh-deps`, or as a
-standing machine-local declaration in `~/.config/pirategoat/config.json`
-(`{"review": {"refresh_dependencies": true}}`, resolved by
-`user_settings.py`) — the pipeline instead lets the **main orchestrator**
-refresh the worktree, because opting in means the requester trusts the
-branch enough to execute its code. Resolution: an explicit
-`--refresh-deps`/`--no-refresh-deps` wins; an omitted flag falls back to
-the machine-local default; the effective value lands in run-config.json as
-`refresh_dependencies`. The standing declaration covers every interactive
-run the requester starts — all modes, all clones — which includes
-interactive PR reviews of third-party branches; that is the requester's
-explicit trust decision, made in a file the reviewed repo can never touch.
+The pipeline never installs dependencies itself (1.113.0 removed manifest-driven installation because package managers execute configuration as code). When the requester opts in — per run with `--refresh-deps`, or as a standing machine-local declaration in `~/.config/pirategoat/config.json` (`{"review": {"refresh_dependencies": true}}`, resolved by `user_settings.py`) — the pipeline lets the **main orchestrator** inspect the trusted worktree and refresh dependencies adaptively. An explicit `--refresh-deps`/`--no-refresh-deps` wins; an omitted flag falls back to the machine-local default; the effective value lands in `run-config.json` as `refresh_dependencies`. The standing declaration covers every interactive run the requester starts — all modes, all clones — including interactive PR reviews of third-party branches; that is the requester's explicit trust decision, made in a file the reviewed repo can never touch.
 
 Split of responsibilities:
 
-- **Deterministic detection** (`scripts/review/dependency_refresh.py`, run by
-  step 3 orchestration): signals dependency roots whose manifest/lockfile
-  changed in the reviewed range or whose installed state is missing, then
-  requires a clean tracked worktree before offering any install actions.
-  `git status --porcelain --untracked-files=no` ignores untracked files but
-  retains tracked submodule changes. Dirty state records `dirty_worktree` with
-  bounded path evidence; a failed, timed-out, nonzero, or undecodable status
-  check fails closed as `worktree_status_failed`. Both skip states preserve
-  the stale-root signals and proceed with degraded host context. A broader
-  detection failure still records `detection_failed` — staleness is unknown,
-  never silently clean.
-- **Adaptive execution** (step 3 briefing, only after the clean-baseline
-  precondition): the orchestrator runs the suggested install commands
-  (`composer install`, `npm ci`, `pnpm install --frozen-lockfile`, `yarn
-  install --immutable`), checks for tracked-file changes, restores only
-  install-created tracked changes from the known-clean baseline, then
-  re-resolves host context with `context.py --refresh-host-context` and writes
-  `dependency-refresh.json` (a step 3 handoff gate). The pipeline never
-  stashes, reapplies, or otherwise takes custody of the requester's
-  uncommitted work.
-- **Measurement** (`telemetry.py`): the manifest records the sanitized
-  report under `dependency_refresh`. Refused refreshes carry explicit
-  `skipped` provenance and no `verification` block — a run reviewed against
-  freshly installed dependencies is not comparable to one with degraded host
-  context.
+- **Pipeline config + tracked Git precheck → whether refresh actions may be offered.** Step 3 observes tracked state with `git status --porcelain --untracked-files=no --ignore-submodules=untracked`; untracked files do not make the baseline dirty. A dirty or unknown observation fails closed and offers no dependency commands or save handoff. A clean result allows the adaptive briefing. This gate is separate from the whole-run hygiene baseline and never takes custody of the requester's tracked changes.
+- **Main orchestrator → whether and what to run, plus the reported outcome.** After a clean precheck, the orchestrator inspects the repository and reviewed change, decides whether refresh work is needed, chooses appropriate lockfile-preserving commands without a manager or flag allowlist, and refreshes host context after any installation. It writes a schema-1 request under `$TMPDIR`; `not_needed` with an empty command list is the required outcome when inspection finds no work.
+- **`dependency_refresh.py save` → schema validation, final Git observation, and atomic publication.** The save command accepts exactly the request schema, records bounded final tracked-state evidence, and publishes the sole canonical `dependency-refresh.json` through `atomic_write_json()`. `completed`, `partial`, `failed`, and dirty or unknown final state are valid evidence. Only invalid request input blocks publication; reported command strings are not parsed and do not attest that execution occurred.
 
-Execution governance (requester-trusted, clean-baseline enforced; updated
-2026-08-10): requester opt-in is the execution trust boundary, while the
-deterministic clean-worktree gate is the custody boundary. If tracked changes
-exist, the requester decides whether to commit or stash them and rerun; the
-pipeline does not touch them. When installs do run, the orchestrator performs
-them adaptively. At step 5, the pipeline records post-hoc evidence: it validates
-the command strings in the self-report against its install-command allowlist
-and independently observes tracked Git dirtiness with `git status --porcelain
---untracked-files=no`, recording a `verification` block beside the self-report
-in the manifest. A refused refresh skips verification and records the refusal
-instead. Neither post-hoc check attests which commands actually executed. A
-missing report leaves command evidence unknown without marking verification
-itself failed, and validation failures do not block dispatch. Suggested
-commands carry script-blocking flags as defense-in-depth, not as a guarantee
-that package-manager execution is safe: `.pnpmfile.cjs` survives
-`--ignore-scripts`.
+At step 5, the pipeline reads the canonical artifact through `load_dependency_refresh_report()`. A missing or malformed report after a clean precheck, or a report whose final tracked state is dirty or unknown, becomes explicit degraded evidence before dispatch; no verification sidecar or command-policy state exists. The manifest preserves `requested`, `reported`, optional unsafe-precheck evidence, and the validated canonical report fields.
 
-**Hard-off for bots.** `refresh_dependencies` is interactive-only: step 1
-forces it off (with a stderr warning) for `interactive: false` runs whether
-it arrived via CLI or a pre-seeded run-config.json. A bot reviewing
-third-party PRs must never execute reviewed-branch code. The adaptive
-orchestrator solves the *variability* problem (which manager, which
-commands, monorepos); the opt-in gate — and only the gate — solves the
-*trust* problem. The deterministic clean-baseline gate separately ensures the
-pipeline never takes custody of uncommitted tracked work.
+**Hard-off for bots.** `refresh_dependencies` is interactive-only: step 1 forces it off (with a stderr warning) for `interactive: false` runs whether it arrived via CLI or a pre-seeded `run-config.json`. A bot reviewing third-party PRs must never execute reviewed-branch code. The adaptive orchestrator solves the variability problem; the opt-in gate is the execution trust boundary, and the clean tracked-worktree precheck is the custody boundary.
 
 ### Shared Protocols
 

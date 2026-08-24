@@ -11,7 +11,7 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 
 ### Added
 
-- **`--refresh-deps`** — opt-in per run or standing via `~/.config/pirategoat/config.json`, lets interactive runs install stale or missing worktree dependencies before dispatch; defaults off, never for bots.
+- **`--refresh-deps`** — interactive refresh remains opt-in and orchestrator-adaptive after a clean tracked-worktree safety check, then publishes a schema-validated report through one atomic save command that records final tracked state; defaults off and stays disabled for bots.
 - **Deferred-review coverage** — `add_deferred_reviewed()` records a NOT DIFFED file actually read; each candidate save validates those positive claims and derives every remaining gap and the reviewed-file count from the authoritative sidecar.
 - **Save echo names the continuation** — when unreviewed files remain, the echo prints reachable PROGRESS derived from disjoint inline and claimable-deferred paths plus a NEXT UNREAD list of the largest remaining deferred files; list-only paths stay in telemetry scope without making 100% progress unreachable.
 - **Source-bound critic adjustments** — REVISE proposals receive stable IDs and are digest-bound to the critic verdict, then orchestrator spot checks settle through a validating, resumable channel before the sole ledger applier records provenance. Omitted IDs are derived as `not_checked`, refutations remain auditable, and the checkpointed post-critic assessment replaces withdrawn reconciler prose.
@@ -59,7 +59,6 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 - **Reviewer saves remain provisional until complete schema and coverage validation explicitly finalizes them**; only canonical JSON marks a reviewer finished, parent finalization follows the CLI's rendered candidate command after host completion, and synthesis atomically closes intake, repairs missing canonical completion telemetry, and discards unfinalized dispatched candidates before reconciliation. Finalization rejects fields outside the single documented candidate and metadata shape.
 - **a11y scope asks for UI evidence, not extensions** — bare `.ts`/`.js` need evidence in their diff or a bounded repo-rooted disk read; `.tsx`/`.jsx`, components, styles, and templates stay unconditional; triage is untouched.
 - **`agents_reporting` counts agents, not sidecar files.**
-- **Dependency refresh hardened** — refuses dirty or unverifiable worktrees, decodes quoted paths, survives malformed self-reports, and `--refresh-host-context` preserves the rest of `review-context.json`.
 - **Briefing no longer instructs bulk enumeration of unreviewed files** — the builder derives every unclaimed deferred path, freeing that budget for real analysis instead of bookkeeping.
 - **Measurement honesty sweep** — damaged JSONL records are counted, unmeasured never publishes as zero, availability flags derive from what was actually parsed, findings-ledger readers share the discriminated reader, and a coverage-manifest build failure is distinguishable from legitimate absence. Every measured deferred-coverage row requires a conserved authoritative denominator.
 - **Dispatch decisions stopped re-parsing bootstrap's rendered text** — each fact now arrives as a structured parameter computed once, upstream.

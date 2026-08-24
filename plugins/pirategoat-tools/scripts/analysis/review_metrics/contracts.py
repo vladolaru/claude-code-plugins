@@ -80,14 +80,15 @@ _USAGE_SNAPSHOT_AVAILABILITY_STATES = (
 _DEPENDENCY_REFRESH_STATUSES = (
     _MANIFEST_SECTIONS_CONTRACT._DEPENDENCY_REFRESH_STATUSES
 )
-# Public on the producer (imported there from dependency_refresh.py, its
-# actual owner), unlike the private vocabularies above — still reached
-# through the same exact-path module rather than re-imported from
-# dependency_refresh.py directly, so there is one loading mechanism for
-# every manifest_sections.py-shaped constant this package borrows.
-_DEPENDENCY_REFRESH_SKIP_REASONS = (
-    _MANIFEST_SECTIONS_CONTRACT.DEPENDENCY_REFRESH_SKIP_REASONS
+_DEPENDENCY_REFRESH_EXIT_STATUSES = (
+    _MANIFEST_SECTIONS_CONTRACT._DEPENDENCY_REFRESH_EXIT_STATUSES
 )
+# Retired producer vocabulary kept only so historical run manifests remain
+# measurable. New manifests use dependency_refresh.precheck instead.
+_HISTORICAL_DEPENDENCY_REFRESH_SKIP_REASONS = frozenset({
+    "dirty_worktree",
+    "worktree_status_failed",
+})
 _MAX_DEPENDENCY_REFRESH_COMMANDS = (
     _MANIFEST_SECTIONS_CONTRACT._MAX_DEPENDENCY_REFRESH_COMMANDS
 )

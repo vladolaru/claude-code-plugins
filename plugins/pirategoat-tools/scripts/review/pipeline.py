@@ -68,7 +68,7 @@ try:
         _preserve_initial_dispatch_plan,
         _load_dispatch_plan,
         _run_subprocess,
-        _detect_dependency_refresh_state,
+        _dependency_refresh_safety_state,
         _orchestrate_step_2,
         _orchestrate_step_3,
         _orchestrate_step_5,
@@ -104,14 +104,6 @@ try:
         SKIPPED_STATUSES,
         SKIPPED_QUICK_MODE,
         validate_dispatch_plan_agents,
-    )
-    from .dependency_refresh import (
-        _MAX_DIRTY_FILES,
-        DEPENDENCY_REFRESH_SKIP_REASONS,
-        SKIP_REASON_DIRTY_WORKTREE,
-        SKIP_REASON_WORKTREE_STATUS_FAILED,
-        detect_dependency_refresh,
-        verify_dependency_refresh,
     )
     from .user_settings import load_user_settings, refresh_dependencies_default
     from .atomic_io import atomic_write_json
@@ -151,7 +143,7 @@ except ImportError:
         _preserve_initial_dispatch_plan,
         _load_dispatch_plan,
         _run_subprocess,
-        _detect_dependency_refresh_state,
+        _dependency_refresh_safety_state,
         _orchestrate_step_2,
         _orchestrate_step_3,
         _orchestrate_step_5,
@@ -187,14 +179,6 @@ except ImportError:
         SKIPPED_STATUSES,
         SKIPPED_QUICK_MODE,
         validate_dispatch_plan_agents,
-    )
-    from review.dependency_refresh import (
-        _MAX_DIRTY_FILES,
-        DEPENDENCY_REFRESH_SKIP_REASONS,
-        SKIP_REASON_DIRTY_WORKTREE,
-        SKIP_REASON_WORKTREE_STATUS_FAILED,
-        detect_dependency_refresh,
-        verify_dependency_refresh,
     )
     from review.user_settings import (
         load_user_settings,

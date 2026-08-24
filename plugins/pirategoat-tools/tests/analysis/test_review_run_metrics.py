@@ -8383,6 +8383,7 @@ def _dependency_refresh_payload(**overrides) -> dict:
         "reported": True,
         "status": "completed",
         "tracked_files_dirty": False,
+        "dirty_files": [],
         "commands": [
             {"directory": ".", "command": "composer install", "exit_status": "ok"},
         ],
@@ -8577,8 +8578,8 @@ class TestOptionalSectionVocabulariesAreNotRestated:
         assert contracts._DEPENDENCY_REFRESH_STATUSES == (
             manifest_sections._DEPENDENCY_REFRESH_STATUSES
         )
-        assert contracts._DEPENDENCY_REFRESH_SKIP_REASONS == (
-            manifest_sections.DEPENDENCY_REFRESH_SKIP_REASONS
+        assert contracts._DEPENDENCY_REFRESH_EXIT_STATUSES == (
+            manifest_sections._DEPENDENCY_REFRESH_EXIT_STATUSES
         )
         assert contracts._DERIVED_MARKDOWN_STATUSES == (
             manifest_sections._DERIVED_MARKDOWN_STATUSES
@@ -8968,7 +8969,7 @@ class TestDependencyRefreshSanitize:
             "requested": True, "reported": False,
         }
 
-    def test_a_skipped_refresh_carries_bounded_dirty_files_and_no_verification(
+    def test_a_precheck_refusal_carries_bounded_dirty_files(
         self,
     ):
         manifest = _manifest("run-1")
@@ -8976,20 +8977,19 @@ class TestDependencyRefreshSanitize:
         manifest["dependency_refresh"] = {
             "requested": True,
             "reported": False,
-            "skipped": True,
-            "skipped_reason": "dirty_worktree",
-            "dirty_files": [f"file-{i}.txt" for i in range(25)],
+            "precheck": {
+                "tracked_files_dirty": True,
+                "dirty_files": [f"file-{i}.txt" for i in range(25)],
+            },
         }
 
         sanitized = sanitize._sanitize_manifest(manifest)
 
         section = sanitized["dependency_refresh"]
-        assert section["skipped"] is True
-        assert section["skipped_reason"] == "dirty_worktree"
-        assert len(section["dirty_files"]) == contracts._MAX_DIRTY_FILES
-        assert "verification" not in section
+        assert section["precheck"]["tracked_files_dirty"] is True
+        assert len(section["precheck"]["dirty_files"]) == contracts._MAX_DIRTY_FILES
 
-    def test_an_unrecognized_skip_reason_reads_as_invalid(self):
+    def test_historical_unrecognized_skip_reason_reads_as_invalid(self):
         manifest = _manifest("run-1")
         manifest["availability"]["dependency_refresh"] = True
         manifest["dependency_refresh"] = {
@@ -9002,11 +9002,8 @@ class TestDependencyRefreshSanitize:
 
         assert sanitized["dependency_refresh"]["skipped_reason"] == "invalid"
 
-    def test_verification_and_a_self_report_can_coexist(self):
-        """The producer appends the status/commands group after either
-        the skipped or verification branch, never gated by it — a
-        successful verification alongside a read self-report is the
-        normal non-skipped path."""
+    def test_historical_verification_and_a_self_report_remain_measurable(self):
+        """Historical manifests retain their retired verification evidence."""
         manifest = _manifest("run-1")
         manifest["availability"]["dependency_refresh"] = True
         manifest["dependency_refresh"] = {
@@ -9097,21 +9094,12 @@ class TestDependencyRefreshSanitize:
         assert sanitized["dependency_refresh"] is None
 
 
-class TestDependencyRefreshDivergenceFromProducer:
-    """M3: the sanitizer is at least as strict as its producer, not
-    exactly as strict — pin the one known divergence rather than let the
-    docstring claim more than the code does.
-    """
+class TestDependencyRefreshDefensiveBounds:
+    """Hand-edited manifests cannot bypass the consumer's string bound."""
 
-    def test_an_oversized_command_string_becomes_none_though_the_producer_keeps_a_slice(
+    def test_an_oversized_command_string_becomes_none(
         self,
     ):
-        """The producer slices `command`/`directory` to 500/200 chars and
-        keeps the result. This sanitizer requires `_safe_string`'s
-        <=4096-char bound instead — the divergence only bites past 4096,
-        past which the producer's own slice would already have capped
-        it, so a manifest actually written by the real producer never
-        reaches this path; only a hand-edited or hostile one does."""
         manifest = _manifest("run-1")
         manifest["availability"]["dependency_refresh"] = True
         oversized_command = "x" * 5000

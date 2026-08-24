@@ -4,6 +4,7 @@ import glob
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -20,6 +21,7 @@ SCRIPT_PATH = PLUGIN_ROOT / "scripts" / "review" / "telemetry.py"
 
 sys.path.insert(0, str(TESTS_DIR))
 from helpers.context_fixtures import COMPLETE_CONTEXT
+from review import dependency_refresh
 from review import synthesis_lifecycle as lifecycle_contract
 from review.reconciliation_context import aggregate_inline_coverage
 
@@ -3478,6 +3480,25 @@ class TestDependencyRefreshManifest:
     """The manifest records the sanitized dependency-refresh report."""
 
     def _telemetry(self, mod, tmp_path):
+        subprocess.run(
+            ["git", "init", str(tmp_path)], check=True, capture_output=True
+        )
+        (tmp_path / "tracked.txt").write_text("initial\n", encoding="utf-8")
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", "tracked.txt"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            [
+                "git", "-C", str(tmp_path),
+                "-c", "user.name=Dependency Refresh Test",
+                "-c", "user.email=dependency-refresh@example.com",
+                "commit", "-m", "Initial commit",
+            ],
+            check=True,
+            capture_output=True,
+        )
         out_dir = tmp_path / "out"
         out_dir.mkdir(exist_ok=True)
         log_dir = tmp_path / "logs"
@@ -3485,6 +3506,24 @@ class TestDependencyRefreshManifest:
         t.start(mode="full", repo_path=str(tmp_path), identifier="branch",
                 run_id="run-1")
         return t, out_dir
+
+    @staticmethod
+    def _save_report(out_dir, *, status="completed", commands=None):
+        if commands is None:
+            commands = [{
+                "directory": ".",
+                "command": "custom sync --locked",
+                "exit_status": "ok",
+            }]
+        request = out_dir.parent / "dependency-refresh-request.json"
+        request.write_text(json.dumps({
+            "schema": 1,
+            "status": status,
+            "commands": commands,
+        }))
+        assert dependency_refresh.save_report(
+            out_dir, request, out_dir.parent
+        ) == []
 
     def test_absent_when_never_requested_and_no_report(self, mod, tmp_path):
         t, out_dir = self._telemetry(mod, tmp_path)
@@ -3502,18 +3541,11 @@ class TestDependencyRefreshManifest:
         assert section["reported"] is False
         assert "status" not in section
 
-    def test_report_is_sanitized_into_the_manifest(self, mod, tmp_path):
+    def test_saved_report_is_projected_into_the_manifest(self, mod, tmp_path):
         t, out_dir = self._telemetry(mod, tmp_path)
         (out_dir / "run-config.json").write_text(json.dumps(
             {"mode": "full", "refresh_dependencies": True}))
-        (out_dir / "dependency-refresh.json").write_text(json.dumps({
-            "status": "completed",
-            "commands": [
-                {"directory": ".", "command": "composer install",
-                 "exit_status": "ok"},
-            ],
-            "tracked_files_dirty": False,
-        }))
+        self._save_report(out_dir)
         t.log_step(step=3, phase="SETUP", title="Gather Context")
         manifest = json.loads(Path(t.manifest_path).read_text())
         section = manifest["dependency_refresh"]
@@ -3522,59 +3554,50 @@ class TestDependencyRefreshManifest:
             "reported": True,
             "status": "completed",
             "tracked_files_dirty": False,
+            "dirty_files": [],
             "commands": [
-                {"directory": ".", "command": "composer install",
+                {"directory": ".", "command": "custom sync --locked",
                  "exit_status": "ok"},
             ],
         }
 
-    def test_verification_is_sanitized_into_the_manifest(self, mod, tmp_path):
-        t, out_dir = self._telemetry(mod, tmp_path)
-        (out_dir / "run-config.json").write_text(json.dumps(
-            {"mode": "full", "refresh_dependencies": True}))
-        (out_dir / "dependency-refresh.json").write_text(json.dumps({
-            "status": "completed",
-            "commands": [],
-            "tracked_files_dirty": False,
-        }))
-        (out_dir / "dependency-refresh-verification.json").write_text(
-            json.dumps({
-                "report_present": True,
-                "commands_allowed": False,
-                "disallowed_commands": ["x" * 600, 42],
-                "tracked_files_dirty": False,
-                "dirty_files": ["ignored.php"],
-                "verification_failed": False,
-            })
-        )
-
-        t.log_step(step=5, phase="EXECUTION", title="Dispatch Plan + Triage")
-
-        manifest = json.loads(Path(t.manifest_path).read_text())
-        assert manifest["dependency_refresh"]["verification"] == {
-            "report_present": True,
-            "commands_allowed": False,
-            "disallowed_commands": ["x" * 500],
-            "tracked_files_dirty": False,
-            "verification_failed": False,
-        }
-
-    def test_skipped_refresh_is_distinct_from_successful_verification(
+    def test_dirty_precheck_refusal_is_projected_without_a_report(
         self, mod, tmp_path
     ):
         t, out_dir = self._telemetry(mod, tmp_path)
         (out_dir / "run-config.json").write_text(json.dumps(
             {"mode": "full", "refresh_dependencies": True}))
-        (out_dir / "dependency-refresh-verification.json").write_text(
-            json.dumps({
-                "skipped": True,
-                "skipped_reason": "dirty_worktree",
-                "dirty_files": [
-                    *(f"tracked-{index:02d}.txt" for index in range(25)),
-                    42,
-                ],
-            })
-        )
+        (out_dir / "pipeline-state.json").write_text(json.dumps({
+            "dependency_refresh_precheck": {
+                "tracked_files_dirty": True,
+                "dirty_files": ["tracked.txt"],
+            },
+        }))
+
+        t.log_step(step=5, phase="EXECUTION", title="Dispatch Plan + Triage")
+
+        manifest = json.loads(Path(t.manifest_path).read_text())
+        assert manifest["dependency_refresh"] == {
+            "requested": True,
+            "reported": False,
+            "precheck": {
+                "tracked_files_dirty": True,
+                "dirty_files": ["tracked.txt"],
+            },
+        }
+
+    def test_unknown_precheck_refusal_is_projected_without_a_report(
+        self, mod, tmp_path
+    ):
+        t, out_dir = self._telemetry(mod, tmp_path)
+        (out_dir / "run-config.json").write_text(json.dumps(
+            {"mode": "full", "refresh_dependencies": True}))
+        (out_dir / "pipeline-state.json").write_text(json.dumps({
+            "dependency_refresh_precheck": {
+                "tracked_files_dirty": None,
+                "dirty_files": [],
+            },
+        }))
 
         t.log_step(step=5, phase="EXECUTION", title="Dispatch Plan + Triage")
 
@@ -3583,15 +3606,13 @@ class TestDependencyRefreshManifest:
         assert section == {
             "requested": True,
             "reported": False,
-            "skipped": True,
-            "skipped_reason": "dirty_worktree",
-            "dirty_files": [
-                f"tracked-{index:02d}.txt" for index in range(20)
-            ],
+            "precheck": {
+                "tracked_files_dirty": None,
+                "dirty_files": [],
+            },
         }
-        assert "verification" not in section
 
-    def test_unhashable_status_preserves_report_and_verification(
+    def test_malformed_canonical_report_is_unreported_without_replacement(
         self, mod, tmp_path
     ):
         t, out_dir = self._telemetry(mod, tmp_path)
@@ -3602,80 +3623,53 @@ class TestDependencyRefreshManifest:
             "commands": [],
             "tracked_files_dirty": False,
         }))
-        (out_dir / "dependency-refresh-verification.json").write_text(
-            json.dumps({
-                "report_present": True,
-                "commands_allowed": True,
-                "disallowed_commands": [],
-                "tracked_files_dirty": False,
-                "dirty_files": [],
-                "verification_failed": False,
-            })
-        )
 
         t.log_step(step=5, phase="EXECUTION", title="Dispatch Plan + Triage")
 
         manifest = json.loads(Path(t.manifest_path).read_text())
         assert manifest["dependency_refresh"] == {
             "requested": True,
-            "reported": True,
-            "status": "invalid",
-            "tracked_files_dirty": False,
-            "commands": [],
-            "verification": {
-                "report_present": True,
-                "commands_allowed": True,
-                "disallowed_commands": [],
-                "tracked_files_dirty": False,
-                "verification_failed": False,
-            },
+            "reported": False,
         }
         assert manifest["steps"][-1]["step"] == 5
 
-    def test_verification_is_absent_when_file_is_missing(self, mod, tmp_path):
+    def test_saved_report_projects_final_dirty_files(self, mod, tmp_path):
         t, out_dir = self._telemetry(mod, tmp_path)
         (out_dir / "run-config.json").write_text(json.dumps(
             {"mode": "full", "refresh_dependencies": True}))
-        (out_dir / "dependency-refresh.json").write_text(json.dumps({
-            "status": "completed",
-            "commands": [],
-            "tracked_files_dirty": False,
-        }))
-
-        t.log_step(step=5, phase="EXECUTION", title="Dispatch Plan + Triage")
-
-        manifest = json.loads(Path(t.manifest_path).read_text())
-        assert "verification" not in manifest["dependency_refresh"]
-
-    def test_verification_is_preserved_when_self_report_is_missing(
-        self, mod, tmp_path
-    ):
-        t, out_dir = self._telemetry(mod, tmp_path)
-        (out_dir / "run-config.json").write_text(json.dumps(
-            {"mode": "full", "refresh_dependencies": True}))
-        (out_dir / "dependency-refresh-verification.json").write_text(
-            json.dumps({
-                "report_present": False,
-                "commands_allowed": None,
-                "disallowed_commands": [],
-                "tracked_files_dirty": False,
-                "dirty_files": [],
-                "verification_failed": False,
-            })
-        )
+        (tmp_path / "tracked.txt").write_text("changed\n", encoding="utf-8")
+        self._save_report(out_dir, status="failed", commands=[{
+            "directory": ".",
+            "command": "custom sync",
+            "exit_status": "failed",
+        }])
 
         t.log_step(step=5, phase="EXECUTION", title="Dispatch Plan + Triage")
 
         manifest = json.loads(Path(t.manifest_path).read_text())
         section = manifest["dependency_refresh"]
-        assert section["reported"] is False
-        assert section["verification"] == {
-            "report_present": False,
-            "commands_allowed": None,
-            "disallowed_commands": [],
-            "tracked_files_dirty": False,
-            "verification_failed": False,
-        }
+        assert section["status"] == "failed"
+        assert section["tracked_files_dirty"] is True
+        assert section["dirty_files"] == ["tracked.txt"]
+
+    def test_clean_precheck_is_not_repeated_in_the_manifest(
+        self, mod, tmp_path
+    ):
+        t, out_dir = self._telemetry(mod, tmp_path)
+        (out_dir / "run-config.json").write_text(json.dumps(
+            {"mode": "full", "refresh_dependencies": True}))
+        (out_dir / "pipeline-state.json").write_text(json.dumps({
+            "dependency_refresh_precheck": {
+                "tracked_files_dirty": False,
+                "dirty_files": [],
+            },
+        }))
+
+        t.log_step(step=5, phase="EXECUTION", title="Dispatch Plan + Triage")
+
+        manifest = json.loads(Path(t.manifest_path).read_text())
+        section = manifest["dependency_refresh"]
+        assert section == {"requested": True, "reported": False}
 
     @pytest.mark.parametrize(
         "report_bytes",
@@ -3696,38 +3690,21 @@ class TestDependencyRefreshManifest:
         ],
         ids=("malformed", "oversized", "deeply-nested", "invalid-utf8"),
     )
-    def test_hostile_self_report_preserves_verification(
+    def test_hostile_canonical_report_reads_as_unreported(
         self, mod, tmp_path, report_bytes
     ):
         t, out_dir = self._telemetry(mod, tmp_path)
         (out_dir / "run-config.json").write_text(json.dumps(
             {"mode": "full", "refresh_dependencies": True}))
         (out_dir / "dependency-refresh.json").write_bytes(report_bytes)
-        (out_dir / "dependency-refresh-verification.json").write_text(
-            json.dumps({
-                "report_present": False,
-                "commands_allowed": None,
-                "disallowed_commands": [],
-                "tracked_files_dirty": False,
-                "dirty_files": [],
-                "verification_failed": True,
-            })
-        )
 
         t.log_step(step=5, phase="EXECUTION", title="Dispatch Plan + Triage")
 
         manifest = json.loads(Path(t.manifest_path).read_text())
         section = manifest["dependency_refresh"]
-        assert section["reported"] is False
-        assert section["verification"] == {
-            "report_present": False,
-            "commands_allowed": None,
-            "disallowed_commands": [],
-            "tracked_files_dirty": False,
-            "verification_failed": True,
-        }
+        assert section == {"requested": True, "reported": False}
 
-    def test_invalid_report_values_sanitize_not_crash(self, mod, tmp_path):
+    def test_invalid_report_values_read_as_unreported(self, mod, tmp_path):
         t, out_dir = self._telemetry(mod, tmp_path)
         (out_dir / "dependency-refresh.json").write_text(json.dumps({
             "status": "did-things",
@@ -3739,14 +3716,7 @@ class TestDependencyRefreshManifest:
         }))
         t.log_step(step=3, phase="SETUP", title="Gather Context")
         manifest = json.loads(Path(t.manifest_path).read_text())
-        section = manifest["dependency_refresh"]
-        assert section["requested"] is False
-        assert section["reported"] is True
-        assert section["status"] == "invalid"
-        assert section["tracked_files_dirty"] is None
-        assert section["commands"] == [
-            {"directory": None, "command": None, "exit_status": "invalid"},
-        ]
+        assert manifest["dependency_refresh"] is None
 
     def test_non_object_report_reads_as_unreported(self, mod, tmp_path):
         t, out_dir = self._telemetry(mod, tmp_path)

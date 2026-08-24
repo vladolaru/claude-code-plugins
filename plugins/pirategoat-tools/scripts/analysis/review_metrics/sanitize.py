@@ -9,11 +9,12 @@ from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from .contracts import (
-    _DEPENDENCY_REFRESH_SKIP_REASONS,
+    _DEPENDENCY_REFRESH_EXIT_STATUSES,
     _DEPENDENCY_REFRESH_STATUSES,
     _DERIVED_MARKDOWN_STATUSES,
     _DISPATCHED_STATUSES,
     _FIXED_WARNING_CODES,
+    _HISTORICAL_DEPENDENCY_REFRESH_SKIP_REASONS,
     _MAX_DEPENDENCY_REFRESH_COMMANDS,
     _MAX_DIRTY_FILES,
     _MAX_WALL_TIME_MS,
@@ -1336,45 +1337,16 @@ def _sanitize_skipped_steps(value: object) -> list[dict[str, Any]] | None:
 def _sanitize_dependency_refresh(value: object) -> dict[str, Any] | None:
     """Sanitize the dependency-refresh manifest section, or None.
 
-    None means the run never measured refresh at all — the section is
-    absent or the wrong shape, mirroring
-    `manifest_sections.build_dependency_refresh_manifest`'s own
-    "never requested and no artifact" absence. This is a second,
-    independent pass over what actually landed in the manifest (that
-    builder already reduced the raw run-config/self-report/verification
-    artifacts to this shape), so a status/skip-reason/exit-status outside
-    the producer's own vocabulary reads as "invalid" here exactly as it
-    does there, rather than surviving unchecked past a corrupted or
-    hand-edited manifest file.
+    Current manifests carry request/report flags, optional precheck refusal
+    evidence, and the validated canonical report projection. Status and exit
+    vocabularies come from the live producer contract. Bounded historical
+    skip/verification branches remain reader-only so old runs stay measurable;
+    no current producer emits them.
 
-    `requested` and `reported` are the only fields the producer always
-    emits. `skipped`+`skipped_reason`+`dirty_files` and `verification`
-    are mutually exclusive verification-outcome shapes (the producer
-    never emits both — a skipped refresh has nothing to verify).
-    `status`+`tracked_files_dirty`+`commands` are, in producer-written
-    manifests, present exactly when the run's own self-report was read
-    (`reported: true`), independent of which verification shape (if any)
-    accompanies them. This defensive pass gates on the group's own key
-    presence rather than re-deriving that invariant from `reported` — a
-    hand-edited manifest pairing `reported: false` with a status group
-    republishes the group as found, evidence over inference.
-
-    Divergence from the producer, mirroring `_sanitize_worktree_hygiene`'s
-    own stricter-not-exact-parity precedent: `directory`/`command`/
-    `disallowed_commands`/`dirty_files` entries go through
-    `_safe_string`/`_safe_strings`' bounded, control-character-free shape
-    instead of the producer's bare length-slice, so an entry the producer
-    would keep verbatim (oversized past 4096 chars, empty, or carrying a
-    control character) reads as `None` (or is dropped, for the list
-    fields) here instead.
-
-    PII: none of these fields carry user-authored prose. `requested`/
-    `reported`/`skipped`/the three booleans in `verification` are plain
-    flags; `skipped_reason`/`status`/`exit_status` are closed,
-    producer-declared vocabularies; `dirty_files` are repository
-    source-tree paths; and `directory`/`command` are the fixed
-    package-manager install commands the orchestrator is allowed to run
-    (`composer install`, `npm ci`, …), not arbitrary reviewed-branch text.
+    Command strings are arbitrary orchestrator-reported evidence and may
+    contain repository-relative tool invocations. They are not execution
+    attestation and are retained only through the ordinary bounded string
+    sanitizer. Dirty-file entries are repository paths.
     """
     if not isinstance(value, dict):
         return None
@@ -1384,18 +1356,36 @@ def _sanitize_dependency_refresh(value: object) -> dict[str, Any] | None:
         return None
     result: dict[str, Any] = {"requested": requested, "reported": reported}
 
+    precheck = value.get("precheck")
+    if isinstance(precheck, dict):
+        tracked_files_dirty = precheck.get("tracked_files_dirty")
+        result["precheck"] = {
+            "tracked_files_dirty": (
+                tracked_files_dirty
+                if isinstance(tracked_files_dirty, bool) else None
+            ),
+            "dirty_files": _safe_strings(
+                precheck.get("dirty_files")
+            )[:_MAX_DIRTY_FILES],
+        }
+
+    # Historical reader branch: schema-less manifests produced before the
+    # validating save channel represented precheck refusal as `skipped`.
     if value.get("skipped") is True:
         skipped_reason = value.get("skipped_reason")
         result["skipped"] = True
         result["skipped_reason"] = (
             skipped_reason
-            if skipped_reason in _DEPENDENCY_REFRESH_SKIP_REASONS
+            if skipped_reason in _HISTORICAL_DEPENDENCY_REFRESH_SKIP_REASONS
             else "invalid"
         )
         result["dirty_files"] = _safe_strings(
             value.get("dirty_files")
         )[:_MAX_DIRTY_FILES]
-    elif isinstance(value.get("verification"), dict):
+
+    # Historical reader branch: post-hoc command-policy verification was
+    # retired from the live producer, but existing manifests retain evidence.
+    if isinstance(value.get("verification"), dict):
         verification = value["verification"]
         commands_allowed = verification.get("commands_allowed")
         tracked_files_dirty = verification.get("tracked_files_dirty")
@@ -1416,8 +1406,9 @@ def _sanitize_dependency_refresh(value: object) -> dict[str, Any] | None:
             ),
         }
 
-    if any(
-        key in value for key in ("status", "tracked_files_dirty", "commands")
+    if reported or any(
+        key in value
+        for key in ("status", "tracked_files_dirty", "dirty_files", "commands")
     ):
         status = value.get("status")
         result["status"] = (
@@ -1429,6 +1420,9 @@ def _sanitize_dependency_refresh(value: object) -> dict[str, Any] | None:
         result["tracked_files_dirty"] = (
             tracked_files_dirty if isinstance(tracked_files_dirty, bool) else None
         )
+        result["dirty_files"] = _safe_strings(
+            value.get("dirty_files")
+        )[:_MAX_DIRTY_FILES]
         commands_raw = value.get("commands")
         commands: list[dict[str, Any]] = []
         if isinstance(commands_raw, list):
@@ -1441,7 +1435,8 @@ def _sanitize_dependency_refresh(value: object) -> dict[str, Any] | None:
                     "command": _safe_string(entry.get("command")),
                     "exit_status": (
                         exit_status
-                        if exit_status in ("ok", "failed") else "invalid"
+                        if exit_status in _DEPENDENCY_REFRESH_EXIT_STATUSES
+                        else "invalid"
                     ),
                 })
         result["commands"] = commands

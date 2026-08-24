@@ -15,8 +15,13 @@ try:
     from .agent.coverage import CoverageError, derive_deferred_coverage
     from .reviewer_names import derive_reviewer_name
     from .dependency_refresh import (
+        EXIT_STATUSES,
+        REPORT_STATUSES,
+        _MAX_COMMAND_CHARS,
         _MAX_DIRTY_FILES,
-        DEPENDENCY_REFRESH_SKIP_REASONS,
+        _MAX_DIRTY_FILE_CHARS,
+        _MAX_DIRECTORY_CHARS,
+        _MAX_REPORTED_COMMANDS,
         load_dependency_refresh_report,
     )
     from .dispatch_status import (
@@ -36,8 +41,13 @@ except ImportError:
     from review.agent.coverage import CoverageError, derive_deferred_coverage
     from review.reviewer_names import derive_reviewer_name
     from review.dependency_refresh import (
+        EXIT_STATUSES,
+        REPORT_STATUSES,
+        _MAX_COMMAND_CHARS,
         _MAX_DIRTY_FILES,
-        DEPENDENCY_REFRESH_SKIP_REASONS,
+        _MAX_DIRTY_FILE_CHARS,
+        _MAX_DIRECTORY_CHARS,
+        _MAX_REPORTED_COMMANDS,
         load_dependency_refresh_report,
     )
     from review.dispatch_status import (
@@ -52,10 +62,11 @@ except ImportError:
     )
 
 
-_DEPENDENCY_REFRESH_STATUSES = frozenset({"completed", "partial", "failed"})
-_MAX_DEPENDENCY_REFRESH_COMMANDS = 32
-_MAX_DEPENDENCY_REFRESH_DIRECTORY_CHARS = 200
-_MAX_DEPENDENCY_REFRESH_COMMAND_CHARS = 500
+_DEPENDENCY_REFRESH_STATUSES = frozenset(REPORT_STATUSES)
+_DEPENDENCY_REFRESH_EXIT_STATUSES = frozenset(EXIT_STATUSES)
+_MAX_DEPENDENCY_REFRESH_COMMANDS = _MAX_REPORTED_COMMANDS
+_MAX_DEPENDENCY_REFRESH_DIRECTORY_CHARS = _MAX_DIRECTORY_CHARS
+_MAX_DEPENDENCY_REFRESH_COMMAND_CHARS = _MAX_COMMAND_CHARS
 # Shared by both derived-Markdown families (reviewer_markdown, step 8's
 # per-reviewer render; findings_markdown, steps 9/11's review-findings.md
 # render) — the same vocabulary `briefings.py`'s
@@ -562,105 +573,43 @@ def build_coverage_manifest(
 
 
 def build_dependency_refresh_manifest(output_dir: str):
-    """Sanitize the orchestrator's dependency-refresh report.
-
-    The orchestrator report is free text and the verification artifact is
-    script-owned: only known fields with expected shapes survive, commands
-    are length-capped measurement evidence (like adjustment reasons), and
-    a non-object file reads as absent. Returns None when refresh was never
-    requested and neither evidence artifact exists — absent, not a
-    measured no-op.
-    """
+    """Project request state, precheck refusal, and the canonical report."""
     config = read_json_file(output_dir, "run-config.json") or {}
     requested = config.get("refresh_dependencies") is True
-    report, _report_load_failed = load_dependency_refresh_report(output_dir)
-    verification = read_json_file(
-        output_dir, "dependency-refresh-verification.json"
-    )
-    if not requested and report is None and verification is None:
+    report = load_dependency_refresh_report(output_dir)
+    state = read_json_file(output_dir, "pipeline-state.json") or {}
+    precheck = state.get("dependency_refresh_precheck")
+    if not requested and report is None and not isinstance(precheck, dict):
         return None
     result = {"requested": requested, "reported": report is not None}
 
-    if verification is not None and verification.get("skipped") is True:
-        skipped_reason = verification.get("skipped_reason")
-        dirty_files = verification.get("dirty_files")
+    if isinstance(precheck, dict):
+        precheck_dirty = precheck.get("tracked_files_dirty")
+        if precheck_dirty is not False:
+            dirty_files = precheck.get("dirty_files")
+            result["precheck"] = {
+                "tracked_files_dirty": (
+                    precheck_dirty
+                    if isinstance(precheck_dirty, bool) else None
+                ),
+                "dirty_files": [
+                    path[:_MAX_DIRTY_FILE_CHARS]
+                    for path in (
+                        dirty_files[:_MAX_DIRTY_FILES]
+                        if isinstance(dirty_files, list) else []
+                    )
+                    if isinstance(path, str)
+                ],
+            }
+
+    if report is not None:
         result.update({
-            "skipped": True,
-            "skipped_reason": (
-                skipped_reason
-                if skipped_reason in DEPENDENCY_REFRESH_SKIP_REASONS
-                else "invalid"
-            ),
-            "dirty_files": [
-                path for path in (
-                    dirty_files if isinstance(dirty_files, list) else []
-                )
-                if isinstance(path, str)
-            ][:_MAX_DIRTY_FILES],
+            "status": report["status"],
+            "commands": [dict(command) for command in report["commands"]],
+            "tracked_files_dirty": report["tracked_files_dirty"],
+            "dirty_files": list(report["dirty_files"]),
         })
-    elif verification is not None:
-        commands_allowed = verification.get("commands_allowed")
-        tracked_files_dirty = verification.get("tracked_files_dirty")
-        disallowed_commands = verification.get("disallowed_commands")
-        result["verification"] = {
-            "report_present": verification.get("report_present") is True,
-            "commands_allowed": (
-                commands_allowed
-                if isinstance(commands_allowed, bool) else None
-            ),
-            "disallowed_commands": [
-                command[:_MAX_DEPENDENCY_REFRESH_COMMAND_CHARS]
-                for command in (
-                    disallowed_commands[:_MAX_DEPENDENCY_REFRESH_COMMANDS]
-                    if isinstance(disallowed_commands, list) else []
-                )
-                if isinstance(command, str)
-            ],
-            "tracked_files_dirty": (
-                tracked_files_dirty
-                if isinstance(tracked_files_dirty, bool) else None
-            ),
-            "verification_failed": (
-                verification.get("verification_failed") is True
-            ),
-        }
 
-    if report is None:
-        return result
-
-    status = report.get("status")
-    result["status"] = (
-        status
-        if isinstance(status, str) and status in _DEPENDENCY_REFRESH_STATUSES
-        else "invalid"
-    )
-    dirty = report.get("tracked_files_dirty")
-    result["tracked_files_dirty"] = dirty if isinstance(dirty, bool) else None
-
-    sanitized = []
-    commands = report.get("commands")
-    if isinstance(commands, list):
-        for entry in commands[:_MAX_DEPENDENCY_REFRESH_COMMANDS]:
-            if not isinstance(entry, dict):
-                continue
-            directory = entry.get("directory")
-            command = entry.get("command")
-            exit_status = entry.get("exit_status")
-            sanitized.append({
-                "directory": (
-                    directory[:_MAX_DEPENDENCY_REFRESH_DIRECTORY_CHARS]
-                    if isinstance(directory, str) else None
-                ),
-                "command": (
-                    command[:_MAX_DEPENDENCY_REFRESH_COMMAND_CHARS]
-                    if isinstance(command, str) else None
-                ),
-                "exit_status": (
-                    exit_status
-                    if exit_status in ("ok", "failed") else "invalid"
-                ),
-            })
-    result["commands"] = sanitized
     return result
 
 

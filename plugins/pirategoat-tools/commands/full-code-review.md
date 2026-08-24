@@ -27,13 +27,7 @@ the file, verify it exists, then move on. Do not skip verification.
 - Branch name: use that branch
 - Explicit git range (contains `..`): use that range
 
-**Detect dependency refresh mode:** If the user's input clearly asks to
-refresh or install dependencies before the review (e.g., "refresh deps",
-"refresh dependencies", "update dependencies first", "install deps first"),
-add `--refresh-deps` to the first `pipeline.py` call. This is trusted-branch
-mode: the pipeline will detect stale dependency roots and brief you to run
-frozen-mode installs in the worktree — only add the flag when the user
-asked. Examples:
+**Detect dependency refresh mode:** If the user's input clearly asks to refresh or install dependencies before the review (e.g., "refresh deps", "refresh dependencies", "update dependencies first", "install deps first"), add `--refresh-deps` to the first `pipeline.py` call. This is trusted-branch mode: after a clean-tracked-worktree safety check, the interactive orchestrator inspects the trusted worktree and refreshes dependencies adaptively — only add the flag when the user asked. Examples:
 - `/full-code-review refresh deps` → add `--refresh-deps`
 - `/full-code-review` → omit the flag
 

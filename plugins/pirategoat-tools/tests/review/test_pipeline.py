@@ -2969,22 +2969,11 @@ class TestStep10QuickMode:
 class TestStep3DependencyRefresh:
     """Step 3 briefing renders trusted-branch dependency refresh guidance."""
 
-    _SIGNAL_STATE = {
+    _CLEAN_STATE = {
         "completed_steps": [],
-        "dependency_refresh": {
-            "signals": [
-                {
-                    "manager": "composer",
-                    "directory": ".",
-                    "reasons": ["changed_in_range"],
-                    "changed_files": ["composer.lock"],
-                    "installed_state_present": True,
-                    "suggested_command": (
-                        "composer install --no-scripts --no-plugins "
-                        "--prefer-dist --no-interaction"
-                    ),
-                },
-            ],
+        "dependency_refresh_precheck": {
+            "tracked_files_dirty": False,
+            "dirty_files": [],
         },
     }
 
@@ -2994,66 +2983,34 @@ class TestStep3DependencyRefresh:
             parts += list(g["handoff"])
         return "\n".join(parts)
 
-    def test_signals_render_refresh_section(self, mod, tmp_path):
-        config = {"mode": "full", "interactive": True,
-                  "refresh_dependencies": True}
-        g = mod.get_step_guidance(3, "full", dict(self._SIGNAL_STATE), {},
-                                  config=config, output_dir=str(tmp_path))
-        text = self._text(g)
-        assert "Dependency refresh" in text
-        assert "composer install" in text
-        assert "Commands disable lifecycle scripts on purpose; do not strip flags" in text
-        assert "yarn install --frozen-lockfile --ignore-scripts" in text
-        assert "never chain commands (`&&`, `;`)" in text
-        assert "Pipeline independently verifies reported commands and worktree state" in text
-        assert "git status --porcelain" in text
-        assert "--refresh-host-context" in text
-        assert "dependency-refresh.json" in text
-
-    def test_refresh_guidance_only_contains_adaptive_work_in_order(
+    def test_clean_precheck_offers_adaptive_refresh_and_save_channel(
         self, mod, tmp_path
     ):
         config = {"mode": "full", "interactive": True,
                   "refresh_dependencies": True}
-        guidance = mod.get_step_guidance(
-            3,
-            "full",
-            dict(self._SIGNAL_STATE),
-            {},
-            config=config,
-            output_dir=str(tmp_path),
-        )
-        actions = "\n".join(guidance["actions"])
-
-        ordered_guidance = [
-            "1. Run each suggested command",
-            "NEVER run update/upgrade/add/require",
-            "2. After all install attempts",
-            "record them as dependency-refresh failure evidence",
-            "tracked worktree was verified clean before installs",
-            "restore the refresh-created tracked changes",
-            "3. Re-resolve host context",
-        ]
-        offsets = [actions.index(phrase) for phrase in ordered_guidance]
-        assert offsets == sorted(offsets)
-        assert "even when an install command fails" in actions
-        assert "git restore --source=HEAD --staged --worktree -- <path>" in actions
-        assert "git checkout -- <path>" not in actions
-        assert "stash" not in actions.lower()
-        assert "pre-existing tracked changes remain unstashed" not in actions
-
-    def test_handoff_gates_the_refresh_report(self, mod, tmp_path):
-        config = {"mode": "full", "interactive": True,
-                  "refresh_dependencies": True}
-        g = mod.get_step_guidance(3, "full", dict(self._SIGNAL_STATE), {},
+        g = mod.get_step_guidance(3, "full", dict(self._CLEAN_STATE), {},
                                   config=config, output_dir=str(tmp_path))
-        handoff_text = "\n".join(g["handoff"])
-        assert "dependency-refresh.json" in handoff_text
-        # change-purpose handoff still present (no unfetched issues)
-        assert "change-purpose.md" in handoff_text
+        text = self._text(g)
+        lowered = text.lower()
+        assert "Dependency refresh" in text
+        assert "inspect the repository and reviewed change" in lowered
+        assert "lockfile-preserving" in text
+        assert "decide whether dependency installation is needed" in lowered
+        assert "--refresh-host-context" in text
+        assert "$TMPDIR/dependency-refresh-report.json" in text
+        assert "dependency_refresh.py" in text
+        assert " save " in text
+        assert "SAVED dependency-refresh.json" in text
+        assert '"schema": 1' in text
+        assert '"status": "not_needed"' in text
+        assert '"commands": []' in text
+        assert "change-purpose.md" in text
+        for manager in ("composer install", "npm ci", "pnpm install", "yarn install"):
+            assert manager not in text
+        assert "verifies execution" not in text
 
     def test_refresh_handoff_survives_unfetched_issues(self, mod, tmp_path):
-        state = dict(self._SIGNAL_STATE)
+        state = dict(self._CLEAN_STATE)
         state["resolved_params"] = {"has_unfetched_issues": True}
         config = {"mode": "full", "interactive": True,
                   "refresh_dependencies": True}
@@ -3064,38 +3021,16 @@ class TestStep3DependencyRefresh:
         # change-purpose moves to step 4 when issues are unfetched
         assert "change-purpose.md" not in handoff_text
 
-    def test_enabled_with_no_signals_reports_nothing_to_refresh(self, mod, tmp_path):
-        state = {"completed_steps": [],
-                 "dependency_refresh": {"signals": []}}
-        config = {"mode": "full", "interactive": True,
-                  "refresh_dependencies": True}
-        g = mod.get_step_guidance(3, "full", state, {},
-                                  config=config, output_dir=str(tmp_path))
-        text = self._text(g)
-        assert "nothing to refresh" in text
-        assert "composer install" not in text
-        handoff_text = "\n".join(g["handoff"] or [])
-        assert "dependency-refresh.json" not in handoff_text
-
-    def test_detection_failure_reports_unknown_staleness(self, mod, tmp_path):
-        state = {"completed_steps": [],
-                 "dependency_refresh": {"signals": [],
-                                        "detection_failed": True}}
-        config = {"mode": "full", "interactive": True,
-                  "refresh_dependencies": True}
-        g = mod.get_step_guidance(3, "full", state, {},
-                                  config=config, output_dir=str(tmp_path))
-        text = self._text(g)
-        assert "detection failed" in text
-
-    def test_dirty_worktree_skips_refresh_with_honest_degradation(
-        self, mod, tmp_path
+    @pytest.mark.parametrize("tracked_files_dirty", [True, None])
+    def test_unsafe_or_unknown_precheck_offers_no_execution_or_save_handoff(
+        self, mod, tmp_path, tracked_files_dirty
     ):
         state = {
-            "dependency_refresh": {
-                **self._SIGNAL_STATE["dependency_refresh"],
-                "skipped_reason": "dirty_worktree",
-                "dirty_files": ["composer.lock"],
+            "dependency_refresh_precheck": {
+                "tracked_files_dirty": tracked_files_dirty,
+                "dirty_files": (
+                    ["tracked.txt"] if tracked_files_dirty is True else []
+                ),
             }
         }
         config = {"refresh_dependencies": True}
@@ -3105,40 +3040,14 @@ class TestStep3DependencyRefresh:
         )
 
         text = "\n".join(situation)
-        assert "refresh skipped" in text.lower()
-        assert "pre-existing tracked changes" in text
-        assert "degraded host context" in text
-        assert "commit or stash" in text
-        assert "re-run" in text
-        assert actions == []
-        assert handoff == []
-
-    def test_failed_worktree_status_skips_refresh_closed(self, mod, tmp_path):
-        state = {
-            "dependency_refresh": {
-                **self._SIGNAL_STATE["dependency_refresh"],
-                "skipped_reason": "worktree_status_failed",
-                "dirty_files": [],
-            }
-        }
-        config = {"refresh_dependencies": True}
-
-        situation, actions, handoff = mod._dependency_refresh_briefing(
-            state, config, str(tmp_path)
-        )
-
-        text = "\n".join(situation)
-        assert "refresh skipped" in text.lower()
-        assert "could not verify that the tracked worktree is clean" in text
-        assert "degraded host context" in text
-        assert "resolve the Git status failure" in text
-        assert "re-run" in text
+        assert "will not run dependency commands" in text
+        assert "unsafe" in text or "unknown" in text
         assert actions == []
         assert handoff == []
 
     def test_flag_off_renders_nothing(self, mod, tmp_path):
         config = {"mode": "full", "interactive": True}
-        g = mod.get_step_guidance(3, "full", dict(self._SIGNAL_STATE), {},
+        g = mod.get_step_guidance(3, "full", dict(self._CLEAN_STATE), {},
                                   config=config, output_dir=str(tmp_path))
         text = self._text(g)
         assert "Dependency refresh" not in text
