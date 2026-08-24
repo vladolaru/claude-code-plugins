@@ -995,8 +995,8 @@ class ReviewOutputBuilder:
         return self._deferred_files
 
     @staticmethod
-    def _normalize_deferred_path(file: str, api_name: str) -> str:
-        """The repository-relative grammar deferred claims speak.
+    def _normalize_deferred_claim(file: str) -> str:
+        """Normalize one positive deferred-review claim.
 
         Normalizes "./src/x.php", "src\\x.php", and "src//x.php" to one
         form, and rejects forms no scope path can ever take (absolute,
@@ -1005,69 +1005,46 @@ class ReviewOutputBuilder:
         exist in this review.
         """
         if not isinstance(file, str) or not file.strip():
-            raise ValueError(f"{api_name} requires a non-empty file path.")
+            raise ValueError(
+                "add_deferred_reviewed requires a non-empty file path."
+            )
         try:
-            return normalize_deferred_path(file, api_name)
+            return normalize_deferred_path(file, "add_deferred_reviewed")
         except CoverageError as exc:
             raise ValueError(str(exc)) from exc
 
     @staticmethod
-    def _reject_unknown_deferred(
-        paths: List[str], known: frozenset, api_name: str, noun: str
+    def _reject_unknown_deferred_claims(
+        paths: List[str], known: frozenset
     ) -> None:
-        """Raise the one canonical rejection for out-of-set deferred paths.
+        """Reject positive claims outside the authoritative deferred set.
 
-        Every enforcement point shares this phrasing. Add-time passes the
-        single path just offered so feedback stays immediate; save-time
-        passes every offender at once, so a review carrying 23 bad
-        declarations costs one round trip instead of 23. ``api_name`` names
-        the calling API, keeping rejections from the sibling deferred-set
-        APIs distinguishable to agent and test alike, and ``noun`` says what
-        the offending paths were offered as ("declaration", "claim").
-
-        ``noun`` is deliberately required rather than defaulted: a default
-        is how the empty-set branch came to tell a claimant that "nothing
-        may be declared", and the next sibling API would inherit the same
-        wrong word silently.
+        Collect every offender so a review carrying several bad claims costs
+        one correction round trip instead of one retry per path.
         """
         valid = (
             "Valid paths: " + ", ".join(sorted(known))
             if known
-            else f"This review has no deferred files, so no {noun} may be "
-                 "made."
+            else "This review has no deferred files, so no claim may be made."
         )
         offenders = ", ".join(repr(p) for p in paths)
         raise ValueError(
-            f"{api_name} received {len(paths)} {noun}(s) matching no "
+            f"add_deferred_reviewed received {len(paths)} claim(s) matching no "
             f"NOT DIFFED file of this review: {offenders}. {valid}"
         )
 
-    def _validate_deferred_batch(
-        self, files, api_name: str, noun: str
-    ) -> List[str]:
-        """Normalize and membership-check a whole batch, or raise once.
-
-        The one validation body both deferred-set APIs run. They address
-        the same namespace under the same rules, so a second copy is a
-        drift generator, not a convenience — the last time these APIs kept
-        their own loops, one accepted absolute and traversal paths the
-        other rejected.
+    def _validate_deferred_claims(self, files) -> List[str]:
+        """Normalize and membership-check one positive-claim batch.
 
         Both error classes collect across the whole batch — grammar
-        failures as their own messages, membership offenders through the
-        shared rejection helper — so one raise names every problem instead
-        of surfacing them one retry at a time. Nothing is recorded here:
-        the caller commits only after this returns, which is what makes a
-        multi-path call all-or-nothing. A mid-batch failure that had
-        already recorded the leading paths would leave the builder in a
-        state the caller never asked for — a retry would double-record
-        them, and a caller who gives up is left with a half-statement no
-        one made.
+        failures as their own messages and membership offenders together —
+        so one raise names every problem instead of surfacing them one retry
+        at a time. Nothing is recorded until the whole batch passes.
         """
         if not files:
             raise ValueError(
-                f"{api_name} requires at least one file path — a call "
-                f"naming nothing is a no-op, not a {noun}."
+                "add_deferred_reviewed requires at least one file path — "
+                "a call naming nothing is a no-op, not a claim."
             )
         known = self._known_deferred_files()
         normalized: List[str] = []
@@ -1075,7 +1052,7 @@ class ReviewOutputBuilder:
         grammar_errors: List[str] = []
         for file in files:
             try:
-                path = self._normalize_deferred_path(file, api_name)
+                path = self._normalize_deferred_claim(file)
             except ValueError as exc:
                 grammar_errors.append(str(exc))
                 continue
@@ -1086,9 +1063,7 @@ class ReviewOutputBuilder:
             parts = list(grammar_errors)
             if unknown:
                 try:
-                    self._reject_unknown_deferred(
-                        unknown, known, api_name, noun
-                    )
+                    self._reject_unknown_deferred_claims(unknown, known)
                 except ValueError as exc:
                     parts.append(str(exc))
             raise ValueError("; ".join(parts))
@@ -1205,9 +1180,7 @@ class ReviewOutputBuilder:
 
         The whole batch either lands or leaves no trace.
         """
-        normalized = self._validate_deferred_batch(
-            files, "add_deferred_reviewed", "claim"
-        )
+        normalized = self._validate_deferred_claims(files)
         for path in normalized:
             if path not in self.deferred_reviewed:
                 self.deferred_reviewed.append(path)

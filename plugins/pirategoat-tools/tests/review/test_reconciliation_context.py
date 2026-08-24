@@ -47,11 +47,6 @@ def mod():
 # Test fixture helpers
 # ---------------------------------------------------------------------------
 
-# Distinguishes "key absent" (legacy producer) from an explicit null/empty
-# value — the two carry opposite meanings for deferred-review claims.
-_ABSENT = object()
-
-
 def _make_issue(
     severity="medium",
     title="Test issue",
@@ -115,21 +110,20 @@ def _write_summary(
         }, f)
 
 
-def _write_review(output_dir, stem, unreviewed=None, claims=_ABSENT):
+def _write_review(output_dir, stem, claims):
     """Write <stem>.json — the real filename an agent's review carries.
 
     Takes the review STEM, not the agent name: several tests exist to pin
     the stem-derivation rule itself, so deriving it here would hide the
     thing under test.
 
-    `claims` defaults to a sentinel so a test can distinguish a key-less
-    legacy output from an explicit `deferred_reviewed: []`.
+    Every current review carries the positive deferred-review claim list.
     """
-    payload = {"reviewer": stem.replace("-review", ""), "issues": []}
-    if unreviewed is not None:
-        payload["unreviewed"] = unreviewed
-    if claims is not _ABSENT:
-        payload["deferred_reviewed"] = claims
+    payload = {
+        "reviewer": stem.replace("-review", ""),
+        "issues": [],
+        "deferred_reviewed": claims,
+    }
     with open(os.path.join(output_dir, f"{stem}.json"), "w") as f:
         json.dump(payload, f)
 

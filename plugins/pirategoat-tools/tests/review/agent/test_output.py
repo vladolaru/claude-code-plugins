@@ -1066,10 +1066,7 @@ class TestAddDeferredReviewed:
         ],
     )
     def test_rejects_non_repo_relative_forms(self, bad):
-        """A claim addresses the same namespace as a declaration, so it
-        must reject the same unmatchable forms — claiming '/etc/passwd' as
-        reviewed is not a near miss, it is a statement about a file this
-        review does not contain."""
+        """A claim must address a repository-relative deferred path."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         with pytest.raises(ValueError):
             b.add_deferred_reviewed(bad)
@@ -1094,8 +1091,7 @@ class TestAddDeferredReviewed:
     def test_claim_outside_deferred_set_rejected_at_add(
         self, tmp_path, monkeypatch
     ):
-        """A claim on a file this review never deferred is as wrong as a
-        declaration on one, and the rejection must say 'claim'."""
+        """A claim on a file this review never deferred is rejected."""
         self._arm_deferred_sidecar(tmp_path, monkeypatch, ["src/email.py"])
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         with pytest.raises(ValueError, match="src/email.py"):
@@ -1106,8 +1102,7 @@ class TestAddDeferredReviewed:
     def test_empty_deferred_set_rejects_every_claim(
         self, tmp_path, monkeypatch
     ):
-        """The empty-set branch must speak the caller's noun — a claimant
-        told "nothing may be declared" is being handed the wrong API."""
+        """The empty-set branch explains that no claim can be made."""
         self._arm_deferred_sidecar(tmp_path, monkeypatch, [])
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         with pytest.raises(ValueError, match=r"1 claim\(s\)") as excinfo:
