@@ -922,6 +922,66 @@ class TestValidateProposalInput:
         })
         assert any("ids are generated" in p for p in problems)
 
+    @pytest.mark.parametrize(
+        "action,fields,problem",
+        [
+            ("promote", {}, "promote requires exactly the severity field"),
+            (
+                "promote",
+                {"severity": "high", "title": "also change the title"},
+                "promote requires exactly the severity field",
+            ),
+            ("demote", {"title": "not a severity"},
+             "demote requires exactly the severity field"),
+            ("rescope", {}, "rescope requires exactly the line field"),
+            (
+                "rescope",
+                {"line": 20, "file": "other.go"},
+                "rescope requires exactly the line field",
+            ),
+            ("correct", {}, "correct requires at least one field"),
+            (
+                "remove", {"title": "replacement"},
+                "remove does not accept replacement fields",
+            ),
+        ],
+    )
+    def test_action_specific_field_contract_is_enforced(
+        self, action, fields, problem
+    ):
+        problems = validate_proposal_input({
+            "schema": 1,
+            "adjustments": [{
+                "action": action,
+                "id": "aaaa1111",
+                "fields": fields,
+                "rationale": "r",
+            }],
+        })
+
+        assert any(problem in candidate for candidate in problems)
+
+    def test_a_proposal_may_target_each_finding_only_once(self):
+        problems = validate_proposal_input({
+            "schema": 1,
+            "adjustments": [
+                {
+                    "action": "promote",
+                    "id": "aaaa1111",
+                    "fields": {"severity": "high"},
+                    "rationale": "r",
+                },
+                {
+                    "action": "correct",
+                    "id": "aaaa1111",
+                    "fields": {"title": "Clearer title"},
+                    "rationale": "r",
+                },
+            ],
+        })
+
+        assert any("duplicate target 'aaaa1111'" in problem for problem in problems)
+
     def test_two_independent_problems_are_both_reported(self):
         """The proposal validator collects every independent problem
         collects every problem instead of stopping at the first one it
@@ -951,9 +1011,7 @@ class TestAdjustmentsSchemaValidation:
     pytestmark = pytest.mark.usefixtures("revise_verdict")
 
     def _write_raw_adjustments(self, output_dir, doc):
-        (Path(output_dir) / "decision-critic-adjustments.json").write_text(
-            json.dumps(doc)
-        )
+        _write_snapshot_document(output_dir, doc)
 
     def test_schema_1_proceeds(self, tmp_path):
         _write_findings(tmp_path, [_issue("aaaa1111", "low")])
@@ -1360,6 +1418,47 @@ class TestReadCriticVerdict:
             json.dumps({"verdict": 1})
         )
         assert read_critic_verdict(str(tmp_path)) is None
+
+    def test_explicit_null_adjudication_makes_the_snapshot_unusable(
+        self, tmp_path
+    ):
+        proposal = critic_adjustments_module.prepare_proposal({
+            "schema": 1,
+            "adjustments": [{
+                "action": "demote",
+                "id": "aaaa1111",
+                "fields": {"severity": "low"},
+                "rationale": "Guarded upstream.",
+            }],
+        })
+        proposal["adjudication"] = None
+        _write_snapshot_document(tmp_path, proposal)
+
+        assert read_critic_verdict(str(tmp_path)) is None
+
+    def test_apply_rejects_explicit_null_adjudication_without_mutation(
+        self, tmp_path
+    ):
+        _write_findings(tmp_path, [_issue("aaaa1111", "high")])
+        proposal = critic_adjustments_module.prepare_proposal({
+            "schema": 1,
+            "adjustments": [{
+                "action": "demote",
+                "id": "aaaa1111",
+                "fields": {"severity": "low"},
+                "rationale": "Guarded upstream.",
+            }],
+        })
+        proposal["adjudication"] = None
+        _write_snapshot_document(tmp_path, proposal)
+        adj_path = tmp_path / "decision-critic-adjustments.json"
+        findings_path = tmp_path / "review-findings.json"
+        before = (adj_path.read_bytes(), findings_path.read_bytes())
+
+        with pytest.raises(ValueError, match="'adjudication' must be an object"):
+            apply_adjustments(str(tmp_path))
+
+        assert (adj_path.read_bytes(), findings_path.read_bytes()) == before
 
     def test_missing_verdict_key_returns_none(self, tmp_path):
         (tmp_path / "decision-critic-verdict.json").write_text(
@@ -2738,7 +2837,9 @@ class TestSpotCheckRecordedInTheLedger:
         assert after["issues"][0]["severity"] == "high"
 
     def test_pending_count_reads_both_record_shapes(self, tmp_path):
-        _write_findings(tmp_path, [_issue("aaaa1111", "high")])
+        _write_findings(tmp_path, [
+            _issue("aaaa1111", "high"), _issue("bbbb2222", "low"),
+        ])
         data = json.loads((tmp_path / "review-findings.json").read_text())
         data[APPLIED_IDS_KEY] = [
             "legacy-id", {"adjustment_id": "new-id", "spot_check": "verified"},
@@ -2747,7 +2848,7 @@ class TestSpotCheckRecordedInTheLedger:
         _write_adjustments(tmp_path, [
             {"adjustment_id": "legacy-id", "action": "demote", "id": "aaaa1111",
              "fields": {"severity": "low"}, "rationale": "r"},
-            {"adjustment_id": "new-id", "action": "promote", "id": "aaaa1111",
+            {"adjustment_id": "new-id", "action": "promote", "id": "bbbb2222",
              "fields": {"severity": "critical"}, "rationale": "r"},
         ])
         assert pending_count(str(tmp_path)) == 0
@@ -2838,6 +2939,12 @@ class TestRevisedNarrative:
         (tmp_path / "decision-critic-adjustments.json").write_text(
             json.dumps(doc)
         )
+        ledger = json.loads((tmp_path / "review-findings.json").read_text())
+        ledger[APPLIED_IDS_KEY] = [{
+            "adjustment_id": doc["adjustments"][0]["adjustment_id"],
+            "spot_check": doc["adjustments"][0]["spot_check"],
+        }]
+        write_findings(str(tmp_path), ledger)
         apply_adjustments(str(tmp_path))
         data = json.loads((tmp_path / "review-findings.json").read_text())
         assert data["narrative_summary"] == self._SUMMARY
@@ -3044,6 +3151,11 @@ class TestLedgerVerdictRecompute:
             "adjustment_id": "landed", "applied": True, "action": "demote",
             "id": "aaaa1111", "fields": {"severity": "low"}, "rationale": "r",
         }])
+        ledger = json.loads((tmp_path / "review-findings.json").read_text())
+        ledger[APPLIED_IDS_KEY] = [{
+            "adjustment_id": "landed", "spot_check": "not_checked",
+        }]
+        write_findings(str(tmp_path), ledger)
         apply_adjustments(str(tmp_path))
         data = json.loads((tmp_path / "review-findings.json").read_text())
         assert data["verdict"] == "deliberately-stale"
@@ -3119,6 +3231,21 @@ class TestProposalPreparation:
         assert [
             entry["adjustment_id"] for entry in proposal["adjustments"]
         ] == ["same", "different"]
+
+    def test_prepare_rejects_duplicate_targets_before_assigning_ids(self):
+        with pytest.raises(ValueError, match="duplicate target 'aaaa1111'"):
+            critic_adjustments_module.prepare_proposal({
+                "schema": 1,
+                "adjustments": [
+                    self._entry(),
+                    {
+                        "action": "correct",
+                        "id": "aaaa1111",
+                        "fields": {"title": "Clearer title"},
+                        "rationale": "Clarify the mechanism.",
+                    },
+                ],
+            })
 
     @pytest.mark.parametrize(
         "forbidden,value",
@@ -3361,6 +3488,299 @@ class TestAdjudicationRequest:
 
         assert (adj_path.read_bytes(), findings_path.read_bytes()) == before
 
+    def test_unknown_ledger_target_is_rejected_before_checkpoint(
+        self, tmp_path
+    ):
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        proposal = _commit_critic_snapshot(tmp_path, [{
+            "action": "promote",
+            "id": "missing-id",
+            "fields": {"severity": "high"},
+            "rationale": "The proposal points at a missing finding.",
+        }])
+        request = _settlement_request(proposal, verified=(0,))
+        adj_path = tmp_path / "decision-critic-adjustments.json"
+        findings_path = tmp_path / "review-findings.json"
+        before = (adj_path.read_bytes(), findings_path.read_bytes())
+
+        with pytest.raises(ValueError, match="no issue with id 'missing-id'"):
+            critic_adjustments_module.settle(str(tmp_path), request)
+
+        assert (adj_path.read_bytes(), findings_path.read_bytes()) == before
+
+    def test_duplicate_ledger_target_is_rejected_before_checkpoint(
+        self, tmp_path
+    ):
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        document = {
+            "schema": 1,
+            "adjustments": [
+                {
+                    "adjustment_id": "first",
+                    "action": "promote",
+                    "id": "aaaa1111",
+                    "fields": {"severity": "high"},
+                    "rationale": "First mutation.",
+                },
+                {
+                    "adjustment_id": "second",
+                    "action": "correct",
+                    "id": "aaaa1111",
+                    "fields": {"title": "Clearer title"},
+                    "rationale": "Second mutation.",
+                },
+            ],
+        }
+        _write_snapshot_document(tmp_path, document)
+        request = {
+            "schema": 1,
+            "verified": ["first", "second"],
+            "refuted": [],
+            "revised_narrative": "Settled assessment.",
+        }
+        adj_path = tmp_path / "decision-critic-adjustments.json"
+        findings_path = tmp_path / "review-findings.json"
+        before = (adj_path.read_bytes(), findings_path.read_bytes())
+
+        with pytest.raises(ValueError, match="duplicate target 'aaaa1111'"):
+            critic_adjustments_module.settle(str(tmp_path), request)
+
+        assert (adj_path.read_bytes(), findings_path.read_bytes()) == before
+
+    def test_malformed_ledger_is_rejected_before_checkpoint(self, tmp_path):
+        proposal = self._seed(tmp_path)
+        ledger = json.loads((tmp_path / "review-findings.json").read_text())
+        ledger[APPLIED_IDS_KEY] = "not-a-record-list"
+        write_findings(str(tmp_path), ledger)
+        request = _settlement_request(proposal, verified=(0,))
+        adj_path = tmp_path / "decision-critic-adjustments.json"
+        findings_path = tmp_path / "review-findings.json"
+        before = (adj_path.read_bytes(), findings_path.read_bytes())
+
+        with pytest.raises(ValueError, match="applied_critic_adjustments"):
+            critic_adjustments_module.settle(str(tmp_path), request)
+
+        assert (adj_path.read_bytes(), findings_path.read_bytes()) == before
+
+    def test_refuted_noop_is_still_rejected_before_checkpoint(self, tmp_path):
+        _write_findings(tmp_path, [_issue("aaaa1111", "high")])
+        proposal = _commit_critic_snapshot(tmp_path, [{
+            "action": "promote",
+            "id": "aaaa1111",
+            "fields": {"severity": "high"},
+            "rationale": "This proposal changes nothing.",
+        }])
+        request = _settlement_request(
+            proposal,
+            refuted=((0, "The proposed mutation is a no-op."),),
+        )
+        adj_path = tmp_path / "decision-critic-adjustments.json"
+        findings_path = tmp_path / "review-findings.json"
+        before = (adj_path.read_bytes(), findings_path.read_bytes())
+
+        with pytest.raises(ValueError, match="promote would not change"):
+            critic_adjustments_module.settle(str(tmp_path), request)
+
+        assert (adj_path.read_bytes(), findings_path.read_bytes()) == before
+
+    @pytest.mark.parametrize(
+        "action,current,fields,problem",
+        [
+            (
+                "promote", "high", {"severity": "medium"},
+                "promote must increase severity",
+            ),
+            (
+                "promote", "high", {"severity": "high"},
+                "promote would not change severity",
+            ),
+            (
+                "demote", "low", {"severity": "medium"},
+                "demote must decrease severity",
+            ),
+            (
+                "demote", "low", {"severity": "low"},
+                "demote would not change severity",
+            ),
+            (
+                "correct", "low", {"title": "t"},
+                "correct would not change the finding",
+            ),
+            (
+                "rescope", "low", {"line": 10},
+                "rescope would not change the finding",
+            ),
+        ],
+    )
+    def test_noop_or_wrong_direction_proposal_is_rejected_before_checkpoint(
+        self, tmp_path, action, current, fields, problem
+    ):
+        _write_findings(tmp_path, [_issue("aaaa1111", current)])
+        proposal = _commit_critic_snapshot(tmp_path, [{
+            "action": action,
+            "id": "aaaa1111",
+            "fields": fields,
+            "rationale": "This mutation is not coherent with the ledger.",
+        }])
+        request = _settlement_request(proposal, verified=(0,))
+        adj_path = tmp_path / "decision-critic-adjustments.json"
+        findings_path = tmp_path / "review-findings.json"
+        before = (adj_path.read_bytes(), findings_path.read_bytes())
+
+        with pytest.raises(ValueError, match=problem):
+            critic_adjustments_module.settle(str(tmp_path), request)
+
+        assert (adj_path.read_bytes(), findings_path.read_bytes()) == before
+
+
+class TestAuthoritativeLedgerApplicationState:
+    def _write_settled_entry(self, tmp_path, entry, **ledger_extra):
+        _write_findings(
+            tmp_path, [_issue("aaaa1111", "high")], **ledger_extra
+        )
+        _write_adjustments(tmp_path, [entry])
+        adj_path = tmp_path / "decision-critic-adjustments.json"
+        findings_path = tmp_path / "review-findings.json"
+        return adj_path, findings_path
+
+    def test_applied_flag_without_ledger_provenance_is_rejected(self, tmp_path):
+        paths = self._write_settled_entry(tmp_path, {
+            "adjustment_id": "state-one",
+            "applied": True,
+            "action": "demote",
+            "id": "aaaa1111",
+            "fields": {"severity": "low"},
+            "rationale": "Guarded upstream.",
+        })
+        before = tuple(path.read_bytes() for path in paths)
+
+        with pytest.raises(ValueError, match="applied flag has no matching"):
+            apply_adjustments(str(tmp_path))
+
+        assert tuple(path.read_bytes() for path in paths) == before
+
+    def test_pending_count_does_not_trust_an_unproven_applied_flag(
+        self, tmp_path
+    ):
+        self._write_settled_entry(tmp_path, {
+            "adjustment_id": "state-pending",
+            "applied": True,
+            "action": "demote",
+            "id": "aaaa1111",
+            "fields": {"severity": "low"},
+            "rationale": "Guarded upstream.",
+        })
+
+        assert pending_count(str(tmp_path)) == 1
+
+    def test_id_in_applied_and_rejected_provenance_is_rejected(self, tmp_path):
+        paths = self._write_settled_entry(
+            tmp_path,
+            {
+                "adjustment_id": "state-two",
+                "applied": True,
+                "action": "demote",
+                "id": "aaaa1111",
+                "fields": {"severity": "low"},
+                "rationale": "Guarded upstream.",
+            },
+            applied_critic_adjustments=[{
+                "adjustment_id": "state-two", "spot_check": "not_checked",
+            }],
+            rejected_critic_adjustments=[{
+                "adjustment_id": "state-two",
+                "action": "demote",
+                "target_id": "aaaa1111",
+                "spot_check": "refuted",
+                "rejection_reason": "Contradictory provenance.",
+            }],
+        )
+        before = tuple(path.read_bytes() for path in paths)
+
+        with pytest.raises(ValueError, match="both applied and rejected"):
+            apply_adjustments(str(tmp_path))
+
+        assert tuple(path.read_bytes() for path in paths) == before
+
+    def test_catch_up_rejects_a_spot_check_mismatch(self, tmp_path):
+        paths = self._write_settled_entry(
+            tmp_path,
+            {
+                "adjustment_id": "state-three",
+                "spot_check": "verified",
+                "action": "demote",
+                "id": "aaaa1111",
+                "fields": {"severity": "low"},
+                "rationale": "Guarded upstream.",
+            },
+            applied_critic_adjustments=[{
+                "adjustment_id": "state-three", "spot_check": "not_checked",
+            }],
+        )
+        before = tuple(path.read_bytes() for path in paths)
+
+        with pytest.raises(ValueError, match="spot_check.*does not match"):
+            apply_adjustments(str(tmp_path))
+
+        assert tuple(path.read_bytes() for path in paths) == before
+
+    def test_existing_rejection_must_match_the_checkpoint(self, tmp_path):
+        paths = self._write_settled_entry(
+            tmp_path,
+            {
+                "adjustment_id": "state-four",
+                "spot_check": "refuted",
+                "rejected": True,
+                "rejection_reason": "Checkpoint reason.",
+                "action": "demote",
+                "id": "aaaa1111",
+                "fields": {"severity": "low"},
+                "rationale": "Guarded upstream.",
+            },
+            rejected_critic_adjustments=[{
+                "adjustment_id": "state-four",
+                "action": "demote",
+                "target_id": "aaaa1111",
+                "spot_check": "refuted",
+                "rejection_reason": "Different ledger reason.",
+            }],
+        )
+        before = tuple(path.read_bytes() for path in paths)
+
+        with pytest.raises(ValueError, match="rejection provenance does not match"):
+            apply_adjustments(str(tmp_path))
+
+        assert tuple(path.read_bytes() for path in paths) == before
+
+    def test_legacy_rejection_without_spot_check_matches_refuted_checkpoint(
+        self, tmp_path
+    ):
+        paths = self._write_settled_entry(
+            tmp_path,
+            {
+                "adjustment_id": "state-five",
+                "spot_check": "refuted",
+                "rejected": True,
+                "rejection_reason": "Checkpoint reason.",
+                "action": "demote",
+                "id": "aaaa1111",
+                "fields": {"severity": "low"},
+                "rationale": "Guarded upstream.",
+            },
+            rejected_critic_adjustments=[{
+                "adjustment_id": "state-five",
+                "action": "demote",
+                "target_id": "aaaa1111",
+                "rejection_reason": "Checkpoint reason.",
+            }],
+        )
+        before = tuple(path.read_bytes() for path in paths)
+
+        result = apply_adjustments(str(tmp_path))
+
+        assert result["status"] == "nothing_pending"
+        assert tuple(path.read_bytes() for path in paths) == before
+
 
 class TestSourceBindingAndRecovery:
     ENTRIES = [
@@ -3418,7 +3838,7 @@ class TestSourceBindingAndRecovery:
         proposal = self._seed(tmp_path)
         request = _settlement_request(proposal, verified=(0,))
 
-        def inspect_checkpoint(output_dir):
+        def inspect_checkpoint(output_dir, _plan):
             doc = json.loads(
                 (Path(output_dir) / "decision-critic-adjustments.json").read_text()
             )
@@ -3445,7 +3865,7 @@ class TestSourceBindingAndRecovery:
         request = _settlement_request(proposal, verified=(0,))
         real_apply = critic_adjustments_module._apply_adjustments_locked
 
-        def raise_after_checkpoint(_output_dir):
+        def raise_after_checkpoint(_output_dir, _plan):
             raise OSError("injected after checkpoint")
 
         monkeypatch.setattr(
@@ -3545,9 +3965,9 @@ class TestSourceBindingAndRecovery:
             finally:
                 active = False
 
-        def observed_apply(output_dir):
+        def observed_apply(output_dir, plan):
             assert active, "public recovery must hold the output lock"
-            return real_apply(output_dir)
+            return real_apply(output_dir, plan)
 
         monkeypatch.setattr(
             critic_adjustments_module.atomic_io,
@@ -3583,7 +4003,7 @@ class TestSourceBindingAndRecovery:
             finally:
                 active = False
 
-        def observed_apply(_output_dir):
+        def observed_apply(_output_dir, _plan):
             assert active, "the checkpoint and ledger apply share one lock"
             return {"status": "nothing_pending", "applied": 0}
 

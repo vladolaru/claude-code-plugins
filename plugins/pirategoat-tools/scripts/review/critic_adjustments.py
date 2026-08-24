@@ -11,13 +11,15 @@ unchecked complement and persists a complete adjudication checkpoint. Finally,
 carrying provenance, narrative replacement, recounting, and verdict derivation
 into ``review-findings.json``.
 
-Settlement deliberately checkpoints before ledger application. Both writes are
-atomic individually and the whole transition holds ``output_dir_lock()``, but
-there is no pretend cross-file transaction: a crash after the checkpoint is
-resumed exactly once by public :func:`apply_adjustments`. That public entry point
-is an explicit recovery path; if an older orchestrator reaches it without a
-checkpoint, it first records an honest ``defensive_apply`` adjudication with all
-entries ``not_checked`` and no invented narrative.
+Settlement builds and validates the complete document-plus-ledger apply plan
+before it checkpoints, then deliberately checkpoints before executing the
+ledger writes. Both files are atomic individually and the whole transition
+holds ``output_dir_lock()``, but there is no pretend cross-file transaction: a
+crash after the checkpoint is resumed exactly once by public
+:func:`apply_adjustments`. That public entry point is an explicit recovery path;
+if an older orchestrator reaches it without a checkpoint, it first prepares an
+honest ``defensive_apply`` adjudication with all entries ``not_checked`` and no
+invented narrative, validates the same plan, and only then records it.
 """
 
 import argparse
@@ -166,6 +168,13 @@ FINDINGS_READ_NOT_OBJECT = "not_object"
 FindingsRead = collections.namedtuple(
     "FindingsRead", ("status", "findings", "error")
 )
+ApplyPlan = collections.namedtuple(
+    "ApplyPlan",
+    (
+        "document", "findings", "findings_changed", "document_changed",
+        "result",
+    ),
+)
 
 # Where a withdrawn `narrative_summary` goes. The adjustment vocabulary
 # addresses issues — severity, title, scope, the fields of one finding —
@@ -255,13 +264,25 @@ def _validate_proposal_entry(entry, label, *, require_adjustment_id):
     except ValueError as error:
         problems.append(str(error))
     else:
-        if action == "add":
+        if action in ("promote", "demote") and set(fields) != {"severity"}:
+            problems.append(
+                f"{label}: {action} requires exactly the severity field"
+            )
+        elif action == "rescope" and set(fields) != {"line"}:
+            problems.append(
+                f"{label}: rescope requires exactly the line field"
+            )
+        elif action == "correct" and not fields:
+            problems.append(
+                f"{label}: correct requires at least one field"
+            )
+        elif action == "add":
             missing = [key for key in ADD_REQUIRED_FIELDS if key not in fields]
             if missing:
                 problems.append(
                     f"{label}: add requires fields {', '.join(missing)}"
                 )
-        if action == "remove" and fields:
+        elif action == "remove" and fields:
             problems.append(f"{label}: remove does not accept replacement fields")
 
     target_id = entry.get("id")
@@ -285,6 +306,57 @@ def _validate_proposal_entry(entry, label, *, require_adjustment_id):
     return problems
 
 
+def _validate_proposal_entries(adjustments, *, require_adjustment_id):
+    """Validate every entry plus invariants that belong to the whole batch."""
+    problems = []
+    seen_adjustment_ids = {}
+    seen_targets = {}
+    for index, entry in enumerate(adjustments):
+        label = f"adjustment[{index}]"
+        problems.extend(_validate_proposal_entry(
+            entry, label, require_adjustment_id=require_adjustment_id
+        ))
+        if not isinstance(entry, dict):
+            continue
+
+        if require_adjustment_id:
+            adjustment_id = entry.get("adjustment_id")
+            if isinstance(adjustment_id, str) and adjustment_id:
+                if adjustment_id in seen_adjustment_ids:
+                    problems.append(
+                        f"{label}: duplicate adjustment_id {adjustment_id!r} "
+                        f"(also adjustment["
+                        f"{seen_adjustment_ids[adjustment_id]}])"
+                    )
+                else:
+                    seen_adjustment_ids[adjustment_id] = index
+
+        action = entry.get("action")
+        target_id = entry.get("id")
+        if (
+            action not in ACTIONS
+            or action == "add"
+            or not isinstance(target_id, str)
+            or not target_id
+        ):
+            continue
+        if target_id in seen_targets:
+            first_index, first_action = seen_targets[target_id]
+            if first_action == "remove":
+                problems.append(
+                    f"{label}: id {target_id!r} is removed by "
+                    f"adjustment[{first_index}] in this batch"
+                )
+            else:
+                problems.append(
+                    f"{label}: duplicate target {target_id!r} — merge "
+                    f"finding-level changes into one entry per finding"
+                )
+        else:
+            seen_targets[target_id] = (index, action)
+    return problems
+
+
 def validate_proposal_input(payload: Mapping[str, object]):
     """Return every problem in a critic-authored proposal input."""
     if not isinstance(payload, dict):
@@ -304,10 +376,9 @@ def validate_proposal_input(payload: Mapping[str, object]):
             f"{ADJUSTMENTS_FILENAME}: 'adjustments' must be a list"
         )
         return problems
-    for index, entry in enumerate(adjustments):
-        problems.extend(_validate_proposal_entry(
-            entry, f"adjustment[{index}]", require_adjustment_id=False
-        ))
+    problems.extend(_validate_proposal_entries(
+        adjustments, require_adjustment_id=False
+    ))
     return problems
 
 
@@ -391,25 +462,19 @@ def validate_adjustments_document(payload):
         )
         return problems
 
-    seen_ids = {}
+    problems.extend(_validate_proposal_entries(
+        adjustments, require_adjustment_id=True
+    ))
+    adjudication_present = ADJUDICATION_KEY in payload
     adjudication = payload.get(ADJUDICATION_KEY)
-    is_settled = adjudication is not None
+    if adjudication_present and not isinstance(adjudication, dict):
+        problems.append(f"{ADJUDICATION_KEY!r} must be an object")
+        return problems
+    is_settled = adjudication_present
     for index, entry in enumerate(adjustments):
         label = f"adjustment[{index}]"
-        problems.extend(_validate_proposal_entry(
-            entry, label, require_adjustment_id=True
-        ))
         if not isinstance(entry, dict):
             continue
-        adjustment_id = entry.get("adjustment_id")
-        if isinstance(adjustment_id, str) and adjustment_id:
-            if adjustment_id in seen_ids:
-                problems.append(
-                    f"{label}: duplicate adjustment_id {adjustment_id!r} "
-                    f"(also adjustment[{seen_ids[adjustment_id]}])"
-                )
-            else:
-                seen_ids[adjustment_id] = index
 
         lifecycle_keys = set(entry) & _LIFECYCLE_ENTRY_KEYS
         lifecycle_keys.discard("adjustment_id")
@@ -454,9 +519,6 @@ def validate_adjustments_document(payload):
                 problems.append(f"{label}: applied may only be true when present")
 
     if not is_settled:
-        return problems
-    if not isinstance(adjudication, dict):
-        problems.append(f"{ADJUDICATION_KEY!r} must be an object")
         return problems
     problems.extend(_extra_key_problems(
         adjudication, _ADJUDICATION_KEYS, ADJUDICATION_KEY
@@ -566,15 +628,15 @@ def _load_committed_snapshot(output_dir):
     document = _read_json_object(
         os.path.join(output_dir, ADJUSTMENTS_FILENAME), ADJUSTMENTS_FILENAME
     )
-    document_problems = validate_adjustments_document(document)
-    if document_problems:
-        raise AdjustmentValidationError(document_problems)
     digest = proposal_digest(document)
     if marker[PROPOSAL_DIGEST_KEY] != digest:
         raise ValueError(
             f"proposal digest mismatch: {CRITIC_VERDICT_FILENAME} commits "
             f"{marker[PROPOSAL_DIGEST_KEY]}, current proposal is {digest}"
         )
+    document_problems = validate_adjustments_document(document)
+    if document_problems:
+        raise AdjustmentValidationError(document_problems)
     if marker["verdict"] != REVISE_VERDICT and document["adjustments"]:
         raise ValueError(
             f"{marker['verdict']} may not commit a non-empty proposal"
@@ -763,6 +825,8 @@ def _applied_record(value):
         isinstance(value, dict)
         and isinstance(value.get("adjustment_id"), str)
         and value["adjustment_id"]
+        and set(value) == {"adjustment_id", SPOT_CHECK_KEY}
+        and value.get(SPOT_CHECK_KEY) in SPOT_CHECK_VALUES
     ):
         return dict(value)
     return None
@@ -787,61 +851,75 @@ def _load_recorded_records(findings):
 def _load_rejected_records(findings):
     """Read the rejection audit records the findings file already contains.
 
-    Mirrors `_load_recorded_records()` for the applied side: `None` (the key
-    has never been written) reads as an empty list, and anything present
-    but not a list of objects is a malformed pre-existing ledger — worth
-    failing on, the same call `_load_recorded_records()` makes, since this
-    function is about to write against what it reads.
+    Schema-1 records written before spot-check provenance omit ``spot_check``;
+    the rejection bucket itself means ``refuted``, so normalize that one
+    historical omission while rejecting malformed record shapes.
     """
     recorded = findings.get(REJECTED_ADJUSTMENTS_KEY)
     if recorded is None:
         return []
-    if not isinstance(recorded, list) or not all(
-        isinstance(value, dict) for value in recorded
-    ):
+    required = {
+        "adjustment_id", "action", "target_id", "rejection_reason",
+    }
+    records = []
+    if isinstance(recorded, list):
+        for value in recorded:
+            if not isinstance(value, dict) or not required <= set(value):
+                break
+            adjustment_id = value.get("adjustment_id")
+            action = value.get("action")
+            target_id = value.get("target_id")
+            reason = value.get("rejection_reason")
+            spot_check = value.get(SPOT_CHECK_KEY, SPOT_CHECK_REFUTED)
+            if not (
+                isinstance(adjustment_id, str)
+                and adjustment_id
+                and (action is None or isinstance(action, str))
+                and (target_id is None or isinstance(target_id, str))
+                and isinstance(reason, str)
+                and reason.strip()
+                and spot_check == SPOT_CHECK_REFUTED
+            ):
+                break
+            records.append({**value, SPOT_CHECK_KEY: SPOT_CHECK_REFUTED})
+    if not isinstance(recorded, list) or len(records) != len(recorded):
         raise ValueError(
             f"{FINDINGS_FILENAME}: {REJECTED_ADJUSTMENTS_KEY!r} must be a "
-            f"list of objects"
+            f"list of complete refuted adjustment records"
         )
-    return list(recorded)
+    return records
 
 
-def _index_adjustment_ids(adjustments):
-    """Validate id shape and uniqueness across the whole file."""
-    seen = {}
-    for idx, entry in enumerate(adjustments):
-        if not isinstance(entry, dict):
-            raise ValueError(f"adjustment[{idx}] must be an object")
-        adjustment_id = entry.get("adjustment_id")
-        if adjustment_id is None:
-            continue
-        if not isinstance(adjustment_id, str) or not adjustment_id:
+def _records_by_adjustment_id(records, ledger_key):
+    """Index one provenance list and reject ambiguous duplicate records."""
+    indexed = {}
+    for index, record in enumerate(records):
+        adjustment_id = record["adjustment_id"]
+        if adjustment_id in indexed:
             raise ValueError(
-                f"adjustment[{idx}]: 'adjustment_id' must be a non-empty "
-                f"string"
+                f"{FINDINGS_FILENAME}: {ledger_key!r} contains duplicate "
+                f"adjustment id {adjustment_id!r} at position {index}"
             )
-        if adjustment_id in seen:
-            raise ValueError(
-                f"adjustment[{idx}]: duplicate adjustment_id "
-                f"{adjustment_id!r} (also adjustment[{seen[adjustment_id]}]) "
-                f"— ids identify which decisions a ledger already contains"
-            )
-        seen[adjustment_id] = idx
+        indexed[adjustment_id] = record
+    return indexed
 
 
-# Entry states, shared by the writer and the read-only counter so the two
-# can never disagree about what "pending" means.
-_SETTLED = "settled"      # flagged applied, or rejected by the orchestrator
-_CATCH_UP = "catch_up"    # findings write landed, flag write did not
-_PENDING = "pending"      # not yet applied anywhere
+# Read-only entry states used by ``pending_count()``. Applied provenance is
+# authoritative: a mutable flag alone stays pending, while a ledger record with
+# no flag is the crash-recovery catch-up case.
+_SETTLED = "settled"      # provenance plus flag, or a refuted checkpoint
+_CATCH_UP = "catch_up"    # findings provenance landed, flag write did not
+_PENDING = "pending"      # not yet recorded in the authoritative ledger
 
 
 def _entry_state(entry, already_recorded):
     """Classify one adjustment against the record kept on both sides."""
-    if entry.get("applied") is True or entry.get("rejected") is True:
-        return _SETTLED
     if entry.get("adjustment_id") in already_recorded:
+        if entry.get("applied") is True:
+            return _SETTLED
         return _CATCH_UP
+    if entry.get("rejected") is True:
+        return _SETTLED
     return _PENDING
 
 
@@ -1003,7 +1081,7 @@ def _checkpoint_matches_request(document, decisions, narrative):
 
 
 def settle(output_dir, request):
-    """Commit orchestrator adjudication, then apply it under one lock."""
+    """Validate, checkpoint, and apply orchestrator adjudication under one lock."""
     with atomic_io.output_dir_lock(output_dir):
         marker, document = _load_committed_snapshot(output_dir)
         if marker["verdict"] != REVISE_VERDICT:
@@ -1032,11 +1110,14 @@ def settle(output_dir, request):
                 narrative,
                 source=ADJUDICATION_SOURCE_ORCHESTRATOR,
             )
-            write_adjustments(output_dir, document)
             settlement_status = "settled"
 
+        findings = _read_findings_for_apply(output_dir)
+        plan = _build_apply_plan(document, findings)
+        if settlement_status == "settled":
+            write_adjustments(output_dir, document)
         counts = settlement_counts(document)
-        apply_result = _apply_adjustments_locked(output_dir)
+        apply_result = _apply_adjustments_locked(output_dir, plan)
         return {
             "status": settlement_status,
             "counts": counts,
@@ -1100,221 +1181,209 @@ def _withdraw_narrative_summary(findings, recorded_ids):
     findings[WITHDRAWN_SUMMARY_KEY] = withdrawn
 
 
-def _apply_adjustments_locked(output_dir):
-    """Apply a settled critic document once while the caller holds the lock.
-
-    Idempotent from either side: an entry is skipped when its flag says
-    it was applied or the orchestrator rejected it, and also when the
-    findings file already records its `adjustment_id` — the case a crash
-    between the two writes leaves behind, where only the flags need to
-    catch up. An unrecognized `schema` (see `ADJUSTMENTS_SCHEMA`), unknown
-    ids, unknown actions, invalid patches, duplicate or already-removed
-    targets, and a malformed pre-existing ledger fail the whole call loudly
-    BEFORE anything is written — a critic decision that cannot land must
-    not silently vanish, and a half-applied batch must not exist.
-
-    Rejected entries (`rejected: true` + `rejection_reason`) are never
-    applied, but a newly-settled rejection still costs one findings write:
-    its `adjustment_id`, `action`, target id, `spot_check: refuted`, and
-    `rejection_reason` land in `REJECTED_ADJUSTMENTS_KEY` — before this, a
-    rejection was visible only in decision-critic-adjustments.json, which
-    apply_adjustments() itself is the only reader of. The audit record now
-    lands on the artifact bot mode, baselines, and metrics actually read,
-    and its Markdown projection renders the explicit refuted outcome. An
-    entry carrying both `applied: true` and
-    `rejected: true` (a hand-edited adjustments doc) is never audited
-    here: the applied mutation is ground truth, and recording both would
-    publish two contradictory outcomes for one `adjustment_id`. A
-    `rejected: true` entry with a missing or blank `rejection_reason`
-    refuses the whole batch — the reason is the entire payload of the
-    audit record.
-
-    An applying batch also settles three ledger-level facts the critic's
-    finding-level vocabulary cannot reach. `verdict` is recomputed from the
-    post-batch severities through the shared ladder in `verdict_rules.py`,
-    with the pre-apply value preserved once under
-    `VERDICT_BEFORE_ADJUSTMENTS_KEY`; the reconciler's `narrative_summary`
-    is withdrawn and replaced by the document's `revised_narrative` when it
-    carries one; and each applied entry's `spot_check` — the orchestrator's
-    own outcome for that decision, defaulting to SPOT_CHECK_NOT_CHECKED —
-    lands beside its id in `APPLIED_IDS_KEY`.
-
-    Gated on the complete source-bound critic snapshot before mutation:
-    adjustments are a REVISE-only channel (see the module docstring), so any
-    other verdict refuses the whole call. Public callers enter through
-    :func:`apply_adjustments`, which owns lock acquisition and the defensive
-    checkpoint; :func:`settle` calls this function only after committing the
-    orchestrator checkpoint while holding the same lock.
-    """
-    marker, doc = _load_committed_snapshot(output_dir)
-    verdict = marker["verdict"]
-    if verdict != REVISE_VERDICT:
-        return {
-            "status": "refused", "applied": 0,
-            "reason": f"{REFUSAL_VERDICT_NOT_REVISE} ({verdict})",
-        }
-
-    findings_path = os.path.join(output_dir, FINDINGS_FILENAME)
-    adjustments = doc["adjustments"]
-    if not adjustments:
-        return {
-            "status": "no_adjustments",
-            "applied": 0,
-            "rejected": 0,
-            "adjudication_source": None,
-            "counts": {
-                SPOT_CHECK_VERIFIED: 0,
-                SPOT_CHECK_REFUTED: 0,
-                SPOT_CHECK_NOT_CHECKED: 0,
-            },
-        }
-    problems = validate_adjustments_document(doc)
-    if problems:
-        raise AdjustmentValidationError(problems)
-    adjudication = doc.get(ADJUDICATION_KEY)
-    if not isinstance(adjudication, dict):
-        raise ValueError(
-            f"{ADJUSTMENTS_FILENAME} has no adjudication checkpoint"
-        )
-    read = read_findings_file(findings_path)
-    # This path is about to WRITE against what it reads, so every failure
-    # is loud. Absent, unreadable, and unparseable re-raise the original
-    # exception — a caller catching `FileNotFoundError` still sees one —
-    # and only the shape fact, which no exception carries, is raised as
-    # this module's own ValueError. That shape guard matters for the same
-    # reason the adjustments file has one: a non-object ledger would
-    # otherwise die on an AttributeError instead of this module's
-    # ValueError contract, and the step-11 caller catches only the
-    # latter — a malformed ledger would crash finalize inside the guard
-    # meant to keep it running.
+def _read_findings_for_apply(output_dir):
+    """Read the ledger for a plan, preserving its existing error contract."""
+    read = read_findings_file(os.path.join(output_dir, FINDINGS_FILENAME))
     if read.status == FINDINGS_READ_NOT_OBJECT:
         raise ValueError(f"{FINDINGS_FILENAME} must be a JSON object")
     if read.status != FINDINGS_READ_OK:
         raise read.error
-    findings = read.findings
-    issues = findings.get("issues")
+    return read.findings
+
+
+def _new_finding_id(adjustment_id, occupied_ids):
+    """Derive a stable 8-hex finding id from the script-assigned decision id."""
+    candidate = adjustment_id[:8]
+    if re.fullmatch(r"[0-9a-f]{8}", candidate) and candidate not in occupied_ids:
+        return candidate
+    counter = 0
+    while True:
+        encoded = f"{adjustment_id}:{counter}".encode("utf-8")
+        candidate = hashlib.sha256(encoded).hexdigest()[:8]
+        if candidate not in occupied_ids:
+            return candidate
+        counter += 1
+
+
+def _validate_pending_mutation(entry, target, label):
+    """Validate ledger-dependent action direction and reject no-op patches."""
+    action = entry["action"]
+    fields = entry.get("fields") or {}
+    if action in ("promote", "demote"):
+        current = target.get("severity")
+        replacement = fields["severity"]
+        if replacement == current:
+            raise ValueError(
+                f"{label}: {action} would not change severity {current!r}"
+            )
+        current_rank = VALID_SEVERITIES.index(current)
+        replacement_rank = VALID_SEVERITIES.index(replacement)
+        if action == "promote" and replacement_rank > current_rank:
+            raise ValueError(
+                f"{label}: promote must increase severity, not change "
+                f"{current!r} to {replacement!r}"
+            )
+        if action == "demote" and replacement_rank < current_rank:
+            raise ValueError(
+                f"{label}: demote must decrease severity, not change "
+                f"{current!r} to {replacement!r}"
+            )
+        return
+    if action not in ("correct", "rescope"):
+        return
+    candidate = copy.deepcopy(target)
+    candidate.update(fields)
+    if "line" in fields:
+        _apply_scope_pairing(candidate, fields["line"] is None)
+    if candidate == target:
+        raise ValueError(
+            f"{label}: {action} would not change the finding"
+        )
+
+
+def _validate_unlanded_entry(entry, by_id, label):
+    """Resolve and validate one proposal whose outcome is not in the ledger."""
+    if entry["action"] == "add":
+        return
+    target_id = entry["id"]
+    target = by_id.get(target_id)
+    if target is None:
+        raise ValueError(
+            f"{label}: no issue with id {target_id!r} in {FINDINGS_FILENAME}"
+        )
+    _validate_pending_mutation(entry, target, label)
+
+
+def _validate_rejection_provenance(entry, record, label):
+    expected = {
+        "action": entry["action"],
+        "target_id": entry.get("id"),
+        SPOT_CHECK_KEY: SPOT_CHECK_REFUTED,
+        "rejection_reason": entry["rejection_reason"],
+    }
+    if any(record.get(key) != value for key, value in expected.items()):
+        raise ValueError(
+            f"{label}: rejection provenance does not match the adjudication "
+            f"checkpoint"
+        )
+
+
+def _build_apply_plan(document, findings):
+    """Purely validate and project one settled document against one ledger."""
+    problems = validate_adjustments_document(document)
+    if problems:
+        raise AdjustmentValidationError(problems)
+    adjustments = document["adjustments"]
+    if not adjustments:
+        return ApplyPlan(
+            copy.deepcopy(document), copy.deepcopy(findings), False, False,
+            {
+                "status": "no_adjustments",
+                "applied": 0,
+                "rejected": 0,
+                "adjudication_source": None,
+                "counts": {
+                    SPOT_CHECK_VERIFIED: 0,
+                    SPOT_CHECK_REFUTED: 0,
+                    SPOT_CHECK_NOT_CHECKED: 0,
+                },
+            },
+        )
+    adjudication = document[ADJUDICATION_KEY]
+    planned_document = copy.deepcopy(document)
+    planned_findings = copy.deepcopy(findings)
+    issues = planned_findings.get("issues")
     if not isinstance(issues, list):
         raise ValueError(f"{FINDINGS_FILENAME} has no issues list")
-    # An issue without a usable id is not addressable: keeping it out of
-    # the map is what makes a missing id fail as a clean unknown-id error
-    # instead of matching a None key or dying on a KeyError later.
-    by_id = {
-        issue["id"]: issue
-        for issue in issues
-        if isinstance(issue, dict)
-        and isinstance(issue.get("id"), str)
-        and issue["id"]
-    }
+    if not isinstance(planned_findings.get("summary"), dict):
+        raise ValueError(f"{FINDINGS_FILENAME} has no summary object")
+    try:
+        derive_review_state(issues)
+    except ValueError as error:
+        raise ValueError(f"{FINDINGS_FILENAME}: {error}") from error
 
-    _index_adjustment_ids(adjustments)
-    recorded_records = _load_recorded_records(findings)
-    already_recorded = {
-        record["adjustment_id"] for record in recorded_records
-    }
-    rejected_records = _load_rejected_records(findings)
-    already_rejected_ids = {
-        record.get("adjustment_id")
-        for record in rejected_records
-        if isinstance(record.get("adjustment_id"), str)
-    }
+    by_id = {}
+    for index, issue in enumerate(issues):
+        issue_id = issue.get("id")
+        if not isinstance(issue_id, str) or not issue_id:
+            continue
+        if issue_id in by_id:
+            raise ValueError(
+                f"{FINDINGS_FILENAME}: duplicate issue id {issue_id!r} "
+                f"at position {index}"
+            )
+        by_id[issue_id] = issue
 
-    # Validate every pending entry BEFORE mutating anything. The working
-    # view tracks what each later entry in this batch can still address.
+    applied_records = _load_recorded_records(planned_findings)
+    rejected_records = _load_rejected_records(planned_findings)
+    applied_by_id = _records_by_adjustment_id(
+        applied_records, APPLIED_IDS_KEY
+    )
+    rejected_by_id = _records_by_adjustment_id(
+        rejected_records, REJECTED_ADJUSTMENTS_KEY
+    )
+    contradictory_ids = sorted(set(applied_by_id) & set(rejected_by_id))
+    if contradictory_ids:
+        raise ValueError(
+            f"{FINDINGS_FILENAME}: adjustment ids are both applied and "
+            f"rejected: {', '.join(contradictory_ids)}"
+        )
+
     pending = []
     catch_up = []
-    # Rejections a spot-check settled but this findings ledger has not yet
-    # recorded — orthogonal to the applied-ids bookkeeping above, since a
-    # rejected entry never reaches `pending`/`catch_up` at all.
     newly_rejected = []
-    seen_targets = {}
-    removed_in_batch = {}
-    for idx, entry in enumerate(adjustments):
-        label = f"adjustment[{idx}]"
-        entry_state = _entry_state(entry, already_recorded)
-        if entry_state == _SETTLED:
-            # `applied is True` wins over a coexisting `rejected: true`:
-            # the applied mutation already landed and IS the ground truth
-            # for this decision, so a rejected flag added to it afterward
-            # (a post-hoc hand edit of the adjustments doc, since the
-            # step-10 briefing never sets both) is tampering with that
-            # doc, not a second decision — auditing it would assert two
-            # contradictory outcomes for one adjustment_id.
-            if entry.get("rejected") is True and entry.get("applied") is not True:
-                existing_id = entry.get("adjustment_id")
-                if not (
-                    isinstance(existing_id, str)
-                    and existing_id in already_rejected_ids
-                ):
-                    reason = entry.get("rejection_reason")
-                    if not isinstance(reason, str) or not reason.strip():
-                        raise ValueError(
-                            f"{label}: rejected entries must carry a "
-                            f"non-empty 'rejection_reason' — it is the "
-                            f"entire payload of the audit record"
-                        )
-                    newly_rejected.append(entry)
+    for index, entry in enumerate(planned_document["adjustments"]):
+        label = f"adjustment[{index}]"
+        adjustment_id = entry["adjustment_id"]
+        applied_record = applied_by_id.get(adjustment_id)
+        rejected_record = rejected_by_id.get(adjustment_id)
+        spot_check = entry[SPOT_CHECK_KEY]
+
+        if spot_check == SPOT_CHECK_REFUTED:
+            if applied_record is not None:
+                raise ValueError(
+                    f"{label}: adjudication refutes {adjustment_id!r}, but "
+                    f"the ledger records it as applied"
+                )
+            if rejected_record is None:
+                _validate_unlanded_entry(entry, by_id, label)
+                newly_rejected.append(entry)
+            else:
+                _validate_rejection_provenance(entry, rejected_record, label)
             continue
-        if entry_state == _CATCH_UP:
-            # The findings write landed; only the flag write was lost.
-            catch_up.append(entry)
-            continue
-        action = entry.get("action")
-        # The lifecycle document validator already established the action
-        # and replacement-field grammar for the whole batch. These checks
-        # stay close to mutation as a defensive assertion; target resolution
-        # against the findings ledger remains authoritative only here.
-        if action not in ACTIONS:
+
+        if rejected_record is not None:
             raise ValueError(
-                f"{label}: unknown action {action!r} "
-                f"(allowed: {', '.join(ACTIONS)})"
+                f"{label}: adjudication marks {adjustment_id!r} as "
+                f"{spot_check}, but the ledger records it as rejected"
             )
+        if entry.get("applied") is True and applied_record is None:
+            raise ValueError(
+                f"{label}: applied flag has no matching applied ledger record"
+            )
+        if applied_record is not None:
+            if applied_record[SPOT_CHECK_KEY] != spot_check:
+                raise ValueError(
+                    f"{label}: applied ledger spot_check "
+                    f"{applied_record[SPOT_CHECK_KEY]!r} does not match "
+                    f"checkpoint {spot_check!r}"
+                )
+            if entry.get("applied") is not True:
+                catch_up.append(entry)
+            continue
+
+        action = entry["action"]
         fields = entry.get("fields") or {}
-        _validate_fields(fields, label)
-        if action == "add":
-            missing = [k for k in ADD_REQUIRED_FIELDS if k not in fields]
-            if missing:
-                raise ValueError(
-                    f"{label}: add requires fields {', '.join(missing)}"
-                )
-            if entry.get("id") is not None:
-                raise ValueError(
-                    f"{label}: ids are generated, not assigned — the critic "
-                    f"must not invent ids"
-                )
-        else:
-            target_id = entry.get("id")
-            if not isinstance(target_id, str) or not target_id:
-                raise ValueError(
-                    f"{label}: no issue with id {target_id!r} in "
-                    f"{FINDINGS_FILENAME}"
-                )
-            if target_id in removed_in_batch:
-                raise ValueError(
-                    f"{label}: id {target_id!r} is removed by "
-                    f"adjustment[{removed_in_batch[target_id]}] in this batch"
-                )
-            if target_id in seen_targets:
-                raise ValueError(
-                    f"{label}: duplicate target {target_id!r} — merge "
-                    f"finding-level changes into one entry per finding"
-                )
-            if target_id not in by_id:
-                raise ValueError(
-                    f"{label}: no issue with id {target_id!r} in "
-                    f"{FINDINGS_FILENAME}"
-                )
-            seen_targets[target_id] = idx
-            if action == "remove":
-                removed_in_batch[target_id] = idx
+        _validate_unlanded_entry(entry, by_id, label)
         pending.append((entry, action, fields))
 
     rejection_records = [
         {
             "adjustment_id": entry["adjustment_id"],
-            "action": entry.get("action"),
+            "action": entry["action"],
             "target_id": entry.get("id"),
             SPOT_CHECK_KEY: SPOT_CHECK_REFUTED,
-            "rejection_reason": entry.get("rejection_reason") or "",
+            "rejection_reason": entry["rejection_reason"],
         }
         for entry in newly_rejected
     ]
@@ -1324,11 +1393,11 @@ def _apply_adjustments_locked(output_dir):
     for entry, action, fields in pending:
         provenance = {
             "action": action,
-            "rationale": entry.get("rationale") or "",
+            "rationale": entry["rationale"],
         }
         if action == "add":
             new_issue = {
-                "id": str(uuid.uuid4())[:8],
+                "id": _new_finding_id(entry["adjustment_id"], set(by_id)),
                 "category": fields.get("category", "general"),
                 "confidence": fields.get("confidence", 0.9),
                 "line": fields.get("line"),
@@ -1339,72 +1408,99 @@ def _apply_adjustments_locked(output_dir):
             issues.append(new_issue)
             by_id[new_issue["id"]] = new_issue
         elif action == "remove":
+            removed = planned_findings.get("removed_by_critic")
+            if removed is not None and not isinstance(removed, list):
+                raise ValueError(
+                    f"{FINDINGS_FILENAME}: 'removed_by_critic' must be a list"
+                )
             target = by_id.pop(entry["id"])
             issues.remove(target)
             target["critic_adjustment"] = provenance
-            findings.setdefault("removed_by_critic", []).append(target)
+            planned_findings.setdefault("removed_by_critic", []).append(target)
         else:
             target = by_id[entry["id"]]
-            provenance["prior"] = {k: target.get(k) for k in fields}
+            provenance["prior"] = {key: target.get(key) for key in fields}
             target.update(fields)
             if "line" in fields:
                 _apply_scope_pairing(target, fields["line"] is None)
             target["critic_adjustment"] = provenance
-        spot_check = entry.get(SPOT_CHECK_KEY)
-        if spot_check not in SPOT_CHECK_VALUES:
-            # Never required (see SPOT_CHECK_KEY): an orchestrator that
-            # crashed before step 10's probes still converges here, and the
-            # ledger says so rather than implying a check nobody ran.
-            spot_check = SPOT_CHECK_NOT_CHECKED
-        recorded_records.append({
+        applied_records.append({
             "adjustment_id": entry["adjustment_id"],
-            SPOT_CHECK_KEY: spot_check,
+            SPOT_CHECK_KEY: entry[SPOT_CHECK_KEY],
         })
         batch_ids.append(entry["adjustment_id"])
         applied += 1
 
     if applied:
-        derived = _recount_summary(findings, issues)
+        derived = _recount_summary(planned_findings, issues)
         recomputed = derived["verdict"]
-        if findings.get("verdict") != recomputed:
-            findings.setdefault(
-                VERDICT_BEFORE_ADJUSTMENTS_KEY, findings.get("verdict")
+        if planned_findings.get("verdict") != recomputed:
+            planned_findings.setdefault(
+                VERDICT_BEFORE_ADJUSTMENTS_KEY,
+                planned_findings.get("verdict"),
             )
-            findings["verdict"] = recomputed
-        findings[APPLIED_IDS_KEY] = recorded_records
-        # Only the ids applied in THIS call: recorded_records is cumulative
-        # across every batch the ledger ever absorbed, and a second
-        # withdrawal must name the decisions that caused it, not history.
-        _withdraw_narrative_summary(findings, batch_ids)
-        # The orchestrator's post-critic assessment takes the seat the
-        # withdrawal just emptied. The withdrawal record stays: replacement
-        # is not erasure, and the reconciler's retracted words remain
-        # readable beside the ids that cost them their standing.
+            planned_findings["verdict"] = recomputed
+        planned_findings[APPLIED_IDS_KEY] = applied_records
+        _withdraw_narrative_summary(planned_findings, batch_ids)
         revised = adjudication.get(REVISED_NARRATIVE_KEY)
         if isinstance(revised, str) and revised.strip():
-            findings[NARRATIVE_SUMMARY_KEY] = revised
+            planned_findings[NARRATIVE_SUMMARY_KEY] = revised
     if rejection_records:
-        findings[REJECTED_ADJUSTMENTS_KEY] = rejected_records + rejection_records
-    if applied or rejection_records:
-        # Through the shared findings writer, not the raw atomic write:
-        # this is an in-channel write, so it re-stamps the content digest
-        # finalize verifies. A patched ledger that kept the pre-patch
-        # stamp would read as an out-of-channel edit at finalize — the
-        # applier accusing itself.
-        write_findings(output_dir, findings)
+        planned_findings[REJECTED_ADJUSTMENTS_KEY] = (
+            rejected_records + rejection_records
+        )
+
     if applied or catch_up:
         for entry, _action, _fields in pending:
             entry["applied"] = True
         for entry in catch_up:
             entry["applied"] = True
-        write_adjustments(output_dir, doc)
-    return {
-        "status": "applied" if applied else "nothing_pending",
-        "applied": applied,
-        "rejected": len(rejection_records),
-        "adjudication_source": adjudication["source"],
-        "counts": settlement_counts(doc),
-    }
+    final_problems = validate_adjustments_document(planned_document)
+    if final_problems:
+        raise AdjustmentValidationError(final_problems)
+
+    return ApplyPlan(
+        planned_document,
+        planned_findings,
+        bool(applied or rejection_records),
+        bool(applied or catch_up),
+        {
+            "status": "applied" if applied else "nothing_pending",
+            "applied": applied,
+            "rejected": len(rejection_records),
+            "adjudication_source": adjudication["source"],
+            "counts": settlement_counts(planned_document),
+        },
+    )
+
+
+def _apply_adjustments_locked(output_dir, plan=None):
+    """Execute one prevalidated plan while the caller holds the lock.
+
+    When no plan is supplied (the explicit recovery path), this function
+    reads the committed checkpoint and builds one first. ``settle()`` builds
+    the plan before checkpointing and supplies it here, so every failure after
+    that crash boundary is an atomic file-write failure rather than a
+    deterministic validation rejection. This remains the sole
+    post-reconciliation ledger mutator.
+    """
+    if plan is None:
+        marker, document = _load_committed_snapshot(output_dir)
+        if marker["verdict"] != REVISE_VERDICT:
+            return {
+                "status": "refused",
+                "applied": 0,
+                "reason": (
+                    f"{REFUSAL_VERDICT_NOT_REVISE} ({marker['verdict']})"
+                ),
+            }
+        findings = _read_findings_for_apply(output_dir)
+        plan = _build_apply_plan(document, findings)
+    if plan.findings_changed:
+        write_findings(output_dir, plan.findings)
+    if plan.document_changed:
+        write_adjustments(output_dir, plan.document)
+    return plan.result
 
 
 def _read_marker_for_gate(output_dir):
@@ -1449,15 +1545,19 @@ def apply_adjustments(output_dir):
                     SPOT_CHECK_NOT_CHECKED: 0,
                 },
             }
-        if ADJUDICATION_KEY not in document:
+        checkpoint_missing = ADJUDICATION_KEY not in document
+        if checkpoint_missing:
             document = _build_adjudication_checkpoint(
                 document,
                 {},
                 None,
                 source=ADJUDICATION_SOURCE_DEFENSIVE,
             )
+        findings = _read_findings_for_apply(output_dir)
+        plan = _build_apply_plan(document, findings)
+        if checkpoint_missing:
             write_adjustments(output_dir, document)
-        return _apply_adjustments_locked(output_dir)
+        return _apply_adjustments_locked(output_dir, plan)
 
 
 def main():
