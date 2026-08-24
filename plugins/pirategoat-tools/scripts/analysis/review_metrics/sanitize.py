@@ -317,6 +317,9 @@ def _sanitize_agent_event(value: object, *, completed: bool) -> dict[str, Any]:
                 if (count := _nonnegative_int(severities.get(name))) is not None
             }
             result["severities"] = safe_severities
+        digest = value.get("artifact_digest")
+        if _lowercase_sha256(digest):
+            result["artifact_digest"] = digest
     else:
         budget_target = _nonnegative_int(value.get("budget_target"))
         if budget_target is not None:
@@ -366,8 +369,20 @@ def _bounded_event_string(value: object) -> bool:
     )
 
 
+def _lowercase_sha256(value: object) -> bool:
+    return (
+        type(value) is str
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
 def _strict_lifecycle_event(
-    value: object, *, completed: bool, run_id: str
+    value: object,
+    *,
+    completed: bool,
+    run_id: str,
+    raw_completion: bool = False,
 ) -> dict[str, Any] | None:
     expected_event = "agent_complete" if completed else "agent_start"
     if (
@@ -383,6 +398,8 @@ def _strict_lifecycle_event(
         return None
 
     if completed:
+        digest_present = "artifact_digest" in value
+        artifact_digest = value.get("artifact_digest")
         if (
             "duration_ms" not in value
             or (
@@ -392,6 +409,12 @@ def _strict_lifecycle_event(
             or _nonnegative_exact_int(value.get("issue_count")) is None
             or not _bounded_event_string(value.get("verdict"))
             or not isinstance(value.get("severities"), dict)
+            or (digest_present and not _lowercase_sha256(artifact_digest))
+            or (
+                raw_completion
+                and not digest_present
+                and type(value.get("resave")) is not bool
+            )
         ):
             return None
         severities: dict[str, int] = {}
@@ -404,7 +427,7 @@ def _strict_lifecycle_event(
             severities[name] = count
         if value["issue_count"] != sum(severities.values()):
             return None
-        return {
+        result = {
             "schema": value["schema"],
             "run_id": value["run_id"],
             "event": value["event"],
@@ -415,6 +438,9 @@ def _strict_lifecycle_event(
             "issue_count": value["issue_count"],
             "severities": severities,
         }
+        if digest_present:
+            result["artifact_digest"] = artifact_digest
+        return result
 
     scope = value.get("scope")
     if (

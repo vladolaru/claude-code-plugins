@@ -124,13 +124,16 @@ def _privacy_reduced_lifecycle_event(
         "agent": event["agent"],
     }
     if completed:
-        return {
+        reduced = {
             **common,
             "duration_ms": event.get("duration_ms"),
             "verdict": "unavailable",
             "issue_count": event["issue_count"],
             "severities": dict(event["severities"]),
         }
+        if "artifact_digest" in event:
+            reduced["artifact_digest"] = event["artifact_digest"]
+        return reduced
     reduced = {
         **common,
         "domain": "",
@@ -295,7 +298,10 @@ def _overlay_running_lifecycle(
                 return _invalid_running_lifecycle_overlay(manifest)
         elif event_name == "agent_complete":
             safe = _strict_lifecycle_event(
-                event, completed=True, run_id=run_id
+                event,
+                completed=True,
+                run_id=run_id,
+                raw_completion=True,
             )
             if safe is None:
                 return _invalid_running_lifecycle_overlay(manifest)

@@ -1714,6 +1714,234 @@ def _read_json_object(path, label):
     return value
 
 
+_REQUIRED_REVIEW_FIELDS = frozenset({
+    "pr_id",
+    "reviewer",
+    "timestamp",
+    "plugin_version",
+    "schema",
+    "verdict",
+    "summary",
+    "issues",
+    "unreviewed",
+    "deferred_reviewed",
+    "narrative_summary",
+    "meta",
+})
+_REQUIRED_ISSUE_FIELDS = frozenset({
+    "id",
+    "category",
+    "severity",
+    "title",
+    "description",
+    "file",
+    "recommendation",
+    "confidence",
+})
+_REQUIRED_META_FIELDS = frozenset({
+    "files_reviewed",
+    "unreviewed_autofilled",
+    "review_duration_ms",
+    "confidence_score",
+})
+
+
+def _is_confidence(value):
+    return type(value) in (int, float) and 0.0 <= value <= 1.0
+
+
+def _is_string_list(value):
+    return isinstance(value, list) and all(
+        isinstance(item, str) for item in value
+    )
+
+
+def _validate_issue_shape(issue, index):
+    """Validate fields emitted by ``ReviewOutputBuilder.add_issue``."""
+    if not isinstance(issue, dict):
+        raise ValueError(f"review candidate issue {index} must be an object")
+    missing = sorted(_REQUIRED_ISSUE_FIELDS - set(issue))
+    if missing:
+        raise ValueError(
+            f"review candidate issue {index} is missing required fields: "
+            + ", ".join(missing)
+        )
+    for field in (
+        "id",
+        "category",
+        "title",
+        "description",
+        "file",
+        "recommendation",
+    ):
+        if not isinstance(issue[field], str):
+            raise ValueError(
+                f"review candidate issue {index}.{field} must be a string"
+            )
+    if issue["severity"] not in _VALID_SEVERITIES:
+        raise ValueError(
+            f"review candidate issue {index}.severity is invalid"
+        )
+    if not _is_confidence(issue["confidence"]):
+        raise ValueError(
+            f"review candidate issue {index}.confidence must be 0.0-1.0"
+        )
+    if "line" in issue and (
+        issue["line"] is not None
+        and (type(issue["line"]) is not int or issue["line"] <= 0)
+    ):
+        raise ValueError(
+            f"review candidate issue {index}.line must be positive or null"
+        )
+    if "scope" in issue and issue["scope"] != "file":
+        raise ValueError(
+            f"review candidate issue {index}.scope must be 'file'"
+        )
+    if "severity_floor" in issue and issue["severity_floor"] not in _VALID_SEVERITIES:
+        raise ValueError(
+            f"review candidate issue {index}.severity_floor is invalid"
+        )
+    if "channel" in issue and issue["channel"] not in _VALID_CHANNELS:
+        raise ValueError(
+            f"review candidate issue {index}.channel is invalid"
+        )
+    if (
+        "behavior_evidence" in issue
+        and issue["behavior_evidence"] not in ("cited", "inferred")
+    ):
+        raise ValueError(
+            f"review candidate issue {index}.behavior_evidence is invalid"
+        )
+    for field in ("code_snippet", "source_cited"):
+        if field in issue and not isinstance(issue[field], str):
+            raise ValueError(
+                f"review candidate issue {index}.{field} must be a string"
+            )
+    if "references" in issue and not _is_string_list(issue["references"]):
+        raise ValueError(
+            f"review candidate issue {index}.references must be strings"
+        )
+
+
+def _validate_optional_review_fields(candidate):
+    observations = candidate.get("observations")
+    if observations is not None and (
+        not isinstance(observations, list)
+        or any(
+            not isinstance(item, dict)
+            or any(
+                not isinstance(item.get(field), str)
+                for field in ("file", "note", "category")
+            )
+            for item in observations
+        )
+    ):
+        raise ValueError("review candidate observations are malformed")
+
+    recommendations = candidate.get("recommendations")
+    if recommendations is not None and (
+        not isinstance(recommendations, dict)
+        or set(recommendations) != {"immediate", "important", "suggestions"}
+        or any(
+            not _is_string_list(recommendations.get(priority))
+            for priority in ("immediate", "important", "suggestions")
+        )
+    ):
+        raise ValueError("review candidate recommendations are malformed")
+
+    for field in ("positive_observations",):
+        value = candidate.get(field)
+        if value is not None and not _is_string_list(value):
+            raise ValueError(f"review candidate {field} must be strings or null")
+
+    clearances = candidate.get("clearances")
+    if clearances is not None:
+        if not isinstance(clearances, list):
+            raise ValueError("review candidate clearances must be a list or null")
+        for index, clearance in enumerate(clearances):
+            if not isinstance(clearance, dict):
+                raise ValueError(
+                    f"review candidate clearance {index} must be an object"
+                )
+            for field in ("claim", "method"):
+                value = clearance.get(field)
+                if not isinstance(value, str) or not value.strip():
+                    raise ValueError(
+                        f"review candidate clearance {index}.{field} "
+                        "must be a non-empty string"
+                    )
+            evidence = clearance.get("evidence")
+            if evidence is not None and not isinstance(evidence, str):
+                raise ValueError(
+                    f"review candidate clearance {index}.evidence "
+                    "must be a string or null"
+                )
+
+
+def _validate_candidate_shape(candidate, reviewer):
+    """Validate the complete builder-owned review shape before derivation."""
+    missing = sorted(_REQUIRED_REVIEW_FIELDS - set(candidate))
+    if missing:
+        raise ValueError(
+            "review candidate is missing required fields: " + ", ".join(missing)
+        )
+    if type(candidate["schema"]) is not int or candidate["schema"] != REVIEW_OUTPUT_SCHEMA:
+        raise ValueError("review candidate schema does not match the live contract")
+    if not isinstance(candidate["reviewer"], str) or candidate["reviewer"] != reviewer:
+        raise ValueError("review candidate reviewer does not match finalization request")
+    if not isinstance(candidate["pr_id"], str):
+        raise ValueError("review candidate pr_id must be a string")
+    if not isinstance(candidate["timestamp"], str):
+        raise ValueError("review candidate timestamp must be an ISO string")
+    try:
+        datetime.fromisoformat(candidate["timestamp"])
+    except ValueError as exc:
+        raise ValueError("review candidate timestamp must be an ISO string") from exc
+    if candidate["plugin_version"] is not None and not isinstance(
+        candidate["plugin_version"], str
+    ):
+        raise ValueError("review candidate plugin_version must be a string or null")
+    if candidate["narrative_summary"] is not None and not isinstance(
+        candidate["narrative_summary"], str
+    ):
+        raise ValueError("review candidate narrative_summary must be a string or null")
+    if candidate["unreviewed"] is not None and not _is_string_list(
+        candidate["unreviewed"]
+    ):
+        raise ValueError("review candidate unreviewed must be strings or null")
+
+    issues = candidate["issues"]
+    if not isinstance(issues, list):
+        raise ValueError("review candidate issues must be a list")
+    for index, issue in enumerate(issues):
+        _validate_issue_shape(issue, index)
+
+    meta = candidate["meta"]
+    if not isinstance(meta, dict):
+        raise ValueError("review candidate meta must be an object")
+    missing_meta = sorted(_REQUIRED_META_FIELDS - set(meta))
+    if missing_meta:
+        raise ValueError(
+            "review candidate meta is missing required fields: "
+            + ", ".join(missing_meta)
+        )
+    duration = meta["review_duration_ms"]
+    if duration is not None and (type(duration) is not int or duration < 0):
+        raise ValueError(
+            "review candidate meta.review_duration_ms must be non-negative or null"
+        )
+    if not _is_confidence(meta["confidence_score"]):
+        raise ValueError(
+            "review candidate meta.confidence_score must be 0.0-1.0"
+        )
+    tools = meta.get("tool_results_used")
+    if tools is not None and not _is_string_list(tools):
+        raise ValueError(
+            "review candidate meta.tool_results_used must be strings or null"
+        )
+    _validate_optional_review_fields(candidate)
+
+
 def _validate_candidate(output_dir, reviewer, paths, candidate_bytes):
     """Validate one exact candidate snapshot and return telemetry facts."""
     try:
@@ -1722,13 +1950,10 @@ def _validate_candidate(output_dir, reviewer, paths, candidate_bytes):
         raise ValueError("malformed review candidate JSON") from exc
     if not isinstance(candidate, dict):
         raise ValueError("malformed review candidate: expected an object")
-    if candidate.get("schema") != REVIEW_OUTPUT_SCHEMA:
-        raise ValueError("review candidate schema does not match the live contract")
-    if candidate.get("reviewer") != reviewer:
-        raise ValueError("review candidate reviewer does not match finalization request")
+    _validate_candidate_shape(candidate, reviewer)
 
-    issues = candidate.get("issues")
-    summary = candidate.get("summary")
+    issues = candidate["issues"]
+    summary = candidate["summary"]
     if not isinstance(issues, list) or not isinstance(summary, dict):
         raise ValueError("review candidate issues/summary are malformed")
     try:
@@ -1737,9 +1962,18 @@ def _validate_candidate(output_dir, reviewer, paths, candidate_bytes):
         raise ValueError(f"review candidate issues are malformed: {exc}") from exc
     expected_verdict = derived["verdict"]
     if candidate.get("verdict") == "not_applicable":
-        if issues or not isinstance(candidate.get("skip_reason"), str):
+        skip_reason = candidate.get("skip_reason")
+        if (
+            issues
+            or not isinstance(skip_reason, str)
+            or not skip_reason.strip()
+        ):
             raise ValueError("review candidate not_applicable verdict is malformed")
         expected_verdict = "not_applicable"
+    elif "skip_reason" in candidate:
+        raise ValueError(
+            "review candidate skip_reason requires a not_applicable verdict"
+        )
     if candidate.get("verdict") != expected_verdict:
         raise ValueError("review candidate verdict does not match its issues")
     expected_summary = {
@@ -1747,8 +1981,22 @@ def _validate_candidate(output_dir, reviewer, paths, candidate_bytes):
         "by_severity": derived["counts"],
         **derived["advisory"],
     }
+    severity_counts = summary.get("by_severity")
     if (
         type(summary.get("total_issues")) is not int
+        or not isinstance(severity_counts, dict)
+        or set(severity_counts) != set(_VALID_SEVERITIES)
+        or any(
+            type(severity_counts.get(severity)) is not int
+            or severity_counts[severity] < 0
+            for severity in _VALID_SEVERITIES
+        )
+        or type(summary.get("advisory_suppressed")) is not int
+        or summary["advisory_suppressed"] < 0
+        or (
+            "verdict_without_advisory" in summary
+            and summary["verdict_without_advisory"] not in VERDICT_RANK
+        )
         or summary != expected_summary
     ):
         raise ValueError("review candidate summary does not match its issues")
@@ -1772,6 +2020,7 @@ def _validate_candidate(output_dir, reviewer, paths, candidate_bytes):
         candidate.get("deferred_reviewed") != list(coverage.deferred_reviewed)
         or candidate.get("unreviewed") != expected_unreviewed
         or not isinstance(meta, dict)
+        or type(meta.get("files_reviewed")) is not int
         or meta.get("files_reviewed") != coverage.files_reviewed
         or (
             autofilled is not None

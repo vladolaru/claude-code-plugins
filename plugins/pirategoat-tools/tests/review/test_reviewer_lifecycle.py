@@ -54,6 +54,15 @@ def _start_telemetry(tmp_path, output_dir):
     return telemetry
 
 
+def _edit_candidate(output_dir, edit):
+    candidate = Path(output_dir, "code-review.candidate.json")
+    payload = json.loads(candidate.read_text())
+    edit(payload)
+    edited = json.dumps(payload).encode()
+    candidate.write_bytes(edited)
+    return hashlib.sha256(edited).hexdigest()
+
+
 class TestCandidatePublication:
     def test_save_is_candidate_until_explicit_finalize(self, tmp_path):
         _write_sidecar(tmp_path)
@@ -141,6 +150,187 @@ class TestCandidatePublication:
             finalize_candidate(
                 str(tmp_path), "code", hashlib.sha256(malformed).hexdigest()
             )
+
+        assert not (tmp_path / "code-review.json").exists()
+
+    def test_boolean_review_schema_is_rejected_before_publication(self, tmp_path):
+        _write_sidecar(tmp_path)
+        _builder().save(str(tmp_path))
+        digest = _edit_candidate(
+            tmp_path, lambda payload: payload.__setitem__("schema", True)
+        )
+
+        with pytest.raises(ValueError, match="schema"):
+            finalize_candidate(str(tmp_path), "code", digest)
+
+        assert not (tmp_path / "code-review.json").exists()
+
+    @pytest.mark.parametrize(
+        "required_field",
+        [
+            "pr_id",
+            "reviewer",
+            "timestamp",
+            "plugin_version",
+            "schema",
+            "verdict",
+            "summary",
+            "issues",
+            "unreviewed",
+            "deferred_reviewed",
+            "narrative_summary",
+            "meta",
+        ],
+    )
+    def test_missing_required_review_field_is_rejected_before_publication(
+        self, tmp_path, required_field
+    ):
+        _write_sidecar(tmp_path)
+        _builder().save(str(tmp_path))
+        digest = _edit_candidate(
+            tmp_path, lambda payload: payload.pop(required_field)
+        )
+
+        with pytest.raises(ValueError, match="review candidate"):
+            finalize_candidate(str(tmp_path), "code", digest)
+
+        assert not (tmp_path / "code-review.json").exists()
+
+    @pytest.mark.parametrize(
+        "required_field",
+        [
+            "id",
+            "category",
+            "severity",
+            "title",
+            "description",
+            "file",
+            "recommendation",
+            "confidence",
+        ],
+    )
+    def test_missing_required_issue_field_is_rejected_before_publication(
+        self, tmp_path, required_field
+    ):
+        _write_sidecar(tmp_path)
+        _builder(issue_count=1).save(str(tmp_path))
+        digest = _edit_candidate(
+            tmp_path,
+            lambda payload: payload["issues"][0].pop(required_field),
+        )
+
+        with pytest.raises(ValueError, match="issue"):
+            finalize_candidate(str(tmp_path), "code", digest)
+
+        assert not (tmp_path / "code-review.json").exists()
+
+    @pytest.mark.parametrize(
+        ("field", "invalid_value"),
+        [
+            ("pr_id", 42),
+            ("timestamp", []),
+            ("plugin_version", 114),
+            ("narrative_summary", {}),
+        ],
+    )
+    def test_wrong_review_field_type_is_rejected_before_publication(
+        self, tmp_path, field, invalid_value
+    ):
+        _write_sidecar(tmp_path)
+        _builder().save(str(tmp_path))
+        digest = _edit_candidate(
+            tmp_path,
+            lambda payload: payload.__setitem__(field, invalid_value),
+        )
+
+        with pytest.raises(ValueError, match="review candidate"):
+            finalize_candidate(str(tmp_path), "code", digest)
+
+        assert not (tmp_path / "code-review.json").exists()
+
+    @pytest.mark.parametrize(
+        ("field", "invalid_value"),
+        [
+            ("id", 1),
+            ("category", []),
+            ("title", {}),
+            ("description", None),
+            ("file", 1),
+            ("recommendation", []),
+            ("confidence", True),
+            ("line", True),
+        ],
+    )
+    def test_wrong_issue_field_type_is_rejected_before_publication(
+        self, tmp_path, field, invalid_value
+    ):
+        _write_sidecar(tmp_path)
+        _builder(issue_count=1).save(str(tmp_path))
+        digest = _edit_candidate(
+            tmp_path,
+            lambda payload: payload["issues"][0].__setitem__(
+                field, invalid_value
+            ),
+        )
+
+        with pytest.raises(ValueError, match="issue"):
+            finalize_candidate(str(tmp_path), "code", digest)
+
+        assert not (tmp_path / "code-review.json").exists()
+
+    def test_boolean_summary_count_is_rejected_before_publication(self, tmp_path):
+        _write_sidecar(tmp_path)
+        _builder(issue_count=1).save(str(tmp_path))
+        digest = _edit_candidate(
+            tmp_path,
+            lambda payload: payload["summary"]["by_severity"].__setitem__(
+                "low", True
+            ),
+        )
+
+        with pytest.raises(ValueError, match="summary"):
+            finalize_candidate(str(tmp_path), "code", digest)
+
+        assert not (tmp_path / "code-review.json").exists()
+
+    @pytest.mark.parametrize(
+        "required_field",
+        ["unreviewed_autofilled", "review_duration_ms", "confidence_score"],
+    )
+    def test_missing_required_meta_field_is_rejected_before_publication(
+        self, tmp_path, required_field
+    ):
+        _write_sidecar(tmp_path)
+        _builder().save(str(tmp_path))
+        digest = _edit_candidate(
+            tmp_path,
+            lambda payload: payload["meta"].pop(required_field),
+        )
+
+        with pytest.raises(ValueError, match="meta"):
+            finalize_candidate(str(tmp_path), "code", digest)
+
+        assert not (tmp_path / "code-review.json").exists()
+
+    @pytest.mark.parametrize("skip_reason", [None, "", "   "])
+    def test_not_applicable_requires_nonempty_skip_reason(
+        self, tmp_path, skip_reason
+    ):
+        _write_sidecar(tmp_path)
+        builder = _builder()
+        builder.mark_not_applicable("No relevant changes")
+        builder.save(str(tmp_path))
+
+        def _replace_reason(payload):
+            if skip_reason is None:
+                payload.pop("skip_reason")
+            else:
+                payload["skip_reason"] = skip_reason
+
+        digest = _edit_candidate(tmp_path, _replace_reason)
+
+        with pytest.raises(ValueError, match="not_applicable"):
+            finalize_candidate(str(tmp_path), "code", digest)
 
         assert not (tmp_path / "code-review.json").exists()
 

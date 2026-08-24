@@ -362,6 +362,7 @@ def _agent_complete(
         "verdict": "approve",
         "issue_count": 0,
         "severities": {},
+        "artifact_digest": "a" * 64,
     }
 
 
@@ -794,6 +795,77 @@ class TestLoadRuns:
         assert run["availability"]["lifecycle"] is False
         assert "running_lifecycle_overlay_invalid" in run["warnings"]
 
+    def test_running_overlay_preserves_finalized_artifact_digest(self, tmp_path):
+        manifest = _running_manifest("running-run")
+        _write_manifest(tmp_path / "review.manifest.json", manifest)
+        completion = _agent_complete(
+            "code-reviewer", run_id="running-run"
+        )
+        completion["artifact_digest"] = "b" * 64
+        _write_jsonl(
+            tmp_path / "review.jsonl",
+            [
+                _pipeline_start("running-run"),
+                _agent_start("code-reviewer", run_id="running-run"),
+                completion,
+            ],
+        )
+
+        [run] = load_runs(tmp_path)
+
+        assert run["availability"]["lifecycle"] is True
+        assert run["agents"]["completed"][0]["artifact_digest"] == "b" * 64
+
+    @pytest.mark.parametrize(
+        "artifact_digest",
+        ["A" * 64, "b" * 63, True],
+        ids=["uppercase", "short", "boolean"],
+    )
+    def test_malformed_finalized_digest_invalidates_running_lifecycle(
+        self, tmp_path, artifact_digest
+    ):
+        manifest = _running_manifest("running-run")
+        _write_manifest(tmp_path / "review.manifest.json", manifest)
+        completion = _agent_complete(
+            "code-reviewer", run_id="running-run"
+        )
+        completion["artifact_digest"] = artifact_digest
+        _write_jsonl(
+            tmp_path / "review.jsonl",
+            [
+                _pipeline_start("running-run"),
+                _agent_start("code-reviewer", run_id="running-run"),
+                completion,
+            ],
+        )
+
+        [run] = load_runs(tmp_path)
+
+        assert run["availability"]["lifecycle"] is False
+        assert "running_lifecycle_overlay_invalid" in run["warnings"]
+
+    def test_running_overlay_accepts_historical_digestless_resave(self, tmp_path):
+        manifest = _running_manifest("running-run")
+        _write_manifest(tmp_path / "review.manifest.json", manifest)
+        historical = _agent_complete(
+            "code-reviewer", run_id="running-run"
+        )
+        historical.pop("artifact_digest")
+        historical["resave"] = False
+        _write_jsonl(
+            tmp_path / "review.jsonl",
+            [
+                _pipeline_start("running-run"),
+                _agent_start("code-reviewer", run_id="running-run"),
+                historical,
+            ],
+        )
+
+        [run] = load_runs(tmp_path)
+
+        assert run["availability"]["lifecycle"] is True
+        assert "artifact_digest" not in run["agents"]["completed"][0]
+
     def test_running_sidecar_reads_historical_resave_completions(self, tmp_path):
         """Pre-finalization logs used repeated completion events for saves.
 
@@ -807,6 +879,7 @@ class TestLoadRuns:
             run_id="revision-run",
             timestamp="2026-07-19T10:00:20+00:00",
         )
+        first_completion.pop("artifact_digest")
         first_completion.update(
             verdict="comment",
             issue_count=1,
@@ -817,6 +890,7 @@ class TestLoadRuns:
             run_id="revision-run",
             timestamp="2026-07-19T10:00:30+00:00",
         )
+        latest_completion.pop("artifact_digest")
         latest_completion["resave"] = True
         _write_jsonl(
             tmp_path / "review.jsonl",
