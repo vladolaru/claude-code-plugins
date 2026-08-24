@@ -1,5 +1,6 @@
 """Tests for review/orchestration.py through the pipeline.py compatibility facade."""
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -16,9 +17,17 @@ PLUGIN_ROOT = TESTS_DIR.parent
 _SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 
 sys.path.insert(0, str(_SCRIPTS_DIR))
-from review import agents_status, critic_adjustments, dependency_refresh
+from review import (
+    agents_status,
+    critic_adjustments,
+    dependency_refresh,
+    reviewer_lifecycle,
+)
+from review.agent.coverage import derive_deferred_coverage
 from review.atomic_io import atomic_write_json
 from review.critic_adjustments import write_findings
+from review.telemetry import ReviewTelemetry
+from review.verdict_rules import verdict_for_counts
 
 sys.path.insert(0, str(TESTS_DIR))
 from helpers.pipeline_process import (
@@ -141,6 +150,532 @@ def _review_json(reviewer):
             "tool_results_used": None,
         },
     }
+
+
+class TestReviewerCandidateFinalizationLifecycle:
+    def test_last_candidate_is_the_only_synthesis_input(
+        self, tmp_path
+    ):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_git_repo(repo)
+        _add_commit(repo)
+        output_dir = tmp_path / "out"
+        output_dir.mkdir()
+
+        (output_dir / "dispatch-plan.json").write_text(json.dumps({
+            "agents": [{
+                "name": "code-reviewer",
+                "domain": "code",
+                "status": "DISPATCH",
+                "reason": "always",
+            }],
+            "git_range": "HEAD~1..HEAD",
+        }))
+        (output_dir / "code-reviewer.started").write_text(
+            datetime.now(timezone.utc).isoformat()
+        )
+        sidecar = {
+            "schema": 2,
+            "agent_name": "code-reviewer",
+            "deferred_files": [
+                "deferred/read.py",
+                "deferred/unread.py",
+            ],
+            "diffed_count": 1,
+            "in_scope_count": 3,
+        }
+        (output_dir / "code-deferred-files.json").write_text(
+            json.dumps(sidecar)
+        )
+        (output_dir / "code-reviewer-scope-summary.json").write_text(
+            json.dumps({
+                "schema": 1,
+                "domain": "code",
+                "status": "OK",
+                "files_with_diffs": ["second.txt"],
+                "budget_exceeded_files": [
+                    "deferred/read.py",
+                    "deferred/unread.py",
+                ],
+                "list_only_files": [],
+                "in_scope_files": [
+                    "second.txt",
+                    "deferred/read.py",
+                    "deferred/unread.py",
+                ],
+            })
+        )
+
+        telemetry = ReviewTelemetry(
+            str(output_dir), log_dir=str(tmp_path / "telemetry")
+        )
+        telemetry.start(
+            mode="full",
+            repo_path=str(repo),
+            identifier="candidate-lifecycle",
+            git_range="HEAD~1..HEAD",
+        )
+        telemetry.log_agent_start(
+            "code-reviewer", domain="code", scope_files=3
+        )
+
+        builder = _output_mod.ReviewOutputBuilder(
+            pr_id="42", reviewer="code"
+        )
+        first = builder.save(str(output_dir))
+        first_bytes = Path(first["candidate"]).read_bytes()
+        assert agents_status.check_status(str(output_dir))["all_done"] is False
+
+        builder.add_deferred_reviewed("deferred/read.py")
+        last = builder.save(str(output_dir))
+        last_bytes = Path(last["candidate"]).read_bytes()
+        assert last["candidate_digest"] != first["candidate_digest"]
+        assert last_bytes != first_bytes
+        assert agents_status.check_status(str(output_dir))["all_done"] is False
+
+        finalized = _output_mod.finalize_candidate(
+            str(output_dir), "code", last["candidate_digest"]
+        )
+        assert agents_status.check_status(str(output_dir))["all_done"] is True
+        canonical_path = output_dir / "code-review.json"
+        canonical_bytes = canonical_path.read_bytes()
+        assert canonical_bytes == last_bytes
+        assert hashlib.sha256(canonical_bytes).hexdigest() == (
+            finalized["artifact_digest"]
+        )
+
+        intake = reviewer_lifecycle.close_review_intake(
+            str(output_dir), ["code-reviewer"]
+        )
+        assert intake["discarded_candidates"] == []
+        written = _output_mod.materialize_markdown(str(output_dir))
+        assert written == [str(output_dir / "code-review.md")]
+
+        reconciliation = subprocess.run(
+            [
+                sys.executable,
+                str(_SCRIPTS_DIR / "review" / "reconciliation_context.py"),
+                "--output-dir", str(output_dir),
+                "--git-range", "HEAD~1..HEAD",
+                "--changed-files",
+                "second.txt,deferred/read.py,deferred/unread.py",
+                "--pr-id", "42",
+                "--dispatched-agents", "code-reviewer",
+            ],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+        )
+        assert reconciliation.returncode == 0, reconciliation.stderr
+
+        telemetry.finalize(step=11, phase="OUTPUT", title="Finalize")
+        manifest = json.loads(Path(telemetry.manifest_path).read_text())
+        canonical = json.loads(canonical_bytes)
+        context = json.loads(
+            (output_dir / "reconciliation-context.json").read_text()
+        )
+        coverage = derive_deferred_coverage(
+            sidecar, ["deferred/read.py"]
+        )
+        events = [
+            json.loads(line)
+            for line in Path(telemetry.log_path).read_text().splitlines()
+        ]
+        saves = [
+            index for index, event in enumerate(events)
+            if event["event"] == "agent_save"
+        ]
+        completions = [
+            index for index, event in enumerate(events)
+            if event["event"] == "agent_complete"
+        ]
+
+        assert len(saves) == 2
+        assert len(completions) == 1
+        assert completions[0] > saves[-1]
+        assert canonical["deferred_reviewed"] == list(
+            coverage.deferred_reviewed
+        )
+        assert canonical["unreviewed"] == list(coverage.unreviewed)
+        assert canonical["meta"]["files_reviewed"] == coverage.files_reviewed
+        assert context["inline_coverage"]["files_deferred_reviewed"] == {
+            "deferred/read.py": ["code-reviewer"],
+        }
+        assert context["inline_coverage"]["files_never_inline"] == {
+            "deferred/unread.py": ["code-reviewer"],
+        }
+        assert (output_dir / "code-review.md").read_text() == (
+            _render_markdown(canonical)
+        )
+        assert manifest["status"] == "complete"
+        assert manifest["agents"]["completed"][0]["artifact_digest"] == (
+            last["candidate_digest"]
+        )
+        assert list(output_dir.glob("*-review.candidate.json")) == []
+        assert list(output_dir.glob("*.tmp")) == []
+        serialized = json.dumps({
+            "canonical": canonical,
+            "context": context,
+            "manifest": manifest,
+        })
+        assert "unreviewed_autofilled" not in serialized
+        assert "files_declared_unreviewed" not in serialized
+        assert "files_autofilled_unreviewed" not in serialized
+
+
+class TestCriticAdjudicationLifecycle:
+    def test_committed_proposal_is_settled_and_published_once(
+        self, tmp_path
+    ):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_git_repo(repo)
+        _add_commit(repo)
+        output_dir = tmp_path / "out"
+        started = run_pipeline(
+            "--step", "1", "--mode", "full", "--pr-number", "42",
+            "--interactive", "false", "--output-dir", str(output_dir),
+            cwd=repo, env=hermetic_env(),
+        )
+        assert started.returncode == 0, started.stderr
+
+        ledger = _review_json("reconciliator")
+        ledger["issues"] = [
+            {
+                "id": issue_id,
+                "category": "general",
+                "severity": "low",
+                "title": f"Finding {issue_id}",
+                "file": "second.txt",
+                "line": 1,
+                "description": "description",
+                "recommendation": "recommendation",
+                "confidence": 0.9,
+            }
+            for issue_id in ("aaaa1111", "bbbb2222", "cccc3333")
+        ]
+        ledger["summary"] = {
+            "total_issues": 3,
+            "by_severity": {
+                "critical": 0,
+                "high": 0,
+                "medium": 0,
+                "low": 3,
+                "info": 0,
+            },
+        }
+        ledger["verdict"] = verdict_for_counts(
+            ledger["summary"]["by_severity"]
+        )
+        write_findings(str(output_dir), ledger)
+
+        critic_findings = tmp_path / "critic-findings.md"
+        critic_findings.write_text("# Decision critic\n\nThree proposals.\n")
+        proposal_request = tmp_path / "critic-proposal.json"
+        proposal_request.write_text(json.dumps({
+            "schema": 1,
+            "adjustments": [
+                {
+                    "action": "promote",
+                    "id": "aaaa1111",
+                    "fields": {"severity": "high"},
+                    "rationale": "The impact is release-blocking.",
+                },
+                {
+                    "action": "demote",
+                    "id": "bbbb2222",
+                    "fields": {"severity": "info"},
+                    "rationale": "The impact is informational.",
+                },
+                {
+                    "action": "promote",
+                    "id": "cccc3333",
+                    "fields": {"severity": "medium"},
+                    "rationale": "The impact warrants follow-up.",
+                },
+            ],
+        }))
+        saved = subprocess.run(
+            [
+                sys.executable,
+                str(_SCRIPTS_DIR / "review" / "critic.py"),
+                "--save",
+                "--output-dir", str(output_dir),
+                "--verdict", "REVISE",
+                "--findings", str(critic_findings),
+                "--adjustments", str(proposal_request),
+            ],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+        )
+        assert saved.returncode == 0, saved.stdout + saved.stderr
+
+        proposal = json.loads(
+            (output_dir / "decision-critic-adjustments.json").read_text()
+        )
+        marker = json.loads(
+            (output_dir / "decision-critic-verdict.json").read_text()
+        )
+        proposal_ids = [
+            entry["adjustment_id"] for entry in proposal["adjustments"]
+        ]
+        assert len(set(proposal_ids)) == 3
+        assert marker == {
+            "schema": 1,
+            "verdict": "REVISE",
+            "proposal_digest": critic_adjustments.proposal_digest(proposal),
+        }
+
+        settlement = critic_adjustments.settle(str(output_dir), {
+            "schema": 1,
+            "verified": [proposal_ids[0]],
+            "refuted": [{
+                "adjustment_id": proposal_ids[1],
+                "rejection_reason": "The source probe refuted the premise.",
+            }],
+            "revised_narrative": (
+                "One promotion was verified, one demotion was refuted, "
+                "and one promotion was not checked."
+            ),
+        })
+        settled_proposal_path = (
+            output_dir / "decision-critic-adjustments.json"
+        )
+        settled_proposal = json.loads(settled_proposal_path.read_text())
+        checkpoint = settled_proposal["adjudication"]
+        assert settlement["counts"] == {
+            "verified": 1,
+            "refuted": 1,
+            "not_checked": 1,
+        }
+        assert checkpoint["source"] == "orchestrator"
+        assert checkpoint["proposal_digest"] == marker["proposal_digest"]
+        assert critic_adjustments.proposal_digest(settled_proposal) == (
+            marker["proposal_digest"]
+        )
+        assert [
+            entry["spot_check"]
+            for entry in settled_proposal["adjustments"]
+        ] == ["verified", "refuted", "not_checked"]
+
+        settled_ledger_path = output_dir / "review-findings.json"
+        settled_ledger = json.loads(settled_ledger_path.read_text())
+        applied = settled_ledger[
+            critic_adjustments.APPLIED_IDS_KEY
+        ]
+        rejected = settled_ledger[
+            critic_adjustments.REJECTED_ADJUSTMENTS_KEY
+        ]
+        accounted_ids = [
+            entry["adjustment_id"] for entry in applied + rejected
+        ]
+        assert sorted(accounted_ids) == sorted(proposal_ids)
+        assert len(accounted_ids) == len(set(accounted_ids))
+        assert settled_ledger["verdict_before_adjustments"] == (
+            ledger["verdict"]
+        )
+        assert settled_ledger["verdict"] == verdict_for_counts(
+            settled_ledger["summary"]["by_severity"]
+        )
+        assert settled_ledger["summary"]["by_severity"] == {
+            "critical": 0,
+            "high": 1,
+            "medium": 1,
+            "low": 1,
+            "info": 0,
+        }
+
+        proposal_bytes = settled_proposal_path.read_bytes()
+        ledger_bytes = settled_ledger_path.read_bytes()
+        prepared = run_pipeline(
+            "--step", "11", "--mode", "full",
+            "--output-dir", str(output_dir), cwd=repo, env=hermetic_env(),
+        )
+        assert prepared.returncode == 0, prepared.stderr
+        assert settled_proposal_path.read_bytes() == proposal_bytes
+        assert settled_ledger_path.read_bytes() == ledger_bytes
+        state = json.loads((output_dir / "pipeline-state.json").read_text())
+        assert "critic_adjudication_missing" not in state.get(
+            "degradation", {}
+        )
+        assert not any(
+            "without orchestrator adjudication" in note
+            for note in state.get("degradation_notes", [])
+        )
+        record = (output_dir / "review-record.md").read_text()
+        assert "request_changes" in record
+        assert all(adjustment_id in record for adjustment_id in proposal_ids)
+
+        report = output_dir / "review-report.md"
+        report.write_text(
+            "# Review\n\nREQUEST_CHANGES: the settled ledger has one high "
+            "and one medium finding.\n"
+        )
+        published = run_pipeline(
+            "--step", "11", "--mode", "full",
+            "--output-dir", str(output_dir), cwd=repo, env=hermetic_env(),
+        )
+        assert published.returncode == 0, published.stderr
+        assert settled_proposal_path.read_bytes() == proposal_bytes
+        assert settled_ledger_path.read_bytes() == ledger_bytes
+        result = json.loads((output_dir / "pipeline-result.json").read_text())
+        assert result["verdict"] == "REQUEST_CHANGES"
+        assert result["report_path"] == str(report)
+        telemetry_log = Path(
+            (output_dir / ".telemetry-log-path").read_text().strip()
+        )
+        manifest = json.loads(
+            telemetry_log.with_suffix(".manifest.json").read_text()
+        )
+        assert manifest["status"] == "complete"
+        assert list(output_dir.glob("*.tmp")) == []
+        assert list(output_dir.glob("*candidate*")) == []
+        assert not any(
+            "adjudication" in path.name and path != settled_proposal_path
+            for path in output_dir.iterdir()
+        )
+
+
+class TestDependencyRefreshSaveLifecycle:
+    def test_adaptive_refresh_report_is_saved_and_consumed_once(
+        self, orchestration_mod, tmp_path
+    ):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_git_repo(repo)
+        _add_commit(repo)
+        output_dir = tmp_path / "out"
+        environment = hermetic_env()
+        started = run_pipeline(
+            "--step", "1", "--mode", "full",
+            "--output-dir", str(output_dir),
+            "--git-range", "HEAD~1..HEAD", "--refresh-deps",
+            cwd=repo, env=environment,
+        )
+        assert started.returncode == 0, started.stderr
+        briefed = run_pipeline(
+            "--step", "3", "--mode", "full",
+            "--output-dir", str(output_dir),
+            cwd=repo, env=environment,
+        )
+        assert briefed.returncode == 0, briefed.stderr
+        assert "dependency_refresh.py" in briefed.stdout
+        assert " save " in briefed.stdout
+        assert "SAVED dependency-refresh.json" in briefed.stdout
+        for manager_command in (
+            "npm install",
+            "pnpm install",
+            "yarn install",
+            "composer install",
+        ):
+            assert manager_command not in briefed.stdout
+        assert "write dependency-refresh.json" not in briefed.stdout.lower()
+
+        request = tmp_path / "dependency-refresh-request.json"
+        request.write_text(json.dumps({
+            "schema": 1,
+            "status": "completed",
+            "commands": [{
+                "directory": ".",
+                "command": "custom-refresh --lockfile-preserving",
+                "exit_status": "ok",
+            }],
+        }))
+        saved = subprocess.run(
+            [
+                sys.executable,
+                str(_SCRIPTS_DIR / "review" / "dependency_refresh.py"),
+                "save",
+                "--output-dir", str(output_dir),
+                "--report", str(request),
+            ],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        assert saved.returncode == 0, saved.stderr
+        assert saved.stdout.strip() == "SAVED dependency-refresh.json"
+        canonical_path = output_dir / "dependency-refresh.json"
+        canonical = json.loads(canonical_path.read_text())
+        assert canonical == {
+            "schema": 1,
+            "status": "completed",
+            "commands": [{
+                "directory": ".",
+                "command": "custom-refresh --lockfile-preserving",
+                "exit_status": "ok",
+            }],
+            "tracked_files_dirty": False,
+            "dirty_files": [],
+        }
+
+        consumed = run_pipeline(
+            "--step", "5", "--mode", "full",
+            "--output-dir", str(output_dir),
+            cwd=repo, env=environment,
+        )
+        assert consumed.returncode == 0, consumed.stderr
+        state = json.loads((output_dir / "pipeline-state.json").read_text())
+        assert state["dependency_refresh_precheck"] == {
+            "tracked_files_dirty": False,
+            "dirty_files": [],
+        }
+        assert state["dependency_refresh_report"] == canonical
+
+        write_findings(
+            str(output_dir), _review_json("review-reconciliator")
+        )
+        record_outcome, record_error = orchestration_mod.assemble_review_record(
+            str(output_dir), state
+        )
+        assert record_error is None
+        assert record_outcome == {
+            "ran": True,
+            "written": 1,
+            "expected": 1,
+            "status": "complete",
+        }
+        record = (output_dir / "review-record.md").read_text()
+        assert (
+            "Dependency refresh: completed; 1 command(s) reported; "
+            "final tracked files dirty: false."
+        ) in record
+
+        telemetry = ReviewTelemetry(str(output_dir))
+        telemetry.finalize(step=11, phase="OUTPUT", title="Finalize")
+        manifest = json.loads(Path(telemetry.manifest_path).read_text())
+        assert manifest["status"] == "complete"
+        assert manifest["dependency_refresh"] == {
+            "requested": True,
+            "reported": True,
+            "status": "completed",
+            "commands": canonical["commands"],
+            "tracked_files_dirty": False,
+            "dirty_files": [],
+        }
+
+        assert request.parent != output_dir
+        assert list(output_dir.glob("*verification*.json")) == []
+        assert not (output_dir / request.name).exists()
+        assert [
+            path.name
+            for path in output_dir.iterdir()
+            if path.name.startswith("dependency-refresh")
+        ] == ["dependency-refresh.json"]
+        serialized = json.dumps({"state": state, "manifest": manifest})
+        for retired in (
+            "dependency_refresh_verification",
+            "dependency-refresh-verification",
+            "suggested_command",
+            "installed_state_present",
+            "commands_allowed",
+            "disallowed_commands",
+            "verification_failed",
+        ):
+            assert retired not in serialized
 
 
 class TestTelemetryIntegration:
