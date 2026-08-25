@@ -61,7 +61,7 @@ def _make_finding(
 ):
     """Create a single finding dict matching ReviewOutputBuilder format."""
     finding = {
-        "id": "abc12345",
+        "id": "f1",
         "category": category,
         "severity": severity,
         "title": title,
@@ -120,11 +120,17 @@ def _write_review(output_dir, stem, claims):
 
     Every current review carries the positive reviewed-file claim list.
     """
-    payload = {
-        "reviewer": stem.replace("-review", ""),
-        "findings": [],
-        "reviewed_file_claims": claims,
-    }
+    payload = _make_review_json(
+        reviewer=stem.removesuffix("-review"), findings=[]
+    )
+    payload["review_claimable_files"] = list(claims)
+    payload["reviewed_file_claims"] = list(claims)
+    payload["review_accounted_file_count"] = (
+        payload["inline_diff_file_count"] + len(claims)
+    )
+    payload["in_scope_review_file_count"] = (
+        payload["inline_diff_file_count"] + len(claims)
+    )
     with open(os.path.join(output_dir, f"{stem}.json"), "w") as f:
         json.dump(payload, f)
 
@@ -165,29 +171,61 @@ def _make_context_with_findings(reviews_by_agent):
 def _make_review_json(
     reviewer="security",
     pr_id="42",
-    verdict="comment",
+    verdict=None,
     findings=None,
 ):
     """Create a complete review JSON dict matching ReviewOutputBuilder output."""
     if findings is None:
         findings = [_make_finding()]
 
+    findings = [
+        dict(finding, id=f"f{index}")
+        for index, finding in enumerate(findings, 1)
+    ]
     severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+    blocking_counts = dict(severity_counts)
+    suppressed_advisory_finding_count = 0
     for finding in findings:
         sev = finding.get("severity", "medium")
         if sev in severity_counts:
             severity_counts[sev] += 1
+            if finding.get("channel") == "advisory":
+                suppressed_advisory_finding_count += 1
+            else:
+                blocking_counts[sev] += 1
+
+    def _verdict(counts):
+        if counts["critical"] or counts["high"] >= 3:
+            return "block"
+        if counts["high"] or counts["medium"] >= 5:
+            return "request_changes"
+        if counts["medium"]:
+            return "comment"
+        return "approve"
+
+    derived_verdict = _verdict(blocking_counts)
+    summary = {
+        "total_findings": len(findings),
+        "by_severity": severity_counts,
+        "suppressed_advisory_finding_count": (
+            suppressed_advisory_finding_count
+        ),
+    }
+    verdict_without_advisory = _verdict(severity_counts)
+    verdict_rank = {
+        "approve": 0, "comment": 1, "request_changes": 2, "block": 3,
+    }
+    if verdict_rank[verdict_without_advisory] > verdict_rank[derived_verdict]:
+        summary["verdict_without_advisory"] = verdict_without_advisory
 
     return {
         "pr_id": pr_id,
         "reviewer": reviewer,
         "timestamp": "2026-04-04T10:00:00",
+        "plugin_version": None,
         "schema": 2,
-        "verdict": verdict,
-        "summary": {
-            "total_findings": len(findings),
-            "by_severity": severity_counts,
-        },
+        "verdict": derived_verdict if verdict is None else verdict,
+        "summary": summary,
         "findings": findings,
         "review_claimable_files": [],
         "reviewed_file_claims": [],
@@ -281,6 +319,42 @@ class TestLoadAgentReviews:
 
         assert "security-review" in result
         assert "broken-review" not in result
+
+    @pytest.mark.parametrize(
+        "mutate",
+        [
+            pytest.param(lambda review: review.pop("schema"), id="missing-schema"),
+            pytest.param(lambda review: review.update(schema=1), id="retired-schema"),
+            pytest.param(
+                lambda review: review.update(issues=[]),
+                id="retired-findings-field",
+            ),
+            pytest.param(
+                lambda review: review["summary"].update(total_findings=0),
+                id="inconsistent-summary",
+            ),
+        ],
+    )
+    def test_skips_noncanonical_final_reviews(
+        self, mod, tmp_path, capsys, mutate
+    ):
+        review = _make_review_json(reviewer="security")
+        mutate(review)
+        (tmp_path / "security-review.json").write_text(json.dumps(review))
+
+        result = mod.load_agent_reviews(str(tmp_path))
+
+        assert result == {}
+        assert "security-review.json" in capsys.readouterr().err
+
+    def test_skips_review_whose_identity_disagrees_with_filename(
+        self, mod, tmp_path
+    ):
+        (tmp_path / "security-review.json").write_text(json.dumps(
+            _make_review_json(reviewer="performance")
+        ))
+
+        assert mod.load_agent_reviews(str(tmp_path)) == {}
 
     def test_skips_non_json_files(self, mod, tmp_path):
         """Files not ending in -review.json are ignored."""
@@ -411,6 +485,7 @@ class TestSeverityFloorNormalization:
 
     def test_loading_findings_materializes_legacy_floor(self, mod, tmp_path):
         review = _make_review_json(
+            reviewer="woo-regression",
             findings=[
                 _make_finding(
                     description=(
@@ -475,7 +550,7 @@ class TestExtractReferences:
         assert refs[0]["lines"] == [10, 20, 30]
 
     def test_skips_missing_lines(self, mod):
-        """Issues without a valid line field are skipped."""
+        """Findings without a valid line field are skipped."""
         findings = {
             "security-review": _make_review_json(findings=[
                 _make_finding(file="src/auth.py", line=10),
@@ -1927,9 +2002,14 @@ class TestAggregateReviewAccounting:
             final=str(authority_dir / "final.json"),
             accounting_input=str(authority_dir / "accounting.json"),
         )
-        Path(paths.final).write_text(json.dumps({
-            "reviewed_file_claims": ["src/read.php"],
-        }))
+        review = _make_review_json(reviewer="security", findings=[])
+        review["review_claimable_files"] = ["src/read.php", "src/unread.php"]
+        review["reviewed_file_claims"] = ["src/read.php"]
+        review["unclaimed_review_files"] = ["src/unread.php"]
+        review["inline_diff_file_count"] = 0
+        review["review_accounted_file_count"] = 1
+        review["in_scope_review_file_count"] = 2
+        Path(paths.final).write_text(json.dumps(review))
         Path(paths.accounting_input).write_text(json.dumps({
             "schema": 3,
             "agent_name": "security-reviewer",
@@ -2305,11 +2385,12 @@ class TestReviewStem:
     blocking output."""
 
     def test_mid_string_reviewer_id_output_is_loaded(self, mod, tmp_path):
-        (tmp_path / "repo-api-reviewer-v2-review.json").write_text(json.dumps({
-            "reviewer": "repo-api-reviewer-v2",
-            "findings": [],
-            "verdict": "approve",
-        }))
+        review = _make_review_json(
+            reviewer="repo-api-reviewer-v2", findings=[]
+        )
+        (tmp_path / "repo-api-reviewer-v2-review.json").write_text(
+            json.dumps(review)
+        )
         findings = mod.load_agent_reviews(
             str(tmp_path),
             dispatched_agents=["repo-api-reviewer-v2-reviewer"],

@@ -33,7 +33,10 @@ try:
     from .reviewer_lifecycle import close_review_intake, review_paths
     from .reviewer_names import derive_reviewer_name
     from .briefings import _render_review_accounting_section
-    from .reconciliation_context import strip_severity_floor_markers
+    from .reconciliation_context import (
+        review_accounting_from_context,
+        strip_severity_floor_markers,
+    )
     from . import critic_adjustments
     from . import manifest_sections
     from . import synthesis_lifecycle
@@ -64,7 +67,10 @@ except ImportError:
     from review.reviewer_lifecycle import close_review_intake, review_paths
     from review.reviewer_names import derive_reviewer_name
     from review.briefings import _render_review_accounting_section
-    from review.reconciliation_context import strip_severity_floor_markers
+    from review.reconciliation_context import (
+        review_accounting_from_context,
+        strip_severity_floor_markers,
+    )
     from review import critic_adjustments
     from review import manifest_sections
     from review import synthesis_lifecycle
@@ -1478,14 +1484,8 @@ def _orchestrate_step_9(mode, config, state, context, output_dir):
         try:
             with open(recon_json_path) as f:
                 recon = json.load(f)
-            accounting = (
-                recon.get("review_accounting")
-                if isinstance(recon, dict)
-                else None
-            )
-            if isinstance(accounting, dict):
-                review_accounting = accounting
-        except (json.JSONDecodeError, OSError):
+            review_accounting = review_accounting_from_context(recon)
+        except (json.JSONDecodeError, OSError, ValueError):
             review_accounting = None
     state["review_accounting"] = review_accounting
 

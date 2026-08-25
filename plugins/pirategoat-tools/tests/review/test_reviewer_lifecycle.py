@@ -112,7 +112,7 @@ class TestDraftOpenAndReplacement:
         reopened = _open_builder(tmp_path)
 
         assert reopened.timestamp == builder.timestamp
-        assert [issue["id"] for issue in reopened.findings] == [finding_id]
+        assert [finding["id"] for finding in reopened.findings] == [finding_id]
         assert reopened.observations == builder.observations
         assert reopened.recommendations == builder.recommendations
         assert reopened.positive_observations == builder.positive_observations

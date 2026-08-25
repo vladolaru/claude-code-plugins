@@ -1978,7 +1978,7 @@ class TestRunManifest:
                     "name": "m-reviewer",
                     "status": "SKIPPED_OVERRIDE",
                     "override_reason": "SENSITIVE_FINAL_REASON",
-                    "issues": ["SENSITIVE_FINAL_FINDING"],
+                    "private_notes": ["SENSITIVE_FINAL_FINDING"],
                 },
                 {"name": "a-reviewer", "status": "DISPATCH_OVERRIDE"},
             ]
@@ -2182,7 +2182,7 @@ class TestRunManifest:
                     "reason": "always",
                     "focus": "SENSITIVE_FOCUS_PROSE",
                     "raw_diff": "SENSITIVE_SOURCE",
-                    "issues": ["SENSITIVE_FINDING"],
+                    "private_notes": ["SENSITIVE_FINDING"],
                 }
             ],
         }

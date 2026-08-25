@@ -52,12 +52,12 @@ class TestVerdictForCounts:
 
 class TestDeriveReviewState:
     def test_advisory_findings_count_without_gating(self):
-        issues = [
+        findings = [
             {"severity": "high", "channel": "advisory"},
             {"severity": "low"},
         ]
 
-        derived = verdict_rules.derive_review_state(issues)
+        derived = verdict_rules.derive_review_state(findings)
 
         assert derived["counts"] == {
             "critical": 0,

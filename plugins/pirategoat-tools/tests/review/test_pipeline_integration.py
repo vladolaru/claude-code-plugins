@@ -126,7 +126,7 @@ def _publish_step_11(output_dir, cwd, mode="pr"):
 
 
 def _review_json(reviewer):
-    """Return one complete v1 review artifact accepted by render_markdown()."""
+    """Return one complete schema-2 review accepted by render_markdown()."""
     return {
         "pr_id": "42",
         "reviewer": reviewer,
@@ -353,17 +353,17 @@ class TestCriticAdjudicationLifecycle:
         ledger = _review_json("reconciliator")
         ledger["findings"] = [
             {
-                "id": issue_id,
+                "id": finding_id,
                 "category": "general",
                 "severity": "low",
-                "title": f"Finding {issue_id}",
+                "title": f"Finding {finding_id}",
                 "file": "second.txt",
                 "line": 1,
                 "description": "description",
                 "recommendation": "recommendation",
                 "confidence": 0.9,
             }
-            for issue_id in ("f1", "f2", "f3")
+            for finding_id in ("f1", "f2", "f3")
         ]
         ledger["summary"] = {
             "total_findings": 3,
@@ -2413,8 +2413,21 @@ class TestStep9CoverageStateLoading:
 
     @pytest.mark.parametrize(
         "payload",
-        [None, {"review_accounting": ["malformed"]}, {"not_accounting": 1}],
-        ids=["missing-context", "malformed-coverage", "no-coverage-key"],
+        [
+            pytest.param(None, id="missing-context"),
+            pytest.param(
+                {"schema": 3, "review_accounting": ["malformed"]},
+                id="malformed-accounting",
+            ),
+            pytest.param(
+                {"schema": 3, "not_accounting": 1},
+                id="missing-accounting",
+            ),
+            pytest.param(
+                {"schema": 3, "review_accounting": {"issues": []}},
+                id="retired-accounting-shape",
+            ),
+        ],
     )
     def test_stale_populations_are_cleared_not_carried(
         self, mod, tmp_path, payload
@@ -2431,12 +2444,38 @@ class TestStep9CoverageStateLoading:
 
         assert state["review_accounting"] is None
 
+    @pytest.mark.parametrize(
+        "schema",
+        [
+            pytest.param(None, id="missing-schema"),
+            pytest.param(2, id="retired-schema"),
+            pytest.param("3", id="wrong-schema-type"),
+        ],
+    )
+    def test_noncanonical_context_schema_cannot_supply_accounting(
+        self, mod, tmp_path, schema
+    ):
+        accounting = {
+            "scope_reporting_agent_count": 1,
+            "agents_receiving_inline_diff_by_file": {},
+            "agents_claiming_review_by_file": {},
+            "agents_with_unclaimed_review_by_file": {},
+            "unscoped_files": [],
+        }
+        payload = {"review_accounting": accounting}
+        if schema is not None:
+            payload["schema"] = schema
+
+        state = self._load(mod, tmp_path, payload)
+
+        assert state["review_accounting"] is None
+
     def test_unmeasured_unscoped_is_none_not_empty(self, mod, tmp_path):
         """`unscoped_files: null` is "not measured", not "none found" —
         only the second may ever render as a clean coverage result."""
         state = self._load(
             mod, tmp_path,
-            {"review_accounting": {
+            {"schema": 3, "review_accounting": {
                 "scope_reporting_agent_count": 1,
                 "agents_receiving_inline_diff_by_file": {},
                 "agents_claiming_review_by_file": {},
@@ -2448,7 +2487,7 @@ class TestStep9CoverageStateLoading:
         assert state["review_accounting"]["unscoped_files"] is None
 
     def test_measured_empty_unscoped_is_a_list(self, mod, tmp_path):
-        state = self._load(mod, tmp_path, {"review_accounting": {
+        state = self._load(mod, tmp_path, {"schema": 3, "review_accounting": {
             "scope_reporting_agent_count": 1,
             "agents_receiving_inline_diff_by_file": {},
             "agents_claiming_review_by_file": {},
@@ -2462,7 +2501,7 @@ class TestStep9CoverageStateLoading:
         (tmp_path / "review-findings.json").write_text(
             json.dumps(_review_json("review-reconciliator"))
         )
-        self._load(mod, tmp_path, {"review_accounting": {
+        self._load(mod, tmp_path, {"schema": 3, "review_accounting": {
             "scope_reporting_agent_count": 1,
             "agents_receiving_inline_diff_by_file": {},
             "agents_with_unclaimed_review_by_file": {

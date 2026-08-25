@@ -1321,7 +1321,7 @@ def build_output(
     lines.append(f"not the Read tool's display line numbers (e.g., 227→).")
     lines.append(f"For findings that are line-less BY NATURE (whole changed file has no")
     lines.append(f"test coverage, git-history precedent, cross-file architecture), pass")
-    lines.append(f"line=None — recorded as a verdict-counting FILE-SCOPED issue. Never")
+    lines.append(f"line=None — recorded as a verdict-counting FILE-SCOPED finding. Never")
     lines.append(f"omit line= for a point defect that has one.")
     lines.append(f"")
     lines.append(f"MUST NOT create or write a temporary builder script with the Write tool:")

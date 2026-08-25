@@ -2127,7 +2127,7 @@ class TestCriticVerdictPersistence:
         run_pipeline("--step", "1", "--mode", "pr",
                    "--output-dir", str(out), "--pr-number", "42", cwd=tmp_path / "repo")
         (out / "review-report.md").write_text("# Review")
-        (out / "review-findings.json").write_text('{"verdict": "APPROVE", "issues": []}')
+        (out / "review-findings.json").write_text('{"verdict": "APPROVE", "findings": []}')
         _write_critic_snapshot(out, "STAND")
         r = _publish_step_11(out, tmp_path / "repo")
         assert r.returncode == 0
@@ -2140,7 +2140,7 @@ class TestCriticVerdictPersistence:
         run_pipeline("--step", "1", "--mode", "pr",
                    "--output-dir", str(out), "--pr-number", "42", cwd=tmp_path / "repo")
         (out / "review-report.md").write_text("# Review")
-        (out / "review-findings.json").write_text('{"verdict": "APPROVE", "issues": []}')
+        (out / "review-findings.json").write_text('{"verdict": "APPROVE", "findings": []}')
         r = _publish_step_11(out, tmp_path / "repo")
         assert r.returncode == 0
         result = json.loads((out / "pipeline-result.json").read_text())
@@ -2152,7 +2152,7 @@ class TestCriticVerdictPersistence:
         run_pipeline("--step", "1", "--mode", "pr",
                    "--output-dir", str(out), "--pr-number", "42", cwd=tmp_path / "repo")
         (out / "review-report.md").write_text("# Review")
-        (out / "review-findings.json").write_text('{"verdict": "approve", "issues": []}')
+        (out / "review-findings.json").write_text('{"verdict": "approve", "findings": []}')
         _write_critic_snapshot(out, "SKIPPED")
         r = _publish_step_11(out, tmp_path / "repo")
         assert r.returncode == 0
@@ -2813,7 +2813,7 @@ class TestStep11PresentResults:
         findings — not from a verdict the orchestrator transcribed."""
         import json
         (tmp_path / "review-findings.json").write_text(
-            json.dumps({"verdict": "comment", "issues": []})
+            json.dumps({"verdict": "comment", "findings": []})
         )
 
         state = {

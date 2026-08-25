@@ -483,7 +483,7 @@ class TestStepTenDispatchMarker:
         row, rather than a row claiming it finished instantly."""
         from review.critic_adjustments import write_findings
 
-        write_findings(str(out), {"verdict": "approve", "issues": []})
+        write_findings(str(out), {"verdict": "approve", "findings": []})
         state = {}
         orchestration_mod._orchestrate_step_10(
             "full", {"quick": True}, state, {}, str(out)
@@ -550,7 +550,7 @@ class TestStepTenRedispatchStartsFreshAttempt:
         from review.critic_adjustments import write_findings
 
         lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
-        write_findings(str(out), {"verdict": "approve", "issues": []})
+        write_findings(str(out), {"verdict": "approve", "findings": []})
         _set_mtime(out / "review-findings.json", T0 + timedelta(seconds=41))
 
         state = {}
@@ -572,7 +572,9 @@ class TestStepTenRedispatchStartsFreshAttempt:
         from review.critic_adjustments import write_findings
 
         lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
-        write_findings(str(out), {"verdict": "request_changes", "issues": []})
+        write_findings(
+            str(out), {"verdict": "request_changes", "findings": []}
+        )
         _set_mtime(out / "review-findings.json", T0 + timedelta(seconds=41))
 
         orchestration_mod._orchestrate_step_10("full", {}, {}, {}, str(out))
@@ -584,7 +586,9 @@ class TestStepTenRedispatchStartsFreshAttempt:
         )
         verdict = _critic_snapshot(out, "REVISE")
         _set_mtime(verdict, dispatched + timedelta(seconds=665))
-        write_findings(str(out), {"verdict": "request_changes", "issues": []})
+        write_findings(
+            str(out), {"verdict": "request_changes", "findings": []}
+        )
 
         orchestration_mod._orchestrate_step_11("pr", {}, {}, {}, str(out))
 
@@ -600,7 +604,7 @@ class TestStepNineObservation:
         from review.critic_adjustments import write_findings
 
         lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
-        write_findings(str(out), {"verdict": "approve", "issues": []})
+        write_findings(str(out), {"verdict": "approve", "findings": []})
         _set_mtime(out / "review-findings.json", T0 + timedelta(seconds=41))
 
         orchestration_mod._orchestrate_step_9("full", {}, {}, {}, str(out))
@@ -641,7 +645,7 @@ class TestStepElevenObservation:
         from review.critic_adjustments import write_findings
 
         lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
-        write_findings(str(out), {"verdict": "approve", "issues": []})
+        write_findings(str(out), {"verdict": "approve", "findings": []})
         _set_mtime(out / "review-findings.json", T0 + timedelta(seconds=41))
 
         orchestration_mod._orchestrate_step_11("pr", {}, {}, {}, str(out))

@@ -395,7 +395,7 @@ class GradeResult:
 
 | Function | Input | Checks |
 |---|---|---|
-| `grade_review_json(path)` | Path to `{reviewer}-review.json` | File exists, valid JSON, required fields (`pr_id`, `reviewer`, `verdict`, `summary`, `issues`, `meta`), valid severities, valid verdict, issue schema, summary structure |
+| `grade_review_json(path)` | Path to `{reviewer}-review.json` | File exists, valid JSON, required fields (`pr_id`, `reviewer`, `schema`, `verdict`, `summary`, `findings`, `checks`, `assessment`, review accounting, `meta`), valid severities, exact schema 2, finding/check schemas, accounting, summary structure |
 | `grade_review_markdown(path)` | Path to `{reviewer}-review.md` | File exists, `# ... Review` header, `## Executive Summary`, `**Verdict:**` — rendered from the JSON when absent |
 | `grade_signal_format(text)` | Return signal text | `STATUS: FINISHED`, `OUTPUT_FILES:`, `COUNTS:`, `VERDICT:`, `SUMMARY:` |
 | `grade_no_domain_files(text)` | Agent output for no-code scenario | APPROVE verdict, zero findings |
@@ -423,9 +423,9 @@ probes.
 
 | Field | Gates |
 |---|---|
-| `required_findings` | Each spec must be matched by some issue (recall) — a miss fails the entry. |
+| `required_findings` | Each spec must be matched by some finding (recall) — a miss fails the entry. |
 | `acceptable_findings` | Secondary findings the key pre-declares; matching them never punishes or rewards the entry, and they are excluded from `max_unexpected`. |
-| `max_severity` | False-positive precision cap: no issue may rank above this severity — the gate the clean-code probes rely on. |
+| `max_severity` | False-positive precision cap: no finding may rank above this severity — the gate the clean-code probes rely on. |
 | `max_unexpected` | Precision cap on how many findings are entirely unpredicted (`match["unexpected"]`) — contrast `max_severity`'s cap on how severe findings are. |
 | `verdict_in` | The reviewer's verdict must be one of the listed values — derive from the agent's auto-verdict rules, not intuition (see below). |
 | `expect_not_applicable` | Abstention keys: accepts `not_applicable` or `approve`, each with zero findings. Mutually exclusive with every other field in this table — see "Abstention keys" below. |
@@ -591,7 +591,7 @@ invalid flags, unwritable report path — always before artifacts exist),
 1 when the eval ran and at least one entry failed, 0 on full pass. The
 comparative metric is per-entry `passed` (and detection detail) — check
 counts and ratios are per-entry diagnostics only, because compliance adds
-checks per schema-valid issue and would score a more verbose reviewer
+checks per schema-valid finding and would score a more verbose reviewer
 higher for identical detection performance.
 
 ## Design Principles

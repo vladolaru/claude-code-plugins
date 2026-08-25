@@ -269,9 +269,7 @@ def _validate_review_bytes(
         review = json.loads(data)
     except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as exc:
         raise ValueError("malformed review draft JSON") from exc
-    if not isinstance(review, dict):
-        raise ValueError("malformed review draft: expected an object")
-    _validate_review_shape(review, reviewer)
+    validate_review_document(review, reviewer)
     expected_pr_id = pr_id if isinstance(pr_id, str) else str(pr_id)
     if review["pr_id"] != expected_pr_id:
         raise ValueError("review draft PR does not match open request")
@@ -2080,20 +2078,21 @@ def _validate_review_shape(review, reviewer):
     _validate_optional_review_fields(review)
 
 
-def _validate_review(output_dir, reviewer, paths, review_bytes):
-    """Validate one exact review snapshot and return telemetry facts."""
-    try:
-        review = json.loads(review_bytes)
-    except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as exc:
-        raise ValueError("malformed review JSON") from exc
+def validate_review_document(review, reviewer):
+    """Validate one complete canonical review document.
+
+    This is the shared trust boundary for draft rehydration, finalization,
+    and finalized-review readers. Validation that depends on an adjacent
+    accounting-input artifact remains in ``_validate_review``.
+    """
     if not isinstance(review, dict):
         raise ValueError("malformed review: expected an object")
     _validate_review_shape(review, reviewer)
 
     findings = review["findings"]
     summary = review["summary"]
-    if not isinstance(findings, list) or not isinstance(summary, dict):
-        raise ValueError("review findings/summary are malformed")
+    if not isinstance(summary, dict):
+        raise ValueError("review summary is malformed")
     try:
         derived = derive_review_state(findings)
     except ValueError as exc:
@@ -2138,6 +2137,16 @@ def _validate_review(output_dir, reviewer, paths, review_bytes):
         or summary != expected_summary
     ):
         raise ValueError("review summary does not match its findings")
+    return review
+
+
+def _validate_review(output_dir, reviewer, paths, review_bytes):
+    """Validate one exact review snapshot and return telemetry facts."""
+    try:
+        review = json.loads(review_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as exc:
+        raise ValueError("malformed review JSON") from exc
+    validate_review_document(review, reviewer)
 
     accounting_input = _read_json_object(
         paths.accounting_input, "review-accounting input"

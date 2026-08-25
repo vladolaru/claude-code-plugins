@@ -1546,6 +1546,8 @@ class TestReviewOutputBuilderAPIExample:
         assert "file=" in output
         assert "description=" in output
         assert "recommendation=" in output
+        assert "FILE-SCOPED finding" in output
+        assert "FILE-SCOPED issue" not in output
 
     def test_output_contains_add_positive_example(self, tmp_path):
         """The usage example must show add_positive_observation()."""

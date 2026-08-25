@@ -41,10 +41,25 @@ from review.agent.coverage import (
     ReviewAccountingError,
     derive_review_accounting,
 )
+from review.agent.output import validate_review_document
 
 from git_paths import normalize_repo_paths
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
+RECONCILIATION_CONTEXT_SCHEMA = 3
+
+_REVIEW_ACCOUNTING_FIELDS = frozenset({
+    "scope_reporting_agent_count",
+    "unscoped_files",
+    "agents_receiving_inline_diff_by_file",
+    "agents_claiming_review_by_file",
+    "agents_with_unclaimed_review_by_file",
+})
+_REVIEW_ACCOUNTING_POPULATIONS = frozenset({
+    "agents_receiving_inline_diff_by_file",
+    "agents_claiming_review_by_file",
+    "agents_with_unclaimed_review_by_file",
+})
 
 # Files in the output directory that are NOT agent review outputs.
 # These are pipeline infrastructure files that should be skipped when
@@ -88,6 +103,72 @@ _CRITIC_SEVERITY_FLOOR_MARKER_RE = re.compile(
     rf"{_LEGACY_SEVERITY_FLOOR_PATTERN})"
     rf"(?!\w)[ \t]*(?:(?:[;—-])[ \t]*)?"
 )
+
+
+def _validate_string_list(value: Any, label: str, *, allow_none=False) -> None:
+    if allow_none and value is None:
+        return
+    if (
+        not isinstance(value, list)
+        or any(not isinstance(item, str) or not item for item in value)
+        or len(value) != len(set(value))
+    ):
+        suffix = " or null" if allow_none else ""
+        raise ValueError(f"{label} must be unique non-empty strings{suffix}")
+
+
+def review_accounting_from_context(context: Any) -> Optional[Dict[str, Any]]:
+    """Return exact schema-3 review accounting, or reject the context."""
+    if not isinstance(context, dict):
+        raise ValueError("reconciliation context must be an object")
+    if (
+        type(context.get("schema")) is not int
+        or context["schema"] != RECONCILIATION_CONTEXT_SCHEMA
+    ):
+        raise ValueError("reconciliation context schema must be 3")
+    if "review_accounting" not in context:
+        raise ValueError("reconciliation context is missing review_accounting")
+    accounting = context["review_accounting"]
+    if accounting is None:
+        return None
+    if not isinstance(accounting, dict):
+        raise ValueError(
+            "reconciliation review_accounting must be an object or null"
+        )
+    if set(accounting) != _REVIEW_ACCOUNTING_FIELDS:
+        raise ValueError("reconciliation review_accounting fields are invalid")
+    count = accounting["scope_reporting_agent_count"]
+    if type(count) is not int or count < 0:
+        raise ValueError(
+            "reconciliation review_accounting scope count must be non-negative"
+        )
+    _validate_string_list(
+        accounting["unscoped_files"],
+        "reconciliation review_accounting unscoped_files",
+        allow_none=True,
+    )
+    for field in _REVIEW_ACCOUNTING_POPULATIONS:
+        population = accounting[field]
+        if not isinstance(population, dict):
+            raise ValueError(
+                f"reconciliation review_accounting {field} is malformed"
+            )
+        for path, agents in population.items():
+            if not isinstance(path, str) or not path:
+                raise ValueError(
+                    f"reconciliation review_accounting {field} has "
+                    "an invalid path"
+                )
+            _validate_string_list(
+                agents,
+                f"reconciliation review_accounting {field}[{path!r}]",
+            )
+            if not agents:
+                raise ValueError(
+                    f"reconciliation review_accounting {field}[{path!r}] "
+                    "must name at least one agent"
+                )
+    return accounting
 
 
 def resolve_structured_severity_floor(finding: Dict[str, Any]) -> Optional[str]:
@@ -190,9 +271,10 @@ def _load_review_payload(output_dir: str, agent: str) -> Optional[Dict[str, Any]
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-    except (OSError, json.JSONDecodeError):
+        validate_review_document(data, reviewer)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
         return None
-    return data if isinstance(data, dict) else None
+    return data
 
 
 def _load_agent_review_accounting(
@@ -512,7 +594,7 @@ def load_agent_reviews(
             When provided, only review files for these agents are loaded.
             Agent names are mapped to file stems by replacing ``-reviewer``
             with ``-review``. When ``None``, all review files are loaded
-            (backward-compatible default).
+            (the all-files mode).
 
     Returns:
         Dict keyed by agent name (e.g., "security-review") with the parsed
@@ -542,13 +624,8 @@ def load_agent_reviews(
 
         try:
             data = json.loads(entry.read_text(encoding="utf-8"))
-            if not isinstance(data, dict):
-                print(
-                    f"WARNING: skipping malformed file {entry.name}: "
-                    "top-level JSON must be an object",
-                    file=sys.stderr,
-                )
-                continue
+            reviewer = entry.stem.removesuffix("-review")
+            validate_review_document(data, reviewer)
             review_findings = data.get("findings", [])
             if isinstance(review_findings, list):
                 for finding in review_findings:
@@ -562,7 +639,9 @@ def load_agent_reviews(
             # Key by filename without .json extension (e.g., "security-review")
             agent_name = entry.stem
             reviews[agent_name] = data
-        except (json.JSONDecodeError, OSError) as exc:
+        except (
+            UnicodeDecodeError, json.JSONDecodeError, OSError, ValueError
+        ) as exc:
             print(f"WARNING: skipping malformed file {entry.name}: {exc}", file=sys.stderr)
 
     return reviews
@@ -1223,7 +1302,7 @@ def main() -> int:
 
         # Build the context object
         context: Dict[str, Any] = {
-            "schema": 3,
+            "schema": RECONCILIATION_CONTEXT_SCHEMA,
             "reviews_by_agent": reviews_by_agent,
             "source_snippets": source_snippets,
             "scope_annotations": scope_annotations,

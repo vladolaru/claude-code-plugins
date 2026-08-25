@@ -1023,7 +1023,7 @@ def print_results(all_results: dict):
     """Print formatted eval results.
 
     The headline metric is ENTRIES passed — check counts vary with reviewer
-    verbosity (compliance adds checks per schema-valid issue), so a
+    verbosity (compliance adds checks per schema-valid finding), so a
     check-ratio percentage would score a noisier reviewer higher for
     identical detection performance. Check counts remain per-entry
     diagnostics only.

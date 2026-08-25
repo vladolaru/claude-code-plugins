@@ -892,7 +892,7 @@ def format_text_report(dispatches: list[tuple[dict, dict]], agent_name: str | No
             for wo in data["write_outputs"]:
                 content = wo["content"]
                 # A save that parses as a review payload carries its exact
-                # issue list — count it directly. The keyword heuristic is
+                # findings list — count it directly. The keyword heuristic is
                 # only for prose saves; applied to JSON it miscounts (the
                 # builder-heredoc reconstruction has no "id" keys at all,
                 # so a real one-finding save would render as ~0 findings).
