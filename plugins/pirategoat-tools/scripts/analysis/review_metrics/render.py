@@ -7,6 +7,7 @@ import unicodedata
 from typing import Any, Iterable
 
 from .contracts import (
+    _ASSIGNMENT_TABLE_FIELDS,
     _ANSI_ESCAPE_RE,
     _CRITIC_VERDICTS,
     _REPORT_SCHEMA,
@@ -141,9 +142,10 @@ def _table_row(run: dict[str, Any]) -> list[str]:
             else "n/a"
         )
     coverage_text = (
-        f"{len(coverage.get('assigned_files', []))}/"
-        f"{len(coverage.get('reviewable_files', []))}/"
-        f"{len(coverage.get('unassigned_reviewable_files', []))}"
+        "/".join(
+            str(len(coverage.get(field, [])))
+            for field in _ASSIGNMENT_TABLE_FIELDS
+        )
         if coverage is not None else "—"
     )
     if coverage is not None and metrics.get("coverage") == "partial":

@@ -9,11 +9,17 @@ from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from .contracts import (
+    _ASSIGNED_FILES_BY_AGENT_FIELD,
+    _ASSIGNED_FILES_FIELD,
+    _ASSIGNMENT_FIELDS,
+    _ASSIGNMENT_PATH_LIST_FIELDS,
+    _CHANGED_FILES_FIELD,
     _DEPENDENCY_REFRESH_EXIT_STATUSES,
     _DEPENDENCY_REFRESH_STATUSES,
     _DERIVED_MARKDOWN_STATUSES,
     _DISPATCHED_STATUSES,
     _FIXED_WARNING_CODES,
+    _FILE_EXCLUSIONS_FIELD,
     _HISTORICAL_DEPENDENCY_REFRESH_SKIP_REASONS,
     _MAX_DEPENDENCY_REFRESH_COMMANDS,
     _MAX_DIRTY_FILES,
@@ -23,6 +29,7 @@ from .contracts import (
     _RECONCILIATION_COUNT_FIELDS,
     _RECONCILIATION_FIELDS,
     _RETAINED_CRITIC_VALUES,
+    _REVIEWABLE_FILES_FIELD,
     _SAFE_RUN_ID_RE,
     _SEVERITIES,
     _SUMMARY_FIELDS,
@@ -32,6 +39,7 @@ from .contracts import (
     _SYNTHESIS_ROW_KEYS,
     _USAGE_FIELDS,
     _USAGE_SNAPSHOT_AVAILABILITY_STATES,
+    _UNASSIGNED_REVIEWABLE_FILES_FIELD,
     _WINDOWS_DRIVE_RE,
     _WORKTREE_HYGIENE_STATUSES,
     _parse_time,
@@ -926,12 +934,7 @@ def _sanitize_coverage(value: object) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
     required = {
-        "changed_files",
-        "reviewable_files",
-        "assigned_files_by_agent",
-        "assigned_files",
-        "file_exclusions",
-        "unassigned_reviewable_files",
+        *_ASSIGNMENT_FIELDS,
         "review_claim_accounting_by_agent",
         "review_claimable_file_count_by_agent",
         "semantics",
@@ -942,18 +945,13 @@ def _sanitize_coverage(value: object) -> dict[str, Any] | None:
         return None
 
     path_lists: dict[str, list[str]] = {}
-    for name in (
-        "changed_files",
-        "reviewable_files",
-        "assigned_files",
-        "unassigned_reviewable_files",
-    ):
+    for name in _ASSIGNMENT_PATH_LIST_FIELDS:
         paths = _strict_repo_read_paths(value.get(name))
         if paths is None or len(paths) != len(set(paths)):
             return None
         path_lists[name] = paths
 
-    by_agent = value.get("assigned_files_by_agent")
+    by_agent = value.get(_ASSIGNED_FILES_BY_AGENT_FIELD)
     if not isinstance(by_agent, dict):
         return None
     safe_by_agent: dict[str, list[str]] = {}
@@ -968,7 +966,7 @@ def _sanitize_coverage(value: object) -> dict[str, Any] | None:
             return None
         safe_by_agent[name] = paths
 
-    raw_excluded = value.get("file_exclusions")
+    raw_excluded = value.get(_FILE_EXCLUSIONS_FIELD)
     if not isinstance(raw_excluded, list):
         return None
     file_exclusions: list[dict[str, str]] = []
@@ -980,10 +978,12 @@ def _sanitize_coverage(value: object) -> dict[str, Any] | None:
             return None
         file_exclusions.append({"path": path, "reason": "noise_filtered"})
 
-    changed = set(path_lists["changed_files"])
-    reviewable = set(path_lists["reviewable_files"])
-    assigned = set(path_lists["assigned_files"])
-    unassigned_reviewable = set(path_lists["unassigned_reviewable_files"])
+    changed = set(path_lists[_CHANGED_FILES_FIELD])
+    reviewable = set(path_lists[_REVIEWABLE_FILES_FIELD])
+    assigned = set(path_lists[_ASSIGNED_FILES_FIELD])
+    unassigned_reviewable = set(
+        path_lists[_UNASSIGNED_REVIEWABLE_FILES_FIELD]
+    )
     excluded_paths = [item["path"] for item in file_exclusions]
     if (
         not reviewable <= changed
@@ -1001,13 +1001,13 @@ def _sanitize_coverage(value: object) -> dict[str, Any] | None:
         return None
 
     result: dict[str, Any] = {
-        "changed_files": path_lists["changed_files"],
-        "reviewable_files": path_lists["reviewable_files"],
-        "assigned_files_by_agent": safe_by_agent,
-        "assigned_files": path_lists["assigned_files"],
-        "file_exclusions": file_exclusions,
-        "unassigned_reviewable_files": path_lists[
-            "unassigned_reviewable_files"
+        _CHANGED_FILES_FIELD: path_lists[_CHANGED_FILES_FIELD],
+        _REVIEWABLE_FILES_FIELD: path_lists[_REVIEWABLE_FILES_FIELD],
+        _ASSIGNED_FILES_BY_AGENT_FIELD: safe_by_agent,
+        _ASSIGNED_FILES_FIELD: path_lists[_ASSIGNED_FILES_FIELD],
+        _FILE_EXCLUSIONS_FIELD: file_exclusions,
+        _UNASSIGNED_REVIEWABLE_FILES_FIELD: path_lists[
+            _UNASSIGNED_REVIEWABLE_FILES_FIELD
         ],
         "semantics": "generated_scope_not_proof_of_model_read",
     }

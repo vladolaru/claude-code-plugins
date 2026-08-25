@@ -366,6 +366,40 @@ class TestRecordAssembly:
         assert "9 skipped" in text
         assert "unrecognized source language: .zig" in text
 
+    @pytest.mark.parametrize(
+        ("state", "expected_line"),
+        [
+            pytest.param(
+                {"agents": {
+                    "discarded_drafts": [
+                        "code-reviewer", "security-reviewer",
+                    ],
+                }},
+                "- Discarded reviewer drafts: code-reviewer, "
+                "security-reviewer.",
+                id="non-empty",
+            ),
+            pytest.param(
+                {"agents": {"discarded_drafts": []}},
+                None,
+                id="empty",
+            ),
+            pytest.param({}, None, id="missing"),
+        ],
+    )
+    def test_run_notes_render_discarded_drafts_only_when_nonempty(
+        self, out_dir, state, expected_line
+    ):
+        _write_ledger(out_dir)
+
+        assemble_review_record(str(out_dir), state)
+        text = (out_dir / REVIEW_RECORD_MD).read_text()
+
+        if expected_line is None:
+            assert "Discarded reviewer drafts" not in text
+        else:
+            assert expected_line in text
+
     def test_run_notes_report_a_requested_but_unrecorded_refresh(self, out_dir):
         _write_ledger(out_dir)
         state = {

@@ -27,7 +27,15 @@ MANIFEST_SECTIONS_SCRIPT_PATH = (
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts" / "analysis"))
 
 import review_metrics as _mod  # noqa: E402
-from review_metrics import cli, contracts, load, measure, render, sanitize  # noqa: E402
+from review_metrics import (  # noqa: E402
+    cli,
+    cohort,
+    contracts,
+    load,
+    measure,
+    render,
+    sanitize,
+)
 
 load_runs = _mod.load_runs
 measure_run = _mod.measure_run
@@ -8681,6 +8689,36 @@ class TestOptionalSectionVocabulariesAreNotRestated:
         )
         assert contracts._DERIVED_MARKDOWN_STATUSES == (
             manifest_sections._DERIVED_MARKDOWN_STATUSES
+        )
+
+    def test_assignment_fields_share_one_producer_consumer_authority(self):
+        manifest_sections = _load_manifest_sections_module()
+        expected = (
+            "changed_files",
+            "reviewable_files",
+            "assigned_files_by_agent",
+            "assigned_files",
+            "file_exclusions",
+            "unassigned_reviewable_files",
+        )
+
+        assert getattr(manifest_sections, "ASSIGNMENT_FIELDS", None) == expected
+        assert getattr(contracts, "_ASSIGNMENT_FIELDS", None) == expected
+        assert contracts._ASSIGNMENT_FIELDS is (
+            contracts._ASSIGNMENT_VOCABULARY_CONTRACT.ASSIGNMENT_FIELDS
+        )
+        assert sanitize._ASSIGNMENT_FIELDS is contracts._ASSIGNMENT_FIELDS
+        assert sanitize._ASSIGNMENT_PATH_LIST_FIELDS is (
+            contracts._ASSIGNMENT_PATH_LIST_FIELDS
+        )
+        assert load._ASSIGNMENT_PATH_LIST_FIELDS is (
+            contracts._ASSIGNMENT_PATH_LIST_FIELDS
+        )
+        assert cohort._ASSIGNMENT_COUNTABLE_LIST_FIELDS is (
+            contracts._ASSIGNMENT_COUNTABLE_LIST_FIELDS
+        )
+        assert render._ASSIGNMENT_TABLE_FIELDS is (
+            contracts._ASSIGNMENT_TABLE_FIELDS
         )
 
     def test_every_producer_recognized_worktree_status_survives(self):

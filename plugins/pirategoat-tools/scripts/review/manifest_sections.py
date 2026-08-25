@@ -12,6 +12,15 @@ from collections import Counter
 from typing import Any, Dict, List, Optional
 
 try:
+    from .assignment_vocabulary import (
+        ASSIGNED_FILES,
+        ASSIGNED_FILES_BY_AGENT,
+        ASSIGNMENT_FIELDS,
+        CHANGED_FILES,
+        FILE_EXCLUSIONS,
+        REVIEWABLE_FILES,
+        UNASSIGNED_REVIEWABLE_FILES,
+    )
     from .agent.coverage import ReviewAccountingError, derive_review_accounting
     from .reviewer_names import derive_reviewer_name
     from .reviewer_lifecycle import review_paths
@@ -37,6 +46,15 @@ except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
+    from review.assignment_vocabulary import (
+        ASSIGNED_FILES,
+        ASSIGNED_FILES_BY_AGENT,
+        ASSIGNMENT_FIELDS,
+        CHANGED_FILES,
+        FILE_EXCLUSIONS,
+        REVIEWABLE_FILES,
+        UNASSIGNED_REVIEWABLE_FILES,
+    )
     from review.agent.coverage import ReviewAccountingError, derive_review_accounting
     from review.reviewer_names import derive_reviewer_name
     from review.reviewer_lifecycle import review_paths
@@ -523,11 +541,11 @@ def build_coverage_manifest(
                 review_claimable_file_count_by_agent[name] = claimable_count
 
         return {
-            "changed_files": changed,
-            "reviewable_files": reviewable,
-            "assigned_files_by_agent": assigned_files_by_agent,
-            "assigned_files": sorted(assigned_set),
-            "file_exclusions": [
+            CHANGED_FILES: changed,
+            REVIEWABLE_FILES: reviewable,
+            ASSIGNED_FILES_BY_AGENT: assigned_files_by_agent,
+            ASSIGNED_FILES: sorted(assigned_set),
+            FILE_EXCLUSIONS: [
                 {"path": path, "reason": "noise_filtered"}
                 for path in sorted(changed_set - reviewable_set)
             ],
@@ -553,7 +571,9 @@ def build_coverage_manifest(
             # Keep both. This one is the plan-vs-changed accounting the
             # metrics partition depends on; that one is the did-anyone-
             # actually-see-it accounting the review report must confess.
-            "unassigned_reviewable_files": sorted(reviewable_set - assigned_set),
+            UNASSIGNED_REVIEWABLE_FILES: sorted(
+                reviewable_set - assigned_set
+            ),
             "review_claim_accounting_by_agent": review_claim_accounting_by_agent,
             "review_claimable_file_count_by_agent": (
                 review_claimable_file_count_by_agent

@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .contracts import (
+    _ASSIGNED_FILES_BY_AGENT_FIELD,
+    _ASSIGNMENT_PATH_LIST_FIELDS,
+    _FILE_EXCLUSIONS_FIELD,
     _PRODUCER_AGENT_NAME_RE,
     _SUPPORTED_MANIFEST_SCHEMA,
     _incomplete_agent_executions,
@@ -489,23 +492,18 @@ def _canonical_manifest(manifest: dict[str, Any]) -> str:
 
     coverage = canonical.get("coverage")
     if isinstance(coverage, dict):
-        for name in (
-            "changed_files",
-            "reviewable_files",
-            "assigned_files",
-            "unassigned_reviewable_files",
-        ):
+        for name in _ASSIGNMENT_PATH_LIST_FIELDS:
             values = coverage.get(name)
             if isinstance(values, list):
                 coverage[name] = sorted(set(values))
-        by_agent = coverage.get("assigned_files_by_agent")
+        by_agent = coverage.get(_ASSIGNED_FILES_BY_AGENT_FIELD)
         if isinstance(by_agent, dict):
             for name, values in by_agent.items():
                 if isinstance(values, list):
                     by_agent[name] = sorted(set(values))
-        file_exclusions = coverage.get("file_exclusions")
+        file_exclusions = coverage.get(_FILE_EXCLUSIONS_FIELD)
         if isinstance(file_exclusions, list):
-            coverage["file_exclusions"] = sorted(
+            coverage[_FILE_EXCLUSIONS_FIELD] = sorted(
                 file_exclusions,
                 key=lambda item: json.dumps(
                     item, sort_keys=True, separators=(",", ":")

@@ -7,10 +7,13 @@ from collections import Counter
 from typing import Any, Iterable
 
 from .contracts import (
+    _ASSIGNED_FILES_FIELD,
+    _ASSIGNMENT_COUNTABLE_LIST_FIELDS,
     _AVAILABILITY_FAMILIES,
     _AVAILABILITY_STATES,
     _CRITIC_VERDICT_SKIPPED,
     _CRITIC_VERDICTS,
+    _REVIEWABLE_FILES_FIELD,
 )
 from .sanitize import _exact_statistic, _nonnegative_int, _safe_wall_time_ms
 from .usage import _add_usage, _dispatched_model, _empty_usage
@@ -253,31 +256,20 @@ def _aggregate_coverage(
         coverage = run.get("coverage")
         if not isinstance(coverage, dict):
             continue
-        for name in (
-            "changed_files",
-            "reviewable_files",
-            "assigned_files",
-            "file_exclusions",
-            "unassigned_reviewable_files",
-        ):
+        for name in _ASSIGNMENT_COUNTABLE_LIST_FIELDS:
             value = coverage.get(name)
             coverage_counts[name] += len(value) if isinstance(value, list) else 0
         coverage_runs += 1
     coverage_rate = (
-        coverage_counts["assigned_files"] / coverage_counts["reviewable_files"]
-        if coverage_runs and coverage_counts["reviewable_files"]
+        coverage_counts[_ASSIGNED_FILES_FIELD]
+        / coverage_counts[_REVIEWABLE_FILES_FIELD]
+        if coverage_runs and coverage_counts[_REVIEWABLE_FILES_FIELD]
         else None
     )
     return {
         **{
             name: coverage_counts[name] if coverage_runs else None
-            for name in (
-                "changed_files",
-                "reviewable_files",
-                "assigned_files",
-                "file_exclusions",
-                "unassigned_reviewable_files",
-            )
+            for name in _ASSIGNMENT_COUNTABLE_LIST_FIELDS
         },
         "assignment_rate": coverage_rate,
         "available_runs": coverage_runs,

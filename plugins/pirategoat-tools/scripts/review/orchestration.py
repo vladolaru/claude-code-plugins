@@ -453,6 +453,17 @@ def _render_run_notes(state: dict) -> str:
     else:
         lines.append("- Dispatch: no plan summary recorded for this run.")
 
+    agents = state.get("agents")
+    discarded_drafts = (
+        agents.get("discarded_drafts") if isinstance(agents, dict) else None
+    )
+    if isinstance(discarded_drafts, list) and discarded_drafts:
+        lines.append(
+            "- Discarded reviewer drafts: "
+            + ", ".join(discarded_drafts)
+            + "."
+        )
+
     warnings = state.get("dispatch_plan_warnings")
     if isinstance(warnings, list):
         for warning in warnings:
