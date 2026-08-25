@@ -1009,6 +1009,39 @@ class TestMaterializeMarkdown:
             assert not Path(d, "security-review.md").exists()
             assert "skipped security-review.json" in capsys.readouterr().err
 
+    def test_custom_suffix_cannot_bypass_final_review_validation(self, capsys):
+        with tempfile.TemporaryDirectory() as d:
+            builder = ReviewOutputBuilder(pr_id="1", reviewer="security")
+            _write_required_accounting_input(d, "security")
+            _save_and_finalize(builder, d)
+            path = Path(d, "security-review.json")
+            review = json.loads(path.read_text())
+            review["schema"] = 1
+            path.write_text(json.dumps(review))
+
+            written = materialize_markdown(
+                d, suffix="security-review.json"
+            )
+
+            assert written == []
+            assert not Path(d, "security-review.md").exists()
+            assert "skipped security-review.json" in capsys.readouterr().err
+
+    def test_arbitrary_json_is_not_a_renderable_artifact_family(self, capsys):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d, "arbitrary.json")
+            path.write_text(json.dumps(
+                ReviewOutputBuilder(
+                    pr_id="1", reviewer="security"
+                ).to_dict()
+            ))
+
+            written = materialize_markdown(d, suffix="arbitrary.json")
+
+            assert written == []
+            assert not Path(d, "arbitrary.md").exists()
+            assert "unsupported review artifact" in capsys.readouterr().err
+
     def test_render_cli_prints_markdown(self):
         output_py = Path(__file__).parents[3] / "scripts" / "review" / "agent" / "output.py"
         assert output_py.is_file(), output_py  # layout guard: tests/review/agent -> plugin root
@@ -1042,6 +1075,38 @@ class TestMaterializeMarkdown:
             assert result.returncode == 0, result.stderr
             assert str(md_path) in result.stdout
             assert md_path.is_file()
+
+    def test_materialize_cli_custom_suffix_validates_final_review(self):
+        output_py = (
+            Path(__file__).parents[3] / "scripts" / "review" / "agent"
+            / "output.py"
+        )
+        with tempfile.TemporaryDirectory() as d:
+            builder = ReviewOutputBuilder(pr_id="1", reviewer="security")
+            _write_required_accounting_input(d, "security")
+            _save_and_finalize(builder, d)
+            path = Path(d, "security-review.json")
+            review = json.loads(path.read_text())
+            review["schema"] = 1
+            path.write_text(json.dumps(review))
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(output_py),
+                    "materialize",
+                    d,
+                    "--suffix",
+                    "security-review.json",
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            assert result.returncode == 0
+            assert result.stdout == ""
+            assert "skipped security-review.json" in result.stderr
+            assert not Path(d, "security-review.md").exists()
 
 
 # =============================================================================

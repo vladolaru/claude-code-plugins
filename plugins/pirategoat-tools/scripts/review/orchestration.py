@@ -1293,12 +1293,18 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
             if agent.get("status") in DISPATCHED_STATUSES
         ]
     try:
-        review_intake = close_review_intake(output_dir, dispatched_names)
+        intake_close = close_review_intake(output_dir, dispatched_names)
     except Exception as exc:
         raise RuntimeError(
             "review intake could not be closed — reconciliation inputs "
             "are not frozen"
         ) from exc
+    invalid_at_close = {
+        entry["path"]
+        for entry in intake_close.get("invalid_final_reviews", [])
+    }
+    review_intake = dict(intake_close)
+    review_intake.pop("invalid_final_reviews", None)
     state["review_intake"] = review_intake
     discarded_drafts = review_intake["discarded_drafts"]
     degradation = state.setdefault("degradation", {})
@@ -1392,6 +1398,9 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
                 reviewer = derive_reviewer_name(name)
                 review_file = review_paths(output_dir, reviewer).final
                 if os.path.isfile(review_file):
+                    if review_file in invalid_at_close:
+                        invalid_review_files.append(review_file)
+                        continue
                     try:
                         _load_final_review(
                             output_builder_path, review_file, reviewer

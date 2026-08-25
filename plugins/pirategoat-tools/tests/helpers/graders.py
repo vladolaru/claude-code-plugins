@@ -138,10 +138,9 @@ def grade_review_json(path: str, expected_reviewer: str = None) -> GradeResult:
         _validate_review_document(data, reviewer)
     except ValueError as error:
         checks.append((False, str(error)))
+        return _grade(checks)
     else:
         checks.append((True, ""))
-    if not isinstance(data, dict):
-        return _grade(checks)
 
     # Check required top-level fields
     for field_name in REQUIRED_JSON_TOP_FIELDS:

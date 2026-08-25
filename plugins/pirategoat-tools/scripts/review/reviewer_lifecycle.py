@@ -115,8 +115,10 @@ def close_review_intake(output_dir: str, dispatched_reviewers):
     """Freeze reviewer inputs and discard only dispatched drafts.
 
     The closed marker is written before completion repair and cleanup. If
-    either later operation is interrupted, ordinary save/finalize remains
-    rejected and a repeated close resumes from the recorded discard set.
+    cleanup is interrupted, ordinary save/finalize remains rejected and a
+    repeated close resumes from the recorded discard set. Invalid finals
+    are terminal inputs rather than an interruption: the returned runtime
+    result classifies them while the persisted intake marker stays schema 2.
     """
     if not isinstance(dispatched_reviewers, (list, tuple)):
         raise ValueError("dispatched reviewer identities must be a list")
@@ -156,11 +158,23 @@ def close_review_intake(output_dir: str, dispatched_reviewers):
         # Canonical JSON is the only completion source at close. Repair is
         # deliberately after the closed marker so an interrupted operation
         # cannot reopen the ordinary finalization channel.
-        repaired_reviewers = set()
-        for _agent_name, reviewer, paths in recognized:
-            if os.path.isfile(paths.final) and reviewer not in repaired_reviewers:
-                _repair_finalized_completion(output_dir, reviewer)
-                repaired_reviewers.add(reviewer)
+        classified_reviewers = set()
+        invalid_final_reviews = []
+        for agent_name, reviewer, paths in recognized:
+            if (
+                os.path.isfile(paths.final)
+                and reviewer not in classified_reviewers
+            ):
+                classified_reviewers.add(reviewer)
+                try:
+                    _repair_finalized_completion(output_dir, reviewer)
+                except ValueError as error:
+                    invalid_final_reviews.append({
+                        "agent_name": agent_name,
+                        "reviewer": reviewer,
+                        "path": paths.final,
+                        "error": str(error),
+                    })
 
         deleted_paths = set()
         for _agent_name, _reviewer, paths in recognized:
@@ -173,4 +187,7 @@ def close_review_intake(output_dir: str, dispatched_reviewers):
             else:
                 deleted_paths.add(paths.draft)
 
-    return intake
+    return {
+        **intake,
+        "invalid_final_reviews": invalid_final_reviews,
+    }

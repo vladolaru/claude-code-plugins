@@ -120,6 +120,49 @@ class TestGradeReviewJson:
         assert any("unexpected fields: issues" in failure for failure in result.failures)
 
     @pytest.mark.parametrize(
+        ("malformation", "diagnostic"),
+        [
+            ("numeric-summary", "review summary is malformed"),
+            ("non-object-finding", "review finding 0 must be an object"),
+            ("non-list-checks", "review checks must be a list"),
+            (
+                "non-list-accounting",
+                "review reviewed_file_claims must be a list of strings",
+            ),
+            (
+                "retired-schema-and-field",
+                "review has unexpected fields: issues",
+            ),
+        ],
+    )
+    def test_canonical_rejection_stops_invalid_document_projection(
+        self, tmp_dir, malformation, diagnostic
+    ):
+        path = _make_valid_json(tmp_dir)
+        with open(path) as source:
+            data = json.load(source)
+        if malformation == "numeric-summary":
+            data["summary"] = 7
+        elif malformation == "non-object-finding":
+            data["findings"] = [7]
+        elif malformation == "non-list-checks":
+            data["checks"] = 7
+        elif malformation == "non-list-accounting":
+            data["reviewed_file_claims"] = 7
+        else:
+            data["schema"] = 1
+            data["issues"] = []
+        with open(path, "w") as target:
+            json.dump(data, target)
+
+        result = grade_review_json(path)
+
+        assert result.passed is False
+        assert result.failures == [diagnostic]
+        assert result.checks_run == 3
+        assert result.checks_passed == 2
+
+    @pytest.mark.parametrize(
         "field_name",
         [
             "checks",
@@ -271,20 +314,19 @@ class TestGradeReviewJson:
         assert any("verdict" in f for f in result.failures)
 
     def test_invalid_verdict_fails(self, tmp_dir):
-        path = os.path.join(tmp_dir, "bad-verdict.json")
-        data = {
-            "pr_id": "1",
-            "reviewer": "test",
-            "verdict": "INVALID_VERDICT",
-            "summary": {"total_findings": 0, "by_severity": {}},
-            "findings": [],
-            "meta": {},
-        }
+        path = _make_valid_json(tmp_dir)
+        with open(path) as source:
+            data = json.load(source)
+        data["verdict"] = "INVALID_VERDICT"
         with open(path, "w") as f:
             json.dump(data, f)
+
         result = grade_review_json(path)
+
         assert not result.passed
-        assert any("Invalid verdict" in f for f in result.failures)
+        assert result.failures == [
+            "review verdict does not match its findings"
+        ]
 
     def test_valid_severity_floor_passes(self, tmp_dir):
         path = _make_valid_json(tmp_dir)
@@ -304,13 +346,18 @@ class TestGradeReviewJson:
             data = json.load(f)
         data["findings"][0]["severity"] = "low"
         data["findings"][0]["severity_floor"] = "medium"
+        data["verdict"] = "approve"
+        data["summary"]["by_severity"]["high"] = 0
+        data["summary"]["by_severity"]["low"] = 1
         with open(path, "w") as f:
             json.dump(data, f)
 
         result = grade_review_json(path)
 
         assert not result.passed
-        assert any("below floor" in failure for failure in result.failures)
+        assert any(
+            "below floor" in failure for failure in result.failures
+        ), result.failures
 
     def test_empty_file_fails(self, tmp_dir):
         path = os.path.join(tmp_dir, "empty.json")
@@ -320,29 +367,17 @@ class TestGradeReviewJson:
         assert not result.passed
 
     def test_finding_with_invalid_severity_fails(self, tmp_dir):
-        path = os.path.join(tmp_dir, "bad-sev.json")
-        data = {
-            "pr_id": "1",
-            "reviewer": "test",
-            "verdict": "comment",
-            "summary": {"total_findings": 1, "by_severity": {"unknown": 1}},
-            "findings": [
-                {
-                    "id": "abc",
-                    "severity": "unknown",
-                    "title": "Test",
-                    "file": "a.py",
-                    "description": "desc",
-                    "recommendation": "fix",
-                }
-            ],
-            "meta": {},
-        }
+        path = _make_valid_json(tmp_dir)
+        with open(path) as source:
+            data = json.load(source)
+        data["findings"][0]["severity"] = "unknown"
         with open(path, "w") as f:
             json.dump(data, f)
+
         result = grade_review_json(path)
+
         assert not result.passed
-        assert any("invalid severity" in f.lower() for f in result.failures)
+        assert result.failures == ["review finding 0.severity is invalid"]
 
 
 class TestGradeReviewMarkdown:
@@ -1116,6 +1151,8 @@ class TestReviewRoundHardening:
         assert grade_review_json(path, expected_reviewer="security").passed
         mismatch = grade_review_json(path, expected_reviewer="performance")
         assert not mismatch.passed
-        assert any("does not match expected" in f for f in mismatch.failures)
+        assert mismatch.failures == [
+            "review reviewer does not match finalization request"
+        ]
         # Omitting the expectation keeps prior behavior.
         assert grade_review_json(path).passed

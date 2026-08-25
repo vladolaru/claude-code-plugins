@@ -1780,8 +1780,13 @@ class TestStep8Orchestration:
         assert state["agents"]["review_files"] == [str(final_path)]
 
     def test_step_8_preserves_invalid_output_evidence_without_completion(
-        self, mod, tmp_path, monkeypatch
+        self, tmp_path
     ):
+        initialized = run_pipeline(
+            "--step", "1", "--mode", "full",
+            "--output-dir", str(tmp_path), cwd=tmp_path,
+        )
+        assert initialized.returncode == 0, initialized.stderr
         (tmp_path / "dispatch-plan.json").write_text(json.dumps({
             "agents": [{"name": "code-reviewer", "status": "DISPATCH"}],
         }))
@@ -1789,45 +1794,35 @@ class TestStep8Orchestration:
         review = canonical_review_document("code")
         review["schema"] = 1
         review_path.write_text(json.dumps(review))
-        monkeypatch.setattr(
-            mod.subprocess,
-            "run",
-            lambda *args, **kwargs: subprocess.CompletedProcess(
-                args=args[0], returncode=0, stdout="", stderr=""
-            ),
-        )
-        monkeypatch.setitem(
-            mod._orchestrate_step_8.__globals__,
-            "close_review_intake",
-            lambda *_args: {
-                "schema": 2,
-                "status": "closed",
-                "closed_at": "2026-08-26T00:00:00+03:00",
-                "discarded_drafts": [],
-            },
-        )
-        monkeypatch.setitem(
-            mod._orchestrate_step_8.__globals__,
-            "_materialize_markdown",
-            lambda *_args, **_kwargs: [],
+
+        result = run_pipeline(
+            "--step", "8", "--mode", "full",
+            "--output-dir", str(tmp_path), cwd=tmp_path,
         )
 
-        def reconciliation_succeeds(*_args, **_kwargs):
-            (tmp_path / "reconciliation-context.json").write_text("{}")
-            return "", True
-
-        monkeypatch.setitem(
-            mod._orchestrate_step_8.__globals__,
-            "_run_subprocess",
-            reconciliation_succeeds,
-        )
-        state = {"resolved_params": {}}
-
-        mod._orchestrate_step(8, "full", {}, state, {}, str(tmp_path))
-
+        assert result.returncode == 0, result.stderr
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
         assert state["agents"]["completed"] == []
         assert state["agents"]["review_files"] == []
         assert state["agents"]["invalid_review_files"] == [str(review_path)]
+        assert state["reviewer_markdown"]["status"] == "partial"
+        assert not (tmp_path / "code-review.md").exists()
+        intake = json.loads((tmp_path / "review-intake.json").read_text())
+        assert intake["status"] == "closed"
+        context = json.loads(
+            (tmp_path / "reconciliation-context.json").read_text()
+        )
+        assert context["reviews_by_agent"] == {}
+        assert context["missing_agents"] == ["code-review"]
+        telemetry_path = Path(
+            (tmp_path / ".telemetry-log-path").read_text().strip()
+        )
+        events = [
+            json.loads(line) for line in telemetry_path.read_text().splitlines()
+        ]
+        assert not any(
+            event["event"] == "agent_complete" for event in events
+        )
 
     def test_step_1_records_that_reviewer_markdown_has_not_run(self, tmp_path):
         result = run_pipeline(

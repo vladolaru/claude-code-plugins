@@ -699,6 +699,20 @@ def render_review_body(data: Dict) -> str:
     return ''.join(md)
 
 
+_RECONCILIATION_LEDGER_NAME = "review-findings.json"
+
+
+def _load_renderable_review_artifact(path):
+    """Classify and load one supported artifact by its actual filename."""
+    name = os.path.basename(path)
+    if name == _RECONCILIATION_LEDGER_NAME:
+        return _read_json_object(path, "reconciliation findings ledger")
+    if name.endswith("-review.json"):
+        reviewer = name[: -len("-review.json")]
+        return load_review_document(path, reviewer)
+    raise ValueError(f"unsupported review artifact: {name}")
+
+
 def materialize_markdown(
     output_dir: str, *, suffix: str = "-review.json"
 ) -> List[str]:
@@ -710,13 +724,13 @@ def materialize_markdown(
     key on the JSON). Malformed JSONs are skipped with a note on stderr —
     grading and reconciliation report those failures on their own channels.
 
-    `suffix` is what lets ONE materializer own every derived Markdown in a
-    run directory: the default covers the per-reviewer family the step-8
-    readiness gate renders, and `suffix="review-findings.json"` (an exact
-    filename, which is also a suffix that nothing else in the directory
-    matches) covers the reconciliation ledger the pipeline renders at
-    steps 9 and 11. A second copy of this loop is how the two would
-    eventually disagree about what a rendering means.
+    `suffix` selects filenames only; the matched filename independently
+    chooses its validation boundary. Every `<reviewer>-review.json` uses
+    the canonical final-review loader, including when a caller supplies an
+    exact filename as the suffix. Only exact `review-findings.json` uses
+    the reconciliation ledger's separate object/rendering boundary. A
+    second copy of this loop is how the two would eventually disagree
+    about what a rendering means.
     """
     written: List[str] = []
     for name in sorted(os.listdir(output_dir)):
@@ -724,12 +738,7 @@ def materialize_markdown(
             continue
         json_path = os.path.join(output_dir, name)
         try:
-            if suffix == "-review.json":
-                reviewer = name[: -len(suffix)]
-                data = load_review_document(json_path, reviewer)
-            else:
-                with open(json_path, encoding="utf-8") as handle:
-                    data = json.load(handle)
+            data = _load_renderable_review_artifact(json_path)
             md_text = render_markdown(data)
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as err:
             print(f"skipped {name}: {err}", file=sys.stderr)
@@ -2263,11 +2272,11 @@ def repair_finalized_completion(output_dir: str, reviewer: str):
     draft and does nothing after intake close unless final JSON
     already exists. The caller holds the shared output-directory lock.
     """
+    paths = review_paths(output_dir, reviewer)
     telemetry = _telemetry_for_output(output_dir)
     if telemetry.log_path is None:
+        load_review_document(paths.final, reviewer)
         return None
-
-    paths = review_paths(output_dir, reviewer)
     try:
         with open(paths.final, "rb") as final_handle:
             final_bytes = final_handle.read()
@@ -2329,15 +2338,7 @@ if __name__ == '__main__':
     finalize_cmd.add_argument("--review-digest", required=True)
     cli_args = parser.parse_args()
     if cli_args.command == "render":
-        cli_name = os.path.basename(cli_args.json_path)
-        if cli_name.endswith("-review.json"):
-            cli_reviewer = cli_name[: -len("-review.json")]
-            cli_data = load_review_document(
-                cli_args.json_path, cli_reviewer
-            )
-        else:
-            with open(cli_args.json_path, encoding="utf-8") as cli_handle:
-                cli_data = json.load(cli_handle)
+        cli_data = _load_renderable_review_artifact(cli_args.json_path)
         print(render_markdown(cli_data))
     elif cli_args.command == "materialize":
         for written_path in materialize_markdown(

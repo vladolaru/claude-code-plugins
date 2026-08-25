@@ -266,6 +266,25 @@ class TestFinalization:
 
 
 class TestReviewIntakeClose:
+    def test_close_classifies_invalid_final_without_telemetry(self, tmp_path):
+        final = Path(tmp_path, "security-review.json")
+        final.write_text("not json")
+
+        closed = close_review_intake(
+            str(tmp_path), ["security-reviewer"]
+        )
+
+        assert closed["invalid_final_reviews"] == [{
+            "agent_name": "security-reviewer",
+            "reviewer": "security",
+            "path": str(final),
+            "error": "malformed final review JSON",
+        }]
+        persisted = json.loads(
+            Path(tmp_path, "review-intake.json").read_text()
+        )
+        assert "invalid_final_reviews" not in persisted
+
     def test_close_discards_only_recognized_dispatched_drafts(self, tmp_path):
         _write_accounting_input(tmp_path)
         saved = _open_builder(tmp_path).save_draft()

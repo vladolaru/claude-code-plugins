@@ -129,6 +129,46 @@ class TestGradeOnlyMode:
         assert "Traceback" not in result.stderr, result.stderr
         assert "security" in result.stdout
 
+    @pytest.mark.parametrize(
+        ("malformation", "diagnostic"),
+        [
+            ("numeric-summary", "review summary is malformed"),
+            ("non-object-finding", "review finding 0 must be an object"),
+            (
+                "retired-schema-and-field",
+                "review has unexpected fields: issues",
+            ),
+        ],
+    )
+    def test_rejected_final_review_reports_canonical_diagnostic(
+        self, tmp_path, malformation, diagnostic
+    ):
+        _write_review_pair(tmp_path)
+        bad = tmp_path / "security-review.json"
+        data = json.loads(bad.read_text())
+        if malformation == "numeric-summary":
+            data["summary"] = 7
+        elif malformation == "non-object-finding":
+            data["findings"] = [7]
+        else:
+            data["schema"] = 1
+            data["issues"] = []
+        bad.write_text(json.dumps(data))
+
+        grade = run_grade_only(str(tmp_path))["security"]
+        result = _run_eval("--grade-only", str(tmp_path), cwd=tmp_path)
+
+        assert grade.passed is False
+        assert grade.failures == [
+            diagnostic,
+            f"File does not exist: {tmp_path / 'security-review.md'}",
+        ]
+        assert grade.checks_run == 4
+        assert grade.checks_passed == 2
+        assert "Traceback" not in result.stderr, result.stderr
+        assert result.returncode == 0
+        assert diagnostic in result.stdout
+
     def test_grade_only_materializes_missing_markdown(self, tmp_path):
         """Finalized runs may lack derived Markdown until materialization."""
         _write_review_pair(tmp_path)
