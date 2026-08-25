@@ -64,7 +64,7 @@ export interface Issue {
     title: string; // Short description
     description: string; // Detailed explanation
     file: string; // Path to file
-    line?: number | null; // Line number. null for file-scoped findings (missing coverage, precedent, cross-file architecture)
+    line: number | null; // Line number. null for file-scoped findings (missing coverage, precedent, cross-file architecture)
     scope?: 'file'; // Present (with line: null) when the finding is file-scoped rather than line-anchored
     code_snippet?: string; // Relevant code (optional)
     recommendation: string; // How to fix

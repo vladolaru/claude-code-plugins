@@ -205,7 +205,7 @@ class TestFindingsSave:
         "missing_field",
         [
             "severity", "title", "file", "description", "recommendation",
-            "id", "category", "confidence",
+            "id", "category", "confidence", "line",
         ],
     )
     def test_rejects_issue_missing_required_field(self, tmp_path, missing_field):
@@ -219,6 +219,17 @@ class TestFindingsSave:
         assert "REJECTED" in result.stdout
         assert missing_field in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
+
+    def test_accepts_null_line_for_file_scoped_issue(self, tmp_path):
+        doc = _valid_findings()
+        doc["issues"][0]["line"] = None
+        findings = self._write_findings(tmp_path, doc)
+
+        result = self._run_save(tmp_path, findings)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        saved = json.loads((tmp_path / "review-findings.json").read_text())
+        assert saved["issues"][0]["line"] is None
 
     def test_rejects_issue_invalid_severity(self, tmp_path):
         doc = _valid_findings()

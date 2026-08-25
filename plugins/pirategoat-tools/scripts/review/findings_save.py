@@ -58,13 +58,12 @@ RECONCILER_VERDICTS = ("block", "request_changes", "comment", "approve")
 
 # Fields every issue entry must carry to be a well-formed ReviewOutputBuilder
 # issue (see Issue in schemas/review-output.ts and add_issue() in
-# review/agent/output.py, which always sets exactly these plus 'line' and
-# 'confidence'/'category' defaults). 'line' is deliberately absent — it is
-# legitimately null for file-scoped findings — matching the same omission
-# critic_adjustments.ADD_REQUIRED_FIELDS makes for the same reason.
+# review/agent/output.py, which always sets exactly these. ``line`` is
+# required but nullable: null identifies a file-scoped finding, while an
+# absent key is a malformed issue that the renderer cannot consume.
 REQUIRED_ISSUE_FIELDS = (
     "id", "category", "severity", "title", "description", "file",
-    "recommendation", "confidence",
+    "line", "recommendation", "confidence",
 )
 
 # Severities the breakdown echo reports, in the order the brief's format
