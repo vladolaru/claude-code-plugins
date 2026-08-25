@@ -318,9 +318,9 @@ def _sanitize_agent_event(value: object, *, completed: bool) -> dict[str, Any]:
                 if (count := _nonnegative_int(severities.get(name))) is not None
             }
             result["severities"] = safe_severities
-        digest = value.get("artifact_digest")
+        digest = value.get("review_digest")
         if _lowercase_sha256(digest):
-            result["artifact_digest"] = digest
+            result["review_digest"] = digest
     else:
         budget_target = _nonnegative_int(value.get("budget_target"))
         if budget_target is not None:
@@ -383,7 +383,6 @@ def _strict_lifecycle_event(
     *,
     completed: bool,
     run_id: str,
-    raw_completion: bool = False,
 ) -> dict[str, Any] | None:
     expected_event = "agent_complete" if completed else "agent_start"
     if (
@@ -399,8 +398,7 @@ def _strict_lifecycle_event(
         return None
 
     if completed:
-        digest_present = "artifact_digest" in value
-        artifact_digest = value.get("artifact_digest")
+        review_digest = value.get("review_digest")
         if (
             "duration_ms" not in value
             or (
@@ -410,12 +408,7 @@ def _strict_lifecycle_event(
             or _nonnegative_exact_int(value.get("issue_count")) is None
             or not _bounded_event_string(value.get("verdict"))
             or not isinstance(value.get("severities"), dict)
-            or (digest_present and not _lowercase_sha256(artifact_digest))
-            or (
-                raw_completion
-                and not digest_present
-                and type(value.get("resave")) is not bool
-            )
+            or not _lowercase_sha256(review_digest)
         ):
             return None
         severities: dict[str, int] = {}
@@ -439,8 +432,7 @@ def _strict_lifecycle_event(
             "issue_count": value["issue_count"],
             "severities": severities,
         }
-        if digest_present:
-            result["artifact_digest"] = artifact_digest
+        result["review_digest"] = review_digest
         return result
 
     scope = value.get("scope")

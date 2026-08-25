@@ -215,7 +215,7 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
     ):
         return None
 
-    # The builder persists its accumulated state at save(): only issues
+    # The builder persists its accumulated state at save_draft(): only issues
     # added BEFORE the final save call entered the saved JSON. An
     # add_issue() after the last save executed but persisted nothing —
     # collecting it would fabricate findings into the quality report.
@@ -227,7 +227,7 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
         if (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "save"
+            and node.func.attr == "save_draft"
         ):
             pos = (node.lineno, node.col_offset)
             if final_save_pos is None or pos > final_save_pos:
@@ -240,12 +240,10 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
             return None
         save_receiver_name = save_receiver.id
 
-    # save() persists one builder instance's accumulated state. A heredoc
-    # that reassigns the builder (constructs a second ReviewOutputBuilder
-    # to correct its review) discards the first instance's issues — the
-    # final artifact holds only issues added to the LAST instance
-    # constructed before the final save. Collecting earlier instances'
-    # add_issue() calls would merge superseded findings into the record.
+    # save_draft() persists one opened builder's accumulated state. The
+    # final artifact holds only issues added to the last builder opened
+    # before the final save. Collecting earlier instances' add_issue()
+    # calls would merge superseded findings into the record.
     # Position alone is not identity: issues bind to the SAVED receiver's
     # variable, so a second builder variable's calls are never merged in.
     # The constructor assignment must also be that variable's final binding
@@ -306,12 +304,13 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
         ):
             continue
         func = value.func
-        ctor_name = (
-            func.id if isinstance(func, ast.Name)
-            else func.attr if isinstance(func, ast.Attribute)
-            else None
+        is_builder_open = (
+            isinstance(func, ast.Attribute)
+            and func.attr == "open"
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "ReviewOutputBuilder"
         )
-        if ctor_name != "ReviewOutputBuilder":
+        if not is_builder_open:
             continue
         if final_ctor_pos is None or pos > final_ctor_pos:
             final_ctor_pos = pos
@@ -360,7 +359,7 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
         _normalize_builder_severity(issue)
         issues.append(issue)
 
-    # A heredoc that never calls builder.save() persisted nothing — its
+    # A heredoc that never calls builder.save_draft() persisted nothing — its
     # findings must not be fabricated into a review record. (The save
     # target is env-pinned by the envelope and not statically resolvable,
     # so the call's presence is the verifiable signal.)

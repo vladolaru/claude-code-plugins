@@ -99,9 +99,9 @@ Scan the diff hunks (changed lines, not just file names): **does anything relate
 ```python
 builder.mark_not_applicable("No changes relevant to [your domain] — diff contains only [brief description]")
 builder.add_positive("Diff scanned — no changes relevant to [your domain]")
-result = builder.save(OUTPUT_DIR)
-# Inspect the echo, then run its exact FINALIZE command in a separate tool turn.
-# Return STATUS: FINISHED only after that command prints RECORDED FINAL.
+builder.save_draft()
+# Inspect the receipt, then run its exact FINALIZE REVIEW command in a separate tool turn.
+# Return STATUS: FINISHED only after that command prints REVIEW FINALIZED.
 ```
 
 This backstops false-positive dispatch — triage matched on file paths/keywords, but the actual changes may not warrant your review.
@@ -231,7 +231,7 @@ This is a non-executable API reference. Bootstrap's **OUTPUT INSTRUCTIONS** bloc
 - `builder.add_tool_result("ToolName")` - Track tools used
 - `builder.set_confidence(0.0-1.0)` - Set overall confidence
 - `builder.add_positive("observation")` - Note good patterns
-- `builder.save(output_dir)` - Publish a replaceable candidate and print its RECORDED COUNTS plus an exact FINALIZE command. Inspect the echo and optionally continue; in a separate tool turn run that exact command, and treat the review as finished only after it prints RECORDED FINAL.
+- `builder.save_draft()` - Atomically replace the bound mutable draft and print its DRAFT TOTALS plus an exact FINALIZE REVIEW command. Inspect the receipt and optionally continue; in a separate tool turn run that exact command, and treat the review as finished only after it prints REVIEW FINALIZED.
 
 **Valid severities:** `critical`, `high`, `medium`, `low`, `info`
 

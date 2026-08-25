@@ -110,7 +110,7 @@ _AGENT_COMPLETE_MANIFEST_FIELDS = (
     "duration_ms",
     "verdict",
     "issue_count",
-    "artifact_digest",
+    "review_digest",
 )
 _SEVERITY_FIELDS = _VALID_SEVERITIES
 
@@ -157,18 +157,16 @@ def _incomplete_agent_executions(
 
 
 def project_agent_lifecycle(items, *, strict: bool = False):
-    """Project append-only saves into one completion per execution.
+    """Project append-only starts and finalizations by execution.
 
-    The canonical save-revision projection shared by the telemetry producer
-    and the review_metrics consumer (via contracts) — both sides MUST agree
+    The canonical execution projection shared by the telemetry producer and
+    the review_metrics consumer (via contracts) — both sides MUST agree
     bit-exactly, so there is exactly one implementation.
 
     ``items`` yields ``(is_completion, agent, payload)`` triples in event
     order; ``agent`` is the agent name or ``None`` when unusable. A
-    completion matches an outstanding start while any remain — so
-    overlapping executions of the same agent each keep their completion.
-    Only once every start is matched does a further completion count as a
-    corrected save, replacing the latest completion.
+    completion matches one outstanding start, so overlapping executions of
+    the same agent each keep their completion.
 
     With ``strict=False`` completions with no preceding start remain visible
     for strict consumers to reject; with ``strict=True`` they fail the whole
@@ -178,7 +176,6 @@ def project_agent_lifecycle(items, *, strict: bool = False):
     completed: List[dict] = []
     start_counts: Counter = Counter()
     completion_counts: Counter = Counter()
-    completion_slot: Dict[str, int] = {}
 
     for is_completion, agent, payload in items:
         if not is_completion:
@@ -186,19 +183,14 @@ def project_agent_lifecycle(items, *, strict: bool = False):
             if agent:
                 start_counts[agent] += 1
             continue
-        if strict and (agent is None or agent not in start_counts):
-            return None
-        if (
-            agent
-            and agent in completion_slot
-            and completion_counts[agent] >= start_counts[agent]
+        if strict and (
+            agent is None
+            or completion_counts[agent] >= start_counts[agent]
         ):
-            completed[completion_slot[agent]] = payload
-        else:
-            completed.append(payload)
-            if agent and start_counts[agent] > 0:
-                completion_counts[agent] += 1
-                completion_slot[agent] = len(completed) - 1
+            return None
+        completed.append(payload)
+        if agent and completion_counts[agent] < start_counts[agent]:
+            completion_counts[agent] += 1
 
     return started, completed
 
@@ -352,18 +344,20 @@ class ReviewTelemetry:
             event["budget_target"] = budget_target
         self._append(event)
 
-    def log_agent_save(self, agent_name: str, artifact_digest: str) -> None:
-        """Append raw diagnostic evidence for one candidate publication."""
+    def log_agent_review_draft_saved(
+        self, agent_name: str, review_digest: str
+    ) -> None:
+        """Append raw diagnostic evidence for one saved review draft."""
         if self.log_path is None:
             return
         self._append({
-            "event": "agent_save",
+            "event": "agent_review_draft_saved",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "agent": agent_name,
-            "artifact_digest": artifact_digest,
+            "review_digest": review_digest,
         })
 
-    def log_agent_complete(self, agent_name: str, artifact_digest: str,
+    def log_agent_complete(self, agent_name: str, review_digest: str,
                            verdict: str = "",
                            issue_count: int = 0,
                            severities: Optional[dict] = None) -> None:
@@ -382,7 +376,7 @@ class ReviewTelemetry:
             "verdict": verdict,
             "issue_count": issue_count,
             "severities": severities or {},
-            "artifact_digest": artifact_digest,
+            "review_digest": review_digest,
         }
         self._append(event)
 
@@ -648,9 +642,6 @@ class ReviewTelemetry:
         """Sanitize raw events and run the shared lifecycle projection.
 
         Current producers emit one completion per finalized execution.
-        The last-wins-per-outstanding-execution-slot projection remains for
-        pre-finalization logs where candidate corrections were recorded as
-        repeated `agent_complete` events.
         """
 
         def items():

@@ -35,7 +35,7 @@ from helpers.graders import (
     aggregate_detection_trials,
 )
 
-from review.agent.output import ReviewOutputBuilder, finalize_candidate
+from review.agent.output import ReviewOutputBuilder, finalize_review
 
 
 @pytest.fixture
@@ -46,7 +46,7 @@ def tmp_dir():
 
 def _make_valid_json(tmp_dir: str, reviewer: str = "security") -> str:
     """Create a valid review JSON file using ReviewOutputBuilder."""
-    builder = ReviewOutputBuilder(pr_id="123", reviewer=reviewer)
+    builder = ReviewOutputBuilder.open(tmp_dir, "123", reviewer)
     builder.add_issue(
         severity="high",
         title="SQL Injection",
@@ -68,8 +68,8 @@ def _make_valid_json(tmp_dir: str, reviewer: str = "security") -> str:
             "inline_diff_file_count": 3,
             "in_scope_review_file_count": 3,
         }, f)
-    candidate = builder.save(tmp_dir)
-    finalize_candidate(tmp_dir, reviewer, candidate["candidate_digest"])
+    saved = builder.save_draft()
+    finalize_review(tmp_dir, reviewer, saved["review_digest"])
     path = os.path.join(tmp_dir, f"{reviewer}-review.json")
     return path
 

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Reviewer-specific candidate, canonical, sidecar, and intake state."""
+"""Reviewer-specific draft, final, sidecar, and intake state."""
 
 from dataclasses import dataclass
 import json
 import os
+import shlex
 from datetime import datetime, timezone
 
 try:
@@ -15,16 +16,33 @@ except ImportError:
 
 
 REVIEW_INTAKE_NAME = "review-intake.json"
+FINALIZE_REVIEW_COMMAND = (
+    "python3 {output_script} finalize-review "
+    "--output-dir {output_dir} --reviewer {reviewer} "
+    "--review-digest {review_digest}"
+)
+
+
+def finalize_review_command(
+    output_script: str, output_dir: str, reviewer: str, review_digest: str
+) -> str:
+    """Render the one digest-bound finalization command."""
+    return FINALIZE_REVIEW_COMMAND.format(
+        output_script=shlex.quote(output_script),
+        output_dir=shlex.quote(output_dir),
+        reviewer=shlex.quote(reviewer),
+        review_digest=review_digest,
+    )
 
 
 @dataclass(frozen=True)
-class ReviewerPaths:
-    candidate: str
-    canonical: str
+class ReviewPaths:
+    draft: str
+    final: str
     accounting_input: str
 
 
-def reviewer_paths(output_dir: str, reviewer: str) -> ReviewerPaths:
+def review_paths(output_dir: str, reviewer: str) -> ReviewPaths:
     """Return the three lifecycle paths for one safe reviewer identity."""
     if (
         not isinstance(reviewer, str)
@@ -36,9 +54,9 @@ def reviewer_paths(output_dir: str, reviewer: str) -> ReviewerPaths:
     ):
         raise ValueError(f"invalid reviewer identity: {reviewer!r}")
     stem = os.path.join(output_dir, f"{reviewer}-review")
-    return ReviewerPaths(
-        candidate=f"{stem}.candidate.json",
-        canonical=f"{stem}.json",
+    return ReviewPaths(
+        draft=f"{stem}.draft.json",
+        final=f"{stem}.json",
         accounting_input=os.path.join(
             output_dir, f"{reviewer}-review-accounting-input.json"
         ),
@@ -52,11 +70,11 @@ def require_review_intake_open(output_dir: str) -> None:
         raise ValueError("review intake is closed")
 
 
-def require_not_finalized(paths: ReviewerPaths) -> None:
-    """Reject a mutable candidate save once canonical JSON exists."""
-    if os.path.exists(paths.canonical):
+def require_not_finalized(paths: ReviewPaths) -> None:
+    """Reject a mutable draft save once final JSON exists."""
+    if os.path.exists(paths.final):
         raise ValueError(
-            f"reviewer {os.path.basename(paths.canonical)!r} is already finalized"
+            f"reviewer {os.path.basename(paths.final)!r} is already finalized"
         )
 
 
@@ -71,13 +89,13 @@ def _load_closed_intake(path: str):
     if (
         not isinstance(intake, dict)
         or type(intake.get("schema")) is not int
-        or intake["schema"] != 1
+        or intake["schema"] != 2
         or intake.get("status") != "closed"
         or not isinstance(intake.get("closed_at"), str)
-        or not isinstance(intake.get("discarded_candidates"), list)
+        or not isinstance(intake.get("discarded_drafts"), list)
         or not all(
             isinstance(name, str) and name
-            for name in intake["discarded_candidates"]
+            for name in intake["discarded_drafts"]
         )
     ):
         raise ValueError("malformed closed review intake")
@@ -94,7 +112,7 @@ def _repair_finalized_completion(output_dir: str, reviewer: str) -> None:
 
 
 def close_review_intake(output_dir: str, dispatched_reviewers):
-    """Freeze reviewer inputs and discard only dispatched candidates.
+    """Freeze reviewer inputs and discard only dispatched drafts.
 
     The closed marker is written before completion repair and cleanup. If
     either later operation is interrupted, ordinary save/finalize remains
@@ -110,28 +128,28 @@ def close_review_intake(output_dir: str, dispatched_reviewers):
         previous = _load_closed_intake(intake_path)
         known_identities = set(dispatched_reviewers)
         if previous is not None:
-            known_identities.update(previous["discarded_candidates"])
+            known_identities.update(previous["discarded_drafts"])
 
         recognized = []
         discarded = set(
-            previous["discarded_candidates"] if previous is not None else []
+            previous["discarded_drafts"] if previous is not None else []
         )
         for agent_name in sorted(known_identities):
             reviewer = derive_reviewer_name(agent_name)
-            paths = reviewer_paths(output_dir, reviewer)
+            paths = review_paths(output_dir, reviewer)
             recognized.append((agent_name, reviewer, paths))
-            if os.path.isfile(paths.candidate):
+            if os.path.isfile(paths.draft):
                 discarded.add(agent_name)
 
         intake = {
-            "schema": 1,
+            "schema": 2,
             "status": "closed",
             "closed_at": (
                 previous["closed_at"]
                 if previous is not None
                 else datetime.now(timezone.utc).isoformat()
             ),
-            "discarded_candidates": sorted(discarded),
+            "discarded_drafts": sorted(discarded),
         }
         atomic_write_json(intake_path, intake)
 
@@ -140,19 +158,19 @@ def close_review_intake(output_dir: str, dispatched_reviewers):
         # cannot reopen the ordinary finalization channel.
         repaired_reviewers = set()
         for _agent_name, reviewer, paths in recognized:
-            if os.path.isfile(paths.canonical) and reviewer not in repaired_reviewers:
+            if os.path.isfile(paths.final) and reviewer not in repaired_reviewers:
                 _repair_finalized_completion(output_dir, reviewer)
                 repaired_reviewers.add(reviewer)
 
         deleted_paths = set()
         for _agent_name, _reviewer, paths in recognized:
-            if paths.candidate in deleted_paths:
+            if paths.draft in deleted_paths:
                 continue
             try:
-                os.unlink(paths.candidate)
+                os.unlink(paths.draft)
             except FileNotFoundError:
                 pass
             else:
-                deleted_paths.add(paths.candidate)
+                deleted_paths.add(paths.draft)
 
     return intake

@@ -334,9 +334,9 @@ class TestPartitionScopePaths:
             _mod.main()
         capsys.readouterr()
 
-        builder = ReviewOutputBuilder("123", "security")
+        builder = ReviewOutputBuilder.open(str(tmp_path), "123", "security")
         builder.claim_files_reviewed("src/deferred-b.py")
-        builder.save(str(tmp_path))
+        builder.save_draft()
 
         payload = json.loads(
             (tmp_path / "security-review-accounting-input.json").read_text()
@@ -359,7 +359,7 @@ class TestPartitionScopePaths:
         assert payload["in_scope_review_file_count"] == 5
         assert 0 <= covered <= payload["in_scope_review_file_count"]
         assert (
-            "PROGRESS: accounted for 4 of 5 in-scope files."
+            "FILES NOT YET CLAIMED AS REVIEWED (1): src/deferred-a.py"
             in capsys.readouterr().out
         )
 

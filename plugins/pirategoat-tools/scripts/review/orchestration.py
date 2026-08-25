@@ -1243,8 +1243,8 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
         )
 
     # Freeze exactly the dispatched reviewer identities before any consumer
-    # renders or loads canonical JSON. Candidate publication/finalization and
-    # this close share the output-directory lock, so no candidate can cross
+    # renders or loads final JSON. Draft saving/finalization and this close
+    # share the output-directory lock, so no draft can cross
     # this boundary after the status gate decides to proceed.
     plan_path = os.path.join(output_dir, "dispatch-plan.json")
     dispatch_plan = None
@@ -1263,12 +1263,12 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
             "are not frozen"
         ) from exc
     state["review_intake"] = review_intake
-    discarded_candidates = review_intake["discarded_candidates"]
+    discarded_drafts = review_intake["discarded_drafts"]
     degradation = state.setdefault("degradation", {})
-    if discarded_candidates:
-        degradation["reviewer_candidates_discarded"] = True
+    if discarded_drafts:
+        degradation["reviewer_drafts_discarded"] = True
     else:
-        degradation.pop("reviewer_candidates_discarded", None)
+        degradation.pop("reviewer_drafts_discarded", None)
         if not degradation:
             state.pop("degradation", None)
 
@@ -1353,7 +1353,7 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
                 # One rule, one home: reviewer_names.derive_reviewer_name
                 # owns the trailing-"-reviewer" strip (repo reviewer ids
                 # may carry "reviewer" mid-string), and every name maps to
-                # "<derived>-review.json" exactly as save() publishes it.
+                # "<derived>-review.json" exactly as finalization publishes it.
                 review_file = os.path.join(
                     output_dir, f"{derive_reviewer_name(name)}-review.json"
                 )
@@ -1363,7 +1363,7 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
             state["agents"] = {
                 "dispatched": dispatched_names,
                 "completed": completed,
-                "failed": discarded_candidates,
+                "discarded_drafts": discarded_drafts,
                 "review_files": review_files,
             }
         except (json.JSONDecodeError, OSError):

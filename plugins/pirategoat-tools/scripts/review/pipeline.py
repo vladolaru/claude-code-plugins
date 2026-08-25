@@ -304,7 +304,7 @@ _DEFAULT_STATE = {
     "agents": {
         "dispatched": [],
         "completed": [],
-        "failed": [],
+        "discarded_drafts": [],
     },
     "reviewer_markdown": {
         "ran": False,

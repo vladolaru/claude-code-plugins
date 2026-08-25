@@ -55,7 +55,7 @@ class TestRouting:
             "agents": {
                 "dispatched": [],
                 "completed": [],
-                "failed": [],
+                "discarded_drafts": [],
             },
             "verdict": None,
         }
@@ -250,7 +250,7 @@ class TestCleanStaleArtifacts:
         (d / "review-intake.json").write_text(
             json.dumps({"schema": 1, "status": "closed"})
         )
-        (d / "code-review.candidate.json").write_text("{}")
+        (d / "code-review.draft.json").write_text("{}")
         (d / "subdir").mkdir()
         (d / "subdir" / "y").write_text("x")
         mod.clean_stale_artifacts(str(d))

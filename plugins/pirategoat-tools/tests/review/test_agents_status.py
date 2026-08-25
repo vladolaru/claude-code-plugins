@@ -16,7 +16,7 @@ SCRIPT_PATH = PLUGIN_ROOT / "scripts" / "review" / "agents_status.py"
 
 from review import dispatch_status
 from review import synthesis_lifecycle
-from review.agent.output import ReviewOutputBuilder, finalize_candidate
+from review.agent.output import ReviewOutputBuilder, finalize_review
 from review.reconciliation_context import load_agent_findings
 
 
@@ -106,6 +106,26 @@ class _FakeClock:
 
 
 class TestCheckStatus:
+    def test_draft_evidence_does_not_replace_execution_status(
+        self, mod, tmp_path
+    ):
+        _write_plan(tmp_path, [
+            {"name": "security-reviewer", "status": "DISPATCH"},
+        ])
+        _write_accounting_input(
+            tmp_path, "security", "security-reviewer", []
+        )
+        _start_agent(tmp_path, "security-reviewer", minutes_ago=60)
+        ReviewOutputBuilder.open(
+            tmp_path, "42", "security"
+        ).save_draft()
+
+        status = mod.check_status(str(tmp_path), timeout_seconds=0)
+        agent = status["agents"][0]
+
+        assert agent["status"] == "TIMED_OUT"
+        assert agent["draft_available"] is True
+
     def test_all_finished(self, mod, tmp_path):
         _write_plan(tmp_path, [
             {"name": "code-reviewer", "status": "DISPATCH"},
@@ -183,10 +203,10 @@ class TestCheckStatus:
         assert result["finished"] == 1
         assert result["timed_out"] == 1
 
-    def test_replaceable_candidates_do_not_finish_until_exact_finalization(
+    def test_replaceable_drafts_do_not_finish_until_exact_finalization(
         self, mod, tmp_path
     ):
-        """Removing the canonical-only branch would let candidate A or B
+        """Removing the final-only branch would let draft A or B
         race reconciliation; this sequence pins the final B snapshot all
         the way through the real reconciliation loader."""
         _write_plan(tmp_path, [
@@ -196,32 +216,34 @@ class TestCheckStatus:
         _write_accounting_input(
             tmp_path, "a11y", "a11y-reviewer", ["src/late.ts"]
         )
-        builder = ReviewOutputBuilder(pr_id="13", reviewer="a11y")
+        builder = ReviewOutputBuilder.open(str(tmp_path), "13", "a11y")
 
-        first = builder.save(str(tmp_path))
+        first = builder.save_draft()
         first_status = mod.check_status(str(tmp_path))
         assert first_status["all_done"] is False
         assert first_status["agents"][0]["status"] == "RUNNING"
-        assert first_status["agents"][0]["candidate_available"] is True
-        assert first_status["agents"][0]["candidate_digest"] == (
-            first["candidate_digest"]
+        assert first_status["agents"][0]["draft_available"] is True
+        assert first_status["agents"][0]["draft_digest"] == (
+            first["review_digest"]
         )
 
         builder.claim_files_reviewed("src/late.ts")
-        second = builder.save(str(tmp_path))
+        second = builder.save_draft()
         second_status = mod.check_status(str(tmp_path))
         assert second_status["all_done"] is False
-        assert second_status["agents"][0]["candidate_digest"] == (
-            second["candidate_digest"]
+        assert second_status["agents"][0]["draft_digest"] == (
+            second["review_digest"]
         )
-        assert first["candidate_digest"] != second["candidate_digest"]
+        assert first["review_digest"] != second["review_digest"]
         formatted = mod.format_output(second_status)
-        assert f"CANDIDATE  digest={second['candidate_digest']}" in formatted
-        assert "FINALIZE_COMMAND:" in formatted
-        assert second_status["agents"][0]["finalize_command"] in formatted
+        assert f"DRAFT  digest={second['review_digest']}" in formatted
+        assert "FINALIZE_REVIEW_COMMAND:" in formatted
+        assert (
+            second_status["agents"][0]["finalize_review_command"] in formatted
+        )
 
-        finalize_candidate(
-            str(tmp_path), "a11y", second["candidate_digest"]
+        finalize_review(
+            str(tmp_path), "a11y", second["review_digest"]
         )
         assert mod.check_status(str(tmp_path))["all_done"] is True
         findings = load_agent_findings(
@@ -231,17 +253,17 @@ class TestCheckStatus:
             "src/late.ts"
         ]
 
-    def test_timed_out_candidate_stays_timed_out_with_finalize_evidence(
+    def test_timed_out_draft_stays_timed_out_with_finalize_evidence(
         self, mod, tmp_path
     ):
-        """Candidate evidence must enrich TIMED_OUT, not create a new
+        """Draft evidence must enrich TIMED_OUT, not create a new
         terminal status or turn it back into RUNNING."""
         _write_plan(tmp_path, [
             {"name": "slow-reviewer", "status": "DISPATCH"},
         ])
         _start_agent(tmp_path, "slow-reviewer", minutes_ago=25)
-        candidate = tmp_path / "slow-review.candidate.json"
-        candidate.write_bytes(b'{"snapshot":"late"}')
+        draft = tmp_path / "slow-review.draft.json"
+        draft.write_bytes(b'{"snapshot":"late"}')
 
         result = mod.check_status(str(tmp_path))
 
@@ -249,12 +271,12 @@ class TestCheckStatus:
         assert result["timed_out"] == 1
         [slow] = result["agents"]
         assert slow["status"] == "TIMED_OUT"
-        assert slow["candidate_available"] is True
-        assert len(slow["candidate_digest"]) == 64
-        assert "--reviewer slow" in slow["finalize_command"]
+        assert slow["draft_available"] is True
+        assert len(slow["draft_digest"]) == 64
+        assert "--reviewer slow" in slow["finalize_review_command"]
         assert (
-            f"--candidate-digest {slow['candidate_digest']}"
-            in slow["finalize_command"]
+            f"--review-digest {slow['draft_digest']}"
+            in slow["finalize_review_command"]
         )
 
     def test_reads_timeout_from_context_file(self, mod, tmp_path):

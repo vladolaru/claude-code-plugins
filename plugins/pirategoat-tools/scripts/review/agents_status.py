@@ -32,7 +32,6 @@ import argparse
 import hashlib
 import json
 import os
-import shlex
 import sys
 import time
 from collections import Counter
@@ -45,6 +44,10 @@ try:
         validate_dispatch_plan_agents,
     )
     from .reviewer_names import derive_reviewer_name
+    from .reviewer_lifecycle import (
+        finalize_review_command,
+        review_paths,
+    )
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
@@ -55,6 +58,10 @@ except ImportError:
         validate_dispatch_plan_agents,
     )
     from review.reviewer_names import derive_reviewer_name
+    from review.reviewer_lifecycle import (
+        finalize_review_command,
+        review_paths,
+    )
 
 
 DEFAULT_TIMEOUT = 1200  # 20 minutes
@@ -70,31 +77,26 @@ def _reviewer_filename(agent_name: str) -> str:
     return f"{derive_reviewer_name(agent_name)}-review.json"
 
 
-def candidate_evidence(output_dir: str, agent_name: str) -> dict:
-    """Return digest-bound finalization evidence for a saved candidate."""
+def draft_evidence(output_dir: str, agent_name: str) -> dict:
+    """Return digest-bound finalization evidence for a saved draft."""
     reviewer = derive_reviewer_name(agent_name)
-    candidate_path = os.path.join(
-        output_dir, f"{reviewer}-review.candidate.json"
-    )
+    draft_path = review_paths(output_dir, reviewer).draft
     try:
-        with open(candidate_path, "rb") as candidate_handle:
-            candidate_bytes = candidate_handle.read()
+        with open(draft_path, "rb") as draft_handle:
+            draft_bytes = draft_handle.read()
     except OSError:
         return {}
-    candidate_digest = hashlib.sha256(candidate_bytes).hexdigest()
+    draft_digest = hashlib.sha256(draft_bytes).hexdigest()
     output_script = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "agent", "output.py"
     )
-    finalize_command = (
-        f"python3 {shlex.quote(output_script)} finalize "
-        f"--output-dir {shlex.quote(output_dir)} "
-        f"--reviewer {shlex.quote(reviewer)} "
-        f"--candidate-digest {candidate_digest}"
+    command = finalize_review_command(
+        output_script, output_dir, reviewer, draft_digest
     )
     return {
-        "candidate_available": True,
-        "candidate_digest": candidate_digest,
-        "finalize_command": finalize_command,
+        "draft_available": True,
+        "draft_digest": draft_digest,
+        "finalize_review_command": command,
     }
 
 
@@ -185,7 +187,7 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
                     "name": name, "status": "RUNNING",
                     "elapsed_seconds": elapsed,
                 }
-            agent_state.update(candidate_evidence(output_dir, name))
+            agent_state.update(draft_evidence(output_dir, name))
             agents.append(agent_state)
         else:
             not_dispatched += 1
@@ -272,12 +274,14 @@ def format_output(result: dict) -> str:
             lines.append(f"  {name:30s} TIMED_OUT ({elapsed} — exceeded timeout)")
         elif st == "NOT_DISPATCHED":
             lines.append(f"  {name:30s} NOT_DISPATCHED (never started — LLM may have failed to dispatch)")
-        if a.get("candidate_available"):
+        if a.get("draft_available"):
             lines.append(
-                f"  {'':30s} CANDIDATE  digest={a['candidate_digest']}"
+                f"  {'':30s} DRAFT  digest={a['draft_digest']}"
             )
             lines.append(
-                f"  {'':30s} FINALIZE_COMMAND: {a['finalize_command']}"
+                "  "
+                f"{'':30s} FINALIZE_REVIEW_COMMAND: "
+                f"{a['finalize_review_command']}"
             )
     lines.append("")
     lines.append(f"ALL_DONE: {'true' if result['all_done'] else 'false'}")

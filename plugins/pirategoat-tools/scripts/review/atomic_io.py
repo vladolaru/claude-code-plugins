@@ -25,7 +25,7 @@ reconciliator's first write via ``findings_save.py``, and the critic
 adjustments applier — so a bare write here would be a SECOND write path
 (see the one-write-path rule in the plugin's AGENTS.md).
 
-Reviewer candidate publication and finalization use staged nonce files and
+Reviewer draft replacement and finalization use staged nonce files and
 the shared ``output_dir_lock()`` below. Their state transitions coordinate
 between processes, while this module deliberately knows nothing about
 reviewer filenames or lifecycle states.

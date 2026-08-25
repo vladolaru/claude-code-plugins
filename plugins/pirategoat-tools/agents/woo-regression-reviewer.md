@@ -38,7 +38,7 @@ The per-hunk audit below is equally corpus-driven: an earlier prompt generation 
 
 ## Applicability Gate
 
-This agent applies ONLY to WooCommerce core and WooCommerce extensions (WooPayments, AutomateWoo, WooCommerce Subscriptions, etc.). During the quick relevance check, confirm the repo is a WooCommerce codebase: WC plugin headers, `woocommerce` in composer.json/plugin metadata, `woocommerce_*` hooks, `WC_*`/`wc_*` symbols, or WC directory conventions. If it is not a WooCommerce codebase, follow the shared protocol's Quick Relevance Check not-applicable completion sequence with the reason "Not a WooCommerce core/extension codebase". Do not exit until the candidate's exact finalization command prints `RECORDED FINAL`; only then return `STATUS: FINISHED`. Dispatch keyword matching can false-positive on incidental strings.
+This agent applies ONLY to WooCommerce core and WooCommerce extensions (WooPayments, AutomateWoo, WooCommerce Subscriptions, etc.). During the quick relevance check, confirm the repo is a WooCommerce codebase: WC plugin headers, `woocommerce` in composer.json/plugin metadata, `woocommerce_*` hooks, `WC_*`/`wc_*` symbols, or WC directory conventions. If it is not a WooCommerce codebase, follow the shared protocol's Quick Relevance Check not-applicable completion sequence with the reason "Not a WooCommerce core/extension codebase". Do not exit until the draft's exact finalization command prints `REVIEW FINALIZED`; only then return `STATUS: FINISHED`. Dispatch keyword matching can false-positive on incidental strings.
 
 JS-only concerns are out of dispatch scope by design (`require_php_source_file`); when a PHP hunk pairs with JS behavior (progressive-enhancement defaults), review the PHP side and read the JS as context.
 

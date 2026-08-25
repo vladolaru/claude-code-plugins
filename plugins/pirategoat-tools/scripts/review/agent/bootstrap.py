@@ -44,7 +44,9 @@ if _SCRIPTS_DIR not in sys.path:
 
 from review.reviewer_names import derive_reviewer_name
 from review.agent.coverage import derive_review_accounting
+from review.agent.output import _validate_review_bytes, render_draft_index
 from review.atomic_io import atomic_write_json
+from review.reviewer_lifecycle import review_paths
 
 # Import telemetry (parent directory script, best-effort)
 try:
@@ -1153,7 +1155,7 @@ def build_output(
             # zero effect — median 44% of budget used, nine agents
             # leaving 100+ files while under half budget. The same run
             # falsified its premise: under-spend did not predict weak
-            # output. Salience at the decision point replaced it — save()
+            # output. Salience at the decision point replaced it — save_draft()
             # echoes the target back when unclaimed review files are recorded,
             # in the one piece of feedback every agent reads. Do not
             # restore a rule the reviewer cannot evaluate; make the number
@@ -1265,10 +1267,19 @@ def build_output(
     )
     lines.append("")
     pr_id_str = pr_number if pr_number else "0"
+    draft_path = review_paths(output_dir, reviewer_name).draft
+    if os.path.isfile(draft_path):
+        draft_review = _validate_review_bytes(
+            Path(draft_path).read_bytes(),
+            reviewer=reviewer_name,
+            pr_id=str(pr_id_str),
+        )
+        lines.append(render_draft_index(draft_review))
+        lines.append("")
     lines.append("ReviewOutputBuilder — MUST use a one-shot quoted heredoc in this form:")
     # The call-budget target no longer rides this envelope: it silently died
     # for any agent that rebuilt its save command (run12's worst under-spender,
-    # 15% of target, never saw it). save() now reads the effective number from
+    # 15% of target, never saw it). save_draft() reads the effective number from
     # the review-accounting input bootstrap writes below — the one per-agent
     # file the builder already locates for derived accounting.
     lines.append(
@@ -1290,7 +1301,10 @@ def build_output(
     lines.append('pr_id = os.environ["PIRATEGOAT_PR_ID"]')
     lines.append('sys.path.insert(0, os.path.join(plugin_root, "scripts"))')
     lines.append("from review.agent.output import ReviewOutputBuilder")
-    lines.append('builder = ReviewOutputBuilder(pr_id=pr_id, reviewer=reviewer_name)')
+    lines.append(
+        "builder = ReviewOutputBuilder.open("
+        "output_dir, pr_id, reviewer_name)"
+    )
     lines.append(f'builder.add_issue(severity="high", title="Issue title", file="path/to/file.py",')
     lines.append(f'    description="What is wrong", recommendation="How to fix",')
     lines.append(f'    category="category-name", line=42, confidence=0.9)')
@@ -1300,7 +1314,7 @@ def build_output(
     lines.append(f'    evidence="hit counts, file:line list")     # optional')
     lines.append(f'# builder.claim_files_reviewed("path/read1.py", "path/read2.py")  # uncomment with actual NOT DIFFED paths you read')
     lines.append(f'builder.set_confidence(0.85)')
-    lines.append(f'result = builder.save(output_dir)  # publishes a replaceable candidate')
+    lines.append('builder.save_draft()')
     lines.append("PY")
     lines.append(f"")
     lines.append(f"line= MUST be the SOURCE FILE line number (from @@ hunk headers),")
@@ -1315,20 +1329,20 @@ def build_output(
     lines.append(f"NEVER inline `python3 -c \"...\"` — finding prose contains")
     lines.append(f"apostrophes/quotes/em-dashes that break shell quoting.")
     lines.append(f"")
-    lines.append(f"  save() prints the RECORDED COUNTS / RECORDED ISSUES / VERDICT of what was")
-    lines.append(f"  actually saved. Copy your COUNTS signal from that echo — NOT from memory of")
-    lines.append(f"  what you intended to file. If the echo differs from your intent (e.g. an")
-    lines.append(f"  issue you added is missing), investigate, fix, and save a new candidate.")
-    lines.append(f"  Do NOT read the output file back to verify — inspect the save() echo.")
-    lines.append(f"  In a separate tool turn, run the exact FINALIZE command printed by save().")
-    lines.append(f"  Only after that command prints RECORDED FINAL is the review immutable.")
+    lines.append("  DRAFT TOTALS describes the complete saved draft; CHANGED describes only")
+    lines.append("  mutations made during this invocation. An absent file-gap line means no")
+    lines.append("  review-claimable files remain unclaimed.")
+    lines.append("  Do NOT read the output file back to verify — inspect the save_draft() receipt.")
+    lines.append("  In a separate tool turn, run the exact FINALIZE REVIEW command printed by")
+    lines.append("  save_draft() verbatim. Never construct or edit that command.")
+    lines.append("  Only after that command prints REVIEW FINALIZED is the review immutable.")
     lines.append(f"  Only then return the FINISHED signal below.")
     lines.append("")
     lines.append("Return signal format:")
     lines.append("  STATUS: FINISHED")
     lines.append(f"  OUTPUT_FILES:")
     lines.append(f"    - {output_dir}/{reviewer_name}-review.json")
-    lines.append("  COUNTS: critical: N, high: N, medium: N  (copied from save()'s RECORDED COUNTS echo)")
+    lines.append("  COUNTS: critical: N, high: N, medium: N  (copied from DRAFT TOTALS)")
     lines.append("  VERDICT: <APPROVE|COMMENT|REQUEST_CHANGES|BLOCK>")
     lines.append("  SUMMARY: <one sentence>")
     lines.append("")
@@ -1863,7 +1877,7 @@ def main():
         budget_capped = False
 
     # Written after the override is applied: the sidecar's review_budget is
-    # the effective (post-override) number save() echoes back, never a
+    # the effective (post-override) number save_draft() echoes back, never a
     # scope-only figure a downstream reader would have to recompute.
     try:
         persist_review_accounting_input(

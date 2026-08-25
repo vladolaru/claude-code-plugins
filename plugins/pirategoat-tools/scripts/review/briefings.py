@@ -878,17 +878,17 @@ def _step_6_dispatch_agents(mode, state, context, config, output_dir):
 # Step 7: Save Review Baseline
 # ---------------------------------------------------------------------------
 
-def _candidate_finalization_guidance():
+def _draft_finalization_guidance():
     return [
-        "A saved reviewer candidate remains RUNNING; only canonical "
+        "A saved review draft remains RUNNING; only final "
         "`<reviewer>-review.json` is FINISHED.",
         "After a host subagent-completion notification, run agents_status. "
-        "If that returned agent's status block contains a `CANDIDATE` line, "
-        "run the exact command printed on its `FINALIZE_COMMAND` line, then "
+        "If that returned agent's status block contains a `DRAFT` line, "
+        "run the exact command printed on its `FINALIZE_REVIEW_COMMAND` line, then "
         "run agents_status again.",
-        "Polling or candidate presence without a host completion notification "
+        "Polling or draft presence without a host completion notification "
         "never authorizes parent-side finalization.",
-        "A TIMED_OUT unfinalized candidate remains timed out and is discarded "
+        "A TIMED_OUT unfinalized draft remains timed out and is discarded "
         "when review intake closes.",
         "",
     ]
@@ -922,7 +922,7 @@ def _step_7_save_baseline(mode, state, context, config, output_dir):
     actions.append("")
     actions.append("**Wait for agents before step 8.**")
     actions.append("")
-    actions.extend(_candidate_finalization_guidance())
+    actions.extend(_draft_finalization_guidance())
 
     if _host(config) == HOST_CODEX:
         actions.extend([
@@ -1043,7 +1043,7 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
             remaining_budget = max(1, int(escalation_threshold - elapsed))
 
             if _host(config) == HOST_CODEX:
-                actions = _candidate_finalization_guidance() + [
+                actions = _draft_finalization_guidance() + [
                     "Poll for completion once a minute — the wait lives "
                     "inside the script, so each call blocks for up to 60 "
                     "seconds before returning control to you:",
@@ -1059,7 +1059,7 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
                     "after waiting began.",
                 ]
             else:
-                actions = _candidate_finalization_guidance() + [
+                actions = _draft_finalization_guidance() + [
                     "Sequence matters here — do these two things IN ORDER, "
                     "not in parallel:",
                     "",
@@ -1106,7 +1106,7 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
     agents_state = state.get("agents", {})
     dispatched = agents_state.get("dispatched", [])
     completed = agents_state.get("completed", [])
-    failed = agents_state.get("failed", [])
+    discarded_drafts = agents_state.get("discarded_drafts", [])
     change_purpose = state.get("change_purpose")
     commit_messages = state.get("commit_messages", [])
 
@@ -1116,15 +1116,18 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
         f"**Agents dispatched:** {', '.join(dispatched) if dispatched else 'see dispatch plan'}",
         f"**Agents completed:** {', '.join(completed) if completed else 'check status'}",
     ]
-    if failed:
-        situation.append(f"**Agents failed:** {', '.join(failed)}")
+    if discarded_drafts:
+        situation.append(
+            "**Discarded reviewer drafts:** "
+            + ", ".join(discarded_drafts)
+        )
 
     intake = state.get("review_intake", {})
     if intake.get("status") == "closed":
-        discarded = intake.get("discarded_candidates", [])
+        discarded = intake.get("discarded_drafts", [])
         situation.append(
             "**Review intake:** closed before synthesis; discarded "
-            + (", ".join(discarded) if discarded else "no candidates")
+            + (", ".join(discarded) if discarded else "no drafts")
             + "."
         )
 

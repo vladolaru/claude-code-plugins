@@ -67,7 +67,7 @@ via `ReviewOutputBuilder`, using the `reviewer_name` from the bootstrap output:
 
 ```python
 from review.agent.output import ReviewOutputBuilder
-builder = ReviewOutputBuilder(reviewer="<reviewer_name>", pr_id="<pr_number-or-branch>")
+builder = ReviewOutputBuilder.open("<OUTPUT_DIR>", "<pr_number-or-branch>", "<reviewer_name>")
 builder.add_issue(
     severity="high",          # map the repo prompt's severity to critical|high|medium|low|info
     category="<short-slug>",  # e.g. runtime-environment, flow-interaction
@@ -79,7 +79,7 @@ builder.add_issue(
     channel="<CHANNEL>",      # blocking or advisory, exactly as given in the bootstrap output
 )
 # ... one add_issue per finding ...
-builder.save("<OUTPUT_DIR>")   # writes <reviewer_name>-review.json and .md
+builder.save_draft()   # inspect the receipt, then run its exact FINALIZE REVIEW command
 ```
 
 Rules:

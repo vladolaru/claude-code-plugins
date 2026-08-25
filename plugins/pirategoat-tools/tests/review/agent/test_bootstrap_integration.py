@@ -589,20 +589,85 @@ class TestCanonicalExecutableBuilderSource:
         assert "PIRATEGOAT_REVIEWER_NAME=security" in prompt
         assert "PIRATEGOAT_PR_ID=42" in prompt
         assert (
-            "builder = ReviewOutputBuilder(pr_id=pr_id, reviewer=reviewer_name)"
-            in prompt
+            "builder = ReviewOutputBuilder.open("
+            "output_dir, pr_id, reviewer_name)" in prompt
         )
-        assert "result = builder.save(output_dir)" in prompt
+        assert "builder.save_draft()" in prompt
         assert "MUST NOT create or write a temporary builder script" in prompt
         assert "generic filenames collide" in prompt
-        assert "RECORDED COUNTS" in prompt
-        assert "run the exact FINALIZE command printed by save()" in prompt
-        assert "RECORDED FINAL" in prompt
+        assert "DRAFT TOTALS" in prompt
+        assert "run the exact FINALIZE REVIEW command printed by" in prompt
+        assert "REVIEW FINALIZED" in prompt
         assert "Only then return the FINISHED signal" in prompt
         assert "Return signal format:" in prompt
         assert "STATUS: FINISHED" in prompt
         assert f"{tmp_path}/security-review.json" in prompt
         assert f"{tmp_path}/security-review.md" not in prompt
+
+    def test_continuation_index_precedes_the_executable_builder_snippet(
+        self, tmp_path
+    ):
+        from review.agent.output import ReviewOutputBuilder
+
+        (tmp_path / "security-review-accounting-input.json").write_text(
+            json.dumps({
+                "schema": 3,
+                "agent_name": "security-reviewer",
+                "reviewer": "security",
+                "review_claimable_files": [],
+                "review_budget": 15,
+                "inline_diff_file_count": 1,
+                "in_scope_review_file_count": 1,
+            })
+        )
+        builder = ReviewOutputBuilder.open(tmp_path, "42", "security")
+        finding_id = builder.add_issue(
+            severity="medium",
+            title="Existing finding",
+            file="src/code.py",
+            line=7,
+            description="Description",
+            recommendation="Recommendation",
+        )
+        builder.save_draft()
+
+        prompt = build_output(
+            agent_name="security-reviewer",
+            plugin_root=str(PLUGIN_ROOT),
+            status="OK",
+            review_rules="rules",
+            domain_rules=None,
+            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number="42",
+            reviewer_name="security",
+            review_claimable_count=0,
+            has_php=False,
+        )
+
+        assert f"finding {finding_id}" in prompt
+        assert prompt.index("DRAFT INDEX:") < prompt.index(
+            "ReviewOutputBuilder — MUST use"
+        )
+
+    def test_first_use_bootstrap_omits_the_continuation_index(self, tmp_path):
+        prompt = build_output(
+            agent_name="security-reviewer",
+            plugin_root=str(PLUGIN_ROOT),
+            status="OK",
+            review_rules="rules",
+            domain_rules=None,
+            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number="42",
+            reviewer_name="security",
+            review_claimable_count=0,
+            has_php=False,
+        )
+
+        assert "DRAFT INDEX:" not in prompt
 
     def test_envelope_carries_the_plugin_version_assignment(self, tmp_path):
         """The producing plugin version travels in the same envelope.
@@ -748,9 +813,9 @@ class TestNotApplicableCompletionContract:
         )
 
         assert "builder.mark_not_applicable(" in prompt
-        assert "builder.save(OUTPUT_DIR)" in prompt
-        assert "FINALIZE" in prompt
-        assert "RECORDED FINAL" in prompt
+        assert "builder.save_draft()" in prompt
+        assert "FINALIZE REVIEW" in prompt
+        assert "REVIEW FINALIZED" in prompt
         assert "STATUS: FINISHED" in prompt
 
     def test_output_instructions_require_collision_safe_builder_invocation(self, tmp_path):
@@ -799,7 +864,7 @@ class TestNotApplicableCompletionContract:
             has_php=False,
         )
 
-        assert "RECORDED COUNTS" in prompt
+        assert "DRAFT TOTALS" in prompt
 
     def test_registered_agents_derive_unique_nonempty_reviewer_names(self):
         """Every shipped agent has a collision-safe output identity."""
@@ -861,13 +926,13 @@ class TestNotApplicableCompletionContract:
         assert all(result.returncode == 0 for result in results), [
             result.stderr for result in results
         ]
-        assert all("RECORDED COUNTS:" in result.stdout for result in results)
+        assert all("DRAFT TOTALS:" in result.stdout for result in results)
         finalize_results = []
         for result in results:
             finalize_command = next(
-                line.removeprefix("FINALIZE: ")
+                line.removeprefix("FINALIZE REVIEW: ")
                 for line in result.stdout.splitlines()
-                if line.startswith("FINALIZE: ")
+                if line.startswith("FINALIZE REVIEW: ")
             )
             finalize_results.append(subprocess.run(
                 ["bash", "-c", finalize_command],
@@ -877,7 +942,9 @@ class TestNotApplicableCompletionContract:
                 text=True,
             ))
         assert all(result.returncode == 0 for result in finalize_results)
-        assert all("RECORDED FINAL" in result.stdout for result in finalize_results)
+        assert all(
+            "REVIEW FINALIZED" in result.stdout for result in finalize_results
+        )
         for reviewer_name in ("security", "performance"):
             saved = json.loads(
                 (output_dir / f"{reviewer_name}-review.json").read_text()
@@ -928,11 +995,11 @@ class TestNotApplicableCompletionContract:
         )
 
         assert result.returncode == 0, result.stderr
-        assert "RECORDED COUNTS:" in result.stdout
+        assert "DRAFT TOTALS:" in result.stdout
         finalize_command = next(
-            line.removeprefix("FINALIZE: ")
+            line.removeprefix("FINALIZE REVIEW: ")
             for line in result.stdout.splitlines()
-            if line.startswith("FINALIZE: ")
+            if line.startswith("FINALIZE REVIEW: ")
         )
         final = subprocess.run(
             ["bash", "-c", finalize_command],
@@ -941,7 +1008,7 @@ class TestNotApplicableCompletionContract:
             text=True,
         )
         assert final.returncode == 0, final.stderr
-        assert "RECORDED FINAL" in final.stdout
+        assert "REVIEW FINALIZED" in final.stdout
         saved = json.loads((output_dir / "security-review.json").read_text())
         assert saved["review_accounted_file_count"] == 3
         assert set(tmp_path.rglob("*.py")) == python_files_before
@@ -1317,10 +1384,11 @@ class TestReviewOutputBuilderAPIExample:
         output = self._build(tmp_path)
         assert "add_positive(" in output
 
-    def test_output_contains_save_example(self, tmp_path):
-        """The usage example must show save() with the resolved output_dir."""
+    def test_output_contains_bound_save_draft_example(self, tmp_path):
+        """The example opens against output_dir and saves without a path."""
         output = self._build(tmp_path)
-        assert "save(" in output
+        assert "ReviewOutputBuilder.open(" in output
+        assert "save_draft()" in output
         assert str(tmp_path) in output
 
     def test_output_uses_positive_claims_as_the_only_coverage_input(self, tmp_path):
@@ -1859,13 +1927,13 @@ class TestRepoRuleAndRefModeSelection:
 
 
 class TestOutputFilenameConsistency:
-    """Candidate save and canonical finalization use distinct filenames."""
+    """Draft save and immutable finalization use distinct filenames."""
 
-    def test_save_stages_candidate_then_finalization_publishes_canonical(
+    def test_save_stages_draft_then_finalization_publishes_final(
         self, tmp_path
     ):
-        """save() stages a candidate; finalization publishes the review."""
-        from review.agent.output import ReviewOutputBuilder, finalize_candidate
+        """save_draft() stages a draft; finalization publishes the review."""
+        from review.agent.output import ReviewOutputBuilder, finalize_review
 
         (tmp_path / "dead-code-review-accounting-input.json").write_text(json.dumps({
             "schema": 3,
@@ -1876,30 +1944,32 @@ class TestOutputFilenameConsistency:
             "inline_diff_file_count": 1,
             "in_scope_review_file_count": 1,
         }))
-        builder = ReviewOutputBuilder(pr_id="42", reviewer="dead-code")
-        result = builder.save(str(tmp_path))
+        builder = ReviewOutputBuilder.open(str(tmp_path), "42", "dead-code")
+        result = builder.save_draft()
 
-        assert set(result) == {"candidate", "candidate_digest"}
-        assert result["candidate"].endswith("dead-code-review.candidate.json")
-        candidate = Path(result["candidate"])
-        canonical = tmp_path / "dead-code-review.json"
-        assert candidate.is_file()
-        assert not canonical.exists()
+        assert set(result) == {
+            "draft", "review_digest", "finalize_review_command"
+        }
+        assert result["draft"].endswith("dead-code-review.draft.json")
+        draft = Path(result["draft"])
+        final = tmp_path / "dead-code-review.json"
+        assert draft.is_file()
+        assert not final.exists()
 
-        finalized = finalize_candidate(
-            str(tmp_path), "dead-code", result["candidate_digest"]
+        finalized = finalize_review(
+            str(tmp_path), "dead-code", result["review_digest"]
         )
-        assert finalized["json"] == str(canonical)
-        assert canonical.is_file()
-        assert not candidate.exists()
+        assert finalized["final"] == str(final)
+        assert final.is_file()
+        assert not draft.exists()
         assert not os.path.exists(os.path.join(str(tmp_path), "dead-code-review.md"))
 
-    def test_bootstrap_output_names_finalized_file_not_candidate(self, tmp_path):
-        """Bootstrap OUTPUT_FILES must name the finalized canonical JSON,
+    def test_bootstrap_output_names_finalized_file_not_draft(self, tmp_path):
+        """Bootstrap OUTPUT_FILES must name the finalized review JSON,
         and no Markdown the pipeline derives elsewhere.
 
         This checks the briefing TEXT only (what the agent is told to produce);
-        the candidate/finalization filesystem contract is covered above.
+        the draft/finalization filesystem contract is covered above.
         """
         output = build_output(
             agent_name="dead-code-reviewer",
@@ -1916,18 +1986,18 @@ class TestOutputFilenameConsistency:
             has_php=False,
         )
         assert f"{tmp_path}/dead-code-review.json" in output
-        assert f"{tmp_path}/dead-code-review.candidate.json" not in output
-        assert "run the exact FINALIZE command printed by save()" in output
+        assert f"{tmp_path}/dead-code-review.draft.json" not in output
+        assert "run the exact FINALIZE REVIEW command printed by" in output
         assert f"{tmp_path}/dead-code-review.md" not in output
 
-    def test_testing_inventory_names_two_phase_filename_contract(self):
+    def test_testing_inventory_names_draft_lifecycle_contract(self):
         testing_doc = (TESTS_DIR / "TESTING.md").read_text()
         row = next(
             line for line in testing_doc.splitlines()
             if "`TestOutputFilenameConsistency`" in line
         )
 
-        assert "candidate" in row
+        assert "draft" in row
         assert "finalization" in row
         assert "match bootstrap expectations" not in row
 

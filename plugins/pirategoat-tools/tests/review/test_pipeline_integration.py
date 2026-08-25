@@ -95,11 +95,11 @@ def _write_required_accounting_input(output_dir, reviewer, agent_name=None):
 
 def _save_and_finalize(output_dir, reviewer, agent_name=None):
     _write_required_accounting_input(output_dir, reviewer, agent_name)
-    saved = _output_mod.ReviewOutputBuilder(
-        pr_id="42", reviewer=reviewer
-    ).save(str(output_dir))
-    return _output_mod.finalize_candidate(
-        str(output_dir), reviewer, saved["candidate_digest"]
+    saved = _output_mod.ReviewOutputBuilder.open(
+        output_dir, "42", reviewer
+    ).save_draft()
+    return _output_mod.finalize_review(
+        str(output_dir), reviewer, saved["review_digest"]
     )
 
 
@@ -161,8 +161,8 @@ def _review_json(reviewer):
     }
 
 
-class TestReviewerCandidateFinalizationLifecycle:
-    def test_last_candidate_is_the_only_synthesis_input(
+class TestReviewerDraftFinalizationLifecycle:
+    def test_last_draft_is_the_only_synthesis_input(
         self, tmp_path
     ):
         repo = tmp_path / "repo"
@@ -224,42 +224,42 @@ class TestReviewerCandidateFinalizationLifecycle:
         telemetry.start(
             mode="full",
             repo_path=str(repo),
-            identifier="candidate-lifecycle",
+            identifier="draft-lifecycle",
             git_range="HEAD~1..HEAD",
         )
         telemetry.log_agent_start(
             "code-reviewer", domain="code", scope_files=3
         )
 
-        builder = _output_mod.ReviewOutputBuilder(
-            pr_id="42", reviewer="code"
+        builder = _output_mod.ReviewOutputBuilder.open(
+            str(output_dir), "42", "code"
         )
-        first = builder.save(str(output_dir))
-        first_bytes = Path(first["candidate"]).read_bytes()
+        first = builder.save_draft()
+        first_bytes = Path(first["draft"]).read_bytes()
         assert agents_status.check_status(str(output_dir))["all_done"] is False
 
         builder.claim_files_reviewed("deferred/read.py")
-        last = builder.save(str(output_dir))
-        last_bytes = Path(last["candidate"]).read_bytes()
-        assert last["candidate_digest"] != first["candidate_digest"]
+        last = builder.save_draft()
+        last_bytes = Path(last["draft"]).read_bytes()
+        assert last["review_digest"] != first["review_digest"]
         assert last_bytes != first_bytes
         assert agents_status.check_status(str(output_dir))["all_done"] is False
 
-        finalized = _output_mod.finalize_candidate(
-            str(output_dir), "code", last["candidate_digest"]
+        finalized = _output_mod.finalize_review(
+            str(output_dir), "code", last["review_digest"]
         )
         assert agents_status.check_status(str(output_dir))["all_done"] is True
         canonical_path = output_dir / "code-review.json"
         canonical_bytes = canonical_path.read_bytes()
         assert canonical_bytes == last_bytes
         assert hashlib.sha256(canonical_bytes).hexdigest() == (
-            finalized["artifact_digest"]
+            finalized["review_digest"]
         )
 
         intake = reviewer_lifecycle.close_review_intake(
             str(output_dir), ["code-reviewer"]
         )
-        assert intake["discarded_candidates"] == []
+        assert intake["discarded_drafts"] == []
         written = _output_mod.materialize_markdown(str(output_dir))
         assert written == [str(output_dir / "code-review.md")]
 
@@ -295,7 +295,7 @@ class TestReviewerCandidateFinalizationLifecycle:
         ]
         saves = [
             index for index, event in enumerate(events)
-            if event["event"] == "agent_save"
+            if event["event"] == "agent_review_draft_saved"
         ]
         completions = [
             index for index, event in enumerate(events)
@@ -324,10 +324,10 @@ class TestReviewerCandidateFinalizationLifecycle:
             _render_markdown(canonical)
         )
         assert manifest["status"] == "complete"
-        assert manifest["agents"]["completed"][0]["artifact_digest"] == (
-            last["candidate_digest"]
+        assert manifest["agents"]["completed"][0]["review_digest"] == (
+            last["review_digest"]
         )
-        assert list(output_dir.glob("*-review.candidate.json")) == []
+        assert list(output_dir.glob("*-review.draft.json")) == []
         assert list(output_dir.glob("*.tmp")) == []
 
 
@@ -1181,7 +1181,7 @@ class TestStep8WaitingRouting:
             "agents": {
                 "dispatched": ["security-reviewer"],
                 "completed": [],
-                "failed": [],
+                "discarded_drafts": [],
             },
             "verdict": None,
         })
@@ -1682,7 +1682,7 @@ class TestStep7Orchestration:
         result = grade_review_baseline(str(baseline_path))
         assert result.passed, f"Baseline grading failed: {result.failures}"
 
-    def test_step_7_requires_host_completion_before_candidate_finalization(
+    def test_step_7_requires_host_completion_before_draft_finalization(
         self, mod, tmp_path
     ):
         guidance = mod.get_step_guidance(
@@ -1694,11 +1694,11 @@ class TestStep7Orchestration:
         )
         text = "\n".join(guidance["actions"])
 
-        assert "candidate" in text.lower()
+        assert "draft" in text.lower()
         assert "RUNNING" in text
         assert "completion notification" in text.lower()
-        assert "`CANDIDATE`" in text
-        assert "`FINALIZE_COMMAND`" in text
+        assert "`DRAFT`" in text
+        assert "`FINALIZE_REVIEW_COMMAND`" in text
         assert "never authorizes" in text.lower()
         assert "discarded when review intake closes" in text.lower()
 
@@ -1713,22 +1713,22 @@ class TestStep7Orchestration:
         (tmp_path / "security-reviewer.started").write_text(
             datetime.now(timezone.utc).isoformat()
         )
-        (tmp_path / "security-review.candidate.json").write_text("{}")
+        (tmp_path / "security-review.draft.json").write_text("{}")
         status_output = agents_status.format_output(
             agents_status.check_status(str(tmp_path))
         )
-        candidate_line = next(
+        draft_line = next(
             line.strip()
             for line in status_output.splitlines()
-            if line.strip().startswith("CANDIDATE")
+            if line.strip().startswith("DRAFT")
         )
         finalize_line = next(
             line.strip()
             for line in status_output.splitlines()
-            if line.strip().startswith("FINALIZE_COMMAND")
+            if line.strip().startswith("FINALIZE_REVIEW_COMMAND")
         )
         rendered_labels = {
-            candidate_line.split()[0],
+            draft_line.split()[0],
             finalize_line.partition(":")[0],
         }
 
@@ -1741,10 +1741,10 @@ class TestStep7Orchestration:
         )
         text = "\n".join(guidance["actions"])
 
-        assert rendered_labels == {"CANDIDATE", "FINALIZE_COMMAND"}
+        assert rendered_labels == {"DRAFT", "FINALIZE_REVIEW_COMMAND"}
         assert all(f"`{label}`" in text for label in rendered_labels)
-        assert "candidate_available" not in text
-        assert "`finalize_command`" not in text
+        assert "draft_available" not in text
+        assert "`finalize_review_command`" not in text
 
 
 class TestStep8Orchestration:
@@ -1765,7 +1765,7 @@ class TestStep8Orchestration:
             "status": "not_run",
         }
 
-    def test_step_8_waiting_repeats_candidate_finalization_authority(
+    def test_step_8_waiting_repeats_draft_finalization_authority(
         self, mod, tmp_path
     ):
         state = {
@@ -1777,7 +1777,7 @@ class TestStep8Orchestration:
             "agents": {
                 "dispatched": ["security-reviewer"],
                 "completed": [],
-                "failed": [],
+                "discarded_drafts": [],
             },
         }
         guidance = mod.get_step_guidance(
@@ -1791,8 +1791,8 @@ class TestStep8Orchestration:
 
         assert guidance["blocks_progress"] is True
         assert "completion notification" in text.lower()
-        assert "`CANDIDATE`" in text
-        assert "`FINALIZE_COMMAND`" in text
+        assert "`DRAFT`" in text
+        assert "`FINALIZE_REVIEW_COMMAND`" in text
         assert "never authorizes" in text.lower()
 
     def test_step_8_reads_change_purpose(self, tmp_path):
@@ -1899,10 +1899,10 @@ class TestStep8Orchestration:
         def close_intake(output_dir, dispatched):
             events.append(("close", list(dispatched)))
             return {
-                "schema": 1,
+                "schema": 2,
                 "status": "closed",
                 "closed_at": "2026-08-24T12:00:00+00:00",
-                "discarded_candidates": ["code-reviewer"],
+                "discarded_drafts": ["code-reviewer"],
             }
 
         monkeypatch.setitem(
@@ -1935,10 +1935,10 @@ class TestStep8Orchestration:
             ("materialize", []),
             ("reconciliation", []),
         ]
-        assert state["review_intake"]["discarded_candidates"] == [
+        assert state["review_intake"]["discarded_drafts"] == [
             "code-reviewer"
         ]
-        assert state["degradation"]["reviewer_candidates_discarded"] is True
+        assert state["degradation"]["reviewer_drafts_discarded"] is True
 
     def test_step_8_close_failure_blocks_materialization_and_reconciliation(
         self, mod, tmp_path, monkeypatch
@@ -1987,8 +1987,8 @@ class TestStep8Orchestration:
                 "agents": [{"name": "code-reviewer", "status": "DISPATCH"}],
             })
         )
-        candidate = tmp_path / "code-review.candidate.json"
-        candidate.write_bytes(b'{"candidate":true}\n')
+        draft = tmp_path / "code-review.draft.json"
+        draft.write_bytes(b'{"draft":true}\n')
         events = []
         monkeypatch.setattr(
             mod.subprocess,
@@ -2016,7 +2016,7 @@ class TestStep8Orchestration:
         with pytest.raises(RuntimeError, match="status checker"):
             mod._orchestrate_step(8, "full", {}, state, {}, str(tmp_path))
 
-        assert candidate.read_bytes() == b'{"candidate":true}\n'
+        assert draft.read_bytes() == b'{"draft":true}\n'
         assert not (tmp_path / "review-intake.json").exists()
         assert events == []
 
@@ -2028,8 +2028,8 @@ class TestStep8Orchestration:
                 "agents": [{"name": "code-reviewer", "status": "DISPATCH"}],
             })
         )
-        candidate = tmp_path / "code-review.candidate.json"
-        candidate.write_bytes(b'{"candidate":true}\n')
+        draft = tmp_path / "code-review.draft.json"
+        draft.write_bytes(b'{"draft":true}\n')
         events = []
         monkeypatch.setattr(
             mod.subprocess,
@@ -2055,7 +2055,7 @@ class TestStep8Orchestration:
                 8, "full", {}, {"resolved_params": {}}, {}, str(tmp_path)
             )
 
-        assert candidate.read_bytes() == b'{"candidate":true}\n'
+        assert draft.read_bytes() == b'{"draft":true}\n'
         assert not (tmp_path / "review-intake.json").exists()
         assert events == []
 
@@ -2971,7 +2971,7 @@ class TestStep8AgentPrompt:
             "agents": {
                 "dispatched": ["code-reviewer", "security-reviewer"],
                 "completed": ["code-reviewer", "security-reviewer"],
-                "failed": [],
+                "discarded_drafts": [],
             },
             "change_purpose": "Adds retry logic.",
         }

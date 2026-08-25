@@ -1011,7 +1011,7 @@ class TestAnalyzeSubagent:
                         file_path="/private/tmp/review-output.py",
                         content=(
                             f"builder = ReviewOutputBuilder({secret!r})\n"
-                            "builder.save('/safe')"
+                            "builder.save_draft()"
                         ),
                     )
                 ),
@@ -1062,7 +1062,7 @@ class TestAnalyzeSubagent:
         command = (
             "PIRATEGOAT_PLUGIN_ROOT=/plugin PIRATEGOAT_OUTPUT_DIR=/output "
             "PIRATEGOAT_REVIEWER_NAME=security PIRATEGOAT_PR_ID=42 "
-            "python3 <<'PY'\nbuilder.save(output_dir)\nPY"
+            "python3 <<'PY'\nbuilder.save_draft()\nPY"
         )
         transcript = _write_jsonl(
             tmp_path / "legacy-envelope.jsonl",
@@ -1070,7 +1070,7 @@ class TestAnalyzeSubagent:
                 _assistant(_call("builder", "Bash", command=command)),
                 _result(
                     "builder",
-                    "RECORDED COUNTS: safe",
+                    "DRAFT TOTALS: safe",
                     is_error=None,
                     structured={"exitCode": 0},
                 ),
@@ -1164,7 +1164,7 @@ class TestAnalyzeSubagent:
                 _assistant(_call("builder", "Bash", command=command)),
                 _result(
                     "builder",
-                    "RECORDED COUNTS: safe",
+                    "DRAFT TOTALS: safe",
                     is_error=None,
                     structured={"exitCode": 0},
                 ),
@@ -1257,7 +1257,7 @@ class TestAnalyzeSubagent:
                 _assistant(_call("builder", "Bash", command=command)),
                 _result(
                     "builder",
-                    "RECORDED COUNTS: safe",
+                    "DRAFT TOTALS: safe",
                     is_error=None,
                     structured={"exitCode": 0},
                 ),
@@ -1427,7 +1427,7 @@ class TestAnalyzeSubagent:
                 _assistant(_call("success", "Bash", command=successful_command)),
                 _result(
                     "success",
-                    "RECORDED COUNTS: safe",
+                    "DRAFT TOTALS: safe",
                     is_error=None,
                     structured={"exitCode": 0},
                 ),
@@ -1467,7 +1467,7 @@ class TestAnalyzeSubagent:
                 _assistant(_call("retry", "Bash", command=retry_command)),
                 _result(
                     "retry",
-                    "RECORDED COUNTS: safe",
+                    "DRAFT TOTALS: safe",
                     is_error=None,
                     structured={"exitCode": 0},
                 ),
@@ -1509,7 +1509,7 @@ class TestAnalyzeSubagent:
                         file_path="/private/tmp/review-output.py",
                         content=(
                             "builder = ReviewOutputBuilder('safe')\n"
-                            "builder.save('/safe')"
+                            "builder.save_draft()"
                         ),
                     )
                 ),
@@ -1777,7 +1777,7 @@ class TestAnalyzeSubagent:
                         file_path=target,
                         content=(
                             "builder = ReviewOutputBuilder('safe')\n"
-                            "builder.save('/safe')"
+                            "builder.save_draft()"
                         ),
                     )
                 ),
@@ -1831,7 +1831,7 @@ class TestAnalyzeSubagent:
         target = str(tmp_path / "review-output.py")
         builder = (
             "builder = ReviewOutputBuilder('safe')\n"
-            "builder.save('/safe')"
+            "builder.save_draft()"
         )
         structured = _current_write_result(target, update=True)
         structured["originalFile"] = None
@@ -2007,7 +2007,7 @@ class TestAnalyzeSubagent:
                     "file_path": "/safe/write.py",
                     "content": (
                         "builder = ReviewOutputBuilder('safe')\n"
-                        "builder.save('/safe')"
+                        "builder.save_draft()"
                     ),
                 },
                 {
@@ -2025,7 +2025,7 @@ class TestAnalyzeSubagent:
                     "file_path": "/safe/unexpected-type.py",
                     "content": (
                         "builder = ReviewOutputBuilder('safe')\n"
-                        "builder.save('/safe')"
+                        "builder.save_draft()"
                     ),
                 },
                 _current_write_result("/safe/unexpected-type.py")
@@ -2037,7 +2037,7 @@ class TestAnalyzeSubagent:
                     "file_path": "/safe/update-crossed.py",
                     "content": (
                         "builder = ReviewOutputBuilder('safe')\n"
-                        "builder.save('/safe')"
+                        "builder.save_draft()"
                     ),
                 },
                 _current_write_result("/safe/update-crossed.py")
@@ -2049,7 +2049,7 @@ class TestAnalyzeSubagent:
                     "file_path": "/safe/update-bad-patch.py",
                     "content": (
                         "builder = ReviewOutputBuilder('safe')\n"
-                        "builder.save('/safe')"
+                        "builder.save_draft()"
                     ),
                 },
                 _current_write_result("/safe/update-bad-patch.py", update=True)
@@ -2304,7 +2304,7 @@ class TestAnalyzeSubagent:
                     "file_path": "/safe/write.py",
                     "content": (
                         "builder = ReviewOutputBuilder('safe')\n"
-                        "builder.save('/safe')"
+                        "builder.save_draft()"
                     ),
                 },
                 _current_write_result("/safe/write.py"),
@@ -2400,7 +2400,7 @@ class TestAnalyzeSubagent:
                     "file_path": "/safe/write.py",
                     "content": (
                         "builder = ReviewOutputBuilder('safe')\n"
-                        "builder.save('/safe')"
+                        "builder.save_draft()"
                     ),
                 },
                 _current_write_result("/safe/write.py") | {"error": "safe"},
@@ -2502,7 +2502,7 @@ class TestAnalyzeSubagent:
                         file_path="/private/tmp/review.py",
                         content=(
                             "builder = ReviewOutputBuilder('safe')\n"
-                            "builder.save('/safe')"
+                            "builder.save_draft()"
                         ),
                     )
                 ),
@@ -4568,7 +4568,7 @@ class TestEnrichRunTranscript:
                         file_path="/private/tmp/builder.py",
                         content=(
                             "builder = ReviewOutputBuilder('safe')\n"
-                            "builder.save('/safe')"
+                            "builder.save_draft()"
                         ),
                     ),
                     usage=_usage(1, 2),
@@ -6197,4 +6197,3 @@ class TestEvidenceToolNameSync:
         assert _branched_tool_names(sample, "tool_name", "name") == {
             "Read", "Write", "Edit", "Grep", "Glob", "Bash",
         }
-

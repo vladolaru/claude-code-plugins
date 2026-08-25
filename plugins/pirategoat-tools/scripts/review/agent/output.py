@@ -7,7 +7,7 @@ Provides structure and basic validation using plain Python.
 Usage:
     from review.agent.output import ReviewOutputBuilder
 
-    builder = ReviewOutputBuilder(pr_id="123", reviewer="security")
+    builder = ReviewOutputBuilder.open(output_dir, "123", "security")
     builder.add_issue(
         severity="critical",
         title="SQL Injection",
@@ -16,11 +16,10 @@ Usage:
         description="...",
         recommendation="..."
     )
-    json_output = builder.to_json()
-    saved = builder.save(output_dir)  # publishes a replaceable candidate
-    finalize_candidate(output_dir, "security", saved["candidate_digest"])
+    saved = builder.save_draft()
+    finalize_review(output_dir, "security", saved["review_digest"])
 
-    Markdown is derived from the canonical JSON: render one dict with
+    Markdown is derived from the final JSON: render one dict with
     render_markdown(data), or from the shell via the CLI —
     `python3 output.py render <path>-review.json` prints one review's
     Markdown, `python3 output.py materialize <output_dir>` writes
@@ -30,9 +29,9 @@ Usage:
 import hashlib
 import json
 import os
-import shlex
 import sys
 import uuid
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 
@@ -49,17 +48,19 @@ except ImportError:
 try:
     from ..atomic_io import output_dir_lock
     from ..reviewer_lifecycle import (
+        finalize_review_command,
         require_not_finalized,
         require_review_intake_open,
-        reviewer_paths,
+        review_paths,
     )
     from ..reviewer_names import derive_reviewer_name
 except ImportError:
     from review.atomic_io import output_dir_lock
     from review.reviewer_lifecycle import (
+        finalize_review_command,
         require_not_finalized,
         require_review_intake_open,
-        reviewer_paths,
+        review_paths,
     )
     from review.reviewer_names import derive_reviewer_name
 
@@ -227,25 +228,27 @@ def _telemetry_for_output(output_dir):
     return mod.ReviewTelemetry(output_dir)
 
 
-def _log_agent_save_telemetry(output_dir, agent_name, artifact_digest):
+def _log_agent_review_draft_saved_telemetry(
+    output_dir, agent_name, review_digest
+):
     telemetry = _telemetry_for_output(output_dir)
-    telemetry.log_agent_save(
-        agent_name=agent_name, artifact_digest=artifact_digest
+    telemetry.log_agent_review_draft_saved(
+        agent_name=agent_name, review_digest=review_digest
     )
 
 
-def _completion_was_logged(output_dir, agent_name, artifact_digest):
+def _completion_was_logged(output_dir, agent_name, review_digest):
     telemetry = _telemetry_for_output(output_dir)
     return any(
         event.get("event") == "agent_complete"
         and event.get("agent") == agent_name
-        and event.get("artifact_digest") == artifact_digest
+        and event.get("review_digest") == review_digest
         for event in telemetry._read_events()
     )
 
 
 def _log_agent_complete_telemetry(
-    output_dir, agent_name, verdict, issue_count, severities, artifact_digest
+    output_dir, agent_name, verdict, issue_count, severities, review_digest
 ):
     telemetry = _telemetry_for_output(output_dir)
     telemetry.log_agent_complete(
@@ -253,8 +256,63 @@ def _log_agent_complete_telemetry(
         verdict=verdict,
         issue_count=issue_count,
         severities=severities,
-        artifact_digest=artifact_digest,
+        review_digest=review_digest,
     )
+
+
+def _validate_review_bytes(
+    data: bytes, *, reviewer: str, pr_id: str
+) -> dict:
+    """Validate one persisted draft before rehydrating builder state."""
+    try:
+        review = json.loads(data)
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as exc:
+        raise ValueError("malformed review draft JSON") from exc
+    if not isinstance(review, dict):
+        raise ValueError("malformed review draft: expected an object")
+    _validate_review_shape(review, reviewer)
+    expected_pr_id = pr_id if isinstance(pr_id, str) else str(pr_id)
+    if review["pr_id"] != expected_pr_id:
+        raise ValueError("review draft PR does not match open request")
+    return review
+
+
+def _optional_file_digest(path: str) -> str | None:
+    """Return a file's SHA-256 digest, or None only when it is absent."""
+    try:
+        data = Path(path).read_bytes()
+    except FileNotFoundError:
+        return None
+    return hashlib.sha256(data).hexdigest()
+
+
+def _atomic_replace_bytes(path: str, data: bytes) -> None:
+    """Atomically replace one file with staged bytes and clean failures."""
+    staged_path = f"{path}.{uuid.uuid4().hex}.tmp"
+    try:
+        Path(staged_path).write_bytes(data)
+        os.replace(staged_path, path)
+    finally:
+        try:
+            os.unlink(staged_path)
+        except FileNotFoundError:
+            pass
+
+
+def render_draft_index(review: dict) -> str:
+    """Render concise mutable review state for continuation bootstrap."""
+    issues = review.get("issues") or []
+    clearances = review.get("clearances") or []
+    lines = [
+        "DRAFT INDEX:",
+        f"  findings {len(issues)} | checks {len(clearances)}",
+    ]
+    for issue in issues:
+        lines.append(
+            f"  finding {issue['id']}: {issue['severity']} "
+            f"{json.dumps(issue['title'], ensure_ascii=False)}"
+        )
+    return "\n".join(lines)
 
 
 def render_markdown(data: Dict) -> str:
@@ -656,6 +714,69 @@ class ReviewOutputBuilder:
         self._review_claimable_files = None
         self._advisory_entitlement_loaded = False
         self._advisory_entitlement = None
+        self._output_dir = None
+        self._paths = None
+        self._base_digest = None
+        self._last_saved_review = None
+        self._invocation_delta = []
+
+    @classmethod
+    def open(
+        cls, output_dir: str, pr_id: str, reviewer: str
+    ) -> "ReviewOutputBuilder":
+        """Create or rehydrate one mutable draft under the lifecycle lock."""
+        output_dir = str(output_dir)
+        os.makedirs(output_dir, exist_ok=True)
+        paths = review_paths(output_dir, reviewer)
+        with output_dir_lock(output_dir):
+            require_review_intake_open(output_dir)
+            require_not_finalized(paths)
+            if not os.path.exists(paths.draft):
+                return cls(pr_id, reviewer)._bind(
+                    output_dir, base_digest=None
+                )
+            draft_bytes = Path(paths.draft).read_bytes()
+            review = _validate_review_bytes(
+                draft_bytes, reviewer=reviewer, pr_id=pr_id
+            )
+            digest = hashlib.sha256(draft_bytes).hexdigest()
+        return cls._from_review(review)._bind(
+            output_dir, base_digest=digest
+        )
+
+    @classmethod
+    def _from_review(cls, review: dict) -> "ReviewOutputBuilder":
+        """Rehydrate every builder-owned field from a validated review."""
+        builder = cls(review["pr_id"], review["reviewer"])
+        builder.timestamp = review["timestamp"]
+        builder.issues = list(review["issues"])
+        builder.observations = list(review.get("observations") or [])
+        recommendations = review.get("recommendations") or {}
+        builder.recommendations = {
+            priority: list(recommendations.get(priority) or [])
+            for priority in ("immediate", "important", "suggestions")
+        }
+        builder.positive_observations = list(
+            review.get("positive_observations") or []
+        )
+        builder.clearances = list(review.get("clearances") or [])
+        builder.narrative_summary = review.get("narrative_summary")
+        builder.reviewed_file_claims = list(review["reviewed_file_claims"])
+        meta = review["meta"]
+        builder.tool_results_used = list(meta.get("tool_results_used") or [])
+        builder.overall_confidence = meta["confidence_score"]
+        builder._not_applicable = review["verdict"] == "not_applicable"
+        builder._skip_reason = review.get("skip_reason")
+        return builder
+
+    def _bind(
+        self, output_dir: str, *, base_digest: str | None
+    ) -> "ReviewOutputBuilder":
+        """Bind this builder to exactly one run and observed draft state."""
+        self._output_dir = str(output_dir)
+        self._paths = review_paths(self._output_dir, self.reviewer)
+        self._base_digest = base_digest
+        return self
 
     def add_issue(
         self,
@@ -794,6 +915,10 @@ class ReviewOutputBuilder:
             issue['channel'] = channel
 
         self.issues.append(issue)
+        self._invocation_delta.append(
+            f"added finding {issue_id} "
+            f"{json.dumps(issue['title'], ensure_ascii=False)}"
+        )
         return issue_id
 
     def add_observation(self, file: str, note: str, category: str = "general"):
@@ -956,7 +1081,7 @@ class ReviewOutputBuilder:
     def _known_review_claimable_files(self) -> Optional[frozenset]:
         """The claimable set via the env envelope — add-time fast feedback.
 
-        Authoritative enforcement happens at save() with the explicit
+        Authoritative enforcement happens at save_draft() with the bound
         output directory; this lookup only makes positive claims fail
         earlier on the recommended path.
         """
@@ -1047,12 +1172,12 @@ class ReviewOutputBuilder:
     def _derive_review_accounting(self, output_dir: str):
         """Return the required authoritative accounting for publication.
 
-        Every save uses this path; the explicit output directory makes the
+        Every draft save uses this path; the bound output directory makes the
         check independent of the optional environment envelope.
 
         The seam differs from its advisory sibling on purpose: advisory
         entitlement revalidates at to_dict(output_dir=...) (serialization),
-        this at save() (publication), so a caller serializing manually via
+        this at save_draft() (publication), so a caller serializing manually via
         to_dict/to_json knowingly opts out of accounting validation.
         """
         accounting_input_path = os.path.join(
@@ -1146,6 +1271,7 @@ class ReviewOutputBuilder:
         for path in normalized:
             if path not in self.reviewed_file_claims:
                 self.reviewed_file_claims.append(path)
+                self._invocation_delta.append(f"claimed file {path}")
 
     def retract_reviewed_file_claims(self, *files: str):
         """Retract existing reviewed-file claims, atomically."""
@@ -1174,6 +1300,9 @@ class ReviewOutputBuilder:
         self.reviewed_file_claims = [
             path for path in self.reviewed_file_claims if path not in retracted
         ]
+        self._invocation_delta.extend(
+            f"retracted file {path}" for path in normalized
+        )
 
     def set_confidence(self, score: float):
         """Set overall confidence score."""
@@ -1222,7 +1351,7 @@ class ReviewOutputBuilder:
         Without an explicit directory, manual and legacy callers retain the
         deliberate fail-open, vocabulary-only advisory behavior.
 
-        Candidate publication passes authoritative ``review_accounting``.
+        Draft publication passes authoritative ``review_accounting``.
         Direct serialization has no authority for machine-derived fields and
         reports those as absent.
         """
@@ -1329,129 +1458,92 @@ class ReviewOutputBuilder:
         """Generate human-readable markdown."""
         return render_markdown(self.to_dict())
 
-    def save(self, output_dir: str):
-        """Publish a replaceable review candidate for explicit finalization.
-
-        The candidate remains mutable so a reviewer can act on continuation
-        feedback and save a stronger snapshot. Only ``finalize_candidate``
-        promotes validated bytes to the immutable canonical JSON consumed by
-        readiness and reconciliation.
-        """
-        os.makedirs(output_dir, exist_ok=True)
-
-        review_accounting = self._derive_review_accounting(output_dir)
-
-        paths = reviewer_paths(output_dir, self.reviewer)
-        serialized = self.to_json(
-            output_dir=output_dir, review_accounting=review_accounting
+    def save_draft(self) -> dict[str, str]:
+        """Validate and replace this builder's complete bound draft."""
+        if self._output_dir is None or self._paths is None:
+            raise ValueError(
+                "save_draft requires ReviewOutputBuilder.open(...)"
+            )
+        review_accounting = self._derive_review_accounting(self._output_dir)
+        draft_bytes = self.to_json(
+            output_dir=self._output_dir,
+            review_accounting=review_accounting,
+        ).encode("utf-8")
+        review, agent_name = _validate_review(
+            self._output_dir, self.reviewer, self._paths, draft_bytes
         )
-        output = json.loads(serialized)
-        serialized_bytes = serialized.encode("utf-8")
-        candidate_digest = hashlib.sha256(serialized_bytes).hexdigest()
+        review_digest = hashlib.sha256(draft_bytes).hexdigest()
 
-        # The staging name carries a nonce because overlapping executions of
-        # one reviewer are supported. A shared staging name lets one save's
-        # replace consume another save's bytes.
-        nonce = uuid.uuid4().hex
-        staged_json_path = f"{paths.candidate}.{nonce}.tmp"
-        try:
-            with open(staged_json_path, "wb") as f:
-                f.write(serialized_bytes)
-
-            # Echo the RECORDED state so the calling agent reconciles its
-            # self-reported COUNTS against what was actually saved, not its
-            # intent — a mismatch here means a finding was dropped or
-            # mangled before serialization.
-            by_sev = output['summary']['by_severity']
-            counts_str = ", ".join(f"{sev}: {by_sev[sev]}" for sev in _VALID_SEVERITIES)
-            print(f"RECORDED COUNTS: {counts_str}")
-            print(
-                f"RECORDED ISSUES: {output['summary']['total_issues']} | "
-                f"OBSERVATIONS: {len(self.observations)} | "
-                f"VERDICT: {output['verdict']}"
-            )
-            print(
-                "REVIEW CLAIMS: "
-                f"{len(review_accounting.reviewed_file_claims)} reviewed | "
-                f"{len(review_accounting.unclaimed_review_files)} unclaimed"
-            )
-            # Budget salience, and ONLY here. The briefing states the target
-            # once, thousands of tokens before the reviewer decides whether
-            # to stop; a 19-agent field run showed that placement changes
-            # nothing (0/19 reached target, median 44% spent, nine declaring
-            # 100+ files while under half budget). This echo is the one piece
-            # of feedback every agent reads, it arrives with a turn still
-            # left to act, and it only appears when there is something to act
-            # on — unclaimed review files recorded. Silent when the envelope is
-            # absent or malformed: the builder must stay usable outside a
-            # pipeline run, where there is no target to report.
-            budget_target = self._review_budget_target(output_dir, self.reviewer)
-            if review_accounting.unclaimed_review_files and budget_target is not None:
-                print(
-                    f"TARGET: ~{budget_target} tool calls — if you finished "
-                    "well under it with NOT DIFFED files left, read more and "
-                    "re-save before finalizing."
-                )
-                # The target alone moved re-saves but not utilization in
-                # run12 (0/19 agents reached target) — a number with no
-                # concrete next action is exhortation. PROGRESS states how
-                # much of the total in-scope workload (inline + claimable) is
-                # actually covered; NEXT UNREAD names the specific files
-                # still to read, largest first (the sidecar's own order —
-                # see bootstrap.py's order_by_diffstat_largest_first), so
-                # the very next tool call has an obvious target. Both read
-                # the same schema-2 sidecar as budget_target. PROGRESS is
-                # additionally omitted when its count snapshot is
-                # incoherent; TARGET and NEXT UNREAD keep following their
-                # own independently valid fields.
-                print(
-                    "PROGRESS: accounted for "
-                    f"{review_accounting.review_accounted_file_count} of "
-                    f"{review_accounting.in_scope_review_file_count} "
-                    "in-scope files."
-                )
-                remaining = list(review_accounting.unclaimed_review_files)
-                if remaining:
-                    head, rest = remaining[:10], remaining[10:]
-                    print("NEXT UNREAD (largest first):")
-                    for p in head:
-                        print(f"  - {p}")
-                    if rest:
-                        print(f"  (+{len(rest)} more)")
-            with output_dir_lock(output_dir):
-                require_review_intake_open(output_dir)
-                require_not_finalized(paths)
-                os.replace(staged_json_path, paths.candidate)
-                try:
-                    _log_agent_save_telemetry(
-                        output_dir, review_accounting.agent_name, candidate_digest
-                    )
-                except Exception as exc:
-                    print(
-                        "WARNING: candidate published, but agent_save "
-                        f"telemetry failed: {exc}",
-                        file=sys.stderr,
-                    )
-        finally:
-            # A unique staging name never self-overwrites, so a failed save
-            # must remove its orphan (replace already consumed it on
-            # success).
+        with output_dir_lock(self._output_dir):
+            require_review_intake_open(self._output_dir)
+            require_not_finalized(self._paths)
+            current_digest = _optional_file_digest(self._paths.draft)
+            if current_digest != self._base_digest:
+                raise ValueError("draft changed; reopen before saving")
+            _atomic_replace_bytes(self._paths.draft, draft_bytes)
             try:
-                os.unlink(staged_json_path)
-            except FileNotFoundError:
-                pass
+                _log_agent_review_draft_saved_telemetry(
+                    self._output_dir, agent_name, review_digest
+                )
+            except Exception as exc:
+                print(
+                    "WARNING: draft saved, but agent_review_draft_saved "
+                    f"telemetry failed: {exc}",
+                    file=sys.stderr,
+                )
 
-        print(f"CANDIDATE DIGEST: {candidate_digest}")
-        builder_script = os.path.abspath(__file__)
-        print(
-            f"FINALIZE: python3 {shlex.quote(builder_script)} finalize "
-            f"--output-dir {shlex.quote(output_dir)} "
-            f"--reviewer {shlex.quote(self.reviewer)} "
-            f"--candidate-digest {candidate_digest}"
+        self._base_digest = review_digest
+        self._last_saved_review = review
+        return self._draft_receipt(review_digest)
+
+    def _draft_receipt(self, review_digest: str) -> dict[str, str]:
+        """Print and return the compact next-action surface for one save."""
+        review = self._last_saved_review
+        summary = review["summary"]
+        severity_parts = [
+            f"{severity} {summary['by_severity'][severity]}"
+            for severity in _VALID_SEVERITIES
+            if summary["by_severity"][severity]
+        ]
+        findings = f"findings {summary['total_issues']}"
+        if severity_parts:
+            findings += f" ({', '.join(severity_parts)})"
+        totals = [findings]
+        if review.get("clearances"):
+            totals.append(f"checks {len(review['clearances'])}")
+        if review.get("observations"):
+            totals.append(f"observations {len(review['observations'])}")
+
+        command = finalize_review_command(
+            os.path.abspath(__file__),
+            self._output_dir,
+            self.reviewer,
+            review_digest,
         )
+        print(f"DRAFT SAVED: verdict {review['verdict']}")
+        print(f"DRAFT TOTALS: {' | '.join(totals)}")
+        unclaimed = list(review["unclaimed_review_files"])
+        if unclaimed:
+            shown = ", ".join(unclaimed[:3])
+            if len(unclaimed) > 3:
+                shown += f" (+{len(unclaimed) - 3} more)"
+            budget = self._review_budget_target(
+                self._output_dir, self.reviewer
+            )
+            if budget is not None:
+                shown += f" | target ~{budget} tool calls"
+            print(
+                "FILES NOT YET CLAIMED AS REVIEWED "
+                f"({len(unclaimed)}): {shown}"
+            )
+        if self._invocation_delta:
+            print(f"CHANGED: {' | '.join(self._invocation_delta)}")
+        print(f"FINALIZE REVIEW: {command}")
+        self._invocation_delta = []
         return {
-            "candidate": paths.candidate,
-            "candidate_digest": candidate_digest,
+            "draft": self._paths.draft,
+            "review_digest": review_digest,
+            "finalize_review_command": command,
         }
 
 
@@ -1523,11 +1615,11 @@ def _is_string_list(value):
 def _validate_issue_shape(issue, index):
     """Validate fields emitted by ``ReviewOutputBuilder.add_issue``."""
     if not isinstance(issue, dict):
-        raise ValueError(f"review candidate issue {index} must be an object")
+        raise ValueError(f"review issue {index} must be an object")
     missing = sorted(_REQUIRED_ISSUE_FIELDS - set(issue))
     if missing:
         raise ValueError(
-            f"review candidate issue {index} is missing required fields: "
+            f"review issue {index} is missing required fields: "
             + ", ".join(missing)
         )
     for field in (
@@ -1540,55 +1632,55 @@ def _validate_issue_shape(issue, index):
     ):
         if not isinstance(issue[field], str):
             raise ValueError(
-                f"review candidate issue {index}.{field} must be a string"
+                f"review issue {index}.{field} must be a string"
             )
     if issue["severity"] not in _VALID_SEVERITIES:
         raise ValueError(
-            f"review candidate issue {index}.severity is invalid"
+            f"review issue {index}.severity is invalid"
         )
     if not _is_confidence(issue["confidence"]):
         raise ValueError(
-            f"review candidate issue {index}.confidence must be 0.0-1.0"
+            f"review issue {index}.confidence must be 0.0-1.0"
         )
     if "line" in issue and (
         issue["line"] is not None
         and (type(issue["line"]) is not int or issue["line"] <= 0)
     ):
         raise ValueError(
-            f"review candidate issue {index}.line must be positive or null"
+            f"review issue {index}.line must be positive or null"
         )
     if "scope" in issue and issue["scope"] != "file":
         raise ValueError(
-            f"review candidate issue {index}.scope must be 'file'"
+            f"review issue {index}.scope must be 'file'"
         )
     if "severity_floor" in issue and issue["severity_floor"] not in _VALID_SEVERITIES:
         raise ValueError(
-            f"review candidate issue {index}.severity_floor is invalid"
+            f"review issue {index}.severity_floor is invalid"
         )
     if "channel" in issue and issue["channel"] not in _VALID_CHANNELS:
         raise ValueError(
-            f"review candidate issue {index}.channel is invalid"
+            f"review issue {index}.channel is invalid"
         )
     if (
         "behavior_evidence" in issue
         and issue["behavior_evidence"] not in ("cited", "inferred")
     ):
         raise ValueError(
-            f"review candidate issue {index}.behavior_evidence is invalid"
+            f"review issue {index}.behavior_evidence is invalid"
         )
     for field in ("code_snippet", "source_cited"):
         if field in issue and not isinstance(issue[field], str):
             raise ValueError(
-                f"review candidate issue {index}.{field} must be a string"
+                f"review issue {index}.{field} must be a string"
             )
     if "references" in issue and not _is_string_list(issue["references"]):
         raise ValueError(
-            f"review candidate issue {index}.references must be strings"
+            f"review issue {index}.references must be strings"
         )
 
 
-def _validate_optional_review_fields(candidate):
-    observations = candidate.get("observations")
+def _validate_optional_review_fields(review):
+    observations = review.get("observations")
     if observations is not None and (
         not isinstance(observations, list)
         or any(
@@ -1600,9 +1692,9 @@ def _validate_optional_review_fields(candidate):
             for item in observations
         )
     ):
-        raise ValueError("review candidate observations are malformed")
+        raise ValueError("review observations are malformed")
 
-    recommendations = candidate.get("recommendations")
+    recommendations = review.get("recommendations")
     if recommendations is not None and (
         not isinstance(recommendations, dict)
         or set(recommendations) != {"immediate", "important", "suggestions"}
@@ -1611,158 +1703,158 @@ def _validate_optional_review_fields(candidate):
             for priority in ("immediate", "important", "suggestions")
         )
     ):
-        raise ValueError("review candidate recommendations are malformed")
+        raise ValueError("review recommendations are malformed")
 
     for field in ("positive_observations",):
-        value = candidate.get(field)
+        value = review.get(field)
         if value is not None and not _is_string_list(value):
-            raise ValueError(f"review candidate {field} must be strings or null")
+            raise ValueError(f"review {field} must be strings or null")
 
-    clearances = candidate.get("clearances")
+    clearances = review.get("clearances")
     if clearances is not None:
         if not isinstance(clearances, list):
-            raise ValueError("review candidate clearances must be a list or null")
+            raise ValueError("review clearances must be a list or null")
         for index, clearance in enumerate(clearances):
             if not isinstance(clearance, dict):
                 raise ValueError(
-                    f"review candidate clearance {index} must be an object"
+                    f"review clearance {index} must be an object"
                 )
             for field in ("claim", "method"):
                 value = clearance.get(field)
                 if not isinstance(value, str) or not value.strip():
                     raise ValueError(
-                        f"review candidate clearance {index}.{field} "
+                        f"review clearance {index}.{field} "
                         "must be a non-empty string"
                     )
             evidence = clearance.get("evidence")
             if evidence is not None and not isinstance(evidence, str):
                 raise ValueError(
-                    f"review candidate clearance {index}.evidence "
+                    f"review clearance {index}.evidence "
                     "must be a string or null"
                 )
 
 
-def _validate_candidate_shape(candidate, reviewer):
+def _validate_review_shape(review, reviewer):
     """Validate the complete builder-owned review shape before derivation."""
-    missing = sorted(_REQUIRED_REVIEW_FIELDS - set(candidate))
+    missing = sorted(_REQUIRED_REVIEW_FIELDS - set(review))
     if missing:
         raise ValueError(
-            "review candidate is missing required fields: " + ", ".join(missing)
+            "review is missing required fields: " + ", ".join(missing)
         )
-    unexpected = sorted(set(candidate) - _ALLOWED_REVIEW_FIELDS)
+    unexpected = sorted(set(review) - _ALLOWED_REVIEW_FIELDS)
     if unexpected:
         raise ValueError(
-            "review candidate has unexpected fields: " + ", ".join(unexpected)
+            "review has unexpected fields: " + ", ".join(unexpected)
         )
-    if type(candidate["schema"]) is not int or candidate["schema"] != REVIEW_OUTPUT_SCHEMA:
-        raise ValueError("review candidate schema does not match the live contract")
-    if not isinstance(candidate["reviewer"], str) or candidate["reviewer"] != reviewer:
-        raise ValueError("review candidate reviewer does not match finalization request")
-    if not isinstance(candidate["pr_id"], str):
-        raise ValueError("review candidate pr_id must be a string")
-    if not isinstance(candidate["timestamp"], str):
-        raise ValueError("review candidate timestamp must be an ISO string")
+    if type(review["schema"]) is not int or review["schema"] != REVIEW_OUTPUT_SCHEMA:
+        raise ValueError("review schema does not match the live contract")
+    if not isinstance(review["reviewer"], str) or review["reviewer"] != reviewer:
+        raise ValueError("review reviewer does not match finalization request")
+    if not isinstance(review["pr_id"], str):
+        raise ValueError("review pr_id must be a string")
+    if not isinstance(review["timestamp"], str):
+        raise ValueError("review timestamp must be an ISO string")
     try:
-        datetime.fromisoformat(candidate["timestamp"])
+        datetime.fromisoformat(review["timestamp"])
     except ValueError as exc:
-        raise ValueError("review candidate timestamp must be an ISO string") from exc
-    if candidate["plugin_version"] is not None and not isinstance(
-        candidate["plugin_version"], str
+        raise ValueError("review timestamp must be an ISO string") from exc
+    if review["plugin_version"] is not None and not isinstance(
+        review["plugin_version"], str
     ):
-        raise ValueError("review candidate plugin_version must be a string or null")
-    if candidate["narrative_summary"] is not None and not isinstance(
-        candidate["narrative_summary"], str
+        raise ValueError("review plugin_version must be a string or null")
+    if review["narrative_summary"] is not None and not isinstance(
+        review["narrative_summary"], str
     ):
-        raise ValueError("review candidate narrative_summary must be a string or null")
+        raise ValueError("review narrative_summary must be a string or null")
     for field in (
         "review_claimable_files",
         "reviewed_file_claims",
         "unclaimed_review_files",
     ):
-        if not _is_string_list(candidate[field]):
-            raise ValueError(f"review candidate {field} must be a list of strings")
+        if not _is_string_list(review[field]):
+            raise ValueError(f"review {field} must be a list of strings")
     for field in (
         "inline_diff_file_count",
         "review_accounted_file_count",
         "in_scope_review_file_count",
     ):
-        if type(candidate[field]) is not int or candidate[field] < 0:
+        if type(review[field]) is not int or review[field] < 0:
             raise ValueError(
-                f"review candidate {field} must be a non-negative integer"
+                f"review {field} must be a non-negative integer"
             )
 
-    issues = candidate["issues"]
+    issues = review["issues"]
     if not isinstance(issues, list):
-        raise ValueError("review candidate issues must be a list")
+        raise ValueError("review issues must be a list")
     for index, issue in enumerate(issues):
         _validate_issue_shape(issue, index)
 
-    meta = candidate["meta"]
+    meta = review["meta"]
     if not isinstance(meta, dict):
-        raise ValueError("review candidate meta must be an object")
+        raise ValueError("review meta must be an object")
     missing_meta = sorted(_REQUIRED_META_FIELDS - set(meta))
     if missing_meta:
         raise ValueError(
-            "review candidate meta is missing required fields: "
+            "review meta is missing required fields: "
             + ", ".join(missing_meta)
         )
     unexpected_meta = sorted(set(meta) - _ALLOWED_META_FIELDS)
     if unexpected_meta:
         raise ValueError(
-            "review candidate meta has unexpected fields: "
+            "review meta has unexpected fields: "
             + ", ".join(unexpected_meta)
         )
     duration = meta["review_duration_ms"]
     if duration is not None and (type(duration) is not int or duration < 0):
         raise ValueError(
-            "review candidate meta.review_duration_ms must be non-negative or null"
+            "review meta.review_duration_ms must be non-negative or null"
         )
     if not _is_confidence(meta["confidence_score"]):
         raise ValueError(
-            "review candidate meta.confidence_score must be 0.0-1.0"
+            "review meta.confidence_score must be 0.0-1.0"
         )
     tools = meta.get("tool_results_used")
     if tools is not None and not _is_string_list(tools):
         raise ValueError(
-            "review candidate meta.tool_results_used must be strings or null"
+            "review meta.tool_results_used must be strings or null"
         )
-    _validate_optional_review_fields(candidate)
+    _validate_optional_review_fields(review)
 
 
-def _validate_candidate(output_dir, reviewer, paths, candidate_bytes):
-    """Validate one exact candidate snapshot and return telemetry facts."""
+def _validate_review(output_dir, reviewer, paths, review_bytes):
+    """Validate one exact review snapshot and return telemetry facts."""
     try:
-        candidate = json.loads(candidate_bytes)
+        review = json.loads(review_bytes)
     except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as exc:
-        raise ValueError("malformed review candidate JSON") from exc
-    if not isinstance(candidate, dict):
-        raise ValueError("malformed review candidate: expected an object")
-    _validate_candidate_shape(candidate, reviewer)
+        raise ValueError("malformed review JSON") from exc
+    if not isinstance(review, dict):
+        raise ValueError("malformed review: expected an object")
+    _validate_review_shape(review, reviewer)
 
-    issues = candidate["issues"]
-    summary = candidate["summary"]
+    issues = review["issues"]
+    summary = review["summary"]
     if not isinstance(issues, list) or not isinstance(summary, dict):
-        raise ValueError("review candidate issues/summary are malformed")
+        raise ValueError("review issues/summary are malformed")
     try:
         derived = derive_review_state(issues)
     except ValueError as exc:
-        raise ValueError(f"review candidate issues are malformed: {exc}") from exc
+        raise ValueError(f"review issues are malformed: {exc}") from exc
     expected_verdict = derived["verdict"]
-    if candidate.get("verdict") == "not_applicable":
-        skip_reason = candidate.get("skip_reason")
+    if review.get("verdict") == "not_applicable":
+        skip_reason = review.get("skip_reason")
         if (
             issues
             or not isinstance(skip_reason, str)
             or not skip_reason.strip()
         ):
-            raise ValueError("review candidate not_applicable verdict is malformed")
+            raise ValueError("review not_applicable verdict is malformed")
         expected_verdict = "not_applicable"
-    elif "skip_reason" in candidate:
+    elif "skip_reason" in review:
         raise ValueError(
-            "review candidate skip_reason requires a not_applicable verdict"
+            "review skip_reason requires a not_applicable verdict"
         )
-    if candidate.get("verdict") != expected_verdict:
-        raise ValueError("review candidate verdict does not match its issues")
+    if review.get("verdict") != expected_verdict:
+        raise ValueError("review verdict does not match its issues")
     expected_summary = {
         "total_issues": len(issues),
         "by_severity": derived["counts"],
@@ -1786,98 +1878,98 @@ def _validate_candidate(output_dir, reviewer, paths, candidate_bytes):
         )
         or summary != expected_summary
     ):
-        raise ValueError("review candidate summary does not match its issues")
+        raise ValueError("review summary does not match its issues")
 
     accounting_input = _read_json_object(
         paths.accounting_input, "review-accounting input"
     )
-    claims = candidate.get("reviewed_file_claims")
+    claims = review.get("reviewed_file_claims")
     if not isinstance(claims, list):
-        raise ValueError("review candidate reviewed_file_claims must be a list")
+        raise ValueError("review reviewed_file_claims must be a list")
     try:
         review_accounting = derive_review_accounting(accounting_input, claims)
     except ReviewAccountingError as exc:
         raise ValueError(
-            f"review candidate accounting is malformed: {exc}"
+            f"review accounting is malformed: {exc}"
         ) from exc
     if (
-        candidate.get("review_claimable_files")
+        review.get("review_claimable_files")
         != list(review_accounting.review_claimable_files)
-        or candidate.get("reviewed_file_claims")
+        or review.get("reviewed_file_claims")
         != list(review_accounting.reviewed_file_claims)
-        or candidate.get("unclaimed_review_files")
+        or review.get("unclaimed_review_files")
         != list(review_accounting.unclaimed_review_files)
-        or candidate.get("inline_diff_file_count")
+        or review.get("inline_diff_file_count")
         != review_accounting.inline_diff_file_count
-        or candidate.get("review_accounted_file_count")
+        or review.get("review_accounted_file_count")
         != review_accounting.review_accounted_file_count
-        or candidate.get("in_scope_review_file_count")
+        or review.get("in_scope_review_file_count")
         != review_accounting.in_scope_review_file_count
     ):
         raise ValueError(
-            "review candidate derived accounting fields do not match input"
+            "review derived accounting fields do not match input"
         )
-    return candidate, review_accounting.agent_name
+    return review, review_accounting.agent_name
 
 
-def finalize_candidate(output_dir: str, reviewer: str, candidate_digest: str):
-    """Validate and atomically promote exactly one observed candidate."""
+def finalize_review(output_dir: str, reviewer: str, review_digest: str):
+    """Validate and atomically promote exactly one observed draft."""
     if (
-        not isinstance(candidate_digest, str)
-        or len(candidate_digest) != 64
-        or any(ch not in "0123456789abcdef" for ch in candidate_digest)
+        not isinstance(review_digest, str)
+        or len(review_digest) != 64
+        or any(ch not in "0123456789abcdef" for ch in review_digest)
     ):
-        raise ValueError("candidate digest must be a lowercase SHA-256")
-    paths = reviewer_paths(output_dir, reviewer)
+        raise ValueError("review digest must be a lowercase SHA-256")
+    paths = review_paths(output_dir, reviewer)
     already_finalized = False
     with output_dir_lock(output_dir):
         require_review_intake_open(output_dir)
-        if os.path.exists(paths.canonical):
-            with open(paths.canonical, "rb") as canonical_handle:
-                canonical_bytes = canonical_handle.read()
-            canonical_digest = hashlib.sha256(canonical_bytes).hexdigest()
-            if canonical_digest != candidate_digest:
+        if os.path.exists(paths.final):
+            with open(paths.final, "rb") as final_handle:
+                final_bytes = final_handle.read()
+            final_digest = hashlib.sha256(final_bytes).hexdigest()
+            if final_digest != review_digest:
                 raise ValueError(
-                    "candidate digest conflicts with the finalized review"
+                    "review digest conflicts with the finalized review"
                 )
-            candidate, agent_name = _validate_candidate(
-                output_dir, reviewer, paths, canonical_bytes
+            review, agent_name = _validate_review(
+                output_dir, reviewer, paths, final_bytes
             )
             already_finalized = True
             try:
-                os.unlink(paths.candidate)
+                os.unlink(paths.draft)
             except FileNotFoundError:
                 pass
         else:
             try:
-                with open(paths.candidate, "rb") as candidate_handle:
-                    candidate_bytes = candidate_handle.read()
+                with open(paths.draft, "rb") as draft_handle:
+                    draft_bytes = draft_handle.read()
             except OSError as exc:
-                raise ValueError("review candidate is absent") from exc
-            actual_digest = hashlib.sha256(candidate_bytes).hexdigest()
-            if actual_digest != candidate_digest:
+                raise ValueError("review draft is absent") from exc
+            actual_digest = hashlib.sha256(draft_bytes).hexdigest()
+            if actual_digest != review_digest:
                 raise ValueError(
-                    "candidate digest no longer matches the published candidate"
+                    "review digest no longer matches the saved draft"
                 )
-            candidate, agent_name = _validate_candidate(
-                output_dir, reviewer, paths, candidate_bytes
+            review, agent_name = _validate_review(
+                output_dir, reviewer, paths, draft_bytes
             )
-            os.replace(paths.candidate, paths.canonical)
+            os.replace(paths.draft, paths.final)
 
         if not _completion_was_logged(
-            output_dir, agent_name, candidate_digest
+            output_dir, agent_name, review_digest
         ):
             _log_agent_complete_telemetry(
                 output_dir,
                 agent_name,
-                candidate["verdict"],
-                candidate["summary"]["total_issues"],
-                candidate["summary"]["by_severity"],
-                candidate_digest,
+                review["verdict"],
+                review["summary"]["total_issues"],
+                review["summary"]["by_severity"],
+                review_digest,
             )
     return {
-        "json": paths.canonical,
-        "artifact_digest": candidate_digest,
+        "final": paths.final,
+        "review_digest": review_digest,
         "already_finalized": already_finalized,
     }
 
@@ -1886,38 +1978,38 @@ def repair_finalized_completion(output_dir: str, reviewer: str):
     """Repair telemetry for one canonical review during intake close.
 
     This is not an alternate finalization channel: it never promotes a
-    candidate and does nothing after intake close unless canonical JSON
+    draft and does nothing after intake close unless final JSON
     already exists. The caller holds the shared output-directory lock.
     """
     telemetry = _telemetry_for_output(output_dir)
     if telemetry.log_path is None:
         return None
 
-    paths = reviewer_paths(output_dir, reviewer)
+    paths = review_paths(output_dir, reviewer)
     try:
-        with open(paths.canonical, "rb") as canonical_handle:
-            canonical_bytes = canonical_handle.read()
+        with open(paths.final, "rb") as final_handle:
+            final_bytes = final_handle.read()
     except FileNotFoundError:
         return None
     except OSError as exc:
         raise ValueError("finalized review is unreadable") from exc
 
-    artifact_digest = hashlib.sha256(canonical_bytes).hexdigest()
-    candidate, agent_name = _validate_candidate(
-        output_dir, reviewer, paths, canonical_bytes
+    review_digest = hashlib.sha256(final_bytes).hexdigest()
+    review, agent_name = _validate_review(
+        output_dir, reviewer, paths, final_bytes
     )
-    if not _completion_was_logged(output_dir, agent_name, artifact_digest):
+    if not _completion_was_logged(output_dir, agent_name, review_digest):
         _log_agent_complete_telemetry(
             output_dir,
             agent_name,
-            candidate["verdict"],
-            candidate["summary"]["total_issues"],
-            candidate["summary"]["by_severity"],
-            artifact_digest,
+            review["verdict"],
+            review["summary"]["total_issues"],
+            review["summary"]["by_severity"],
+            review_digest,
         )
     return {
-        "json": paths.canonical,
-        "artifact_digest": artifact_digest,
+        "final": paths.final,
+        "review_digest": review_digest,
         "agent_name": agent_name,
     }
 
@@ -1948,11 +2040,11 @@ if __name__ == '__main__':
         ),
     )
     finalize_cmd = sub.add_parser(
-        "finalize", help="Validate and publish one candidate review"
+        "finalize-review", help="Validate and publish one review draft"
     )
     finalize_cmd.add_argument("--output-dir", required=True)
     finalize_cmd.add_argument("--reviewer", required=True)
-    finalize_cmd.add_argument("--candidate-digest", required=True)
+    finalize_cmd.add_argument("--review-digest", required=True)
     cli_args = parser.parse_args()
     if cli_args.command == "render":
         with open(cli_args.json_path, encoding="utf-8") as cli_handle:
@@ -1964,15 +2056,15 @@ if __name__ == '__main__':
             print(written_path)
     else:
         try:
-            finalized = finalize_candidate(
+            finalized = finalize_review(
                 cli_args.output_dir,
                 cli_args.reviewer,
-                cli_args.candidate_digest,
+                cli_args.review_digest,
             )
         except (OSError, ValueError) as exc:
             print(f"REJECTED: {exc}", file=sys.stderr)
             raise SystemExit(1)
-        if finalized["already_finalized"]:
-            print(f"RECORDED FINAL (ALREADY FINALIZED): {finalized['json']}")
-        else:
-            print(f"RECORDED FINAL: {finalized['json']}")
+        print(
+            "REVIEW FINALIZED: "
+            f"{os.path.basename(finalized['final'])}"
+        )

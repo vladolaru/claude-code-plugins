@@ -801,7 +801,7 @@ class TestStep6DispatchAgents:
                     "repo-renewals-reviewer",
                     "repo-billing-reviewer",
                 ],
-                "failed": [],
+                "discarded_drafts": [],
             },
         }
         step_8 = mod.get_step_guidance(
@@ -1094,7 +1094,7 @@ class TestStep8Reconcile:
             "agents": {
                 "dispatched": ["code-reviewer", "security-reviewer", "performance-reviewer"],
                 "completed": ["code-reviewer", "security-reviewer"],
-                "failed": [],
+                "discarded_drafts": [],
             },
             "change_purpose": "Adds retry logic to the payment gateway." if change_purpose_exists else None,
             "commit_messages": ["feat: add payment retry logic", "test: add retry tests"],
@@ -1199,7 +1199,7 @@ class TestStep8FindingsArtifactOwnership:
             "agents": {
                 "dispatched": ["code-reviewer"],
                 "completed": ["code-reviewer"],
-                "failed": [],
+                "discarded_drafts": [],
             },
         }
         ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
@@ -1241,7 +1241,7 @@ class TestStep8AdditionalInstructions:
             "agents": {
                 "dispatched": ["code-reviewer", "security-reviewer"],
                 "completed": ["code-reviewer", "security-reviewer"],
-                "failed": [],
+                "discarded_drafts": [],
             },
         }
 
@@ -1279,7 +1279,7 @@ class TestStep8ReadinessGate:
             "agents": {
                 "dispatched": ["code-reviewer", "security-reviewer", "performance-reviewer"],
                 "completed": ["code-reviewer"],
-                "failed": [],
+                "discarded_drafts": [],
             },
         }
         ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
@@ -1302,7 +1302,7 @@ class TestStep8ReadinessGate:
                 "running": ["security-reviewer"],
                 "not_dispatched": ["dead-code-reviewer"],
             },
-            "agents": {"dispatched": [], "completed": [], "failed": []},
+            "agents": {"dispatched": [], "completed": [], "discarded_drafts": []},
         }
         ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
         g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
@@ -1317,7 +1317,7 @@ class TestStep8ReadinessGate:
             "agents": {
                 "dispatched": ["code-reviewer"],
                 "completed": ["code-reviewer"],
-                "failed": [],
+                "discarded_drafts": [],
             },
             "change_purpose": "Test change.",
         }
@@ -1336,7 +1336,7 @@ class TestStep8ReadinessGate:
                 "running": ["security-reviewer"],
                 "not_dispatched": [],
             },
-            "agents": {"dispatched": ["security-reviewer"], "completed": [], "failed": []},
+            "agents": {"dispatched": ["security-reviewer"], "completed": [], "discarded_drafts": []},
         }
         ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
         g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
@@ -1363,7 +1363,7 @@ class TestStep8ReadinessGate:
             "agents": {
                 "dispatched": ["code-reviewer", "security-reviewer"],
                 "completed": ["code-reviewer"],
-                "failed": [],
+                "discarded_drafts": [],
             },
         }
         ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
@@ -1395,7 +1395,7 @@ class TestStep8ReadinessGate:
                 "first_waiting_at": past.isoformat(),
                 "agent_timeout_seconds": 1200,
             },
-            "agents": {"dispatched": ["security-reviewer"], "completed": [], "failed": []},
+            "agents": {"dispatched": ["security-reviewer"], "completed": [], "discarded_drafts": []},
         }
         ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
         g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
@@ -1413,7 +1413,7 @@ class TestStep8ReadinessGate:
             "agents": {
                 "dispatched": ["code-reviewer"],
                 "completed": ["code-reviewer"],
-                "failed": [],
+                "discarded_drafts": [],
             },
             "change_purpose": "Test change.",
         }
@@ -1429,7 +1429,7 @@ class TestStep8ReadinessGate:
                 "running": ["security-reviewer"],
                 "not_dispatched": [],
             },
-            "agents": {"dispatched": ["security-reviewer"], "completed": [], "failed": []},
+            "agents": {"dispatched": ["security-reviewer"], "completed": [], "discarded_drafts": []},
         }
 
     def test_claude_host_waiting_uses_end_turn_and_fresh_watchdog(self, mod, tmp_path):
@@ -2808,7 +2808,7 @@ class TestStep11PresentResults:
             "resolved_params": {},
             "completed_steps": [1, 2, 3, 5, 6, 7, 8, 9, 10],
             "verdict": None,
-            "agents": {"dispatched": [], "completed": [], "failed": [], "review_files": []},
+            "agents": {"dispatched": [], "completed": [], "discarded_drafts": [], "review_files": []},
         }
         config = {"mode": "pr", "interactive": True}
         context = {}

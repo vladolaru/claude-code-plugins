@@ -30,7 +30,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 from review.agent.output import (
     ReviewOutputBuilder,
-    finalize_candidate,
+    finalize_review,
     materialize_markdown,
     render_markdown,
 )
@@ -51,11 +51,19 @@ def _write_required_accounting_input(output_dir, reviewer):
 
 
 def _save_and_finalize(builder, output_dir):
-    saved = builder.save(str(output_dir))
-    finalize_candidate(
-        str(output_dir), builder.reviewer, saved["candidate_digest"]
+    builder._bind(str(output_dir), base_digest=None)
+    saved = builder.save_draft()
+    finalize_review(
+        str(output_dir), builder.reviewer, saved["review_digest"]
     )
     return saved
+
+
+def _save_draft(builder, output_dir):
+    """Bind direct-constructor unit fixtures to the canonical draft save."""
+    if builder._output_dir is None:
+        builder._bind(str(output_dir), base_digest=None)
+    return builder.save_draft()
 
 
 # =============================================================================
@@ -558,8 +566,8 @@ class TestToDict:
         monkeypatch.setenv("PIRATEGOAT_PLUGIN_VERSION", "1.114.0")
         b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
         _write_required_accounting_input(tmp_path, "pr")
-        b.save(str(tmp_path))
-        saved = json.loads((tmp_path / "pr-review.candidate.json").read_text())
+        _save_draft(b, tmp_path)
+        saved = json.loads((tmp_path / "pr-review.draft.json").read_text())
         assert saved["plugin_version"] == "1.114.0"
 
     def test_schema_is_the_documented_shape_number(self):
@@ -816,17 +824,17 @@ class TestMaterializeMarkdown:
 # =============================================================================
 
 
-class TestSave:
-    """save publishes a replaceable candidate and continuation feedback."""
+class TestSaveDraft:
+    """save_draft publishes replaceable state and compact feedback."""
 
-    def test_creates_only_the_candidate_json(self):
+    def test_creates_only_the_draft_json(self):
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
             b.add_issue("high", "Title", "f.py", "desc", "rec", line=1)
             _write_required_accounting_input(d, "security")
-            b.save(d)
+            _save_draft(b, d)
             assert os.path.isfile(
-                os.path.join(d, "security-review.candidate.json")
+                os.path.join(d, "security-review.draft.json")
             )
             assert not os.path.exists(os.path.join(d, "security-review.json"))
             assert not os.path.exists(os.path.join(d, "security-review.md"))
@@ -842,8 +850,8 @@ class TestSave:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
             b.add_issue("high", "Title", "f.py", "desc", "rec", line=1)
             _write_required_accounting_input(d, "security")
-            b.save(d)
-            with open(os.path.join(d, "security-review.candidate.json")) as f:
+            _save_draft(b, d)
+            with open(os.path.join(d, "security-review.draft.json")) as f:
                 saved = json.load(f)
             live = b.to_dict()
 
@@ -872,54 +880,55 @@ class TestSave:
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="arch")
             _write_required_accounting_input(d, "arch")
-            result = b.save(d)
-            assert result["candidate"] == os.path.join(
-                d, "arch-review.candidate.json"
+            result = _save_draft(b, d)
+            assert result["draft"] == os.path.join(
+                d, "arch-review.draft.json"
             )
-            assert re.fullmatch(r"[0-9a-f]{64}", result["candidate_digest"])
+            assert re.fullmatch(r"[0-9a-f]{64}", result["review_digest"])
 
-    def test_prints_recorded_counts_to_stdout(self, capsys):
-        """save() echoes the SAVED state so agents can reconcile their
-        self-reported COUNTS against what was actually recorded (an agent
-        reporting from intent masked the line=None demotion for 60 days)."""
+    def test_prints_compact_totals_to_stdout(self, capsys):
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
             b.add_issue("high", "A", "a.py", "d", "r", line=1)
             b.add_issue("medium", "B", "b.py", "d", "r", line=2)
             b.add_observation("c.py", "FYI note")
             _write_required_accounting_input(d, "security")
-            b.save(d)
+            _save_draft(b, d)
             out = capsys.readouterr().out
-            assert "RECORDED COUNTS: critical: 0, high: 1, medium: 1, low: 0, info: 0" in out
-            assert "RECORDED ISSUES: 2" in out
-            assert "OBSERVATIONS: 1" in out
-            assert "VERDICT: request_changes" in out
+            assert "DRAFT SAVED: verdict request_changes" in out
+            assert (
+                "DRAFT TOTALS: findings 2 (high 1, medium 1) | "
+                "observations 1"
+            ) in out
+            assert "critical 0" not in out
 
     def test_prints_zero_counts_when_empty(self, capsys):
         """An empty save is echoed too — '0 issues recorded' must be visible."""
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
             _write_required_accounting_input(d, "security")
-            b.save(d)
+            _save_draft(b, d)
             out = capsys.readouterr().out
-            assert "RECORDED ISSUES: 0" in out
-            assert "VERDICT: approve" in out
+            assert "DRAFT TOTALS: findings 0" in out
+            assert "DRAFT SAVED: verdict approve" in out
 
     def test_failed_save_removes_its_staged_file(self, monkeypatch):
-        """A failed candidate replace removes the nonce staging file."""
+        """A failed draft replace removes the nonce staging file."""
         import review.agent.output as output_mod
 
         def _boom(*args):
-            raise OSError("candidate replace failed")
+            raise OSError("draft replace failed")
 
         monkeypatch.setattr(output_mod.os, "replace", _boom)
         with tempfile.TemporaryDirectory() as d:
             _write_required_accounting_input(d, "security")
             with pytest.raises(OSError):
-                ReviewOutputBuilder(pr_id="1", reviewer="security").save(d)
+                _save_draft(
+                    ReviewOutputBuilder(pr_id="1", reviewer="security"), d
+                )
             assert not os.path.exists(os.path.join(d, "security-review.json"))
             assert not os.path.exists(
-                os.path.join(d, "security-review.candidate.json")
+                os.path.join(d, "security-review.draft.json")
             )
             assert not list(Path(d).glob("*.tmp"))
 
@@ -1203,7 +1212,7 @@ class TestReviewedFileClaims:
     def test_failed_batch_leaves_no_trace_in_saved_artifact(
         self, tmp_path, monkeypatch
     ):
-        """The consequence that matters: after a rejected batch, save()'s
+        """The consequence that matters: after a rejected batch, save_draft()'s
         accounting is exactly as if the call never happened — the
         unclaimed file lands in the derived gap record, never as a claim."""
         self._arm_accounting_input(
@@ -1213,9 +1222,9 @@ class TestReviewedFileClaims:
         with pytest.raises(ValueError):
             b.claim_files_reviewed("src/a.py", "src/bogus.py")
         b.claim_files_reviewed("src/c.py")
-        b.save(str(tmp_path))
+        _save_draft(b, tmp_path)
         with open(
-            tmp_path / "sec-review.candidate.json", encoding="utf-8"
+            tmp_path / "sec-review.draft.json", encoding="utf-8"
         ) as f:
             data = json.load(f)
         assert data["reviewed_file_claims"] == ["src/c.py"]
@@ -1546,7 +1555,7 @@ class TestAdvisoryChannel:
         _write_required_accounting_input(tmp_path, "reconciliator")
 
         with pytest.raises(ValueError, match="advisory.*not entitled"):
-            b.save(str(tmp_path))
+            _save_draft(b, tmp_path)
         assert not (tmp_path / "reconciliator-review.json").exists()
 
     def test_advisory_critical_does_not_gate(self):
@@ -1654,7 +1663,7 @@ class TestAdvisoryChannel:
 
 
 class TestDerivedReviewAccounting:
-    """Candidate and final coverage are sidecar-derived from positive claims."""
+    """Draft and final coverage are sidecar-derived from positive claims."""
 
     @staticmethod
     def _write_accounting_input(tmp_path, claimable, *, inline_diff_file_count=0, reviewer="code"):
@@ -1668,38 +1677,38 @@ class TestDerivedReviewAccounting:
             "review_budget": 15,
         }))
 
-    def test_candidate_derives_gaps_and_counts_from_claims(self, tmp_path):
+    def test_draft_derives_gaps_and_counts_from_claims(self, tmp_path):
         self._write_accounting_input(
             tmp_path, ["src/read.ts", "src/unread.ts"], inline_diff_file_count=3
         )
         builder = ReviewOutputBuilder("123", "code")
         builder.claim_files_reviewed("src/read.ts")
 
-        builder.save(str(tmp_path))
+        _save_draft(builder, tmp_path)
 
         saved = json.loads(
-            (tmp_path / "code-review.candidate.json").read_text()
+            (tmp_path / "code-review.draft.json").read_text()
         )
         assert saved["reviewed_file_claims"] == ["src/read.ts"]
         assert saved["unclaimed_review_files"] == ["src/unread.ts"]
         assert saved["review_accounted_file_count"] == 4
         assert "unreviewed_" + "autofilled" not in saved["meta"]
 
-    def test_candidate_resave_recomputes_complement_from_scratch(self, tmp_path):
+    def test_draft_resave_recomputes_complement_from_scratch(self, tmp_path):
         self._write_accounting_input(tmp_path, ["src/a.ts", "src/b.ts"])
         builder = ReviewOutputBuilder("123", "code")
         builder.claim_files_reviewed("src/a.ts")
-        builder.save(str(tmp_path))
+        _save_draft(builder, tmp_path)
         first = json.loads(
-            (tmp_path / "code-review.candidate.json").read_text()
+            (tmp_path / "code-review.draft.json").read_text()
         )
         assert first["unclaimed_review_files"] == ["src/b.ts"]
 
         builder.claim_files_reviewed("src/b.ts")
-        builder.save(str(tmp_path))
+        _save_draft(builder, tmp_path)
 
         second = json.loads(
-            (tmp_path / "code-review.candidate.json").read_text()
+            (tmp_path / "code-review.draft.json").read_text()
         )
         assert second["reviewed_file_claims"] == ["src/a.ts", "src/b.ts"]
         assert second["unclaimed_review_files"] == []
@@ -1712,8 +1721,8 @@ class TestDerivedReviewAccounting:
         builder = ReviewOutputBuilder("123", "code")
         builder.claim_files_reviewed("src/read.ts")
 
-        saved = builder.save(str(tmp_path))
-        finalize_candidate(str(tmp_path), "code", saved["candidate_digest"])
+        saved = _save_draft(builder, tmp_path)
+        finalize_review(str(tmp_path), "code", saved["review_digest"])
 
         final = json.loads((tmp_path / "code-review.json").read_text())
         assert final["reviewed_file_claims"] == ["src/read.ts"]
@@ -1723,18 +1732,18 @@ class TestDerivedReviewAccounting:
     def test_finalization_rejects_a_raw_claim_list(self, tmp_path):
         self._write_accounting_input(tmp_path, ["src/read.ts"])
         builder = ReviewOutputBuilder("123", "code")
-        saved = builder.save(str(tmp_path))
-        candidate_path = tmp_path / "code-review.candidate.json"
-        candidate = json.loads(candidate_path.read_text())
-        candidate["reviewed_file_claims"] = "src/read.ts"
-        candidate_bytes = json.dumps(candidate).encode()
-        candidate_path.write_bytes(candidate_bytes)
-        digest = hashlib.sha256(candidate_bytes).hexdigest()
+        saved = _save_draft(builder, tmp_path)
+        draft_path = tmp_path / "code-review.draft.json"
+        draft = json.loads(draft_path.read_text())
+        draft["reviewed_file_claims"] = "src/read.ts"
+        draft_bytes = json.dumps(draft).encode()
+        draft_path.write_bytes(draft_bytes)
+        digest = hashlib.sha256(draft_bytes).hexdigest()
 
         with pytest.raises(
             ValueError, match="reviewed_file_claims must be a list"
         ):
-            finalize_candidate(str(tmp_path), "code", digest)
+            finalize_review(str(tmp_path), "code", digest)
 
 
 class TestBudgetTargetEcho:
@@ -1778,7 +1787,7 @@ class TestBudgetTargetEcho:
 
     def _save_with_unreviewed(self, tmp_path, monkeypatch, capsys):
         builder = ReviewOutputBuilder("123", "code")
-        builder.save(str(tmp_path))
+        _save_draft(builder, tmp_path)
         return capsys.readouterr().out
 
     def test_target_line_appears_with_unreviewed_and_budget(
@@ -1789,10 +1798,10 @@ class TestBudgetTargetEcho:
             tmp_path, review_claimable_files=["some/file.go"], review_budget=80
         )
         out = self._save_with_unreviewed(tmp_path, monkeypatch, capsys)
-        assert "TARGET: ~80 tool calls" in out
-        assert "read more and re-save before finalizing" in out
-        # Exactly one line, so the echo stays scannable.
-        assert sum(l.startswith("TARGET:") for l in out.splitlines()) == 1
+        assert (
+            "FILES NOT YET CLAIMED AS REVIEWED (1): some/file.go | "
+            "target ~80 tool calls"
+        ) in out
 
     def test_no_target_line_without_unreviewed_files(
         self, tmp_path, monkeypatch, capsys
@@ -1801,8 +1810,8 @@ class TestBudgetTargetEcho:
         self._clean_env(monkeypatch)
         self._write_accounting_input(tmp_path, review_budget=80)
         builder = ReviewOutputBuilder("123", "code")
-        builder.save(str(tmp_path))
-        assert "TARGET:" not in capsys.readouterr().out
+        _save_draft(builder, tmp_path)
+        assert "FILES NOT YET CLAIMED" not in capsys.readouterr().out
 
     def test_missing_accounting_input_rejects_publication(
         self, tmp_path, monkeypatch, capsys
@@ -1844,7 +1853,7 @@ class TestBudgetTargetEcho:
             tmp_path, review_claimable_files=["some/file.go"], review_budget=0
         )
         out = self._save_with_unreviewed(tmp_path, monkeypatch, capsys)
-        assert "TARGET:" not in out
+        assert "target ~" not in out
 
     def test_derived_gap_still_gets_the_target(
         self, tmp_path, monkeypatch, capsys
@@ -1853,9 +1862,9 @@ class TestBudgetTargetEcho:
         self._clean_env(monkeypatch)
         self._write_accounting_input(tmp_path, review_claimable_files=["a.go"], review_budget=40)
         builder = ReviewOutputBuilder("123", "code")
-        builder.save(str(tmp_path))
+        _save_draft(builder, tmp_path)
         out = capsys.readouterr().out
-        assert "TARGET: ~40 tool calls" in out
+        assert "target ~40 tool calls" in out
 
 
 # =============================================================================
@@ -1863,13 +1872,8 @@ class TestBudgetTargetEcho:
 # =============================================================================
 
 
-class TestSaveEchoProgressAndNextUnread:
-    """The TARGET echo names the continuation: a progress fraction plus the
-    first unread NOT DIFFED files, largest first — run12 showed that
-    exhortation without a concrete next action moves repeated saves but not
-    utilization. Both lines ride the same gate as TARGET (derived unclaimed_review_files
-    files and a real budget) and read from the same schema-2 sidecar.
-    """
+class TestDraftFileGapReceipt:
+    """The compact receipt names at most three unclaimed priority files."""
 
     @staticmethod
     def _clean_env(monkeypatch):
@@ -1909,8 +1913,8 @@ class TestSaveEchoProgressAndNextUnread:
 
         assert builder.to_dict()["review_accounted_file_count"] is None
 
-        builder.save(str(tmp_path))
-        saved = json.loads((tmp_path / "code-review.candidate.json").read_text())
+        _save_draft(builder, tmp_path)
+        saved = json.loads((tmp_path / "code-review.draft.json").read_text())
         assert saved["reviewed_file_claims"] == ["b.go"]
         assert saved["unclaimed_review_files"] == ["a.go"]
         assert saved["review_accounted_file_count"] == 3
@@ -1926,23 +1930,14 @@ class TestSaveEchoProgressAndNextUnread:
         )
         builder = ReviewOutputBuilder("123", "code")
         builder.claim_files_reviewed(*claimable[:3])  # claimed — read
-        builder.save(str(tmp_path))
+        _save_draft(builder, tmp_path)
         out = capsys.readouterr().out
 
-        # 10 diffed + 3 claimed = 13 of 30.
-        assert "PROGRESS: accounted for 13 of 30 in-scope files." in out
-        assert "NEXT UNREAD (largest first):" in out
-        # 20 claimable - 3 claimed = 17 remaining, capped at 10.
-        assert out.count("\n  - ") == 10
-        assert "(+7 more)" in out
-        # Replays the sidecar's own order (largest first), not re-sorted or
-        # re-derived: the first listed file is the largest remaining one.
-        next_unread_block = out.split("NEXT UNREAD (largest first):\n", 1)[1]
-        listed = [
-            line[len("  - "):] for line in next_unread_block.splitlines()
-            if line.startswith("  - ")
-        ]
-        assert listed == claimable[3:13]
+        assert (
+            "FILES NOT YET CLAIMED AS REVIEWED (17): "
+            "claimable/03.go, claimable/04.go, claimable/05.go (+14 more) "
+            "| target ~80 tool calls"
+        ) in out
 
     def test_no_progress_or_next_unread_without_unreviewed_files(
         self, tmp_path, monkeypatch, capsys
@@ -1953,10 +1948,9 @@ class TestSaveEchoProgressAndNextUnread:
             tmp_path, review_budget=80, in_scope_review_file_count=30, inline_diff_file_count=30,
         )
         builder = ReviewOutputBuilder("123", "code")
-        builder.save(str(tmp_path))
+        _save_draft(builder, tmp_path)
         out = capsys.readouterr().out
-        assert "PROGRESS:" not in out
-        assert "NEXT UNREAD" not in out
+        assert "FILES NOT YET CLAIMED" not in out
 
     def test_schema_1_sidecar_rejects_progress_publication(
         self, tmp_path, monkeypatch, capsys
@@ -1967,7 +1961,7 @@ class TestSaveEchoProgressAndNextUnread:
         )
         builder = ReviewOutputBuilder("123", "code")
         with pytest.raises(ValueError, match="schema must be 3"):
-            builder.save(str(tmp_path))
+            _save_draft(builder, tmp_path)
 
     def test_next_unread_omitted_only_when_every_deferred_file_is_claimed(
         self, tmp_path, monkeypatch, capsys
@@ -1982,11 +1976,9 @@ class TestSaveEchoProgressAndNextUnread:
         )
         builder = ReviewOutputBuilder("123", "code")
         builder.claim_files_reviewed("a.go", "b.go")
-        builder.save(str(tmp_path))
+        _save_draft(builder, tmp_path)
         out = capsys.readouterr().out
-        assert "TARGET:" not in out
-        assert "PROGRESS:" not in out
-        assert "NEXT UNREAD" not in out
+        assert "FILES NOT YET CLAIMED" not in out
 
     def test_missing_scope_counts_reject_progress_publication(
         self, tmp_path, monkeypatch, capsys
@@ -1998,7 +1990,7 @@ class TestSaveEchoProgressAndNextUnread:
         )
         builder = ReviewOutputBuilder("123", "code")
         with pytest.raises(ValueError, match="in_scope_review_file_count"):
-            builder.save(str(tmp_path))
+            _save_draft(builder, tmp_path)
 
     @pytest.mark.parametrize(
         ("in_scope_review_file_count", "inline_diff_file_count", "review_claimable_files"),
@@ -2029,7 +2021,7 @@ class TestSaveEchoProgressAndNextUnread:
         )
         builder = ReviewOutputBuilder("123", "code")
         with pytest.raises(ValueError, match="malformed authoritative review-accounting input"):
-            builder.save(str(tmp_path))
+            _save_draft(builder, tmp_path)
 
     def test_incoherent_claim_partition_rejects_publication(
         self, tmp_path, monkeypatch, capsys
@@ -2045,7 +2037,7 @@ class TestSaveEchoProgressAndNextUnread:
         builder = ReviewOutputBuilder("123", "code")
         builder.claim_files_reviewed("a.go", "b.go")
         with pytest.raises(ValueError, match="incoherent inline and review-claimable scope counts"):
-            builder.save(str(tmp_path))
+            _save_draft(builder, tmp_path)
 
     def test_progress_counts_unique_authoritative_claims(
         self, tmp_path, monkeypatch, capsys
@@ -2062,10 +2054,13 @@ class TestSaveEchoProgressAndNextUnread:
         # Defensive against a caller mutating public builder state instead of
         # using claim_files_reviewed(), whose API already order-deduplicates.
         builder.reviewed_file_claims = ["a.go", "a.go"]
-        builder.save(str(tmp_path))
+        _save_draft(builder, tmp_path)
         out = capsys.readouterr().out
 
-        assert "PROGRESS: accounted for 1 of 2 in-scope files." in out
+        assert (
+            "FILES NOT YET CLAIMED AS REVIEWED (1): b.go | "
+            "target ~40 tool calls"
+        ) in out
 
 
 # =============================================================================
@@ -2472,12 +2467,12 @@ class TestReconciliationSectionsRender:
 class TestMaterializeFindingsMarkdown:
     """One materializer, parameterized — never a second render path."""
 
-    def test_default_suffix_ignores_unfinalized_reviewer_candidates(self):
+    def test_default_suffix_ignores_unfinalized_reviewer_drafts(self):
         with tempfile.TemporaryDirectory() as d:
             _write_required_accounting_input(d, "security")
-            ReviewOutputBuilder(
-                pr_id="1", reviewer="security"
-            ).save(d)
+            _save_draft(
+                ReviewOutputBuilder(pr_id="1", reviewer="security"), d
+            )
 
             assert materialize_markdown(d) == []
             assert not Path(d, "security-review.md").exists()

@@ -480,14 +480,17 @@ def _builder_heredoc(reviewer="security", body=None):
             'plugin_root = os.environ["PIRATEGOAT_PLUGIN_ROOT"]\n'
             "sys.path.insert(0, os.path.join(plugin_root, \"scripts\"))\n"
             "from review.agent.output import ReviewOutputBuilder\n"
-            f'builder = ReviewOutputBuilder(pr_id="42", reviewer="{reviewer}")\n'
+            'builder = ReviewOutputBuilder.open('
+            'os.environ["PIRATEGOAT_OUTPUT_DIR"], '
+            'os.environ["PIRATEGOAT_PR_ID"], '
+            'os.environ["PIRATEGOAT_REVIEWER_NAME"])\n'
             'builder.add_issue(severity="high", title="Reviewer\'s finding — '
             'unsafe echo", file="src/f.php",\n'
             '    description="What is wrong", recommendation="How to fix",\n'
             '    category="xss", line=42, confidence=0.9)\n'
             'builder.add_issue("medium", "Positional style", "src/g.php",\n'
             '    "desc", "rec", line=7)\n'
-            "result = builder.save(os.environ[\"PIRATEGOAT_OUTPUT_DIR\"])\n"
+            "builder.save_draft()\n"
         )
     return (
         "PIRATEGOAT_PLUGIN_ROOT='/plug' "
@@ -526,7 +529,7 @@ def _tool_result_entry(tool_id, is_error=False):
                 {
                     "type": "tool_result",
                     "tool_use_id": tool_id,
-                    "content": "RECORDED COUNTS: ..." if not is_error else "Traceback",
+                    "content": "DRAFT TOTALS: ..." if not is_error else "Traceback",
                     "is_error": is_error,
                 }
             ],
@@ -574,7 +577,7 @@ class TestBashBuilderRecognition:
             "PIRATEGOAT_OUTPUT_DIR='/tmp/pr-review-42' "
             "PIRATEGOAT_REVIEWER_NAME='security' "
             "PIRATEGOAT_PR_ID='42' python3 <<'PY'\n"
-            "builder.save(os.environ[\"PIRATEGOAT_OUTPUT_DIR\"])\n"
+            "builder.save_draft()\n"
             "PY"
         )
 
@@ -606,7 +609,7 @@ class TestBashBuilderRecognition:
             "PIRATEGOAT_PR_ID='42' "
             "PIRATEGOAT_PLUGIN_VERSION='1.114.0' "
             "PIRATEGOAT_REVIEW_BUDGET='80' python3 <<'PY'\n"
-            "builder.save(os.environ[\"PIRATEGOAT_OUTPUT_DIR\"])\n"
+            "builder.save_draft()\n"
             "PY"
         )
 
@@ -633,7 +636,7 @@ class TestBashBuilderRecognition:
             "PIRATEGOAT_PR_ID='42' "
             "PIRATEGOAT_PLUGIN_VERSION='1.114.0' "
             "PIRATEGOAT_SOME_RETIRED_NAME='80' python3 <<'PY'\n"
-            "builder.save(os.environ[\"PIRATEGOAT_OUTPUT_DIR\"])\n"
+            "builder.save_draft()\n"
             "PY"
         )
 
@@ -732,10 +735,10 @@ class TestBashBuilderRecognition:
     def test_fully_positional_severity_floor_is_applied(self):
         body = (
             "from review.agent.output import ReviewOutputBuilder\n"
-            'builder = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
             'builder.add_issue("low", "T", "src/f.php", "d", "r", "cat", 3,\n'
             '    0.9, None, None, "high")\n'
-            "builder.save(\"/tmp/pr-review-42\")\n"
+            "builder.save_draft()\n"
         )
         record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
 
@@ -749,9 +752,9 @@ class TestBashBuilderRecognition:
         its line and exclude it from overlap scoring."""
         body = (
             "from review.agent.output import ReviewOutputBuilder\n"
-            'builder = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
             'builder.add_issue("high", "T", "src/f.php", "d", "r", "xss", 42)\n'
-            "builder.save(\"/tmp/pr-review-42\")\n"
+            "builder.save_draft()\n"
         )
         record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
 
@@ -764,11 +767,11 @@ class TestBashBuilderRecognition:
         the reconstruction must match what was actually saved."""
         body = (
             "from review.agent.output import ReviewOutputBuilder\n"
-            'builder = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
             'builder.add_issue(severity="LOW", title="Floored", file="f.php",\n'
             '    description="d", recommendation="r", line=3,\n'
             '    severity_floor="medium")\n'
-            "builder.save(\"/tmp/pr-review-42\")\n"
+            "builder.save_draft()\n"
         )
         record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
 
@@ -781,10 +784,10 @@ class TestBashBuilderRecognition:
         would fabricate findings into the quality report."""
         body = (
             "from review.agent.output import ReviewOutputBuilder\n"
-            'builder = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
             'builder.add_issue(severity="high", title="Persisted", file="a.php",\n'
             '    description="d", recommendation="r", line=1)\n'
-            "builder.save(\"/tmp/pr-review-42\")\n"
+            "builder.save_draft()\n"
             'builder.add_issue(severity="critical", title="Never saved", file="b.php",\n'
             '    description="d", recommendation="r", line=2)\n'
         )
@@ -799,13 +802,13 @@ class TestBashBuilderRecognition:
         also went out with an earlier save."""
         body = (
             "from review.agent.output import ReviewOutputBuilder\n"
-            'builder = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
             'builder.add_issue(severity="high", title="First", file="a.php",\n'
             '    description="d", recommendation="r", line=1)\n'
-            "builder.save(\"/tmp/pr-review-42\")\n"
+            "builder.save_draft()\n"
             'builder.add_issue(severity="medium", title="Second", file="b.php",\n'
             '    description="d", recommendation="r", line=2)\n'
-            "builder.save(\"/tmp/pr-review-42\")\n"
+            "builder.save_draft()\n"
         )
         record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
 
@@ -820,14 +823,14 @@ class TestBashBuilderRecognition:
         into severity, overlap, and survival metrics."""
         body = (
             "from review.agent.output import ReviewOutputBuilder\n"
-            'builder = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
             'builder.add_issue(severity="critical", title="Superseded", file="a.php",\n'
             '    description="d", recommendation="r", line=1)\n'
-            "builder.save(\"/tmp/pr-review-42\")\n"
-            'builder = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            "builder.save_draft()\n"
+            'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
             'builder.add_issue(severity="low", title="Final", file="b.php",\n'
             '    description="d", recommendation="r", line=2)\n'
-            "builder.save(\"/tmp/pr-review-42\")\n"
+            "builder.save_draft()\n"
         )
         record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
 
@@ -839,11 +842,11 @@ class TestBashBuilderRecognition:
         persisted nothing — collecting it fabricates findings."""
         body = (
             "from review.agent.output import ReviewOutputBuilder\n"
-            'other = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
-            'saved = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'other = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
+            'saved = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
             'other.add_issue("high", "Unsaved", "a.php", "d", "r", "cat", 1)\n'
             'saved.add_issue("low", "Saved", "b.php", "d", "r", "cat", 2)\n'
-            'saved.save("/tmp/pr-review-42")\n'
+            'saved.save_draft()\n'
         )
 
         record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
@@ -856,7 +859,7 @@ class TestBashBuilderRecognition:
         """A save through anything but a plain variable is ambiguous."""
         body = (
             "from review.agent.output import ReviewOutputBuilder\n"
-            'holder.b = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'holder.b = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
             'holder.b.add_issue("high", "Finding", "a.php", "d", "r", "cat", 1)\n'
             'holder.b.save("/tmp/pr-review-42")\n'
         )
@@ -869,12 +872,12 @@ class TestBashBuilderRecognition:
         """A later alias rebind invalidates the receiver's old constructor."""
         body = (
             "from review.agent.output import ReviewOutputBuilder\n"
-            'saved = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'saved = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
             'saved.add_issue("high", "Stale", "a.php", "d", "r", "cat", 1)\n'
-            'other = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'other = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
             'other.add_issue("low", "Actual", "b.php", "d", "r", "cat", 2)\n'
             "saved = other\n"
-            'saved.save("/tmp/pr-review-42")\n'
+            'saved.save_draft()\n'
         )
 
         record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
@@ -887,7 +890,7 @@ class TestBashBuilderRecognition:
             "from review.agent.output import ReviewOutputBuilder\n"
             "saved = make_builder()\n"
             'saved.add_issue("high", "Unknown", "a.php", "d", "r", "cat", 1)\n'
-            'saved.save("/tmp/pr-review-42")\n'
+            'saved.save_draft()\n'
         )
 
         record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
@@ -986,9 +989,12 @@ class TestBashBuilderRecognition:
                 'plugin_root = os.environ["PIRATEGOAT_PLUGIN_ROOT"]\n'
                 'sys.path.insert(0, os.path.join(plugin_root, "scripts"))\n'
                 "from review.agent.output import ReviewOutputBuilder\n"
-                'builder = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+                'builder = ReviewOutputBuilder.open('
+                'os.environ["PIRATEGOAT_OUTPUT_DIR"], '
+                'os.environ["PIRATEGOAT_PR_ID"], '
+                'os.environ["PIRATEGOAT_REVIEWER_NAME"])\n'
                 f'builder.add_issue("high", "{title}", "src/f.php", "d", "r", line=1)\n'
-                'result = builder.save(os.environ["PIRATEGOAT_OUTPUT_DIR"])\n'
+                'builder.save_draft()\n'
             )
             return _builder_heredoc(body=body)
 
@@ -1067,7 +1073,7 @@ class TestBashBuilderRecognition:
                     {
                         "type": "tool_result",
                         "tool_use_id": "builder-legacy",
-                        "content": "RECORDED COUNTS: ...",
+                        "content": "DRAFT TOTALS: ...",
                     }
                 ],
             },
@@ -1083,10 +1089,10 @@ class TestBashBuilderRecognition:
         assert len(data["write_outputs"]) == 1
 
     def test_heredoc_without_save_is_not_a_review_record(self):
-        """add_issue() calls without builder.save() persisted nothing."""
+        """add_issue() calls without builder.save_draft() persisted nothing."""
         body = (
             "from review.agent.output import ReviewOutputBuilder\n"
-            'builder = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
             'builder.add_issue(severity="high", title="Unsaved", file="f.php",\n'
             '    description="d", recommendation="r", line=3)\n'
         )
@@ -1097,19 +1103,19 @@ class TestBashBuilderRecognition:
         must see the final save only, not one dispatch per rerun."""
         first_body = (
             "from review.agent.output import ReviewOutputBuilder\n"
-            'builder = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
             'builder.add_issue(severity="high", title="First", file="f.php",\n'
             '    description="d", recommendation="r", line=3)\n'
-            "builder.save(\"/tmp/pr-review-42\")\n"
+            "builder.save_draft()\n"
         )
         corrected_body = (
             "from review.agent.output import ReviewOutputBuilder\n"
-            'builder = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
             'builder.add_issue(severity="high", title="Corrected", file="f.php",\n'
             '    description="d", recommendation="r", line=3)\n'
             'builder.add_issue(severity="low", title="Added", file="g.php",\n'
             '    description="d", recommendation="r", line=9)\n'
-            "builder.save(\"/tmp/pr-review-42\")\n"
+            "builder.save_draft()\n"
         )
         log = tmp_path / "agent.jsonl"
         entries = [
@@ -1179,10 +1185,10 @@ class TestStraightLineReconstruction:
         for case, guard in guards.items():
             body = (
                 "from review.agent.output import ReviewOutputBuilder\n"
-                'builder = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+                'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
                 'builder.add_issue("high", "Real", "src/f.php", "d", "r", line=3)\n'
                 f"{guard}\n"
-                "builder.save(\"/tmp/pr-review-42\")\n"
+                "builder.save_draft()\n"
             )
             record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
 

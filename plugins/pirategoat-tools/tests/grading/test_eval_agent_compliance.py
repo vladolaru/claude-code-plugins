@@ -22,7 +22,7 @@ PLUGIN_ROOT = TESTS_DIR.parent
 EVAL_SCRIPT = TESTS_DIR / "grading" / "eval_agent_compliance.py"
 
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
-from review.agent.output import ReviewOutputBuilder, finalize_candidate
+from review.agent.output import ReviewOutputBuilder, finalize_review
 
 # Same precedent as grading/test_graders.py: add tests/ to sys.path so the
 # `helpers` package resolves, then import graders directly from their real
@@ -43,7 +43,7 @@ run_grade_only = _eval_mod.run_grade_only
 
 def _write_review_pair(output_dir: Path, reviewer: str = "security") -> None:
     """Produce a real review output pair with the production builder."""
-    builder = ReviewOutputBuilder(pr_id="1", reviewer=reviewer)
+    builder = ReviewOutputBuilder.open(output_dir, "1", reviewer)
     builder.add_issue(
         severity="high",
         title="Unescaped output",
@@ -62,9 +62,9 @@ def _write_review_pair(output_dir: Path, reviewer: str = "security") -> None:
         "inline_diff_file_count": 1,
         "in_scope_review_file_count": 1,
     }))
-    candidate = builder.save(str(output_dir))
-    finalize_candidate(
-        str(output_dir), reviewer, candidate["candidate_digest"]
+    saved = builder.save_draft()
+    finalize_review(
+        str(output_dir), reviewer, saved["review_digest"]
     )
 
 

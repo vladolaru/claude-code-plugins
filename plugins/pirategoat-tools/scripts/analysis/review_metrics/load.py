@@ -34,18 +34,18 @@ from .sanitize import (
 )
 
 
-def _strict_agent_save_event(
+def _strict_agent_review_draft_saved_event(
     value: object, *, run_id: str
 ) -> bool:
-    """Validate current candidate-save evidence without retaining it."""
+    """Validate current draft-save evidence without retaining it."""
     if not isinstance(value, dict):
         return False
-    digest = value.get("artifact_digest")
+    digest = value.get("review_digest")
     return (
         type(value.get("schema")) is int
         and value.get("schema") == _SUPPORTED_MANIFEST_SCHEMA
         and value.get("run_id") == run_id
-        and value.get("event") == "agent_save"
+        and value.get("event") == "agent_review_draft_saved"
         and _parse_time(value.get("timestamp")) is not None
         and type(value.get("agent")) is str
         and _PRODUCER_AGENT_NAME_RE.fullmatch(value["agent"]) is not None
@@ -131,8 +131,7 @@ def _privacy_reduced_lifecycle_event(
             "issue_count": event["issue_count"],
             "severities": dict(event["severities"]),
         }
-        if "artifact_digest" in event:
-            reduced["artifact_digest"] = event["artifact_digest"]
+        reduced["review_digest"] = event["review_digest"]
         return reduced
     reduced = {
         **common,
@@ -152,14 +151,13 @@ def _privacy_reduced_lifecycle_event(
 def _project_lifecycle_revisions(
     events: list[tuple[bool, dict[str, Any]]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]] | None:
-    """Project same-agent save revisions without execution IDs.
+    """Project start/finalization pairs without execution IDs.
 
     Runs the telemetry producer's own projection (via contracts) in strict
     mode, so producer and consumer can never drift: a completion matches an
     outstanding start while any remain (overlapping executions each keep
-    their completion); only afterwards does a further completion replace the
-    latest one as a corrected save. A completion with no preceding start
-    fails the projection.
+    their completion). A completion with no preceding start fails the
+    projection.
     """
     return _project_agent_lifecycle(
         (
@@ -271,7 +269,7 @@ def _overlay_running_lifecycle(
                 "pipeline_start",
                 "step",
                 "agent_start",
-                "agent_save",
+                "agent_review_draft_saved",
                 "agent_complete",
                 "pipeline_end",
             }
@@ -293,15 +291,16 @@ def _overlay_running_lifecycle(
             if safe is None:
                 return _invalid_running_lifecycle_overlay(manifest)
             raw_lifecycle.append((False, safe))
-        elif event_name == "agent_save":
-            if not _strict_agent_save_event(event, run_id=run_id):
+        elif event_name == "agent_review_draft_saved":
+            if not _strict_agent_review_draft_saved_event(
+                event, run_id=run_id
+            ):
                 return _invalid_running_lifecycle_overlay(manifest)
         elif event_name == "agent_complete":
             safe = _strict_lifecycle_event(
                 event,
                 completed=True,
                 run_id=run_id,
-                raw_completion=True,
             )
             if safe is None:
                 return _invalid_running_lifecycle_overlay(manifest)
