@@ -1697,7 +1697,7 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append("```")
     actions.append(
         "A successful handoff reports `RECORDED ADJUDICATION`, the derived "
-        "`VERIFIED | REFUTED | NOT_CHECKED` counts, `REVISED NARRATIVE: "
+        "`VERIFIED | REFUTED | NOT_CHECKED` counts, `REVISED ASSESSMENT: "
         "present`, the `PROPOSAL DIGEST`, and the `APPLY` result. On any "
         "`REJECTED:` line, correct only the temp request and resubmit it; "
         "never edit the output artifact or bypass `settle`."
@@ -1711,7 +1711,7 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append(
         "Never hand-edit `review-findings.json` either: the application "
         "phase carries provenance, withdraws the reconciler's prior "
-        "assessment, installs the request's revised narrative, recounts "
+        "assessment, installs the request's revised assessment, recounts "
         "findings, and derives the final ledger verdict."
     )
     actions.append(

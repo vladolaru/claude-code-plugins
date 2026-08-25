@@ -1168,6 +1168,7 @@ class ReviewOutputBuilder:
         """
         coerced = _coerce_text(text).strip()
         self.assessment = coerced or None
+        self._invocation_delta.append("updated assessment")
 
     def add_recommendation(self, priority: str, text: str):
         """Add recommendation (priority: immediate, important, suggestions)."""
@@ -1176,7 +1177,12 @@ class ReviewOutputBuilder:
 
     def add_positive_observation(self, observation: str):
         """Add positive observation."""
-        self.positive_observations.append(_coerce_text(observation))
+        value = _coerce_text(observation)
+        self.positive_observations.append(value)
+        self._invocation_delta.append(
+            "added positive observation "
+            + json.dumps(value, ensure_ascii=False)
+        )
 
     @staticmethod
     def _resolve_plugin_version(output_dir: Optional[str]) -> Optional[str]:

@@ -8,6 +8,7 @@ Follows Anthropic eval guidance: deterministic, objective, grades outcomes not p
 import json
 import os
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import List, Optional
@@ -57,6 +58,16 @@ REQUIRED_JSON_TOP_FIELDS = {
     "in_scope_review_file_count",
     "meta",
 }
+
+
+def _validate_review_domain(findings, checks, assessment, meta):
+    """Reuse the production review-domain boundary from the eval harness."""
+    scripts_dir = str(Path(__file__).resolve().parents[2] / "scripts")
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    from review.agent.output import validate_review_domain
+
+    validate_review_domain(findings, checks, assessment, meta)
 
 
 def _grade(checks: List[tuple]) -> GradeResult:
@@ -282,6 +293,13 @@ def grade_review_json(path: str, expected_reviewer: str = None) -> GradeResult:
             "tool_results_used" not in meta,
             "Retired review-domain field is present: meta.tool_results_used",
         ))
+
+    try:
+        _validate_review_domain(findings, review_checks, assessment, meta)
+    except ValueError as error:
+        checks.append((False, str(error)))
+    else:
+        checks.append((True, ""))
 
     return _grade(checks)
 

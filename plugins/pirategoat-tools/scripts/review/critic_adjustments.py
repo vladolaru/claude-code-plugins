@@ -1620,7 +1620,7 @@ def main():
             f"REFUTED: {counts[SPOT_CHECK_REFUTED]} | "
             f"NOT_CHECKED: {counts[SPOT_CHECK_NOT_CHECKED]}"
         )
-        print("REVISED NARRATIVE: present")
+        print("REVISED ASSESSMENT: present")
         print(f"PROPOSAL DIGEST: {result[PROPOSAL_DIGEST_KEY]}")
         apply_result = result["apply"]
         if (

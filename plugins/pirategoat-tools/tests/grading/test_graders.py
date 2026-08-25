@@ -160,6 +160,81 @@ class TestGradeReviewJson:
         assert not result.passed
         assert any("assessment" in failure for failure in result.failures)
 
+    @pytest.mark.parametrize(
+        ("population", "bad_id", "message"),
+        [
+            ("findings", "f01", "canonical fN id"),
+            ("checks", "c01", "canonical cN id"),
+        ],
+    )
+    def test_noncanonical_review_domain_id_fails(
+        self, tmp_dir, population, bad_id, message
+    ):
+        path = _make_valid_json(tmp_dir)
+        with open(path) as f:
+            data = json.load(f)
+        data[population][0]["id"] = bad_id
+        with open(path, "w") as f:
+            json.dump(data, f)
+
+        result = grade_review_json(path)
+
+        assert not result.passed
+        assert any(message in failure for failure in result.failures)
+
+    @pytest.mark.parametrize(
+        ("population", "summary_delta", "message"),
+        [
+            ("findings", 1, "review finding ids must be unique"),
+            ("checks", 0, "review check ids must be unique"),
+        ],
+    )
+    def test_duplicate_review_domain_id_fails(
+        self, tmp_dir, population, summary_delta, message
+    ):
+        path = _make_valid_json(tmp_dir)
+        with open(path) as f:
+            data = json.load(f)
+        data[population].append(dict(data[population][0]))
+        data["summary"]["total_findings"] += summary_delta
+        if summary_delta:
+            data["summary"]["by_severity"]["high"] += summary_delta
+        with open(path, "w") as f:
+            json.dump(data, f)
+
+        result = grade_review_json(path)
+
+        assert not result.passed
+        assert any(message in failure for failure in result.failures)
+
+    @pytest.mark.parametrize(
+        ("counter", "message"),
+        [
+            (
+                "next_finding_number",
+                "review meta.next_finding_number must be greater than every live id",
+            ),
+            (
+                "next_check_number",
+                "review meta.next_check_number must be greater than every live id",
+            ),
+        ],
+    )
+    def test_next_counter_must_exceed_every_live_id(
+        self, tmp_dir, counter, message
+    ):
+        path = _make_valid_json(tmp_dir)
+        with open(path) as f:
+            data = json.load(f)
+        data["meta"][counter] = 1
+        with open(path, "w") as f:
+            json.dump(data, f)
+
+        result = grade_review_json(path)
+
+        assert not result.passed
+        assert any(message in failure for failure in result.failures)
+
     def test_missing_file_fails(self):
         result = grade_review_json("/nonexistent/path.json")
         assert not result.passed

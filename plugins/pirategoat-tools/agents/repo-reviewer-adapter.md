@@ -62,7 +62,7 @@ summary.
 
 ## Step 2: Normalize findings into the standard format
 
-Translate every finding the repo prompt produced into a standard pirategoat issue
+Translate every finding the repo prompt produced into a standard pirategoat finding
 via `ReviewOutputBuilder`, using the `reviewer_name` from the bootstrap output:
 
 ```python
@@ -79,16 +79,18 @@ builder.add_finding(
     channel="<CHANNEL>",      # blocking or advisory, exactly as given in the bootstrap output
 )
 # ... one add_finding per finding ...
-builder.save_draft()   # inspect the receipt, then run its exact FINALIZE REVIEW command
+receipt = builder.save_draft()
+# Inspect the compact receipt, then execute receipt["finalize_review_command"] exactly.
 ```
 
 Rules:
 - Preserve the repo finding's file/line/severity faithfully — you are a translator,
   not a second reviewer. Do not add findings of your own or drop findings you
   merely disagree with; the pipeline's reconciliation and verification handle that.
-- Tag EVERY issue with the `CHANNEL` value from the bootstrap output. Advisory
+- Tag EVERY finding with the `CHANNEL` value from the bootstrap output. Advisory
   findings must be tagged `channel="advisory"` so they never gate the verdict.
-- If the repo prompt produced no findings, still `save()` — an empty, honest
-  result is valid. Do not pad.
+- If the repo prompt produced no findings, still call `save_draft()`, inspect
+  its compact receipt, and execute its exact `finalize_review_command` — an
+  empty, honest result is valid. Do not pad.
 - Write ONLY to the reviewer_name paths the bootstrap gave you. Never write into
   another reviewer's `-review.json`.

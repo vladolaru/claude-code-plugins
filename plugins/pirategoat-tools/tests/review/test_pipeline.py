@@ -1928,6 +1928,17 @@ class TestStep10DecisionCritic:
         assert "RECORDED ADJUDICATION" in revise_text
         assert "PROPOSAL DIGEST" in revise_text
 
+    def test_revise_briefing_uses_assessment_language(self, mod, tmp_path):
+        guidance = mod.get_step_guidance(
+            10, "pr", {"completed_steps": []}, {}, output_dir=str(tmp_path)
+        )
+        revise_text = self._revise_section(guidance)
+
+        assert "REVISED ASSESSMENT: present" in revise_text
+        assert "revised assessment" in revise_text
+        assert "REVISED NARRATIVE" not in revise_text
+        assert "revised narrative" not in revise_text
+
     def test_revise_forbids_raw_settlement_mutation(self, mod, tmp_path):
         state = {"completed_steps": []}
         guidance = mod.get_step_guidance(

@@ -4193,7 +4193,8 @@ class TestAdjudicationCLI:
         assert result.returncode == 0, result.stdout + result.stderr
         assert "RECORDED ADJUDICATION: 1" in result.stdout
         assert "VERIFIED: 1 | REFUTED: 0 | NOT_CHECKED: 0" in result.stdout
-        assert "REVISED NARRATIVE: present" in result.stdout
+        assert "REVISED ASSESSMENT: present" in result.stdout
+        assert "REVISED NARRATIVE" not in result.stdout
         assert "PROPOSAL DIGEST:" in result.stdout
         assert "APPLY: applied 1 | rejected 0" in result.stdout
 

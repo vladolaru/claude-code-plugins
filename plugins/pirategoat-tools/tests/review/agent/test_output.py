@@ -1121,6 +1121,34 @@ class TestSaveDraft:
             assert "DRAFT TOTALS: findings 0" in out
             assert "DRAFT SAVED: verdict approve" in out
 
+    def test_reopened_draft_reports_only_assessment_and_positive_changes(
+        self, tmp_path, capsys
+    ):
+        _write_required_accounting_input(tmp_path, "reconciliator")
+        builder = ReviewOutputBuilder.open(
+            tmp_path, "42", "reconciliator"
+        )
+        builder.add_finding("low", "Prior", "a.py", "d", "r", line=1)
+        builder.save_draft()
+        capsys.readouterr()
+
+        reopened = ReviewOutputBuilder.open(
+            tmp_path, "42", "reconciliator"
+        )
+        reopened.set_assessment("The remaining risk is bounded.")
+        reopened.add_positive_observation("The validation path is clear.")
+        reopened.save_draft()
+
+        changed = [
+            line
+            for line in capsys.readouterr().out.splitlines()
+            if line.startswith("CHANGED:")
+        ]
+        assert changed == [
+            "CHANGED: updated assessment | added positive observation "
+            '"The validation path is clear."'
+        ]
+
     def test_failed_save_removes_its_staged_file(self, monkeypatch):
         """A failed draft replace removes the nonce staging file."""
         import review.agent.output as output_mod

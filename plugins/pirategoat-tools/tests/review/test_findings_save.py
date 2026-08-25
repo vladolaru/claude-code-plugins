@@ -24,6 +24,7 @@ SCRIPT = SCRIPTS_DIR / "review" / "findings_save.py"
 
 def _valid_findings(**overrides):
     doc = {
+        "schema": 2,
         "verdict": "request_changes",
         "findings": [
             {
@@ -74,6 +75,7 @@ def _valid_findings(**overrides):
 
 def _valid_schema2_findings(**overrides):
     doc = {
+        "schema": 2,
         "verdict": "request_changes",
         "findings": [
             {
@@ -138,9 +140,35 @@ class TestFindingsSave:
         assert saved["findings"][0]["id"] == "f1"
         assert saved["checks"][0]["source_reviewers"] == ["security"]
         assert saved["assessment"] == "One high-severity finding remains."
+        assert saved["schema"] == 2
         assert "issues" not in saved
         assert "clearances" not in saved
         assert "narrative_summary" not in saved
+
+    def test_rejects_missing_schema(self, tmp_path):
+        doc = _valid_schema2_findings()
+        del doc["schema"]
+        findings = self._write_findings(tmp_path, doc)
+
+        result = self._run_save(tmp_path, findings)
+
+        assert result.returncode != 0
+        assert "schema" in result.stdout
+        assert not (tmp_path / "review-findings.json").exists()
+
+    @pytest.mark.parametrize("schema", [1, 3, "2", True, None])
+    def test_rejects_schema_other_than_exact_integer_two(
+        self, tmp_path, schema
+    ):
+        findings = self._write_findings(
+            tmp_path, _valid_schema2_findings(schema=schema)
+        )
+
+        result = self._run_save(tmp_path, findings)
+
+        assert result.returncode != 0
+        assert "schema" in result.stdout
+        assert not (tmp_path / "review-findings.json").exists()
 
     @pytest.mark.parametrize(
         ("field", "value"),

@@ -28,14 +28,14 @@ Verify claims before accepting them. The document's framing, confidence level, a
 You receive a Review Record Path, a Structured Findings Path, and an Output Directory:
 
 - **Review Record Path**: Path to `review-record.md` — the pipeline's own account of the review. It is mechanically assembled, and no model edits it after assembly. The initial findings, assessment, and verified checks originate in the reconciliator-authored `review-findings.json`, while the pipeline supplies measurements and run notes. On step-10 re-entry, the ledger may already include prior critic-authored finding changes and an orchestrator-authored revised assessment; inspect these audit fields before judging the current state: `findings[].critic_adjustment`, `applied_critic_adjustments`, `rejected_critic_adjustments`, and `invalidated_assessments`. Read this file first. **This is what you are stress-testing.**
-- **Structured Findings Path**: Path to `review-findings.json` — the canonical ledger the record projects. Each issue carries an 8-hex `id`; that id is the ONLY key the pipeline can resolve, and it is what you key every adjustment by.
+- **Structured Findings Path**: Path to `review-findings.json` — the canonical ledger the record projects. Each finding carries a stable `fN` `id`; that id is the ONLY key the pipeline can resolve, and it is what you key every adjustment by.
 - **Output Directory**: Directory where you write your findings.
 
 ### What each file gives you
 
-`review-record.md` renders the findings grouped by severity, each with its file:line, description, optional severity floor, and recommendation — plus the sections a bare findings list cannot carry: `## Assessment` (the reconciler's, or a post-critic replacement, or an explicit statement that the standing assessment was withdrawn), `## Clearances (verified absences)` with the verification method behind each, `## Run notes`, and `## Review coverage` when the run measured a gap. Use the coverage section to judge whether the review's confidence is earned: a review that reached 30 of 41 changed files is not the same claim as one that reached all of them. Treat a stated severity floor as a claim to verify, not something to silently discard.
+`review-record.md` renders the findings grouped by severity, each with its file:line, description, optional severity floor, and recommendation — plus the sections a bare findings list cannot carry: `## Assessment` (the reconciler's, or a post-critic replacement, or an explicit statement that the standing assessment was withdrawn), `## Verified Checks` with the verification method behind each, `## Run notes`, and `## Review coverage` when the run measured a gap. Use the coverage section to judge whether the review's confidence is earned: a review that reached 30 of 41 changed files is not the same claim as one that reached all of them. Treat a stated severity floor as a claim to verify, not something to silently discard.
 
-`review-findings.json` is where the ids live. Read it for `issues[].id`, and use those ids — never a positional label like "F1", which is a rendering artifact no ledger contains — when you reference a finding in your critique and when you write adjustments. `meta.reconciliation` there carries the pipeline statistics (input count, merge ratio, agents contributing, false positives dropped); use them to assess whether the reconciliation itself was thorough.
+`review-findings.json` is where the ids live. Read it for `findings[].id`, and use those ids — never a positional label based on rendering order — when you reference a finding in your critique and when you write adjustments. `meta.reconciliation` there carries the pipeline statistics (input count, merge ratio, agents contributing, false positives dropped); use them to assess whether the reconciliation itself was thorough.
 
 **There is no report yet, and that is deliberate.** `review-report.md` — the document a human actually reads — is authored after you, once, from whatever state your verdict leaves the ledger in. Nothing you say has to chase prose that already exists.
 
@@ -43,7 +43,7 @@ You receive a Review Record Path, a Structured Findings Path, and an Output Dire
 
 ## Step 1: Gather the Subject Matter
 
-**Normal path (record + ledger):** Read `review-record.md` — this is what you are critiquing — then `review-findings.json` for the ids and the reconciliation metrics. Key every claim you decompose to the finding's 8-hex `id`, so your critique and your adjustments address the same thing the pipeline can resolve.
+**Normal path (record + ledger):** Read `review-record.md` — this is what you are critiquing — then `review-findings.json` for the ids and the reconciliation metrics. Key every claim you decompose to the finding's stable `fN` `id`, so your critique and your adjustments address the same thing the pipeline can resolve.
 
 **Degraded path (plain document, no ledger):** Read the document at the provided path. This is all you have — no structured findings, no reconciliation metrics. Assign your own claim IDs during decomposition and verify claims directly against the source code.
 
@@ -179,7 +179,7 @@ finding change you recommend must stay attached to a finding here:
   "adjustments": [
     {
       "action": "promote | demote | rescope | correct | add | remove",
-      "id": "<the 8-hex ledger id from review-findings.json, or null for add>",
+      "id": "<the fN ledger id from review-findings.json, or null for add>",
       "fields": {"severity": "medium"},
       "rationale": "<one sentence grounding the change in your evidence>"
     }
@@ -192,8 +192,8 @@ at a different source line than reported, or when it turns out to describe
 the whole file rather than one line (or vice versa):
 
 ```json
-{"action": "rescope", "id": "9f3a1c7d", "fields": {"line": 88}, "rationale": "pinned to the actual call site, not the import line the reviewer cited"}
-{"action": "rescope", "id": "9f3a1c7d", "fields": {"line": null}, "rationale": "the concern applies to the whole file, not one line"}
+{"action": "rescope", "id": "f1", "fields": {"line": 88}, "rationale": "pinned to the actual call site, not the import line the reviewer cited"}
+{"action": "rescope", "id": "f1", "fields": {"line": null}, "rationale": "the concern applies to the whole file, not one line"}
 ```
 
 `fields: {"line": N}` (a positive, 1-indexed integer) moves the finding to
@@ -208,7 +208,7 @@ Allowed `fields` keys: `severity`, `title`, `description`, `recommendation`,
 batch. An `add` entry must include `severity`, `title`, `file`,
 `description`, `recommendation`, and must leave `id` null — ids are
 generated by the pipeline, never assigned by you. `line` is a positive
-1-indexed integer or null. Key every entry by the 8-hex `id` from
+1-indexed integer or null. Key every entry by the stable `fN` `id` from
 `review-findings.json` — never a positional label like "F1", which is a
 rendering artifact no ledger contains. Target each finding with at most ONE entry
 (merge finding-level changes); an entry may not target a finding another

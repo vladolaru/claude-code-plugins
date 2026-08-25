@@ -1092,6 +1092,35 @@ class TestDecisionReviewerContract:
         assert "inspect these audit fields" in critic
         assert "nothing in it was authored by an agent" not in critic
 
+    def test_live_ledger_guidance_uses_findings_and_verified_checks(self):
+        critic = (PLUGIN_ROOT / "agents/decision-reviewer.md").read_text()
+
+        assert "stable `fN` `id`" in critic
+        assert "`findings[].id`" in critic
+        assert "`## Verified Checks`" in critic
+        assert "8-hex" not in critic
+        assert "`issues[].id`" not in critic
+        assert "`## Clearances" not in critic
+
+
+class TestRepoReviewerAdapterContract:
+    def test_empty_review_uses_the_same_draft_finalization_flow(self):
+        adapter = (
+            PLUGIN_ROOT / "agents/repo-reviewer-adapter.md"
+        ).read_text()
+        empty_branch = adapter.split(
+            "If the repo prompt produced no findings", 1
+        )[1].split("\n- ", 1)[0]
+
+        assert "`save_draft()`" in empty_branch
+        assert "compact receipt" in empty_branch
+        assert "`finalize_review_command`" in empty_branch
+        assert "`save()`" not in empty_branch
+        assert "standard pirategoat finding" in adapter
+        assert "Tag EVERY finding" in adapter
+        assert "standard pirategoat issue" not in adapter
+        assert "Tag EVERY issue" not in adapter
+
 
 class TestAPIContractReviewerReturnSideHooks:
     """Regression guard for caller-side handling of filter return values."""

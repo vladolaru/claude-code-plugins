@@ -118,6 +118,15 @@ def validate_findings(payload):
 
     problems = []
 
+    if (
+        type(payload.get("schema")) is not int
+        or payload.get("schema") != review_output.REVIEW_OUTPUT_SCHEMA
+    ):
+        problems.append(
+            f"'schema' must be the exact integer "
+            f"{review_output.REVIEW_OUTPUT_SCHEMA}"
+        )
+
     verdict = payload.get("verdict")
     if verdict not in RECONCILER_VERDICTS:
         problems.append(
