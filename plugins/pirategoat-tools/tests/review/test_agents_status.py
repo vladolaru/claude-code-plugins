@@ -13,12 +13,14 @@ import pytest
 TESTS_DIR = Path(__file__).resolve().parent.parent  # review/ -> tests/
 PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPT_PATH = PLUGIN_ROOT / "scripts" / "review" / "agents_status.py"
+sys.path.insert(0, str(TESTS_DIR))
 
 from review import dispatch_status
 from review import synthesis_lifecycle
 from review.agent.output import ReviewOutputBuilder, finalize_review
 from review.reconciliation_context import load_agent_reviews
 from review.reviewer_lifecycle import ReviewPaths
+from helpers.review_fixtures import canonical_review_document
 
 
 def _load_module():
@@ -51,10 +53,13 @@ def _reviewer_filename(agent_name: str) -> str:
     return f"{base}-review.json"
 
 
-def _finish_agent(tmp_path, name, findings=None, verdict="APPROVE"):
-    (tmp_path / _reviewer_filename(name)).write_text(json.dumps({
-        "findings": findings or [], "verdict": verdict,
-    }))
+def _finish_agent(tmp_path, name, findings=None, verdict=None):
+    severities = [finding["severity"] for finding in findings or []]
+    reviewer = _reviewer_filename(name)[: -len("-review.json")]
+    review = canonical_review_document(reviewer, severities)
+    if verdict is not None:
+        assert review["verdict"] == verdict
+    (tmp_path / _reviewer_filename(name)).write_text(json.dumps(review))
 
 
 def _write_accounting_input(tmp_path, reviewer, agent_name, claimable_files):
@@ -116,7 +121,7 @@ class TestCheckStatus:
         authority_dir = tmp_path / "authority"
         authority_dir.mkdir()
         final_path = authority_dir / "final.json"
-        final_path.write_text(json.dumps({"findings": [], "verdict": "approve"}))
+        final_path.write_text(json.dumps(canonical_review_document("security")))
         monkeypatch.setattr(
             mod,
             "review_paths",
@@ -159,7 +164,7 @@ class TestCheckStatus:
         ])
         _start_agent(tmp_path, "code-reviewer")
         _start_agent(tmp_path, "security-reviewer")
-        _finish_agent(tmp_path, "code-reviewer", [{"severity": "critical"}], "REQUEST_CHANGES")
+        _finish_agent(tmp_path, "code-reviewer", [{"severity": "critical"}], "block")
         _finish_agent(tmp_path, "security-reviewer")
 
         result = mod.check_status(str(tmp_path))
@@ -338,13 +343,13 @@ class TestCheckStatus:
             {"severity": "high"},
             {"severity": "high"},
             {"severity": "medium"},
-        ], "REQUEST_CHANGES")
+        ], "block")
 
         result = mod.check_status(str(tmp_path))
         agent = result["agents"][0]
         assert agent["counts"]["critical"] == 1
         assert agent["counts"]["high"] == 2
-        assert agent["verdict"] == "REQUEST_CHANGES"
+        assert agent["verdict"] == "block"
 
     def test_no_dispatch_plan_exits_1(self, tmp_path):
         cmd = [sys.executable, str(SCRIPT_PATH), "--output-dir", str(tmp_path)]
@@ -566,7 +571,7 @@ class TestFilenameConvention:
         plan = {"agents": [{"name": "security-reviewer", "status": "DISPATCH"}]}
         (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
 
-        review = {"findings": [], "verdict": "approve"}
+        review = canonical_review_document("security")
         (tmp_path / "security-review.json").write_text(json.dumps(review))
 
         result = mod.check_status(str(tmp_path))
@@ -581,12 +586,7 @@ class TestFilenameConvention:
         plan = {"agents": [{"name": "code-reviewer", "status": "DISPATCH"}]}
         (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
 
-        review = {
-            "findings": [
-                {"title": "Bug", "file": "a.py", "severity": "high"}
-            ],
-            "verdict": "request_changes",
-        }
+        review = canonical_review_document("code", ["high"])
         (tmp_path / "code-review.json").write_text(json.dumps(review))
 
         result = mod.check_status(str(tmp_path))
@@ -598,7 +598,7 @@ class TestFilenameConvention:
         plan = {"agents": [{"name": "gemini-reviewer", "status": "DISPATCH"}]}
         (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
 
-        review = {"findings": [], "verdict": "approve"}
+        review = canonical_review_document("gemini")
         (tmp_path / "gemini-review.json").write_text(json.dumps(review))
 
         result = mod.check_status(str(tmp_path))
@@ -614,13 +614,7 @@ class TestFindingsKey:
         plan = {"agents": [{"name": "security-reviewer", "status": "DISPATCH"}]}
         (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
 
-        review = {
-            "findings": [
-                {"title": "XSS", "file": "a.php", "severity": "critical"},
-                {"title": "CSRF", "file": "b.php", "severity": "high"},
-            ],
-            "verdict": "block",
-        }
+        review = canonical_review_document("security", ["critical", "high"])
         (tmp_path / "security-review.json").write_text(json.dumps(review))
 
         result = mod.check_status(str(tmp_path))
@@ -628,6 +622,31 @@ class TestFindingsKey:
         assert agent["status"] == "FINISHED"
         assert agent["counts"]["critical"] == 1
         assert agent["counts"]["high"] == 1
+
+    def test_retired_review_is_terminal_process_evidence_not_finished_content(
+        self, mod, tmp_path
+    ):
+        _write_plan(tmp_path, [
+            {"name": "security-reviewer", "status": "DISPATCH"},
+        ])
+        (tmp_path / "security-review.json").write_text(json.dumps({
+            "schema": 1,
+            "reviewer": "security",
+            "issues": [],
+            "verdict": "approve",
+        }))
+
+        result = mod.check_status(str(tmp_path))
+
+        assert result["all_done"] is True
+        assert result["finished"] == 0
+        assert result["invalid"] == 1
+        assert result["agents"][0] == {
+            "name": "security-reviewer",
+            "status": "INVALID_OUTPUT",
+            "output_present": True,
+            "note": "final review failed canonical validation",
+        }
 
 
 class TestOverrideStatuses:

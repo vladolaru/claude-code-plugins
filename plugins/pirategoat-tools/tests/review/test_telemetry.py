@@ -21,6 +21,7 @@ SCRIPT_PATH = PLUGIN_ROOT / "scripts" / "review" / "telemetry.py"
 
 sys.path.insert(0, str(TESTS_DIR))
 from helpers.context_fixtures import COMPLETE_CONTEXT
+from helpers.review_fixtures import canonical_review_document
 from review import dependency_refresh
 from review import synthesis_lifecycle as lifecycle_contract
 from review.reconciliation_context import aggregate_review_accounting
@@ -1547,9 +1548,11 @@ class TestRunManifest:
             final=str(authority_dir / "final.json"),
             accounting_input=str(authority_dir / "accounting.json"),
         )
-        Path(paths.final).write_text(json.dumps({
-            "reviewed_file_claims": ["a.py"],
-        }))
+        Path(paths.final).write_text(json.dumps(canonical_review_document(
+            "security",
+            reviewed_file_claims=["a.py"],
+            review_claimable_files=["a.py", "b.py"],
+        )))
         Path(paths.accounting_input).write_text(json.dumps({
             "schema": 3,
             "agent_name": "security-reviewer",
@@ -1579,6 +1582,36 @@ class TestRunManifest:
             "unclaimed_review_file_count": 1,
         }
         assert claimable_count == 2
+
+    def test_claim_accounting_rejects_retired_final_review(
+        self, mod, output_dir
+    ):
+        paths = ReviewPaths(
+            draft=str(output_dir / "security-review.draft.json"),
+            final=str(output_dir / "security-review.json"),
+            accounting_input=str(
+                output_dir / "security-review-accounting-input.json"
+            ),
+        )
+        Path(paths.final).write_text(json.dumps({
+            "schema": 1,
+            "reviewer": "security",
+            "issues": [],
+            "reviewed_file_claims": [],
+        }))
+        Path(paths.accounting_input).write_text(json.dumps({
+            "schema": 3,
+            "agent_name": "security-reviewer",
+            "reviewer": "security",
+            "review_claimable_files": [],
+            "review_budget": 15,
+            "in_scope_review_file_count": 0,
+            "inline_diff_file_count": 0,
+        }))
+
+        assert mod.manifest_sections._load_review_claim_accounting(
+            str(output_dir), "security-reviewer"
+        ) is None
 
     def test_coverage_omits_unfinalized_draft_counts(
         self, telemetry, output_dir
@@ -2530,13 +2563,7 @@ class TestSnapshot:
 
     def test_extracts_agent_results(self, mod, output_dir, tmp_path):
         log_dir = tmp_path / "logs"
-        review = {
-            "verdict": "comment",
-            "findings": [
-                {"severity": "high", "title": "XSS vuln"},
-                {"severity": "medium", "title": "Missing escape"},
-            ],
-        }
+        review = canonical_review_document("security", ["high", "medium"])
         (output_dir / "security-review.json").write_text(json.dumps(review))
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
         t.start(pr_number="42")
@@ -2544,19 +2571,36 @@ class TestSnapshot:
         events = _read_events(t.log_path)
         agents = events[-1]["snapshot"]["agent_results"]
         assert "security" in agents
-        assert agents["security"]["verdict"] == "comment"
+        assert agents["security"]["verdict"] == "request_changes"
         assert agents["security"]["finding_count"] == 2
         assert agents["security"]["severities"]["high"] == 1
 
-    def test_extracts_agent_advisory_measurement(self, mod, output_dir, tmp_path):
-        review = {
+    def test_retired_agent_review_extracts_only_malformed_evidence(
+        self, mod, output_dir, tmp_path
+    ):
+        (output_dir / "security-review.json").write_text(json.dumps({
+            "schema": 1,
+            "reviewer": "security",
+            "issues": [],
             "verdict": "approve",
-            "summary": {
-                "suppressed_advisory_finding_count": 2,
-                "verdict_without_advisory": "block",
-            },
-            "findings": [{"severity": "critical", "channel": "advisory"}],
+        }))
+        telemetry = mod.ReviewTelemetry(
+            str(output_dir), log_dir=str(tmp_path / "logs")
+        )
+
+        assert telemetry._extract_agent_results()["security"] == {
+            "error": "malformed"
         }
+
+    def test_extracts_agent_advisory_measurement(self, mod, output_dir, tmp_path):
+        review = canonical_review_document(
+            "security", ["critical", "critical"]
+        )
+        for finding in review["findings"]:
+            finding["channel"] = "advisory"
+        review["verdict"] = "approve"
+        review["summary"]["suppressed_advisory_finding_count"] = 2
+        review["summary"]["verdict_without_advisory"] = "block"
         (output_dir / "security-review.json").write_text(json.dumps(review))
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(tmp_path / "logs"))
 
@@ -2618,17 +2662,13 @@ class TestSnapshot:
             ),
         ],
     )
-    def test_agent_advisory_measurement_omits_malformed_values(
-        self, mod, output_dir, tmp_path, verdict, summary, expected_count
+    def test_advisory_measurement_omits_malformed_values(
+        self, mod, verdict, summary, expected_count
     ):
-        (output_dir / "security-review.json").write_text(json.dumps({
+        extracted = mod._advisory_measurement({
             "verdict": verdict,
             "summary": summary,
-            "findings": [],
-        }))
-        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(tmp_path / "logs"))
-
-        extracted = t._extract_agent_results()["security"]
+        })
 
         if expected_count is not None:
             assert extracted["suppressed_advisory_finding_count"] == expected_count
@@ -3198,10 +3238,9 @@ class TestReviewVocabularyManifestProjection:
     def test_finalized_summary_and_reconciliation_use_finding_vocabulary(
         self, mod, output_dir, tmp_path
     ):
-        (output_dir / "security-review.json").write_text(json.dumps({
-            "verdict": "comment",
-            "findings": [{"severity": "medium"}],
-        }))
+        (output_dir / "security-review.json").write_text(json.dumps(
+            canonical_review_document("security", ["medium"])
+        ))
         reconciliation = {
             "input_finding_count": 3,
             "contributing_agent_count": 2,

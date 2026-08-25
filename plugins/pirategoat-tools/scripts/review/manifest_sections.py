@@ -22,6 +22,7 @@ try:
         UNASSIGNED_REVIEWABLE_FILES,
     )
     from .agent.coverage import ReviewAccountingError, derive_review_accounting
+    from .agent.output import load_review_document
     from .reviewer_names import derive_reviewer_name
     from .reviewer_lifecycle import review_paths
     from .dependency_refresh import (
@@ -56,6 +57,7 @@ except ImportError:
         UNASSIGNED_REVIEWABLE_FILES,
     )
     from review.agent.coverage import ReviewAccountingError, derive_review_accounting
+    from review.agent.output import load_review_document
     from review.reviewer_names import derive_reviewer_name
     from review.reviewer_lifecycle import review_paths
     from review.dependency_refresh import (
@@ -402,7 +404,10 @@ def _load_review_claim_accounting(
     """Derive one finalized review's claim and unclaimed counts."""
     reviewer = derive_reviewer_name(agent)
     paths = review_paths(output_dir, reviewer)
-    review = _read_json_path(paths.final)
+    try:
+        review = load_review_document(paths.final, reviewer)
+    except ValueError:
+        review = None
     accounting_input = _read_json_path(paths.accounting_input)
     if (
         review is None

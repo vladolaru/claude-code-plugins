@@ -993,6 +993,22 @@ class TestMaterializeMarkdown:
             assert not Path(d, "empty-review.md").exists()
             assert "skipped empty-review.json" in capsys.readouterr().err
 
+    def test_skips_complete_review_with_retired_schema(self, capsys):
+        with tempfile.TemporaryDirectory() as d:
+            builder = ReviewOutputBuilder(pr_id="1", reviewer="security")
+            _write_required_accounting_input(d, "security")
+            _save_and_finalize(builder, d)
+            path = Path(d, "security-review.json")
+            review = json.loads(path.read_text())
+            review["schema"] = 1
+            path.write_text(json.dumps(review))
+
+            written = materialize_markdown(d)
+
+            assert written == []
+            assert not Path(d, "security-review.md").exists()
+            assert "skipped security-review.json" in capsys.readouterr().err
+
     def test_render_cli_prints_markdown(self):
         output_py = Path(__file__).parents[3] / "scripts" / "review" / "agent" / "output.py"
         assert output_py.is_file(), output_py  # layout guard: tests/review/agent -> plugin root

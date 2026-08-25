@@ -196,6 +196,14 @@ def _materialize_markdown(
     return module.materialize_markdown(output_dir, suffix=suffix)
 
 
+def _load_final_review(
+    output_builder_path: str, review_path: str, reviewer: str
+) -> dict:
+    """Load one semantic completion through the final-review authority."""
+    module = _load_output_module(output_builder_path)
+    return module.load_review_document(review_path, reviewer)
+
+
 _FINDINGS_JSON = "review-findings.json"
 _FINDINGS_MD = "review-findings.md"
 
@@ -1377,20 +1385,30 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
     if dispatch_plan is not None:
         try:
             review_files = []
+            invalid_review_files = []
             completed = []
+            output_builder_path = str(SCRIPTS_DIR / "agent" / "output.py")
             for name in dispatched_names:
                 reviewer = derive_reviewer_name(name)
                 review_file = review_paths(output_dir, reviewer).final
                 if os.path.isfile(review_file):
-                    completed.append(name)
-                    review_files.append(review_file)
+                    try:
+                        _load_final_review(
+                            output_builder_path, review_file, reviewer
+                        )
+                    except ValueError:
+                        invalid_review_files.append(review_file)
+                    else:
+                        completed.append(name)
+                        review_files.append(review_file)
             state["agents"] = {
                 "dispatched": dispatched_names,
                 "completed": completed,
                 "discarded_drafts": discarded_drafts,
                 "review_files": review_files,
+                "invalid_review_files": invalid_review_files,
             }
-        except (json.JSONDecodeError, OSError):
+        except OSError:
             pass
 
     # Build reconciliation context (pre-gather all data for the reconciliator)

@@ -25,7 +25,9 @@ SCRIPT_PATH = PLUGIN_ROOT / "scripts" / "analysis" / "session_analyzer.py"
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 
 sys.path.insert(0, str(SCRIPTS_DIR))
+sys.path.insert(0, str(TESTS_DIR))
 from review.agent.output import ReviewOutputBuilder
+from helpers.review_fixtures import canonical_review_document
 
 _spec = importlib.util.spec_from_file_location("analyze_reviewer_sessions", str(SCRIPT_PATH))
 _mod = importlib.util.module_from_spec(_spec)
@@ -115,36 +117,22 @@ def _make_review_json(
     findings=None,
     verdict="comment",
 ):
-    """Build a review JSON dict matching ReviewOutputBuilder.to_dict() schema."""
+    """Build a canonical finalized-review JSON dictionary."""
     if findings is None:
         findings = []
 
-    severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
-    for finding in findings:
-        sev = finding.get("severity", "info")
-        if sev in severity_counts:
-            severity_counts[sev] += 1
-
-    return {
-        "pr_id": "42",
-        "reviewer": reviewer,
-        "verdict": verdict,
-        "summary": {
-            "total_findings": len(findings),
-            "by_severity": severity_counts,
-        },
-        "findings": findings,
-        "review_claimable_files": [],
-        "reviewed_file_claims": [],
-        "unclaimed_review_files": [],
-        "inline_diff_file_count": 5,
-        "review_accounted_file_count": 5,
-        "in_scope_review_file_count": 5,
-        "meta": {
-            "review_duration_ms": 12000,
-            "confidence_score": 0.9,
-        },
-    }
+    review = canonical_review_document(
+        reviewer, [finding["severity"] for finding in findings]
+    )
+    for canonical, supplied in zip(review["findings"], findings):
+        canonical.update({
+            field: supplied[field]
+            for field in (
+                "title", "file", "line", "description",
+                "recommendation", "confidence",
+            )
+        })
+    return review
 
 
 def _make_finding(
@@ -159,6 +147,7 @@ def _make_finding(
     """Build a single finding dict."""
     return {
         "id": finding_id,
+        "category": "general",
         "severity": severity,
         "title": title,
         "file": file,
@@ -503,6 +492,30 @@ class TestUnrelatedWritesInQualityReport:
         report = formatter([dispatch], None)
 
         assert "unknown" not in report
+
+    def test_ignores_retired_review_payload(self):
+        dispatch = (
+            {"agent_name": "security-reviewer"},
+            {
+                "write_outputs": [{
+                    "content": json.dumps({
+                        "schema": 1,
+                        "reviewer": "security",
+                        "findings": [],
+                        "issues": [],
+                        "verdict": "approve",
+                    }),
+                    "path": "security-review.json",
+                }],
+                "files_read": [],
+                "bash_commands": [],
+                "final_texts": [],
+            },
+        )
+
+        report = json.loads(format_quality_json_report([dispatch], None))
+
+        assert report["per_agent"] == []
 
 
 # ---------------------------------------------------------------------------

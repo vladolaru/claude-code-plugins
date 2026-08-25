@@ -41,7 +41,7 @@ from review.agent.coverage import (
     ReviewAccountingError,
     derive_review_accounting,
 )
-from review.agent.output import validate_review_document
+from review.agent.output import load_review_document
 
 from git_paths import normalize_repo_paths
 
@@ -269,10 +269,8 @@ def _load_review_payload(output_dir: str, agent: str) -> Optional[Dict[str, Any]
     reviewer = derive_reviewer_name(agent)
     path = review_paths(output_dir, reviewer).final
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        validate_review_document(data, reviewer)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        data = load_review_document(path, reviewer)
+    except ValueError:
         return None
     return data
 
@@ -623,9 +621,8 @@ def load_agent_reviews(
             continue
 
         try:
-            data = json.loads(entry.read_text(encoding="utf-8"))
             reviewer = entry.stem.removesuffix("-review")
-            validate_review_document(data, reviewer)
+            data = load_review_document(entry, reviewer)
             review_findings = data.get("findings", [])
             if isinstance(review_findings, list):
                 for finding in review_findings:
@@ -639,9 +636,7 @@ def load_agent_reviews(
             # Key by filename without .json extension (e.g., "security-review")
             agent_name = entry.stem
             reviews[agent_name] = data
-        except (
-            UnicodeDecodeError, json.JSONDecodeError, OSError, ValueError
-        ) as exc:
+        except ValueError as exc:
             print(f"WARNING: skipping malformed file {entry.name}: {exc}", file=sys.stderr)
 
     return reviews

@@ -881,7 +881,8 @@ def _step_6_dispatch_agents(mode, state, context, config, output_dir):
 def _draft_finalization_guidance():
     return [
         "A saved review draft remains RUNNING; only final "
-        "`<reviewer>-review.json` is FINISHED.",
+        "`<reviewer>-review.json` that passes canonical validation is FINISHED; "
+        "an invalid final filename is terminal process evidence only.",
         "After a host subagent-completion notification, run agents_status. "
         "If that returned agent's status block contains a `DRAFT` line, "
         "run the exact command printed on its `FINALIZE_REVIEW_COMMAND` line, then "

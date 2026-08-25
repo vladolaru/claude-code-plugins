@@ -106,6 +106,19 @@ class TestGradeReviewJson:
         assert result.passed, f"Failures: {result.failures}"
         assert result.score == 1.0
 
+    def test_unexpected_retired_field_fails(self, tmp_dir):
+        path = _make_valid_json(tmp_dir)
+        with open(path) as source:
+            data = json.load(source)
+        data["issues"] = []
+        with open(path, "w") as target:
+            json.dump(data, target)
+
+        result = grade_review_json(path)
+
+        assert not result.passed
+        assert any("unexpected fields: issues" in failure for failure in result.failures)
+
     @pytest.mark.parametrize(
         "field_name",
         [

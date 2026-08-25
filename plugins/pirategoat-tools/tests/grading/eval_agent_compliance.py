@@ -31,6 +31,7 @@ OUTPUT_MODULE = SCRIPTS_DIR / "review" / "agent" / "output.py"
 FIXTURES_DIR = TESTS_DIR / "fixtures"
 
 sys.path.insert(0, str(TESTS_DIR))
+sys.path.insert(0, str(SCRIPTS_DIR))
 from helpers.graders import (
     GradeResult,
     grade_detection,
@@ -41,6 +42,7 @@ from helpers.graders import (
     merge_grades,
     aggregate_detection_trials,
 )
+from review.agent.output import load_review_document
 
 # Import agent config
 import importlib.util
@@ -969,9 +971,10 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
                 return compliance
 
             try:
-                with open(review_path) as f:
-                    review = json.load(f)
-            except (OSError, json.JSONDecodeError) as exc:
+                review = load_review_document(
+                    review_path, reviewer_name
+                )
+            except ValueError as exc:
                 detection = GradeResult(
                     passed=False, score=0.0,
                     failures=[f"review JSON unreadable for detection grading: {exc}"],

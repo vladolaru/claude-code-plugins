@@ -61,7 +61,10 @@ from review_builder_ast import (  # noqa: E402
     parse_builder_envelope,
     recognize_canonical_builder_program,
 )
-from review.agent.output import _validate_review_bytes  # noqa: E402
+from review.agent.output import (  # noqa: E402
+    _validate_review_bytes,
+    validate_review_document,
+)
 from review_transcript import _result_state  # noqa: E402
 
 # The canonical one-shot builder envelope mandated by bootstrap: these
@@ -95,6 +98,7 @@ _BUILDER_FINDING_POSITIONAL = (
 # are lowercased and a severity_floor promotes lower severities to it. The
 # reconstruction must match what the builder actually saved.
 _SEVERITY_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+_RECONSTRUCTED_REVIEW_SCHEMA = 1
 
 
 class _ProvenEmptyReviewState:
@@ -371,6 +375,7 @@ def _reconstruct_builder_review(
             program.env["PIRATEGOAT_OUTPUT_DIR"], f"{reviewer}-review.json"
         ),
         "content": json.dumps({
+            "analysis_schema": _RECONSTRUCTED_REVIEW_SCHEMA,
             "reviewer": reviewer,
             "findings": findings,
             "checks": checks,
@@ -1054,11 +1059,32 @@ def _parse_review_write_output(write_output: Any) -> dict[str, Any] | None:
     except (json.JSONDecodeError, TypeError):
         return None
 
-    if not isinstance(review_json, dict):
-        return None
-    if not isinstance(review_json.get("reviewer"), str):
-        return None
-    if not isinstance(review_json.get("findings"), list):
+    name = posixpath.basename(path.replace("\\", "/"))
+    reviewer = name[: -len("-review.json")]
+    if write_output.get("source") == "bash_builder_heredoc":
+        if (
+            not isinstance(review_json, dict)
+            or set(review_json) != {
+                "analysis_schema",
+                "reviewer",
+                "findings",
+                "checks",
+                "reviewed_file_claims",
+                "meta",
+            }
+            or review_json.get("analysis_schema")
+            != _RECONSTRUCTED_REVIEW_SCHEMA
+            or review_json.get("reviewer") != reviewer
+            or not isinstance(review_json.get("findings"), list)
+            or not isinstance(review_json.get("checks"), list)
+            or not isinstance(review_json.get("reviewed_file_claims"), list)
+            or not isinstance(review_json.get("meta"), dict)
+        ):
+            return None
+        return review_json
+    try:
+        validate_review_document(review_json, reviewer)
+    except ValueError:
         return None
 
     return review_json

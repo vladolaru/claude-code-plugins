@@ -724,8 +724,12 @@ def materialize_markdown(
             continue
         json_path = os.path.join(output_dir, name)
         try:
-            with open(json_path, encoding="utf-8") as handle:
-                data = json.load(handle)
+            if suffix == "-review.json":
+                reviewer = name[: -len(suffix)]
+                data = load_review_document(json_path, reviewer)
+            else:
+                with open(json_path, encoding="utf-8") as handle:
+                    data = json.load(handle)
             md_text = render_markdown(data)
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as err:
             print(f"skipped {name}: {err}", file=sys.stderr)
@@ -2140,6 +2144,16 @@ def validate_review_document(review, reviewer):
     return review
 
 
+def load_review_document(path, reviewer):
+    """Load and validate one canonical final-review document."""
+    try:
+        with open(path, "r", encoding="utf-8") as source:
+            review = json.load(source)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("malformed final review JSON") from exc
+    return validate_review_document(review, reviewer)
+
+
 def _validate_review(output_dir, reviewer, paths, review_bytes):
     """Validate one exact review snapshot and return telemetry facts."""
     try:
@@ -2315,8 +2329,16 @@ if __name__ == '__main__':
     finalize_cmd.add_argument("--review-digest", required=True)
     cli_args = parser.parse_args()
     if cli_args.command == "render":
-        with open(cli_args.json_path, encoding="utf-8") as cli_handle:
-            print(render_markdown(json.load(cli_handle)))
+        cli_name = os.path.basename(cli_args.json_path)
+        if cli_name.endswith("-review.json"):
+            cli_reviewer = cli_name[: -len("-review.json")]
+            cli_data = load_review_document(
+                cli_args.json_path, cli_reviewer
+            )
+        else:
+            with open(cli_args.json_path, encoding="utf-8") as cli_handle:
+                cli_data = json.load(cli_handle)
+        print(render_markdown(cli_data))
     elif cli_args.command == "materialize":
         for written_path in materialize_markdown(
             cli_args.output_dir, suffix=cli_args.suffix

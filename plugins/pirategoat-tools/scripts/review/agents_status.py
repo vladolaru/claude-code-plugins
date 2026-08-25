@@ -3,14 +3,15 @@
 Check Reviewer Agent Status — deterministic status check.
 
 Reads dispatch-plan.json + scans for {agent}.started and {agent}-review.json.
-Four states per dispatched agent:
-  FINISHED       — review file exists
+Five states per dispatched agent:
+  FINISHED       — canonical schema-2 final review exists
+  INVALID_OUTPUT — final filename exists but its contents are not canonical
   RUNNING        — .started marker exists, within timeout
   TIMED_OUT      — .started marker exists, exceeded timeout
   NOT_DISPATCHED — neither marker nor review file (LLM forgot to dispatch)
 
 Exit codes:
-    0  ALL_DONE: true (nothing left to wait for — all finished or timed out)
+    0  ALL_DONE: true (nothing left to wait for, including invalid output)
     2  ALL_DONE: false (some agents still running or not dispatched)
     1  Error (no dispatch plan, bad JSON; also: --wait given without
        --max-seconds, --max-seconds <= 0, or --max-seconds given without
@@ -48,6 +49,7 @@ try:
         finalize_review_command,
         review_paths,
     )
+    from .agent.output import load_review_document
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
@@ -62,6 +64,7 @@ except ImportError:
         finalize_review_command,
         review_paths,
     )
+    from review.agent.output import load_review_document
 
 
 DEFAULT_TIMEOUT = 1200  # 20 minutes
@@ -117,6 +120,7 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
     agents = []
     dispatched = 0
     finished = 0
+    invalid = 0
     running = 0
     timed_out = 0
     not_dispatched = 0
@@ -141,25 +145,26 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
         started_path = os.path.join(output_dir, f"{name}.started")
 
         if os.path.isfile(review_path):
-            finished += 1
             try:
-                with open(review_path) as f:
-                    review = json.load(f)
-                findings = review.get("findings", [])
+                review = load_review_document(review_path, reviewer)
+                findings = review["findings"]
                 counts = dict(Counter(
                     finding.get("severity", "medium").lower()
                     for finding in findings
                 ))
-                verdict = review.get("verdict", "UNKNOWN")
+                verdict = review["verdict"]
+                finished += 1
                 agents.append({
                     "name": name, "status": "FINISHED",
                     "counts": counts, "verdict": verdict,
                 })
-            except (json.JSONDecodeError, KeyError):
+            except (ValueError, KeyError, TypeError):
+                invalid += 1
                 agents.append({
-                    "name": name, "status": "FINISHED",
-                    "counts": {}, "verdict": "UNKNOWN",
-                    "note": "output malformed",
+                    "name": name,
+                    "status": "INVALID_OUTPUT",
+                    "output_present": True,
+                    "note": "final review failed canonical validation",
                 })
         elif os.path.isfile(started_path):
             try:
@@ -195,6 +200,7 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
         "all_done": all_done,
         "dispatched": dispatched,
         "finished": finished,
+        "invalid": invalid,
         "running": running,
         "timed_out": timed_out,
         "not_dispatched": not_dispatched,
@@ -249,7 +255,8 @@ def format_output(result: dict) -> str:
     r = result["running"]
     t = result["timed_out"]
     nd = result["not_dispatched"]
-    lines.append(f"AGENT STATUS: {d} expected, {f} finished, {r} running, {t} timed out, {nd} never started")
+    invalid = result.get("invalid", 0)
+    lines.append(f"AGENT STATUS: {d} expected, {f} finished, {invalid} invalid, {r} running, {t} timed out, {nd} never started")
     lines.append("")
     for a in result["agents"]:
         name = a["name"]
@@ -267,6 +274,11 @@ def format_output(result: dict) -> str:
             lines.append(f"  {name:30s} TIMED_OUT ({elapsed} — exceeded timeout)")
         elif st == "NOT_DISPATCHED":
             lines.append(f"  {name:30s} NOT_DISPATCHED (never started — LLM may have failed to dispatch)")
+        elif st == "INVALID_OUTPUT":
+            lines.append(
+                f"  {name:30s} INVALID_OUTPUT "
+                "(final review failed canonical validation)"
+            )
         if a.get("draft_available"):
             lines.append(
                 f"  {'':30s} DRAFT  digest={a['draft_digest']}"
@@ -284,6 +296,15 @@ def format_output(result: dict) -> str:
     if result["timed_out"] > 0:
         names = [a["name"] for a in result["agents"] if a["status"] == "TIMED_OUT"]
         lines.append(f"NOTE: Timed out agents will be excluded from reconciliation: {', '.join(names)}")
+    if result.get("invalid", 0) > 0:
+        names = [
+            a["name"] for a in result["agents"]
+            if a["status"] == "INVALID_OUTPUT"
+        ]
+        lines.append(
+            "NOTE: Invalid final reviews will be excluded from "
+            f"reconciliation: {', '.join(names)}"
+        )
     return "\n".join(lines)
 
 

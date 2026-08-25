@@ -28,7 +28,11 @@ try:
         SKIPPED_STATUSES,
         validate_dispatch_plan_agents,
     )
-    from .agent.output import _VALID_SEVERITIES, _VERDICT_RANK
+    from .agent.output import (
+        _VALID_SEVERITIES,
+        _VERDICT_RANK,
+        load_review_document,
+    )
     from .atomic_io import atomic_write_json
     from .critic_adjustments import FINDINGS_READ_OK, read_findings_file
 except ImportError:
@@ -41,7 +45,11 @@ except ImportError:
         SKIPPED_STATUSES,
         validate_dispatch_plan_agents,
     )
-    from review.agent.output import _VALID_SEVERITIES, _VERDICT_RANK
+    from review.agent.output import (
+        _VALID_SEVERITIES,
+        _VERDICT_RANK,
+        load_review_document,
+    )
     from review.atomic_io import atomic_write_json
     from review.critic_adjustments import FINDINGS_READ_OK, read_findings_file
 
@@ -1124,13 +1132,13 @@ class ReviewTelemetry:
                     continue
                 path = os.path.join(self.output_dir, name)
                 base = name.replace("-review.json", "")
-                read = read_findings_file(path)
-                if read.status != FINDINGS_READ_OK:
+                try:
+                    data = load_review_document(path, base)
+                except ValueError:
                     results[base] = {"error": "malformed"}
                     continue
                 try:
-                    data = read.findings
-                    findings = data.get("findings", [])
+                    findings = data["findings"]
                     severities = dict(Counter(
                         finding.get("severity", "medium").lower()
                         for finding in findings
@@ -1141,7 +1149,7 @@ class ReviewTelemetry:
                         "severities": severities,
                     }
                     results[base].update(_advisory_measurement(data))
-                except (json.JSONDecodeError, KeyError):
+                except (KeyError, TypeError):
                     results[base] = {"error": "malformed"}
         except OSError:
             pass

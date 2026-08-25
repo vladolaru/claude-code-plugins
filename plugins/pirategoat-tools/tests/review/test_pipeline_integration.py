@@ -36,6 +36,7 @@ from helpers.pipeline_process import (
     init_repo as _init_git_repo,
     run_pipeline,
 )
+from helpers.review_fixtures import canonical_review_document
 _dispatch_spec = importlib.util.spec_from_file_location(
     "plan_review_dispatch", str(_SCRIPTS_DIR / "review" / "plan_dispatch.py")
 )
@@ -126,42 +127,8 @@ def _publish_step_11(output_dir, cwd, mode="pr"):
 
 
 def _review_json(reviewer):
-    """Return one complete schema-2 review accepted by render_markdown()."""
-    return {
-        "pr_id": "42",
-        "reviewer": reviewer,
-        "timestamp": "2026-08-10T12:00:00",
-        "schema": 2,
-        "verdict": "approve",
-        "summary": {
-            "total_findings": 0,
-            "by_severity": {
-                "critical": 0,
-                "high": 0,
-                "medium": 0,
-                "low": 0,
-                "info": 0,
-            },
-        },
-        "findings": [],
-        "review_claimable_files": [],
-        "reviewed_file_claims": [],
-        "unclaimed_review_files": [],
-        "inline_diff_file_count": 1,
-        "review_accounted_file_count": 1,
-        "in_scope_review_file_count": 1,
-        "observations": None,
-        "recommendations": None,
-        "positive_observations": None,
-        "checks": [],
-        "assessment": None,
-        "meta": {
-            "review_duration_ms": 10,
-            "confidence_score": 1.0,
-            "next_finding_number": 1,
-            "next_check_number": 1,
-        },
-    }
+    """Return one complete schema-2 final review."""
+    return canonical_review_document(reviewer)
 
 
 class TestReviewerDraftFinalizationLifecycle:
@@ -1763,7 +1730,7 @@ class TestStep8Orchestration:
         authority_dir = tmp_path / "authority"
         authority_dir.mkdir()
         final_path = authority_dir / "final.json"
-        final_path.write_text("{}")
+        final_path.write_text(json.dumps(canonical_review_document("code")))
         monkeypatch.setattr(
             mod.subprocess,
             "run",
@@ -1811,6 +1778,56 @@ class TestStep8Orchestration:
 
         assert state["agents"]["completed"] == ["code-reviewer"]
         assert state["agents"]["review_files"] == [str(final_path)]
+
+    def test_step_8_preserves_invalid_output_evidence_without_completion(
+        self, mod, tmp_path, monkeypatch
+    ):
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps({
+            "agents": [{"name": "code-reviewer", "status": "DISPATCH"}],
+        }))
+        review_path = tmp_path / "code-review.json"
+        review = canonical_review_document("code")
+        review["schema"] = 1
+        review_path.write_text(json.dumps(review))
+        monkeypatch.setattr(
+            mod.subprocess,
+            "run",
+            lambda *args, **kwargs: subprocess.CompletedProcess(
+                args=args[0], returncode=0, stdout="", stderr=""
+            ),
+        )
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "close_review_intake",
+            lambda *_args: {
+                "schema": 2,
+                "status": "closed",
+                "closed_at": "2026-08-26T00:00:00+03:00",
+                "discarded_drafts": [],
+            },
+        )
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "_materialize_markdown",
+            lambda *_args, **_kwargs: [],
+        )
+
+        def reconciliation_succeeds(*_args, **_kwargs):
+            (tmp_path / "reconciliation-context.json").write_text("{}")
+            return "", True
+
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "_run_subprocess",
+            reconciliation_succeeds,
+        )
+        state = {"resolved_params": {}}
+
+        mod._orchestrate_step(8, "full", {}, state, {}, str(tmp_path))
+
+        assert state["agents"]["completed"] == []
+        assert state["agents"]["review_files"] == []
+        assert state["agents"]["invalid_review_files"] == [str(review_path)]
 
     def test_step_1_records_that_reviewer_markdown_has_not_run(self, tmp_path):
         result = run_pipeline(
@@ -3349,7 +3366,7 @@ class TestStep8ReviewFileStems:
         }]}
         (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
         (tmp_path / "repo-api-reviewer-v2-review.json").write_text(
-            json.dumps({"reviewer": "repo-api-reviewer-v2", "findings": []})
+            json.dumps(canonical_review_document("repo-api-reviewer-v2"))
         )
         fake_done = subprocess.CompletedProcess(
             [], returncode=0, stdout="", stderr=""

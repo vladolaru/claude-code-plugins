@@ -70,6 +70,16 @@ def _validate_review_domain(findings, checks, assessment, meta):
     validate_review_domain(findings, checks, assessment, meta)
 
 
+def _validate_review_document(review, reviewer):
+    """Reuse the production finalized-review boundary from the harness."""
+    scripts_dir = str(Path(__file__).resolve().parents[2] / "scripts")
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    from review.agent.output import validate_review_document
+
+    validate_review_document(review, reviewer)
+
+
 def _grade(checks: List[tuple]) -> GradeResult:
     """Run a list of (condition, failure_message) checks and return a GradeResult."""
     failures = []
@@ -114,6 +124,23 @@ def grade_review_json(path: str, expected_reviewer: str = None) -> GradeResult:
         checks.append((True, ""))
     except (json.JSONDecodeError, OSError) as e:
         checks.append((False, f"Invalid JSON: {e}"))
+        return _grade(checks)
+
+    reviewer = expected_reviewer
+    if reviewer is None:
+        filename = os.path.basename(path)
+        reviewer = (
+            filename[: -len("-review.json")]
+            if filename.endswith("-review.json")
+            else data.get("reviewer") if isinstance(data, dict) else None
+        )
+    try:
+        _validate_review_document(data, reviewer)
+    except ValueError as error:
+        checks.append((False, str(error)))
+    else:
+        checks.append((True, ""))
+    if not isinstance(data, dict):
         return _grade(checks)
 
     # Check required top-level fields
@@ -403,30 +430,14 @@ def grade_output_pair(output_dir: str, reviewer_name: str) -> GradeResult:
     md_path = os.path.join(output_dir, f"{reviewer_name}-review.md")
 
     # Collect all checks from sub-graders
-    json_result = grade_review_json(json_path)
+    json_result = grade_review_json(
+        json_path, expected_reviewer=reviewer_name
+    )
     md_result = grade_review_markdown(md_path)
 
     all_failures = json_result.failures + md_result.failures
     total_checks = json_result.checks_run + md_result.checks_run
     total_passed = json_result.checks_passed + md_result.checks_passed
-
-    # Additional check: reviewer name matches
-    reviewer_match = False
-    if os.path.isfile(json_path):
-        try:
-            with open(json_path) as f:
-                data = json.load(f)
-            reviewer_match = data.get("reviewer") == reviewer_name
-        except (json.JSONDecodeError, OSError):
-            pass
-
-    if not reviewer_match and os.path.isfile(json_path):
-        all_failures.append(
-            f"Reviewer name in JSON does not match expected '{reviewer_name}'"
-        )
-    elif os.path.isfile(json_path):
-        total_passed += 1
-    total_checks += 1
 
     return GradeResult(
         passed=len(all_failures) == 0,
