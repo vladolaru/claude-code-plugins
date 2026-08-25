@@ -39,20 +39,6 @@ _bootstrap_mod = importlib.util.module_from_spec(_bootstrap_spec)
 _bootstrap_spec.loader.exec_module(_bootstrap_mod)
 
 
-def _known_empty_review(reviewer="security"):
-    """Literal proof that an invocation starts without prior builder state."""
-    return {
-        "reviewer": reviewer,
-        "findings": [],
-        "checks": [],
-        "reviewed_file_claims": [],
-        "meta": {
-            "next_finding_number": 1,
-            "next_check_number": 1,
-        },
-    }
-
-
 def _write_accounting_input(output_dir, reviewer="security", claimable=()):
     Path(output_dir, f"{reviewer}-review-accounting-input.json").write_text(
         json.dumps({
@@ -64,6 +50,25 @@ def _write_accounting_input(output_dir, reviewer="security", claimable=()):
             "in_scope_review_file_count": len(claimable),
             "review_budget": 15,
         })
+    )
+
+
+def _real_saved_review(output_dir, reviewer="security"):
+    """Return one production-validated persisted snapshot with f1 and c1."""
+    _write_accounting_input(
+        output_dir,
+        reviewer=reviewer,
+        claimable=("src/large-a.php",),
+    )
+    builder = ReviewOutputBuilder.open(output_dir, "42", reviewer)
+    builder.add_finding(
+        "high", "Initial", "src/a.php", "d", "r", line=3
+    )
+    builder.record_check("Initial check?", "Read initial path", "Yes")
+    builder.claim_files_reviewed("src/large-a.php")
+    builder.save_draft()
+    return json.loads(
+        Path(output_dir, f"{reviewer}-review.draft.json").read_text()
     )
 
 
@@ -535,11 +540,11 @@ def _builder_heredoc(reviewer="security", body=None):
     )
 
 
-def _fresh_builder_record(command, reviewer="security"):
+def _fresh_builder_record(command):
     """Reconstruct with explicit proof that no earlier draft exists."""
     return _mod._builder_review_from_heredoc(
         command,
-        prior_review=_known_empty_review(reviewer),
+        prior_review=_mod.PROVEN_EMPTY_REVIEW_STATE,
     )
 
 
@@ -547,7 +552,7 @@ def _parse_with_empty_draft(log, path="/tmp/pr-review-42/security-review.json"):
     """Parse a transcript whose caller proves this artifact starts empty."""
     return _mod.parse_subagent_log(
         str(log),
-        prior_review_states={path: _known_empty_review()},
+        prior_review_states={path: _mod.PROVEN_EMPTY_REVIEW_STATE},
     )
 
 
@@ -1002,6 +1007,77 @@ class TestBashBuilderRecognition:
             _builder_heredoc(body=body)
         ) is None
 
+    def test_proven_empty_sentinel_reconstructs_first_use(self):
+        record = _mod._builder_review_from_heredoc(
+            _builder_heredoc(),
+            prior_review=_mod.PROVEN_EMPTY_REVIEW_STATE,
+        )
+
+        assert record is not None
+        assert [
+            finding["id"]
+            for finding in json.loads(record["content"])["findings"]
+        ] == ["f1", "f2"]
+
+    def test_prior_allocator_must_be_above_every_live_id(self, tmp_path):
+        prior = _real_saved_review(tmp_path)
+        prior["meta"]["next_finding_number"] = 1
+        body = (
+            "from review.agent.output import ReviewOutputBuilder\n"
+            f'builder = ReviewOutputBuilder.open("{tmp_path}", "42", "security")\n'
+            'builder.add_finding("medium", "Added", "src/b.php", "d", "r", line=7)\n'
+            "builder.save_draft()\n"
+        )
+
+        assert _mod._builder_review_from_heredoc(
+            _builder_heredoc(body=body), prior_review=prior
+        ) is None
+        assert prior["meta"]["next_finding_number"] == 1
+        assert [finding["id"] for finding in prior["findings"]] == ["f1"]
+
+    @pytest.mark.parametrize(
+        "malformation",
+        [
+            "noncanonical-finding-id",
+            "malformed-finding",
+            "duplicate-finding-id",
+            "noncanonical-check-id",
+            "malformed-check",
+            "duplicate-check-id",
+            "wrong-reviewer",
+            "wrong-schema",
+            "missing-accounting-field",
+        ],
+    )
+    def test_noncanonical_prior_snapshot_fails_closed(
+        self, tmp_path, malformation
+    ):
+        prior = _real_saved_review(tmp_path)
+        if malformation == "noncanonical-finding-id":
+            prior["findings"][0]["id"] = "finding-1"
+        elif malformation == "malformed-finding":
+            prior["findings"][0].pop("title")
+        elif malformation == "duplicate-finding-id":
+            prior["findings"].append(dict(prior["findings"][0]))
+        elif malformation == "noncanonical-check-id":
+            prior["checks"][0]["id"] = "check-1"
+        elif malformation == "malformed-check":
+            prior["checks"][0].pop("result")
+        elif malformation == "duplicate-check-id":
+            prior["checks"].append(dict(prior["checks"][0]))
+        elif malformation == "wrong-reviewer":
+            prior["reviewer"] = "patterns"
+        elif malformation == "wrong-schema":
+            prior["schema"] = 1
+        else:
+            prior.pop("review_claimable_files")
+        untouched = json.loads(json.dumps(prior))
+
+        assert _mod._builder_review_from_heredoc(
+            _builder_heredoc(), prior_review=prior
+        ) is None
+        assert prior == untouched
+
     def test_reconstruction_rejects_multiple_open_receivers(self):
         """An unrelated open receiver is outside the canonical one-shot form."""
         body = (
@@ -1014,7 +1090,8 @@ class TestBashBuilderRecognition:
         )
 
         assert _mod._builder_review_from_heredoc(
-            _builder_heredoc(body=body), prior_review=_known_empty_review()
+            _builder_heredoc(body=body),
+            prior_review=_mod.PROVEN_EMPTY_REVIEW_STATE,
         ) is None
 
     def test_reconstruction_fails_closed_on_non_name_receiver(self):
@@ -1305,6 +1382,63 @@ class TestBashBuilderRecognition:
         [record] = data["write_outputs"]
         findings = json.loads(record["content"])["findings"]
         assert [finding["title"] for finding in findings] == ["Corrected", "Added"]
+
+    def test_unrepresentable_success_removes_earlier_reconstruction(
+        self, tmp_path
+    ):
+        first_body = (
+            "from review.agent.output import ReviewOutputBuilder\n"
+            'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
+            'builder.add_finding("high", "First", "a.php", "d", "r", line=1)\n'
+            'builder.claim_files_reviewed("src/large-a.php")\n'
+            "builder.save_draft()\n"
+        )
+        dynamic_body = (
+            "from review.agent.output import ReviewOutputBuilder\n"
+            'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
+            'builder.add_finding("medium", dynamic_title, "b.php", "d", "r", line=2)\n'
+            "builder.save_draft()\n"
+        )
+        log = tmp_path / "agent.jsonl"
+        entries = [
+            _bash_entry(_builder_heredoc(body=first_body), tool_id="save-1"),
+            _tool_result_entry("save-1"),
+            _bash_entry(
+                _builder_heredoc(body=dynamic_body), tool_id="save-2"
+            ),
+            _tool_result_entry("save-2"),
+        ]
+        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+        data = _parse_with_empty_draft(log)
+
+        assert data["write_outputs"] == []
+
+    def test_literal_save_cannot_resume_after_uncertain_success(self, tmp_path):
+        def _attempt(title, *, dynamic=False):
+            title_expr = "dynamic_title" if dynamic else json.dumps(title)
+            return _builder_heredoc(body=(
+                "from review.agent.output import ReviewOutputBuilder\n"
+                'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
+                f'builder.add_finding("medium", {title_expr}, "a.php", "d", "r", line=1)\n'
+                'builder.claim_files_reviewed("src/large-a.php")\n'
+                "builder.save_draft()\n"
+            ))
+
+        log = tmp_path / "agent.jsonl"
+        entries = [
+            _bash_entry(_attempt("First"), tool_id="save-1"),
+            _tool_result_entry("save-1"),
+            _bash_entry(_attempt("Dynamic", dynamic=True), tool_id="save-2"),
+            _tool_result_entry("save-2"),
+            _bash_entry(_attempt("Later"), tool_id="save-3"),
+            _tool_result_entry("save-3"),
+        ]
+        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+        data = _parse_with_empty_draft(log)
+
+        assert data["write_outputs"] == []
 
     def test_unresolved_builder_heredoc_does_not_count_as_saved(self, tmp_path):
         """No paired tool result means the save was never confirmed."""

@@ -45,12 +45,15 @@ import posixpath
 import re
 import sys
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from glob import glob
 from typing import Any
 
 # Sibling module in scripts/analysis — canonical tri-state result
 # classification shared with transcript enrichment.
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_ANALYSIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(_ANALYSIS_DIR))
+sys.path.insert(0, _ANALYSIS_DIR)
 from review_builder_ast import (  # noqa: E402
     BUILDER_ENV_NAMES,
     BUILDER_ENV_OPTIONAL,
@@ -58,6 +61,7 @@ from review_builder_ast import (  # noqa: E402
     parse_builder_envelope,
     recognize_canonical_builder_program,
 )
+from review.agent.output import _validate_review_bytes  # noqa: E402
 from review_transcript import _result_state  # noqa: E402
 
 # The canonical one-shot builder envelope mandated by bootstrap: these
@@ -91,6 +95,24 @@ _BUILDER_FINDING_POSITIONAL = (
 # are lowercased and a severity_floor promotes lower severities to it. The
 # reconstruction must match what the builder actually saved.
 _SEVERITY_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+
+
+class _ProvenEmptyReviewState:
+    """Identity-only proof that no draft precedes the first invocation."""
+
+
+PROVEN_EMPTY_REVIEW_STATE = _ProvenEmptyReviewState()
+
+
+@dataclass(frozen=True)
+class _BuilderDomainState:
+    reviewer: str
+    pr_id: str
+    findings: list[dict[str, Any]]
+    checks: list[dict[str, Any]]
+    reviewed_file_claims: list[str]
+    next_finding_number: int
+    next_check_number: int
 
 
 def _normalize_builder_severity(finding: dict[str, Any]) -> None:
@@ -147,60 +169,51 @@ def _builder_heredoc_env(command: Any) -> dict[str, str] | None:
 
 
 def _prior_builder_state(
-    prior_review: object, reviewer: str
-) -> tuple[
-    list[dict[str, Any]], list[dict[str, Any]], list[str], int, int
-] | None:
-    """Validate and copy explicit prior state; absence is never empty state."""
+    prior_review: object, reviewer: str, pr_id: str
+) -> _BuilderDomainState | None:
+    """Validate external snapshots once; copy analyzer-owned state exactly."""
+    if prior_review is PROVEN_EMPTY_REVIEW_STATE:
+        return _BuilderDomainState(reviewer, pr_id, [], [], [], 1, 1)
+    if isinstance(prior_review, _BuilderDomainState):
+        if (
+            prior_review.reviewer != reviewer
+            or prior_review.pr_id != pr_id
+        ):
+            return None
+        return _BuilderDomainState(
+            reviewer,
+            pr_id,
+            copy.deepcopy(prior_review.findings),
+            copy.deepcopy(prior_review.checks),
+            list(prior_review.reviewed_file_claims),
+            prior_review.next_finding_number,
+            prior_review.next_check_number,
+        )
     if not isinstance(prior_review, dict):
         return None
-    findings = prior_review.get("findings")
-    checks = prior_review.get("checks")
-    claims = prior_review.get("reviewed_file_claims")
-    meta = prior_review.get("meta")
-    if (
-        prior_review.get("reviewer") != reviewer
-        or not isinstance(findings, list)
-        or any(not isinstance(finding, dict) for finding in findings)
-        or not isinstance(checks, list)
-        or any(not isinstance(check, dict) for check in checks)
-        or not isinstance(claims, list)
-        or any(not isinstance(path, str) for path in claims)
-        or len(set(claims)) != len(claims)
-        or not isinstance(meta, dict)
-    ):
+    try:
+        validated = _validate_review_bytes(
+            json.dumps(prior_review).encode("utf-8"),
+            reviewer=reviewer,
+            pr_id=pr_id,
+        )
+    except (TypeError, ValueError):
         return None
-    next_finding = meta.get("next_finding_number")
-    next_check = meta.get("next_check_number")
-    if (
-        type(next_finding) is not int
-        or next_finding < 1
-        or type(next_check) is not int
-        or next_check < 1
-    ):
-        return None
-    finding_ids = [finding.get("id") for finding in findings]
-    check_ids = [check.get("id") for check in checks]
-    if (
-        any(not isinstance(entry_id, str) for entry_id in finding_ids)
-        or len(set(finding_ids)) != len(finding_ids)
-        or any(not isinstance(entry_id, str) for entry_id in check_ids)
-        or len(set(check_ids)) != len(check_ids)
-    ):
-        return None
-    return (
-        copy.deepcopy(findings),
-        copy.deepcopy(checks),
-        list(claims),
-        next_finding,
-        next_check,
+    return _BuilderDomainState(
+        reviewer,
+        pr_id,
+        validated["findings"],
+        validated["checks"],
+        validated["reviewed_file_claims"],
+        validated["meta"]["next_finding_number"],
+        validated["meta"]["next_check_number"],
     )
 
 
-def _builder_review_from_heredoc(
-    command: str, *, prior_review: dict[str, Any] | None = None
-) -> dict[str, Any] | None:
-    """Synthesize the review record a canonical builder heredoc would save.
+def _reconstruct_builder_review(
+    command: str, *, prior_review: object = None
+) -> tuple[dict[str, Any], _BuilderDomainState] | None:
+    """Return one synthesized record plus exact analyzer-owned next state.
 
     Compliant reviewers save through a mandated Bash heredoc instead of a
     Write call, so the serialized review JSON never appears in the
@@ -213,7 +226,8 @@ def _builder_review_from_heredoc(
     if program is None:
         return None
     reviewer = program.env["PIRATEGOAT_REVIEWER_NAME"]
-    prior = _prior_builder_state(prior_review, reviewer)
+    pr_id = program.env["PIRATEGOAT_PR_ID"]
+    prior = _prior_builder_state(prior_review, reviewer, pr_id)
     if prior is None:
         return None
     (
@@ -222,7 +236,13 @@ def _builder_review_from_heredoc(
         reviewed_file_claims,
         next_finding_number,
         next_check_number,
-    ) = prior
+    ) = (
+        prior.findings,
+        prior.checks,
+        prior.reviewed_file_claims,
+        prior.next_finding_number,
+        prior.next_check_number,
+    )
     mutation_methods = {
         "add_finding",
         "update_finding",
@@ -346,7 +366,7 @@ def _builder_review_from_heredoc(
                 path for path in reviewed_file_claims if path not in retracted
             ]
 
-    return {
+    record = {
         "path": posixpath.join(
             program.env["PIRATEGOAT_OUTPUT_DIR"], f"{reviewer}-review.json"
         ),
@@ -362,12 +382,33 @@ def _builder_review_from_heredoc(
         }),
         "source": "bash_builder_heredoc",
     }
+    state = _BuilderDomainState(
+        reviewer,
+        pr_id,
+        copy.deepcopy(findings),
+        copy.deepcopy(checks),
+        list(reviewed_file_claims),
+        next_finding_number,
+        next_check_number,
+    )
+    return record, state
+
+
+def _builder_review_from_heredoc(
+    command: str, *, prior_review: object = None
+) -> dict[str, Any] | None:
+    """Synthesize a review only from explicit, canonical prior state."""
+    reconstructed = _reconstruct_builder_review(
+        command,
+        prior_review=prior_review,
+    )
+    return reconstructed[0] if reconstructed is not None else None
 
 
 def parse_subagent_log(
     filepath: str,
     *,
-    prior_review_states: dict[str, dict[str, Any]] | None = None,
+    prior_review_states: dict[str, object] | None = None,
 ) -> dict[str, Any]:
     """Parse a subagent JSONL file and extract detailed metrics.
 
@@ -584,11 +625,15 @@ def parse_subagent_log(
         # POSIX regardless of the analysis host.
         return posixpath.normpath(raw)
 
-    known_review_states: dict[str, dict[str, Any]] = {}
+    known_review_states: dict[str, object] = {}
     if isinstance(prior_review_states, dict):
         for raw_path, review in prior_review_states.items():
             key = _path_key(raw_path)
-            if key is not None and isinstance(review, dict):
+            if key is None:
+                continue
+            if review is PROVEN_EMPTY_REVIEW_STATE:
+                known_review_states[key] = review
+            elif isinstance(review, dict):
                 known_review_states[key] = copy.deepcopy(review)
 
     save_events = [
@@ -613,15 +658,26 @@ def parse_subagent_log(
         )
         key = _path_key(path)
         prior_review = known_review_states.get(key) if key is not None else None
-        builder_output = _builder_review_from_heredoc(
+        reconstructed = _reconstruct_builder_review(
             payload,
             prior_review=prior_review,
         )
-        if builder_output is None:
+        if reconstructed is None:
+            if key is not None:
+                known_review_states.pop(key, None)
+                ordered_saves[:] = [
+                    (saved_position, record)
+                    for saved_position, record in ordered_saves
+                    if not (
+                        record.get("source") == "bash_builder_heredoc"
+                        and _path_key(record.get("path")) == key
+                    )
+                ]
             continue
+        builder_output, next_state = reconstructed
         ordered_saves.append((position, builder_output))
         if key is not None:
-            known_review_states[key] = json.loads(builder_output["content"])
+            known_review_states[key] = next_state
 
     last_by_path: dict[str, int] = {}
     for index, (_position, record) in enumerate(ordered_saves):
