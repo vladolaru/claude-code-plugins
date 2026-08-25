@@ -302,20 +302,29 @@ def render_draft_index(review: dict) -> str:
     """Render concise mutable review state for continuation bootstrap."""
     findings = review.get("findings") or []
     checks = review.get("checks") or []
+    reviewed_file_claims = review.get("reviewed_file_claims") or []
     lines = [
         "DRAFT INDEX:",
-        f"  findings {len(findings)} | checks {len(checks)}",
+        f"  findings {len(findings)} | checks {len(checks)} | "
+        f"reviewed-file claims {len(reviewed_file_claims)}",
     ]
     for finding in findings:
+        location = (
+            f"{finding['file']}:{finding['line']}"
+            if finding["line"] is not None
+            else f"{finding['file']} (file scope)"
+        )
         lines.append(
             f"  finding {finding['id']}: {finding['severity']} "
-            f"{json.dumps(finding['title'], ensure_ascii=False)}"
+            f"{json.dumps(finding['title'], ensure_ascii=False)} @ {location}"
         )
     for check in checks:
         lines.append(
             f"  check {check['id']}: "
             f"{json.dumps(check['question'], ensure_ascii=False)}"
         )
+    for path in reviewed_file_claims:
+        lines.append(f"  reviewed-file claim: {path}")
     return "\n".join(lines)
 
 

@@ -128,7 +128,28 @@ def _publish_step_11(output_dir, cwd, mode="pr"):
 
 def _review_json(reviewer):
     """Return one complete schema-2 final review."""
-    return canonical_review_document(reviewer)
+    reviewer = (
+        "reconciliator"
+        if reviewer in ("review-reconciliator", "reconciliator")
+        else reviewer
+    )
+    review = canonical_review_document(reviewer)
+    if reviewer == "reconciliator":
+        review["meta"]["reconciliation"] = {
+            "input_finding_count": 0,
+            "contributing_agent_count": 0,
+            "grouped_concern_count": 0,
+            "false_positive_finding_count": 0,
+            "out_of_scope_finding_count": 0,
+            "verified_finding_count": 0,
+            "deduplication_ratio": 1.0,
+            "not_applicable_agent_count": 0,
+            "not_applicable_agents": [],
+            "reviewing_agents": [],
+            "dispatched_agents": [],
+            "missing_agents": None,
+        }
+    return review
 
 
 class TestReviewerDraftFinalizationLifecycle:
@@ -341,6 +362,7 @@ class TestCriticAdjudicationLifecycle:
                 "low": 3,
                 "info": 0,
             },
+            "suppressed_advisory_finding_count": 0,
         }
         ledger["verdict"] = verdict_for_counts(
             ledger["summary"]["by_severity"]
@@ -2678,8 +2700,34 @@ class TestStep10Orchestration:
     """
 
     def _findings(self, tmp_path, verdict):
+        findings = _review_json("reconciliator")
+        if verdict == "block":
+            findings["findings"] = [{
+                "id": "f1",
+                "category": "correctness",
+                "severity": "critical",
+                "title": "Blocking defect",
+                "description": "The defect blocks a safe release.",
+                "file": "src/blocking.py",
+                "line": 1,
+                "recommendation": "Correct the defect.",
+                "confidence": 0.9,
+            }]
+            findings["verdict"] = "block"
+            findings["summary"] = {
+                "total_findings": 1,
+                "by_severity": {
+                    "critical": 1,
+                    "high": 0,
+                    "medium": 0,
+                    "low": 0,
+                    "info": 0,
+                },
+                "suppressed_advisory_finding_count": 0,
+            }
+            findings["meta"]["next_finding_number"] = 2
         (tmp_path / "review-findings.json").write_text(
-            json.dumps({"verdict": verdict, "findings": []})
+            json.dumps(findings)
         )
 
     def test_step_10_records_the_reconciliation_verdict(self, tmp_path):
@@ -2753,6 +2801,28 @@ class TestStep10Orchestration:
         assert r.returncode == 0
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         assert state.get("reconciliation_verdict") == ""
+
+    def test_step_10_keeps_a_noncanonical_ledger_out_of_critic_context(
+        self, tmp_path
+    ):
+        run_pipeline(
+            "--step", "1", "--mode", "full", "--output-dir", str(tmp_path),
+            cwd=tmp_path,
+        )
+        (tmp_path / "review-findings.json").write_text(
+            json.dumps({"verdict": "block"})
+        )
+
+        result = run_pipeline(
+            "--step", "10", "--mode", "full", "--output-dir", str(tmp_path),
+            cwd=tmp_path,
+        )
+
+        assert result.returncode == 0, result.stderr
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        assert state["critic_source"]["structured_findings_available"] is False
+        assert "Structured findings (for critic.py --context)" not in result.stdout
+        assert "without --context" in result.stdout
 
     @pytest.mark.parametrize("payload", ["[1, 2]", '"hello"', "5"],
                              ids=["list", "string", "int"])
@@ -2999,9 +3069,11 @@ class TestStep11Orchestration:
         assert published.returncode == 0
         assert result_path.is_file(), "pipeline-result.json was not created"
         result = json.loads(result_path.read_text())
-        assert result["verdict"] == "REQUEST_CHANGES"
-        assert result["verdict_source"] == "findings ledger"
-        assert result["status"] in ("success", "degraded")
+        assert result["verdict"] == "COMMENT"
+        assert result["status"] == "degraded"
+        assert result["verdict_source"] == (
+            "fallback: no usable ledger verdict"
+        )
         assert "report_path" in result
 
     def test_step_11_leaves_the_findings_verdict_alone(self, tmp_path):
@@ -3438,6 +3510,7 @@ class TestStep10CriticSourceRecording:
         mod._orchestrate_step(10, "full", {}, state, {}, str(tmp_path))
         assert state["critic_source"] == {
             "target": None, "available": [], "render_incomplete": False,
+            "structured_findings_available": False,
         }
 
     def test_carries_the_render_outcome_as_the_reason(self, mod, tmp_path):

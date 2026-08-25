@@ -1553,6 +1553,11 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         critic_target = f"{od}/{REVIEW_RECORD_MD}"
 
     has_findings = not degradation.get("reconciliation_failed")
+    if (
+        isinstance(source, dict)
+        and type(source.get("structured_findings_available")) is bool
+    ):
+        has_findings = source["structured_findings_available"]
     findings_path = f"{od}/review-findings.json"
 
     if _host(config) == HOST_CODEX:

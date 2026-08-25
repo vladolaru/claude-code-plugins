@@ -14,6 +14,7 @@ TESTS_DIR = Path(__file__).resolve().parent.parent  # review/ -> tests/
 sys.path.insert(0, str(TESTS_DIR))
 from helpers.context_fixtures import COMPLETE_CONTEXT
 from helpers.pipeline_process import init_repo, run_pipeline
+from helpers.review_fixtures import canonical_review_document
 from conftest import PIPELINE_SCRIPT_PATH as SCRIPT_PATH
 
 
@@ -2811,9 +2812,23 @@ class TestStep11PresentResults:
         """Step 11 orchestration derives state['verdict'] from the findings
         ledger — the artifact whose verdict was actually computed from
         findings — not from a verdict the orchestrator transcribed."""
-        import json
+        findings = canonical_review_document("reconciliator", ["medium"])
+        findings["meta"]["reconciliation"] = {
+            "input_finding_count": 1,
+            "contributing_agent_count": 1,
+            "grouped_concern_count": 1,
+            "false_positive_finding_count": 0,
+            "out_of_scope_finding_count": 0,
+            "verified_finding_count": 1,
+            "deduplication_ratio": 0.0,
+            "not_applicable_agent_count": 0,
+            "not_applicable_agents": [],
+            "reviewing_agents": ["code-reviewer"],
+            "dispatched_agents": ["code-reviewer"],
+            "missing_agents": [],
+        }
         (tmp_path / "review-findings.json").write_text(
-            json.dumps({"verdict": "comment", "findings": []})
+            json.dumps(findings)
         )
 
         state = {

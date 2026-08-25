@@ -9,15 +9,10 @@ review-reconciliator agent is allowed to write review-findings.json through
 gap this module exists to close, because nothing downstream validates a
 hand-written ledger after the fact.
 
-Every problem is collected before anything is decided, the same
-all-or-nothing style ``critic_adjustments.validate_adjustments_document()``
-and ``critic.py``'s ``run_save()`` use: a bad verdict, a missing required finding
-field, and a summary/findings count mismatch are independent facts, and
-reporting only the first would make a caller fix one problem at a time
-instead of seeing the whole rejection at once. On ANY problem, nothing is
-written, and every problem is echoed as its own ``REJECTED: <problem>``
-line — this module's failure mode is silence on disk, never a partial
-ledger.
+Actor-ownership violations are collected before the canonical document
+validator runs. On ANY problem, nothing is written, and every problem is
+echoed as its own ``REJECTED: <problem>`` line — this module's failure mode is
+silence on disk, never a partial ledger.
 
 The write itself goes through ``critic_adjustments.write_findings()`` — the
 ONE sanctioned write path for review-findings.json, shared by both of its
@@ -33,13 +28,11 @@ import sys
 
 try:
     from . import critic_adjustments
-    from .agent import output as review_output
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
     from review import critic_adjustments
-    from review.agent import output as review_output
 
 
 # The reconciled ledger's verdict vocabulary. Matches EXACTLY the range
@@ -54,16 +47,6 @@ except ImportError:
 # from it. Literal, not imported: the shared derivation's verdict range is a
 # small closed set, so this module keeps the reconciler-specific subset here.
 RECONCILER_VERDICTS = ("block", "request_changes", "comment", "approve")
-
-# Fields every finding entry must carry to be a well-formed ReviewOutputBuilder
-# finding (see Finding in schemas/review-output.ts and add_finding() in
-# review/agent/output.py, which always sets exactly these. ``line`` is
-# required but nullable: null identifies a file-scoped finding, while an
-# absent key is a malformed finding that the renderer cannot consume.
-REQUIRED_FINDING_FIELDS = (
-    "id", "category", "severity", "title", "description", "file",
-    "line", "recommendation", "confidence",
-)
 
 # Severities the breakdown echo reports, in the order the brief's format
 # specifies. Deliberately excludes 'info' from VALID_SEVERITIES: the echo
@@ -110,31 +93,16 @@ def _read_findings_json(path, problems):
 
 
 def validate_findings(payload):
-    """Validate the SHAPE of a review-findings.json document.
+    """Validate a producer-authored canonical findings ledger.
 
-    Returns a list of human-readable problems; an empty list means valid.
-    Checks: top-level object; ``verdict`` in the reconciler vocabulary;
-    ``findings`` is a list of well-formed entries, ``checks`` is always a
-    list, ``assessment`` is string-or-null, and ``summary`` counts match the
-    ``findings``
-    population, reusing ``critic_adjustments._recount_summary()`` — the
-    same recount the ledger's other writers already trust — rather than
-    re-deriving the count logic here.
+    The lifecycle module owns the complete post-critic ledger contract. This
+    producer gate adds only the actor boundary: the reconciliator cannot
+    pre-author fields or per-entry provenance owned by the critic applier.
     """
     if not isinstance(payload, dict):
         return [f"{FINDINGS_FILENAME} must be a JSON object"]
 
     problems = []
-
-    if (
-        type(payload.get("schema")) is not int
-        or payload.get("schema") != review_output.REVIEW_OUTPUT_SCHEMA
-    ):
-        problems.append(
-            f"'schema' must be the exact integer "
-            f"{review_output.REVIEW_OUTPUT_SCHEMA}"
-        )
-
     verdict = payload.get("verdict")
     if verdict not in RECONCILER_VERDICTS:
         problems.append(
@@ -142,20 +110,6 @@ def validate_findings(payload):
             f"got {verdict!r}"
         )
 
-    retired = sorted(
-        key
-        for key in ("issues", "clearances", "narrative_summary")
-        if key in payload
-    )
-    if retired:
-        problems.append(
-            "retired review-domain field(s): " + ", ".join(retired)
-        )
-    meta = payload.get("meta")
-    if isinstance(meta, dict) and "tool_results_used" in meta:
-        problems.append(
-            "retired review-domain field: meta.tool_results_used"
-        )
     actor_supplied = sorted(
         key for key in CRITIC_OWNED_LEDGER_FIELDS if key in payload
     )
@@ -165,40 +119,23 @@ def validate_findings(payload):
         )
 
     findings = payload.get("findings")
-    if not isinstance(findings, list):
-        problems.append("'findings' must be a list")
-        findings = []
-
-    for idx, finding in enumerate(findings):
-        label = f"findings[{idx}]"
-        if not isinstance(finding, dict):
-            problems.append(f"{label} must be an object")
-            continue
-        missing = [
-            field
-            for field in REQUIRED_FINDING_FIELDS
-            if field not in finding
-        ]
-        if missing:
-            problems.append(
-                f"{label}: missing required field(s) {', '.join(missing)}"
-            )
-            continue
-        severity = finding.get("severity")
-        if severity not in critic_adjustments.VALID_SEVERITIES:
-            problems.append(
-                f"{label}: invalid severity {severity!r} "
-                f"(allowed: {', '.join(critic_adjustments.VALID_SEVERITIES)})"
-            )
-        if "critic_adjustment" in finding:
-            problems.append(
-                f"{label}: critic_adjustment is script-owned provenance"
-            )
-
-    if "checks" not in payload:
-        problems.append("'checks' must be present as a list")
-    if "assessment" not in payload:
-        problems.append("'assessment' must be present as a string or null")
+    if isinstance(findings, list):
+        for idx, finding in enumerate(findings):
+            if not isinstance(finding, dict):
+                continue
+            severity = finding.get("severity")
+            if (
+                "severity" in finding
+                and severity not in critic_adjustments.VALID_SEVERITIES
+            ):
+                problems.append(
+                    f"findings[{idx}]: invalid severity {severity!r}"
+                )
+            if "critic_adjustment" in finding:
+                problems.append(
+                    f"findings[{idx}]: critic_adjustment is script-owned "
+                    "provenance"
+                )
     checks = payload.get("checks")
     if isinstance(checks, list):
         for idx, check in enumerate(checks):
@@ -207,77 +144,12 @@ def validate_findings(payload):
                     f"checks[{idx}]: critic_adjustment is script-owned "
                     "provenance"
                 )
-    if isinstance(findings, list) and not problems:
-        try:
-            review_output.validate_review_domain(
-                findings,
-                payload.get("checks"),
-                payload.get("assessment"),
-                payload.get("meta"),
-            )
-        except ValueError as err:
-            problems.append(str(err))
-
-    # Summary consistency only makes sense once findings are well-formed —
-    # otherwise the recount itself would raise on the same defect already
-    # reported above (a non-object entry, an out-of-vocabulary severity).
-    if isinstance(payload.get("findings"), list) and not problems:
-        scratch = {}
-        try:
-            derived = critic_adjustments._recount_summary(scratch, findings)
-        except ValueError as err:
-            problems.append(str(err))
-        else:
-            expected_verdict = derived["verdict"]
-            if verdict != expected_verdict:
-                problems.append(
-                    f"'verdict' {verdict!r} does not match the "
-                    f"findings-derived verdict {expected_verdict!r}"
-                )
-            expected = scratch["summary"]
-            actual = payload.get("summary")
-            if not isinstance(actual, dict):
-                problems.append("'summary' must be an object")
-            else:
-                if (
-                    actual.get("total_findings")
-                    != expected["total_findings"]
-                ):
-                    problems.append(
-                        "'summary.total_findings' "
-                        f"({actual.get('total_findings')!r}) does not match "
-                        f"the {expected['total_findings']} finding(s) recorded"
-                    )
-                if actual.get("by_severity") != expected["by_severity"]:
-                    problems.append(
-                        "'summary.by_severity' "
-                        f"({actual.get('by_severity')!r}) does not match "
-                        f"the findings' actual severities "
-                        f"({expected['by_severity']!r})"
-                    )
-                if (
-                    actual.get("suppressed_advisory_finding_count")
-                    != expected["suppressed_advisory_finding_count"]
-                ):
-                    problems.append(
-                        "'summary.suppressed_advisory_finding_count' "
-                        f"({actual.get('suppressed_advisory_finding_count')!r}) "
-                        "does not match the findings-derived count "
-                        f"({expected['suppressed_advisory_finding_count']!r})"
-                    )
-                if actual.get("verdict_without_advisory") != expected.get(
-                    "verdict_without_advisory"
-                ):
-                    problems.append(
-                        "'summary.verdict_without_advisory' does not match "
-                        "the findings-derived verdict"
-                    )
-                unexpected_summary = sorted(set(actual) - set(expected))
-                if unexpected_summary:
-                    problems.append(
-                        "'summary' has unexpected field(s): "
-                        + ", ".join(unexpected_summary)
-                    )
+    try:
+        critic_adjustments.validate_findings_document(payload)
+    except ValueError as err:
+        canonical_problem = str(err)
+        if canonical_problem not in problems:
+            problems.append(canonical_problem)
 
     return problems
 

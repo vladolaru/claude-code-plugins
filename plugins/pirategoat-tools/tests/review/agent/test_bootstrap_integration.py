@@ -706,10 +706,12 @@ class TestCanonicalExecutableBuilderSource:
                 "schema": 3,
                 "agent_name": "security-reviewer",
                 "reviewer": "security",
-                "review_claimable_files": [],
+                "review_claimable_files": [
+                    "src/service.py", "tests/test_service.py",
+                ],
                 "review_budget": 15,
                 "inline_diff_file_count": 1,
-                "in_scope_review_file_count": 1,
+                "in_scope_review_file_count": 3,
             })
         )
         builder = ReviewOutputBuilder.open(tmp_path, "42", "security")
@@ -720,6 +722,17 @@ class TestCanonicalExecutableBuilderSource:
             line=7,
             description="Description",
             recommendation="Recommendation",
+        )
+        file_scoped_id = builder.add_finding(
+            severity="medium",
+            title="Existing file-scoped finding",
+            file="tests/test_code.py",
+            line=None,
+            description="Description",
+            recommendation="Recommendation",
+        )
+        builder.claim_files_reviewed(
+            "src/service.py", "tests/test_service.py"
         )
         builder.save_draft()
 
@@ -739,6 +752,11 @@ class TestCanonicalExecutableBuilderSource:
         )
 
         assert f"finding {finding_id}" in prompt
+        assert 'src/code.py:7' in prompt
+        assert f"finding {file_scoped_id}" in prompt
+        assert "tests/test_code.py (file scope)" in prompt
+        assert "reviewed-file claim: src/service.py" in prompt
+        assert "reviewed-file claim: tests/test_service.py" in prompt
         assert prompt.index("DRAFT INDEX:") < prompt.index(
             "ReviewOutputBuilder — MUST use"
         )

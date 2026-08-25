@@ -386,12 +386,13 @@ def _seed_step_11(out):
         "timestamp": "2026-08-13T10:00:00",
         "plugin_version": None,
         "schema": 2,
-        "verdict": "APPROVE",
+        "verdict": "approve",
         "summary": {
             "total_findings": 0,
             "by_severity": {
                 "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0,
             },
+            "suppressed_advisory_finding_count": 0,
         },
         "findings": [],
         "review_claimable_files": [],
@@ -410,6 +411,20 @@ def _seed_step_11(out):
             "confidence_score": 0.9,
             "next_finding_number": 1,
             "next_check_number": 1,
+            "reconciliation": {
+                "input_finding_count": 0,
+                "contributing_agent_count": 0,
+                "grouped_concern_count": 0,
+                "false_positive_finding_count": 0,
+                "out_of_scope_finding_count": 0,
+                "verified_finding_count": 0,
+                "deduplication_ratio": 1.0,
+                "not_applicable_agent_count": 0,
+                "not_applicable_agents": [],
+                "reviewing_agents": [],
+                "dispatched_agents": [],
+                "missing_agents": None,
+            },
         },
     })
     proposal = critic_adjustments.prepare_proposal({

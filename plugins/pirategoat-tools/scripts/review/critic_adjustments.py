@@ -38,8 +38,10 @@ try:
     from . import atomic_io
     from .agent.output import (
         validate_finding_content_field,
+        validate_review_document,
         validate_review_domain,
     )
+    from .agent.coverage import ReviewAccountingError, derive_review_accounting
     from .verdict_rules import VALID_SEVERITIES, derive_review_state
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -48,8 +50,10 @@ except ImportError:
     from review import atomic_io
     from review.agent.output import (
         validate_finding_content_field,
+        validate_review_document,
         validate_review_domain,
     )
+    from review.agent.coverage import ReviewAccountingError, derive_review_accounting
     from review.verdict_rules import VALID_SEVERITIES, derive_review_state
 
 atomic_write_json = atomic_io.atomic_write_json
@@ -171,6 +175,7 @@ FINDINGS_READ_ABSENT = "absent"
 FINDINGS_READ_IO_ERROR = "io_error"
 FINDINGS_READ_UNPARSABLE = "unparsable"
 FINDINGS_READ_NOT_OBJECT = "not_object"
+FINDINGS_READ_INVALID = "invalid"
 
 # What `read_findings_file()` hands back: the state above, the parsed
 # object (only on FINDINGS_READ_OK), and the exception that produced a
@@ -763,6 +768,418 @@ def critic_verdict_for_state(output_dir):
     return "unavailable" if verdict in (None, "SKIPPED") else verdict
 
 
+_LEDGER_EXTENSION_FIELDS = frozenset({
+    "host_context_banner",
+    APPLIED_IDS_KEY,
+    VERDICT_BEFORE_ADJUSTMENTS_KEY,
+    "findings_removed_by_critic",
+    "checks_removed_by_critic",
+    REJECTED_ADJUSTMENTS_KEY,
+    INVALIDATED_ASSESSMENTS_KEY,
+})
+_RECONCILIATION_FIELDS = frozenset({
+    "input_finding_count",
+    "contributing_agent_count",
+    "grouped_concern_count",
+    "false_positive_finding_count",
+    "out_of_scope_finding_count",
+    "verified_finding_count",
+    "deduplication_ratio",
+    "not_applicable_agent_count",
+    "not_applicable_agents",
+    "reviewing_agents",
+    "dispatched_agents",
+    "missing_agents",
+})
+_BASE_FINDING_FIELDS = frozenset({
+    "id", "category", "severity", "title", "description", "file", "line",
+    "recommendation", "confidence",
+})
+_OPTIONAL_FINDING_FIELDS = frozenset({
+    "severity_floor", "scope", "code_snippet", "references",
+    "behavior_evidence", "source_cited", "channel", "critic_adjustment",
+})
+_CHECK_FIELDS = frozenset({
+    "id", "question", "method", "result", "source_reviewers",
+    "critic_adjustment",
+})
+_RECONCILER_VERDICTS = frozenset({
+    "block", "request_changes", "comment", "approve",
+})
+
+
+def _require_nonnegative_integer(value, label):
+    if type(value) is not int or value < 0:
+        raise ValueError(f"{label} must be a non-negative integer")
+
+
+def _validate_unique_strings(value, label, *, nullable=False):
+    if nullable and value is None:
+        return
+    if (
+        not isinstance(value, list)
+        or any(not isinstance(item, str) or not item.strip() for item in value)
+        or len(value) != len(set(value))
+    ):
+        raise ValueError(f"{label} must be a list of unique non-empty strings")
+
+
+def _validate_reconciliation(value):
+    label = f"{FINDINGS_FILENAME}: meta.reconciliation"
+    if not isinstance(value, dict) or set(value) != _RECONCILIATION_FIELDS:
+        raise ValueError(f"{label} must have the exact canonical fields")
+    count_fields = (
+        "input_finding_count",
+        "contributing_agent_count",
+        "grouped_concern_count",
+        "false_positive_finding_count",
+        "out_of_scope_finding_count",
+        "verified_finding_count",
+        "not_applicable_agent_count",
+    )
+    for field in count_fields:
+        _require_nonnegative_integer(value[field], f"{label}.{field}")
+    if value["grouped_concern_count"] > value["input_finding_count"]:
+        raise ValueError(f"{label}.grouped_concern_count exceeds its input")
+    ratio = value["deduplication_ratio"]
+    expected_ratio = round(
+        1
+        - value["grouped_concern_count"]
+        / max(value["input_finding_count"], 1),
+        2,
+    )
+    if (
+        type(ratio) not in (int, float)
+        or not 0 <= ratio <= 1
+        or ratio != expected_ratio
+    ):
+        raise ValueError(f"{label}.deduplication_ratio is incoherent")
+    not_applicable = value["not_applicable_agents"]
+    if not isinstance(not_applicable, list):
+        raise ValueError(f"{label}.not_applicable_agents must be a list")
+    names = []
+    for index, agent in enumerate(not_applicable):
+        if (
+            not isinstance(agent, dict)
+            or set(agent) != {"name", "skip_reason"}
+            or not isinstance(agent.get("name"), str)
+            or not agent["name"].strip()
+            or not isinstance(agent.get("skip_reason"), str)
+            or not agent["skip_reason"].strip()
+        ):
+            raise ValueError(
+                f"{label}.not_applicable_agents[{index}] is malformed"
+            )
+        names.append(agent["name"])
+    if len(names) != len(set(names)):
+        raise ValueError(f"{label}.not_applicable_agents contains duplicates")
+    if value["not_applicable_agent_count"] != len(not_applicable):
+        raise ValueError(f"{label}.not_applicable_agent_count is incoherent")
+    for field in ("reviewing_agents", "dispatched_agents"):
+        _validate_unique_strings(value[field], f"{label}.{field}")
+    _validate_unique_strings(
+        value["missing_agents"], f"{label}.missing_agents", nullable=True
+    )
+
+
+def _validate_host_context_banner(value):
+    label = f"{FINDINGS_FILENAME}: host_context_banner"
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"degraded", "reason", "message", "unresolved"}
+        or value.get("degraded") is not True
+        or value.get("reason") not in ("partial_unresolved", "fully_unavailable")
+        or not isinstance(value.get("message"), str)
+        or not value["message"].strip()
+        or not isinstance(value.get("unresolved"), list)
+    ):
+        raise ValueError(f"{label} is malformed")
+    for index, unresolved in enumerate(value["unresolved"]):
+        if (
+            not isinstance(unresolved, dict)
+            or not isinstance(unresolved.get("name"), str)
+            or not unresolved["name"].strip()
+            or not isinstance(unresolved.get("reason"), str)
+            or not unresolved["reason"].strip()
+            or (
+                "source" in unresolved
+                and not isinstance(unresolved["source"], str)
+            )
+        ):
+            raise ValueError(f"{label}.unresolved[{index}] is malformed")
+
+
+def _validate_finding_provenance(value, label, *, removed):
+    if not isinstance(value, dict):
+        raise ValueError(f"{label}.critic_adjustment must be an object")
+    action = value.get("action")
+    if action not in ACTIONS or (action == "remove") != removed:
+        raise ValueError(f"{label}.critic_adjustment action is incoherent")
+    if (
+        not isinstance(value.get("rationale"), str)
+        or not value["rationale"].strip()
+    ):
+        raise ValueError(f"{label}.critic_adjustment rationale is malformed")
+    expected_fields = {"action", "rationale"}
+    prior_fields = ()
+    if action in ("promote", "demote"):
+        expected_fields.add("prior")
+        prior_fields = ("severity",)
+    elif action == "rescope":
+        expected_fields.add("prior")
+        prior_fields = ("file", "line")
+    elif action == "correct":
+        expected_fields.add("prior")
+        prior_fields = FINDING_PATCH_FIELDS
+    if set(value) != expected_fields:
+        raise ValueError(f"{label}.critic_adjustment has invalid fields")
+    if not prior_fields:
+        return
+    prior = value["prior"]
+    if (
+        not isinstance(prior, dict)
+        or not prior
+        or not set(prior) <= set(prior_fields)
+        or (action == "rescope" and set(prior) != {"file", "line"})
+    ):
+        raise ValueError(f"{label}.critic_adjustment prior is malformed")
+    for field, field_value in prior.items():
+        validate_finding_content_field(field, field_value, f"{label}.prior")
+
+
+def _validate_ledger_finding(finding, index, *, removed=False):
+    label = (
+        f"{FINDINGS_FILENAME}: "
+        f"{'findings_removed_by_critic' if removed else 'findings'}[{index}]"
+    )
+    allowed = _BASE_FINDING_FIELDS | _OPTIONAL_FINDING_FIELDS
+    if not isinstance(finding, dict) or not set(finding) <= allowed:
+        raise ValueError(f"{label} has unexpected fields")
+    line = finding.get("line")
+    if line is None and finding.get("scope") != "file":
+        raise ValueError(f"{label} file scope is not canonical")
+    if line is not None and "scope" in finding:
+        raise ValueError(f"{label} line scope is not canonical")
+    if finding.get("channel") == "blocking":
+        raise ValueError(f"{label}.channel must omit the blocking default")
+    provenance = finding.get("critic_adjustment")
+    if removed or provenance is not None:
+        _validate_finding_provenance(provenance, label, removed=removed)
+
+
+def _validate_check_provenance(value, label, *, removed):
+    if not isinstance(value, dict):
+        raise ValueError(f"{label}.critic_adjustment must be an object")
+    action = value.get("action")
+    if action == "remove" and removed:
+        expected_fields = {"action", "rationale"}
+    elif action == "correct" and not removed:
+        expected_fields = {"action", "rationale", "prior"}
+    else:
+        raise ValueError(f"{label}.critic_adjustment action is incoherent")
+    if set(value) != expected_fields or not isinstance(
+        value.get("rationale"), str
+    ) or not value["rationale"].strip():
+        raise ValueError(f"{label}.critic_adjustment is malformed")
+    if action == "correct":
+        prior = value["prior"]
+        if (
+            not isinstance(prior, dict)
+            or not prior
+            or not set(prior) <= {"question", "method", "result"}
+            or any(
+                not isinstance(item, str) or not item.strip()
+                for item in prior.values()
+            )
+        ):
+            raise ValueError(f"{label}.critic_adjustment prior is malformed")
+
+
+def _validate_ledger_check(check, index, *, removed=False):
+    label = (
+        f"{FINDINGS_FILENAME}: "
+        f"{'checks_removed_by_critic' if removed else 'checks'}[{index}]"
+    )
+    if not isinstance(check, dict) or not set(check) <= _CHECK_FIELDS:
+        raise ValueError(f"{label} has unexpected fields")
+    provenance = check.get("critic_adjustment")
+    if removed or provenance is not None:
+        _validate_check_provenance(provenance, label, removed=removed)
+
+
+def _validate_invalidated_assessments(value, applied_ids):
+    label = f"{FINDINGS_FILENAME}: {INVALIDATED_ASSESSMENTS_KEY}"
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"{label} must be a non-empty list")
+    for index, record in enumerate(value):
+        if (
+            not isinstance(record, dict)
+            or set(record) != {
+                "text", "invalidated_by_critic_adjustment_ids",
+            }
+            or not isinstance(record.get("text"), str)
+            or not record["text"].strip()
+        ):
+            raise ValueError(f"{label}[{index}] is malformed")
+        ids = record["invalidated_by_critic_adjustment_ids"]
+        _validate_unique_strings(ids, f"{label}[{index}] adjustment ids")
+        if not ids or not set(ids) <= applied_ids:
+            raise ValueError(f"{label}[{index}] cites unknown adjustments")
+
+
+def _validate_ledger_accounting(document):
+    accounting_input = {
+        "schema": 3,
+        "agent_name": "reconciliator-reviewer",
+        "reviewer": "reconciliator",
+        "review_claimable_files": document["review_claimable_files"],
+        "review_budget": 0,
+        "inline_diff_file_count": document["inline_diff_file_count"],
+        "in_scope_review_file_count": document["in_scope_review_file_count"],
+    }
+    try:
+        accounting = derive_review_accounting(
+            accounting_input, document["reviewed_file_claims"]
+        )
+    except ReviewAccountingError as error:
+        raise ValueError(
+            f"{FINDINGS_FILENAME}: accounting is malformed: {error}"
+        ) from error
+    expected = {
+        "review_claimable_files": list(accounting.review_claimable_files),
+        "reviewed_file_claims": list(accounting.reviewed_file_claims),
+        "unclaimed_review_files": list(accounting.unclaimed_review_files),
+        "inline_diff_file_count": accounting.inline_diff_file_count,
+        "review_accounted_file_count": accounting.review_accounted_file_count,
+        "in_scope_review_file_count": accounting.in_scope_review_file_count,
+    }
+    if any(document[field] != value for field, value in expected.items()):
+        raise ValueError(f"{FINDINGS_FILENAME}: accounting fields are incoherent")
+
+
+def validate_findings_document(document):
+    """Validate one exact canonical post-critic findings ledger.
+
+    This is the single reader-boundary authority for ``review-findings.json``.
+    It delegates the builder-owned base document and review domain to
+    :func:`validate_review_document`, then validates only the reconciler and
+    critic extensions that distinguish this ledger from an agent review.
+    """
+    if not isinstance(document, dict):
+        raise ValueError(f"{FINDINGS_FILENAME} must be a JSON object")
+    base = copy.deepcopy(document)
+    extensions = {
+        field: base.pop(field)
+        for field in _LEDGER_EXTENSION_FIELDS
+        if field in base
+    }
+    meta = base.get("meta")
+    reconciliation = None
+    if isinstance(meta, dict):
+        reconciliation = meta.pop("reconciliation", None)
+    try:
+        validate_review_document(base, "reconciliator")
+    except ValueError as error:
+        raise ValueError(f"{FINDINGS_FILENAME}: {error}") from error
+    if document["verdict"] not in _RECONCILER_VERDICTS:
+        raise ValueError(f"{FINDINGS_FILENAME}: reconciler verdict is invalid")
+    if (
+        isinstance(document["assessment"], str)
+        and not document["assessment"].strip()
+    ):
+        raise ValueError(f"{FINDINGS_FILENAME}: assessment must not be blank")
+    _validate_ledger_accounting(document)
+    _validate_reconciliation(reconciliation)
+    if "host_context_banner" in extensions:
+        _validate_host_context_banner(extensions["host_context_banner"])
+
+    live_findings = document["findings"]
+    live_checks = document["checks"]
+    removed_findings = extensions.get("findings_removed_by_critic", [])
+    removed_checks = extensions.get("checks_removed_by_critic", [])
+    if not isinstance(removed_findings, list) or (
+        "findings_removed_by_critic" in extensions and not removed_findings
+    ):
+        raise ValueError(
+            f"{FINDINGS_FILENAME}: findings_removed_by_critic must be a "
+            "non-empty list"
+        )
+    if not isinstance(removed_checks, list) or (
+        "checks_removed_by_critic" in extensions and not removed_checks
+    ):
+        raise ValueError(
+            f"{FINDINGS_FILENAME}: checks_removed_by_critic must be a "
+            "non-empty list"
+        )
+    for index, finding in enumerate(live_findings):
+        _validate_ledger_finding(finding, index)
+    for index, finding in enumerate(removed_findings):
+        _validate_ledger_finding(finding, index, removed=True)
+    for index, check in enumerate(live_checks):
+        _validate_ledger_check(check, index)
+    for index, check in enumerate(removed_checks):
+        _validate_ledger_check(check, index, removed=True)
+    try:
+        validate_review_domain(
+            live_findings + removed_findings,
+            live_checks + removed_checks,
+            document["assessment"],
+            base["meta"],
+        )
+    except ValueError as error:
+        raise ValueError(f"{FINDINGS_FILENAME}: {error}") from error
+
+    applied_records = _load_recorded_records(document)
+    if any(
+        record[SPOT_CHECK_KEY] not in (SPOT_CHECK_VERIFIED, SPOT_CHECK_NOT_CHECKED)
+        for record in applied_records
+    ):
+        raise ValueError(f"{FINDINGS_FILENAME}: applied spot checks are invalid")
+    applied_by_id = _records_by_adjustment_id(applied_records, APPLIED_IDS_KEY)
+    rejected_records = _load_rejected_records(document)
+    rejected_by_id = _records_by_adjustment_id(
+        rejected_records, REJECTED_ADJUSTMENTS_KEY
+    )
+    if set(applied_by_id) & set(rejected_by_id):
+        raise ValueError(
+            f"{FINDINGS_FILENAME}: adjustment ids are both applied and rejected"
+        )
+    has_adjusted_entries = any(
+        item.get("critic_adjustment") is not None
+        for item in live_findings + live_checks + removed_findings + removed_checks
+    )
+    if applied_by_id and not has_adjusted_entries:
+        raise ValueError(
+            f"{FINDINGS_FILENAME}: applied records have no critic provenance"
+        )
+    critic_requires_applied = (
+        has_adjusted_entries
+        or "findings_removed_by_critic" in extensions
+        or "checks_removed_by_critic" in extensions
+        or VERDICT_BEFORE_ADJUSTMENTS_KEY in extensions
+        or INVALIDATED_ASSESSMENTS_KEY in extensions
+    )
+    if critic_requires_applied and not applied_by_id:
+        raise ValueError(
+            f"{FINDINGS_FILENAME}: critic provenance has no applied records"
+        )
+    if APPLIED_IDS_KEY in extensions and not applied_records:
+        raise ValueError(f"{FINDINGS_FILENAME}: applied records must not be empty")
+    if REJECTED_ADJUSTMENTS_KEY in extensions and not rejected_records:
+        raise ValueError(f"{FINDINGS_FILENAME}: rejected records must not be empty")
+    if VERDICT_BEFORE_ADJUSTMENTS_KEY in extensions and extensions[
+        VERDICT_BEFORE_ADJUSTMENTS_KEY
+    ] not in _RECONCILER_VERDICTS:
+        raise ValueError(
+            f"{FINDINGS_FILENAME}: verdict_before_adjustments is invalid"
+        )
+    if INVALIDATED_ASSESSMENTS_KEY in extensions:
+        _validate_invalidated_assessments(
+            extensions[INVALIDATED_ASSESSMENTS_KEY], set(applied_by_id)
+        )
+    return document
+
+
 def read_findings_file(path):
     """Read review-findings.json into a discriminated result.
 
@@ -787,10 +1204,14 @@ def read_findings_file(path):
         return FindingsRead(FINDINGS_READ_ABSENT, None, err)
     except OSError as err:
         return FindingsRead(FINDINGS_READ_IO_ERROR, None, err)
-    except json.JSONDecodeError as err:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as err:
         return FindingsRead(FINDINGS_READ_UNPARSABLE, None, err)
     if not isinstance(findings, dict):
         return FindingsRead(FINDINGS_READ_NOT_OBJECT, None, None)
+    try:
+        validate_findings_document(findings)
+    except (ValueError, RecursionError) as err:
+        return FindingsRead(FINDINGS_READ_INVALID, None, err)
     return FindingsRead(FINDINGS_READ_OK, findings, None)
 
 

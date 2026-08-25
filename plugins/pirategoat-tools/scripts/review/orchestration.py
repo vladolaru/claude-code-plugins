@@ -1565,7 +1565,10 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
     read = critic_adjustments.read_findings_file(
         os.path.join(output_dir, critic_adjustments.FINDINGS_FILENAME)
     )
-    if read.status == critic_adjustments.FINDINGS_READ_OK:
+    structured_findings_available = (
+        read.status == critic_adjustments.FINDINGS_READ_OK
+    )
+    if structured_findings_available:
         state["reconciliation_verdict"] = read.findings.get("verdict", "")
     elif read.status != critic_adjustments.FINDINGS_READ_ABSENT:
         state["reconciliation_verdict"] = ""
@@ -1576,16 +1579,19 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
     # `reconciliation_verdict` above rather than re-reading the ledger in
     # the briefing. Recording `available` alongside the choice keeps the
     # briefing from having to re-derive why it got the target it got.
-    available = [
-        name for name in _CRITIC_SOURCE_CANDIDATES
-        if os.path.isfile(os.path.join(output_dir, name))
-    ]
+    available = []
+    if structured_findings_available:
+        available = [
+            name for name in _CRITIC_SOURCE_CANDIDATES
+            if os.path.isfile(os.path.join(output_dir, name))
+        ]
     state["critic_source"] = {
         "target": available[0] if available else None,
         "available": available,
         "render_incomplete": bool(
             state.get("degradation", {}).get("findings_markdown_incomplete")
         ),
+        "structured_findings_available": structured_findings_available,
     }
 
     # Record critic skip decision for telemetry.

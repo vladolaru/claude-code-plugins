@@ -38,6 +38,7 @@ from review.critic_adjustments import (
 from review import critic_adjustments as critic_adjustments_module
 from review import orchestration as orchestration_mod
 from review.orchestration import _orchestrate_step_11
+from review.verdict_rules import derive_review_state
 
 
 def _write_findings(output_dir, findings, **extra):
@@ -54,9 +55,7 @@ def _write_findings(output_dir, findings, **extra):
     ledger's first IN-CHANNEL write. A raw `json.dumps` here would route
     around the one sanctioned write path the real producer uses.
     """
-    sev = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
-    for i in findings:
-        sev[i["severity"]] += 1
+    derived = derive_review_state(findings)
     checks = extra.get("checks", [])
     finding_numbers = [
         int(item["id"][1:])
@@ -78,11 +77,11 @@ def _write_findings(output_dir, findings, **extra):
         # (schemas/review-output.ts), not the outer-pipeline
         # APPROVE/COMMENT/REQUEST_CHANGES values pipeline-result.json
         # publishes. Step 11 maps between the two layers.
-        "verdict": "request_changes",
+        "verdict": derived["verdict"],
         "summary": {
             "total_findings": len(findings),
-            "by_severity": sev,
-            "suppressed_advisory_finding_count": 0,
+            "by_severity": derived["counts"],
+            **derived["advisory"],
         },
         "findings": findings,
         "review_claimable_files": [],
@@ -101,8 +100,24 @@ def _write_findings(output_dir, findings, **extra):
             "confidence_score": 0.9,
             "next_finding_number": max(finding_numbers, default=0) + 1,
             "next_check_number": max(check_numbers, default=0) + 1,
+            "reconciliation": {
+                "input_finding_count": len(findings),
+                "contributing_agent_count": 1 if findings else 0,
+                "grouped_concern_count": len(findings),
+                "false_positive_finding_count": 0,
+                "out_of_scope_finding_count": 0,
+                "verified_finding_count": len(findings),
+                "deduplication_ratio": 0.0 if findings else 1.0,
+                "not_applicable_agent_count": 0,
+                "not_applicable_agents": [],
+                "reviewing_agents": ["security-reviewer"],
+                "dispatched_agents": ["security-reviewer"],
+                "missing_agents": [],
+            },
         },
     }
+    if "meta" in extra:
+        data["meta"].update(extra.pop("meta"))
     data.update(extra)
     write_findings(str(output_dir), data)
     return data
@@ -253,6 +268,131 @@ def _check(id_, *, result="No matching callers."):
         "result": result,
         "source_reviewers": ["ecosystem-integration"],
     }
+
+
+class TestCanonicalFindingsReader:
+    """The reader boundary rejects any ledger a live consumer cannot trust."""
+
+    @staticmethod
+    def _write_raw(tmp_path, payload):
+        path = tmp_path / "review-findings.json"
+        path.write_text(json.dumps(payload))
+        return path
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"verdict": "block"},
+            {"schema": 2, "verdict": "approve", "findings": "none"},
+            {"schema": 2, "issues": [], "verdict": "approve"},
+        ],
+    )
+    def test_object_shaped_noncanonical_ledgers_are_invalid(
+        self, tmp_path, payload
+    ):
+        path = self._write_raw(tmp_path, payload)
+
+        read = critic_adjustments_module.read_findings_file(path)
+
+        assert read.status == "invalid"
+        assert read.findings is None
+        assert isinstance(read.error, ValueError)
+
+    @pytest.mark.parametrize(
+        "mutation",
+        [
+            lambda ledger: ledger.update(findings=[{"id": "f1"}]),
+            lambda ledger: ledger["findings"].append(
+                dict(ledger["findings"][0])
+            ),
+            lambda ledger: ledger["meta"].update(next_finding_number=1),
+            lambda ledger: ledger.update(reviewed_file_claims=["src/unknown.py"]),
+            lambda ledger: ledger.update(applied_critic_adjustments=[{
+                "adjustment_id": "orphan", "spot_check": "verified",
+            }]),
+        ],
+        ids=(
+            "malformed-finding",
+            "duplicate-finding-id",
+            "counter-reuses-live-id",
+            "accounting-claim-outside-authority",
+            "applied-adjustment-without-critic-provenance",
+        ),
+    )
+    def test_complete_ledger_invariants_are_checked_at_read(
+        self, tmp_path, mutation
+    ):
+        ledger = _write_findings(tmp_path, [_finding("f1")])
+        mutation(ledger)
+        path = self._write_raw(tmp_path, ledger)
+
+        read = critic_adjustments_module.read_findings_file(path)
+
+        assert read.status == "invalid"
+        assert isinstance(read.error, ValueError)
+
+    def test_canonical_reconciler_ledger_is_accepted(self, tmp_path):
+        _write_findings(
+            tmp_path,
+            [_finding("f1")],
+            checks=[_check("c1")],
+            assessment="One low-severity finding remains.",
+        )
+
+        read = critic_adjustments_module.read_findings_file(
+            tmp_path / "review-findings.json"
+        )
+
+        assert read.status == critic_adjustments_module.FINDINGS_READ_OK
+        assert read.findings["findings"][0]["id"] == "f1"
+
+    def test_canonical_critic_adjusted_ledger_is_accepted(self, tmp_path):
+        _write_findings(tmp_path, [_finding("f1", "low")])
+        _commit_critic_snapshot(tmp_path, [{
+            "action": "promote",
+            "target": {"kind": "finding", "id": "f1"},
+            "fields": {"severity": "high"},
+            "rationale": "The verified impact crosses the high threshold.",
+        }])
+        result = apply_adjustments(str(tmp_path))
+        assert result["status"] == "applied"
+
+        read = critic_adjustments_module.read_findings_file(
+            tmp_path / "review-findings.json"
+        )
+
+        assert read.status == critic_adjustments_module.FINDINGS_READ_OK
+        assert read.findings["findings"][0]["severity"] == "high"
+
+    def test_missing_and_unreadable_statuses_remain_distinct(self, tmp_path):
+        absent = critic_adjustments_module.read_findings_file(
+            tmp_path / "missing.json"
+        )
+        unreadable_path = tmp_path / "ledger-directory"
+        unreadable_path.mkdir()
+        unreadable = critic_adjustments_module.read_findings_file(
+            unreadable_path
+        )
+
+        assert absent.status == critic_adjustments_module.FINDINGS_READ_ABSENT
+        assert isinstance(absent.error, FileNotFoundError)
+        assert (
+            unreadable.status
+            == critic_adjustments_module.FINDINGS_READ_IO_ERROR
+        )
+        assert isinstance(unreadable.error, OSError)
+
+    def test_invalid_utf8_is_unparsable_without_escaping_reader(
+        self, tmp_path
+    ):
+        path = tmp_path / "review-findings.json"
+        path.write_bytes(b'{"schema": 2, "invalid": "\xff"}')
+
+        read = critic_adjustments_module.read_findings_file(path)
+
+        assert read.status == critic_adjustments_module.FINDINGS_READ_UNPARSABLE
+        assert read.findings is None
+        assert isinstance(read.error, UnicodeDecodeError)
 
 
 def _publish_step_11(output_dir, state=None):
@@ -798,7 +938,7 @@ class TestBatchCoherence:
             "rationale": "r",
         }])
         # A None target must not silently match an id-less finding.
-        with pytest.raises(ValueError, match="finding at position 0 has no id"):
+        with pytest.raises(ValueError, match="missing required fields: id"):
             apply_adjustments(str(tmp_path))
 
     def test_add_rejects_a_critic_supplied_id_in_both_spellings(
@@ -832,7 +972,7 @@ class TestBatchCoherence:
             "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "medium"}, "rationale": "r",
         }])
-        with pytest.raises(ValueError, match="f2"):
+        with pytest.raises(ValueError, match="finding 1.severity"):
             apply_adjustments(str(tmp_path))
         data = json.loads((tmp_path / "review-findings.json").read_text())
         assert data["findings"][0]["severity"] == "low"  # nothing written
@@ -1524,27 +1664,29 @@ class TestDerivedVerdict:
         _publish_step_11(tmp_path, state)
         return json.loads((tmp_path / "pipeline-result.json").read_text())
 
-    @pytest.mark.parametrize("ledger,published", [
-        ("block", "REQUEST_CHANGES"),
-        ("request_changes", "REQUEST_CHANGES"),
-        ("comment", "COMMENT"),
-        ("approve", "APPROVE"),
-        ("not_applicable", "COMMENT"),
+    @pytest.mark.parametrize("ledger,severity,published", [
+        ("block", "critical", "REQUEST_CHANGES"),
+        ("request_changes", "high", "REQUEST_CHANGES"),
+        ("comment", "medium", "COMMENT"),
+        ("approve", None, "APPROVE"),
     ])
-    def test_every_ledger_verdict_maps(self, tmp_path, ledger, published):
-        """All FIVE, `block` included: it is what any critical finding (or
-        three highs) produces, and omitting it would publish COMMENT for a
-        critical-finding review."""
-        self._seed(tmp_path, ledger)
+    def test_every_canonical_ledger_verdict_maps(
+        self, tmp_path, ledger, severity, published
+    ):
+        """Every reconciler verdict maps only when its findings derive it."""
+        findings = [] if severity is None else [_finding("f1", severity)]
+        self._seed(tmp_path, ledger, findings)
         result = self._finalize(tmp_path)
         assert result["verdict"] == published
         assert result["verdict_source"] == "findings ledger"
         assert result["status"] == "success"
 
     @pytest.mark.parametrize("ledger", ["BLOCK", "  Approve  ", "Comment"])
-    def test_casing_and_padding_do_not_break_the_mapping(self, tmp_path, ledger):
+    def test_casing_and_padding_fail_closed(self, tmp_path, ledger):
         self._seed(tmp_path, ledger)
-        assert self._finalize(tmp_path)["verdict_source"] == "findings ledger"
+        result = self._finalize(tmp_path)
+        assert result["verdict_source"] == "fallback: no usable ledger verdict"
+        assert result["status"] == "degraded"
 
     def test_a_critical_finding_never_publishes_comment(self, tmp_path):
         """The failure this derivation exists to kill, end to end: the
@@ -1563,7 +1705,7 @@ class TestDerivedVerdict:
         assert result["verdict_source"] == "critic ESCALATE override"
 
     def test_stand_does_not_override(self, tmp_path):
-        self._seed(tmp_path, "block")
+        self._seed(tmp_path, "block", [_finding("f1", "critical")])
         _write_critic_verdict(tmp_path, "STAND")
         assert self._finalize(tmp_path)["verdict_source"] == "findings ledger"
 
@@ -2001,10 +2143,18 @@ class TestStepElevenAppliesAdjustments:
         """The other half of the shared predicate: a crash between the two
         writes leaves an unflagged entry whose id the findings file already
         records. It is not pending, so it must not be reported either."""
-        _write_findings(tmp_path, [_finding("f1", "medium")])
+        _write_findings(tmp_path, [_finding("f1", "critical")])
         findings_path = tmp_path / "review-findings.json"
         data = json.loads(findings_path.read_text())
-        data[APPLIED_IDS_KEY] = ["f4"]
+        data["findings"][0]["critic_adjustment"] = {
+            "action": "promote",
+            "rationale": "r",
+            "prior": {"severity": "medium"},
+        }
+        data[APPLIED_IDS_KEY] = [{
+            "adjustment_id": "f4", "spot_check": "not_checked",
+        }]
+        data["verdict_before_adjustments"] = "request_changes"
         # Through the sanctioned writer: the state being simulated is a
         # crash between apply_adjustments' two writes, where the FINDINGS
         # write (in channel) landed and only the flag write was lost. A
@@ -2100,8 +2250,8 @@ class TestStepElevenRerendersFindingsMarkdown:
         self._step_11(tmp_path)
 
         data = json.loads((tmp_path / "review-findings.json").read_text())
-        assert data["verdict"] == "request_changes"
-        assert "**Verdict:** REQUEST_CHANGES" in (
+        assert data["verdict"] == "approve"
+        assert "**Verdict:** APPROVE" in (
             tmp_path / "review-findings.md"
         ).read_text()
 
@@ -2869,7 +3019,7 @@ class TestSpotCheckRecordedInTheLedger:
         with pytest.raises(ValueError, match="applied_critic_adjustments"):
             apply_adjustments(str(tmp_path))
 
-    def test_pending_count_does_not_treat_schema_one_records_as_landed(
+    def test_pending_count_fails_closed_on_mixed_schema_records(
         self, tmp_path
     ):
         _write_findings(tmp_path, [
@@ -2886,7 +3036,7 @@ class TestSpotCheckRecordedInTheLedger:
             {"adjustment_id": "new-id", "action": "promote", "target": {"kind": "finding", "id": "f2"},
              "fields": {"severity": "critical"}, "rationale": "r"},
         ])
-        assert pending_count(str(tmp_path)) == 1
+        assert pending_count(str(tmp_path)) == 2
 
 
 class TestRevisedAssessment:
@@ -2970,14 +3120,22 @@ class TestRevisedAssessment:
         doc = json.loads(
             (tmp_path / "decision-critic-adjustments.json").read_text()
         )
-        doc["adjustments"][0]["applied"] = True
+        entry = doc["adjustments"][0]
+        entry.update({
+            "rejected": True,
+            "rejection_reason": "The spot-check refuted this proposal.",
+            "spot_check": "refuted",
+        })
         (tmp_path / "decision-critic-adjustments.json").write_text(
             json.dumps(doc)
         )
         ledger = json.loads((tmp_path / "review-findings.json").read_text())
-        ledger[APPLIED_IDS_KEY] = [{
-            "adjustment_id": doc["adjustments"][0]["adjustment_id"],
-            "spot_check": doc["adjustments"][0]["spot_check"],
+        ledger[REJECTED_ADJUSTMENTS_KEY] = [{
+            "adjustment_id": entry["adjustment_id"],
+            "action": entry["action"],
+            "target": entry["target"],
+            "spot_check": entry["spot_check"],
+            "rejection_reason": entry["rejection_reason"],
         }]
         write_findings(str(tmp_path), ledger)
         apply_adjustments(str(tmp_path))
@@ -3140,7 +3298,7 @@ class TestLedgerVerdictRecompute:
         _write_findings(
             tmp_path,
             [advisory, _finding("f2", "low")],
-            verdict="request_changes",
+            verdict="approve",
         )
         _write_adjustments(tmp_path, [{
             "action": "correct", "target": {"kind": "finding", "id": "f2"},
@@ -3192,11 +3350,10 @@ class TestLedgerVerdictRecompute:
         assert data["verdict"] == "comment"
         assert data["verdict_before_adjustments"] == "request_changes"
 
-    def test_a_batch_that_applies_nothing_leaves_the_verdict_alone(
+    def test_a_stale_ledger_is_refused_before_a_noop_batch(
         self, tmp_path
     ):
-        """Including the stale-but-untouched case: nothing applied means
-        nothing was recomputed, and no audit trail is fabricated."""
+        """The reader boundary refuses stale verdicts before any consumer."""
         _write_findings(tmp_path, [_finding("f1", "high")],
                         verdict="deliberately-stale")
         _write_adjustments(tmp_path, [{
@@ -3208,10 +3365,12 @@ class TestLedgerVerdictRecompute:
             "adjustment_id": "landed", "spot_check": "not_checked",
         }]
         write_findings(str(tmp_path), ledger)
-        apply_adjustments(str(tmp_path))
-        data = json.loads((tmp_path / "review-findings.json").read_text())
-        assert data["verdict"] == "deliberately-stale"
-        assert "verdict_before_adjustments" not in data
+        before = (tmp_path / "review-findings.json").read_bytes()
+
+        with pytest.raises(ValueError, match="verdict does not match"):
+            apply_adjustments(str(tmp_path))
+
+        assert (tmp_path / "review-findings.json").read_bytes() == before
 
     def test_an_unchanged_verdict_records_no_audit_trail(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1", "high"),
@@ -4269,8 +4428,11 @@ class TestAdjudicationRequest:
 
 class TestAuthoritativeLedgerApplicationState:
     def _write_settled_entry(self, tmp_path, entry, **ledger_extra):
+        ledger_finding = ledger_extra.pop(
+            "_ledger_finding", _finding("f1", "high")
+        )
         _write_findings(
-            tmp_path, [_finding("f1", "high")], **ledger_extra
+            tmp_path, [ledger_finding], **ledger_extra
         )
         _write_adjustments(tmp_path, [entry])
         adj_path = tmp_path / "decision-critic-adjustments.json"
@@ -4337,6 +4499,12 @@ class TestAuthoritativeLedgerApplicationState:
         assert tuple(path.read_bytes() for path in paths) == before
 
     def test_catch_up_rejects_a_spot_check_mismatch(self, tmp_path):
+        landed = _finding("f1", "low")
+        landed["critic_adjustment"] = {
+            "action": "demote",
+            "rationale": "Guarded upstream.",
+            "prior": {"severity": "high"},
+        }
         paths = self._write_settled_entry(
             tmp_path,
             {
@@ -4350,6 +4518,8 @@ class TestAuthoritativeLedgerApplicationState:
             applied_critic_adjustments=[{
                 "adjustment_id": "state-three", "spot_check": "not_checked",
             }],
+            _ledger_finding=landed,
+            verdict_before_adjustments="request_changes",
         )
         before = tuple(path.read_bytes() for path in paths)
 

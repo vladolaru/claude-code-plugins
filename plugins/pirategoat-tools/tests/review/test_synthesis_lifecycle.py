@@ -22,13 +22,34 @@ TESTS_DIR = Path(__file__).resolve().parent.parent
 PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
+sys.path.insert(0, str(TESTS_DIR))
 
+from helpers.review_fixtures import canonical_review_document
 from review import critic_adjustments
 from review import synthesis_lifecycle as lifecycle
 from review.atomic_io import atomic_write_json
 
 
 T0 = datetime(2026, 8, 19, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def _canonical_findings():
+    review = canonical_review_document("reconciliator")
+    review["meta"]["reconciliation"] = {
+        "input_finding_count": 0,
+        "contributing_agent_count": 0,
+        "grouped_concern_count": 0,
+        "false_positive_finding_count": 0,
+        "out_of_scope_finding_count": 0,
+        "verified_finding_count": 0,
+        "deduplication_ratio": 1.0,
+        "not_applicable_agent_count": 0,
+        "not_applicable_agents": [],
+        "reviewing_agents": [],
+        "dispatched_agents": [],
+        "missing_agents": None,
+    }
+    return review
 
 
 def _marker(out, name):
@@ -483,7 +504,7 @@ class TestStepTenDispatchMarker:
         row, rather than a row claiming it finished instantly."""
         from review.critic_adjustments import write_findings
 
-        write_findings(str(out), {"verdict": "approve", "findings": []})
+        write_findings(str(out), _canonical_findings())
         state = {}
         orchestration_mod._orchestrate_step_10(
             "full", {"quick": True}, state, {}, str(out)
@@ -550,7 +571,7 @@ class TestStepTenRedispatchStartsFreshAttempt:
         from review.critic_adjustments import write_findings
 
         lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
-        write_findings(str(out), {"verdict": "approve", "findings": []})
+        write_findings(str(out), _canonical_findings())
         _set_mtime(out / "review-findings.json", T0 + timedelta(seconds=41))
 
         state = {}
@@ -604,7 +625,7 @@ class TestStepNineObservation:
         from review.critic_adjustments import write_findings
 
         lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
-        write_findings(str(out), {"verdict": "approve", "findings": []})
+        write_findings(str(out), _canonical_findings())
         _set_mtime(out / "review-findings.json", T0 + timedelta(seconds=41))
 
         orchestration_mod._orchestrate_step_9("full", {}, {}, {}, str(out))
@@ -645,7 +666,7 @@ class TestStepElevenObservation:
         from review.critic_adjustments import write_findings
 
         lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
-        write_findings(str(out), {"verdict": "approve", "findings": []})
+        write_findings(str(out), _canonical_findings())
         _set_mtime(out / "review-findings.json", T0 + timedelta(seconds=41))
 
         orchestration_mod._orchestrate_step_11("pr", {}, {}, {}, str(out))

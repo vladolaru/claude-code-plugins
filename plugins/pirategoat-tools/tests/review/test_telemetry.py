@@ -82,6 +82,27 @@ def _write_coverage_inputs(output_dir, changed, reviewable, agents):
     }))
 
 
+def _canonical_findings_ledger(severities=()):
+    """Return one complete reconciler ledger for telemetry consumers."""
+    ledger = canonical_review_document("reconciliator", severities)
+    count = len(severities)
+    ledger["meta"]["reconciliation"] = {
+        "input_finding_count": count,
+        "contributing_agent_count": 1 if count else 0,
+        "grouped_concern_count": count,
+        "false_positive_finding_count": 0,
+        "out_of_scope_finding_count": 0,
+        "verified_finding_count": count,
+        "deduplication_ratio": 0.0 if count else 1.0,
+        "not_applicable_agent_count": 0,
+        "not_applicable_agents": [],
+        "reviewing_agents": ["security-reviewer"],
+        "dispatched_agents": ["security-reviewer"],
+        "missing_agents": [],
+    }
+    return ledger
+
+
 # ── start() ─────────────────────────────────────────────────────────
 
 
@@ -2680,7 +2701,7 @@ class TestSnapshot:
         """review-findings.json is reconciled output, not an agent result."""
         log_dir = tmp_path / "logs"
         (output_dir / "review-findings.json").write_text(json.dumps(
-            {"verdict": "comment", "findings": [{"severity": "high"}]}
+            _canonical_findings_ledger(["medium"])
         ))
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
         t.start(pr_number="42")
@@ -2692,35 +2713,27 @@ class TestSnapshot:
 
     def test_extracts_findings(self, mod, output_dir, tmp_path):
         log_dir = tmp_path / "logs"
-        findings = {
-            "verdict": "comment",
-            "findings": [
-                {"severity": "high", "title": "Real issue"},
-                {"severity": "medium", "title": "Minor issue"},
-                {"severity": "low", "title": "Nit"},
-            ],
-        }
+        findings = _canonical_findings_ledger(["high", "medium", "low"])
         (output_dir / "review-findings.json").write_text(json.dumps(findings))
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
         t.start(pr_number="42")
         t.finalize(step=15, phase="OUTPUT", title="Present Results")
         events = _read_events(t.log_path)
         f = events[-1]["snapshot"]["findings"]
-        assert f["verdict"] == "comment"
+        assert f["verdict"] == "request_changes"
         assert f["final_finding_count"] == 3
         assert f["severities"]["high"] == 1
 
     def test_findings_measurement_reaches_summary_and_manifest(
         self, mod, output_dir, tmp_path
     ):
-        findings = {
-            "verdict": "approve",
-            "summary": {
-                "suppressed_advisory_finding_count": 1,
-                "verdict_without_advisory": "block",
-            },
-            "findings": [{"severity": "critical", "channel": "advisory"}],
-        }
+        findings = _canonical_findings_ledger(["critical"])
+        findings["findings"][0]["channel"] = "advisory"
+        findings["verdict"] = "approve"
+        findings["summary"].update({
+            "suppressed_advisory_finding_count": 1,
+            "verdict_without_advisory": "block",
+        })
         (output_dir / "review-findings.json").write_text(json.dumps(findings))
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(tmp_path / "logs"))
         t.start(pr_number="42")
@@ -2752,8 +2765,7 @@ class TestSnapshot:
 
         findings = t._extract_findings()
 
-        assert "suppressed_advisory_finding_count" not in findings
-        assert "verdict_without_advisory" not in findings
+        assert findings is None
 
     def test_findings_preserve_count_but_reject_impossible_counterfactual(
         self, mod, output_dir, tmp_path
@@ -2770,8 +2782,7 @@ class TestSnapshot:
 
         findings = t._extract_findings()
 
-        assert findings["suppressed_advisory_finding_count"] == 1
-        assert "verdict_without_advisory" not in findings
+        assert findings is None
 
     def test_omits_missing_snapshot_sections(self, telemetry):
         """Snapshot keys are absent when source files don't exist."""
@@ -3248,14 +3259,18 @@ class TestReviewVocabularyManifestProjection:
             "false_positive_finding_count": 1,
             "out_of_scope_finding_count": 0,
             "verified_finding_count": 1,
-            "deduplication_ratio": 1 / 3,
+            "deduplication_ratio": 0.33,
             "not_applicable_agent_count": 0,
         }
-        (output_dir / "review-findings.json").write_text(json.dumps({
-            "verdict": "comment",
-            "findings": [{"severity": "medium"}],
-            "meta": {"reconciliation": reconciliation},
-        }))
+        ledger = _canonical_findings_ledger(["medium"])
+        ledger["meta"]["reconciliation"] = {
+            **reconciliation,
+            "not_applicable_agents": [],
+            "reviewing_agents": ["security-reviewer"],
+            "dispatched_agents": ["security-reviewer"],
+            "missing_agents": [],
+        }
+        (output_dir / "review-findings.json").write_text(json.dumps(ledger))
         telemetry = mod.ReviewTelemetry(
             str(output_dir), log_dir=str(tmp_path / "logs")
         )

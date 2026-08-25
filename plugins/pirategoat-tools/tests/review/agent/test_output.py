@@ -33,6 +33,7 @@ from review.agent.output import (
     ReviewOutputBuilder,
     finalize_review,
     materialize_markdown,
+    render_draft_index,
     render_markdown,
 )
 from review.reviewer_lifecycle import ReviewPaths
@@ -94,6 +95,38 @@ def test_accounting_reads_follow_the_bound_review_paths(
     assert saved["draft"] == paths.draft
     assert Path(paths.draft).is_file()
     assert "target ~80 tool calls" in capsys.readouterr().out
+
+
+def test_draft_index_carries_locations_and_every_reviewed_file_claim():
+    builder = ReviewOutputBuilder(pr_id="42", reviewer="security")
+    builder.add_finding(
+        "high", "Missing authorization", "src/auth.py", "d", "r", line=42
+    )
+    builder.add_finding(
+        "medium", "Missing coverage", "tests/test_auth.py", "d", "r",
+        line=None,
+    )
+    builder.reviewed_file_claims = ["src/service.py", "tests/test_service.py"]
+
+    index = render_draft_index(builder.to_dict())
+
+    assert 'finding f1: high "Missing authorization" @ src/auth.py:42' in index
+    assert (
+        'finding f2: medium "Missing coverage" '
+        '@ tests/test_auth.py (file scope)' in index
+    )
+    assert "reviewed-file claims 2" in index
+    assert "reviewed-file claim: src/service.py" in index
+    assert "reviewed-file claim: tests/test_service.py" in index
+
+
+def test_draft_index_reports_zero_claims_without_claim_entries():
+    index = render_draft_index(
+        ReviewOutputBuilder(pr_id="42", reviewer="security").to_dict()
+    )
+
+    assert "reviewed-file claims 0" in index
+    assert "reviewed-file claim:" not in index
 
 
 # =============================================================================

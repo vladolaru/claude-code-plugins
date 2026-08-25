@@ -24,6 +24,10 @@ SCRIPT = SCRIPTS_DIR / "review" / "findings_save.py"
 
 def _valid_findings(**overrides):
     doc = {
+        "pr_id": "42",
+        "reviewer": "reconciliator",
+        "timestamp": "2026-08-26T10:00:00+00:00",
+        "plugin_version": "1.114.0",
         "schema": 2,
         "verdict": "request_changes",
         "findings": [
@@ -47,6 +51,15 @@ def _valid_findings(**overrides):
             "suppressed_advisory_finding_count": 0,
         },
         "assessment": "One high-severity finding found.",
+        "review_claimable_files": ["src/foo.php"],
+        "reviewed_file_claims": ["src/foo.php"],
+        "unclaimed_review_files": [],
+        "inline_diff_file_count": 0,
+        "review_accounted_file_count": 1,
+        "in_scope_review_file_count": 1,
+        "observations": None,
+        "recommendations": None,
+        "positive_observations": None,
         "checks": [
             {
                 "id": "c1",
@@ -56,64 +69,44 @@ def _valid_findings(**overrides):
                 "source_reviewers": ["security"],
             },
         ],
-        "meta": {"next_finding_number": 2, "next_check_number": 2},
-    }
-    doc.update(overrides)
-    if "meta" not in overrides:
-        findings = doc.get("findings")
-        checks = doc.get("checks")
-        doc["meta"] = {
-            "next_finding_number": (
-                len(findings) + 1 if isinstance(findings, list) else 2
-            ),
-            "next_check_number": (
-                len(checks) + 1 if isinstance(checks, list) else 2
-            ),
-        }
-    return doc
-
-
-def _valid_schema2_findings(**overrides):
-    doc = {
-        "schema": 2,
-        "verdict": "request_changes",
-        "findings": [
-            {
-                "id": "f1",
-                "category": "security",
-                "severity": "high",
-                "title": "Unsanitized input",
-                "description": "User input reaches the query unsanitized.",
-                "file": "src/foo.php",
-                "line": 42,
-                "recommendation": "Sanitize before use.",
-                "confidence": 0.9,
-            },
-        ],
-        "summary": {
-            "total_findings": 1,
-            "by_severity": {
-                "critical": 0, "high": 1, "medium": 0, "low": 0, "info": 0,
-            },
-            "suppressed_advisory_finding_count": 0,
-        },
-        "assessment": "One high-severity finding remains.",
-        "checks": [
-            {
-                "id": "c1",
-                "question": "Are there any safe call sites?",
-                "method": "Read every caller.",
-                "result": "No.",
-                "source_reviewers": ["security"],
-            },
-        ],
         "meta": {
+            "review_duration_ms": 10,
+            "confidence_score": 0.9,
             "next_finding_number": 2,
             "next_check_number": 2,
         },
     }
+    meta_override = overrides.pop("meta", None)
     doc.update(overrides)
+    findings = doc.get("findings")
+    checks = doc.get("checks")
+    finding_count = len(findings) if isinstance(findings, list) else 0
+    check_count = len(checks) if isinstance(checks, list) else 0
+    doc["meta"].update({
+        "next_finding_number": finding_count + 1,
+        "next_check_number": check_count + 1,
+        "reconciliation": {
+            "input_finding_count": finding_count,
+            "contributing_agent_count": 1 if finding_count else 0,
+            "grouped_concern_count": finding_count,
+            "false_positive_finding_count": 0,
+            "out_of_scope_finding_count": 0,
+            "verified_finding_count": finding_count,
+            "deduplication_ratio": 0.0 if finding_count else 1.0,
+            "not_applicable_agent_count": 0,
+            "not_applicable_agents": [],
+            "reviewing_agents": ["security-reviewer"],
+            "dispatched_agents": ["security-reviewer"],
+            "missing_agents": [],
+        },
+    })
+    if meta_override is not None:
+        doc["meta"].update(meta_override)
     return doc
+
+
+def _valid_schema2_findings(**overrides):
+    return _valid_findings(**overrides)
 
 
 class TestFindingsSave:
@@ -139,7 +132,7 @@ class TestFindingsSave:
         saved = json.loads((tmp_path / "review-findings.json").read_text())
         assert saved["findings"][0]["id"] == "f1"
         assert saved["checks"][0]["source_reviewers"] == ["security"]
-        assert saved["assessment"] == "One high-severity finding remains."
+        assert saved["assessment"] == "One high-severity finding found."
         assert saved["schema"] == 2
         assert "issues" not in saved
         assert "clearances" not in saved
@@ -223,7 +216,7 @@ class TestFindingsSave:
         result = self._run_save(tmp_path, findings)
 
         assert result.returncode != 0
-        assert "suppressed_advisory_finding_count" in result.stdout
+        assert "summary does not match" in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
 
     def test_valid_findings_saved_atomically(self, tmp_path):
@@ -324,7 +317,7 @@ class TestFindingsSave:
 
         assert result.returncode != 0
         assert "REJECTED" in result.stdout
-        assert "does not match the findings-derived verdict" in result.stdout
+        assert "verdict does not match its findings" in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
 
     def test_rejects_uppercase_verdict(self, tmp_path):
@@ -386,6 +379,7 @@ class TestFindingsSave:
     def test_accepts_null_line_for_file_scoped_issue(self, tmp_path):
         doc = _valid_findings()
         doc["findings"][0]["line"] = None
+        doc["findings"][0]["scope"] = "file"
         findings = self._write_findings(tmp_path, doc)
 
         result = self._run_save(tmp_path, findings)

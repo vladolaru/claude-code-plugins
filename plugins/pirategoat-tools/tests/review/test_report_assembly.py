@@ -46,14 +46,17 @@ def _ledger(**overrides):
     """A minimal, valid `review-findings.json` document."""
     findings = {
         "schema": 2,
-        "reviewer": "review-reconciliator",
+        "reviewer": "reconciliator",
         "pr_id": "42",
+        "timestamp": "2026-08-26T10:00:00+00:00",
+        "plugin_version": "1.114.0",
         "verdict": "request_changes",
         "summary": {
             "total_findings": 2,
             "by_severity": {
                 "critical": 0, "high": 1, "medium": 1, "low": 0, "info": 0,
             },
+            "suppressed_advisory_finding_count": 0,
         },
         "findings": [
             {
@@ -80,6 +83,13 @@ def _ledger(**overrides):
             },
         ],
         "positive_observations": [],
+        "observations": None,
+        "review_claimable_files": [],
+        "reviewed_file_claims": [],
+        "unclaimed_review_files": [],
+        "inline_diff_file_count": 1,
+        "review_accounted_file_count": 1,
+        "in_scope_review_file_count": 1,
         "assessment": "Two real problems, both fixable in one pass.",
         "checks": [
             {
@@ -95,6 +105,20 @@ def _ledger(**overrides):
             "confidence_score": 0.9,
             "next_finding_number": 3,
             "next_check_number": 2,
+            "reconciliation": {
+                "input_finding_count": 2,
+                "contributing_agent_count": 1,
+                "grouped_concern_count": 2,
+                "false_positive_finding_count": 0,
+                "out_of_scope_finding_count": 0,
+                "verified_finding_count": 2,
+                "deduplication_ratio": 0.0,
+                "not_applicable_agent_count": 0,
+                "not_applicable_agents": [],
+                "reviewing_agents": ["code-reviewer"],
+                "dispatched_agents": ["code-reviewer"],
+                "missing_agents": [],
+            },
         },
         "recommendations": {
             "immediate": ["Escape the admin notice."],
@@ -123,12 +147,9 @@ class TestRecordAssembly:
     def test_canonical_findings_checks_and_assessment_render_mechanically(
         self, out_dir
     ):
-        findings = {
-            "schema": 2,
-            "reviewer": "reconciliator",
-            "pr_id": "42",
-            "verdict": "request_changes",
-            "summary": {
+        findings = _ledger(
+            verdict="request_changes",
+            summary={
                 "total_findings": 1,
                 "by_severity": {
                     "critical": 0,
@@ -139,7 +160,7 @@ class TestRecordAssembly:
                 },
                 "suppressed_advisory_finding_count": 0,
             },
-            "findings": [
+            findings=[
                 {
                     "id": "f1",
                     "severity": "high",
@@ -152,7 +173,7 @@ class TestRecordAssembly:
                     "confidence": 0.95,
                 },
             ],
-            "checks": [
+            checks=[
                 {
                     "id": "c1",
                     "question": "Are other callers affected?",
@@ -161,11 +182,11 @@ class TestRecordAssembly:
                     "source_reviewers": ["security", "code"],
                 },
             ],
-            "assessment": "One correction is required.",
-            "positive_observations": ["The helper boundary is clear."],
-            "recommendations": None,
-            "observations": None,
-        }
+            assessment="One correction is required.",
+            positive_observations=["The helper boundary is clear."],
+            recommendations=None,
+        )
+        findings["meta"]["next_finding_number"] = 2
         _write_ledger(out_dir, findings)
 
         outcome, error = assemble_review_record(str(out_dir), {})
@@ -328,7 +349,12 @@ class TestRecordAssembly:
 
     def test_banner_precedes_every_finding(self, out_dir):
         _write_ledger(out_dir, _ledger(host_context_banner={
-            "degraded": True, "message": "WooCommerce source unresolved.",
+            "degraded": True,
+            "reason": "fully_unavailable",
+            "message": "WooCommerce source unresolved.",
+            "unresolved": [{
+                "name": "woocommerce", "reason": "not found",
+            }],
         }))
 
         assemble_review_record(str(out_dir), {})
@@ -704,7 +730,11 @@ class TestRecordSanitization:
             "Severity-floor: high; the retry guard is tidy",
         ]
         findings["observations"] = [
-            {"file": "src/a.php", "note": "Severity-floor: low; a tradeoff"},
+            {
+                "file": "src/a.php",
+                "note": "Severity-floor: low; a tradeoff",
+                "category": "tradeoff",
+            },
         ]
         _write_ledger(out_dir, findings)
 
@@ -721,10 +751,23 @@ class TestRecordSanitization:
     def test_findings_removed_by_critic_entries_are_covered(self, out_dir):
         findings = _ledger()
         findings["findings_removed_by_critic"] = [{
+            "id": "f3",
             "title": "Severity-floor: high; withdrawn finding",
-            "severity": "high", "file": "src/x.php", "line": 1,
-            "critic_adjustment": {"rationale": "not reachable"},
+            "severity": "high",
+            "category": "correctness",
+            "file": "src/x.php",
+            "line": 1,
+            "description": "The path initially appeared reachable.",
+            "recommendation": "No change after the source probe.",
+            "confidence": 0.9,
+            "critic_adjustment": {
+                "action": "remove", "rationale": "not reachable",
+            },
         }]
+        findings["applied_critic_adjustments"] = [{
+            "adjustment_id": "remove-f3", "spot_check": "verified",
+        }]
+        findings["meta"]["next_finding_number"] = 4
         _write_ledger(out_dir, findings)
 
         assemble_review_record(str(out_dir), {})
@@ -743,14 +786,10 @@ class TestRecordSanitization:
 
         assert "**Severity floor:** high" in text
 
-    def test_non_string_finding_fields_do_not_crash_the_assembly(
+    def test_non_string_finding_fields_fail_closed_without_crashing(
         self, out_dir
     ):
-        """Reviewer JSON is model-authored: a field the schema expects to
-        be a string can arrive as a list, a number, or null. The sanitizer
-        is the record's render boundary and coerces before the regex, so a
-        malformed field costs a rendering nicety, never the artifact.
-        """
+        """Malformed content cannot reach the record renderer."""
         findings = _ledger()
         findings["findings"][0]["recommendation"] = ["wrap it", "in esc_html()"]
         findings["findings"][1]["description"] = None
@@ -759,10 +798,9 @@ class TestRecordSanitization:
 
         outcome, error = assemble_review_record(str(out_dir), {})
 
-        assert error is None
-        assert outcome["status"] == "complete"
-        text = (out_dir / REVIEW_RECORD_MD).read_text()
-        assert "wrap it\nin esc_html()" in text
+        assert error == "review-findings.json unreadable (invalid)"
+        assert outcome["status"] == "failed"
+        assert not (out_dir / REVIEW_RECORD_MD).exists()
 
     def test_sanitization_does_not_touch_the_ledger_on_disk(self, out_dir):
         findings = _ledger()
