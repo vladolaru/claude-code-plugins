@@ -29,7 +29,7 @@ _spec.loader.exec_module(_mod)
 
 main = _mod.main
 SNAPSHOT_FILENAME = _mod.SNAPSHOT_FILENAME
-# The MANIFEST's own schema (telemetry's `EVENT_SCHEMA`, currently 2) — a
+# The MANIFEST's own schema (telemetry's `EVENT_SCHEMA`, currently 3) — a
 # different number from `SNAPSHOT_SCHEMA` above, which stamps
 # usage-snapshot.json instead. Read through the same exact-path contract
 # seam usage_snapshot.py itself uses, so a future EVENT_SCHEMA bump can

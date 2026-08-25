@@ -854,7 +854,7 @@ class TestToMarkdown:
 
     def test_info_findings_render_in_markdown(self):
         """Info findings count toward total_findings, so Markdown must show them —
-        omitting them reports 'Total Issues: 1' with no visible finding."""
+        omitting them reports `Total Findings: 1` with no visible finding."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
         b.add_finding("info", "Anchored info finding", "a.py", "desc", "rec", line=3)
         md = b.to_markdown()
@@ -1171,11 +1171,11 @@ class TestSaveDraft:
 
 
 # =============================================================================
-# TestFileScopedIssues
+# TestFileScopedFindings
 # =============================================================================
 
 
-class TestFileScopedIssues:
+class TestFileScopedFindings:
     """line=None records a first-class file-scoped finding (no silent demotion).
 
     Some finding classes are line-less BY NATURE — missing test coverage,
@@ -1358,13 +1358,13 @@ class TestReviewedFileClaims:
         with pytest.raises(ValueError, match="at least one file path"):
             b.claim_files_reviewed()
 
-    def test_claim_in_deferred_set_accepted(self, tmp_path, monkeypatch):
+    def test_claim_in_claimable_set_accepted(self, tmp_path, monkeypatch):
         self._arm_accounting_input(tmp_path, monkeypatch, ["src/claimable.py"])
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         b.claim_files_reviewed("./src/claimable.py")  # normalized first
         assert b.reviewed_file_claims == ["src/claimable.py"]
 
-    def test_claim_outside_deferred_set_rejected_at_add(
+    def test_claim_outside_claimable_set_rejected_at_add(
         self, tmp_path, monkeypatch
     ):
         """A claim on a file this review never claimable is rejected."""
@@ -1375,7 +1375,7 @@ class TestReviewedFileClaims:
         with pytest.raises(ValueError, match="claim"):
             b.claim_files_reviewed("src/emails.py")
 
-    def test_empty_deferred_set_rejects_every_claim(
+    def test_empty_claimable_set_rejects_every_claim(
         self, tmp_path, monkeypatch
     ):
         """The empty-set branch explains that no claim can be made."""
@@ -1895,7 +1895,7 @@ class TestAdvisoryChannel:
 
 
 # =============================================================================
-# TestSaveTimeDeferredValidation
+# TestSaveTimeClaimValidation
 # =============================================================================
 
 
@@ -2200,7 +2200,7 @@ class TestDraftFileGapReceipt:
         with pytest.raises(ValueError, match="schema must be 3"):
             _save_draft(builder, tmp_path)
 
-    def test_next_unread_omitted_only_when_every_deferred_file_is_claimed(
+    def test_next_unread_omitted_only_when_every_claimable_file_is_claimed(
         self, tmp_path, monkeypatch, capsys
     ):
         """Only a positive claim removes a file from NEXT UNREAD. With every
@@ -3013,7 +3013,7 @@ class TestRemovedByCriticSection:
             "file": "b.py", "line": 12, "description": "d",
             "recommendation": "r",
         }]))
-        assert "## High Issues" not in rendered
+        assert "## High Findings" not in rendered
 
 
 # =============================================================================

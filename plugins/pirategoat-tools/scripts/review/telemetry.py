@@ -143,7 +143,9 @@ def _advisory_measurement(data: Any) -> Dict[str, Any]:
             or suppressed < 0):
         return {}
 
-    measurement: Dict[str, Any] = {"advisory_suppressed": suppressed}
+    measurement: Dict[str, Any] = {
+        "suppressed_advisory_finding_count": suppressed,
+    }
     verdict = data.get("verdict")
     verdict_without_advisory = summary.get("verdict_without_advisory")
     if (
@@ -1236,9 +1238,9 @@ class ReviewTelemetry:
             summary["final_verdict"] = findings.get("verdict")
             summary["final_finding_count"] = findings.get("final_finding_count")
             summary["final_severities"] = findings.get("severities")
-            if "advisory_suppressed" in findings:
-                summary["final_advisory_suppressed"] = (
-                    findings["advisory_suppressed"]
+            if "suppressed_advisory_finding_count" in findings:
+                summary["final_suppressed_advisory_finding_count"] = (
+                    findings["suppressed_advisory_finding_count"]
                 )
             if "verdict_without_advisory" in findings:
                 summary["final_verdict_without_advisory"] = (

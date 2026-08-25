@@ -35,9 +35,11 @@ tests/
 │   ├── test_report_assembly.py       # review-record.md assembler tests
 │   ├── test_registry_docs.py         # AGENTS.md registry reference pinned to the registry
 │   ├── test_review_config.py         # Repo-contributed review config loader tests
+│   ├── test_reviewer_lifecycle.py    # Mutable draft, intake close, immutable finalization tests
 │   ├── test_synthesis_lifecycle.py   # Reconciliator/critic lifecycle measurement
 │   ├── test_telemetry.py             # Telemetry logging + manifest-section tests
 │   ├── test_user_settings.py         # Requester-side machine-local settings tests
+│   ├── test_verdict_rules.py         # Shared finding-severity verdict ladder tests
 │   ├── test_workspace_setup.py       # Workspace setup tests
 │   └── agent/                        # Tests for scripts/review/agent/
 │       ├── test_bootstrap.py         # Bootstrap unit tests (direct imports)
@@ -60,6 +62,8 @@ tests/
 │   ├── test_loop.py                  # Review loop tests
 │   └── test_telemetry.py            # Iterative review telemetry tests
 ├── analysis/                         # Tests for scripts/analysis/
+│   ├── test_codex_rollout.py         # Codex rollout parsing tests
+│   ├── test_codex_session_scripts.py # Codex session analyzer/metrics CLI tests
 │   ├── test_review_run_metrics.py    # review_run_metrics.py / review_metrics/ package tests
 │   ├── test_review_transcript.py     # Privacy-preserving transcript enrichment tests
 │   ├── test_session_analyzer.py      # Session analyzer tests
@@ -186,50 +190,78 @@ Deterministic pytest suite that validates structural properties of command files
 
 ### ReviewOutputBuilder Unit Tests (`review/agent/test_output.py`)
 
-Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/output.py`. Tests cover initialization, issue addition with validation, recommendations, verdict calculation, serialization (dict, markdown), file output, the NOT DIFFED coverage APIs, advisory-channel accounting, and the reconciliator-facing rendering this class grew once `review-findings.md` became a mechanical render of the JSON (Task 7) rather than reconciliator-written prose.
+Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/output.py`. Tests cover the schema-2 findings/checks/assessment domain, mutable whole-state drafts, the six canonical reviewed-file accounting fields, verdict derivation, and the shared JSON-to-Markdown projection.
 
 | Class | What it verifies |
 |---|---|
-| `TestAddIssue` | Returns 8-char ID, stores all fields, severity case-insensitive, invalid severity raises, confidence boundaries, extra kwargs, defaults |
-| `TestAddClearance` | `add_clearance()` records auditable "nothing depends on this" claims |
+| `TestFindingAndCheckDomainModel` | Stable `fN`/`cN` IDs, non-recycling counters, exact check shape, and absence of every retired field/API |
+| `TestAddFinding` | Finding field validation, severity normalization, advisory vocabulary, stable IDs, and file/line invariants |
+| `TestRecordCheck` | Material checks record `question`, `method`, `result`, and `source_reviewers` without affecting verdicts |
 | `TestAddRecommendation` | Valid priorities store, invalid silently ignored, multiple per bucket |
-| `TestNonStringFieldCoercion` | `add_issue()` coerces free-form text fields to strings rather than rejecting non-string input |
+| `TestNonStringFieldCoercion` | Finding/check free-form text fields coerce to strings where the runtime contract permits |
 | `TestSetConfidence` | Valid range works, invalid raises ValueError |
-| `TestAddToolResult` | Stores tool names, deduplicates |
+| `TestRemovedToolMetadata` | Reviewer artifacts expose no tool-result metadata API or field |
 | `TestCalculateVerdict` | All 9 verdict boundaries (approve/comment/request_changes/block) |
-| `TestToDict` | All top-level keys, severity counts, meta structure, empty accounting placeholders before publication, `schema: 2`, and `plugin_version` resolution — envelope variable first, then the run-config stamp for envelope-bypassing callers, null when neither is readable |
-| `TestToMarkdown` | Header format, issues grouped by severity, positive observations |
+| `TestToDict` | Exact schema-2 top-level shape, summary, counters, accounting placeholders before publication, and plugin-version resolution |
+| `TestToMarkdown` | Header format, findings grouped by severity, checks, assessment, and positive observations |
 | `TestRenderMarkdown` | Markdown is a pure function of the canonical JSON dict — same dict in, same Markdown out |
 | `TestMaterializeMarkdown` | The on-demand `materialize` CLI/function reads finalized canonical JSON and writes its derived Markdown |
-| `TestSave` | `save_draft()` publishes a replaceable draft JSON, echoes its exact digest-bound finalization command, and returns the draft path, digest, and command; it never publishes final JSON or Markdown |
-| `TestFileScopedIssues` | `line=None` records a first-class file-scoped issue (`scope: "file"`) that still counts toward the verdict — no silent demotion |
+| `TestSaveDraft` | `save_draft()` atomically replaces the complete mutable draft, emits exact totals/change receipt/finalization command, and never publishes final JSON or Markdown |
+| `TestFileScopedFindings` | `line=None` records a first-class file-scoped finding (`scope: "file"`) that still counts toward the verdict |
 | `TestLineRequired` | Invalid line values still raise for point defects — the file-scoped path never becomes a way to skip validation |
 | `TestAddObservation` | `add_observation()` stores file-level notes outside the finding pipeline, in insertion order |
 | `TestReviewedFileClaims` | Explicit positive claims of review-claimable files actually read: canonical path grammar, add-time membership validation against the authoritative accounting input, no verdict effect, all-or-nothing claim/retraction batches, and duplicate/already-recorded dedup semantics |
 | `TestNotApplicable` | `mark_not_applicable()` produces a `not_applicable` verdict with `skip_reason`, zero findings |
 | `TestAdvisoryChannel` | Advisory-channel findings are listed but never gate the verdict; entitlement and suppression accounting |
 | `TestDerivedReviewAccounting` | Every draft save derives the six canonical top-level accounting fields from schema-3 input and reviewed-file claims; re-saving recomputes from scratch and finalized JSON preserves the derived values |
-| `TestBudgetTargetEcho` | The call-budget target reaches the reviewer where it can still act on it: `save()` echoes one TARGET line exactly when unclaimed review files remain and the accounting input carries a positive target, and stays silent otherwise |
+| `TestBudgetTargetEcho` | `save_draft()` echoes the call-budget target exactly when canonical accounting still has unclaimed work |
+| `TestDraftFileGapReceipt` | The receipt reports the complete unclaimed population compactly without turning filenames into mutable agent-authored accounting |
 | `TestMetaIsNeverFakeZero` | `review_accounted_file_count` stays top-level and unmeasured until authoritative accounting is supplied, while `meta.review_duration_ms` derives from the actor's dispatch marker — the `<agent>.started` and `<agent>.synthesis-started` families both — with null for a missing, unparsable, or future-stamped marker |
 | `TestTypeScriptContractLockstep` | `schemas/review-output.ts` and the serialized artifact describe one shape: the identity block (`pr_id`/`reviewer`/`timestamp`/`plugin_version`/`schema`) is declared and emitted, the retired `version` field is gone from both, `schema` is typed `number`, and `plugin_version` is typed nullable |
-| `TestNarrativeSummary` | The reconciliator's overall-state prose (`narrative_summary`) gets a structured home in `to_dict()`/`to_markdown()`, including the withdrawn-summary audit record left by an applying critic adjustment |
+| `TestAssessment` | The reconciliator-owned nullable assessment serializes and renders, while raw reviewer use is blocked by protocol and bootstrap contracts |
 | `TestReconciliationSectionsRender` | Every section the reconciliator's old hand-written narrative template carried (recommendations, observations, host context banner, `meta.reconciliation`) now has a rendered home |
 | `TestMaterializeFindingsMarkdown` | One materializer, parameterized — `review-findings.md` and `<reviewer>-review.md` share the same render path, never a second one |
 | `TestAssessmentProvenance` | `## Assessment` is prose about a ledger that keeps changing after critic adjustments — provenance is pinned so a stale claim can't outlive the finding it described |
 | `TestRemovedByCriticSection` | The ledger deliberately keeps what the critic took out, rendered as an audit section rather than silently vanishing |
 | `TestRendererFaithfulness` | Minors that all share one failure mode: the renderer showing content that contradicts what the JSON actually says (e.g. a header claiming a section exists over content that was dropped) |
 
-### Reconciliation Context Tests (`review/test_reconciliation_context.py`)
+### Reviewer Lifecycle Tests (`review/test_reviewer_lifecycle.py`)
 
-Direct unit tests on `scripts/review/reconciliation_context.py` — agent-finding loading, scope and hunk checking, source-snippet extraction, severity normalization, and schema-3 reviewed-file accounting. The module builds `reconciliation-context.json` and nothing else now: its two Markdown renderers (`to_markdown` for the reconciliator, `build_critic_context` for the decision critic) were projections whose only readers were agents, and both are gone — the agents read the JSON, and the decision critic reads `review-record.md` beside it.
+Direct tests for the mutable-draft/immutable-final state machine and schema-2 review-intake boundary.
 
 | Class | What it verifies |
 |---|---|
+| `TestReviewPaths` | One safe reviewer identity maps to exactly one draft, final, and schema-3 accounting-input path |
+| `TestDraftOpenAndReplacement` | `open()` creates or completely rehydrates a draft; optimistic saves reject stale writers and preserve the prior bytes |
+| `TestFinalization` | Only the exact digest printed by `save_draft()` can atomically publish immutable final JSON, and finalization is idempotent only for that same content |
+| `TestReviewIntakeClose` | Synthesis closes schema-2 `review-intake.json`, records finalized and discarded-draft reviewers, and blocks every later save/finalize transition |
+| `TestFinalizationTelemetry` | Draft saves and finalization emit distinct schema-3 lifecycle telemetry without treating a draft as reviewer completion |
+
+### Reconciliation Context Tests (`review/test_reconciliation_context.py`)
+
+Direct unit tests on `scripts/review/reconciliation_context.py` — finalized-review loading, scope and hunk checking, source-snippet extraction, severity normalization, and schema-3 reviewed-file accounting. The module builds schema-3 `reconciliation-context.json` and nothing else now: its two Markdown renderers (`to_markdown` for the reconciliator, `build_critic_context` for the decision critic) were projections whose only readers were agents, and both are gone — the agents read the JSON, and the decision critic reads `review-record.md` beside it.
+
+| Class | What it verifies |
+|---|---|
+| `TestLoadAgentReviews` | Only immutable finalized reviewer JSON enters synthesis; drafts, the reconciled ledger, and pipeline artifacts are excluded |
+| `TestSeverityFloorNormalization` | Reviewer-authored severity-floor prose becomes structured, bounded finding metadata |
+| `TestExtractReferences` | Source references are extracted only from canonical finding fields |
+| `TestReadSourceSnippets` | Repository reads stay bounded, normalized, and honest for missing or binary source |
+| `TestMergeWindows` | Overlapping source windows merge deterministically without losing referenced lines |
+| `TestCheckScope` | File and line scope annotations preserve the finding while describing its diff relationship |
+| `TestFilterInScopeReferences` | In-scope references are selected without mutating the reviewer record |
+| `TestCheckScopeHunkLevel` | Hunk proximity remains a review aid, not an automatic out-of-scope verdict |
+| `TestParseDiffHunks` | Unified-diff hunk ranges and quoted paths parse into deterministic source coordinates |
+| `TestLineNearHunk` | The bounded line-proximity predicate handles absent and malformed line evidence |
+| `TestFindFileHunks` | File lookup distinguishes matching, missing, and metadata-only diff entries |
+| `TestResolveOutputBuilderPath` | The reconciler uses the installed plugin's output authority rather than a reviewed-repo lookalike |
+| `TestFullScript` | The CLI writes exact schema-3 reconciliation context from finalized schema-2 reviews and canonical accounting inputs |
 | `TestAggregateReviewAccounting` | `aggregate_review_accounting()` carries inline-diff receipt, reviewed-file claims, and unclaimed review files per agent through the shared authority; malformed claims receive no credit, and one reviewer's claim cannot conceal another reviewer's unclaimed work |
 | `TestUnscopedFiles` | `unscoped_files` — the changed files no reviewer's scope contained in any form, with the measured-empty case distinct from `None` when no changed-file list was supplied |
 | `TestAgentsReportingCountsAgents` | `scope_reporting_agent_count` counts distinct agent names, not scope-summary files — reviewers with a secondary `-config-ops` summary still count once |
 | `TestMissingAgentDetection` | `compute_missing_agents()` keeps dispatched-minus-reporting a MEASUREMENT rather than the reconciliator's arithmetic — sorted for stable diffs, `None` (never `[]`) when dispatch is unknown, measured-empty for an explicitly empty dispatch, and no negative population from an undispatched reporter. Crossed through the CLI to the JSON both ways |
-| `TestPrefilterAnnotation` | The two structurally-certain out-of-scope statuses are adjudicated by the pipeline and annotated in place, never deleted (`agent_findings` is the record of what each reviewer said, and its metrics are counted from it). `not_in_hunk` is deliberately never annotated — it is the one out-of-scope status that IS a judgment call. Owns the key, so a stale marker on in-scope input is cleared rather than silently deleting a real finding; malformed shapes are skipped, not raised |
+| `TestPrefilterAnnotation` | The two structurally-certain out-of-scope statuses are adjudicated by the pipeline and annotated in place, never deleted (`reviews_by_agent` is the record of what each reviewer said, and its metrics are counted from it). `not_in_hunk` is deliberately never annotated — it is the one out-of-scope status that IS a judgment call. Owns the key, so a stale marker on in-scope input is cleared rather than silently deleting a real finding; malformed shapes are skipped, not raised |
+| `TestReviewStem` | Reviewer artifact stems are derived through the shared trailing-`-reviewer` rule |
 
 ### Review Record Assembly Tests (`review/test_report_assembly.py`)
 
@@ -243,6 +275,7 @@ Direct unit tests on `orchestration.assemble_review_record()` — the machine pr
 | `TestBriefingsAreConstantSize` | Briefings are O(1) in changed-file count while the record is O(n): a 500-file coverage state renders a step-9 briefing under 8KB with all 500 lines in the record, and the briefing is byte-identical at 1 file and at 500. Pins the class of guarantee the record artifact buys, not a single fact about step 9 |
 | `TestRecordFailureModes` | A run with no ledger reports a measured zero, not a failure (that is the degraded path step 9 routes to manual synthesis); an unreadable or shape-invalid ledger reports `failed` with the reason and writes nothing |
 | `TestRecordWriteIsAtomic` | The write goes through `atomic_write_text`, a failing render leaves the previous record byte-identical rather than half-replacing it, and no temp file survives a successful assembly |
+| `TestPreparedReportSourceFingerprint` | The final report binds to the exact settled record, findings ledger, critic state, and coverage source it describes |
 
 ### Critic Adjustments Tests (`review/test_critic_adjustments.py`)
 
@@ -254,26 +287,33 @@ Direct contract tests for the three-owner lifecycle: `critic proposal -> critic.
 | `TestRejectionAudit` | A script-derived refutation lands a `rejected_critic_adjustments` audit record (`adjustment_id`, `action`, `target_id`, `spot_check: refuted`, `rejection_reason`) in `review-findings.json`, where the shared renderer projects it beside applied decisions while the finding itself remains unmodified; retries do not duplicate records, later settlements append, pure refutations report `nothing_pending`, and mixed settlements apply verified or unchecked entries while auditing refuted ones; malformed lifecycle documents are rejected before mutation |
 | `TestCrashSafety` | Application recorded on both sides — stable IDs allocated before proposal publication and the `applied_critic_adjustments` record — so a crash between the findings and applied-flag writes converges without double-applying; duplicate IDs are rejected and no temp file survives either a success or a rejection |
 | `TestProposalPreparation` | Critic proposal validation rejects every lifecycle field, assigns unique stable IDs without mutating temp input, digest-projects only immutable proposal facts, and requires unique IDs in persisted lifecycle documents |
-| `TestAdjudicationRequest` | The exact orchestrator request accepts only verified IDs, refuted IDs with non-empty reasons, and a non-empty revised narrative; omitted committed IDs become `not_checked`, counts are derived, and request, proposal, target, direction/no-op, or ledger validation failures leave proposal and ledger byte-identical because the complete apply plan validates before the checkpoint |
+| `TestAdjudicationRequest` | The exact schema-2 orchestrator request accepts only verified IDs, refuted IDs with non-empty reasons, and an optional non-empty revised assessment; omitted committed IDs become `not_checked`, counts are derived, and request, proposal, target, direction/no-op, or ledger validation failures leave proposal and ledger byte-identical because the complete apply plan validates before the checkpoint |
 | `TestAuthoritativeLedgerApplicationState` | The findings ledger, not mutable proposal flags, proves application: an `applied` flag without matching provenance, contradictory applied/rejected provenance, and spot-check or rejection-record drift all refuse byte-identically, while a legacy rejection record's implied `refuted` outcome remains readable |
 | `TestSourceBindingAndRecovery` | Immutable edits break the verdict marker's proposal digest; a validated plan checkpoints before its ledger writes; a crash at that boundary resumes once; identical retries are byte-stable; different retries refuse; defensive apply records visible `not_checked` provenance; and one output lock spans checkpoint plus apply, including concurrent critic publication |
 | `TestAdjudicationCLI` | `settle` consumes one stdin object and echoes the checkpoint/count/digest/apply contract; exact retries report `ALREADY SETTLED` and `ALREADY APPLIED`; bare implicit apply is retired while explicit `apply` remains available for recovery |
 | `TestBatchCoherence` | All-or-nothing batch validation with nothing written: duplicate targets, an entry targeting a finding an earlier entry removes, an entry with no usable id, an unaddressable finding, an `add` that assigns its own id (both spellings), a pre-existing severity outside the vocabulary, and a findings file that is not a JSON object |
-| `TestAdjustmentsSchemaValidation` | The adjustments doc's own `schema` field is validated, not just taught: `schema: 1` proceeds, `schema: 2` refuses the whole batch naming `schema`, a missing `schema` key refuses with the same message shape rather than defaulting to version 1, `"1"` (string) is not type-coerced into the accepted integer, and a non-object doc (`[]`, `"hello"`, `5`) is diagnosed as a shape error — not a schema error — mirroring `read_findings_file()`'s FINDINGS_READ_NOT_OBJECT handling |
+| `TestValidateProposalInput` | Proposal-only schema validation rejects lifecycle state, malformed target unions, illegal check additions, and actor-authored stable IDs before publication |
+| `TestAdjustmentsSchemaValidation` | The adjustments doc accepts exact integer schema 2 and rejects schema 1, missing, string, boolean, future, and non-object inputs before any ledger mutation |
 | `TestScopeLinePairing` | `scope`/`line` stay the pair `schemas/review-output.ts` declares and `output.py`'s renderer branches on, and patched lines keep the builder's positive 1-indexed invariant |
 | `TestCLI` | The explicit recovery `apply` process contract: exit status plus the stdout/stderr channel split |
 | `TestCriticVerdictGate` | `apply_adjustments()`'s own authority gate, exercised directly and via the CLI subprocess: a missing verdict file, an unparseable one, a present STAND verdict, and three near-miss REVISE spellings (`revise`, ` REVISE `, `REVISE\n`) all refuse with `{"status": "refused", ...}` and write nothing (byte-identical findings, untouched adjustments file) — the gate is exact-match, not case- or whitespace-tolerant; a REVISE verdict proceeds normally; and the CLI exits a distinct nonzero code (`REFUSAL_EXIT_CODE`) on refusal, separate from 0 (success) and 1 (validation/IO error), with the result JSON still reaching stdout |
 | `TestReadCriticVerdict` | The shared reader `read_critic_verdict()` the gate is built on: a missing file, unparseable JSON, a non-object payload, a non-string `verdict` field, and a missing `verdict` key all return `None`; every verdict string on the module's vocabulary (`REVISE`, `STAND`, `ESCALATE`, `SKIPPED`) round-trips as-is |
 | `TestStepElevenAppliesAdjustments` | Step 11 recovers pending REVISE checkpoints before deriving the ledger verdict. If it must create a `defensive_apply` checkpoint, it records stable `critic_adjudication_missing` degradation provenance and never duplicates the public note; malformed or unbound snapshots degrade without mutation, and an unexpected authority refusal remains visible |
-| `TestNarrativeSummaryInvalidation` | The one part of the ledger the critic can invalidate but not correct. `narrative_summary` is ledger-level prose no adjustment addresses, so an applying batch withdraws it: the text moves to `withdrawn_narrative_summary` beside the ids of the decisions that withdrew it (a list, so a second round appends rather than erasing the first), and a batch that applies nothing — refused, settled, or fully rejected — leaves the assessment untouched. A ledger with no summary records no withdrawal rather than a fabricated empty one
-| `TestStepElevenWithdrawsContradictedProse` | The reproduced defect end to end: a critical finding described in the Assessment and demoted by the critic used to render the demotion in the issue list with the stale "one CRITICAL blocker" claim printed directly above it. Step 11 now renders the withdrawal notice instead
+| `TestAssessmentInvalidation` | A real critic mutation invalidates the reconciler's assessment into the append-only `invalidated_assessments` audit; refused, settled, fully refuted, and semantic no-op batches leave it current |
+| `TestStepElevenWithdrawsContradictedProse` | A critical finding described in the assessment and demoted by the critic renders an invalidation notice rather than stale blocker prose above the changed finding |
 | `TestStepElevenRerendersFindingsMarkdown` | Step 11 re-renders `review-findings.md` from the FINAL ledger — after the adjustments apply — so a REVISE demote reaches the Markdown instead of leaving the pre-adjustment severity showing, the field-proven staleness this closes by construction. A render failure is one degradation note and never an exception out of finalize; a run with no ledger renders nothing and adds no note; and `report_path` resolves report → record → findings Markdown, so the run always names the newest complete account it has — including at the normal instant when the report has not been authored yet, which is no longer a degradation
-| `TestCriticInputRoundTrip` | The seam none of the three modules' own tests span: the id the critic can see must resolve in the ledger when step 11 applies it. The critic is handed `review-findings.json` itself now, so the only key its view offers IS the ledger key — and the record is pinned to offer no rival positional handle, which is the gap where an F-label was the critic's only visible id and every REVISE run shipped degraded with "no issue with id 'F1'" |
+| `TestCriticInputRoundTrip` | The stable finding/check ID visible to the critic resolves against the same ledger step 11 mutates; the record offers no rival positional handle |
 | `TestDerivedVerdict` | Step 11 DERIVES the published verdict from `review-findings.json` — the one artifact whose verdict was actually computed from findings — instead of transcribing one out of `review-verdict.json` and syncing it back over the ledger. All FIVE ledger verdicts map (`block` included: it is what any critical finding produces, and omitting it published COMMENT for a critical-finding review), casing and padding are tolerated, and a critic `ESCALATE` overrides to COMMENT while `STAND` does not. Every unusable ledger — absent, non-object, unparseable, null/unknown/missing `verdict` — falls back to COMMENT with `verdict_source` and a degradation note saying so, never a crash and never a confident value. A stale `review-verdict.json` left in the directory cannot reach the published verdict, and finalize no longer writes the ledger at all |
 | `TestCriticAbsenceHonesty` | A critic that was dispatched and produced no usable verdict is a run that lost its stress test; a critic never dispatched is quick mode working as designed. `critic_verdict_for_state()` maps both missing and `SKIPPED` verdicts to `"unavailable"`, so the dispatch marker separates them: quick mode commits `SKIPPED` without a marker and stays silent, while a dispatched missing or unusable verdict appends `critic produced no verdict artifact` and degrades. The missing critique never costs the review the verdict its findings earned |
 | `TestReconciliatorWritePathPin` | Writer #1 is an agent following a Markdown snippet, so a test is the only thing holding it to the sanctioned write path: `agents/review-reconciliator.md` must save through `scripts/review/findings_save.py` (the reconciliator's sibling to `critic.py --save`; see `tests/review/test_findings_save.py`) and must not carry any spelling that writes `review-findings.json` directly, including a direct `write_findings()` call. Drift back to the bare atomic write it carried two commits earlier — or to calling `write_findings()` straight from the snippet, unvalidated — would give the ledger an unvalidated write path again with the rest of the suite green |
-| `TestClearancePassthrough` | The ledger's `clearances` survives every writer after the reconciliator — `apply_adjustments()`, the whole-document `write_findings()`, and the renderer that produces `## Clearances (verified absences)`. The field run only ever carried `clearances: null`, so a write path that quietly dropped unknown-to-it keys would have looked identical |
-| `TestReconciliatorClearancePin` | The same agent-follows-a-snippet problem one field over: `agents/review-reconciliator.md` must teach `add_clearance(claim, method, evidence)`, must exclude void and method-correlated-duplicate clearances from it, and must list it in the structured-home table. Without this the ledger's `clearances` stays null and step 9 rebuilds "what held" from memory |
+| `TestCheckPassthrough` | The ledger's exact check objects survive every writer and the shared renderer without becoming findings or verdict evidence |
+| `TestReconciliatorCheckPin` | The reconciliator prompt records only method-adequate, deduplicated material checks through `record_check()` and preserves their source reviewers |
+| `TestSpotCheckVocabulary` | Spot-check outcomes are exactly `verified`, `refuted`, and `not_checked`, with no stage-local synonyms |
+| `TestSpotCheckRecordedInTheLedger` | Applied and rejected critic decisions carry their adjudicated outcome into ledger provenance and rendering |
+| `TestRevisedAssessment` | Settlement validates a revised assessment, installs it only when an operation really applies, and retains the invalidated predecessor for audit |
+| `TestWithdrawnAssessmentRender` | An invalidated assessment without replacement renders an explicit absence and never republishes retracted prose |
+| `TestLedgerVerdictRecompute` | Applied mutations recompute channel-aware summary counts, advisory suppression, and verdict through the shared verdict authority |
+| `TestSchemaTwoTargetUnion` | Schema-2 proposals target the tagged finding/check union; checks permit correction or removal but never `add` |
 
 ### Orchestration Hygiene Tests (`review/test_orchestration_hygiene.py`)
 
@@ -517,7 +557,7 @@ would be silently inert beside it, and the answer-key guard
 (`grading/test_answer_keys.py`) rejects a key that combines it with any of
 them.
 
-**Report schema** (`--report-out`, dispatch mode only): top-level `mode`,
+**Report shape** (`--report-out`, dispatch mode only): top-level `mode`,
 `trials` (the requested count), and `results[]` with `scenario`, `agent`,
 `trials` (trial attempts run for this entry), `keyed` (whether an answer
 key exists), `status`, `passed`, `checks_run`, `checks_passed`, `failures`,
@@ -538,9 +578,9 @@ evidence — it is deliberately not conflated with never-dispatched. Status
 describes gradability, not spend: a trial that dispatched and was then
 rejected is not a graded trial.
 
-`detail` shapes follow the entry: single-run graded entries carry
+The `detail` shapes follow the entry: single-run graded entries carry
 `{verdict, match, gates, compliance_passed, output_dir, models, status}`
-(abstention keys carry `issue_count` and `match: null`, and no `gates`
+(abstention keys carry `finding_count` and `match: null`, and no `gates`
 key — discriminate on `gates`, not on `match` presence; unkeyed
 entries carry compliance detail plus `{output_dir, status}`); rejected
 dispatches carry `{dispatch_rejected, dispatch_evidence, output_dir,
@@ -838,8 +878,9 @@ These are the canonical valid values used by graders. If the review output schem
 
 | Constant | Values | Source |
 |---|---|---|
-| `VALID_SEVERITIES` | `critical`, `high`, `medium`, `low`, `info` | `ReviewOutputBuilder.add_issue()` |
+| `VALID_SEVERITIES` | `critical`, `high`, `medium`, `low`, `info` | `ReviewOutputBuilder.add_finding()` |
 | `VALID_VERDICTS` | `approve`, `block`, `request_changes`, `comment`, `not_applicable` | `ReviewOutputBuilder._calculate_verdict()` |
-| `REQUIRED_JSON_TOP_FIELDS` | `pr_id`, `reviewer`, `verdict`, `summary`, `issues`, `meta` | `ReviewOutputBuilder.to_dict()` |
-| `REQUIRED_ISSUE_FIELDS` | `id`, `severity`, `title`, `file`, `description`, `recommendation` | `ReviewOutputBuilder.add_issue()` |
+| `REQUIRED_JSON_TOP_FIELDS` | Identity, schema, verdict/summary, `findings`, `checks`, `assessment`, six accounting fields, and `meta` | `ReviewOutputBuilder.to_dict()` |
+| `REQUIRED_FINDING_FIELDS` | `id`, `category`, `severity`, `title`, `description`, `file`, `line`, `recommendation`, `confidence` | `ReviewOutputBuilder.add_finding()` |
+| `REQUIRED_CHECK_FIELDS` | `id`, `question`, `method`, `result`, `source_reviewers` | `ReviewOutputBuilder.record_check()` |
 | `REQUIRED_STATE_FIELDS` | `last_reviewed_sha`, `last_reviewed_at`, `review_count`, `base_ref`, `git_range_used` | `code-review.md` Step 5 |

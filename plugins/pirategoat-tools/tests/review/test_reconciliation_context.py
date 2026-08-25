@@ -198,19 +198,22 @@ def _make_review_json(
         "observations": None,
         "recommendations": None,
         "positive_observations": None,
+        "checks": [],
+        "assessment": None,
         "meta": {
             "review_duration_ms": 1500,
             "confidence_score": 0.95,
-            "tool_results_used": None,
+            "next_finding_number": len(findings) + 1,
+            "next_check_number": 1,
         },
     }
 
 
 # ===========================================================================
-# TestLoadAgentFindings
+# TestLoadAgentReviews
 # ===========================================================================
 
-class TestLoadAgentFindings:
+class TestLoadAgentReviews:
     """Tests for load_agent_reviews()."""
 
     def test_loads_review_jsons(self, mod, tmp_path):
@@ -2018,10 +2021,10 @@ class TestAggregateReviewAccounting:
     def test_claims_and_gaps_match_the_authoritative_builder_helper(
         self, mod, tmp_path
     ):
-        deferred = ["src/read.php", "src/unread.php"]
-        _write_summary(str(tmp_path), "security-reviewer", [], deferred)
+        claimable = ["src/read.php", "src/unread.php"]
+        _write_summary(str(tmp_path), "security-reviewer", [], claimable)
         accounting_input = _write_accounting_input(
-            str(tmp_path), "security", deferred, inline_count=2
+            str(tmp_path), "security", claimable, inline_count=2
         )
         _write_review(
             str(tmp_path), "security-review", claims=["src/read.php"]
@@ -2045,9 +2048,9 @@ class TestAggregateReviewAccounting:
         ids=["raw-string", "malformed-entry"],
     )
     def test_malformed_claims_credit_nothing(self, mod, tmp_path, claims):
-        deferred = ["src/read.php", "src/unread.php"]
-        _write_summary(str(tmp_path), "security-reviewer", [], deferred)
-        _write_accounting_input(str(tmp_path), "security", deferred)
+        claimable = ["src/read.php", "src/unread.php"]
+        _write_summary(str(tmp_path), "security-reviewer", [], claimable)
+        _write_accounting_input(str(tmp_path), "security", claimable)
         _write_review(str(tmp_path), "security-review", claims=claims)
 
         cov = mod.aggregate_review_accounting(str(tmp_path))
@@ -2101,17 +2104,17 @@ class TestUnscopedFiles:
         assert cov["unscoped_files"] == [".editorconfig", "package-lock.json"]
 
     def test_union_covers_every_sidecar_file_list(self, mod, tmp_path):
-        """Inline, deferred, AND name-only listing all count as scoped —
+        """Inline, claimable, AND name-only listing all count as scoped —
         a file the agent was told about is not "matched no domain"."""
         _write_summary(
             str(tmp_path), "security-reviewer",
-            ["src/inline.php"], ["src/deferred.php"],
+            ["src/inline.php"], ["src/claimable.php"],
             list_only=["src/listed.php"],
         )
         cov = mod.aggregate_review_accounting(
             str(tmp_path),
             changed_files=[
-                "src/inline.php", "src/deferred.php", "src/listed.php",
+                "src/inline.php", "src/claimable.php", "src/listed.php",
                 "yarn.lock",
             ],
         )

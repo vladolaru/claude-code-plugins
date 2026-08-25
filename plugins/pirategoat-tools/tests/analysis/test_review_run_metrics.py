@@ -4382,7 +4382,7 @@ class TestMeasureRun:
 
 
 class TestReviewClaimAccounting:
-    """Deferred metrics carry the two conserved derived populations."""
+    """Review-claim metrics carry the two conserved derived populations."""
 
     def test_measured_populations_and_denominator_pass_through(self, tmp_path):
         manifest = _manifest()

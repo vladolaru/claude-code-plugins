@@ -2562,7 +2562,7 @@ class TestSnapshot:
 
         extracted = t._extract_agent_results()["security"]
 
-        assert extracted["advisory_suppressed"] == 2
+        assert extracted["suppressed_advisory_finding_count"] == 2
         assert extracted["verdict_without_advisory"] == "block"
 
     @pytest.mark.parametrize(
@@ -2631,9 +2631,9 @@ class TestSnapshot:
         extracted = t._extract_agent_results()["security"]
 
         if expected_count is not None:
-            assert extracted["advisory_suppressed"] == expected_count
+            assert extracted["suppressed_advisory_finding_count"] == expected_count
         else:
-            assert "advisory_suppressed" not in extracted
+            assert "suppressed_advisory_finding_count" not in extracted
         assert "verdict_without_advisory" not in extracted
 
     def test_excludes_review_findings_from_agent_results(self, mod, output_dir, tmp_path):
@@ -2689,12 +2689,12 @@ class TestSnapshot:
 
         event = _read_events(t.log_path)[-1]
         snapshot = event["snapshot"]["findings"]
-        assert snapshot["advisory_suppressed"] == 1
+        assert snapshot["suppressed_advisory_finding_count"] == 1
         assert snapshot["verdict_without_advisory"] == "block"
-        assert event["summary"]["final_advisory_suppressed"] == 1
+        assert event["summary"]["final_suppressed_advisory_finding_count"] == 1
         assert event["summary"]["final_verdict_without_advisory"] == "block"
         manifest_summary = _read_manifest(t)["outcome"]["summary"]
-        assert manifest_summary["final_advisory_suppressed"] == 1
+        assert manifest_summary["final_suppressed_advisory_finding_count"] == 1
         assert manifest_summary["final_verdict_without_advisory"] == "block"
 
     def test_findings_omit_malformed_advisory_measurement(
@@ -2712,7 +2712,7 @@ class TestSnapshot:
 
         findings = t._extract_findings()
 
-        assert "advisory_suppressed" not in findings
+        assert "suppressed_advisory_finding_count" not in findings
         assert "verdict_without_advisory" not in findings
 
     def test_findings_preserve_count_but_reject_impossible_counterfactual(
@@ -2730,7 +2730,7 @@ class TestSnapshot:
 
         findings = t._extract_findings()
 
-        assert findings["advisory_suppressed"] == 1
+        assert findings["suppressed_advisory_finding_count"] == 1
         assert "verdict_without_advisory" not in findings
 
     def test_omits_missing_snapshot_sections(self, telemetry):

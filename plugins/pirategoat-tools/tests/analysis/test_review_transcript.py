@@ -1138,7 +1138,7 @@ class TestAnalyzeSubagent:
         )
         # HISTORICAL-ENVELOPE ALLOWANCE ONLY — not live. 1.114.0 briefly
         # carried the call-budget target on this envelope before a later fix
-        # moved it to the deferred-files sidecar (the live envelope never
+        # moved it to the accounting input (the live envelope never
         # emits this name again — see
         # test_envelope_never_carries_a_budget_assignment in
         # test_bootstrap_integration.py). run12's own recorded transcripts DO
@@ -1159,7 +1159,7 @@ class TestAnalyzeSubagent:
 
         Hand-built strings elsewhere pin the names; only this test proves
         what bootstrap actually emits is recognized. The budget no longer
-        rides this envelope at all (it moved to the deferred-files sidecar
+        rides this envelope at all (it moved to the accounting input
         in 1.114.0), so there is no budgeted/unbudgeted variant left to
         parametrize here — the shape pin for "the live envelope never
         carries a budget assignment" lives at the source in

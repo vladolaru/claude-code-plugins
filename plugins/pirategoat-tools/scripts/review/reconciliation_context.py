@@ -456,7 +456,7 @@ def annotate_prefiltered_findings(
     artifact, so nobody could audit what had been decided on their behalf.
     Deleting them from the JSON would be worse still: `reviews_by_agent` is
     also the record of what each reviewer actually said, and the
-    reconciliation metrics (`input_findings_count`, per-agent tallies) are
+    reconciliation metrics (`input_finding_count`, per-agent tallies) are
     counted from it, so removals would silently shift numbers nothing else
     could reconstruct.
 

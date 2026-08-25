@@ -158,11 +158,11 @@ class TestPersistReviewAccountingInput:
         assert json.loads(accounting_input.read_text())["reviewer"] == "security"
         assert not (tmp_path / "security-review-accounting-input.json").exists()
 
-    def test_writes_only_authoritative_deferred_files(self, tmp_path):
+    def test_writes_only_authoritative_claimable_files(self, tmp_path):
         _mod.persist_review_accounting_input(
             str(tmp_path),
             "repo-renewals-reviewer",
-            ["src/deferred.php"],
+            ["src/claimable.php"],
             review_budget=80,
             in_scope_review_file_count=12,
             inline_diff_file_count=11,
@@ -175,7 +175,7 @@ class TestPersistReviewAccountingInput:
             "schema": 3,
             "agent_name": "repo-renewals-reviewer",
             "reviewer": "repo-renewals",
-            "review_claimable_files": ["src/deferred.php"],
+            "review_claimable_files": ["src/claimable.php"],
             "review_budget": 80,
             "in_scope_review_file_count": 12,
             "inline_diff_file_count": 11,
@@ -207,12 +207,12 @@ class TestPersistReviewAccountingInput:
 
         with pytest.raises(OSError):
             _mod.persist_review_accounting_input(
-                str(output_file), "security-reviewer", ["src/deferred.php"],
+                str(output_file), "security-reviewer", ["src/claimable.php"],
                 review_budget=80,
                 in_scope_review_file_count=1, inline_diff_file_count=0,
             )
 
-    def test_dedupes_deferred_files_order_preserving(self, tmp_path):
+    def test_dedupes_claimable_files_order_preserving(self, tmp_path):
         """A multi-domain agent's secondary-domain scope render can repeat
         a file already budget-exceeded in the primary domain's sidecar —
         load_scope_facts() concatenates every summary's
@@ -260,17 +260,17 @@ class TestPartitionScopePaths:
     """Scope populations are disjoint, ordered sets with fixed precedence."""
 
     def test_partitions_duplicates_and_cross_population_overlap(self):
-        inline, deferred, list_only = _mod.partition_scope_paths(
+        inline, claimable, list_only = _mod.partition_scope_paths(
             ["src/inline-a.py", "src/shared.py", "src/inline-a.py"],
             [
-                "src/deferred-a.py",
+                "src/claimable-a.py",
                 "src/shared.py",
-                "src/deferred-a.py",
-                "src/deferred-b.py",
+                "src/claimable-a.py",
+                "src/claimable-b.py",
             ],
             [
                 "package-lock.json",
-                "src/deferred-b.py",
+                "src/claimable-b.py",
                 "package-lock.json",
                 "src/shared.py",
                 "generated/api.json",
@@ -278,7 +278,7 @@ class TestPartitionScopePaths:
         )
 
         assert inline == ["src/inline-a.py", "src/shared.py"]
-        assert deferred == ["src/deferred-a.py", "src/deferred-b.py"]
+        assert claimable == ["src/claimable-a.py", "src/claimable-b.py"]
         assert list_only == ["package-lock.json", "generated/api.json"]
 
     def test_save_echo_uses_reachable_progress_while_telemetry_keeps_list_only(
@@ -302,14 +302,14 @@ class TestPartitionScopePaths:
                 ],
                 "review_claimable": [
                     "src/shared.py",
-                    "src/deferred-a.py",
-                    "src/deferred-a.py",
+                    "src/claimable-a.py",
+                    "src/claimable-a.py",
                     "src/secondary.py",
-                    "src/deferred-b.py",
+                    "src/claimable-b.py",
                 ],
                 "list_only": [
                     "package-lock.json",
-                    "src/deferred-b.py",
+                    "src/claimable-b.py",
                     "package-lock.json",
                     "generated/api.json",
                 ],
@@ -323,8 +323,8 @@ class TestPartitionScopePaths:
             "src/shared.py  (+10 -0)\n"
             "src/secondary.py  (+10 -0)\n"
             "=== NOT DIFFED (budget exceeded, 2 files) ===\n"
-            "src/deferred-a.py  (+10 -0)\n"
-            "src/deferred-b.py  (+20 -0)\n"
+            "src/claimable-a.py  (+10 -0)\n"
+            "src/claimable-b.py  (+20 -0)\n"
             "=== CHANGED (no diff — 2 lock/generated files) ===\n"
             "package-lock.json  (+100 -100)\n"
             "generated/api.json  (+100 -100)\n"
@@ -363,7 +363,7 @@ class TestPartitionScopePaths:
         capsys.readouterr()
 
         builder = ReviewOutputBuilder.open(str(tmp_path), "123", "security")
-        builder.claim_files_reviewed("src/deferred-b.py")
+        builder.claim_files_reviewed("src/claimable-b.py")
         builder.save_draft()
 
         payload = json.loads(
@@ -374,20 +374,20 @@ class TestPartitionScopePaths:
             "src/inline.py",
             "src/shared.py",
             "src/secondary.py",
-            "src/deferred-b.py",
-            "src/deferred-a.py",
+            "src/claimable-b.py",
+            "src/claimable-a.py",
             "package-lock.json",
             "generated/api.json",
         ]
         assert payload["review_claimable_files"] == [
-            "src/deferred-b.py",
-            "src/deferred-a.py",
+            "src/claimable-b.py",
+            "src/claimable-a.py",
         ]
         assert payload["inline_diff_file_count"] == 3
         assert payload["in_scope_review_file_count"] == 5
         assert 0 <= covered <= payload["in_scope_review_file_count"]
         assert (
-            "FILES NOT YET CLAIMED AS REVIEWED (1): src/deferred-a.py"
+            "FILES NOT YET CLAIMED AS REVIEWED (1): src/claimable-a.py"
             in capsys.readouterr().out
         )
 
@@ -446,7 +446,7 @@ class TestExtractFileDiffstat:
 
 
 class TestOrderByDiffstatLargestFirst:
-    """The deferred-files sidecar's ordering contract, in isolation."""
+    """The review-claimable queue's ordering contract, in isolation."""
 
     def test_sorts_descending_by_total_lines(self):
         result = order_by_diffstat_largest_first(
@@ -1007,7 +1007,7 @@ class TestExtractScopeMultipleBlocks:
         assert extract_scope_line_count(single) == 8
 
     def test_line_count_includes_not_diffed_workload(self):
-        """NOT DIFFED files are deferred in-scope work: their lines must size
+        """NOT DIFFED files are claimable in-scope work: their lines must size
         the budget, or the largest reviews get the smallest targets."""
         scope = (
             "=== FILES ===\n"
@@ -1015,18 +1015,18 @@ class TestExtractScopeMultipleBlocks:
             "=== NOT DIFFED (budget exceeded, 2 files) ===\n"
             "These files ARE IN YOUR SCOPE — their diffs were withheld only to fit\n"
             "the context budget.\n"
-            "  src/deferred-large.py  (+700 -100)\n"
-            "  src/deferred-small.py  (+80 -20)\n"
+            "  src/claimable-large.py  (+700 -100)\n"
+            "  src/claimable-small.py  (+80 -20)\n"
             "=== DIFFS ===\n"
             "diff content\n"
         )
-        # 500 inline + 800 + 100 deferred = 1400
+        # 500 inline + 800 + 100 claimable = 1400
         assert extract_scope_line_count(scope) == 1400
-        # Deferred lines must not enter the FILES-only file list.
+        # Claimable lines must not enter the FILES-only file list.
         assert extract_scope_files(scope) == ["src/inline.py"]
 
     def test_extract_not_diffed_files_skips_section_prose(self):
-        """Deferred paths come only from stats-shaped lines — the NOT DIFFED
+        """Claimable paths come only from stats-shaped lines — the NOT DIFFED
         section's instruction prose must never be parsed as file paths."""
         scope = (
             "=== FILES ===\n"
@@ -1037,14 +1037,14 @@ class TestExtractScopeMultipleBlocks:
             "first: review with 'git diff base..head -- <file>' while tool budget\n"
             "remains. Claim every NOT DIFFED file you actually read; the builder "
             "derives the rest as unclaimed review files.\n"
-            "  src/deferred-large.py  (+700 -100)\n"
-            "  src/deferred-small.py  (+80 -20)\n"
+            "  src/claimable-large.py  (+700 -100)\n"
+            "  src/claimable-small.py  (+80 -20)\n"
             "=== DIFFS ===\n"
             "diff content\n"
         )
         assert extract_not_diffed_files(scope) == [
-            "src/deferred-large.py",
-            "src/deferred-small.py",
+            "src/claimable-large.py",
+            "src/claimable-small.py",
         ]
 
     def test_extract_not_diffed_files_accumulates_across_secondary_scopes(self):
@@ -1119,9 +1119,9 @@ class TestLoadScopeFacts:
         data = {
             "schema": 2,
             "inline_diff_files": ["src/a.py"],
-            "review_claimable_files": ["src/deferred.py"],
+            "review_claimable_files": ["src/claimable.py"],
             "list_only_files": ["package-lock.json"],
-            "in_scope_review_files": ["src/a.py", "src/deferred.py"],
+            "in_scope_review_files": ["src/a.py", "src/claimable.py"],
             "in_scope_stat_lines": 100,
         }
         data.update(overrides)
@@ -1141,7 +1141,7 @@ class TestLoadScopeFacts:
         facts = load_scope_facts([primary, secondary])
         assert facts == {
             "files": ["src/a.py", "ci.yml"],
-            "review_claimable": ["src/deferred.py"],
+            "review_claimable": ["src/claimable.py"],
             "list_only": ["package-lock.json"],
             "stat_lines": 107,
         }

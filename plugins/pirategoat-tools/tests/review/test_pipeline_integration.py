@@ -192,8 +192,8 @@ class TestReviewerDraftFinalizationLifecycle:
             "agent_name": "code-reviewer",
             "reviewer": "code",
             "review_claimable_files": [
-                "deferred/read.py",
-                "deferred/unread.py",
+                "claimable/read.py",
+                "claimable/unread.py",
             ],
             "review_budget": 15,
             "inline_diff_file_count": 1,
@@ -209,14 +209,14 @@ class TestReviewerDraftFinalizationLifecycle:
                 "status": "OK",
                 "inline_diff_files": ["second.txt"],
                 "review_claimable_files": [
-                    "deferred/read.py",
-                    "deferred/unread.py",
+                    "claimable/read.py",
+                    "claimable/unread.py",
                 ],
                 "list_only_files": [],
                 "in_scope_review_files": [
                     "second.txt",
-                    "deferred/read.py",
-                    "deferred/unread.py",
+                    "claimable/read.py",
+                    "claimable/unread.py",
                 ],
             })
         )
@@ -241,7 +241,7 @@ class TestReviewerDraftFinalizationLifecycle:
         first_bytes = Path(first["draft"]).read_bytes()
         assert agents_status.check_status(str(output_dir))["all_done"] is False
 
-        builder.claim_files_reviewed("deferred/read.py")
+        builder.claim_files_reviewed("claimable/read.py")
         last = builder.save_draft()
         last_bytes = Path(last["draft"]).read_bytes()
         assert last["review_digest"] != first["review_digest"]
@@ -273,7 +273,7 @@ class TestReviewerDraftFinalizationLifecycle:
                 "--output-dir", str(output_dir),
                 "--git-range", "HEAD~1..HEAD",
                 "--changed-files",
-                "second.txt,deferred/read.py,deferred/unread.py",
+                "second.txt,claimable/read.py,claimable/unread.py",
                 "--pr-id", "42",
                 "--dispatched-agents", "code-reviewer",
             ],
@@ -290,7 +290,7 @@ class TestReviewerDraftFinalizationLifecycle:
             (output_dir / "reconciliation-context.json").read_text()
         )
         accounting = derive_review_accounting(
-            accounting_input, ["deferred/read.py"]
+            accounting_input, ["claimable/read.py"]
         )
         events = [
             json.loads(line)
@@ -318,10 +318,10 @@ class TestReviewerDraftFinalizationLifecycle:
             accounting.review_accounted_file_count
         )
         assert context["review_accounting"]["agents_claiming_review_by_file"] == {
-            "deferred/read.py": ["code-reviewer"],
+            "claimable/read.py": ["code-reviewer"],
         }
         assert context["review_accounting"]["agents_with_unclaimed_review_by_file"] == {
-            "deferred/unread.py": ["code-reviewer"],
+            "claimable/unread.py": ["code-reviewer"],
         }
         assert (output_dir / "code-review.md").read_text() == (
             _render_markdown(canonical)

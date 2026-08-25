@@ -648,7 +648,7 @@ class TestBashBuilderRecognition:
 
     def test_budget_carrying_envelope_is_still_recognized_historically(self):
         """1.114.0 briefly carried the call-budget target on this envelope
-        before a later fix moved it to the deferred-files sidecar; the live
+        before a later fix moved it to the accounting input; the live
         envelope never emits this name again (see
         test_envelope_never_carries_a_budget_assignment in
         test_bootstrap_integration.py). But run12's own recorded transcripts
@@ -895,7 +895,9 @@ class TestBashBuilderRecognition:
         body = (
             "from review.agent.output import ReviewOutputBuilder\n"
             'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
-            'builder.add_finding("high", "Existing", "src/a.php", "d", "r", line=3)\n'
+            'finding_id = builder.add_finding("high", "Existing", "src/a.php", "d", "r", line=3)\n'
+            'check_id = builder.record_check("Reachable?", "Read callers", "No")\n'
+            'paths = ["src/large.php"]\n'
             f"{mutation}\n"
             "builder.save_draft()\n"
         )

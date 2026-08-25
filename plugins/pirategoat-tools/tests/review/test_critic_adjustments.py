@@ -2348,7 +2348,7 @@ class TestStepElevenRerendersFindingsMarkdown:
         assert result["report_path"] == str(tmp_path / "review-report.md")
 
 
-class TestNarrativeSummaryInvalidation:
+class TestAssessmentInvalidation:
     """Prose that summarizes a mutable ledger cannot be corrected, only
     invalidated.
 
@@ -2889,7 +2889,7 @@ class TestSpotCheckRecordedInTheLedger:
         assert pending_count(str(tmp_path)) == 1
 
 
-class TestRevisedNarrative:
+class TestRevisedAssessment:
     """The orchestrator's post-critic assessment, in the channel.
 
     An applying batch withdraws the reconciler's `assessment` and

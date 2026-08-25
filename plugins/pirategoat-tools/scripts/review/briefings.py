@@ -1976,7 +1976,7 @@ def _report_authoring_actions(mode, state, context, config, output_dir):
             f"ago from the final ledger — and `{od}/review-findings.json`, "
             "the canonical ledger it projects. The record is the reference "
             "the report must not contradict: every finding, severity, "
-            "count, clearance, and coverage statement in your report has to "
+            "count, check, and coverage statement in your report has to "
             "agree with it."
         )
     else:

@@ -135,7 +135,7 @@ class TestCategoryRepresentatives:
 
         assert result.returncode == 0
         # Telemetry scope covers the full in-scope set: inline FILES entries,
-        # deferred NOT DIFFED paths (in-scope work whose diffs were withheld
+        # claimable NOT DIFFED paths (in-scope work whose diffs were withheld
         # for context budget), and list-only CHANGED (no diff) paths the
         # reviewer is told to inspect when relevant.
         expected_scope = sorted(set(
@@ -156,7 +156,7 @@ class TestCategoryRepresentatives:
         """Adapter ref-mode instances must leave the same per-agent scope
         evidence as native reviewers — instance-named scope summaries (so
         run-level coverage reconciliation sees adapter scopes) and an
-        instance-named deferred sidecar (so the builder's declaration
+        instance-named accounting input (so the builder's claim
         verification finds it via PIRATEGOAT_REVIEWER_NAME)."""
         ref = tmp_path / "renewals.md"
         ref.write_text("Review renewals logic end to end.")
@@ -289,7 +289,7 @@ class TestCategoryRepresentatives:
 
     def test_accounting_input_backs_claim_validation(self, tmp_path):
         """Bootstrap persists the authoritative NOT DIFFED set so the
-        builder can reject declarations that match no deferred file."""
+        builder can reject claims that match no claimable file."""
         result = run_bootstrap(
             "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
         )
@@ -303,7 +303,7 @@ class TestCategoryRepresentatives:
             extract_not_diffed_files(result.stdout)
         )
         # Closes the main()->build_output() seam: review_claimable_count must be
-        # derived from this exact deferred set, not a neighboring fact
+        # derived from this exact claimable set, not a neighboring fact
         # (e.g. total scope files) that also happens to be non-empty here.
         # A mis-wired count would pass every other assertion in this suite.
         assert ("Not reviewed (budget):" in result.stdout) == bool(
@@ -837,7 +837,7 @@ class TestCanonicalExecutableBuilderSource:
     def test_envelope_never_carries_a_budget_assignment(
         self, tmp_path, review_budget
     ):
-        """The budget travels in the deferred-files sidecar, never the
+        """The budget travels in the accounting input, never the
         builder envelope — the retired env-var budget transport silently
         died for any agent that rebuilt its save command (run12's worst
         under-spender, 15% of target, never saw the TARGET echo). The
@@ -1363,18 +1363,18 @@ class TestVerificationMethodContract:
         assert "More agents = higher confidence" not in text
 
     def test_reconciliator_treats_check_conflicts_as_verification_targets(self):
-        """A clearance that contradicts a finding is resolved by verifying
+        """A check that contradicts a finding is resolved by verifying
         the finding, not by counting sides.
 
         Pinned on the rule's meaning rather than its old heading text
-        ("Clearance vs. finding"), which moved when the method-adequacy
-        judgment was lifted out to apply to EVERY clearance — the wording
+        ("check vs. finding"), which moved when the method-adequacy
+        judgment was lifted out to apply to EVERY check — the wording
         can change, this contract cannot.
         """
         text = (PLUGIN_ROOT / "agents/review-reconciliator.md").read_text()
         assert "contradicts a finding" in text
         assert "never a vote" in text
-        # And the judgment that voids a bad-method clearance is not gated
+        # And the judgment that voids a bad-method check is not gated
         # on some finding having disagreed with it first.
         assert "Judge EVERY check by its method" in text
 
@@ -2031,7 +2031,7 @@ class TestRepoRuleAndRefModeSelection:
         assert result.returncode == 1
         assert "Isolated execution is not implemented" in result.stdout
 
-    def test_path_rule_matches_a_budget_deferred_file(self, tmp_path):
+    def test_path_rule_matches_a_budget_claimable_file(self, tmp_path):
         """A rule about a NOT DIFFED file applies precisely when the
         reviewer must inspect that file — selection must see the complete
         in-scope set, not only the inline diff list."""
@@ -2040,25 +2040,25 @@ class TestRepoRuleAndRefModeSelection:
             "alpha.php": "<?php\n" + "\n".join(
                 f"echo {i};" for i in range(3000)
             ) + "\n",
-            "deferred_target.php": "<?php\n" + "\n".join(
+            "claimable_target.php": "<?php\n" + "\n".join(
                 f"print({i});" for i in range(2500)
             ) + "\n",
         })
         outdir = tmp_path / "out"
         outdir.mkdir()
         self._write_review_context(outdir, rules=[self._rule(
-            outdir, "deferred-rule", "DEFERRED FILE RULE MARKER",
+            outdir, "claimable-rule", "CLAIMABLE FILE RULE MARKER",
             applies_to={
                 "agents": [], "domains": [],
-                "paths": ["deferred_target.php"],
+                "paths": ["claimable_target.php"],
             },
         )])
         result = self._run_in_repo(
             repo, "--agent", "code-reviewer", "--output-dir", str(outdir)
         )
         assert result.returncode == 0
-        assert "deferred_target.php" in extract_not_diffed_files(result.stdout)
-        assert "DEFERRED FILE RULE MARKER" in result.stdout
+        assert "claimable_target.php" in extract_not_diffed_files(result.stdout)
+        assert "CLAIMABLE FILE RULE MARKER" in result.stdout
 
     def test_ref_mode_path_declaration_scopes_the_matching_file(
         self, tmp_path
@@ -2247,7 +2247,7 @@ class TestNotDiffedContractIsDelivered:
     so it never reached a single reviewer. Policy belongs in build_output.
 
     Regression guard for the 1.114.0 fix: build_output() used to re-derive the
-    deferred-file count by regexing its OWN rendered scope text for
+    claimable-file count by regexing its OWN rendered scope text for
     '=== NOT DIFFED (budget exceeded, N files) ===' — a second, independent
     text-parsing path duplicating the one load_scope_facts()/main() already
     used. Any rename or reformat of that header in scope.py silently zeroed
@@ -2306,9 +2306,9 @@ class TestNotDiffedContractIsDelivered:
             "diffs": {"src/inline.py": "diff --git"},
             "diffstat": {
                 "src/inline.py": (2, 1),
-                "src/deferred.py": (20, 2),
+                "src/claimable.py": (20, 2),
             },
-            "skipped_files": {"budget": ["src/deferred.py"]},
+            "skipped_files": {"budget": ["src/claimable.py"]},
         })
         output = self._build(tmp_path, scope_output, review_claimable_count=1)
         protocol = (
@@ -2379,7 +2379,7 @@ class TestNotDiffedContractIsDelivered:
             "=== REVIEW SCOPE ===\n"
             "=== FILES ===\n"
             "src/big.py  (+900 -10)\n"
-            "=== DEFERRED (too large to inline, 3 files) ===\n"
+            "=== CLAIMABLE (too large to inline, 3 files) ===\n"
             "  src/big.py  (+900 -10)\n"
         )
         assert "NOT DIFFED" not in renamed_header_scope  # the old regex's anchor is gone
@@ -2392,7 +2392,7 @@ class TestNotDiffedContractIsDelivered:
 
         NOT_DIFFED_SCOPE carries the exact header the old regex parsed, but
         review_claimable_count is explicitly 0 (the caller's fact says nothing was
-        deferred). If build_output() still read scope_output text for this
+        claimable). If build_output() still read scope_output text for this
         decision, the contract would incorrectly appear. It must not.
         """
         output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, review_claimable_count=0)
@@ -2425,7 +2425,7 @@ class TestReviewClaimableOrderingEndToEnd:
         """A small production file and a much larger test file, sized so
         both exceed history-insights-reviewer's 500-line max (registry
         budget_override does not affect scope.py's own --max-lines
-        deferral, only the tool-call target build_output later reports)."""
+        claimability, only the tool-call target build_output later reports)."""
         os.makedirs(os.path.join(repo_dir, "src"), exist_ok=True)
         os.makedirs(os.path.join(repo_dir, "tests"), exist_ok=True)
 
@@ -2456,8 +2456,8 @@ class TestReviewClaimableOrderingEndToEnd:
             ["git", "commit", "-m", "init"], cwd=repo_dir, capture_output=True, check=True
         )
         # huge_prod (485) nearly exhausts the 500-line budget; small_prod
-        # (35, still production tier) is processed next and deferred; only
-        # then does the test tier run, deferring huge_test (405) — larger
+        # (35, still production tier) is processed next and made claimable;
+        # only then does the test tier run, making huge_test (405) claimable — larger
         # than small_prod but ordered after it by the priority tier alone.
         for relpath, n in [
             ("src/huge_prod.py", 485), ("src/small_prod.py", 35),
@@ -2495,7 +2495,7 @@ class TestReviewClaimableOrderingEndToEnd:
                 / "history-insights-review-accounting-input.json"
             ).read_text()
         )
-        # Both deferred (the regression this guards): a same-tier-only
+        # Both claimable (the regression this guards): a same-tier-only
         # re-sort would still fail to fix the divergence, since these two
         # files are in DIFFERENT priority tiers.
         assert set(accounting_input["review_claimable_files"]) == {
