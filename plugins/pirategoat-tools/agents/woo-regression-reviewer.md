@@ -171,6 +171,6 @@ Score 0–100 before reporting: 80–100 report; 60–79 report noting uncertain
 
 ## Output
 
-Use ReviewOutputBuilder per shared protocol. Write to `{output_dir}/woo-regression-review.json` and `.md`.
+Use the bootstrap-provided ReviewOutputBuilder lifecycle. Save the complete draft, inspect the compact receipt, then run the exact printed `FINALIZE REVIEW` command verbatim in a separate tool turn. Never write review JSON or Markdown directly, and never call `set_assessment()` as a raw reviewer.
 
 **Categories:** `scheduled-action`, `hook-contract`, `meta-equality`, `template-override`, `progressive-enhancement`, `php-coercion`, `migration-state`, `interface-break`, `shape-validation`, `session-identity`, `proxy-predicate`, `markup-contract`, `other`

@@ -137,6 +137,6 @@ Before finalizing:
 
 ## Output
 
-Use ReviewOutputBuilder per shared protocol. Write to `{output_dir}/code-review.json` and `.md`.
+Use the bootstrap-provided ReviewOutputBuilder lifecycle. Save the complete draft, inspect the compact receipt, then run the exact printed `FINALIZE REVIEW` command verbatim in a separate tool turn. Never write review JSON or Markdown directly, and never call `set_assessment()` as a raw reviewer.
 
 **Categories:** `bug`, `goal-misalignment`, `error-handling`, `edge-case`, `test-gap`, `code-quality`, `security`, `performance`, `scope-creep`, `other`

@@ -147,6 +147,8 @@ Speculative assumption-mismatch findings are not in scope. If you cannot ground 
 
 ## Output
 
-Produce `ecosystem-integration-review.{json,md}` in the review output directory using `ReviewOutputBuilder`. Each finding includes `file`, `line`, `category` (`filter-arity` | `action-signature` | `override-mismatch` | `abstract-missing` | `final-conflict` | `visibility-downgrade` | `rest-schema-mismatch` | `behavior-assumption` | `other`), and a citation to the upstream source when verification relied on it (`source_cited` field: `"<path>:<line>"`).
+Use the bootstrap-provided ReviewOutputBuilder lifecycle. Save the complete draft, inspect the compact receipt, then run the exact printed `FINALIZE REVIEW` command verbatim in a separate tool turn. Never write review JSON or Markdown directly, and never call `set_assessment()` as a raw reviewer.
+
+Each finding includes `file`, `line`, `category` (`filter-arity` | `action-signature` | `override-mismatch` | `abstract-missing` | `final-conflict` | `visibility-downgrade` | `rest-schema-mismatch` | `behavior-assumption` | `other`), and a citation to the upstream source when verification relied on it (`source_cited` field: `"<path>:<line>"`).
 
 For `behavior-assumption` findings, also set `behavior_evidence` (`cited` | `inferred`) and provide both citations: the downstream assumption site in `file:line`, and the upstream behavior site in `source_cited`.

@@ -79,8 +79,9 @@ builder.add_finding(
     channel="<CHANNEL>",      # blocking or advisory, exactly as given in the bootstrap output
 )
 # ... one add_finding per finding ...
-receipt = builder.save_draft()
-# Inspect the compact receipt, then execute receipt["finalize_review_command"] exactly.
+builder.save_draft()
+# Inspect the compact receipt, then run the exact printed `FINALIZE REVIEW`
+# command verbatim in a separate tool turn.
 ```
 
 Rules:
@@ -89,8 +90,5 @@ Rules:
   merely disagree with; the pipeline's reconciliation and verification handle that.
 - Tag EVERY finding with the `CHANNEL` value from the bootstrap output. Advisory
   findings must be tagged `channel="advisory"` so they never gate the verdict.
-- If the repo prompt produced no findings, still call `save_draft()`, inspect
-  its compact receipt, and execute its exact `finalize_review_command` — an
-  empty, honest result is valid. Do not pad.
-- Write ONLY to the reviewer_name paths the bootstrap gave you. Never write into
-  another reviewer's `-review.json`.
+- If the repo prompt produced no findings, still call `save_draft()`, inspect its compact receipt, and run the exact printed `FINALIZE REVIEW` command verbatim in a separate tool turn — an empty, honest result is valid. Do not pad.
+- Publish ONLY through the reviewer lifecycle and reviewer name the bootstrap gave you. Never write review JSON or Markdown directly, never publish into another reviewer's path, and never call `set_assessment()` as this raw adapter reviewer.

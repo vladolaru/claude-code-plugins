@@ -547,7 +547,7 @@ def _norm_path(path) -> str:
     return "/".join(parts)
 
 
-def _repo_relative_issue_path(path, repo_root) -> str:
+def _repo_relative_finding_path(path, repo_root) -> str:
     """Normalize one reported path relative to the known repository root."""
     text = str(path or "")
     normalized = _norm_path(text)
@@ -565,11 +565,11 @@ def _repo_relative_issue_path(path, repo_root) -> str:
     return normalized
 
 
-def _paths_match(issue_path, spec_path: str) -> bool:
+def _paths_match(finding_path, spec_path: str) -> bool:
     """Match canonical paths exactly after spelling normalization."""
-    issue_norm = _norm_path(issue_path)
+    finding_norm = _norm_path(finding_path)
     spec_norm = _norm_path(spec_path)
-    return bool(issue_norm and spec_norm and issue_norm == spec_norm)
+    return bool(finding_norm and spec_norm and finding_norm == spec_norm)
 
 
 # Field separator that \s-bridging regexes cannot cross — a plain space would
@@ -578,7 +578,7 @@ def _paths_match(issue_path, spec_path: str) -> bool:
 _FIELD_SEP = " ¦ "
 
 
-def _issue_text(finding: dict) -> str:
+def _finding_text(finding: dict) -> str:
     return _FIELD_SEP.join(
         str(finding.get(k) or "") for k in ("title", "description", "category")
     )
@@ -605,7 +605,7 @@ def _finding_matches(finding: dict, spec: dict) -> bool:
             return False
         if abs(line - expected_line) > spec.get("line_tolerance", DEFAULT_LINE_TOLERANCE):
             return False
-    text = _issue_text(finding)
+    text = _finding_text(finding)
     return any(re.search(pattern, text, re.IGNORECASE) for pattern in spec["match_any"])
 
 
@@ -613,8 +613,8 @@ def match_findings(findings: List[dict], key: dict) -> dict:
     """Match reviewer findings against an answer key.
 
     Returns a dict with:
-      matched_required:   {spec_id: issue_index}
-      matched_acceptable: {spec_id: issue_index}
+      matched_required:   {spec_id: finding_index}
+      matched_acceptable: {spec_id: finding_index}
       missing_required:   [spec_id, ...]
       unexpected:         [{index, file, line, severity, category, title,
                             description}, ...]  (findings no spec claimed)
@@ -678,6 +678,8 @@ def grade_detection(review: dict, key: dict, repo_root=None) -> GradeResult:
       acceptable_findings:   legitimate secondary findings (never punished)
       max_severity:          highest allowed severity for ANY finding
       max_unexpected:        cap on findings no spec claimed
+      min_check_count:       minimum number of structured check outcomes
+      max_unclaimed_review_file_count: maximum serialized accounting gaps
       expect_not_applicable: the correct answer is abstention
 
     When repo_root is known, absolute finding paths are canonicalized against it
@@ -690,7 +692,7 @@ def grade_detection(review: dict, key: dict, repo_root=None) -> GradeResult:
         findings = [
             dict(
                 finding,
-                file=_repo_relative_issue_path(finding.get("file"), repo_root),
+                file=_repo_relative_finding_path(finding.get("file"), repo_root),
             )
             for finding in findings
         ]
@@ -709,7 +711,11 @@ def grade_detection(review: dict, key: dict, repo_root=None) -> GradeResult:
             (len(findings) == 0,
              f"expected zero findings on abstention, got {len(findings)}"),
         ])
-        result.detail = {"verdict": verdict, "match": None, "issue_count": len(findings)}
+        result.detail = {
+            "verdict": verdict,
+            "match": None,
+            "finding_count": len(findings),
+        }
         return result
 
     match = match_findings(findings, key)
@@ -750,6 +756,59 @@ def grade_detection(review: dict, key: dict, repo_root=None) -> GradeResult:
             f"{len(match['unexpected'])} unexpected findings exceed cap {max_unexpected}",
         ))
         gates["max_unexpected"] = within
+
+    min_check_count = key.get("min_check_count")
+    if min_check_count is not None:
+        review_checks = review.get("checks")
+        structured_checks = (
+            [
+                check
+                for check in review_checks
+                if isinstance(check, dict)
+                and set(check) == REQUIRED_CHECK_FIELDS
+                and all(
+                    isinstance(check.get(field_name), str)
+                    and bool(check[field_name].strip())
+                    for field_name in ("id", "question", "method", "result")
+                )
+                and isinstance(check.get("source_reviewers"), list)
+                and bool(check["source_reviewers"])
+                and all(
+                    isinstance(source, str) and bool(source.strip())
+                    for source in check["source_reviewers"]
+                )
+            ]
+            if isinstance(review_checks, list)
+            else []
+        )
+        valid_minimum = type(min_check_count) is int and min_check_count >= 0
+        enough = valid_minimum and len(structured_checks) >= min_check_count
+        checks.append((
+            enough,
+            f"{len(structured_checks)} structured checks are below required "
+            f"minimum {min_check_count}",
+        ))
+        gates["min_check_count"] = enough
+
+    max_unclaimed = key.get("max_unclaimed_review_file_count")
+    if max_unclaimed is not None:
+        unclaimed = review.get("unclaimed_review_files")
+        valid_maximum = type(max_unclaimed) is int and max_unclaimed >= 0
+        valid_unclaimed = (
+            isinstance(unclaimed, list)
+            and all(isinstance(path, str) for path in unclaimed)
+        )
+        within = (
+            valid_maximum
+            and valid_unclaimed
+            and len(unclaimed) <= max_unclaimed
+        )
+        actual = len(unclaimed) if isinstance(unclaimed, list) else "invalid"
+        checks.append((
+            within,
+            f"{actual} unclaimed review files exceed cap {max_unclaimed}",
+        ))
+        gates["max_unclaimed_review_file_count"] = within
 
     result = _grade(checks)
     result.detail = {"verdict": verdict, "match": match, "gates": gates}

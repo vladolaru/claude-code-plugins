@@ -106,19 +106,51 @@ _BUILDER_FINDING_POSITIONAL = (
 _SEVERITY_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
 
-def _normalize_builder_severity(issue: dict[str, Any]) -> None:
-    severity = issue.get("severity")
+def _normalize_builder_severity(finding: dict[str, Any]) -> None:
+    severity = finding.get("severity")
     if isinstance(severity, str):
         severity = severity.lower()
-        issue["severity"] = severity
-    floor = issue.get("severity_floor")
+        finding["severity"] = severity
+    floor = finding.get("severity_floor")
     floor = floor.lower() if isinstance(floor, str) else None
+    if floor is not None:
+        finding["severity_floor"] = floor
     if (
         severity in _SEVERITY_RANK
         and floor in _SEVERITY_RANK
         and _SEVERITY_RANK[severity] < _SEVERITY_RANK[floor]
     ):
-        issue["severity"] = floor
+        finding["severity"] = floor
+
+
+def _literal_call_values(
+    call: ast.Call, positional_names: tuple[str, ...]
+) -> dict[str, Any] | None:
+    """Return exact literal arguments, or fail closed for dynamic calls."""
+    if len(call.args) > len(positional_names):
+        return None
+    values: dict[str, Any] = {}
+    for name, argument in zip(positional_names, call.args):
+        try:
+            values[name] = ast.literal_eval(argument)
+        except (ValueError, SyntaxError):
+            return None
+    for keyword in call.keywords:
+        if keyword.arg is None or keyword.arg in values:
+            return None
+        try:
+            values[keyword.arg] = ast.literal_eval(keyword.value)
+        except (ValueError, SyntaxError):
+            return None
+    return values
+
+
+def _entry_by_id(
+    entries: list[dict[str, Any]], entry_id: object
+) -> dict[str, Any] | None:
+    if not isinstance(entry_id, str):
+        return None
+    return next((entry for entry in entries if entry.get("id") == entry_id), None)
 
 
 def _builder_heredoc_env(command: Any) -> dict[str, str] | None:
@@ -186,9 +218,9 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
     Compliant reviewers save through a mandated Bash heredoc instead of a
     Write call, so the serialized review JSON never appears in the
     transcript. The heredoc body is literal Python, though: parse it and
-    reconstruct the findings from the builder.add_finding() calls so quality
-    metrics keep working. Non-literal argument values degrade to omitted
-    fields; an unparseable body degrades to None.
+    reconstruct exact literal finding/check/accounting mutations through the
+    final save_draft() so quality metrics keep working. Dynamic values or an
+    unparseable body degrade to None rather than fabricating saved state.
     """
     env = _builder_heredoc_env(command)
     if env is None:
@@ -215,7 +247,7 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
     ):
         return None
 
-    # The builder persists its accumulated state at save_draft(): only issues
+    # The builder persists its accumulated state at save_draft(): only changes
     # added BEFORE the final save call entered the saved JSON. An
     # add_finding() after the last save executed but persisted nothing —
     # collecting it would fabricate findings into the quality report.
@@ -241,10 +273,10 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
         save_receiver_name = save_receiver.id
 
     # save_draft() persists one opened builder's accumulated state. The
-    # final artifact holds only issues added to the last builder opened
+    # final artifact holds only state changed on the last builder opened
     # before the final save. Collecting earlier instances' add_finding()
     # calls would merge superseded findings into the record.
-    # Position alone is not identity: issues bind to the SAVED receiver's
+    # Position alone is not identity: mutations bind to the SAVED receiver's
     # variable, so a second builder variable's calls are never merged in.
     # The constructor assignment must also be that variable's final binding
     # before save; an alias, factory rebind, or deletion leaves the saved
@@ -322,43 +354,6 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
     ):
         return None
 
-    findings: list[dict[str, Any]] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        if not (isinstance(func, ast.Attribute) and func.attr == "add_finding"):
-            continue
-        receiver = func.value
-        if not (
-            isinstance(receiver, ast.Name)
-            and receiver.id == save_receiver_name
-        ):
-            continue
-        if final_save_pos is not None and (
-            node.lineno, node.col_offset
-        ) > final_save_pos:
-            continue
-        if final_ctor_pos is not None and (
-            node.lineno, node.col_offset
-        ) < final_ctor_pos:
-            continue
-        finding: dict[str, Any] = {}
-        for name, arg in zip(_BUILDER_FINDING_POSITIONAL, node.args):
-            try:
-                finding[name] = ast.literal_eval(arg)
-            except (ValueError, SyntaxError):
-                pass
-        for keyword in node.keywords:
-            if keyword.arg is None:
-                continue
-            try:
-                finding[keyword.arg] = ast.literal_eval(keyword.value)
-            except (ValueError, SyntaxError):
-                pass
-        _normalize_builder_severity(finding)
-        findings.append(finding)
-
     # A heredoc that never calls builder.save_draft() persisted nothing — its
     # findings must not be fabricated into a review record. (The save
     # target is env-pinned by the envelope and not statically resolvable,
@@ -367,11 +362,162 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
         return None
 
     reviewer = env["PIRATEGOAT_REVIEWER_NAME"]
+    findings: list[dict[str, Any]] = []
+    checks: list[dict[str, Any]] = []
+    reviewed_file_claims: list[str] = []
+    next_finding_number = 1
+    next_check_number = 1
+    mutation_methods = {
+        "add_finding",
+        "update_finding",
+        "remove_finding",
+        "record_check",
+        "update_check",
+        "remove_check",
+        "claim_files_reviewed",
+        "retract_reviewed_file_claims",
+    }
+    calls = sorted(
+        (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == save_receiver_name
+        ),
+        key=lambda node: (node.lineno, node.col_offset),
+    )
+    for call in calls:
+        position = (call.lineno, call.col_offset)
+        if position < final_ctor_pos or position > final_save_pos:
+            continue
+        method = call.func.attr
+        if method == "save_draft":
+            if call.args or call.keywords:
+                return None
+            continue
+        if method not in mutation_methods:
+            continue
+
+        if method == "add_finding":
+            values = _literal_call_values(call, _BUILDER_FINDING_POSITIONAL)
+            required = {
+                "severity", "title", "file", "description", "recommendation"
+            }
+            if values is None or not required <= set(values):
+                return None
+            finding = {
+                "id": f"f{next_finding_number}",
+                "category": "general",
+                "line": None,
+                "confidence": 0.95,
+                **values,
+            }
+            next_finding_number += 1
+            _normalize_builder_severity(finding)
+            if finding.get("line") is None:
+                finding["scope"] = "file"
+            channel = finding.pop("channel", None)
+            if channel == "advisory":
+                finding["channel"] = channel
+            for optional in ("behavior_evidence", "source_cited", "severity_floor"):
+                if finding.get(optional) is None:
+                    finding.pop(optional, None)
+            findings.append(finding)
+            continue
+
+        if method == "record_check":
+            values = _literal_call_values(call, ("question", "method", "result"))
+            if values is None or set(values) != {"question", "method", "result"}:
+                return None
+            checks.append({
+                "id": f"c{next_check_number}",
+                **values,
+                "source_reviewers": [reviewer],
+            })
+            next_check_number += 1
+            continue
+
+        if method in {"update_finding", "update_check"}:
+            id_name = "finding_id" if method == "update_finding" else "check_id"
+            values = _literal_call_values(call, (id_name,))
+            if values is None or id_name not in values or len(values) < 2:
+                return None
+            entries = findings if method == "update_finding" else checks
+            entry = _entry_by_id(entries, values.pop(id_name))
+            if entry is None:
+                return None
+            allowed = (
+                {
+                    "category", "severity", "title", "description", "file",
+                    "line", "recommendation", "confidence", "behavior_evidence",
+                    "source_cited", "severity_floor", "channel", "code_snippet",
+                    "references",
+                }
+                if method == "update_finding"
+                else {"question", "method", "result"}
+            )
+            if not set(values) <= allowed:
+                return None
+            entry.update(values)
+            if method == "update_finding":
+                _normalize_builder_severity(entry)
+                if entry.get("line") is None:
+                    entry["scope"] = "file"
+                else:
+                    entry.pop("scope", None)
+            continue
+
+        if method in {"remove_finding", "remove_check"}:
+            id_name = "finding_id" if method == "remove_finding" else "check_id"
+            values = _literal_call_values(call, (id_name,))
+            if values is None or set(values) != {id_name}:
+                return None
+            entries = findings if method == "remove_finding" else checks
+            entry = _entry_by_id(entries, values[id_name])
+            if entry is None:
+                return None
+            entries.remove(entry)
+            continue
+
+        # claim/retract are variadic positional-only in reviewer guidance, so
+        # evaluate every argument directly and reject unpacking/dynamic
+        # expressions.
+        if call.keywords:
+            return None
+        try:
+            paths = [ast.literal_eval(argument) for argument in call.args]
+        except (ValueError, SyntaxError):
+            return None
+        if not paths or any(not isinstance(path, str) for path in paths):
+            return None
+        if method == "claim_files_reviewed":
+            for path in paths:
+                if path not in reviewed_file_claims:
+                    reviewed_file_claims.append(path)
+        else:
+            if any(path not in reviewed_file_claims for path in paths):
+                return None
+            retracted = set(paths)
+            reviewed_file_claims = [
+                path for path in reviewed_file_claims if path not in retracted
+            ]
+
     return {
         "path": posixpath.join(
             env["PIRATEGOAT_OUTPUT_DIR"], f"{reviewer}-review.json"
         ),
-        "content": json.dumps({"reviewer": reviewer, "findings": findings}),
+        "content": json.dumps({
+            "reviewer": reviewer,
+            "findings": findings,
+            "checks": checks,
+            "reviewed_file_claims": reviewed_file_claims,
+            "meta": {
+                "next_finding_number": next_finding_number,
+                "next_check_number": next_check_number,
+            },
+        }),
         "source": "bash_builder_heredoc",
     }
 
@@ -899,12 +1045,12 @@ def extract_agent_findings(write_output: Any) -> dict[str, Any]:
             or any other value (gracefully handled).
 
     Returns:
-        Dict with keys: total_findings, findings_by_severity, issues.
+        Dict with keys: total_findings, findings_by_severity, findings.
     """
     empty = {
         "total_findings": 0,
         "findings_by_severity": {},
-        "issues": [],
+        "findings": [],
     }
 
     if not isinstance(write_output, dict):
@@ -914,34 +1060,34 @@ def extract_agent_findings(write_output: Any) -> dict[str, Any]:
     if not isinstance(review_findings, list):
         return empty
 
-    # Count by severity — prefer summary if present and consistent, else count from issues
+    # Count directly from canonical findings.
     severity_counts: dict[str, int] = {}
-    for issue in review_findings:
-        if not isinstance(issue, dict):
+    for finding in review_findings:
+        if not isinstance(finding, dict):
             continue
-        sev = issue.get("severity", "unknown")
+        sev = finding.get("severity", "unknown")
         severity_counts[sev] = severity_counts.get(sev, 0) + 1
 
-    # Normalize issue dicts to ensure file/line/severity/title are present
-    normalized_issues = []
-    for issue in review_findings:
-        if not isinstance(issue, dict):
+    # Normalize finding dicts to ensure overlap fields are present.
+    normalized_findings = []
+    for finding in review_findings:
+        if not isinstance(finding, dict):
             continue
-        normalized_issues.append({
-            "id": issue.get("id", ""),
-            "file": issue.get("file", ""),
-            "line": issue.get("line"),
-            "severity": issue.get("severity", "unknown"),
-            "title": issue.get("title", ""),
-            "description": issue.get("description", ""),
-            "recommendation": issue.get("recommendation", ""),
-            "confidence": issue.get("confidence", 0.0),
+        normalized_findings.append({
+            "id": finding.get("id", ""),
+            "file": finding.get("file", ""),
+            "line": finding.get("line"),
+            "severity": finding.get("severity", "unknown"),
+            "title": finding.get("title", ""),
+            "description": finding.get("description", ""),
+            "recommendation": finding.get("recommendation", ""),
+            "confidence": finding.get("confidence", 0.0),
         })
 
     return {
-        "total_findings": len(normalized_issues),
+        "total_findings": len(normalized_findings),
         "findings_by_severity": severity_counts,
-        "issues": normalized_issues,
+        "findings": normalized_findings,
     }
 
 
@@ -1139,10 +1285,10 @@ def format_quality_text_report(
             agent_totals[reviewer]["total_findings"] += findings["total_findings"]
             agent_totals[reviewer]["findings_by_severity"].update(findings["findings_by_severity"])
 
-            # Tag each issue with agent name for overlap detection
-            for issue in findings["issues"]:
-                issue["agent"] = reviewer
-                all_findings_for_overlap.append(issue)
+            # Tag each finding with agent name for overlap detection.
+            for finding in findings["findings"]:
+                finding["agent"] = reviewer
+                all_findings_for_overlap.append(finding)
 
     # Per-agent summary
     lines.append("")
@@ -1232,9 +1378,9 @@ def format_quality_json_report(
             agent_records[reviewer]["total_findings"] += findings["total_findings"]
             agent_records[reviewer]["findings_by_severity"].update(findings["findings_by_severity"])
 
-            for issue in findings["issues"]:
-                issue["agent"] = reviewer
-                all_findings_for_overlap.append(issue)
+            for finding in findings["findings"]:
+                finding["agent"] = reviewer
+                all_findings_for_overlap.append(finding)
 
     overlaps = detect_overlaps(all_findings_for_overlap)
 

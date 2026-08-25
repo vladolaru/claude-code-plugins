@@ -221,7 +221,7 @@ For each finding you are about to write, state in one sentence: "Doc [file:line]
 
 ## Output
 
-Use ReviewOutputBuilder per shared protocol. Write to `{output_dir}/docs-drift-review.json` and `.md`.
+Use the bootstrap-provided ReviewOutputBuilder lifecycle. Save the complete draft, inspect the compact receipt, then run the exact printed `FINALIZE REVIEW` command verbatim in a separate tool turn. Never write review JSON or Markdown directly, and never call `set_assessment()` as a raw reviewer.
 
 **Documentation drift categories:** `stale-symbol-reference`, `behavioral-drift`, `incomplete-api-enumeration`, `stale-example`
 

@@ -112,7 +112,7 @@ def setup_temp_git_repo(diff_file: str = None) -> str:
 
 # Scenario "expected" blocks are detection answer keys graded by
 # helpers.graders.grade_detection — see its docstring for key fields and the
-# matcher's claimed-set rule (one issue satisfies at most one spec).
+# matcher's claimed-set rule (one finding satisfies at most one spec).
 SCENARIOS = {
     "no_domain_files_approve": {
         "description": "Docs-only changes: every non-docs reviewer must short-circuit",
@@ -453,8 +453,16 @@ SCENARIOS = {
         "diff": str(FIXTURES_DIR / "php-clean-source.diff"),
         "grader": "output_pair",
         "expected": {
-            "security-reviewer": {"verdict_in": ["approve"], "max_severity": "low"},
-            "performance-reviewer": {"verdict_in": ["approve"], "max_severity": "low"},
+            "security-reviewer": {
+                "verdict_in": ["approve"], "max_severity": "low",
+                "min_check_count": 1,
+                "max_unclaimed_review_file_count": 0,
+            },
+            "performance-reviewer": {
+                "verdict_in": ["approve"], "max_severity": "low",
+                "min_check_count": 1,
+                "max_unclaimed_review_file_count": 0,
+            },
         },
     },
     "js_clean_review": {
@@ -463,7 +471,11 @@ SCENARIOS = {
         "diff": str(FIXTURES_DIR / "js-clean-source.diff"),
         "grader": "output_pair",
         "expected": {
-            "security-reviewer": {"verdict_in": ["approve"], "max_severity": "low"},
+            "security-reviewer": {
+                "verdict_in": ["approve"], "max_severity": "low",
+                "min_check_count": 1,
+                "max_unclaimed_review_file_count": 0,
+            },
         },
     },
 }

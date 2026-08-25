@@ -142,7 +142,7 @@ The alternative MUST pass ALL FOUR criteria. If any one fails, DROP the finding.
 
 ### Step 5: Write Output
 
-Use ReviewOutputBuilder per shared protocol. Write to `{output_dir}/devils-advocate-review.json` and `.md`.
+Use the bootstrap-provided ReviewOutputBuilder lifecycle. Save the complete draft, inspect the compact receipt, then run the exact printed `FINALIZE REVIEW` command verbatim in a separate tool turn. Never write review JSON or Markdown directly, and never call `set_assessment()` as a raw reviewer.
 
 **Finding format:** Each finding must include:
 1. **Problem reframing** — one sentence reframing what the PR is actually solving

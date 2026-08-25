@@ -29,7 +29,7 @@ Top-level keys:
 
 1. **`git_range`, `pr_id`, `output_dir`, `output_builder_path`, `changed_files`, `dispatched_agents`, `missing_agents`** — the run's metadata.
 2. **`change_purpose`** — what the change *claims* to accomplish (author-stated, distilled from the PR description, commits, and linked issues). Use to calibrate severity — a finding about missing validation is higher severity on a payment endpoint than on a debug utility. But treat it as claims to verify, not context to adopt: a discriminator or assumption asserted here (e.g. "condition X identifies population Y") is exactly the kind of claim findings exist to test, and a finding is not wrong for contradicting it. May be empty for non-PR reviews.
-3. **`reviews_by_agent`** — an object keyed by agent stem (`security-review`, `code-review`, …), each carrying that agent's `verdict`, `findings` (severity, optional `severity_floor`, `file`, `line`, `description`, `recommendation`, `category`, `confidence`), `checks` (question, method, result, and structured `source_reviewers`), and optionally prioritized `recommendations`.
+3. **`reviews_by_agent`** — an object keyed by agent stem (`security-review`, `code-review`, …), each carrying that agent's `verdict`, `findings` (severity, optional `severity_floor`, `file`, `line`, `description`, `recommendation`, `category`, `confidence`), `checks` (question, method, result, and structured `source_reviewers`), `positive_observations`, and optionally prioritized `recommendations`.
 4. **`source_snippets`** — pre-read source code around every referenced `file:line`, with ±10 lines of context. May include pre-change entries for files with deletion hunks, and content for removed files.
 5. **`scope_annotations`** — an object mapping `file:line` to a scope status:
    - `IN_SCOPE:in_hunk` — line inside a changed hunk
@@ -38,7 +38,7 @@ Top-level keys:
    - `OUT_OF_SCOPE:file_not_in_diff` and `OUT_OF_SCOPE:metadata_only` — structurally certain: the file is not in the diff at all, or its only change is a rename/chmod. The pipeline has already adjudicated these — see `prefiltered` below.
 6. **`prefiltered_out_of_scope`** — `{"count": N, "by_agent": {...}}`. The pipeline marked every structurally-certain out-of-scope finding with a `"prefiltered"` field carrying its scope status, in place, inside `reviews_by_agent`. **Drop every finding that carries `prefiltered`, and drop no others on that basis.** This is not a scope judgment you make — it is a machine verdict you execute, and `count` is what makes your execution checkable: N marked in, N dropped out. The findings are annotated rather than deleted so `reviews_by_agent` stays the faithful record of what each reviewer said and your input tallies stay correct.
 7. **`host_context_banner`** — the degraded-host banner, if one applies. Carry it into your output so it renders above the findings.
-8. **`review_accounting`** — run-level reviewed-file accounting. The pipeline renders it into `review-record.md`; you do not need to restate it.
+8. **`review_accounting`** — run-level reviewed-file accounting. Use its exact structured completeness/gap facts when calibrating confidence and the initial assessment. The pipeline carries and renders this object verbatim in `review-record.md`; do not recompute, summarize, or rewrite it into the ledger.
 
 **Key fields:**
 - **`dispatched_agents`** — the agents that were dispatched, already normalized to `reviews_by_agent`'s own key spelling. May be absent (older runs, or a run with no dispatch plan).
@@ -58,7 +58,7 @@ Read `reconciliation-context.json`. Every agent's findings are under `reviews_by
 
 3. **When multiple agents flag the same concern**, note convergence — but weigh it by method, not by head-count. Agreement counts only across **distinct verification methods** (one read the file, another traced callers, a third ran the code); N agents who reached the same conclusion via the same method (the same grep, the same snippet window) are **one probe**, not N confirmations. A single agent's finding with strong evidence outweighs any number of method-correlated opinions. See "Verification-Method Weighting & Conflicts" below.
 
-4. **Track agents with no findings.** If an agent key exists in `reviews_by_agent` but has an empty `findings` list (or no issues at all), note it as an agent that reviewed but found nothing.
+4. **Track agents with no findings.** If an agent key exists in `reviews_by_agent` but has an empty `findings` list, note it as an agent that reviewed but found nothing.
 
 5. **Separate not-applicable agents.** For each agent in `reviews_by_agent`, check `verdict`. If it is `"not_applicable"`, the agent determined the changes are not relevant to its domain — it did NOT review the code. Record these separately from agents that performed actual reviews. The `skip_reason` field explains why. Do not include not-applicable agents in finding counts or agent-contribution tallies.
 
@@ -160,6 +160,10 @@ from review.agent.output import ReviewOutputBuilder
 
 builder = ReviewOutputBuilder(pr_id="PR_ID_FROM_CONTEXT", reviewer="reconciliator")
 
+# The reconciliator owns this new artifact's stable identities. Never copy a
+# source review's fN/cN id or assign an id yourself: add_finding() and
+# _record_check() allocate the ledger's monotonic ids.
+
 # For each verified concern:
 builder.add_finding(
     severity="high",
@@ -185,6 +189,13 @@ builder.add_finding(
 # — the pipeline invalidates it rather than let it contradict the ledger.
 builder.set_assessment(
     "OVERALL_ASSESSMENT_2_TO_3_SENTENCES"
+)
+
+# Carry distinct, verified positive observations from reviews_by_agent.
+# Deduplicate equivalent observations; do not synthesize praise that no
+# reviewer supplied.
+builder.add_positive_observation(
+    "VERIFIED_POSITIVE_OBSERVATION_FROM_A_REVIEWER"
 )
 
 # Prioritized recommendations. These render as a "## Recommendations"

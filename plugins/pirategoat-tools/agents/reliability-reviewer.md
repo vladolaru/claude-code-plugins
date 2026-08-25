@@ -213,6 +213,6 @@ For each finding you are about to write, state in one sentence: 'If [specific op
 
 ## Output
 
-Use ReviewOutputBuilder per shared protocol. Write to `{output_dir}/reliability-review.json` and `.md`.
+Use the bootstrap-provided ReviewOutputBuilder lifecycle. Save the complete draft, inspect the compact receipt, then run the exact printed `FINALIZE REVIEW` command verbatim in a separate tool turn. Never write review JSON or Markdown directly, and never call `set_assessment()` as a raw reviewer.
 
 **Reliability categories:** `missing-error-handling`, `silent-failure`, `missing-logging`, `missing-timeout`, `missing-rollback`, `missing-feature-flag`, `missing-circuit-breaker`, `missing-health-check`, `error-format-inconsistency`, `missing-observability`

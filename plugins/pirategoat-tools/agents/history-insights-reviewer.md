@@ -252,7 +252,7 @@ For each finding, score confidence 0-100 before reporting:
 
 ## Output
 
-Use ReviewOutputBuilder per shared protocol. Write to `{output_dir}/history-insights-review.json` and `.md`.
+Use the bootstrap-provided ReviewOutputBuilder lifecycle. Save the complete draft, inspect the compact receipt, then run the exact printed `FINALIZE REVIEW` command verbatim in a separate tool turn. Never write review JSON or Markdown directly, and never call `set_assessment()` as a raw reviewer.
 
 **Categories:** `applicable-fix`, `enhancement-opportunity`, `cautionary-precedent`, `edge-case-precedent`, `performance-precedent`, `security-precedent`, `other`
 

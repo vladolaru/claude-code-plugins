@@ -83,8 +83,8 @@ def _make_review_json(
         findings = []
 
     severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
-    for issue in findings:
-        sev = issue.get("severity", "info")
+    for finding in findings:
+        sev = finding.get("severity", "info")
         if sev in severity_counts:
             severity_counts[sev] += 1
 
@@ -110,18 +110,18 @@ def _make_review_json(
     }
 
 
-def _make_issue(
+def _make_finding(
     severity="high",
     title="Test Issue",
     file="src/Foo.php",
     line=10,
-    issue_id="abc1",
+    finding_id="abc1",
     description="desc",
     recommendation="fix it",
 ):
-    """Build a single issue dict."""
+    """Build a single finding dict."""
     return {
-        "id": issue_id,
+        "id": finding_id,
         "severity": severity,
         "title": title,
         "file": file,
@@ -137,16 +137,16 @@ def _make_issue(
 # ---------------------------------------------------------------------------
 
 class TestExtractAgentFindings:
-    """extract_agent_findings(write_output) → dict with total, by_severity, issues list."""
+    """extract_agent_findings returns canonical finding-domain values."""
 
     def test_basic_extraction(self):
         """Extracts finding counts from a well-formed review JSON."""
         review = _make_review_json(
             reviewer="security",
             findings=[
-                _make_issue(severity="critical", title="SQL Injection", file="a.php", line=10, issue_id="s1"),
-                _make_issue(severity="high", title="XSS", file="b.php", line=20, issue_id="s2"),
-                _make_issue(severity="medium", title="Missing escape", file="c.php", line=30, issue_id="s3"),
+                _make_finding(severity="critical", title="SQL Injection", file="a.php", line=10, finding_id="s1"),
+                _make_finding(severity="high", title="XSS", file="b.php", line=20, finding_id="s2"),
+                _make_finding(severity="medium", title="Missing escape", file="c.php", line=30, finding_id="s3"),
             ],
         )
         result = extract_agent_findings(review)
@@ -156,31 +156,31 @@ class TestExtractAgentFindings:
         assert result["findings_by_severity"]["medium"] == 1
         assert result["findings_by_severity"].get("low", 0) == 0
 
-    def test_issues_list_preserved(self):
-        """The parsed issues list is returned for downstream overlap detection."""
-        issues = [
-            _make_issue(severity="high", file="x.php", line=42, issue_id="h1"),
-            _make_issue(severity="low", file="y.php", line=7, issue_id="h2"),
+    def test_findings_list_preserved(self):
+        """Parsed findings are returned for downstream overlap detection."""
+        findings = [
+            _make_finding(severity="high", file="x.php", line=42, finding_id="h1"),
+            _make_finding(severity="low", file="y.php", line=7, finding_id="h2"),
         ]
-        review = _make_review_json(findings=issues)
+        review = _make_review_json(findings=findings)
         result = extract_agent_findings(review)
-        assert len(result["issues"]) == 2
-        assert result["issues"][0]["file"] == "x.php"
-        assert result["issues"][0]["line"] == 42
+        assert len(result["findings"]) == 2
+        assert result["findings"][0]["file"] == "x.php"
+        assert result["findings"][0]["line"] == 42
 
-    def test_missing_issues_key(self):
-        """Gracefully handles review JSON with no 'issues' key."""
+    def test_missing_findings_key(self):
+        """Gracefully handles review JSON with no findings key."""
         review = {"pr_id": "1", "reviewer": "security", "verdict": "approve"}
         result = extract_agent_findings(review)
         assert result["total_findings"] == 0
 
     def test_missing_summary_key(self):
-        """Gracefully handles review JSON with no 'summary' key — counts from issues."""
+        """Gracefully handles review JSON with no summary key."""
         review = {
             "pr_id": "1",
             "reviewer": "security",
             "verdict": "comment",
-            "findings": [_make_issue(severity="high")],
+            "findings": [_make_finding(severity="high")],
         }
         result = extract_agent_findings(review)
         assert result["total_findings"] == 1
@@ -202,7 +202,7 @@ class TestExtractIngestOutcomes:
     def test_all_categories(self):
         """Recognizes all five ingest categories in text output."""
         texts = [
-            "F1 [IN_SCOPE] VERIFIED:\n  Status: VERIFIED\n  Rationale: confirmed issue",
+            "F1 [IN_SCOPE] VERIFIED:\n  Status: VERIFIED\n  Rationale: confirmed finding",
             "F2 [OUT_OF_SCOPE: file not in diff]: Missing escape",
             "F3 [IN_SCOPE] FAILED:\n  Status: FAILED\n  Rationale: code already handles this",
             "F4 [IN_SCOPE] VERIFIED but STYLE/PREFERENCE:\n  Naming convention preference",
@@ -260,7 +260,7 @@ class TestComputeSurvivalRate:
 
     def test_partial_survival(self):
         """Mix of confirmed/likely_valid and filtered → fractional rate."""
-        agent_findings = {"total_findings": 5, "findings_by_severity": {}, "issues": []}
+        agent_findings = {"total_findings": 5, "findings_by_severity": {}, "findings": []}
         ingest_outcomes = {
             "confirmed": 2, "likely_valid": 1,
             "false_positive": 1, "out_of_scope": 1, "style": 0,
@@ -271,7 +271,7 @@ class TestComputeSurvivalRate:
 
     def test_zero_findings(self):
         """Zero total findings → 0.0 (avoid division by zero)."""
-        agent_findings = {"total_findings": 0, "findings_by_severity": {}, "issues": []}
+        agent_findings = {"total_findings": 0, "findings_by_severity": {}, "findings": []}
         ingest_outcomes = {
             "confirmed": 0, "likely_valid": 0,
             "false_positive": 0, "out_of_scope": 0, "style": 0,
@@ -281,7 +281,7 @@ class TestComputeSurvivalRate:
 
     def test_missing_total_findings(self):
         """Missing total_findings key → 0.0."""
-        agent_findings = {"findings_by_severity": {}, "issues": []}
+        agent_findings = {"findings_by_severity": {}, "findings": []}
         ingest_outcomes = {"confirmed": 1, "likely_valid": 0, "false_positive": 0, "out_of_scope": 0, "style": 0}
         rate = compute_survival_rate(agent_findings, ingest_outcomes)
         assert rate == pytest.approx(0.0)
@@ -376,7 +376,7 @@ format_quality_json_report = _mod.format_quality_json_report
 def _make_dispatch(reviewer="security", findings=None, ingest_texts=None):
     """Build a (meta, data) tuple mimicking a reviewer dispatch."""
     if findings is None:
-        findings = [_make_issue(severity="high", title="XSS", file="f.php", line=1)]
+        findings = [_make_finding(severity="high", title="XSS", file="f.php", line=1)]
     review = _make_review_json(reviewer=reviewer, findings=findings)
     review_json_str = json.dumps(review)
     data = {
@@ -684,14 +684,14 @@ class TestBashBuilderRecognition:
         assert record["source"] == "bash_builder_heredoc"
         review = json.loads(record["content"])
         assert review["reviewer"] == "security"
-        kw_issue, positional_issue = review["findings"]
-        assert kw_issue["severity"] == "high"
-        assert kw_issue["file"] == "src/f.php"
-        assert kw_issue["line"] == 42
-        assert "Reviewer's finding" in kw_issue["title"]
-        assert positional_issue["severity"] == "medium"
-        assert positional_issue["file"] == "src/g.php"
-        assert positional_issue["line"] == 7
+        kw_finding, positional_finding = review["findings"]
+        assert kw_finding["severity"] == "high"
+        assert kw_finding["file"] == "src/f.php"
+        assert kw_finding["line"] == 42
+        assert "Reviewer's finding" in kw_finding["title"]
+        assert positional_finding["severity"] == "medium"
+        assert positional_finding["file"] == "src/g.php"
+        assert positional_finding["line"] == 7
 
     def test_builder_record_path_is_posix_across_analysis_hosts(
         self, monkeypatch
@@ -742,9 +742,9 @@ class TestBashBuilderRecognition:
         )
         record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
 
-        [issue] = json.loads(record["content"])["findings"]
-        assert issue["severity"] == "high"
-        assert issue["confidence"] == 0.9
+        [finding] = json.loads(record["content"])["findings"]
+        assert finding["severity"] == "high"
+        assert finding["confidence"] == 0.9
 
     def test_fully_positional_call_reconstructs_category_and_line(self):
         """add_finding accepts category and line positionally after
@@ -758,9 +758,9 @@ class TestBashBuilderRecognition:
         )
         record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
 
-        [issue] = json.loads(record["content"])["findings"]
-        assert issue["category"] == "xss"
-        assert issue["line"] == 42
+        [finding] = json.loads(record["content"])["findings"]
+        assert finding["category"] == "xss"
+        assert finding["line"] == 42
 
     def test_reconstruction_applies_severity_floor_promotion(self):
         """The builder lowercases severities and promotes to severity_floor;
@@ -775,10 +775,81 @@ class TestBashBuilderRecognition:
         )
         record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
 
-        [issue] = json.loads(record["content"])["findings"]
-        assert issue["severity"] == "medium"
+        [finding] = json.loads(record["content"])["findings"]
+        assert finding["severity"] == "medium"
+        assert finding["severity_floor"] == "medium"
 
-    def test_issue_added_after_final_save_is_not_reconstructed(self):
+    def test_reconstructs_exact_structured_mutations_before_the_last_save(self):
+        body = (
+            "from review.agent.output import ReviewOutputBuilder\n"
+            'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
+            'builder.add_finding("high", "Keep", "src/a.php", "d", "r", line=3)\n'
+            'builder.add_finding("low", "Remove", "src/b.php", "d", "r", line=7)\n'
+            'builder.update_finding("f1", title="Updated", severity="medium")\n'
+            'builder.remove_finding("f2")\n'
+            'builder.record_check("Can callers reach it?", "Read every caller", "No callers remain")\n'
+            'builder.record_check("Discarded?", "Temporary probe", "Superseded")\n'
+            'builder.update_check("c1", result="No in-tree callers remain")\n'
+            'builder.remove_check("c2")\n'
+            'builder.claim_files_reviewed("src/large-a.php", "src/large-b.php")\n'
+            'builder.retract_reviewed_file_claims("src/large-b.php")\n'
+            "builder.save_draft()\n"
+            'builder.add_finding("critical", "Unsaved", "src/c.php", "d", "r", line=9)\n'
+            'builder.claim_files_reviewed("src/never-saved.php")\n'
+        )
+
+        record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
+        review = json.loads(record["content"])
+
+        assert review["findings"] == [{
+            "id": "f1",
+            "severity": "medium",
+            "title": "Updated",
+            "file": "src/a.php",
+            "description": "d",
+            "recommendation": "r",
+            "category": "general",
+            "line": 3,
+            "confidence": 0.95,
+        }]
+        assert review["checks"] == [{
+            "id": "c1",
+            "question": "Can callers reach it?",
+            "method": "Read every caller",
+            "result": "No in-tree callers remain",
+            "source_reviewers": ["security"],
+        }]
+        assert review["reviewed_file_claims"] == ["src/large-a.php"]
+        assert review["meta"] == {
+            "next_finding_number": 3,
+            "next_check_number": 3,
+        }
+
+    @pytest.mark.parametrize(
+        "mutation",
+        [
+            'builder.update_finding(finding_id, title="dynamic")',
+            'builder.remove_finding(finding_id)',
+            'builder.update_check(check_id, result="dynamic")',
+            'builder.remove_check(check_id)',
+            'builder.claim_files_reviewed(*paths)',
+            'builder.retract_reviewed_file_claims(*paths)',
+        ],
+    )
+    def test_nonliteral_mutations_fail_reconstruction_closed(self, mutation):
+        body = (
+            "from review.agent.output import ReviewOutputBuilder\n"
+            'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
+            'builder.add_finding("high", "Existing", "src/a.php", "d", "r", line=3)\n'
+            f"{mutation}\n"
+            "builder.save_draft()\n"
+        )
+
+        assert _mod._builder_review_from_heredoc(
+            _builder_heredoc(body=body)
+        ) is None
+
+    def test_finding_added_after_final_save_is_not_reconstructed(self):
         """The builder persists its state at save(): an add_finding() after
         the last save executed but entered no JSON — reconstructing it
         would fabricate findings into the quality report."""
@@ -793,12 +864,12 @@ class TestBashBuilderRecognition:
         )
         record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
 
-        issues = json.loads(record["content"])["findings"]
-        assert [issue["title"] for issue in issues] == ["Persisted"]
+        findings = json.loads(record["content"])["findings"]
+        assert [finding["title"] for finding in findings] == ["Persisted"]
 
-    def test_issues_before_intermediate_saves_all_reach_the_final_save(self):
+    def test_findings_before_intermediate_saves_all_reach_the_final_save(self):
         """Builder state accumulates across saves: everything added before
-        the FINAL save is in the persisted JSON, including issues that
+        the FINAL save is in the persisted JSON, including findings that
         also went out with an earlier save."""
         body = (
             "from review.agent.output import ReviewOutputBuilder\n"
@@ -812,14 +883,14 @@ class TestBashBuilderRecognition:
         )
         record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
 
-        issues = json.loads(record["content"])["findings"]
-        assert [issue["title"] for issue in issues] == ["First", "Second"]
+        findings = json.loads(record["content"])["findings"]
+        assert [finding["title"] for finding in findings] == ["First", "Second"]
 
-    def test_builder_reassignment_supersedes_earlier_issues(self):
+    def test_builder_reassignment_supersedes_earlier_findings(self):
         """save() persists ONE builder instance's state: a heredoc that
         reassigns the builder to correct its review and saves again leaves
-        only the final instance's issues in the artifact. Reconstructing
-        the superseded instance's issues would merge discarded findings
+        only the final instance's findings in the artifact. Reconstructing
+        the superseded instance's findings would merge discarded findings
         into severity, overlap, and survival metrics."""
         body = (
             "from review.agent.output import ReviewOutputBuilder\n"
@@ -834,10 +905,10 @@ class TestBashBuilderRecognition:
         )
         record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
 
-        issues = json.loads(record["content"])["findings"]
-        assert [issue["title"] for issue in issues] == ["Final"]
+        findings = json.loads(record["content"])["findings"]
+        assert [finding["title"] for finding in findings] == ["Final"]
 
-    def test_reconstruction_binds_issues_to_the_saved_receiver(self):
+    def test_reconstruction_binds_findings_to_the_saved_receiver(self):
         """add_finding() on a builder variable other than the saved receiver
         persisted nothing — collecting it fabricates findings."""
         body = (
@@ -852,8 +923,8 @@ class TestBashBuilderRecognition:
         record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
 
         assert record is not None
-        issues = json.loads(record["content"])["findings"]
-        assert [issue["title"] for issue in issues] == ["Saved"]
+        findings = json.loads(record["content"])["findings"]
+        assert [finding["title"] for finding in findings] == ["Saved"]
 
     def test_reconstruction_fails_closed_on_non_name_receiver(self):
         """A save through anything but a plain variable is ambiguous."""
@@ -1129,8 +1200,8 @@ class TestBashBuilderRecognition:
         data = _mod.parse_subagent_log(str(log))
 
         [record] = data["write_outputs"]
-        issues = json.loads(record["content"])["findings"]
-        assert [issue["title"] for issue in issues] == ["Corrected", "Added"]
+        findings = json.loads(record["content"])["findings"]
+        assert [finding["title"] for finding in findings] == ["Corrected", "Added"]
 
     def test_unresolved_builder_heredoc_does_not_count_as_saved(self, tmp_path):
         """No paired tool result means the save was never confirmed."""
@@ -1196,12 +1267,12 @@ class TestStraightLineReconstruction:
 
 
 class TestTextReportFindingCounts:
-    """A save that parses as a review payload carries its exact issue list.
+    """A save that parses as a review payload carries its exact finding list.
     The keyword heuristic estimated JSON findings by counting '"id"' — but
     the builder-heredoc reconstruction omits ids entirely, so a canonical
     one-finding save rendered as ~0 findings."""
 
-    def test_reconstructed_builder_save_counts_issues_exactly(self, tmp_path):
+    def test_reconstructed_builder_save_counts_findings_exactly(self, tmp_path):
         log = tmp_path / "agent.jsonl"
         entries = [
             _bash_entry(_builder_heredoc(), tool_id="builder-1"),
@@ -1296,7 +1367,7 @@ class TestSaveIntegrity:
         entries = [
             _write_tool_entry(
                 "/tmp/pr-review-42/security-review.json",
-                json.dumps({"reviewer": "security", "issues": []}),
+                json.dumps({"reviewer": "security", "findings": []}),
             ),
             _tool_result_entry("write-1"),
             _bash_entry(_builder_heredoc(), tool_id="builder-1"),
@@ -1316,7 +1387,7 @@ class TestSaveIntegrity:
             _tool_result_entry("builder-1"),
             _write_tool_entry(
                 "/tmp/pr-review-42/security-review.json",
-                json.dumps({"reviewer": "security", "issues": []}),
+                json.dumps({"reviewer": "security", "findings": []}),
             ),
             _tool_result_entry("write-1"),
         ]
@@ -1336,7 +1407,7 @@ class TestSaveIntegrity:
         entries = [
             _write_tool_entry(
                 "/out/security-review.json",
-                json.dumps({"reviewer": "security", "issues": []}),
+                json.dumps({"reviewer": "security", "findings": []}),
             ),
             _tool_result_entry("write-1"),
             _bash_entry(builder_save, tool_id="builder-1"),
@@ -1379,7 +1450,7 @@ class TestSaveIntegrity:
             _tool_result_entry("builder-1"),
             _write_tool_entry(
                 "/tmp/pr-review-42/security-review.json",
-                json.dumps({"reviewer": "security", "issues": []}),
+                json.dumps({"reviewer": "security", "findings": []}),
             ),
             _tool_result_entry("write-1", is_error=True),
         ]
@@ -1398,7 +1469,7 @@ class TestSaveIntegrity:
         entries = [
             _write_tool_entry(
                 "/tmp/pr-review-42/security-review.json",
-                json.dumps({"reviewer": "security", "issues": []}),
+                json.dumps({"reviewer": "security", "findings": []}),
             ),
         ]
         log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")

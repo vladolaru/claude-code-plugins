@@ -79,7 +79,9 @@ def test_agent_uses_bounded_upstream_discovery_then_rule_zero_exit():
     assert "omit" in section, "RULE 0 exit must omit the unverifiable finding"
 
 
-def test_agent_output_filename_matches_review_output_builder_contract():
+def test_agent_uses_the_bootstrap_owned_output_lifecycle():
     content = AGENT_PATH.read_text()
-    assert "ecosystem-integration-review.{json,md}" in content
-    assert "ecosystem-integration-reviewer.{json,md}" not in content
+    assert "Use the bootstrap-provided ReviewOutputBuilder lifecycle" in content
+    assert "exact printed `FINALIZE REVIEW` command verbatim" in content
+    assert "Never write review JSON or Markdown directly" in content
+    assert "ecosystem-integration-review.{json,md}" not in content

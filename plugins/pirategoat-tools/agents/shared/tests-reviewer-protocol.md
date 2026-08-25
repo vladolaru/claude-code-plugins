@@ -20,6 +20,8 @@ A test has value only if it fails when code is broken and passes when code is co
 
 Ask these as open questions, not yes/no confirmations.
 
+When a review conclusion depends on a material negative such as “no assertion exercises this branch,” “no consumer relies on this helper,” or “no race remains,” record the dependent-side verification as structured evidence with `builder.record_check(question=..., method=..., result=...)`. A prose assurance or an empty finding list does not preserve what was checked; the shared reviewer protocol's absence-claim rules still apply.
+
 ## Overprescriptive Test Diagnosis
 
 **Refactoring Resilience Test:** Imagine renaming an internal variable, rewording a string, adding a new field. Would any break this test?

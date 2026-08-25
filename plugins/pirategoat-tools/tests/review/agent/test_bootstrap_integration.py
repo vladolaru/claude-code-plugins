@@ -604,6 +604,98 @@ class TestCanonicalExecutableBuilderSource:
         assert f"{tmp_path}/security-review.json" in prompt
         assert f"{tmp_path}/security-review.md" not in prompt
 
+    def test_every_bootstrapped_reviewer_sees_only_the_canonical_contract(
+        self, tmp_path
+    ):
+        forbidden = (
+            "add_issue",
+            "add_clearance",
+            "add_deferred_reviewed",
+            "add_tool_result",
+            "REVIEW DIGEST",
+        )
+        required = (
+            "ReviewOutputBuilder.open",
+            "add_finding",
+            "record_check",
+            "claim_files_reviewed",
+            "save_draft",
+            "run the exact FINALIZE REVIEW command printed by",
+        )
+
+        for agent_name in ALL_AGENTS:
+            prompt = build_output(
+                agent_name=agent_name,
+                plugin_root=str(PLUGIN_ROOT),
+                status="OK",
+                review_rules="rules",
+                domain_rules=None,
+                scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+                exploration_scope=None,
+                output_dir=str(tmp_path),
+                pr_number="42",
+                reviewer_name=derive_reviewer_name(agent_name),
+                review_claimable_count=1,
+                has_php=False,
+            )
+            assert all(token in prompt for token in required), agent_name
+            assert not any(token in prompt for token in forbidden), agent_name
+
+    def test_registered_reviewer_definitions_do_not_restore_raw_output_paths(self):
+        stale = "Use ReviewOutputBuilder per shared protocol. Write to"
+        canonical = (
+            "Use the bootstrap-provided ReviewOutputBuilder lifecycle. "
+            "Save the complete draft"
+        )
+
+        raw_reviewers = set(ALL_AGENTS) - {
+            "decision-reviewer",
+            "repo-reviewer-adapter",
+        }
+        for agent_name in sorted(raw_reviewers):
+            definition = (PLUGIN_ROOT / "agents" / f"{agent_name}.md").read_text()
+            assert stale not in definition, agent_name
+            assert canonical in definition, agent_name
+            assert "builder.set_assessment(" not in definition, agent_name
+
+    def test_shared_protocol_teaches_the_complete_draft_lifecycle(self):
+        protocol = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
+
+        for phrase in (
+            "rehydrates the existing complete draft",
+            "DRAFT TOTALS",
+            "full persisted draft",
+            "CHANGED",
+            "current invocation",
+            "no claimable review files remain unclaimed",
+            "separate tool turn",
+            "verbatim",
+            "Raw reviewers must not call `set_assessment()`",
+        ):
+            assert phrase in protocol
+
+        lifecycle_section = protocol.split(
+            "## Canonical Draft Lifecycle", 1
+        )[1].split("\n## ", 1)[0]
+        lifecycle = [
+            "ReviewOutputBuilder.open",
+            "builder.add_finding",
+            "builder.record_check",
+            "builder.claim_files_reviewed",
+            "builder.save_draft",
+            "FINALIZE REVIEW",
+        ]
+        positions = [lifecycle_section.index(token) for token in lifecycle]
+        assert positions == sorted(positions)
+
+    def test_tests_protocol_requires_structured_evidence_for_material_negatives(self):
+        protocol = (
+            PLUGIN_ROOT / "agents/shared/tests-reviewer-protocol.md"
+        ).read_text()
+
+        assert "material negative" in protocol
+        assert "builder.record_check(" in protocol
+
     def test_continuation_index_precedes_the_executable_builder_snippet(
         self, tmp_path
     ):
@@ -1102,6 +1194,22 @@ class TestDecisionReviewerContract:
         assert "`issues[].id`" not in critic
         assert "`## Clearances" not in critic
 
+    def test_critic_owns_only_schema_two_finding_and_check_proposals(self):
+        critic = (PLUGIN_ROOT / "agents/decision-reviewer.md").read_text()
+
+        assert "schema 2" in critic
+        assert '"kind": "finding"' in critic
+        assert '"kind": "check"' in critic
+        assert "The orchestrator owns settlement" in critic
+        assert "Do not supply target ids for `add`" in critic
+        for pipeline_owned in (
+            "`source_reviewers`",
+            "`adjustment_id`",
+            "`applied`",
+            "`revised_assessment`",
+        ):
+            assert pipeline_owned in critic
+
 
 class TestRepoReviewerAdapterContract:
     def test_empty_review_uses_the_same_draft_finalization_flow(self):
@@ -1114,12 +1222,43 @@ class TestRepoReviewerAdapterContract:
 
         assert "`save_draft()`" in empty_branch
         assert "compact receipt" in empty_branch
-        assert "`finalize_review_command`" in empty_branch
+        assert "exact printed `FINALIZE REVIEW` command verbatim" in empty_branch
+        assert "`finalize_review_command`" not in empty_branch
         assert "`save()`" not in empty_branch
         assert "standard pirategoat finding" in adapter
         assert "Tag EVERY finding" in adapter
         assert "standard pirategoat issue" not in adapter
         assert "Tag EVERY issue" not in adapter
+
+    def test_example_runs_the_printed_finalization_command_verbatim(self):
+        adapter = (
+            PLUGIN_ROOT / "agents/repo-reviewer-adapter.md"
+        ).read_text()
+
+        assert "receipt = builder.save_draft()" not in adapter
+        assert "builder.save_draft()" in adapter
+        assert "exact printed `FINALIZE REVIEW` command verbatim" in adapter
+        assert "separate tool turn" in adapter
+
+
+class TestReconcilerReviewDomainOwnership:
+    def test_reconciler_carries_complete_structured_reviewer_evidence(self):
+        reconciler = (
+            PLUGIN_ROOT / "agents/review-reconciliator.md"
+        ).read_text()
+
+        for token in (
+            "reviews_by_agent",
+            "positive_observations",
+            "review_accounting",
+            "builder.set_assessment(",
+            "builder._record_check(",
+            "source_reviewers=",
+        ):
+            assert token in reconciler
+        assert "ReviewOutputBuilder(pr_id=" in reconciler
+        assert "ReviewOutputBuilder.open(" not in reconciler
+        assert "builder.add_positive_observation(" in reconciler
 
 
 class TestAPIContractReviewerReturnSideHooks:

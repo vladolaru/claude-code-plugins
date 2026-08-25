@@ -157,6 +157,6 @@ Report only references that fail verification or are unverifiable. Structure eac
 
 ## Output
 
-Use ReviewOutputBuilder per shared protocol. Write to `{output_dir}/reference-integrity-reviewer.json` and `.md`.
+Use the bootstrap-provided ReviewOutputBuilder lifecycle. Save the complete draft, inspect the compact receipt, then run the exact printed `FINALIZE REVIEW` command verbatim in a separate tool turn. Never write review JSON or Markdown directly, and never call `set_assessment()` as a raw reviewer.
 
 **Reference integrity categories:** `wrong-registry`, `missing-asset`, `broken-reference`, `stale-url`, `mismatched-enum`, `unverifiable-advisory`

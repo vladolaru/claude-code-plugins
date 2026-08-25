@@ -165,7 +165,7 @@ entirely — the save command below rejects a STAND/ESCALATE verdict submitted
 alongside a non-empty adjustments batch, since that is a contradiction, not a
 degraded case to quarantine downstream.
 
-The proposal reaches findings and recorded checks, not ledger-level prose. You author only the action-specific target/fields plus a rationale. Do not supply target ids for `add`, any ids inside `fields`, `source_reviewers`, `critic_adjustment`, `adjustment_id`, `spot_check`, `rejected`, `rejection_reason`, `applied`, `adjudication`, or `revised_assessment`; the save and settlement scripts own identity, provenance, and lifecycle state. The reconciler's overall assessment is settled later by the orchestrator, so a content change must stay attached to a finding or check here:
+This is a schema 2 proposal contract: you address only stable `finding` and `check` targets, not ledger-level prose, and author only the action-specific target/fields plus a rationale. Do not supply target ids for `add`, any ids inside `fields`, `source_reviewers`, `critic_adjustment`, `adjustment_id`, `spot_check`, `rejected`, `rejection_reason`, `applied`, `adjudication`, or `revised_assessment`; the ledger/save paths own all generated IDs and source-reviewer provenance. The orchestrator owns settlement, applied/rejected state, assessment invalidation, and any revised assessment, so a content change must stay attached to a finding or check here:
 
 ```json
 {

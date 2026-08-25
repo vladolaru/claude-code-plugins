@@ -54,9 +54,9 @@ def _write_review_pair(output_dir: Path, reviewer: str = "security") -> None:
         line=42,
     )
     builder.record_check(
-        "Can request input reach rendered output?",
-        "Trace the request value to the rendering sink",
-        "Yes; the value reaches the sink without escaping.",
+        "Does any caller escape the value before rendered output?",
+        "Enumerate every caller and trace each path to the rendering sink",
+        "No caller escapes the value before it reaches the sink.",
     )
     (output_dir / f"{reviewer}-review-accounting-input.json").write_text(json.dumps({
         "schema": 3,
@@ -88,12 +88,27 @@ def _run_eval(*args: str, cwd: Path) -> subprocess.CompletedProcess:
     )
 
 
+def test_material_negative_scenarios_grade_structured_evidence():
+    """False-positive probes must grade review state, not reassuring prose."""
+    for scenario_name in ("php_clean_review", "js_clean_review"):
+        expected = _eval_mod.SCENARIOS[scenario_name]["expected"]
+        for answer_key in expected.values():
+            assert answer_key["min_check_count"] == 1
+            assert answer_key["max_unclaimed_review_file_count"] == 0
+
+
 class TestGradeOnlyMode:
     """--grade-only is the entry point AGENTS.md documents for grading
     saved review output without model calls."""
 
     def test_grades_a_passing_review_pair(self, tmp_path):
         _write_review_pair(tmp_path)
+
+        review = json.loads((tmp_path / "security-review.json").read_text())
+        assert len(review["checks"]) == 1
+        assert review["checks"][0]["source_reviewers"] == ["security"]
+        assert review["unclaimed_review_files"] == []
+        assert review["review_accounted_file_count"] == 1
 
         result = _run_eval("--grade-only", str(tmp_path), cwd=tmp_path)
 

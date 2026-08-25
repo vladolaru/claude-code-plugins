@@ -306,7 +306,7 @@ class TestGradeReviewJson:
         result = grade_review_json(path)
         assert not result.passed
 
-    def test_issue_with_invalid_severity_fails(self, tmp_dir):
+    def test_finding_with_invalid_severity_fails(self, tmp_dir):
         path = os.path.join(tmp_dir, "bad-sev.json")
         data = {
             "pr_id": "1",
@@ -547,7 +547,7 @@ class TestGradeReviewBaseline:
         assert any("git_range_used" in f for f in result.failures)
 
 
-def test_issue_accepts_behavior_evidence_and_source_cited():
+def test_finding_accepts_behavior_evidence_and_source_cited():
     b = ReviewOutputBuilder(reviewer="ecosystem-integration-reviewer", pr_id="0")
     b.add_finding(
         severity="medium",
@@ -566,7 +566,7 @@ def test_issue_accepts_behavior_evidence_and_source_cited():
     assert finding["source_cited"] == "woocommerce/.../class-wc-order.php:200"
 
 
-def test_issue_behavior_evidence_optional():
+def test_finding_behavior_evidence_optional():
     b = ReviewOutputBuilder(reviewer="security-reviewer", pr_id="0")
     b.add_finding(
         severity="low", category="xss", title="X", description="y",
@@ -578,7 +578,7 @@ def test_issue_behavior_evidence_optional():
     assert "source_cited" not in output["findings"][0]
 
 
-def test_issue_behavior_evidence_invalid_rejected():
+def test_finding_behavior_evidence_invalid_rejected():
     import pytest
 
     b = ReviewOutputBuilder(reviewer="ecosystem-integration-reviewer", pr_id="0")
@@ -590,7 +590,7 @@ def test_issue_behavior_evidence_invalid_rejected():
         )
 
 
-def test_issue_behavior_evidence_rejects_speculative():
+def test_finding_behavior_evidence_rejects_speculative():
     import pytest
 
     b = ReviewOutputBuilder(reviewer="ecosystem-integration-reviewer", pr_id="0")
@@ -616,21 +616,21 @@ class TestMatchFindings:
         ],
     }
 
-    def _issue(self, **kw):
+    def _finding(self, **kw):
         base = {"file": "src/UserHandler.php", "line": 6, "title": "",
                 "description": "", "category": "", "severity": "high"}
         base.update(kw)
         return base
 
     def test_required_matches_on_file_line_and_keyword(self):
-        findings = [self._issue(title="SQL injection via $_GET")]
+        findings = [self._finding(title="SQL injection via $_GET")]
         m = match_findings(findings, self.KEY)
         assert m["matched_required"] == {"sql-injection": 0}
         assert m["missing_required"] == []
         assert m["unexpected"] == []
 
     def test_line_outside_tolerance_does_not_match(self):
-        findings = [self._issue(line=20, title="SQL injection via $_GET")]
+        findings = [self._finding(line=20, title="SQL injection via $_GET")]
         m = match_findings(findings, self.KEY)
         assert m["missing_required"] == ["sql-injection"]
         assert [u["index"] for u in m["unexpected"]] == [0]
@@ -639,7 +639,7 @@ class TestMatchFindings:
         # The widen-the-regex workflow needs to see what the reviewer wrote:
         # the matcher greps title/description/category, so an unexpected entry
         # must expose those fields plus location, not a bare index.
-        findings = [self._issue(
+        findings = [self._finding(
             line=20, title="SQL injection via $_GET",
             description="Query concatenates raw input" + "x" * 400,
         )]
@@ -652,31 +652,31 @@ class TestMatchFindings:
         assert "severity" in u and "category" in u
 
     def test_keyword_miss_does_not_match(self):
-        findings = [self._issue(title="Something unrelated entirely")]
+        findings = [self._finding(title="Something unrelated entirely")]
         m = match_findings(findings, self.KEY)
         assert m["missing_required"] == ["sql-injection"]
 
     def test_key_without_line_matches_any_line_including_null(self):
-        findings = [self._issue(line=None, title="Missing nonce verification")]
+        findings = [self._finding(line=None, title="Missing nonce verification")]
         m = match_findings(findings, self.KEY)
         assert m["matched_acceptable"] == {"csrf-nonce": 0}
         assert m["unexpected"] == []
 
-    def test_issue_with_null_line_cannot_satisfy_line_bearing_key(self):
-        findings = [self._issue(line=None, title="SQL injection via $_GET")]
+    def test_finding_with_null_line_cannot_satisfy_line_bearing_key(self):
+        findings = [self._finding(line=None, title="SQL injection via $_GET")]
         m = match_findings(findings, self.KEY)
         assert m["missing_required"] == ["sql-injection"]
 
-    def test_one_issue_claims_only_one_spec(self):
+    def test_one_finding_claims_only_one_spec(self):
         # A single finding mentioning both injection and nonce satisfies the
         # required spec (matched first) and leaves the acceptable one unmatched.
-        findings = [self._issue(title="SQL injection; also missing nonce")]
+        findings = [self._finding(title="SQL injection; also missing nonce")]
         m = match_findings(findings, self.KEY)
         assert m["matched_required"] == {"sql-injection": 0}
         assert m["matched_acceptable"] == {}
 
     def test_keyword_in_category_matches(self):
-        findings = [self._issue(title="", description="", category="sql injection")]
+        findings = [self._finding(title="", description="", category="sql injection")]
         m = match_findings(findings, self.KEY)
         assert m["matched_required"] == {"sql-injection": 0}
 
@@ -688,11 +688,11 @@ class TestMatchFindings:
             ],
             "acceptable_findings": [],
         }
-        findings = [self._issue(line=7, title="SQL injection via $_GET")]
+        findings = [self._finding(line=7, title="SQL injection via $_GET")]
         m = match_findings(findings, key)
         assert m["missing_required"] == ["sql-injection"]
 
-        findings = [self._issue(line=6, title="SQL injection via $_GET")]
+        findings = [self._finding(line=6, title="SQL injection via $_GET")]
         m = match_findings(findings, key)
         assert m["matched_required"] == {"sql-injection": 0}
 
@@ -700,10 +700,21 @@ class TestMatchFindings:
 class TestGradeDetection:
     """Answer-key grading of a parsed review JSON."""
 
-    def _review(self, verdict="request_changes", findings=None):
-        return {"verdict": verdict, "findings": findings or []}
+    def _review(
+        self,
+        verdict="request_changes",
+        findings=None,
+        checks=None,
+        unclaimed_review_files=None,
+    ):
+        return {
+            "verdict": verdict,
+            "findings": findings or [],
+            "checks": checks or [],
+            "unclaimed_review_files": unclaimed_review_files or [],
+        }
 
-    def _issue(self, **kw):
+    def _finding(self, **kw):
         base = {"file": "src/UserHandler.php", "line": 6, "title": "SQL injection",
                 "description": "", "category": "sql-injection", "severity": "critical"}
         base.update(kw)
@@ -718,7 +729,7 @@ class TestGradeDetection:
     }
 
     def test_pass_when_required_found_and_verdict_acceptable(self):
-        r = grade_detection(self._review("block", [self._issue()]), self.KEY)
+        r = grade_detection(self._review("block", [self._finding()]), self.KEY)
         assert r.passed, r.failures
         assert r.detail["verdict"] == "block"
         assert r.detail["match"]["matched_required"] == {"sql-injection": 0}
@@ -729,7 +740,7 @@ class TestGradeDetection:
         assert any("sql-injection" in f for f in r.failures)
 
     def test_fail_on_unacceptable_verdict(self):
-        r = grade_detection(self._review("approve", [self._issue()]), self.KEY)
+        r = grade_detection(self._review("approve", [self._finding()]), self.KEY)
         assert not r.passed
         assert any("verdict" in f for f in r.failures)
 
@@ -737,36 +748,76 @@ class TestGradeDetection:
         key = {"verdict_in": ["approve"], "max_severity": "low"}
         clean = self._review("approve", [])
         assert grade_detection(clean, key).passed
-        boundary = self._review("approve", [self._issue(severity="low")])
+        boundary = self._review("approve", [self._finding(severity="low")])
         assert grade_detection(boundary, key).passed
-        noisy = self._review("approve", [self._issue(severity="medium")])
+        noisy = self._review("approve", [self._finding(severity="medium")])
         r = grade_detection(noisy, key)
         assert not r.passed
         assert any("max severity" in f for f in r.failures)
 
     def test_max_unexpected_gate(self):
         key = dict(self.KEY, max_unexpected=0)
-        extra = self._issue(file="src/Other.php", title="Unrelated claim")
-        r = grade_detection(self._review("block", [self._issue(), extra]), key)
+        extra = self._finding(file="src/Other.php", title="Unrelated claim")
+        r = grade_detection(self._review("block", [self._finding(), extra]), key)
         assert not r.passed
         assert any("unexpected" in f for f in r.failures)
 
         key_allow_one = dict(self.KEY, max_unexpected=1)
-        r = grade_detection(self._review("block", [self._issue(), extra]), key_allow_one)
+        r = grade_detection(self._review("block", [self._finding(), extra]), key_allow_one)
         assert r.passed, r.failures
 
     def test_expect_not_applicable(self):
         key = {"expect_not_applicable": True}
         passing = grade_detection(self._review("not_applicable", []), key)
         assert passing.passed
-        assert passing.detail["issue_count"] == 0
+        assert passing.detail["finding_count"] == 0
 
-        r = grade_detection(self._review("comment", [self._issue()]), key)
+        r = grade_detection(self._review("comment", [self._finding()]), key)
         assert not r.passed
 
-        r = grade_detection(self._review("not_applicable", [self._issue()]), key)
+        r = grade_detection(self._review("not_applicable", [self._finding()]), key)
         assert not r.passed
-        assert r.detail["issue_count"] == 1
+        assert r.detail["finding_count"] == 1
+
+    def test_material_negative_requires_a_structured_check_outcome(self):
+        key = {"verdict_in": ["approve"], "min_check_count": 1}
+        missing = grade_detection(self._review("approve"), key)
+
+        assert not missing.passed
+        assert any("structured checks" in failure for failure in missing.failures)
+
+        malformed = self._review("approve", checks=[{
+            "id": "c1",
+            "question": "",
+            "method": "",
+            "result": "",
+            "source_reviewers": [],
+        }])
+        assert not grade_detection(malformed, key).passed
+
+        recorded = self._review("approve", checks=[{
+            "id": "c1",
+            "question": "Does any dependent selector require the removed markup?",
+            "method": "Enumerated selectors in the dependent stylesheet",
+            "result": "No selector depends on the removed element.",
+            "source_reviewers": ["woo-regression"],
+        }])
+        assert grade_detection(recorded, key).passed
+
+    def test_review_accounting_gate_uses_serialized_unclaimed_files(self):
+        key = {
+            "verdict_in": ["approve"],
+            "max_unclaimed_review_file_count": 0,
+        }
+
+        incomplete = self._review(
+            "approve", unclaimed_review_files=["src/not-reviewed.php"]
+        )
+        result = grade_detection(incomplete, key)
+        assert not result.passed
+        assert any("unclaimed review files" in failure for failure in result.failures)
+
+        assert grade_detection(self._review("approve"), key).passed
 
 
 class TestMergeGrades:
@@ -804,12 +855,25 @@ class TestGradeDetectionGates:
     """grade_detection records per-gate outcomes for trial aggregation."""
 
     def test_gates_recorded_when_present(self):
-        key = {"verdict_in": ["approve"], "max_severity": "low", "max_unexpected": 0}
+        key = {
+            "verdict_in": ["approve"],
+            "max_severity": "low",
+            "max_unexpected": 0,
+            "min_check_count": 1,
+            "max_unclaimed_review_file_count": 0,
+        }
         review = {"verdict": "approve",
                   "findings": [{"file": "f.php", "line": 1, "title": "noise",
-                              "description": "", "category": "", "severity": "medium"}]}
+                              "description": "", "category": "", "severity": "medium"}],
+                  "checks": [],
+                  "unclaimed_review_files": ["src/not-reviewed.php"]}
         r = grade_detection(review, key)
-        assert r.detail["gates"] == {"max_severity": False, "max_unexpected": False}
+        assert r.detail["gates"] == {
+            "max_severity": False,
+            "max_unexpected": False,
+            "min_check_count": False,
+            "max_unclaimed_review_file_count": False,
+        }
 
     def test_gates_empty_when_no_gates_in_key(self):
         r = grade_detection({"verdict": "block", "findings": []}, {"verdict_in": ["block"]})

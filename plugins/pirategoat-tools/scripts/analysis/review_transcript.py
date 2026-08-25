@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
@@ -1300,7 +1301,7 @@ def _opaque_target(value: object) -> str:
 
 
 def _is_bootstrap_builder_heredoc(command: object) -> bool:
-    """Recognize the pipeline-owned builder attempt envelope."""
+    """Recognize an exact pipeline-owned save-draft attempt."""
     if not isinstance(command, str):
         return False
     lines = command.splitlines()
@@ -1331,7 +1332,34 @@ def _is_bootstrap_builder_heredoc(command: object) -> bool:
     # Every required name present, and nothing beyond the known
     # optionals: a foreign assignment means this is not an envelope any bootstrap
     # generation emitted, and its contents are not ours to interpret.
-    return _BOOTSTRAP_BUILDER_ENV_REQUIRED <= unique <= _BOOTSTRAP_BUILDER_ENV
+    if not _BOOTSTRAP_BUILDER_ENV_REQUIRED <= unique <= _BOOTSTRAP_BUILDER_ENV:
+        return False
+
+    end = next(
+        (index for index, line in enumerate(lines[1:], 1) if line.strip() == "PY"),
+        None,
+    )
+    if end is None:
+        return False
+    try:
+        tree = ast.parse("\n".join(lines[1:end]))
+    except SyntaxError:
+        return False
+
+    # open() only initializes or rehydrates working state. Saved-output
+    # evidence is an exact top-level, zero-argument save_draft() call; do not
+    # infer it from prose, a generic save method, a nested branch, or the
+    # digest argument that later appears in the printed finalization command.
+    return any(
+        isinstance(statement, ast.Expr)
+        and isinstance(statement.value, ast.Call)
+        and not statement.value.args
+        and not statement.value.keywords
+        and isinstance(statement.value.func, ast.Attribute)
+        and statement.value.func.attr == "save_draft"
+        and isinstance(statement.value.func.value, ast.Name)
+        for statement in tree.body
+    )
 
 
 def _file_target(value: object, repo_root: str | Path) -> str:

@@ -217,19 +217,37 @@ mkdir -p "$OUTPUT_DIR"
 
 **Note on GHE:** For repos hosted on `github.a8c.com`, the `ghe` CLI is used (requires SOCKS5 proxy). The `scope.py` script handles this automatically by detecting the remote URL.
 
+## Canonical Draft Lifecycle
+
+Follow this order for every raw domain review. Bootstrap supplies the one executable command; this section explains the state transitions and ownership without offering a second command to copy.
+
+1. Start with `ReviewOutputBuilder.open(...)`. It creates a new working draft on first use or validates and rehydrates the existing complete draft on continuation. Never use the direct constructor as a raw reviewer.
+2. Record the review state you own with `builder.add_finding(...)`, `builder.add_observation(...)`, and `builder.add_positive_observation(...)`. Use the stable `fN` IDs shown in a continuation's `DRAFT INDEX` with `update_finding()` or `remove_finding()` when correcting prior work.
+3. Record every material verification result with `builder.record_check(...)`. Use the stable `cN` IDs from the continuation index with `update_check()` or `remove_check()` when correcting prior work.
+4. After actually reading a claimable non-inline file, call `builder.claim_files_reviewed(...)`; use `retract_reviewed_file_claims()` if a prior claim no longer reflects what you read.
+5. Raw reviewers must not call `set_assessment()`. The initial synthesis assessment is pipeline-owned and is authored only by the reconciliator after judging all reviewer evidence.
+6. Call `builder.save_draft()` once the builder holds the complete review you currently intend to finalize. Saving validates and atomically replaces the full persisted draft; it is not a partial merge and it is not completion.
+7. Inspect the compact receipt. `DRAFT TOTALS` describes the full persisted draft after the save, while `CHANGED` describes only mutations from the current invocation. When the receipt omits `FILES NOT YET CLAIMED AS REVIEWED`, no claimable review files remain unclaimed.
+8. If more work is needed, stop and continue in a new invocation with `ReviewOutputBuilder.open(...)`; it rehydrates findings, checks, observations, positives, claims, confidence, and their stable ID counters before applying new mutations.
+9. When the receipt matches your intent, run the exact printed `FINALIZE REVIEW` command verbatim in a separate tool turn. Do not construct, edit, copy out, or interpret its digest argument. Return `STATUS: FINISHED` only after the command prints `REVIEW FINALIZED`.
+
 ## ReviewOutputBuilder API
 
 This is a non-executable API reference. Bootstrap's **OUTPUT INSTRUCTIONS** block is the sole canonical executable builder command; if bootstrap fails, stop and report the failure instead of reconstructing a command from this reference.
 
 **Core methods:**
+- `ReviewOutputBuilder.open(output_dir, pr_id, reviewer)` - Create a new bound draft or validate and rehydrate that reviewer's existing bound draft
 - `builder.add_finding(severity, title, file, description, recommendation, category="general", line=<required for point defects>, confidence=0.9)` - Add diff-anchored finding. Pass `line=None` ONLY for findings that are line-less by nature (missing test coverage, precedent, cross-file architecture) — recorded as a verdict-counting file-scoped finding
+- `builder.update_finding(finding_id, **fields)` / `builder.remove_finding(finding_id)` - Correct or remove a persisted finding without recycling its stable ID
 - `builder.add_observation(file, note, category="general")` - Add informational file-level note (doesn't affect verdict — do NOT use for real findings)
 - `builder.record_check(question, method, result)` - Record a material verification check with the exact question, searches/reads, and observed result. Required for material negative or blast-radius conclusions — see "Absence Claims" section
+- `builder.update_check(check_id, **fields)` / `builder.remove_check(check_id)` - Correct or remove a persisted check without recycling its stable ID
 - `builder.claim_files_reviewed(*files)` - Claim NOT DIFFED files you actually read from the review-claimable queue (a statement, not proof — surfaced as a claim downstream). The builder validates this entire batch against the authoritative review-accounting input, derives every unclaimed review file, and derives the accounted-file count from inline files plus validated claims.
 - `builder.retract_reviewed_file_claims(*files)` - Retract reviewed-file claims that no longer reflect what you actually read before saving again.
 - `builder.set_confidence(0.0-1.0)` - Set overall confidence
 - `builder.add_positive_observation("observation")` - Note good patterns
 - `builder.save_draft()` - Atomically replace the bound mutable draft and print its DRAFT TOTALS plus an exact FINALIZE REVIEW command. Inspect the receipt and optionally continue; in a separate tool turn run that exact command, and treat the review as finished only after it prints REVIEW FINALIZED.
+- `builder.set_assessment(text)` - Pipeline-synthesis-only API for the reconciliator's initial overall assessment; raw domain reviewers do not call it
 
 **Valid severities:** `critical`, `high`, `medium`, `low`, `info`
 
