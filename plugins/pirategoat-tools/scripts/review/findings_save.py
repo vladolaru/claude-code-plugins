@@ -199,10 +199,16 @@ def validate_findings(payload):
     if isinstance(payload.get("issues"), list) and not problems:
         scratch = {}
         try:
-            critic_adjustments._recount_summary(scratch, issues)
+            derived = critic_adjustments._recount_summary(scratch, issues)
         except ValueError as err:
             problems.append(str(err))
         else:
+            expected_verdict = derived["verdict"]
+            if verdict != expected_verdict:
+                problems.append(
+                    f"'verdict' {verdict!r} does not match the "
+                    f"issues-derived verdict {expected_verdict!r}"
+                )
             expected = scratch["summary"]
             actual = payload.get("summary")
             if not isinstance(actual, dict):

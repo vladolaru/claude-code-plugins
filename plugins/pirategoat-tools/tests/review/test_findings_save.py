@@ -152,6 +152,18 @@ class TestFindingsSave:
         assert "verdict" in result.stdout.lower()
         assert not (tmp_path / "review-findings.json").exists()
 
+    def test_rejects_verdict_that_does_not_match_issues(self, tmp_path):
+        findings = self._write_findings(
+            tmp_path, _valid_findings(verdict="approve")
+        )
+
+        result = self._run_save(tmp_path, findings)
+
+        assert result.returncode != 0
+        assert "REJECTED" in result.stdout
+        assert "does not match the issues-derived verdict" in result.stdout
+        assert not (tmp_path / "review-findings.json").exists()
+
     def test_rejects_uppercase_verdict(self, tmp_path):
         """Casing matters — the ledger's real vocabulary is lowercase,
         matching _verdict_for_issues()'s return values in agent/output.py."""
@@ -330,10 +342,39 @@ class TestFindingsSave:
         assert not (tmp_path / "review-findings.json").exists()
 
     @pytest.mark.parametrize(
-        "verdict", ["block", "request_changes", "comment", "approve"]
+        ("verdict", "severity", "counts"),
+        [
+            (
+                "block", "critical",
+                {"critical": 1, "high": 0, "medium": 0, "low": 0, "info": 0},
+            ),
+            (
+                "request_changes", "high",
+                {"critical": 0, "high": 1, "medium": 0, "low": 0, "info": 0},
+            ),
+            (
+                "comment", "medium",
+                {"critical": 0, "high": 0, "medium": 1, "low": 0, "info": 0},
+            ),
+            (
+                "approve", None,
+                {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0},
+            ),
+        ],
     )
-    def test_accepts_every_reconciler_verdict(self, tmp_path, verdict):
-        doc = _valid_findings(verdict=verdict)
+    def test_accepts_every_reconciler_verdict(
+        self, tmp_path, verdict, severity, counts
+    ):
+        issues = []
+        if severity is not None:
+            issue = _valid_findings()["issues"][0]
+            issue["severity"] = severity
+            issues.append(issue)
+        doc = _valid_findings(
+            verdict=verdict,
+            issues=issues,
+            summary={"total_issues": len(issues), "by_severity": counts},
+        )
         findings = self._write_findings(tmp_path, doc)
 
         result = self._run_save(tmp_path, findings)

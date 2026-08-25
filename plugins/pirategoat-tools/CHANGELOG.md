@@ -43,7 +43,7 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 - **Decision critic saves every verdict through a validating script channel** — the critic authors findings under `$TMPDIR`, then `critic.py --save` validates the full batch, invalidates any prior verdict commit marker, and records findings, a complete adjustment snapshot, and the new STAND, REVISE, or ESCALATE verdict; an interrupted publication stays visibly incomplete, and STAND/ESCALATE use a canonical empty snapshot.
 - **Agents are handed JSON** — the reconciliator reads `reconciliation-context.json` and the decision critic reads `review-record.md` beside `review-findings.json`; the two Markdown projections written for agent eyes only (`reconciliation-context.md`, `critic-context.md`) are gone, along with the per-run context-building step that produced the second one.
 - **Missing agents and structurally out-of-scope findings stay machine-computed** — `reconciliation-context.json` carries a `missing_agents` list (`null` when dispatch was unknown) and marks each structurally out-of-scope finding with `prefiltered` beside a checkable count, so the reconciliator carries and obeys those measurements instead of re-deriving them.
-- **Reconciliator saves the ledger through a validating script channel** — `findings_save.py` records `review-findings.json`, rejecting a bad verdict, a malformed issue, or a summary/issues count mismatch before anything is written.
+- **Reconciliator saves the ledger through a validating script channel** — `findings_save.py` records `review-findings.json`, rejecting a verdict that does not derive from its issues, a malformed issue, or a summary/issues count mismatch before anything is written.
 
 ### Fixed
 
