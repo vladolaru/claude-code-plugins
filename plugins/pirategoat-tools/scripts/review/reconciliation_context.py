@@ -29,11 +29,13 @@ from typing import Any, Dict, List, Optional, Tuple
 
 try:
     from .reviewer_names import derive_reviewer_name
+    from .reviewer_lifecycle import review_paths
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
     from review.reviewer_names import derive_reviewer_name
+    from review.reviewer_lifecycle import review_paths
 
 from review.agent.coverage import (
     ReviewAccountingError,
@@ -183,7 +185,8 @@ def _load_review_payload(output_dir: str, agent: str) -> Optional[Dict[str, Any]
     through its own path and failure policy — it reports malformed output on
     stderr and skips it, which is not what run-level file accounting wants.
     """
-    path = os.path.join(output_dir, f"{_review_stem(agent)}.json")
+    reviewer = derive_reviewer_name(agent)
+    path = review_paths(output_dir, reviewer).final
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -200,9 +203,7 @@ def _load_agent_review_accounting(
     if data is None or "reviewed_file_claims" not in data:
         return None
     reviewer = derive_reviewer_name(agent)
-    path = os.path.join(
-        output_dir, f"{reviewer}-review-accounting-input.json"
-    )
+    path = review_paths(output_dir, reviewer).accounting_input
     try:
         with open(path, "r", encoding="utf-8") as file_handle:
             accounting_input = json.load(file_handle)

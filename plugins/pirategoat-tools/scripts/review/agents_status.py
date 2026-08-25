@@ -68,15 +68,6 @@ DEFAULT_TIMEOUT = 1200  # 20 minutes
 DEFAULT_POLL_INTERVAL_SECONDS = 1.5  # grain at which --wait re-checks status
 
 
-def _reviewer_filename(agent_name: str) -> str:
-    """Derive the review filename from the agent name.
-
-    'security-reviewer' -> 'security-review.json'
-    'code-reviewer' -> 'code-review.json'
-    """
-    return f"{derive_reviewer_name(agent_name)}-review.json"
-
-
 def draft_evidence(output_dir: str, agent_name: str) -> dict:
     """Return digest-bound finalization evidence for a saved draft."""
     reviewer = derive_reviewer_name(agent_name)
@@ -145,7 +136,8 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
 
         if status in DISPATCHED_STATUSES:
             dispatched += 1
-        review_path = os.path.join(output_dir, _reviewer_filename(name))
+        reviewer = derive_reviewer_name(name)
+        review_path = review_paths(output_dir, reviewer).final
         started_path = os.path.join(output_dir, f"{name}.started")
 
         if os.path.isfile(review_path):

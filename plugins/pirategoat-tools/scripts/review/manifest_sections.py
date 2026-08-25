@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 try:
     from .agent.coverage import ReviewAccountingError, derive_review_accounting
     from .reviewer_names import derive_reviewer_name
+    from .reviewer_lifecycle import review_paths
     from .dependency_refresh import (
         EXIT_STATUSES,
         REPORT_STATUSES,
@@ -38,6 +39,7 @@ except ImportError:
         sys.path.insert(0, _scripts_parent)
     from review.agent.coverage import ReviewAccountingError, derive_review_accounting
     from review.reviewer_names import derive_reviewer_name
+    from review.reviewer_lifecycle import review_paths
     from review.dependency_refresh import (
         EXIT_STATUSES,
         REPORT_STATUSES,
@@ -92,15 +94,19 @@ _USAGE_FIELDS = (
 )
 
 
-def read_json_file(output_dir: str, name: str) -> Optional[dict]:
-    """Read an output JSON object without letting failures escape."""
-    path = os.path.join(output_dir, name)
+def _read_json_path(path: str) -> Optional[dict]:
+    """Read a JSON object at an authoritative path without raising."""
     try:
         with open(path) as source:
             value = json.load(source)
         return value if isinstance(value, dict) else None
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
         return None
+
+
+def read_json_file(output_dir: str, name: str) -> Optional[dict]:
+    """Read one named run-level JSON object without letting failures escape."""
+    return _read_json_path(os.path.join(output_dir, name))
 
 
 def safe_dispatch_string(value: Any) -> Optional[str]:
@@ -376,11 +382,10 @@ def _load_review_claim_accounting(
     output_dir: str, agent: str
 ) -> Optional[Dict[str, int]]:
     """Derive one finalized review's claim and unclaimed counts."""
-    stem = derive_reviewer_name(agent)
-    review = read_json_file(output_dir, f"{stem}-review.json")
-    accounting_input = read_json_file(
-        output_dir, f"{stem}-review-accounting-input.json"
-    )
+    reviewer = derive_reviewer_name(agent)
+    paths = review_paths(output_dir, reviewer)
+    review = _read_json_path(paths.final)
+    accounting_input = _read_json_path(paths.accounting_input)
     if (
         review is None
         or accounting_input is None
@@ -406,9 +411,7 @@ def _load_review_claimable_file_count(
 ) -> Optional[int]:
     """Read the authoritative review-claimable file count."""
     reviewer = derive_reviewer_name(agent)
-    data = read_json_file(
-        output_dir, f"{reviewer}-review-accounting-input.json"
-    )
+    data = _read_json_path(review_paths(output_dir, reviewer).accounting_input)
     if data is None:
         return None
     try:

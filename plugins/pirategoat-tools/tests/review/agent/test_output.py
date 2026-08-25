@@ -28,12 +28,14 @@ PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
+from review.agent import output as review_output
 from review.agent.output import (
     ReviewOutputBuilder,
     finalize_review,
     materialize_markdown,
     render_markdown,
 )
+from review.reviewer_lifecycle import ReviewPaths
 
 
 def _write_required_accounting_input(output_dir, reviewer):
@@ -64,6 +66,34 @@ def _save_draft(builder, output_dir):
     if builder._output_dir is None:
         builder._bind(str(output_dir), base_digest=None)
     return builder.save_draft()
+
+
+def test_accounting_reads_follow_the_bound_review_paths(
+    tmp_path, monkeypatch, capsys
+):
+    authority_dir = tmp_path / "authority"
+    authority_dir.mkdir()
+    paths = ReviewPaths(
+        draft=str(authority_dir / "draft.json"),
+        final=str(authority_dir / "final.json"),
+        accounting_input=str(authority_dir / "accounting.json"),
+    )
+    Path(paths.accounting_input).write_text(json.dumps({
+        "schema": 3,
+        "agent_name": "code-reviewer",
+        "reviewer": "code",
+        "review_claimable_files": ["src/unread.py"],
+        "review_budget": 80,
+        "inline_diff_file_count": 0,
+        "in_scope_review_file_count": 1,
+    }))
+    monkeypatch.setattr(review_output, "review_paths", lambda *_args: paths)
+
+    saved = ReviewOutputBuilder.open(tmp_path, "42", "code").save_draft()
+
+    assert saved["draft"] == paths.draft
+    assert Path(paths.draft).is_file()
+    assert "target ~80 tool calls" in capsys.readouterr().out
 
 
 # =============================================================================

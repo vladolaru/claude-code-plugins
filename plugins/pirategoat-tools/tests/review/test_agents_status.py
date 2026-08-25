@@ -18,6 +18,7 @@ from review import dispatch_status
 from review import synthesis_lifecycle
 from review.agent.output import ReviewOutputBuilder, finalize_review
 from review.reconciliation_context import load_agent_findings
+from review.reviewer_lifecycle import ReviewPaths
 
 
 def _load_module():
@@ -106,6 +107,31 @@ class _FakeClock:
 
 
 class TestCheckStatus:
+    def test_final_status_follows_the_review_paths_authority(
+        self, mod, tmp_path, monkeypatch
+    ):
+        _write_plan(tmp_path, [
+            {"name": "security-reviewer", "status": "DISPATCH"},
+        ])
+        authority_dir = tmp_path / "authority"
+        authority_dir.mkdir()
+        final_path = authority_dir / "final.json"
+        final_path.write_text(json.dumps({"issues": [], "verdict": "approve"}))
+        monkeypatch.setattr(
+            mod,
+            "review_paths",
+            lambda *_args: ReviewPaths(
+                draft=str(authority_dir / "draft.json"),
+                final=str(final_path),
+                accounting_input=str(authority_dir / "accounting.json"),
+            ),
+        )
+
+        result = mod.check_status(str(tmp_path))
+
+        assert result["agents"][0]["status"] == "FINISHED"
+        assert result["all_done"] is True
+
     def test_draft_evidence_does_not_replace_execution_status(
         self, mod, tmp_path
     ):

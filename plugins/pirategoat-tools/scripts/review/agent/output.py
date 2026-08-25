@@ -1040,9 +1040,7 @@ class ReviewOutputBuilder:
         """Parse the bootstrap-written review-accounting input, or ``{}``."""
         if not output_dir or not reviewer:
             return {}
-        accounting_input = os.path.join(
-            output_dir, f"{reviewer}-review-accounting-input.json"
-        )
+        accounting_input = review_paths(output_dir, reviewer).accounting_input
         try:
             with open(accounting_input, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -1180,9 +1178,7 @@ class ReviewOutputBuilder:
         this at save_draft() (publication), so a caller serializing manually via
         to_dict/to_json knowingly opts out of accounting validation.
         """
-        accounting_input_path = os.path.join(
-            output_dir, f"{self.reviewer}-review-accounting-input.json"
-        )
+        accounting_input_path = review_paths(output_dir, self.reviewer).accounting_input
         try:
             with open(accounting_input_path, "r", encoding="utf-8") as handle:
                 accounting_input = json.load(handle)

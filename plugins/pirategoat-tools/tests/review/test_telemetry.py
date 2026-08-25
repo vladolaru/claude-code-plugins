@@ -24,6 +24,7 @@ from helpers.context_fixtures import COMPLETE_CONTEXT
 from review import dependency_refresh
 from review import synthesis_lifecycle as lifecycle_contract
 from review.reconciliation_context import aggregate_review_accounting
+from review.reviewer_lifecycle import ReviewPaths
 
 
 def _load_module():
@@ -1532,6 +1533,49 @@ class TestRunManifest:
         assert coverage["review_claimable_file_count_by_agent"] == {
             "security-reviewer": 3
         }
+
+    def test_direct_coverage_reads_follow_review_paths_authority(
+        self, mod, output_dir, monkeypatch
+    ):
+        authority_dir = output_dir / "authority"
+        authority_dir.mkdir()
+        paths = ReviewPaths(
+            draft=str(authority_dir / "draft.json"),
+            final=str(authority_dir / "final.json"),
+            accounting_input=str(authority_dir / "accounting.json"),
+        )
+        Path(paths.final).write_text(json.dumps({
+            "reviewed_file_claims": ["a.py"],
+        }))
+        Path(paths.accounting_input).write_text(json.dumps({
+            "schema": 3,
+            "agent_name": "security-reviewer",
+            "reviewer": "security",
+            "review_claimable_files": ["a.py", "b.py"],
+            "review_budget": 15,
+            "in_scope_review_file_count": 2,
+            "inline_diff_file_count": 0,
+        }))
+        monkeypatch.setattr(
+            mod.manifest_sections, "review_paths", lambda *_args: paths
+        )
+
+        claim_accounting = (
+            mod.manifest_sections._load_review_claim_accounting(
+                str(output_dir), "security-reviewer"
+            )
+        )
+        claimable_count = (
+            mod.manifest_sections._load_review_claimable_file_count(
+                str(output_dir), "security-reviewer"
+            )
+        )
+
+        assert claim_accounting == {
+            "reviewed_file_claim_count": 1,
+            "unclaimed_review_file_count": 1,
+        }
+        assert claimable_count == 2
 
     def test_coverage_omits_unfinalized_draft_counts(
         self, telemetry, output_dir

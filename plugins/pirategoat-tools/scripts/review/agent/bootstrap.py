@@ -1044,6 +1044,7 @@ def build_output(
     tests/review/agent/test_bootstrap_integration.py for the executable
     contracts and their regression history.
     """
+    paths = review_paths(output_dir, reviewer_name)
     lines = []
 
     # Header
@@ -1250,7 +1251,7 @@ def build_output(
     lines.append(f"OUTPUT_DIR: {output_dir}")
     lines.append(f"REVIEWER_NAME: {reviewer_name}")
     lines.append("OUTPUT_FILES:")
-    lines.append(f"  - {output_dir}/{reviewer_name}-review.json")
+    lines.append(f"  - {paths.final}")
     # The namespace rule, taught once. A field run had a reviewer awk-slice
     # its scoped diff into three ad-hoc .patch files inside OUTPUT_DIR — a
     # sound technique in the wrong place, and nothing in what this function
@@ -1267,10 +1268,9 @@ def build_output(
     )
     lines.append("")
     pr_id_str = pr_number if pr_number else "0"
-    draft_path = review_paths(output_dir, reviewer_name).draft
-    if os.path.isfile(draft_path):
+    if os.path.isfile(paths.draft):
         draft_review = _validate_review_bytes(
-            Path(draft_path).read_bytes(),
+            Path(paths.draft).read_bytes(),
             reviewer=reviewer_name,
             pr_id=str(pr_id_str),
         )
@@ -1341,7 +1341,7 @@ def build_output(
     lines.append("Return signal format:")
     lines.append("  STATUS: FINISHED")
     lines.append(f"  OUTPUT_FILES:")
-    lines.append(f"    - {output_dir}/{reviewer_name}-review.json")
+    lines.append(f"    - {paths.final}")
     lines.append("  COUNTS: critical: N, high: N, medium: N  (copied from DRAFT TOTALS)")
     lines.append("  VERDICT: <APPROVE|COMMENT|REQUEST_CHANGES|BLOCK>")
     lines.append("  SUMMARY: <one sentence>")
@@ -1437,9 +1437,7 @@ def persist_review_accounting_input(
         "inline_diff_file_count": inline_diff_file_count,
     }
     derive_review_accounting(payload, [])
-    accounting_input = os.path.join(
-        output_dir, f"{reviewer}-review-accounting-input.json"
-    )
+    accounting_input = review_paths(output_dir, reviewer).accounting_input
     atomic_write_json(accounting_input, payload)
 
 

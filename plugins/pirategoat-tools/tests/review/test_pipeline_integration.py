@@ -1750,6 +1750,64 @@ class TestStep7Orchestration:
 class TestStep8Orchestration:
     """Step 8 main() reads change-purpose.md and agent completion status."""
 
+    def test_step_8_completion_follows_the_review_paths_authority(
+        self, mod, tmp_path, monkeypatch
+    ):
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps({
+            "agents": [{"name": "code-reviewer", "status": "DISPATCH"}],
+        }))
+        authority_dir = tmp_path / "authority"
+        authority_dir.mkdir()
+        final_path = authority_dir / "final.json"
+        final_path.write_text("{}")
+        monkeypatch.setattr(
+            mod.subprocess,
+            "run",
+            lambda *args, **kwargs: subprocess.CompletedProcess(
+                args=args[0], returncode=0, stdout="", stderr=""
+            ),
+        )
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "review_paths",
+            lambda *_args: reviewer_lifecycle.ReviewPaths(
+                draft=str(authority_dir / "draft.json"),
+                final=str(final_path),
+                accounting_input=str(authority_dir / "accounting.json"),
+            ),
+        )
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "close_review_intake",
+            lambda *_args: {
+                "schema": 2,
+                "status": "closed",
+                "closed_at": "2026-08-25T12:00:00+00:00",
+                "discarded_drafts": [],
+            },
+        )
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "_materialize_markdown",
+            lambda *_args, **_kwargs: [],
+        )
+
+        def reconciliation_succeeds(*_args, **_kwargs):
+            (tmp_path / "reconciliation-context.json").write_text("{}")
+            return "", True
+
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "_run_subprocess",
+            reconciliation_succeeds,
+        )
+        state = {"resolved_params": {}}
+
+        mod._orchestrate_step(8, "full", {}, state, {}, str(tmp_path))
+
+        assert state["agents"]["completed"] == ["code-reviewer"]
+        assert state["agents"]["review_files"] == [str(final_path)]
+
     def test_step_1_records_that_reviewer_markdown_has_not_run(self, tmp_path):
         result = run_pipeline(
             "--step", "1", "--mode", "full", "--output-dir", str(tmp_path),

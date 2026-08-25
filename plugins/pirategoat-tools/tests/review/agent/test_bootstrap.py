@@ -130,6 +130,34 @@ class TestResolveReviewerIdentity:
 class TestPersistReviewAccountingInput:
     """The writer publishes the exact schema-3 accounting authority."""
 
+    def test_writes_to_the_review_paths_accounting_authority(
+        self, tmp_path, monkeypatch
+    ):
+        authority_dir = tmp_path / "authority"
+        authority_dir.mkdir()
+        accounting_input = authority_dir / "accounting.json"
+        monkeypatch.setattr(
+            _mod,
+            "review_paths",
+            lambda *_args: SimpleNamespace(
+                draft=str(authority_dir / "draft.json"),
+                final=str(authority_dir / "final.json"),
+                accounting_input=str(accounting_input),
+            ),
+        )
+
+        _mod.persist_review_accounting_input(
+            str(tmp_path),
+            "security-reviewer",
+            [],
+            review_budget=40,
+            in_scope_review_file_count=1,
+            inline_diff_file_count=1,
+        )
+
+        assert json.loads(accounting_input.read_text())["reviewer"] == "security"
+        assert not (tmp_path / "security-review-accounting-input.json").exists()
+
     def test_writes_only_authoritative_deferred_files(self, tmp_path):
         _mod.persist_review_accounting_input(
             str(tmp_path),
@@ -632,6 +660,37 @@ class TestChangePurpose:
         (tmp_path / "change-purpose.md").write_text("  Content with spaces.  \n\n")
         result = load_change_purpose(str(tmp_path))
         assert result == "Content with spaces."
+
+
+class TestOutputLifecyclePaths:
+    def test_output_file_contract_follows_review_paths_authority(
+        self, tmp_path, monkeypatch
+    ):
+        authority_dir = tmp_path / "authority"
+        paths = SimpleNamespace(
+            draft=str(authority_dir / "draft.json"),
+            final=str(authority_dir / "final.json"),
+            accounting_input=str(authority_dir / "accounting.json"),
+        )
+        monkeypatch.setattr(_mod, "review_paths", lambda *_args: paths)
+
+        output = build_output(
+            agent_name="security-reviewer",
+            plugin_root="/fake",
+            status="OK",
+            review_rules="Rules here",
+            domain_rules=None,
+            scope_output="scope",
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number="1",
+            reviewer_name="security",
+            review_claimable_count=0,
+            has_php=False,
+        )
+
+        assert output.count(paths.final) == 2
+        assert str(tmp_path / "security-review.json") not in output
 
 
 class TestChangePurposeInjection:

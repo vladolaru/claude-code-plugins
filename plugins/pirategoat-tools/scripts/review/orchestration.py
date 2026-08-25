@@ -30,7 +30,7 @@ try:
     )
     from . import atomic_io
     from .atomic_io import atomic_write_json, atomic_write_text
-    from .reviewer_lifecycle import close_review_intake
+    from .reviewer_lifecycle import close_review_intake, review_paths
     from .reviewer_names import derive_reviewer_name
     from .briefings import _render_review_accounting_section
     from .reconciliation_context import strip_severity_floor_markers
@@ -61,7 +61,7 @@ except ImportError:
     )
     from review import atomic_io
     from review.atomic_io import atomic_write_json, atomic_write_text
-    from review.reviewer_lifecycle import close_review_intake
+    from review.reviewer_lifecycle import close_review_intake, review_paths
     from review.reviewer_names import derive_reviewer_name
     from review.briefings import _render_review_accounting_section
     from review.reconciliation_context import strip_severity_floor_markers
@@ -1350,13 +1350,8 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
             review_files = []
             completed = []
             for name in dispatched_names:
-                # One rule, one home: reviewer_names.derive_reviewer_name
-                # owns the trailing-"-reviewer" strip (repo reviewer ids
-                # may carry "reviewer" mid-string), and every name maps to
-                # "<derived>-review.json" exactly as finalization publishes it.
-                review_file = os.path.join(
-                    output_dir, f"{derive_reviewer_name(name)}-review.json"
-                )
+                reviewer = derive_reviewer_name(name)
+                review_file = review_paths(output_dir, reviewer).final
                 if os.path.isfile(review_file):
                     completed.append(name)
                     review_files.append(review_file)

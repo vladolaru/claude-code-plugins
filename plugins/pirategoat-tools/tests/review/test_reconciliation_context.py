@@ -25,6 +25,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 from review.agent.output import ReviewOutputBuilder
 from review.agent.coverage import derive_review_accounting
+from review.reviewer_lifecycle import ReviewPaths
 
 
 def _load_module():
@@ -1912,6 +1913,37 @@ class TestPrefilterAnnotation:
 
 class TestAggregateReviewAccounting:
     """aggregate_review_accounting() reads *-scope-summary*.json sidecars."""
+
+    def test_direct_review_reads_follow_review_paths_authority(
+        self, mod, tmp_path, monkeypatch
+    ):
+        authority_dir = tmp_path / "authority"
+        authority_dir.mkdir()
+        paths = ReviewPaths(
+            draft=str(authority_dir / "draft.json"),
+            final=str(authority_dir / "final.json"),
+            accounting_input=str(authority_dir / "accounting.json"),
+        )
+        Path(paths.final).write_text(json.dumps({
+            "reviewed_file_claims": ["src/read.php"],
+        }))
+        Path(paths.accounting_input).write_text(json.dumps({
+            "schema": 3,
+            "agent_name": "security-reviewer",
+            "reviewer": "security",
+            "review_claimable_files": ["src/read.php", "src/unread.php"],
+            "review_budget": 15,
+            "inline_diff_file_count": 0,
+            "in_scope_review_file_count": 2,
+        }))
+        monkeypatch.setattr(mod, "review_paths", lambda *_args: paths)
+
+        accounting = mod._load_agent_review_accounting(
+            str(tmp_path), "security-reviewer"
+        )
+
+        assert accounting.reviewed_file_claims == ("src/read.php",)
+        assert accounting.unclaimed_review_files == ("src/unread.php",)
 
     def test_returns_none_without_summaries(self, mod, tmp_path):
         assert mod.aggregate_review_accounting(str(tmp_path)) is None
