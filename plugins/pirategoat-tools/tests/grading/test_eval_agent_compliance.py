@@ -53,12 +53,14 @@ def _write_review_pair(output_dir: Path, reviewer: str = "security") -> None:
         category="xss",
         line=42,
     )
-    (output_dir / f"{reviewer}-deferred-files.json").write_text(json.dumps({
-        "schema": 2,
+    (output_dir / f"{reviewer}-review-accounting-input.json").write_text(json.dumps({
+        "schema": 3,
         "agent_name": f"{reviewer}-reviewer",
-        "deferred_files": [],
-        "diffed_count": 1,
-        "in_scope_count": 1,
+        "reviewer": reviewer,
+        "review_claimable_files": [],
+        "review_budget": 15,
+        "inline_diff_file_count": 1,
+        "in_scope_review_file_count": 1,
     }))
     candidate = builder.save(str(output_dir))
     finalize_candidate(

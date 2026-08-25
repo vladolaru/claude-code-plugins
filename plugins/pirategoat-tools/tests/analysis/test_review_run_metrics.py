@@ -251,6 +251,8 @@ def _manifest(
                 {"path": "vendor/generated.js", "reason": "noise_filtered"}
             ],
             "uncovered": [],
+            "review_claim_accounting_by_agent": {},
+            "review_claimable_file_count_by_agent": {},
             "semantics": "generated_scope_not_proof_of_model_read",
         },
         "outcome": {
@@ -3857,6 +3859,8 @@ class TestMeasureRun:
             "assigned": [],
             "excluded": [],
             "uncovered": [],
+            "review_claim_accounting_by_agent": {},
+            "review_claimable_file_count_by_agent": {},
             "semantics": "generated_scope_not_proof_of_model_read",
         }
         missing = _manifest("missing")
@@ -3881,6 +3885,8 @@ class TestMeasureRun:
             "assigned": [],
             "excluded": [],
             "uncovered": [],
+            "review_claim_accounting_by_agent": {},
+            "review_claimable_file_count_by_agent": {},
             "semantics": "generated_scope_not_proof_of_model_read",
         }
 
@@ -3903,6 +3909,8 @@ class TestMeasureRun:
                 {"path": "vendor/generated.js", "reason": "noise_filtered"}
             ],
             "uncovered": ["src/b.py"],
+            "review_claim_accounting_by_agent": {},
+            "review_claimable_file_count_by_agent": {},
             "semantics": "generated_scope_not_proof_of_model_read",
         }
 
@@ -4274,29 +4282,29 @@ class TestMeasureRun:
             assert name not in measured["outcome"]["summary"]
 
 
-class TestDeferredHonestyCoverage:
+class TestReviewClaimAccounting:
     """Deferred metrics carry the two conserved derived populations."""
 
     def test_measured_populations_and_denominator_pass_through(self, tmp_path):
         manifest = _manifest()
-        manifest["coverage"]["deferred_honesty_by_agent"] = {
-            "code-reviewer": {"deferred_reviewed": 2, "unreviewed": 1},
+        manifest["coverage"]["review_claim_accounting_by_agent"] = {
+            "code-reviewer": {"reviewed_file_claim_count": 2, "unclaimed_review_file_count": 1},
         }
-        manifest["coverage"]["deferred_total_by_agent"] = {"code-reviewer": 3}
+        manifest["coverage"]["review_claimable_file_count_by_agent"] = {"code-reviewer": 3}
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
-        assert measured["coverage"]["deferred_honesty_by_agent"] == {
-            "code-reviewer": {"deferred_reviewed": 2, "unreviewed": 1},
+        assert measured["coverage"]["review_claim_accounting_by_agent"] == {
+            "code-reviewer": {"reviewed_file_claim_count": 2, "unclaimed_review_file_count": 1},
         }
         assert measured["metric_availability"]["coverage"] == "complete"
 
     def test_count_conservation_mismatch_fails_coverage_closed(self, tmp_path):
         manifest = _manifest()
-        manifest["coverage"]["deferred_honesty_by_agent"] = {
-            "code-reviewer": {"deferred_reviewed": 1, "unreviewed": 1},
+        manifest["coverage"]["review_claim_accounting_by_agent"] = {
+            "code-reviewer": {"reviewed_file_claim_count": 1, "unclaimed_review_file_count": 1},
         }
-        manifest["coverage"]["deferred_total_by_agent"] = {"code-reviewer": 3}
+        manifest["coverage"]["review_claimable_file_count_by_agent"] = {"code-reviewer": 3}
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
@@ -4305,8 +4313,8 @@ class TestDeferredHonestyCoverage:
 
     def test_missing_denominator_fails_coverage_closed(self, tmp_path):
         manifest = _manifest()
-        manifest["coverage"]["deferred_honesty_by_agent"] = {
-            "code-reviewer": {"deferred_reviewed": 1, "unreviewed": 1},
+        manifest["coverage"]["review_claim_accounting_by_agent"] = {
+            "code-reviewer": {"reviewed_file_claim_count": 1, "unclaimed_review_file_count": 1},
         }
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
@@ -4316,14 +4324,14 @@ class TestDeferredHonestyCoverage:
 
     def test_retired_three_way_shape_is_rejected(self, tmp_path):
         manifest = _manifest()
-        manifest["coverage"]["deferred_honesty_by_agent"] = {
+        manifest["coverage"]["review_claim_accounting_by_agent"] = {
             "code-reviewer": {
-                "deferred_reviewed": 1,
-                "declared_" + "unreviewed": 1,
-                "unreviewed_" + "autofilled": 0,
+                "reviewed_file_claim_count": 1,
+                "declared_" + "unclaimed_review_file_count": 1,
+                "unclaimed_review_file_count_" + "autofilled": 0,
             },
         }
-        manifest["coverage"]["deferred_total_by_agent"] = {"code-reviewer": 2}
+        manifest["coverage"]["review_claimable_file_count_by_agent"] = {"code-reviewer": 2}
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
@@ -4332,37 +4340,37 @@ class TestDeferredHonestyCoverage:
     @pytest.mark.parametrize(
         "counts",
         [
-            {"deferred_reviewed": -1, "unreviewed": 1},
-            {"deferred_reviewed": 1},
-            {"deferred_reviewed": 1, "unreviewed": 0, "extra": 0},
+            {"reviewed_file_claim_count": -1, "unclaimed_review_file_count": 1},
+            {"reviewed_file_claim_count": 1},
+            {"reviewed_file_claim_count": 1, "unclaimed_review_file_count": 0, "extra": 0},
         ],
     )
     def test_malformed_population_row_fails_closed(self, tmp_path, counts):
         manifest = _manifest()
-        manifest["coverage"]["deferred_honesty_by_agent"] = {
+        manifest["coverage"]["review_claim_accounting_by_agent"] = {
             "code-reviewer": counts
         }
-        manifest["coverage"]["deferred_total_by_agent"] = {"code-reviewer": 2}
+        manifest["coverage"]["review_claimable_file_count_by_agent"] = {"code-reviewer": 2}
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
         assert measured["coverage"] is None
 
     def test_cohort_aggregates_both_populations(self):
-        measured_a = _measured_manifest_with_coverage({
-            "code-reviewer": {"deferred_reviewed": 2, "unreviewed": 1},
-        }, deferred_total_by_agent={"code-reviewer": 3})
-        measured_b = _measured_manifest_with_coverage(
-            {"code-reviewer": {"deferred_reviewed": 1, "unreviewed": 2}},
+        measured_a = _measured_manifest_with_review_accounting({
+            "code-reviewer": {"reviewed_file_claim_count": 2, "unclaimed_review_file_count": 1},
+        }, review_claimable_file_count_by_agent={"code-reviewer": 3})
+        measured_b = _measured_manifest_with_review_accounting(
+            {"code-reviewer": {"reviewed_file_claim_count": 1, "unclaimed_review_file_count": 2}},
             run_id="run-2",
-            deferred_total_by_agent={"code-reviewer": 3},
+            review_claimable_file_count_by_agent={"code-reviewer": 3},
         )
 
         cohort = aggregate_cohort([measured_a, measured_b])
 
-        assert cohort["deferred_honesty"]["deferred_reviewed"] == 3
-        assert cohort["deferred_honesty"]["unreviewed"] == 3
-        assert cohort["deferred_honesty"]["measured_runs"] == 2
+        assert cohort["review_claim_accounting"]["reviewed_file_claim_count"] == 3
+        assert cohort["review_claim_accounting"]["unclaimed_review_file_count"] == 3
+        assert cohort["review_claim_accounting"]["measured_runs"] == 2
 
     def test_cohort_reports_none_when_no_run_is_measured(self):
         unmeasured = measure_run(
@@ -4371,22 +4379,22 @@ class TestDeferredHonestyCoverage:
 
         cohort = aggregate_cohort([unmeasured])
 
-        assert cohort["deferred_honesty"]["deferred_reviewed"] is None
-        assert cohort["deferred_honesty"]["unreviewed"] is None
-        assert cohort["deferred_honesty"]["measured_runs"] == 0
-def _measured_manifest_with_coverage(
-    deferred_honesty_by_agent: dict,
+        assert cohort["review_claim_accounting"]["reviewed_file_claim_count"] is None
+        assert cohort["review_claim_accounting"]["unclaimed_review_file_count"] is None
+        assert cohort["review_claim_accounting"]["measured_runs"] == 0
+def _measured_manifest_with_review_accounting(
+    review_claim_accounting_by_agent: dict,
     *,
     run_id: str = "run-1",
-    deferred_total_by_agent: dict | None = None,
+    review_claimable_file_count_by_agent: dict | None = None,
 ) -> dict:
     manifest = _manifest(run_id)
-    manifest["coverage"]["deferred_honesty_by_agent"] = (
-        deferred_honesty_by_agent
+    manifest["coverage"]["review_claim_accounting_by_agent"] = (
+        review_claim_accounting_by_agent
     )
-    if deferred_total_by_agent is not None:
-        manifest["coverage"]["deferred_total_by_agent"] = (
-            deferred_total_by_agent
+    if review_claimable_file_count_by_agent is not None:
+        manifest["coverage"]["review_claimable_file_count_by_agent"] = (
+            review_claimable_file_count_by_agent
         )
     return measure_run(manifest, "/nonexistent", include_transcripts=False)
 
@@ -7667,7 +7675,7 @@ class TestFormattingAndCli:
         payload = json.loads(format_json(runs, aggregate_cohort(runs)))
 
         assert set(payload) == {"schema", "runs", "aggregate"}
-        assert payload["schema"] == 2
+        assert payload["schema"] == 3
 
     def test_json_exposes_lifecycle_and_partial_unknown_builder_evidence(
         self, monkeypatch, tmp_path
@@ -7731,7 +7739,7 @@ class TestFormattingAndCli:
 
         assert result == 0
         assert json.loads(output.read_text()) == {
-            "schema": 2,
+            "schema": 3,
             "runs": [],
             "aggregate": aggregate_cohort([]),
         }

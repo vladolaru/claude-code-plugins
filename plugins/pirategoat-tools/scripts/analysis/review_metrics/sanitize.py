@@ -920,11 +920,11 @@ def _sanitize_dispatch(value: object) -> dict[str, Any] | None:
     return result
 
 
-# The per-agent deferred row shape `_sanitize_coverage` requires whenever
-# `deferred_honesty_by_agent` is present. Both populations are derived from
-# the same authoritative sidecar and validated positive claims.
-_DEFERRED_HONESTY_FIELDS = frozenset({
-    "deferred_reviewed", "unreviewed",
+# The per-agent claim-accounting row shape `_sanitize_coverage` requires.
+# Both populations are derived from the authoritative accounting input and
+# validated positive claims.
+_REVIEW_CLAIM_ACCOUNTING_FIELDS = frozenset({
+    "reviewed_file_claim_count", "unclaimed_review_file_count",
 })
 
 
@@ -938,6 +938,8 @@ def _sanitize_coverage(value: object) -> dict[str, Any] | None:
         "assigned",
         "excluded",
         "uncovered",
+        "review_claim_accounting_by_agent",
+        "review_claimable_file_count_by_agent",
         "semantics",
     }
     if not required <= set(value):
@@ -1009,83 +1011,74 @@ def _sanitize_coverage(value: object) -> dict[str, Any] | None:
         "semantics": "generated_scope_not_proof_of_model_read",
     }
 
-    # Derived positive-claim/gap populations for NOT DIFFED files. Both keys
-    # are OPTIONAL within this section,
-    # unlike everything above: a manifest whose coverage predates this
-    # feature carries neither, and that must read as unmeasured, never
-    # as a measured zero, so an absent key here stays absent in the
-    # sanitized result rather than defaulting to `{}`. When a key IS
-    # present, though, it is held to the same all-or-nothing standard as
-    # `by_agent`/`excluded` above: one malformed entry fails the whole
-    # section, on the theory that a producer whose optional data is
-    # broken cannot be trusted for the required data beside it either.
-    if "deferred_honesty_by_agent" in value:
-        raw_honesty = value.get("deferred_honesty_by_agent")
-        if not isinstance(raw_honesty, dict):
+    raw_accounting = value.get("review_claim_accounting_by_agent")
+    if not isinstance(raw_accounting, dict):
+        return None
+    safe_accounting: dict[str, dict[str, int]] = {}
+    for name, counts in raw_accounting.items():
+        if (
+            type(name) is not str
+            or _PRODUCER_AGENT_NAME_RE.fullmatch(name) is None
+            or not isinstance(counts, dict)
+            or set(counts) != _REVIEW_CLAIM_ACCOUNTING_FIELDS
+        ):
             return None
-        safe_honesty: dict[str, dict[str, int]] = {}
-        for name, counts in raw_honesty.items():
-            if (
-                type(name) is not str
-                or _PRODUCER_AGENT_NAME_RE.fullmatch(name) is None
-                or not isinstance(counts, dict)
-                or set(counts) != _DEFERRED_HONESTY_FIELDS
-            ):
-                return None
-            safe_counts = {
-                field: _nonnegative_int(counts.get(field))
-                for field in _DEFERRED_HONESTY_FIELDS
-            }
-            if any(count is None for count in safe_counts.values()):
-                return None
-            safe_honesty[name] = safe_counts
-        result["deferred_honesty_by_agent"] = safe_honesty
+        safe_counts = {
+            field: _nonnegative_int(counts.get(field))
+            for field in _REVIEW_CLAIM_ACCOUNTING_FIELDS
+        }
+        if any(count is None for count in safe_counts.values()):
+            return None
+        safe_accounting[name] = safe_counts
+    result["review_claim_accounting_by_agent"] = safe_accounting
 
-    if "deferred_total_by_agent" in value:
-        raw_total = value.get("deferred_total_by_agent")
-        if not isinstance(raw_total, dict):
+    raw_claimable_counts = value.get("review_claimable_file_count_by_agent")
+    if not isinstance(raw_claimable_counts, dict):
+        return None
+    safe_claimable_counts: dict[str, int] = {}
+    for name, count in raw_claimable_counts.items():
+        safe_count = _nonnegative_int(count)
+        if (
+            type(name) is not str
+            or _PRODUCER_AGENT_NAME_RE.fullmatch(name) is None
+            or safe_count is None
+        ):
             return None
-        safe_total: dict[str, int] = {}
-        for name, count in raw_total.items():
-            safe_count = _nonnegative_int(count)
-            if (
-                type(name) is not str
-                or _PRODUCER_AGENT_NAME_RE.fullmatch(name) is None
-                or safe_count is None
-            ):
-                return None
-            safe_total[name] = safe_count
-        result["deferred_total_by_agent"] = safe_total
+        safe_claimable_counts[name] = safe_count
+    result["review_claimable_file_count_by_agent"] = safe_claimable_counts
 
     # Reconciliation: every measured agent row requires its independently
-    # sourced deferred-file total, and its derived accounting must sum exactly
+    # sourced review-claimable count, and its derived accounting must sum exactly
     # to that denominator. A row without its denominator is missing evidence,
     # never a measured zero.
     #
     # The agent's own derived accounting must sum exactly to the system's
-    # independently-sourced deferred-file total — the identity
+    # independently sourced review-claimable count — the identity
     # `ReviewOutputBuilder.save()` itself enforces against the very same
-    # sidecar this total is read from. A mismatch means the two sources disagree about a fact
+    # accounting input this count is read from. A mismatch means the two
+    # sources disagree about a fact
     # `save()` guarantees, so the section fails closed rather than
     # publish self-contradictory numbers.
     #
     # This is a COUNT checksum, not a set identity: it proves the two
     # populations add up to the right total, not that any individual file
     # landed in the right population.
-    honesty_by_agent = result.get("deferred_honesty_by_agent")
-    total_by_agent = result.get("deferred_total_by_agent")
-    if isinstance(honesty_by_agent, dict) and honesty_by_agent:
-        if not isinstance(total_by_agent, dict):
+    accounting_by_agent = result.get("review_claim_accounting_by_agent")
+    claimable_count_by_agent = result.get(
+        "review_claimable_file_count_by_agent"
+    )
+    if isinstance(accounting_by_agent, dict) and accounting_by_agent:
+        if not isinstance(claimable_count_by_agent, dict):
             return None
-        if not set(honesty_by_agent) <= set(total_by_agent):
+        if not set(accounting_by_agent) <= set(claimable_count_by_agent):
             return None
-        for name in honesty_by_agent:
-            counts = honesty_by_agent[name]
+        for name in accounting_by_agent:
+            counts = accounting_by_agent[name]
             accounted = (
-                counts["deferred_reviewed"]
-                + counts["unreviewed"]
+                counts["reviewed_file_claim_count"]
+                + counts["unclaimed_review_file_count"]
             )
-            if accounted != total_by_agent[name]:
+            if accounted != claimable_count_by_agent[name]:
                 return None
 
     return result

@@ -168,38 +168,12 @@ _SUMMARY_FIELDS = (
     "final_issues",
 )
 _SEVERITIES = tuple(_TELEMETRY_CONTRACT._SEVERITY_FIELDS)
-# Lockstep with review/telemetry.py's EVENT_SCHEMA — this is the
-# consumer's expected value for the producer's constant, same pairing as
-# _OBSERVED_READS_SCHEMA below. Bumped 1 -> 2 when the manifest's
-# `outcome` block gained a verdict-provenance field. It stayed 2 when the
-# manifest
-# gained the `synthesis_agents` section, and again when `_sanitize_manifest` started
-# actually publishing `dependency_refresh`/`reviewer_markdown`/
-# `findings_markdown` (Task 13 — the sections already existed on disk;
-# only the sanitized, consumer-facing view was dropping two of them and
-# never had the third), and again when that same verdict-provenance key
-# was renamed `verdict_sync` -> `verdict_source` (step 11 stopped syncing
-# a transcribed verdict into the findings ledger and started deriving the
-# published verdict from it), each under the Artifact Schemas rule's
-# unreleased-version carve-out — see the producer-side comment on
-# EVENT_SCHEMA for the tag evidence and the rename's reasoning.
-_SUPPORTED_MANIFEST_SCHEMA = 2
+# Lockstep with review/telemetry.py's EVENT_SCHEMA. Schema 3 requires the
+# reviewed-file accounting projection in every coverage section.
+_SUPPORTED_MANIFEST_SCHEMA = 3
 _OBSERVED_READS_SCHEMA = 2
-# The `--format json` report's own schema. It stayed 2 when each run row
-# and the cohort aggregate gained `synthesis_agents`, and again when each
-# run row gained `dependency_refresh`/`reviewer_markdown`/
-# `findings_markdown` (Task 13, same run-row source as the manifest
-# fields above — `measure_run()`'s output is dumped wholesale as each
-# row), and again when each run row's `coverage` gained
-# `deferred_honesty_by_agent`/`deferred_total_by_agent` and the cohort
-# aggregate gained `deferred_honesty` (Task 14, backlog #19 — the
-# agent-vs-system NOT DIFFED honesty split), and again when each run row
-# gained `budget_utilization` (run12 audit fixes Task 7 — per-agent
-# tool_calls/budget_target with a run-level median/range), under the
-# same unreleased-version carve-out: 2 was introduced in 1.114.0 and
-# 1.114.0 is not tagged, so no report was ever published claiming 2
-# without these keys.
-_REPORT_SCHEMA = 2
+# Schema 3 adds the cohort's canonical `review_claim_accounting` aggregate.
+_REPORT_SCHEMA = 3
 _SUPPORTED_MANIFEST_STATUSES = {"running", "complete"}
 _DISPATCHED_STATUSES = _DISPATCH_STATUS_CONTRACT.DISPATCHED_STATUSES
 _SUPPORTED_DISPATCH_STATUSES = (

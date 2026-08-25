@@ -1500,9 +1500,13 @@ class TestReviewCoverageSection:
     def _render(mod, gaps=None, claims=None, unscoped=None):
         # Straight at briefings.py: the renderer is shared by the record
         # assembler and step 11, so the facade is not the seam under test.
-        from review.briefings import _render_review_coverage_section
+        from review.briefings import _render_review_accounting_section
 
-        return _render_review_coverage_section(gaps, claims, unscoped)
+        return _render_review_accounting_section({
+            "agents_with_unclaimed_review_by_file": gaps,
+            "agents_claiming_review_by_file": claims,
+            "unscoped_files": unscoped,
+        })
 
     def test_all_three_populations_get_their_own_honest_sentence(self, mod):
         """The field failure this pins: a briefing that DESCRIBED a hedged
@@ -1522,7 +1526,7 @@ class TestReviewCoverageSection:
         assert (
             "1 changed file(s) were skipped by every matching agent's diff "
             "budget and no reviewer reported reviewing them from the "
-            "deferred NOT DIFFED queue:" in text
+            "review-claimable queue:" in text
         )
         assert "- `src/starved.php` (skipped by: `code-reviewer`)" in text
 
@@ -1534,7 +1538,7 @@ class TestReviewCoverageSection:
         assert "- `.editorconfig`" in text
 
         assert (
-            "### Reviewed from the deferred queue — claims, not proof of "
+            "### Reviewed-file claims — claims, not proof of "
             "read" in text
         )
         assert "- `src/big.py` (claimed by: `security-reviewer`)" in text
@@ -1653,8 +1657,13 @@ class TestStep9ReviewRecord:
         re-render it into a briefing the orchestrator would paste from."""
         state = {
             "completed_steps": [],
-            "inline_coverage_gaps": {"src/starved.php": ["code-reviewer"]},
-            "inline_coverage_unscoped": ["package-lock.json"],
+            "review_accounting": {
+                "agents_with_unclaimed_review_by_file": {
+                    "src/starved.php": ["code-reviewer"]
+                },
+                "agents_claiming_review_by_file": {},
+                "unscoped_files": ["package-lock.json"],
+            },
         }
         text = "\n".join(mod.get_step_guidance(9, "full", state, {})["actions"])
         assert "## Review coverage" not in text
@@ -2367,9 +2376,13 @@ class TestStep11ReportAuthoring:
         briefing would give the orchestrator a second copy to paraphrase
         — a field run turned the hedged sentence into "read by nobody"."""
         state = {
-            "inline_coverage_gaps": {"src/starved.php": ["code-reviewer"]},
-            "inline_coverage_claims": {},
-            "inline_coverage_unscoped": [],
+            "review_accounting": {
+                "agents_with_unclaimed_review_by_file": {
+                    "src/starved.php": ["code-reviewer"]
+                },
+                "agents_claiming_review_by_file": {},
+                "unscoped_files": [],
+            },
         }
         text = "\n".join(self._guidance(mod, state=state)["actions"])
         assert "Review coverage" in text
@@ -2384,9 +2397,13 @@ class TestStep11ReportAuthoring:
         """Claims are hedged as "not proof of read". Demanding the verdict
         acknowledge a gap on a claims-only run manufactures one."""
         state = {
-            "inline_coverage_gaps": {},
-            "inline_coverage_claims": {"src/big.py": ["security-reviewer"]},
-            "inline_coverage_unscoped": [],
+            "review_accounting": {
+                "agents_with_unclaimed_review_by_file": {},
+                "agents_claiming_review_by_file": {
+                    "src/big.py": ["security-reviewer"]
+                },
+                "unscoped_files": [],
+            },
         }
         text = "\n".join(self._guidance(mod, state=state)["actions"])
         assert "Review coverage" in text
@@ -2394,17 +2411,23 @@ class TestStep11ReportAuthoring:
 
     @pytest.mark.parametrize(
         "population",
-        ["inline_coverage_gaps", "inline_coverage_unscoped"],
+        ["agents_with_unclaimed_review_by_file", "unscoped_files"],
     )
     def test_either_proven_gap_population_demands_the_verdict_clause(
         self, mod, population
     ):
         value = (
             {"src/starved.php": ["code-reviewer"]}
-            if population == "inline_coverage_gaps"
+            if population == "agents_with_unclaimed_review_by_file"
             else ["package-lock.json"]
         )
-        text = "\n".join(self._guidance(mod, state={population: value})["actions"])
+        state = {"review_accounting": {
+            "agents_with_unclaimed_review_by_file": {},
+            "agents_claiming_review_by_file": {},
+            "unscoped_files": [],
+            population: value,
+        }}
+        text = "\n".join(self._guidance(mod, state=state)["actions"])
         assert "verdict must acknowledge this gap" in text
 
     def test_no_coverage_mention_without_a_measurement(self, mod):

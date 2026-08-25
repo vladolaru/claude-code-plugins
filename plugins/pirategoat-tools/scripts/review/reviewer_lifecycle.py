@@ -21,7 +21,7 @@ REVIEW_INTAKE_NAME = "review-intake.json"
 class ReviewerPaths:
     candidate: str
     canonical: str
-    sidecar: str
+    accounting_input: str
 
 
 def reviewer_paths(output_dir: str, reviewer: str) -> ReviewerPaths:
@@ -39,7 +39,9 @@ def reviewer_paths(output_dir: str, reviewer: str) -> ReviewerPaths:
     return ReviewerPaths(
         candidate=f"{stem}.candidate.json",
         canonical=f"{stem}.json",
-        sidecar=os.path.join(output_dir, f"{reviewer}-deferred-files.json"),
+        accounting_input=os.path.join(
+            output_dir, f"{reviewer}-review-accounting-input.json"
+        ),
     )
 
 

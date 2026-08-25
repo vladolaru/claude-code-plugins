@@ -24,7 +24,7 @@ SCRIPT_PATH = SCRIPTS_DIR / "review" / "reconciliation_context.py"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from review.agent.output import ReviewOutputBuilder
-from review.agent.coverage import derive_deferred_coverage
+from review.agent.coverage import derive_review_accounting
 
 
 def _load_module():
@@ -90,16 +90,16 @@ def _write_summary(
     path = os.path.join(output_dir, f"{agent}-scope-summary{suffix}.json")
     with open(path, "w") as f:
         json.dump({
-            "schema": 1,
+            "schema": 2,
             "domain": "x",
             "status": "OK",
-            "files_with_diffs": files_with_diffs,
-            "budget_exceeded_files": budget_exceeded,
+            "inline_diff_files": files_with_diffs,
+            "review_claimable_files": budget_exceeded,
             "list_only_files": list(list_only or []),
             # Real sidecars publish this in every mode; the helper defaults
             # it to the union of what was passed so ordinary-mode fixtures
             # stay honest without every caller restating their scope.
-            "in_scope_files": (
+            "in_scope_review_files": (
                 list(in_scope) if in_scope is not None
                 else sorted(
                     set(files_with_diffs)
@@ -117,26 +117,31 @@ def _write_review(output_dir, stem, claims):
     the stem-derivation rule itself, so deriving it here would hide the
     thing under test.
 
-    Every current review carries the positive deferred-review claim list.
+    Every current review carries the positive reviewed-file claim list.
     """
     payload = {
         "reviewer": stem.replace("-review", ""),
         "issues": [],
-        "deferred_reviewed": claims,
+        "reviewed_file_claims": claims,
     }
     with open(os.path.join(output_dir, f"{stem}.json"), "w") as f:
         json.dump(payload, f)
 
 
-def _write_deferred_sidecar(output_dir, reviewer, deferred, *, diffed_count=0):
+def _write_accounting_input(output_dir, reviewer, claimable, *, inline_count=0):
     payload = {
-        "schema": 2,
+        "schema": 3,
         "agent_name": f"{reviewer}-reviewer",
-        "deferred_files": deferred,
-        "diffed_count": diffed_count,
-        "in_scope_count": diffed_count + len(deferred),
+        "reviewer": reviewer,
+        "review_claimable_files": claimable,
+        "review_budget": 15,
+        "inline_diff_file_count": inline_count,
+        "in_scope_review_file_count": inline_count + len(claimable),
     }
-    with open(os.path.join(output_dir, f"{reviewer}-deferred-files.json"), "w") as f:
+    with open(
+        os.path.join(output_dir, f"{reviewer}-review-accounting-input.json"),
+        "w",
+    ) as f:
         json.dump(payload, f)
     return payload
 
@@ -176,18 +181,23 @@ def _make_review_json(
         "pr_id": pr_id,
         "reviewer": reviewer,
         "timestamp": "2026-04-04T10:00:00",
-        "schema": 1,
+        "schema": 2,
         "verdict": verdict,
         "summary": {
             "total_issues": len(issues),
             "by_severity": severity_counts,
         },
         "issues": issues,
+        "review_claimable_files": [],
+        "reviewed_file_claims": [],
+        "unclaimed_review_files": [],
+        "inline_diff_file_count": 3,
+        "review_accounted_file_count": 3,
+        "in_scope_review_file_count": 3,
         "observations": None,
         "recommendations": None,
         "positive_observations": None,
         "meta": {
-            "files_reviewed": 3,
             "review_duration_ms": 1500,
             "confidence_score": 0.95,
             "tool_results_used": None,
@@ -1348,6 +1358,7 @@ class TestFullScript:
 
         ctx = json.loads(ctx_path.read_text())
         expected_keys = {
+            "schema",
             "agent_findings",
             "source_snippets",
             "scope_annotations",
@@ -1358,11 +1369,12 @@ class TestFullScript:
             "output_dir",
             "output_builder_path",
             "host_context_banner",
-            "inline_coverage",
+            "review_accounting",
             "missing_agents",
             "prefiltered_out_of_scope",
         }
         assert set(ctx.keys()) == expected_keys
+        assert ctx["schema"] == 3
 
         # Verify specific values
         assert "security-review" in ctx["agent_findings"]
@@ -1374,7 +1386,7 @@ class TestFullScript:
 
     def test_changed_files_reach_the_unscoped_computation(self, tmp_path):
         """The seam R3 depends on: `build_context` must hand the CLI's
-        changed-file list to the coverage aggregator, or `files_unscoped`
+        changed-file list to the coverage aggregator, or `unscoped_files`
         is unmeasurable in production."""
         _write_summary(str(tmp_path), "security-reviewer", ["src/auth.py"], [])
 
@@ -1389,7 +1401,7 @@ class TestFullScript:
         ctx = json.loads(
             (tmp_path / "reconciliation-context.json").read_text()
         )
-        assert ctx["inline_coverage"]["files_unscoped"] == [
+        assert ctx["review_accounting"]["unscoped_files"] == [
             "package-lock.json"
         ]
 
@@ -1398,7 +1410,7 @@ class TestFullScript:
         when review-context.json carries no CSV.
 
         That is the production path on which the unmeasured branch is
-        reached. Before this, it published `files_unscoped: []` — a clean
+        reached. Before this, it published `unscoped_files: []` — a clean
         coverage bill for a population nothing had measured.
         """
         _write_summary(str(tmp_path), "security-reviewer", ["src/auth.py"], [])
@@ -1414,7 +1426,7 @@ class TestFullScript:
         ctx = json.loads(
             (tmp_path / "reconciliation-context.json").read_text()
         )
-        assert ctx["inline_coverage"]["files_unscoped"] is None
+        assert ctx["review_accounting"]["unscoped_files"] is None
 
     def test_empty_output_dir(self, tmp_path):
         """Runs successfully with no review files."""
@@ -1684,7 +1696,7 @@ class TestMissingAgentDetection:
         """`None`, never `[]`. A run with no dispatch plan did not measure
         this population, and "nothing was measured" must never read as
         "nobody was missing" — the same zero-vs-unknown rule
-        `files_unscoped` follows."""
+        `unscoped_files` follows."""
         assert mod.compute_missing_agents(None, {"security-review": {}}) is None
 
     def test_empty_dispatch_measures_empty(self, mod):
@@ -1898,16 +1910,18 @@ class TestPrefilterAnnotation:
         assert summary == {"count": 1, "by_agent": {"c-review": 1}}
 
 
-class TestAggregateInlineCoverage:
-    """aggregate_inline_coverage() reads *-scope-summary*.json sidecars."""
+class TestAggregateReviewAccounting:
+    """aggregate_review_accounting() reads *-scope-summary*.json sidecars."""
 
     def test_returns_none_without_summaries(self, mod, tmp_path):
-        assert mod.aggregate_inline_coverage(str(tmp_path)) is None
+        assert mod.aggregate_review_accounting(str(tmp_path)) is None
 
     def test_returns_none_for_missing_dir(self, mod, tmp_path):
-        assert mod.aggregate_inline_coverage(str(tmp_path / "nope")) is None
+        assert mod.aggregate_review_accounting(str(tmp_path / "nope")) is None
 
-    def test_files_never_inline(self, mod, tmp_path):
+    def test_reports_inline_receipt_and_each_agents_unclaimed_work(
+        self, mod, tmp_path
+    ):
         _write_summary(
             str(tmp_path), "security-reviewer",
             ["src/a.php"], ["src/starved.php", "src/b.php"],
@@ -1916,14 +1930,18 @@ class TestAggregateInlineCoverage:
             str(tmp_path), "code-reviewer",
             ["src/b.php"], ["src/starved.php"],
         )
-        cov = mod.aggregate_inline_coverage(str(tmp_path))
-        assert cov["agents_reporting"] == 2
-        # b.php was inline for code-reviewer — covered, not a gap.
-        assert "src/b.php" not in cov["files_never_inline"]
-        # starved.php was skipped by every agent that matched it.
-        assert cov["files_never_inline"]["src/starved.php"] == [
+        cov = mod.aggregate_review_accounting(str(tmp_path))
+        assert cov["scope_reporting_agent_count"] == 2
+        assert cov["agents_receiving_inline_diff_by_file"] == {
+            "src/a.php": ["security-reviewer"],
+            "src/b.php": ["code-reviewer"],
+        }
+        assert cov["agents_with_unclaimed_review_by_file"] == {
+            "src/b.php": ["security-reviewer"],
+            "src/starved.php": [
             "code-reviewer", "security-reviewer",
-        ]
+            ],
+        }
 
     def test_malformed_summary_skipped(self, mod, tmp_path):
         (tmp_path / "broken-scope-summary.json").write_text("{not json")
@@ -1931,40 +1949,41 @@ class TestAggregateInlineCoverage:
             str(tmp_path), "security-reviewer",
             ["src/a.php"], [],
         )
-        cov = mod.aggregate_inline_coverage(str(tmp_path))
-        assert cov["agents_reporting"] == 1
+        cov = mod.aggregate_review_accounting(str(tmp_path))
+        assert cov["scope_reporting_agent_count"] == 1
 
     def test_secondary_summaries_attribute_to_agent(self, mod, tmp_path):
         _write_summary(
             str(tmp_path), "security-reviewer", [], ["ci.yml"],
             domain="config-ops",
         )
-        cov = mod.aggregate_inline_coverage(str(tmp_path))
-        assert cov["files_never_inline"]["ci.yml"] == ["security-reviewer"]
+        cov = mod.aggregate_review_accounting(str(tmp_path))
+        assert cov["agents_with_unclaimed_review_by_file"]["ci.yml"] == ["security-reviewer"]
 
     def test_claims_and_gaps_match_the_authoritative_builder_helper(
         self, mod, tmp_path
     ):
         deferred = ["src/read.php", "src/unread.php"]
         _write_summary(str(tmp_path), "security-reviewer", [], deferred)
-        sidecar = _write_deferred_sidecar(
-            str(tmp_path), "security", deferred, diffed_count=2
+        accounting_input = _write_accounting_input(
+            str(tmp_path), "security", deferred, inline_count=2
         )
         _write_review(
             str(tmp_path), "security-review", claims=["src/read.php"]
         )
 
-        cov = mod.aggregate_inline_coverage(str(tmp_path))
-        expected = derive_deferred_coverage(sidecar, ["src/read.php"])
+        cov = mod.aggregate_review_accounting(str(tmp_path))
+        expected = derive_review_accounting(
+            accounting_input, ["src/read.php"]
+        )
 
-        assert cov["files_deferred_reviewed"] == {
-            path: ["security-reviewer"] for path in expected.deferred_reviewed
+        assert cov["agents_claiming_review_by_file"] == {
+            path: ["security-reviewer"] for path in expected.reviewed_file_claims
         }
-        assert cov["files_never_inline"] == {
-            path: ["security-reviewer"] for path in expected.unreviewed
+        assert cov["agents_with_unclaimed_review_by_file"] == {
+            path: ["security-reviewer"]
+            for path in expected.unclaimed_review_files
         }
-        assert "files_declared_" + "unreviewed" not in cov
-        assert "files_autofilled_" + "unreviewed" not in cov
 
     @pytest.mark.parametrize(
         "claims", ["src/read.php", ["src/read.php", None]],
@@ -1973,13 +1992,13 @@ class TestAggregateInlineCoverage:
     def test_malformed_claims_credit_nothing(self, mod, tmp_path, claims):
         deferred = ["src/read.php", "src/unread.php"]
         _write_summary(str(tmp_path), "security-reviewer", [], deferred)
-        _write_deferred_sidecar(str(tmp_path), "security", deferred)
+        _write_accounting_input(str(tmp_path), "security", deferred)
         _write_review(str(tmp_path), "security-review", claims=claims)
 
-        cov = mod.aggregate_inline_coverage(str(tmp_path))
+        cov = mod.aggregate_review_accounting(str(tmp_path))
 
-        assert cov["files_deferred_reviewed"] == {}
-        assert cov["files_never_inline"] == {
+        assert cov["agents_claiming_review_by_file"] == {}
+        assert cov["agents_with_unclaimed_review_by_file"] == {
             "src/read.php": ["security-reviewer"],
             "src/unread.php": ["security-reviewer"],
         }
@@ -1989,24 +2008,24 @@ class TestAggregateInlineCoverage:
     ):
         for agent in ("security-reviewer", "code-reviewer"):
             _write_summary(str(tmp_path), agent, [], ["src/shared.php"])
-        _write_deferred_sidecar(str(tmp_path), "security", ["src/shared.php"])
-        _write_deferred_sidecar(str(tmp_path), "code", ["src/shared.php"])
+        _write_accounting_input(str(tmp_path), "security", ["src/shared.php"])
+        _write_accounting_input(str(tmp_path), "code", ["src/shared.php"])
         _write_review(
             str(tmp_path), "security-review", claims=["src/shared.php"]
         )
 
-        cov = mod.aggregate_inline_coverage(str(tmp_path))
+        cov = mod.aggregate_review_accounting(str(tmp_path))
 
-        assert cov["files_deferred_reviewed"] == {
+        assert cov["agents_claiming_review_by_file"] == {
             "src/shared.php": ["security-reviewer"]
         }
-        assert cov["files_never_inline"] == {
+        assert cov["agents_with_unclaimed_review_by_file"] == {
             "src/shared.php": ["code-reviewer"]
         }
 
 
 class TestUnscopedFiles:
-    """`files_unscoped` — changed files no reviewer's scope contained.
+    """`unscoped_files` — changed files no reviewer's scope contained.
 
     The population that used to vanish: every other bucket is keyed on a
     file some agent's sidecar mentions, so a lockfile, binary, or dotfile
@@ -2018,13 +2037,13 @@ class TestUnscopedFiles:
         _write_summary(
             str(tmp_path), "security-reviewer", ["src/a.php"], [],
         )
-        cov = mod.aggregate_inline_coverage(
+        cov = mod.aggregate_review_accounting(
             str(tmp_path),
             changed_files=[
                 "src/a.php", "package-lock.json", ".editorconfig",
             ],
         )
-        assert cov["files_unscoped"] == [".editorconfig", "package-lock.json"]
+        assert cov["unscoped_files"] == [".editorconfig", "package-lock.json"]
 
     def test_union_covers_every_sidecar_file_list(self, mod, tmp_path):
         """Inline, deferred, AND name-only listing all count as scoped —
@@ -2034,14 +2053,14 @@ class TestUnscopedFiles:
             ["src/inline.php"], ["src/deferred.php"],
             list_only=["src/listed.php"],
         )
-        cov = mod.aggregate_inline_coverage(
+        cov = mod.aggregate_review_accounting(
             str(tmp_path),
             changed_files=[
                 "src/inline.php", "src/deferred.php", "src/listed.php",
                 "yarn.lock",
             ],
         )
-        assert cov["files_unscoped"] == ["yarn.lock"]
+        assert cov["unscoped_files"] == ["yarn.lock"]
 
     def test_git_quoted_changed_path_matches_the_unquoted_sidecar(
         self, mod, tmp_path
@@ -2059,10 +2078,10 @@ class TestUnscopedFiles:
         _write_summary(
             str(tmp_path), "security-reviewer", ["src/café.php"], [],
         )
-        cov = mod.aggregate_inline_coverage(
+        cov = mod.aggregate_review_accounting(
             str(tmp_path), changed_files=[r'"src/caf\303\251.php"'],
         )
-        assert cov["files_unscoped"] == []
+        assert cov["unscoped_files"] == []
 
     def test_unnormalizable_changed_path_leaves_the_population_unmeasured(
         self, mod, tmp_path
@@ -2072,11 +2091,11 @@ class TestUnscopedFiles:
         _write_summary(
             str(tmp_path), "security-reviewer", ["src/a.php"], [],
         )
-        cov = mod.aggregate_inline_coverage(
+        cov = mod.aggregate_review_accounting(
             str(tmp_path),
             changed_files=["src/a.php", r'"src/broken\3"'],
         )
-        assert cov["files_unscoped"] is None
+        assert cov["unscoped_files"] is None
 
     def test_equivalent_spellings_of_one_path_are_one_file(
         self, mod, tmp_path
@@ -2084,10 +2103,10 @@ class TestUnscopedFiles:
         _write_summary(
             str(tmp_path), "security-reviewer", ["./src//a.php"], [],
         )
-        cov = mod.aggregate_inline_coverage(
+        cov = mod.aggregate_review_accounting(
             str(tmp_path), changed_files=["src/a.php"],
         )
-        assert cov["files_unscoped"] == []
+        assert cov["unscoped_files"] == []
 
     def test_base_ref_only_agent_contributes_its_whole_scope(
         self, mod, tmp_path
@@ -2104,18 +2123,15 @@ class TestUnscopedFiles:
             str(tmp_path), "patterns-reviewer", [], [],
             in_scope=["src/a.php", "src/b.php"],
         )
-        cov = mod.aggregate_inline_coverage(
+        cov = mod.aggregate_review_accounting(
             str(tmp_path),
             changed_files=["src/a.php", "src/b.php", "yarn.lock"],
         )
-        assert cov["files_unscoped"] == ["yarn.lock"]
+        assert cov["unscoped_files"] == ["yarn.lock"]
 
-    def test_sidecar_without_the_field_degrades_to_contributing_nothing(
+    def test_schema_one_summary_is_rejected_without_compatibility_reading(
         self, mod, tmp_path
     ):
-        """A run whose sidecars predate `in_scope_files` under-reports
-        exactly as it did before — never a new false claim, never a
-        crash."""
         path = tmp_path / "legacy-reviewer-scope-summary.json"
         path.write_text(json.dumps({
             "schema": 1,
@@ -2125,27 +2141,26 @@ class TestUnscopedFiles:
             "budget_exceeded_files": [],
             "list_only_files": [],
         }))
-        cov = mod.aggregate_inline_coverage(
+        assert mod.aggregate_review_accounting(
             str(tmp_path), changed_files=["src/a.php", "src/b.php"],
-        )
-        assert cov["files_unscoped"] == ["src/b.php"]
+        ) is None
 
     def test_all_files_scoped_is_measured_empty(self, mod, tmp_path):
         _write_summary(
             str(tmp_path), "security-reviewer", ["src/a.php"], [],
         )
-        cov = mod.aggregate_inline_coverage(
+        cov = mod.aggregate_review_accounting(
             str(tmp_path), changed_files=["src/a.php"],
         )
-        assert cov["files_unscoped"] == []
+        assert cov["unscoped_files"] == []
 
     def test_no_changed_file_list_is_unmeasured_not_empty(self, mod, tmp_path):
         """None, not [] — a caller must not read "not measured" as "none"."""
         _write_summary(
             str(tmp_path), "security-reviewer", ["src/a.php"], [],
         )
-        cov = mod.aggregate_inline_coverage(str(tmp_path))
-        assert cov["files_unscoped"] is None
+        cov = mod.aggregate_review_accounting(str(tmp_path))
+        assert cov["unscoped_files"] is None
 
     @pytest.mark.parametrize(
         "changed_files", [None, []], ids=["absent", "empty"],
@@ -2163,10 +2178,10 @@ class TestUnscopedFiles:
         _write_summary(
             str(tmp_path), "security-reviewer", ["src/a.php"], [],
         )
-        cov = mod.aggregate_inline_coverage(
+        cov = mod.aggregate_review_accounting(
             str(tmp_path), changed_files=changed_files,
         )
-        assert cov["files_unscoped"] is None
+        assert cov["unscoped_files"] is None
 
     def test_a_measured_run_that_finds_nothing_reports_an_empty_list(
         self, mod, tmp_path
@@ -2175,10 +2190,10 @@ class TestUnscopedFiles:
         _write_summary(
             str(tmp_path), "security-reviewer", ["src/a.php"], [],
         )
-        cov = mod.aggregate_inline_coverage(
+        cov = mod.aggregate_review_accounting(
             str(tmp_path), changed_files=["src/a.php"],
         )
-        assert cov["files_unscoped"] == []
+        assert cov["unscoped_files"] == []
 
     def test_secondary_domain_sidecar_files_count_as_scoped(
         self, mod, tmp_path
@@ -2190,14 +2205,14 @@ class TestUnscopedFiles:
             str(tmp_path), "security-reviewer", ["ci.yml"], [],
             domain="config-ops",
         )
-        cov = mod.aggregate_inline_coverage(
+        cov = mod.aggregate_review_accounting(
             str(tmp_path), changed_files=["src/a.php", "ci.yml"],
         )
-        assert cov["files_unscoped"] == []
+        assert cov["unscoped_files"] == []
 
 
 class TestAgentsReportingCountsAgents:
-    """`agents_reporting` counts distinct agents, not summary files.
+    """`scope_reporting_agent_count` counts distinct agents, not summary files.
 
     Three reviewers ship a second `-config-ops` sidecar, so the file count
     reported 22 agents for a 19-agent field run.
@@ -2213,16 +2228,16 @@ class TestAgentsReportingCountsAgents:
                 str(tmp_path), agent, ["ci.yml"], [], domain="config-ops",
             )
 
-        cov = mod.aggregate_inline_coverage(str(tmp_path))
+        cov = mod.aggregate_review_accounting(str(tmp_path))
 
         assert len(list(tmp_path.glob("*-scope-summary*.json"))) == 6
-        assert cov["agents_reporting"] == 3
+        assert cov["scope_reporting_agent_count"] == 3
 
     def test_only_unreadable_summaries_still_reads_as_no_data(
         self, mod, tmp_path
     ):
         (tmp_path / "broken-scope-summary.json").write_text("{not json")
-        assert mod.aggregate_inline_coverage(str(tmp_path)) is None
+        assert mod.aggregate_review_accounting(str(tmp_path)) is None
 
 
 class TestReviewStem:

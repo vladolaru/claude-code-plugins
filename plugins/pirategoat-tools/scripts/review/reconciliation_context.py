@@ -35,7 +35,10 @@ except ImportError:
         sys.path.insert(0, _scripts_parent)
     from review.reviewer_names import derive_reviewer_name
 
-from review.agent.coverage import CoverageError, derive_deferred_coverage
+from review.agent.coverage import (
+    ReviewAccountingError,
+    derive_review_accounting,
+)
 
 from git_paths import normalize_repo_paths
 
@@ -178,7 +181,7 @@ def _load_review_payload(output_dir: str, agent: str) -> Optional[Dict[str, Any]
 
     ``load_agent_findings`` reads the same files for the findings payload
     through its own path and failure policy — it reports malformed output on
-    stderr and skips it, which is not what silent coverage accounting wants.
+    stderr and skips it, which is not what run-level file accounting wants.
     """
     path = os.path.join(output_dir, f"{_review_stem(agent)}.json")
     try:
@@ -189,34 +192,52 @@ def _load_review_payload(output_dir: str, agent: str) -> Optional[Dict[str, Any]
     return data if isinstance(data, dict) else None
 
 
-def _load_agent_deferred_claims(
+def _load_agent_review_accounting(
     output_dir: str, agent: str
 ) -> Optional[Any]:
-    """Read one finalized review's raw positive claims, if available."""
+    """Derive one finalized review's canonical file accounting."""
     data = _load_review_payload(output_dir, agent)
-    return data.get("deferred_reviewed") if data is not None else None
+    if data is None or "reviewed_file_claims" not in data:
+        return None
+    reviewer = derive_reviewer_name(agent)
+    path = os.path.join(
+        output_dir, f"{reviewer}-review-accounting-input.json"
+    )
+    try:
+        with open(path, "r", encoding="utf-8") as file_handle:
+            accounting_input = json.load(file_handle)
+    except (OSError, json.JSONDecodeError):
+        return None
+    try:
+        accounting = derive_review_accounting(
+            accounting_input, data["reviewed_file_claims"]
+        )
+    except (ReviewAccountingError, TypeError):
+        try:
+            accounting = derive_review_accounting(accounting_input, [])
+        except ReviewAccountingError:
+            return None
+    return accounting if accounting.agent_name == agent else None
 
 
 # Every file-carrying list a scope summary sidecar can hold
 # (`agent/scope.py::write_scope_summary`). Their union is "every changed
 # file that reached at least one reviewer's scope in any form", which is
-# what `files_unscoped` is the complement of. Adding a list to the sidecar
+# what `unscoped_files` is the complement of. Adding a list to the sidecar
 # without adding it here would silently reclassify covered files as
 # never-scoped.
 #
-# `in_scope_files` is the only one of these written in EVERY scope mode,
+# `in_scope_review_files` is the only one written in every scope mode,
 # and it is why the union is trustworthy at all: a `--base-ref-only` or
 # `--summary` agent (patterns-reviewer by registry config; any reviewer on
 # a 100+-file PR by protocol) never fetches a diff, so its other three
 # lists are legitimately empty and every file it owned used to look
-# unowned. A sidecar written before this field existed simply contributes
-# nothing through it — the same under-reporting as before, never a new
-# false claim, and never a crash.
-_SIDECAR_FILE_LISTS = (
-    "files_with_diffs",
-    "budget_exceeded_files",
+# unowned.
+_SCOPE_SUMMARY_FILE_LISTS = (
+    "inline_diff_files",
+    "review_claimable_files",
     "list_only_files",
-    "in_scope_files",
+    "in_scope_review_files",
 )
 
 
@@ -246,7 +267,7 @@ def _unscoped_files(
     list never reached the builder very much does: orchestration.py always
     passes ``--changed-files`` and passes ``""`` when review-context.json
     carries no CSV. One rule — no list means nothing was measured — is what
-    keeps that failure from publishing ``files_unscoped: []``, a clean
+    keeps that failure from publishing ``unscoped_files: []``, a clean
     coverage bill for a population nothing looked at.
     """
     if not changed_files:
@@ -257,42 +278,25 @@ def _unscoped_files(
     return sorted(set(normalized) - scoped_anywhere)
 
 
-def aggregate_inline_coverage(
+def aggregate_review_accounting(
     output_dir: str,
     changed_files: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Aggregate per-agent scope summaries into run-level inline coverage.
+    """Aggregate per-agent scope summaries into run-level review accounting.
 
-    Reads ``*-scope-summary*.json`` sidecars written by bootstrap/scope.py,
-    then reconciles them with each agent's review output. Budget-skipped
-    (NOT DIFFED) files are the agent's deferred work queue: the budget
-    contract lets the reviewer make only positive ``deferred_reviewed``
-    claims. The shared coverage helper validates those claims against the
-    reviewer's own deferred scope and derives every remaining path as a gap.
-
-    A file is a coverage gap (``files_never_inline``) only when NO agent
-    received its diff inline AND no deferring agent claims to have reviewed
-    it. Claimed files surface separately in ``files_deferred_reviewed``
-    (an agent claim, not proof of read), while per-reviewer gaps remain in
-    ``files_never_inline`` even when another reviewer claimed the same file.
-
-    Every bucket above answers a question about a file some agent's scope
-    contained. A changed file matching NO reviewer domain (lockfiles,
-    binaries, dotfiles) reaches no sidecar at all and would therefore
-    appear in no bucket — invisible rather than uncovered. When
-    ``changed_files`` is supplied, ``files_unscoped`` closes that hole: it
-    is ``changed_files`` minus every path any sidecar mentions (see
-    ``_SIDECAR_FILE_LISTS`` for the lists and ``_unscoped_files`` for the
-    subtraction). It stays None when the caller supplied no changed-file
-    list — empty counts as none — because "not measured" and "measured,
-    none found" are different facts and only the second is a clean result.
+    Reads schema-2 ``*-scope-summary*.json`` sidecars, carries inline-diff
+    receipt by file, and validates finalized reviewed-file claims through
+    the shared accounting authority. Review-claimable paths without a
+    validated claim remain visible per agent. When ``changed_files`` is
+    supplied, ``unscoped_files`` is its complement against every path any
+    scope summary mentions; it stays None when that population was not
+    measured.
 
     Returns None when no summaries exist (pre-sidecar runs) so callers can
     distinguish "no data" from "no gaps".
     """
     inline: Dict[str, set] = {}
-    skipped: Dict[str, set] = {}
-    deferred_by_agent: Dict[str, set] = {}
+    claimable_by_agent: Dict[str, set] = {}
     # Distinct agent NAMES, not summary files: three reviewers ship a
     # second `-config-ops` sidecar, so counting files reported 22 agents
     # for a 19-agent run. Both of an agent's sidecars derive the same name
@@ -300,7 +304,7 @@ def aggregate_inline_coverage(
     reporting_agents: set = set()
     # Sidecar paths, normalized through the ONE shared repo-path grammar
     # (`git_paths.normalize_repo_paths`) rather than compared raw. The
-    # `files_unscoped` set difference below is subtraction between two
+    # `unscoped_files` set difference below is subtraction between two
     # producers with different quoting settings — the sidecars run
     # `-c core.quotepath=false`, `context.py` does not — so raw arithmetic
     # reports `"src/caf\303\251.php"` and `src/café.php` as different
@@ -329,51 +333,45 @@ def aggregate_inline_coverage(
                 data = json.load(f)
         except (OSError, json.JSONDecodeError):
             continue
-        if not isinstance(data, dict):
+        if not isinstance(data, dict) or data.get("schema") != 2:
+            continue
+        if any(
+            not isinstance(data.get(key), list)
+            for key in _SCOPE_SUMMARY_FILE_LISTS
+        ):
             continue
         reporting_agents.add(agent)
-        for key in _SIDECAR_FILE_LISTS:
+        for key in _SCOPE_SUMMARY_FILE_LISTS:
             scoped_anywhere.update(
                 normalize_repo_paths(data.get(key)) or []
             )
-        for f_path in data.get("files_with_diffs") or []:
+        for f_path in data["inline_diff_files"]:
             if isinstance(f_path, str):
                 inline.setdefault(f_path, set()).add(agent)
-        for f_path in data.get("budget_exceeded_files") or []:
+        for f_path in data["review_claimable_files"]:
             if isinstance(f_path, str):
-                skipped.setdefault(f_path, set()).add(agent)
-                deferred_by_agent.setdefault(agent, set()).add(f_path)
+                claimable_by_agent.setdefault(agent, set()).add(f_path)
     if not reporting_agents:
         return None
 
-    never_inline = {f: set(a) for f, a in skipped.items() if f not in inline}
     claimed: Dict[str, set] = {}
-    for agent, deferred in deferred_by_agent.items():
-        raw_claims = _load_agent_deferred_claims(output_dir, agent)
-        if raw_claims is None:
+    unclaimed: Dict[str, set] = {}
+    for agent in reporting_agents:
+        accounting = _load_agent_review_accounting(output_dir, agent)
+        if accounting is None:
+            for f_path in claimable_by_agent.get(agent, set()):
+                unclaimed.setdefault(f_path, set()).add(agent)
             continue
-        ordered_deferred = sorted(deferred)
-        sidecar = {
-            "schema": 2,
-            "agent_name": agent,
-            "deferred_files": ordered_deferred,
-            "diffed_count": 0,
-            "in_scope_count": len(ordered_deferred),
-        }
-        try:
-            coverage = derive_deferred_coverage(sidecar, raw_claims)
-        except (CoverageError, TypeError):
-            coverage = derive_deferred_coverage(sidecar, [])
-        for f_path in coverage.deferred_reviewed:
+        for f_path in accounting.reviewed_file_claims:
             claimed.setdefault(f_path, set()).add(agent)
-            if f_path in never_inline:
-                never_inline[f_path].discard(agent)
+        for f_path in accounting.unclaimed_review_files:
+            unclaimed.setdefault(f_path, set()).add(agent)
 
     return {
         # Distinct reviewers that produced at least one scope summary, not
         # summary files aggregated — an agent with a primary and a
         # secondary-domain sidecar is one agent.
-        "agents_reporting": len(reporting_agents),
+        "scope_reporting_agent_count": len(reporting_agents),
         # Changed files no reviewer's scope contained in any form — see
         # `_unscoped_files` for the subtraction and its path grammar. NOT
         # the same measurement as the run manifest's `coverage.uncovered`:
@@ -383,15 +381,15 @@ def aggregate_inline_coverage(
         # differ. The full divergence note lives at the one other site,
         # manifest_sections.py's `"uncovered"` key; read it before
         # "reconciling" the two.
-        "files_unscoped": _unscoped_files(changed_files, scoped_anywhere),
-        "files_inline": {f: sorted(a) for f, a in sorted(inline.items())},
-        "files_never_inline": {
-            f: sorted(a)
-            for f, a in sorted(never_inline.items())
-            if a
+        "unscoped_files": _unscoped_files(changed_files, scoped_anywhere),
+        "agents_receiving_inline_diff_by_file": {
+            f: sorted(a) for f, a in sorted(inline.items())
         },
-        "files_deferred_reviewed": {
+        "agents_claiming_review_by_file": {
             f: sorted(a) for f, a in sorted(claimed.items())
+        },
+        "agents_with_unclaimed_review_by_file": {
+            f: sorted(a) for f, a in sorted(unclaimed.items())
         },
     }
 
@@ -414,7 +412,7 @@ def compute_missing_agents(
 
     * ``None`` when dispatch is unknown (no plan; `--dispatched-agents`
       omitted) — UNMEASURED, and never `[]`. "Nothing was measured" must
-      not read as "nobody was missing", the same rule `files_unscoped`
+      not read as "nobody was missing", the same rule `unscoped_files`
       follows.
     * a sorted list otherwise, including the measured-empty ``[]`` that an
       explicitly empty dispatch (a docs-only change) earns.
@@ -1224,6 +1222,7 @@ def main() -> int:
 
         # Build the context object
         context: Dict[str, Any] = {
+            "schema": 3,
             "agent_findings": agent_findings,
             "source_snippets": source_snippets,
             "scope_annotations": scope_annotations,
@@ -1235,13 +1234,13 @@ def main() -> int:
             "output_builder_path": output_builder_path,
             # Host context banner — surfaced for reviewer agents to calibrate findings.
             "host_context_banner": extract_host_banner(output_dir),
-            # Run-level inline coverage from per-agent scope summaries —
+            # Run-level file accounting from per-agent scope summaries —
             # None on pre-sidecar runs.
             #
             # An empty `changed_files` reaches `_unscoped_files` as the
             # unmeasured case it is — see its docstring; nothing needs
             # translating here.
-            "inline_coverage": aggregate_inline_coverage(
+            "review_accounting": aggregate_review_accounting(
                 output_dir, changed_files=changed_files
             ),
             # Dispatched but silent — measured here, not left as arithmetic

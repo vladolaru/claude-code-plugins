@@ -1255,11 +1255,17 @@ class TestScopeSummaryJson:
         review_scope.write_scope_summary(scope, str(path))
 
         data = json.loads(path.read_text())
-        assert data["schema"] == 1
+        assert data["schema"] == 2
         assert data["domain"] == "security"
         assert data["status"] == "OK"
-        assert data["files_with_diffs"] == ["src/a.php", "src/b.php"]
-        assert data["budget_exceeded_files"] == ["tests/test_big.php"]
+        assert data["inline_diff_files"] == ["src/a.php", "src/b.php"]
+        assert data["review_claimable_files"] == ["tests/test_big.php"]
+        assert data["list_only_files"] == ["package-lock.json"]
+        assert data["in_scope_review_files"] == [
+            "src/a.php",
+            "src/b.php",
+            "tests/test_big.php",
+        ]
         assert data["total_diff_lines"] == 42
         # Raw diffstat over inline + budget-exceeded files, excluding the
         # list-only lock file: (10+5) + (3+2) + (700+100) = 820.
@@ -1282,19 +1288,20 @@ class TestScopeSummaryJson:
 
         data = json.loads(path.read_text())
         # The base-ref-only shape: nothing diffed, everything owned.
-        assert data["files_with_diffs"] == []
-        assert data["budget_exceeded_files"] == []
+        assert data["inline_diff_files"] == []
+        assert data["review_claimable_files"] == []
         assert data["list_only_files"] == []
-        assert data["in_scope_files"] == ["src/a.php", "src/b.php"]
+        assert data["in_scope_review_files"] == []
 
     def test_write_scope_summary_tolerates_minimal_scope(self, tmp_path):
         # NO_DOMAIN_FILES scopes lack diffs/budget keys — must not raise.
         path = tmp_path / "sub" / "summary.json"
         review_scope.write_scope_summary({"status": "NO_DOMAIN_FILES"}, str(path))
         data = json.loads(path.read_text())
-        assert data["files_with_diffs"] == []
-        assert data["budget_exceeded_files"] == []
-        assert data["in_scope_files"] == []
+        assert data["inline_diff_files"] == []
+        assert data["review_claimable_files"] == []
+        assert data["list_only_files"] == []
+        assert data["in_scope_review_files"] == []
         assert data["in_scope_stat_lines"] == 0
 
     def test_write_scope_summary_fails_open(self, tmp_path, capsys):

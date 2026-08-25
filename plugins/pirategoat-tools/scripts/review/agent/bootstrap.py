@@ -43,7 +43,7 @@ if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
 from review.reviewer_names import derive_reviewer_name
-from review.agent.coverage import derive_deferred_coverage
+from review.agent.coverage import derive_review_accounting
 from review.atomic_io import atomic_write_json
 
 # Import telemetry (parent directory script, best-effort)
@@ -366,7 +366,7 @@ def _extract_stat_shaped_files(scope_output: str, header_prefix: str) -> List[st
 
 
 def extract_not_diffed_files(scope_output: str) -> List[str]:
-    """Extract deferred in-scope file paths from === NOT DIFFED === sections.
+    """Extract review-claimable paths from === NOT DIFFED === sections.
 
     These files ARE the agent's scope — their diffs were withheld only to fit
     the context budget — so telemetry must record them alongside the inline
@@ -420,7 +420,7 @@ def extract_file_diffstat(scope_output: str) -> Dict[str, int]:
     Parsed from every "path  (+N -M)" stat-shaped line scope.py renders,
     regardless of section (FILES, NOT DIFFED, CHANGED (no diff)) — the one
     per-file size bootstrap has, used only to ORDER already-known file sets
-    (the deferred-files sidecar's largest-first contract). A file matching
+    (the accounting input's largest-first contract). A file matching
     no stat line here sorts as 0, never excluded from whatever set it is
     ordering.
     """
@@ -440,7 +440,7 @@ def order_by_diffstat_largest_first(
 ) -> List[str]:
     """Order ``paths`` by descending total changed lines, largest first.
 
-    The one ordering rule the deferred-files sidecar's ``deferred_files``
+    The ordering rule the accounting input's ``review_claimable_files``
     list is pinned to — the save echo's NEXT UNREAD list (output.py)
     replays that order verbatim, and the briefing already promises
     "largest first" for this queue. A path with no entry in
@@ -454,12 +454,12 @@ def order_by_diffstat_largest_first(
 
 def partition_scope_paths(
     inline_paths: List[str],
-    deferred_paths: List[str],
+    review_claimable_paths: List[str],
     list_only_paths: List[str],
 ) -> Tuple[List[str], List[str], List[str]]:
     """Order-deduplicate three scope populations with fixed precedence.
 
-    Inline paths win over deferred paths, and both win over list-only paths.
+    Inline paths win over review-claimable paths, and both win over list-only paths.
     Each returned population is therefore disjoint while preserving the
     first-seen order of paths that remain in that population.
     """
@@ -475,7 +475,7 @@ def partition_scope_paths(
 
     return (
         take_unseen(inline_paths),
-        take_unseen(deferred_paths),
+        take_unseen(review_claimable_paths),
         take_unseen(list_only_paths),
     )
 
@@ -494,7 +494,7 @@ def load_scope_facts(summary_paths: List[str]) -> Optional[Dict[str, Any]]:
         return None
     facts: Dict[str, Any] = {
         "files": [],
-        "not_diffed": [],
+        "review_claimable": [],
         "list_only": [],
         "stat_lines": 0,
     }
@@ -506,12 +506,14 @@ def load_scope_facts(summary_paths: List[str]) -> Optional[Dict[str, Any]]:
             return None
         if not isinstance(data, dict):
             return None
+        if data.get("schema") != 2:
+            return None
         stat_lines = data.get("in_scope_stat_lines")
         if not isinstance(stat_lines, int) or isinstance(stat_lines, bool):
             return None
         for fact_key, summary_key in (
-            ("files", "files_with_diffs"),
-            ("not_diffed", "budget_exceeded_files"),
+            ("files", "inline_diff_files"),
+            ("review_claimable", "review_claimable_files"),
             ("list_only", "list_only_files"),
         ):
             value = data.get(summary_key)
@@ -999,7 +1001,7 @@ def build_output(
     output_dir: str,
     pr_number: Optional[str],
     reviewer_name: str,
-    not_diffed_count: int,
+    review_claimable_count: int,
     has_php: bool,
     file_history: Optional[str] = None,
     pr_intent: Optional[str] = None,
@@ -1015,12 +1017,12 @@ def build_output(
 ) -> str:
     """Build the structured bootstrap output block.
 
-    not_diffed_count and has_php are REQUIRED facts this function never
+    review_claimable_count and has_php are REQUIRED facts this function never
     derives on its own:
 
-    - not_diffed_count must be the caller's already-computed deferred-file
-      count (main() passes len(not_diffed_paths), its alias for
-      scope_facts["not_diffed"]).
+    - review_claimable_count must be the caller's already-computed claimable-file
+      count (main() passes len(review_claimable_paths), its alias for
+      scope_facts["review_claimable"]).
     - has_php must be the caller's already-computed PHP-in-scope fact
       (main() passes any(p.endswith(".php") for p in
       telemetry_scope_paths) — the same deduped fact-based path union used
@@ -1034,7 +1036,7 @@ def build_output(
     unavailable (load_scope_facts() itself returns None in that case, not
     a text-derived value). Neither parameter has a default, so an omitted
     caller fails loudly (TypeError) instead of silently dropping the NOT
-    DIFFED honesty contract or handing dead-code-reviewer a wrong
+    DIFFED accounting contract or handing dead-code-reviewer a wrong
     DYNAMIC_DISPATCH_RISK.
     See TestNotDiffedContractIsDelivered and TestDynamicDispatchRisk in
     tests/review/agent/test_bootstrap_integration.py for the executable
@@ -1121,9 +1123,9 @@ def build_output(
         else:
             lines.append("Calibrated to YOUR scope. The pipeline waits for the slowest agent.")
         lines.append("")
-        if not_diffed_count:
+        if review_claimable_count:
             lines.append(
-                f"Spend the budget: {not_diffed_count} in-scope files are listed "
+                f"Spend the budget: {review_claimable_count} in-scope files are listed "
                 "under NOT DIFFED. While under target with NOT DIFFED files "
                 "unread, read the next one (largest first) — finishing early "
                 "with in-scope files unread is a coverage gap, not efficiency. "
@@ -1136,11 +1138,11 @@ def build_output(
             # a reviewer. See REVIEWER_PROTOCOL_SKIP_SECTIONS. The
             lines.append(
                 "Claim each NOT DIFFED file you actually "
-                'read with builder.add_deferred_reviewed("<path>"). '
+                'read with builder.claim_files_reviewed("<path>"). '
                 "The builder validates those positive claims against the "
-                "authoritative deferred sidecar, derives every unclaimed path "
-                "as unreviewed, and counts inline files automatically. Never "
-                "count a derived unreviewed file toward your verdict."
+                "authoritative review-accounting input, derives every unclaimed "
+                "review file, and counts inline files automatically. Never count "
+                "an unclaimed review file toward your verdict."
             )
             # A sentence calling an under-budget completion a "protocol
             # violation" and a "false statement" used to close this
@@ -1152,7 +1154,7 @@ def build_output(
             # leaving 100+ files while under half budget. The same run
             # falsified its premise: under-spend did not predict weak
             # output. Salience at the decision point replaced it — save()
-            # echoes the target back when unreviewed files are recorded,
+            # echoes the target back when unclaimed review files are recorded,
             # in the one piece of feedback every agent reads. Do not
             # restore a rule the reviewer cannot evaluate; make the number
             # visible where the choice happens instead.
@@ -1267,8 +1269,8 @@ def build_output(
     # The call-budget target no longer rides this envelope: it silently died
     # for any agent that rebuilt its save command (run12's worst under-spender,
     # 15% of target, never saw it). save() now reads the effective number from
-    # the deferred-files sidecar bootstrap writes below — the one per-agent
-    # file the builder already provably locates for derived coverage.
+    # the review-accounting input bootstrap writes below — the one per-agent
+    # file the builder already locates for derived accounting.
     lines.append(
         f"PIRATEGOAT_PLUGIN_ROOT={shlex.quote(plugin_root)} "
         f"PIRATEGOAT_OUTPUT_DIR={shlex.quote(output_dir)} "
@@ -1296,7 +1298,7 @@ def build_output(
     lines.append(f'builder.add_clearance(claim="Nothing depends on the removed X",')
     lines.append(f'    method="exact searches run / files read",  # REQUIRED — see Absence Claims rules')
     lines.append(f'    evidence="hit counts, file:line list")     # optional')
-    lines.append(f'# builder.add_deferred_reviewed("path/read1.py", "path/read2.py")  # uncomment with actual NOT DIFFED paths you read')
+    lines.append(f'# builder.claim_files_reviewed("path/read1.py", "path/read2.py")  # uncomment with actual NOT DIFFED paths you read')
     lines.append(f'builder.set_confidence(0.85)')
     lines.append(f'result = builder.save(output_dir)  # publishes a replaceable candidate')
     lines.append("PY")
@@ -1399,64 +1401,32 @@ def resolve_reviewer_identity(args):
     return agent_name, effective_agent_name, adapter_label, repo_agent_ref, None
 
 
-def persist_deferred_sidecar(output_dir, effective_agent_name,
-                             deferred_files, list_only_files,
-                             review_budget=None,
-                             in_scope_count=None, diffed_count=None):
-    """Write the authoritative deferred-set sidecar for the output builder.
-
-    Written even when the deferred set is empty. This required machine-fact
-    artifact fails closed when it cannot be published.
-
-    Schema 2 (was 1): also carries the run's tool-call budget and scope
-    counts, replacing the retired env-var budget transport that silently
-    died for any agent that rebuilt its save command. This is the
-    one per-agent sidecar output.py's save() already provably locates (it
-    reads it for derived NOT DIFFED coverage), and the effective
-    (override-applied) number bootstrap computed is never recomputed
-    downstream. Scope counts are required by the shared coverage authority;
-    omitted counts do not form a valid schema-2 sidecar.
-
-    Schema 2 originally also carried ``budget_capped``, dropped here (still
-    within 1.114.0's unreleased window, so no schema bump): nothing ever
-    read it back out of this sidecar. The live consumer of "was this
-    agent's budget capped" is ``build_output()``'s REVIEW BUDGET section,
-    fed directly by the caller's own ``budget_capped`` local — a value
-    computed once per dispatch and never round-tripped through disk. A
-    metrics-layer reader would have had to either re-open this per-run
-    sidecar (a new, ephemeral-file access pattern this measurement layer
-    doesn't otherwise have) or re-derive capping from telemetry's
-    ``scope.lines`` — which silently disagrees with the truth whenever
-    ``budget_override`` applies, since override always forces
-    ``budget_capped=False`` regardless of scope size. Reporting a
-    plausible-but-wrong measurement is worse than reporting none, so
-    the field is deleted rather than surfaced.
-    """
-    # effective_agent_name, not the registry agent: the builder locates this
-    # sidecar via PIRATEGOAT_REVIEWER_NAME, which is derived from the effective
-    # (per-instance) identity — and adapter ref-mode instances must not collide
-    # on one shared template-named file. List-only files are in scope but are
-    # not budget-deferred, so they do not belong in the authoritative set.
-    #
-    # main() passes the normalized deferred population from
-    # partition_scope_paths(). Keep this order-preserving dedupe as defense
-    # for direct callers: an undeduped sidecar inflates the deferred total
-    # build_coverage_manifest reconciles against claimed+unreviewed.
-    deferred_files = list(dict.fromkeys(deferred_files))
+def persist_review_accounting_input(
+    output_dir,
+    effective_agent_name,
+    review_claimable_files,
+    *,
+    review_budget=None,
+    in_scope_review_file_count=None,
+    inline_diff_file_count=None,
+):
+    """Write the schema-3 accounting authority consumed by the builder."""
+    review_claimable_files = list(dict.fromkeys(review_claimable_files))
+    reviewer = derive_reviewer_name(effective_agent_name)
     payload = {
-        "schema": 2,
+        "schema": 3,
         "agent_name": effective_agent_name,
-        "deferred_files": deferred_files,
+        "reviewer": reviewer,
+        "review_claimable_files": review_claimable_files,
         "review_budget": review_budget,
-        "in_scope_count": in_scope_count,
-        "diffed_count": diffed_count,
+        "in_scope_review_file_count": in_scope_review_file_count,
+        "inline_diff_file_count": inline_diff_file_count,
     }
-    derive_deferred_coverage(payload, [])
-    deferred_sidecar = os.path.join(
-        output_dir,
-        f"{derive_reviewer_name(effective_agent_name)}-deferred-files.json",
+    derive_review_accounting(payload, [])
+    accounting_input = os.path.join(
+        output_dir, f"{reviewer}-review-accounting-input.json"
     )
-    atomic_write_json(deferred_sidecar, payload)
+    atomic_write_json(accounting_input, payload)
 
 
 def persist_advisory_entitlement_sidecar(
@@ -1828,7 +1798,7 @@ def main():
     if scope_facts is None:
         scope_facts = {
             "files": extract_scope_files(scope_output) if scope_output else [],
-            "not_diffed": (
+            "review_claimable": (
                 extract_not_diffed_files(scope_output) if scope_output else []
             ),
             "list_only": (
@@ -1839,18 +1809,18 @@ def main():
             ),
         }
     scope_lines_for_budget = scope_facts["stat_lines"]
-    # Deferred NOT DIFFED files and list-only CHANGED (no diff) files are
-    # in-scope work too: telemetry must carry them or coverage marks them
-    # uncovered and reads of them count as out-of-scope. Both are kept out
+    # Review-claimable NOT DIFFED files and list-only CHANGED (no diff) files
+    # are in-scope work too: telemetry must carry them or accounting marks them
+    # unscoped and reads of them count as out-of-scope. Both are kept out
     # of scope_files_for_budget so inline-diff consumers (file history) keep
     # their meaning, and list-only lines never enter budget sizing.
     (
         scope_files_for_budget,
-        not_diffed_paths,
+        review_claimable_paths,
         list_only_paths,
     ) = partition_scope_paths(
         scope_facts["files"],
-        scope_facts["not_diffed"],
+        scope_facts["review_claimable"],
         scope_facts["list_only"],
     )
     # load_scope_facts() reads budget_exceeded_files straight off the
@@ -1860,10 +1830,10 @@ def main():
     # for that path and a no-op (already sorted) for the text-parsing
     # fallback.
     diffstat_totals = extract_file_diffstat(scope_output) if scope_output else {}
-    not_diffed_paths = order_by_diffstat_largest_first(
-        not_diffed_paths, diffstat_totals
+    review_claimable_paths = order_by_diffstat_largest_first(
+        review_claimable_paths, diffstat_totals
     )
-    progress_scope_paths = [*scope_files_for_budget, *not_diffed_paths]
+    progress_scope_paths = [*scope_files_for_budget, *review_claimable_paths]
     telemetry_scope_paths = [*progress_scope_paths, *list_only_paths]
     # DYNAMIC_DISPATCH_RISK (dead-code-reviewer's Step 0 gate) is derived from
     # this same fact-based path set, not from re-parsing scope_output text —
@@ -1896,19 +1866,18 @@ def main():
     # the effective (post-override) number save() echoes back, never a
     # scope-only figure a downstream reader would have to recompute.
     try:
-        persist_deferred_sidecar(
+        persist_review_accounting_input(
             output_dir,
             effective_agent_name,
-            not_diffed_paths,
-            list_only_paths,
+            review_claimable_paths,
             review_budget=review_budget,
-            in_scope_count=len(progress_scope_paths),
-            diffed_count=len(scope_files_for_budget),
+            in_scope_review_file_count=len(progress_scope_paths),
+            inline_diff_file_count=len(scope_files_for_budget),
         )
     except (OSError, ValueError) as exc:
         print(build_error_output(
             effective_agent_name,
-            f"Could not publish authoritative deferred coverage: {exc}",
+            f"Could not publish authoritative review accounting: {exc}",
             plugin_root,
         ))
         sys.exit(1)
@@ -1984,7 +1953,7 @@ def main():
     # "repo-reviewer-adapter" with a null registry domain, so rules targeting
     # the synthetic instance name or its declared scope domains would never
     # match. Path rules match against the COMPLETE in-scope set (inline +
-    # deferred NOT DIFFED + list-only) — a rule about a budget-deferred file
+    # review-claimable NOT DIFFED + list-only) — a rule about a claimable file
     # applies precisely when the reviewer must inspect that file.
     review_config = load_repo_review_config(output_dir)
     agent_domains = [
@@ -2032,7 +2001,7 @@ def main():
         output_dir=output_dir,
         pr_number=pr_number,
         reviewer_name=reviewer_name,
-        not_diffed_count=len(not_diffed_paths),
+        review_claimable_count=len(review_claimable_paths),
         has_php=has_php,
         file_history=file_history_output,
         pr_intent=pr_intent,

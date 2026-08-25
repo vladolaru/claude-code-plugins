@@ -179,7 +179,9 @@ class TestCategoryRepresentatives:
         # Identity chain: sidecar name matches what the builder derives
         # from PIRATEGOAT_REVIEWER_NAME.
         assert "PIRATEGOAT_REVIEWER_NAME=repo-renewals" in result.stdout
-        assert (tmp_path / "repo-renewals-deferred-files.json").is_file()
+        assert (
+            tmp_path / "repo-renewals-review-accounting-input.json"
+        ).is_file()
         entitlement = json.loads(
             (tmp_path / "repo-renewals-advisory-entitlement.json").read_text()
         )
@@ -285,29 +287,31 @@ class TestCategoryRepresentatives:
         )
         assert agent_start["model_tier"] == "sonnet"
 
-    def test_deferred_sidecar_backs_claim_validation(self, tmp_path):
+    def test_accounting_input_backs_claim_validation(self, tmp_path):
         """Bootstrap persists the authoritative NOT DIFFED set so the
         builder can reject declarations that match no deferred file."""
         result = run_bootstrap(
             "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
         )
         assert result.returncode == 0
-        sidecar = tmp_path / "performance-deferred-files.json"
-        assert sidecar.is_file()
-        data = json.loads(sidecar.read_text())
-        assert sorted(data["deferred_files"]) == sorted(
+        accounting_input = (
+            tmp_path / "performance-review-accounting-input.json"
+        )
+        assert accounting_input.is_file()
+        data = json.loads(accounting_input.read_text())
+        assert sorted(data["review_claimable_files"]) == sorted(
             extract_not_diffed_files(result.stdout)
         )
-        # Closes the main()->build_output() seam: not_diffed_count must be
+        # Closes the main()->build_output() seam: review_claimable_count must be
         # derived from this exact deferred set, not a neighboring fact
         # (e.g. total scope files) that also happens to be non-empty here.
         # A mis-wired count would pass every other assertion in this suite.
         assert ("Not reviewed (budget):" in result.stdout) == bool(
-            data["deferred_files"]
+            data["review_claimable_files"]
         )
 
-    def test_deferred_sidecar_carries_budget_and_scope_counts(self, tmp_path):
-        """Schema 2: the sidecar carries the effective (override-applied)
+    def test_accounting_input_carries_budget_and_scope_counts(self, tmp_path):
+        """Schema 3 carries the effective (override-applied)
         budget and scope counts save()'s PROGRESS line reads — the retired
         env-var budget transport silently died for any agent that rebuilt
         its save command, so the sidecar is the only carrier.
@@ -322,21 +326,22 @@ class TestCategoryRepresentatives:
         assert result.returncode == 0
         assert "Target: ~45 tool calls" in result.stdout
 
-        sidecar = tmp_path / "history-insights-deferred-files.json"
-        assert sidecar.is_file()
-        data = json.loads(sidecar.read_text())
-        assert data["schema"] == 2
+        accounting_input = (
+            tmp_path / "history-insights-review-accounting-input.json"
+        )
+        assert accounting_input.is_file()
+        data = json.loads(accounting_input.read_text())
+        assert data["schema"] == 3
         assert data["review_budget"] == 45
         assert "budget_capped" not in data
 
         diffed = extract_scope_files(result.stdout)
         not_diffed = extract_not_diffed_files(result.stdout)
-        list_only = extract_list_only_files(result.stdout)
         expected_in_scope = len(
-            dict.fromkeys([*diffed, *not_diffed, *list_only])
+            dict.fromkeys([*diffed, *not_diffed])
         )
-        assert data["in_scope_count"] == expected_in_scope
-        assert data["diffed_count"] == len(diffed)
+        assert data["in_scope_review_file_count"] == expected_in_scope
+        assert data["inline_diff_file_count"] == len(diffed)
 
     def test_test_agent(self, tmp_path):
         """Test-reviewer agent gets DOMAIN RULES (php-tests-reviewer)."""
@@ -515,7 +520,7 @@ class TestArchitecturalInvariants:
             output_dir=str(tmp_path),
             pr_number=None,
             reviewer_name="code",
-            not_diffed_count=0,
+            review_claimable_count=0,
             has_php=False,
         )
 
@@ -566,7 +571,7 @@ class TestCanonicalExecutableBuilderSource:
             output_dir=str(tmp_path),
             pr_number="42",
             reviewer_name="security",
-            not_diffed_count=0,
+            review_claimable_count=0,
             has_php=False,
         )
 
@@ -621,7 +626,7 @@ class TestCanonicalExecutableBuilderSource:
             output_dir=str(tmp_path),
             pr_number="42",
             reviewer_name="security",
-            not_diffed_count=0,
+            review_claimable_count=0,
             has_php=False,
             plugin_version="1.114.0",
         )
@@ -641,7 +646,7 @@ class TestCanonicalExecutableBuilderSource:
             output_dir=str(tmp_path),
             pr_number="42",
             reviewer_name="security",
-            not_diffed_count=0,
+            review_claimable_count=0,
             has_php=False,
         )
         assert "PIRATEGOAT_PLUGIN_VERSION=''" in prompt
@@ -665,7 +670,7 @@ class TestCanonicalExecutableBuilderSource:
             output_dir=str(tmp_path),
             pr_number="42",
             reviewer_name="security",
-            not_diffed_count=0,
+            review_claimable_count=0,
             has_php=False,
         )
         assert "OUTPUT_DIR accepts only your named artifacts" in prompt
@@ -694,7 +699,7 @@ class TestCanonicalExecutableBuilderSource:
             output_dir=str(tmp_path),
             pr_number="42",
             reviewer_name="security",
-            not_diffed_count=0,
+            review_claimable_count=0,
             has_php=False,
             review_budget=review_budget,
         )
@@ -738,7 +743,7 @@ class TestNotApplicableCompletionContract:
             output_dir=str(tmp_path),
             pr_number=None,
             reviewer_name="woo-regression",
-            not_diffed_count=0,
+            review_claimable_count=0,
             has_php=False,
         )
 
@@ -761,7 +766,7 @@ class TestNotApplicableCompletionContract:
             output_dir=str(tmp_path),
             pr_number=None,
             reviewer_name="security",
-            not_diffed_count=0,
+            review_claimable_count=0,
             has_php=False,
         )
 
@@ -790,7 +795,7 @@ class TestNotApplicableCompletionContract:
             output_dir=str(tmp_path),
             pr_number=None,
             reviewer_name="security",
-            not_diffed_count=0,
+            review_claimable_count=0,
             has_php=False,
         )
 
@@ -812,13 +817,15 @@ class TestNotApplicableCompletionContract:
         for agent_name in ("security-reviewer", "performance-reviewer"):
             reviewer_name = derive_reviewer_name(agent_name)
             output_dir.mkdir(parents=True, exist_ok=True)
-            (output_dir / f"{reviewer_name}-deferred-files.json").write_text(
+            (output_dir / f"{reviewer_name}-review-accounting-input.json").write_text(
                 json.dumps({
-                    "schema": 2,
+                    "schema": 3,
                     "agent_name": agent_name,
-                    "deferred_files": [],
-                    "diffed_count": 2,
-                    "in_scope_count": 2,
+                    "reviewer": reviewer_name,
+                    "review_claimable_files": [],
+                    "review_budget": 15,
+                    "inline_diff_file_count": 2,
+                    "in_scope_review_file_count": 2,
                 })
             )
             prompt = build_output(
@@ -832,7 +839,7 @@ class TestNotApplicableCompletionContract:
                 output_dir=str(output_dir),
                 pr_number="42",
                 reviewer_name=reviewer_name,
-                not_diffed_count=0,
+                review_claimable_count=0,
                 has_php=False,
             )
             start = prompt.index("PIRATEGOAT_PLUGIN_ROOT=")
@@ -877,7 +884,7 @@ class TestNotApplicableCompletionContract:
             )
             assert saved["reviewer"] == reviewer_name
             assert saved["pr_id"] == "42"
-            assert saved["meta"]["files_reviewed"] == 2
+            assert saved["review_accounted_file_count"] == 2
 
     def test_bootstrap_heredoc_executes_with_shell_sensitive_paths(self, tmp_path):
         """Bootstrap must hand paths to stdin Python without literal interpolation."""
@@ -885,12 +892,14 @@ class TestNotApplicableCompletionContract:
         shutil.copytree(PLUGIN_ROOT / "scripts", plugin_root / "scripts")
         output_dir = tmp_path / "reviewer's output folder"
         output_dir.mkdir(parents=True)
-        (output_dir / "security-deferred-files.json").write_text(json.dumps({
-            "schema": 2,
+        (output_dir / "security-review-accounting-input.json").write_text(json.dumps({
+            "schema": 3,
             "agent_name": "security-reviewer",
-            "deferred_files": [],
-            "diffed_count": 3,
-            "in_scope_count": 3,
+            "reviewer": "security",
+            "review_claimable_files": [],
+            "review_budget": 15,
+            "inline_diff_file_count": 3,
+            "in_scope_review_file_count": 3,
         }))
         prompt = build_output(
             agent_name="security-reviewer",
@@ -903,7 +912,7 @@ class TestNotApplicableCompletionContract:
             output_dir=str(output_dir),
             pr_number="42",
             reviewer_name="security",
-            not_diffed_count=0,
+            review_claimable_count=0,
             has_php=False,
         )
         start = prompt.index("PIRATEGOAT_PLUGIN_ROOT=")
@@ -934,7 +943,7 @@ class TestNotApplicableCompletionContract:
         assert final.returncode == 0, final.stderr
         assert "RECORDED FINAL" in final.stdout
         saved = json.loads((output_dir / "security-review.json").read_text())
-        assert saved["meta"]["files_reviewed"] == 3
+        assert saved["review_accounted_file_count"] == 3
         assert set(tmp_path.rglob("*.py")) == python_files_before
 
     def test_agent_definitions_do_not_duplicate_abstention_calls(self):
@@ -1169,7 +1178,7 @@ class TestVerificationMethodContract:
             output_dir=str(tmp_path),
             pr_number=None,
             reviewer_name="code",
-            not_diffed_count=0,
+            review_claimable_count=0,
             has_php=False,
         )
         assert "## Absence Claims" in prompt
@@ -1216,7 +1225,7 @@ class TestEmpiricalProbeContract:
             output_dir=str(tmp_path),
             pr_number=None,
             reviewer_name="code",
-            not_diffed_count=0,
+            review_claimable_count=0,
             has_php=False,
         )
 
@@ -1289,7 +1298,7 @@ class TestReviewOutputBuilderAPIExample:
             output_dir=str(output_dir),
             pr_number="42",
             reviewer_name="security",
-            not_diffed_count=0,
+            review_claimable_count=0,
             has_php=False,
         )
 
@@ -1316,7 +1325,7 @@ class TestReviewOutputBuilderAPIExample:
 
     def test_output_uses_positive_claims_as_the_only_coverage_input(self, tmp_path):
         output = self._build(tmp_path)
-        assert 'builder.add_deferred_reviewed("path/read1.py", "path/read2.py")' in output
+        assert 'builder.claim_files_reviewed("path/read1.py", "path/read2.py")' in output
         assert "builder.add_un" + "reviewed" not in output
         assert "builder.set_files_" + "reviewed" not in output
 
@@ -1356,7 +1365,7 @@ class TestBootstrapOutputSizeCap:
             output_dir=output_dir,
             pr_number="42",
             reviewer_name="security",
-            not_diffed_count=0,
+            review_claimable_count=0,
             has_php=False,
         )
 
@@ -1374,7 +1383,7 @@ class TestBootstrapOutputSizeCap:
             output_dir=str(tmp_path),
             pr_number="42",
             reviewer_name="security",
-            not_diffed_count=0,
+            review_claimable_count=0,
             has_php=False,
         )
         assert small_scope in output
@@ -1413,7 +1422,7 @@ class TestBootstrapOutputSizeCap:
                 output_dir=str(tmp_path),
                 pr_number="42",
                 reviewer_name=reviewer_name,
-                not_diffed_count=0,
+                review_claimable_count=0,
                 has_php=False,
             )
 
@@ -1456,7 +1465,7 @@ class TestDynamicDispatchRisk:
             output_dir=str(tmp_path),
             pr_number="42",
             reviewer_name="dead-code",
-            not_diffed_count=0,
+            review_claimable_count=0,
             has_php=has_php,
         )
 
@@ -1858,12 +1867,14 @@ class TestOutputFilenameConsistency:
         """save() stages a candidate; finalization publishes the review."""
         from review.agent.output import ReviewOutputBuilder, finalize_candidate
 
-        (tmp_path / "dead-code-deferred-files.json").write_text(json.dumps({
-            "schema": 2,
+        (tmp_path / "dead-code-review-accounting-input.json").write_text(json.dumps({
+            "schema": 3,
             "agent_name": "dead-code-reviewer",
-            "deferred_files": [],
-            "diffed_count": 1,
-            "in_scope_count": 1,
+            "reviewer": "dead-code",
+            "review_claimable_files": [],
+            "review_budget": 15,
+            "inline_diff_file_count": 1,
+            "in_scope_review_file_count": 1,
         }))
         builder = ReviewOutputBuilder(pr_id="42", reviewer="dead-code")
         result = builder.save(str(tmp_path))
@@ -1901,7 +1912,7 @@ class TestOutputFilenameConsistency:
             output_dir=str(tmp_path),
             pr_number="42",
             reviewer_name="dead-code",
-            not_diffed_count=0,
+            review_claimable_count=0,
             has_php=False,
         )
         assert f"{tmp_path}/dead-code-review.json" in output
@@ -2004,7 +2015,7 @@ class TestNotDiffedContractIsDelivered:
     used. Any rename or reformat of that header in scope.py silently zeroed
     the count and dropped the entire honesty contract, with no error and
     (because these tests hardcoded the same header text the regex expected)
-    no test failure either. build_output() now receives not_diffed_count as
+    no test failure either. build_output() now receives review_claimable_count as
     an explicit fact from the caller and never inspects scope_output for it.
     """
 
@@ -2016,7 +2027,7 @@ class TestNotDiffedContractIsDelivered:
         "  src/big.py  (+900 -10)\n"
     )
 
-    def _build(self, tmp_path, scope_output, not_diffed_count, **kwargs):
+    def _build(self, tmp_path, scope_output, review_claimable_count, **kwargs):
         kwargs.setdefault("has_php", False)
         return build_output(
             agent_name="security-reviewer",
@@ -2029,7 +2040,7 @@ class TestNotDiffedContractIsDelivered:
             output_dir=str(tmp_path),
             pr_number="42",
             reviewer_name="security",
-            not_diffed_count=not_diffed_count,
+            review_claimable_count=review_claimable_count,
             review_budget=80,
             **kwargs,
         )
@@ -2037,15 +2048,15 @@ class TestNotDiffedContractIsDelivered:
     @pytest.mark.parametrize(
         "phrase",
         [
-            'builder.add_deferred_reviewed("<path>")',
-            "authoritative deferred sidecar",
-            "derives every unclaimed path as unreviewed",
-            "Never count a derived unreviewed file toward your verdict",
+            'builder.claim_files_reviewed("<path>")',
+            "authoritative review-accounting input",
+            "derives every unclaimed review file",
+            "Never count an unclaimed review file toward your verdict",
         ],
     )
     def test_contract_reaches_reviewer(self, tmp_path, phrase):
         """Each clause of the contract appears in the delivered briefing."""
-        output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, not_diffed_count=1)
+        output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, review_claimable_count=1)
         assert phrase in output
 
     def test_scope_and_guidance_never_teach_gap_declarations(self, tmp_path):
@@ -2061,7 +2072,7 @@ class TestNotDiffedContractIsDelivered:
             },
             "skipped_files": {"budget": ["src/deferred.py"]},
         })
-        output = self._build(tmp_path, scope_output, not_diffed_count=1)
+        output = self._build(tmp_path, scope_output, review_claimable_count=1)
         protocol = (
             PLUGIN_ROOT / "agents" / "shared" / "reviewer-protocol.md"
         ).read_text()
@@ -2092,14 +2103,14 @@ class TestNotDiffedContractIsDelivered:
         under-spend did not predict weak output. The replacement is salience
         at the decision point (save()'s TARGET echo), not sterner prose.
         """
-        output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, not_diffed_count=1)
+        output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, review_claimable_count=1)
         assert phrase not in output
 
     def test_contract_absent_without_not_diffed_files(self, tmp_path):
         """No NOT DIFFED files means no positive-claim contract to deliver."""
         clean_scope = "=== REVIEW SCOPE ===\n=== FILES ===\nsrc/a.py  (+5 -1)\n"
-        output = self._build(tmp_path, clean_scope, not_diffed_count=0)
-        assert "authoritative deferred sidecar" not in output
+        output = self._build(tmp_path, clean_scope, review_claimable_count=0)
+        assert "authoritative review-accounting input" not in output
 
     def test_contract_is_not_sourced_from_stripped_protocol(self):
         """The stripped protocol must not be the contract's only home.
@@ -2111,7 +2122,7 @@ class TestNotDiffedContractIsDelivered:
         delivered = _mod.extract_protocol_sections(
             protocol, _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
         )
-        assert "authoritative deferred sidecar" not in delivered, (
+        assert "authoritative review-accounting input" not in delivered, (
             "Contract text placed in a stripped protocol section never reaches "
             "a reviewer — keep it in build_output()'s REVIEW BUDGET block."
         )
@@ -2124,7 +2135,7 @@ class TestNotDiffedContractIsDelivered:
         scope_output. Here that header is renamed to something a future
         scope.py refactor might plausibly emit, and NO section matches the
         old pattern at all — yet because the caller still supplies the real
-        fact via not_diffed_count, the contract must still be delivered.
+        fact via review_claimable_count, the contract must still be delivered.
         """
         renamed_header_scope = (
             "=== REVIEW SCOPE ===\n"
@@ -2134,32 +2145,32 @@ class TestNotDiffedContractIsDelivered:
             "  src/big.py  (+900 -10)\n"
         )
         assert "NOT DIFFED" not in renamed_header_scope  # the old regex's anchor is gone
-        output = self._build(tmp_path, renamed_header_scope, not_diffed_count=1)
-        assert "authoritative deferred sidecar" in output
-        assert "derives every unclaimed path as unreviewed" in output
+        output = self._build(tmp_path, renamed_header_scope, review_claimable_count=1)
+        assert "authoritative review-accounting input" in output
+        assert "derives every unclaimed review file" in output
 
     def test_original_header_text_alone_no_longer_drives_the_contract(self, tmp_path):
         """The rendered header text must never re-enable the contract by itself.
 
         NOT_DIFFED_SCOPE carries the exact header the old regex parsed, but
-        not_diffed_count is explicitly 0 (the caller's fact says nothing was
+        review_claimable_count is explicitly 0 (the caller's fact says nothing was
         deferred). If build_output() still read scope_output text for this
         decision, the contract would incorrectly appear. It must not.
         """
-        output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, not_diffed_count=0)
-        assert "authoritative deferred sidecar" not in output
+        output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, review_claimable_count=0)
+        assert "authoritative review-accounting input" not in output
 
-    def test_briefing_never_commands_bulk_unreviewed_enumeration(self, tmp_path):
+    def test_briefing_never_commands_bulk_unclaimed_enumeration(self, tmp_path):
         """run12: performance-reviewer burned ~1/3 of its calls hand-assembling
-        254 unreviewed paths because the briefing said 'Declare each file you
+        254 unclaimed paths because the briefing said 'Declare each file you
         could not reach' — the builder already derives them for free."""
-        output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, not_diffed_count=3)
+        output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, review_claimable_count=3)
         assert "Declare each file you could not reach" not in output
-        assert "derives every unclaimed path as unreviewed" in output
+        assert "derives every unclaimed review file" in output
 
 
-class TestDeferredFilesOrderingEndToEnd:
-    """The deferred-files sidecar's list is largest-first end to end.
+class TestReviewClaimableOrderingEndToEnd:
+    """The accounting input's claimable list is largest-first end to end.
 
     load_scope_facts() reads budget_exceeded_files straight off the
     scope-summary sidecar in PRIORITY-TIER order (production files before
@@ -2220,7 +2231,7 @@ class TestDeferredFilesOrderingEndToEnd:
             ["git", "commit", "-m", "changes"], cwd=repo_dir, capture_output=True, check=True
         )
 
-    def test_sidecar_deferred_files_are_largest_first_despite_priority_tiering(
+    def test_accounting_claimable_files_are_largest_first_despite_priority_tiering(
         self, tmp_path
     ):
         repo_dir = tmp_path / "repo"
@@ -2240,17 +2251,20 @@ class TestDeferredFilesOrderingEndToEnd:
         )
         assert result.returncode == 0
 
-        sidecar = json.loads(
-            (output_dir / "history-insights-deferred-files.json").read_text()
+        accounting_input = json.loads(
+            (
+                output_dir
+                / "history-insights-review-accounting-input.json"
+            ).read_text()
         )
         # Both deferred (the regression this guards): a same-tier-only
         # re-sort would still fail to fix the divergence, since these two
         # files are in DIFFERENT priority tiers.
-        assert set(sidecar["deferred_files"]) == {
+        assert set(accounting_input["review_claimable_files"]) == {
             "src/small_prod.py", "tests/huge_test.py",
         }
         # Largest first, size overriding the priority tier that put the
         # smaller production file first in scope.py's own raw ordering.
-        assert sidecar["deferred_files"] == [
+        assert accounting_input["review_claimable_files"] == [
             "tests/huge_test.py", "src/small_prod.py",
         ]

@@ -37,14 +37,14 @@ from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 
 try:
-    from .coverage import CoverageError, derive_deferred_coverage, normalize_deferred_path
+    from .coverage import ReviewAccountingError, derive_review_accounting, normalize_review_path
 except ImportError:
     _SCRIPTS_DIR = os.path.dirname(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     )
     if _SCRIPTS_DIR not in sys.path:
         sys.path.insert(0, _SCRIPTS_DIR)
-    from review.agent.coverage import CoverageError, derive_deferred_coverage, normalize_deferred_path
+    from review.agent.coverage import ReviewAccountingError, derive_review_accounting, normalize_review_path
 
 try:
     from ..atomic_io import output_dir_lock
@@ -98,11 +98,9 @@ except ImportError:
 # made within the same UNRELEASED version that introduced the current number
 # updates the TypeScript contract in the same commit but does NOT bump. The
 # number states a compatibility guarantee only once released, so bumping
-# here would publish a shape no artifact ever had. Schema 1 was introduced
-# in 1.114.0, and 1.114.0 is unreleased — the plugin's newest tag is
-# pirategoat-tools/v1.108.0 — so shape changes made inside 1.114.0 update
-# the TypeScript contract without moving this number.
-REVIEW_OUTPUT_SCHEMA = 1
+# here would publish a shape no artifact ever had. This migration deliberately
+# establishes schema 2 as the one review-artifact contract shipped by 1.114.0.
+REVIEW_OUTPUT_SCHEMA = 2
 
 _VALID_SEVERITIES = VALID_SEVERITIES
 _VALID_CHANNELS = ('blocking', 'advisory')
@@ -372,10 +370,9 @@ def render_review_body(data: Dict) -> str:
         md.append(f"- High: {counts['high']}\n")
         md.append(f"- Medium: {counts['medium']}\n\n")
 
-    # Coverage gap — derived by the builder as the authoritative deferred
-    # sidecar minus the reviewer's validated positive claims.
-    if data.get('unreviewed'):
-        files = ", ".join(f"`{f}`" for f in data['unreviewed'])
+    # Unclaimed review work derived by the accounting authority.
+    if data.get('unclaimed_review_files'):
+        files = ", ".join(f"`{f}`" for f in data['unclaimed_review_files'])
         md.append(f"**Not reviewed (budget):** {files}\n\n")
 
     # Reconciliation accounting — the narrative's "Pipeline:" line, now
@@ -649,14 +646,14 @@ class ReviewOutputBuilder:
         # Agent-authored: the producer's own reading of the change as a
         # whole. The reconciliator's overall-state prose lives here.
         self.narrative_summary = None
-        # Agent-authored: deferred files the reviewer claims it read.
-        self.deferred_reviewed = []
+        # Agent-authored: review-claimable files the reviewer claims it read.
+        self.reviewed_file_claims = []
         self.tool_results_used = []
         self.overall_confidence = 0.95
         self._not_applicable = False
         self._skip_reason = None
-        self._deferred_files_loaded = False
-        self._deferred_files = None
+        self._review_claimable_files_loaded = False
+        self._review_claimable_files = None
         self._advisory_entitlement_loaded = False
         self._advisory_entitlement = None
 
@@ -912,45 +909,33 @@ class ReviewOutputBuilder:
         return None
 
     @staticmethod
-    def _read_deferred_sidecar(
+    def _read_review_accounting_input(
         output_dir: Optional[str], reviewer: Optional[str]
     ) -> Dict:
-        """Parse the bootstrap-written deferred-files sidecar, or ``{}``.
-
-        The one read path both consumers share — the derived NOT DIFFED
-        coverage and the review-budget target
-        (``_review_budget_target``) — so the sidecar is opened and parsed
-        in exactly one place. ``{}`` covers every failure uniformly (no
-        output dir/reviewer, missing file, unreadable, malformed, or not a
-        JSON object): callers decide what a given schema entitles them to
-        read, this helper only ever hands back a dict.
-        """
+        """Parse the bootstrap-written review-accounting input, or ``{}``."""
         if not output_dir or not reviewer:
             return {}
-        sidecar = os.path.join(output_dir, f"{reviewer}-deferred-files.json")
+        accounting_input = os.path.join(
+            output_dir, f"{reviewer}-review-accounting-input.json"
+        )
         try:
-            with open(sidecar, "r", encoding="utf-8") as f:
+            with open(accounting_input, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             return {}
         return data if isinstance(data, dict) else {}
 
     @staticmethod
-    def _load_deferred_files(
+    def _load_review_claimable_files(
         output_dir: Optional[str], reviewer: Optional[str]
     ) -> Optional[frozenset]:
-        """Load the bootstrap-written deferred set, or None when unavailable.
-
-        None is deliberate fail-open: no sidecar means no authoritative set
-        exists (manual builder use, older bootstrap, failed fail-open write)
-        and validation stays form-only. Tolerates schema 1 and schema 2 —
-        both carry ``deferred_files`` in the same shape.
-        """
-        data = ReviewOutputBuilder._read_deferred_sidecar(output_dir, reviewer)
-        files = data.get("deferred_files")
-        if not isinstance(files, list):
+        """Load the authoritative claimable set for add-time feedback."""
+        data = ReviewOutputBuilder._read_review_accounting_input(output_dir, reviewer)
+        try:
+            accounting = derive_review_accounting(data, [])
+        except ReviewAccountingError:
             return None
-        return frozenset(p for p in files if isinstance(p, str))
+        return frozenset(accounting.review_claimable_files)
 
     @staticmethod
     def _review_budget_target(
@@ -958,66 +943,56 @@ class ReviewOutputBuilder:
     ) -> Optional[int]:
         """The run's tool-call target, or None when there isn't an honest one.
 
-        Read from the same deferred-files sidecar as ``_load_deferred_files``
-        (schema 2 adds ``review_budget`` alongside the deferred set), through
-        the shared ``_read_deferred_sidecar`` helper — replacing the
-        retired env-var budget envelope, which silently died for any agent
-        that rebuilt its save command. A schema-1 sidecar (an
-        older run, written before the budget field existed) has no honest
-        target: reporting one anyway would state a compatibility guarantee
-        the producer never made, so any schema other than 2 reports None,
-        the same as an absent file, an absent key, or a non-positive value.
-        This value is only ever shown back to the reviewer, and a target of
-        "0" or a fabricated number is worse than none.
+        Read from the same schema-3 input that owns the accounting facts.
         """
-        data = ReviewOutputBuilder._read_deferred_sidecar(output_dir, reviewer)
-        if data.get("schema") != 2:
+        data = ReviewOutputBuilder._read_review_accounting_input(output_dir, reviewer)
+        if data.get("schema") != 3:
             return None
         value = data.get("review_budget")
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
             return None
         return value
 
-    def _known_deferred_files(self) -> Optional[frozenset]:
-        """The deferred set via the env envelope — add-time fast feedback.
+    def _known_review_claimable_files(self) -> Optional[frozenset]:
+        """The claimable set via the env envelope — add-time fast feedback.
 
         Authoritative enforcement happens at save() with the explicit
         output directory; this lookup only makes positive claims fail
         earlier on the recommended path.
         """
-        if self._deferred_files_loaded:
-            return self._deferred_files
-        self._deferred_files_loaded = True
-        self._deferred_files = self._load_deferred_files(
+        if self._review_claimable_files_loaded:
+            return self._review_claimable_files
+        self._review_claimable_files_loaded = True
+        self._review_claimable_files = self._load_review_claimable_files(
             os.environ.get("PIRATEGOAT_OUTPUT_DIR"),
             os.environ.get("PIRATEGOAT_REVIEWER_NAME"),
         )
-        return self._deferred_files
+        return self._review_claimable_files
 
     @staticmethod
-    def _normalize_deferred_claim(file: str) -> str:
-        """Normalize one positive deferred-review claim.
+    def _normalize_reviewed_file_claim(file: str) -> str:
+        """Normalize one reviewed-file claim.
 
         Normalizes "./src/x.php", "src\\x.php", and "src//x.php" to one
         form, and rejects forms no scope path can ever take (absolute,
         traversal, drive-prefixed, dot-only) — an unmatched path is not a
-        near miss, it is a coverage statement about a file that does not
+        near miss, it is an accounting statement about a file that does not
         exist in this review.
         """
         if not isinstance(file, str) or not file.strip():
             raise ValueError(
-                "add_deferred_reviewed requires a non-empty file path."
+                "claim_files_reviewed requires a non-empty file path."
             )
         try:
-            return normalize_deferred_path(file, "add_deferred_reviewed")
-        except CoverageError as exc:
+            return normalize_review_path(file, "claim_files_reviewed")
+        except ReviewAccountingError as exc:
             raise ValueError(str(exc)) from exc
 
     @staticmethod
-    def _reject_unknown_deferred_claims(
+    def _reject_unknown_reviewed_file_claims(
         paths: List[str], known: frozenset
     ) -> None:
-        """Reject positive claims outside the authoritative deferred set.
+        """Reject claims outside the authoritative claimable set.
 
         Collect every offender so a review carrying several bad claims costs
         one correction round trip instead of one retry per path.
@@ -1025,15 +1000,15 @@ class ReviewOutputBuilder:
         valid = (
             "Valid paths: " + ", ".join(sorted(known))
             if known
-            else "This review has no deferred files, so no claim may be made."
+            else "This review has no review-claimable files, so no claim may be made."
         )
         offenders = ", ".join(repr(p) for p in paths)
         raise ValueError(
-            f"add_deferred_reviewed received {len(paths)} claim(s) matching no "
-            f"NOT DIFFED file of this review: {offenders}. {valid}"
+            f"claim_files_reviewed received {len(paths)} claim(s) matching no "
+            f"review-claimable file of this review: {offenders}. {valid}"
         )
 
-    def _validate_deferred_claims(self, files) -> List[str]:
+    def _validate_reviewed_file_claims(self, files) -> List[str]:
         """Normalize and membership-check one positive-claim batch.
 
         Both error classes collect across the whole batch — grammar
@@ -1043,16 +1018,16 @@ class ReviewOutputBuilder:
         """
         if not files:
             raise ValueError(
-                "add_deferred_reviewed requires at least one file path — "
+                "claim_files_reviewed requires at least one file path — "
                 "a call naming nothing is a no-op, not a claim."
             )
-        known = self._known_deferred_files()
+        known = self._known_review_claimable_files()
         normalized: List[str] = []
         unknown: List[str] = []
         grammar_errors: List[str] = []
         for file in files:
             try:
-                path = self._normalize_deferred_claim(file)
+                path = self._normalize_reviewed_file_claim(file)
             except ValueError as exc:
                 grammar_errors.append(str(exc))
                 continue
@@ -1063,14 +1038,14 @@ class ReviewOutputBuilder:
             parts = list(grammar_errors)
             if unknown:
                 try:
-                    self._reject_unknown_deferred_claims(unknown, known)
+                    self._reject_unknown_reviewed_file_claims(unknown, known)
                 except ValueError as exc:
                     parts.append(str(exc))
             raise ValueError("; ".join(parts))
         return normalized
 
-    def _validate_deferred_serialization(self, output_dir: str):
-        """Return the required authoritative coverage for publication.
+    def _derive_review_accounting(self, output_dir: str):
+        """Return the required authoritative accounting for publication.
 
         Every save uses this path; the explicit output directory makes the
         check independent of the optional environment envelope.
@@ -1078,29 +1053,31 @@ class ReviewOutputBuilder:
         The seam differs from its advisory sibling on purpose: advisory
         entitlement revalidates at to_dict(output_dir=...) (serialization),
         this at save() (publication), so a caller serializing manually via
-        to_dict/to_json knowingly opts out of deferred validation.
+        to_dict/to_json knowingly opts out of accounting validation.
         """
-        sidecar_path = os.path.join(
-            output_dir, f"{self.reviewer}-deferred-files.json"
+        accounting_input_path = os.path.join(
+            output_dir, f"{self.reviewer}-review-accounting-input.json"
         )
         try:
-            with open(sidecar_path, "r", encoding="utf-8") as handle:
-                sidecar = json.load(handle)
+            with open(accounting_input_path, "r", encoding="utf-8") as handle:
+                accounting_input = json.load(handle)
         except FileNotFoundError as exc:
             raise ValueError(
-                "missing authoritative deferred coverage sidecar: "
-                f"{sidecar_path}"
+                "missing authoritative review-accounting input: "
+                f"{accounting_input_path}"
             ) from exc
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError(
-                "malformed authoritative deferred coverage sidecar: "
-                f"{sidecar_path}"
+                "malformed authoritative review-accounting input: "
+                f"{accounting_input_path}"
             ) from exc
         try:
-            return derive_deferred_coverage(sidecar, self.deferred_reviewed)
-        except CoverageError as exc:
+            return derive_review_accounting(
+                accounting_input, self.reviewed_file_claims
+            )
+        except ReviewAccountingError as exc:
             raise ValueError(
-                "malformed authoritative deferred coverage sidecar: "
+                "malformed authoritative review-accounting input: "
                 f"{exc}"
             ) from exc
 
@@ -1163,27 +1140,40 @@ class ReviewOutputBuilder:
                 "entitled to the advisory channel."
             )
 
-    def add_deferred_reviewed(self, *files: str):
-        """Claim NOT DIFFED (deferred) files as actually reviewed.
-
-        A claim is a statement, not proof of read — downstream coverage
-        accounting labels it as such. Call as you finish each deferred file
-        (or once with several paths). Claiming is what makes a deferred
-        file the reviewer read distinguishable from one it never opened:
-        every other path in the authoritative deferred sidecar is derived as
-        unreviewed. Silence records a gap; it never counts as review. The
-        complement is recomputed on every save, so a later positive claim
-        removes the path from the next candidate's gaps.
-
-        Claims are validated against the authoritative deferred set at add
-        time when the env envelope is present, and always at save().
-
-        The whole batch either lands or leaves no trace.
-        """
-        normalized = self._validate_deferred_claims(files)
+    def claim_files_reviewed(self, *files: str):
+        """Claim review-claimable files as reviewed, atomically."""
+        normalized = self._validate_reviewed_file_claims(files)
         for path in normalized:
-            if path not in self.deferred_reviewed:
-                self.deferred_reviewed.append(path)
+            if path not in self.reviewed_file_claims:
+                self.reviewed_file_claims.append(path)
+
+    def retract_reviewed_file_claims(self, *files: str):
+        """Retract existing reviewed-file claims, atomically."""
+        if not files:
+            raise ValueError(
+                "retract_reviewed_file_claims requires at least one file path"
+            )
+        normalized: List[str] = []
+        errors: List[str] = []
+        for file in files:
+            try:
+                normalized.append(self._normalize_reviewed_file_claim(file))
+            except ValueError as exc:
+                errors.append(str(exc))
+        if errors:
+            raise ValueError("; ".join(errors))
+        missing = [
+            path for path in normalized if path not in self.reviewed_file_claims
+        ]
+        if missing:
+            raise ValueError(
+                "retract_reviewed_file_claims received paths that are not "
+                "currently claimed: " + ", ".join(missing)
+            )
+        retracted = set(normalized)
+        self.reviewed_file_claims = [
+            path for path in self.reviewed_file_claims if path not in retracted
+        ]
 
     def set_confidence(self, score: float):
         """Set overall confidence score."""
@@ -1224,15 +1214,17 @@ class ReviewOutputBuilder:
             return 'not_applicable'
         return derive_review_state(self.issues)['verdict']
 
-    def to_dict(self, *, output_dir: Optional[str] = None, coverage=None) -> Dict:
+    def to_dict(
+        self, *, output_dir: Optional[str] = None, review_accounting=None
+    ) -> Dict:
         """Build as dictionary, revalidating advisory issues when directed.
 
         Without an explicit directory, manual and legacy callers retain the
         deliberate fail-open, vocabulary-only advisory behavior.
 
-        Candidate publication passes authoritative ``coverage`` derived from
-        the sidecar and positive claims. Draft serialization has no authority
-        for the complement or reviewed count and reports those as absent.
+        Candidate publication passes authoritative ``review_accounting``.
+        Direct serialization has no authority for machine-derived fields and
+        reports those as absent.
         """
         if output_dir is not None:
             self._validate_advisory_serialization(output_dir)
@@ -1260,21 +1252,36 @@ class ReviewOutputBuilder:
             'verdict': verdict,
             'summary': summary,
             'issues': self.issues,
-            'unreviewed': list(coverage.unreviewed) or None if coverage else None,
-            'deferred_reviewed': (
-                list(coverage.deferred_reviewed)
-                if coverage else list(self.deferred_reviewed)
+            'review_claimable_files': (
+                list(review_accounting.review_claimable_files)
+                if review_accounting else None
+            ),
+            'reviewed_file_claims': (
+                list(review_accounting.reviewed_file_claims)
+                if review_accounting else list(self.reviewed_file_claims)
+            ),
+            'unclaimed_review_files': (
+                list(review_accounting.unclaimed_review_files)
+                if review_accounting else None
+            ),
+            'inline_diff_file_count': (
+                review_accounting.inline_diff_file_count
+                if review_accounting else None
+            ),
+            'review_accounted_file_count': (
+                review_accounting.review_accounted_file_count
+                if review_accounting else None
+            ),
+            'in_scope_review_file_count': (
+                review_accounting.in_scope_review_file_count
+                if review_accounting else None
             ),
             'observations': self.observations if self.observations else None,
             'recommendations': self.recommendations if any(self.recommendations.values()) else None,
             'positive_observations': self.positive_observations if self.positive_observations else None,
             'clearances': self.clearances if self.clearances else None,
-            # Always present, null when unset — same contract as
-            # `unreviewed` above: a consumer reads absence off the value,
-            # never off the key.
             'narrative_summary': self.narrative_summary,
             'meta': {
-                'files_reviewed': coverage.files_reviewed if coverage else None,
                 'review_duration_ms': review_duration,
                 'confidence_score': self.overall_confidence,
                 'tool_results_used': self.tool_results_used if self.tool_results_used else None
@@ -1303,11 +1310,17 @@ class ReviewOutputBuilder:
         return int(elapsed * 1000)
 
     def to_json(
-        self, indent: int = 2, *, output_dir: Optional[str] = None, coverage=None
+        self,
+        indent: int = 2,
+        *,
+        output_dir: Optional[str] = None,
+        review_accounting=None,
     ) -> str:
         """Generate JSON, optionally revalidating advisory entitlement."""
         return json.dumps(
-            self.to_dict(output_dir=output_dir, coverage=coverage),
+            self.to_dict(
+                output_dir=output_dir, review_accounting=review_accounting
+            ),
             indent=indent,
             ensure_ascii=False,
         )
@@ -1326,10 +1339,12 @@ class ReviewOutputBuilder:
         """
         os.makedirs(output_dir, exist_ok=True)
 
-        coverage = self._validate_deferred_serialization(output_dir)
+        review_accounting = self._derive_review_accounting(output_dir)
 
         paths = reviewer_paths(output_dir, self.reviewer)
-        serialized = self.to_json(output_dir=output_dir, coverage=coverage)
+        serialized = self.to_json(
+            output_dir=output_dir, review_accounting=review_accounting
+        )
         output = json.loads(serialized)
         serialized_bytes = serialized.encode("utf-8")
         candidate_digest = hashlib.sha256(serialized_bytes).hexdigest()
@@ -1355,10 +1370,10 @@ class ReviewOutputBuilder:
                 f"OBSERVATIONS: {len(self.observations)} | "
                 f"VERDICT: {output['verdict']}"
             )
-            deferred_total = len(coverage.deferred_reviewed) + len(coverage.unreviewed)
             print(
-                f"UNREVIEWED: {len(coverage.unreviewed)} / {deferred_total} deferred | "
-                f"CLAIMED REVIEWED: {len(coverage.deferred_reviewed)}"
+                "REVIEW CLAIMS: "
+                f"{len(review_accounting.reviewed_file_claims)} reviewed | "
+                f"{len(review_accounting.unclaimed_review_files)} unclaimed"
             )
             # Budget salience, and ONLY here. The briefing states the target
             # once, thousands of tokens before the reviewer decides whether
@@ -1367,11 +1382,11 @@ class ReviewOutputBuilder:
             # 100+ files while under half budget). This echo is the one piece
             # of feedback every agent reads, it arrives with a turn still
             # left to act, and it only appears when there is something to act
-            # on — unreviewed files recorded. Silent when the envelope is
+            # on — unclaimed review files recorded. Silent when the envelope is
             # absent or malformed: the builder must stay usable outside a
             # pipeline run, where there is no target to report.
             budget_target = self._review_budget_target(output_dir, self.reviewer)
-            if coverage.unreviewed and budget_target is not None:
+            if review_accounting.unclaimed_review_files and budget_target is not None:
                 print(
                     f"TARGET: ~{budget_target} tool calls — if you finished "
                     "well under it with NOT DIFFED files left, read more and "
@@ -1380,7 +1395,7 @@ class ReviewOutputBuilder:
                 # The target alone moved re-saves but not utilization in
                 # run12 (0/19 agents reached target) — a number with no
                 # concrete next action is exhortation. PROGRESS states how
-                # much of the total in-scope workload (inline + deferred) is
+                # much of the total in-scope workload (inline + claimable) is
                 # actually covered; NEXT UNREAD names the specific files
                 # still to read, largest first (the sidecar's own order —
                 # see bootstrap.py's order_by_diffstat_largest_first), so
@@ -1390,10 +1405,12 @@ class ReviewOutputBuilder:
                 # incoherent; TARGET and NEXT UNREAD keep following their
                 # own independently valid fields.
                 print(
-                    f"PROGRESS: covered {coverage.files_reviewed} of {coverage.in_scope_count} "
+                    "PROGRESS: accounted for "
+                    f"{review_accounting.review_accounted_file_count} of "
+                    f"{review_accounting.in_scope_review_file_count} "
                     "in-scope files."
                 )
-                remaining = list(coverage.unreviewed)
+                remaining = list(review_accounting.unclaimed_review_files)
                 if remaining:
                     head, rest = remaining[:10], remaining[10:]
                     print("NEXT UNREAD (largest first):")
@@ -1407,7 +1424,7 @@ class ReviewOutputBuilder:
                 os.replace(staged_json_path, paths.candidate)
                 try:
                     _log_agent_save_telemetry(
-                        output_dir, coverage.agent_name, candidate_digest
+                        output_dir, review_accounting.agent_name, candidate_digest
                     )
                 except Exception as exc:
                     print(
@@ -1458,8 +1475,12 @@ _REQUIRED_REVIEW_FIELDS = frozenset({
     "verdict",
     "summary",
     "issues",
-    "unreviewed",
-    "deferred_reviewed",
+    "review_claimable_files",
+    "reviewed_file_claims",
+    "unclaimed_review_files",
+    "inline_diff_file_count",
+    "review_accounted_file_count",
+    "in_scope_review_file_count",
     "observations",
     "recommendations",
     "positive_observations",
@@ -1481,7 +1502,6 @@ _REQUIRED_ISSUE_FIELDS = frozenset({
     "confidence",
 })
 _REQUIRED_META_FIELDS = frozenset({
-    "files_reviewed",
     "review_duration_ms",
     "confidence_score",
     "tool_results_used",
@@ -1654,10 +1674,22 @@ def _validate_candidate_shape(candidate, reviewer):
         candidate["narrative_summary"], str
     ):
         raise ValueError("review candidate narrative_summary must be a string or null")
-    if candidate["unreviewed"] is not None and not _is_string_list(
-        candidate["unreviewed"]
+    for field in (
+        "review_claimable_files",
+        "reviewed_file_claims",
+        "unclaimed_review_files",
     ):
-        raise ValueError("review candidate unreviewed must be strings or null")
+        if not _is_string_list(candidate[field]):
+            raise ValueError(f"review candidate {field} must be a list of strings")
+    for field in (
+        "inline_diff_file_count",
+        "review_accounted_file_count",
+        "in_scope_review_file_count",
+    ):
+        if type(candidate[field]) is not int or candidate[field] < 0:
+            raise ValueError(
+                f"review candidate {field} must be a non-negative integer"
+            )
 
     issues = candidate["issues"]
     if not isinstance(issues, list):
@@ -1756,27 +1788,36 @@ def _validate_candidate(output_dir, reviewer, paths, candidate_bytes):
     ):
         raise ValueError("review candidate summary does not match its issues")
 
-    sidecar = _read_json_object(paths.sidecar, "coverage sidecar")
-    claims = candidate.get("deferred_reviewed")
+    accounting_input = _read_json_object(
+        paths.accounting_input, "review-accounting input"
+    )
+    claims = candidate.get("reviewed_file_claims")
     if not isinstance(claims, list):
-        raise ValueError("review candidate deferred_reviewed must be a list")
+        raise ValueError("review candidate reviewed_file_claims must be a list")
     try:
-        coverage = derive_deferred_coverage(sidecar, claims)
-    except CoverageError as exc:
-        raise ValueError(f"review candidate coverage is malformed: {exc}") from exc
-    if derive_reviewer_name(coverage.agent_name) != reviewer:
-        raise ValueError("coverage sidecar agent_name does not match reviewer")
-    expected_unreviewed = list(coverage.unreviewed) or None
-    meta = candidate.get("meta")
+        review_accounting = derive_review_accounting(accounting_input, claims)
+    except ReviewAccountingError as exc:
+        raise ValueError(
+            f"review candidate accounting is malformed: {exc}"
+        ) from exc
     if (
-        candidate.get("deferred_reviewed") != list(coverage.deferred_reviewed)
-        or candidate.get("unreviewed") != expected_unreviewed
-        or not isinstance(meta, dict)
-        or type(meta.get("files_reviewed")) is not int
-        or meta.get("files_reviewed") != coverage.files_reviewed
+        candidate.get("review_claimable_files")
+        != list(review_accounting.review_claimable_files)
+        or candidate.get("reviewed_file_claims")
+        != list(review_accounting.reviewed_file_claims)
+        or candidate.get("unclaimed_review_files")
+        != list(review_accounting.unclaimed_review_files)
+        or candidate.get("inline_diff_file_count")
+        != review_accounting.inline_diff_file_count
+        or candidate.get("review_accounted_file_count")
+        != review_accounting.review_accounted_file_count
+        or candidate.get("in_scope_review_file_count")
+        != review_accounting.in_scope_review_file_count
     ):
-        raise ValueError("review candidate derived coverage fields do not match sidecar")
-    return candidate, coverage.agent_name
+        raise ValueError(
+            "review candidate derived accounting fields do not match input"
+        )
+    return candidate, review_accounting.agent_name
 
 
 def finalize_candidate(output_dir: str, reviewer: str, candidate_digest: str):

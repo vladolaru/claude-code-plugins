@@ -127,56 +127,50 @@ class TestResolveReviewerIdentity:
         assert "STATUS: ERROR" in error
 
 
-class TestPersistDeferredSidecar:
-    """The extracted writer preserves the existing deferred-file contract.
-
-    Schema 2 (was 1): the sidecar also carries the run's effective tool-call
-    budget and scope counts, replacing the retired env-var budget transport
-    that silently died for any agent that rebuilt its save command —
-    output.py's save() reads these fields through the same sidecar it
-    already reads for derived NOT DIFFED coverage.
-    """
+class TestPersistReviewAccountingInput:
+    """The writer publishes the exact schema-3 accounting authority."""
 
     def test_writes_only_authoritative_deferred_files(self, tmp_path):
-        _mod.persist_deferred_sidecar(
+        _mod.persist_review_accounting_input(
             str(tmp_path),
             "repo-renewals-reviewer",
             ["src/deferred.php"],
-            ["src/list-only.php"],
             review_budget=80,
-            in_scope_count=12,
-            diffed_count=11,
+            in_scope_review_file_count=12,
+            inline_diff_file_count=11,
         )
 
         payload = json.loads(
-            (tmp_path / "repo-renewals-deferred-files.json").read_text()
+            (tmp_path / "repo-renewals-review-accounting-input.json").read_text()
         )
         assert payload == {
-            "schema": 2,
+            "schema": 3,
             "agent_name": "repo-renewals-reviewer",
-            "deferred_files": ["src/deferred.php"],
+            "reviewer": "repo-renewals",
+            "review_claimable_files": ["src/deferred.php"],
             "review_budget": 80,
-            "in_scope_count": 12,
-            "diffed_count": 11,
+            "in_scope_review_file_count": 12,
+            "inline_diff_file_count": 11,
         }
 
     def test_writes_empty_authoritative_set(self, tmp_path):
-        _mod.persist_deferred_sidecar(
-            str(tmp_path), "security-reviewer", [], ["src/list-only.php"],
+        _mod.persist_review_accounting_input(
+            str(tmp_path), "security-reviewer", [],
             review_budget=40,
-            in_scope_count=5, diffed_count=5,
+            in_scope_review_file_count=5, inline_diff_file_count=5,
         )
 
         payload = json.loads(
-            (tmp_path / "security-deferred-files.json").read_text()
+            (tmp_path / "security-review-accounting-input.json").read_text()
         )
         assert payload == {
-            "schema": 2,
+            "schema": 3,
             "agent_name": "security-reviewer",
-            "deferred_files": [],
+            "reviewer": "security",
+            "review_claimable_files": [],
             "review_budget": 40,
-            "in_scope_count": 5,
-            "diffed_count": 5,
+            "in_scope_review_file_count": 5,
+            "inline_diff_file_count": 5,
         }
 
     def test_write_errors_are_not_silenced(self, tmp_path):
@@ -184,53 +178,53 @@ class TestPersistDeferredSidecar:
         output_file.write_text("occupied")
 
         with pytest.raises(OSError):
-            _mod.persist_deferred_sidecar(
-                str(output_file), "security-reviewer", ["src/deferred.php"], [],
+            _mod.persist_review_accounting_input(
+                str(output_file), "security-reviewer", ["src/deferred.php"],
                 review_budget=80,
-                in_scope_count=1, diffed_count=0,
+                in_scope_review_file_count=1, inline_diff_file_count=0,
             )
 
     def test_dedupes_deferred_files_order_preserving(self, tmp_path):
         """A multi-domain agent's secondary-domain scope render can repeat
         a file already budget-exceeded in the primary domain's sidecar —
         load_scope_facts() concatenates every summary's
-        budget_exceeded_files without deduping. persist_deferred_sidecar
-        must not publish that duplicate: it inflates len(deferred_files),
+        budget_exceeded_files without deduping. persist_review_accounting_input
+        must not publish that duplicate: it inflates len(review_claimable_files),
         the total manifest_sections.build_coverage_manifest reconciles
         the agent's derived positive-claim/gap populations against."""
-        _mod.persist_deferred_sidecar(
+        _mod.persist_review_accounting_input(
             str(tmp_path),
             "security-reviewer",
             ["src/a.php", "src/b.php", "src/a.php"],
-            [],
             review_budget=80,
-            in_scope_count=4, diffed_count=2,
+            in_scope_review_file_count=4, inline_diff_file_count=2,
         )
 
         payload = json.loads(
-            (tmp_path / "security-deferred-files.json").read_text()
+            (tmp_path / "security-review-accounting-input.json").read_text()
         )
         assert payload == {
-            "schema": 2,
+            "schema": 3,
             "agent_name": "security-reviewer",
-            "deferred_files": ["src/a.php", "src/b.php"],
+            "reviewer": "security",
+            "review_claimable_files": ["src/a.php", "src/b.php"],
             "review_budget": 80,
-            "in_scope_count": 4,
-            "diffed_count": 2,
+            "in_scope_review_file_count": 4,
+            "inline_diff_file_count": 2,
         }
 
     @pytest.mark.parametrize(
         "kwargs",
         [
-            {"review_budget": 40, "in_scope_count": None, "diffed_count": 0},
-            {"review_budget": 40, "in_scope_count": 1, "diffed_count": None},
-            {"review_budget": 40, "in_scope_count": 1, "diffed_count": 1},
+            {"review_budget": 40, "in_scope_review_file_count": None, "inline_diff_file_count": 0},
+            {"review_budget": 40, "in_scope_review_file_count": 1, "inline_diff_file_count": None},
+            {"review_budget": 40, "in_scope_review_file_count": 1, "inline_diff_file_count": 1},
         ],
     )
     def test_rejects_incomplete_or_incoherent_payloads(self, tmp_path, kwargs):
         with pytest.raises(ValueError):
-            _mod.persist_deferred_sidecar(
-                str(tmp_path), "security-reviewer", ["src/a.php"], [], **kwargs
+            _mod.persist_review_accounting_input(
+                str(tmp_path), "security-reviewer", ["src/a.php"], **kwargs
             )
 
 
@@ -278,7 +272,7 @@ class TestPartitionScopePaths:
                     "src/secondary.py",
                     "src/shared.py",
                 ],
-                "not_diffed": [
+                "review_claimable": [
                     "src/shared.py",
                     "src/deferred-a.py",
                     "src/deferred-a.py",
@@ -341,13 +335,13 @@ class TestPartitionScopePaths:
         capsys.readouterr()
 
         builder = ReviewOutputBuilder("123", "security")
-        builder.add_deferred_reviewed("src/deferred-b.py")
+        builder.claim_files_reviewed("src/deferred-b.py")
         builder.save(str(tmp_path))
 
         payload = json.loads(
-            (tmp_path / "security-deferred-files.json").read_text()
+            (tmp_path / "security-review-accounting-input.json").read_text()
         )
-        covered = payload["diffed_count"] + len(builder.deferred_reviewed)
+        covered = payload["inline_diff_file_count"] + len(builder.reviewed_file_claims)
         assert telemetry_starts[0]["scope_paths"] == [
             "src/inline.py",
             "src/shared.py",
@@ -357,14 +351,17 @@ class TestPartitionScopePaths:
             "package-lock.json",
             "generated/api.json",
         ]
-        assert payload["deferred_files"] == [
+        assert payload["review_claimable_files"] == [
             "src/deferred-b.py",
             "src/deferred-a.py",
         ]
-        assert payload["diffed_count"] == 3
-        assert payload["in_scope_count"] == 5
-        assert 0 <= covered <= payload["in_scope_count"]
-        assert "PROGRESS: covered 4 of 5 in-scope files." in capsys.readouterr().out
+        assert payload["inline_diff_file_count"] == 3
+        assert payload["in_scope_review_file_count"] == 5
+        assert 0 <= covered <= payload["in_scope_review_file_count"]
+        assert (
+            "PROGRESS: accounted for 4 of 5 in-scope files."
+            in capsys.readouterr().out
+        )
 
     def test_main_reports_sidecar_publication_failure_as_structured_error(
         self, tmp_path, monkeypatch, capsys
@@ -376,7 +373,7 @@ class TestPartitionScopePaths:
         )
         monkeypatch.setattr(
             _mod,
-            "persist_deferred_sidecar",
+            "persist_review_accounting_input",
             lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")),
         )
         monkeypatch.setattr(
@@ -390,7 +387,7 @@ class TestPartitionScopePaths:
 
         output = capsys.readouterr().out
         assert "STATUS: ERROR" in output
-        assert "Could not publish authoritative deferred coverage: disk full" in output
+        assert "Could not publish authoritative review accounting: disk full" in output
 
 
 class TestExtractFileDiffstat:
@@ -652,7 +649,7 @@ class TestChangePurposeInjection:
             output_dir="/tmp/test",
             pr_number="1",
             reviewer_name="security",
-            not_diffed_count=0,
+            review_claimable_count=0,
             has_php=False,
             change_purpose="Adds retry logic to the payment gateway.",
         )
@@ -709,7 +706,7 @@ class TestCoverageNoteInjection:
             output_dir="/tmp/test",
             pr_number="1",
             reviewer_name="security",
-            not_diffed_count=0,
+            review_claimable_count=0,
             has_php=False,
             coverage_note=note,
         )
@@ -729,7 +726,7 @@ class TestCoverageNoteInjection:
             output_dir="/tmp/test",
             pr_number="1",
             reviewer_name="security",
-            not_diffed_count=0,
+            review_claimable_count=0,
             has_php=False,
         )
         assert "=== COVERAGE NOTE ===" not in output
@@ -841,7 +838,7 @@ class TestBudgetBriefingText:
     """The budget section must be honest about capping and push spend-down."""
 
     def _output(self, tmp_path, scope_output="scope", budget=80, capped=False,
-                not_diffed_count=0):
+                review_claimable_count=0):
         return build_output(
             agent_name="security-reviewer",
             plugin_root="/fake",
@@ -853,7 +850,7 @@ class TestBudgetBriefingText:
             output_dir=str(tmp_path),
             pr_number="1",
             reviewer_name="security",
-            not_diffed_count=not_diffed_count,
+            review_claimable_count=review_claimable_count,
             has_php=False,
             review_budget=budget,
             budget_capped=capped,
@@ -870,7 +867,7 @@ class TestBudgetBriefingText:
 
     def test_not_diffed_scope_gets_spend_down_instruction(self, tmp_path):
         # The header text ("258 files") is deliberately NOT what the count is
-        # sourced from anymore — not_diffed_count is a fact passed by the
+        # sourced from anymore — review_claimable_count is a fact passed by the
         # caller (main() derives it from scope_facts), independent of how
         # scope.py renders its section header. This scope text is present
         # only to prove the header is inert for this decision.
@@ -882,7 +879,7 @@ class TestBudgetBriefingText:
             "  src/big.ts  (+862 -0)\n"
         )
         output = self._output(tmp_path, scope_output=scope, budget=80, capped=True,
-                               not_diffed_count=258)
+                               review_claimable_count=258)
         assert "258 in-scope files" in output
         assert "coverage gap, not efficiency" in output
 
@@ -980,7 +977,7 @@ class TestExtractScopeMultipleBlocks:
             "the context budget. This list is your remaining work queue, largest\n"
             "first: review with 'git diff base..head -- <file>' while tool budget\n"
             "remains. Claim every NOT DIFFED file you actually read; the builder "
-            "derives the rest as unreviewed.\n"
+            "derives the rest as unclaimed review files.\n"
             "  src/deferred-large.py  (+700 -100)\n"
             "  src/deferred-small.py  (+80 -20)\n"
             "=== DIFFS ===\n"
@@ -1061,10 +1058,11 @@ class TestLoadScopeFacts:
 
     def _write_summary(self, path, **overrides):
         data = {
-            "schema": 1,
-            "files_with_diffs": ["src/a.py"],
-            "budget_exceeded_files": ["src/deferred.py"],
+            "schema": 2,
+            "inline_diff_files": ["src/a.py"],
+            "review_claimable_files": ["src/deferred.py"],
             "list_only_files": ["package-lock.json"],
+            "in_scope_review_files": ["src/a.py", "src/deferred.py"],
             "in_scope_stat_lines": 100,
         }
         data.update(overrides)
@@ -1075,15 +1073,16 @@ class TestLoadScopeFacts:
         primary = self._write_summary(tmp_path / "a-scope-summary.json")
         secondary = self._write_summary(
             tmp_path / "a-scope-summary-config-ops.json",
-            files_with_diffs=["ci.yml"],
-            budget_exceeded_files=[],
+            inline_diff_files=["ci.yml"],
+            review_claimable_files=[],
             list_only_files=[],
+            in_scope_review_files=["ci.yml"],
             in_scope_stat_lines=7,
         )
         facts = load_scope_facts([primary, secondary])
         assert facts == {
             "files": ["src/a.py", "ci.yml"],
-            "not_diffed": ["src/deferred.py"],
+            "review_claimable": ["src/deferred.py"],
             "list_only": ["package-lock.json"],
             "stat_lines": 107,
         }
@@ -1108,8 +1107,8 @@ class TestLoadScopeFacts:
             {"in_scope_stat_lines": None},   # pre-field producer
             {"in_scope_stat_lines": True},   # bool is not a count
             {"in_scope_stat_lines": 1.5},
-            {"files_with_diffs": "src/a.py"},
-            {"budget_exceeded_files": [1]},
+            {"inline_diff_files": "src/a.py"},
+            {"review_claimable_files": [1]},
             {"list_only_files": None},
         ],
     )
@@ -1180,7 +1179,7 @@ class TestAdditionalInstructionsInjection:
             output_dir="/tmp/test",
             pr_number="1",
             reviewer_name="security",
-            not_diffed_count=0,
+            review_claimable_count=0,
             has_php=False,
             additional_instructions="Focus on error handling in the retry logic.",
         )
@@ -1200,7 +1199,7 @@ class TestAdditionalInstructionsInjection:
             output_dir="/tmp/test",
             pr_number="1",
             reviewer_name="security",
-            not_diffed_count=0,
+            review_claimable_count=0,
             has_php=False,
             additional_instructions=None,
         )
@@ -1219,7 +1218,7 @@ class TestAdditionalInstructionsInjection:
             output_dir="/tmp/test",
             pr_number="1",
             reviewer_name="security",
-            not_diffed_count=0,
+            review_claimable_count=0,
             has_php=False,
         )
         assert "REVIEWER-REQUESTED FOCUS" not in output
@@ -1237,7 +1236,7 @@ class TestAdditionalInstructionsInjection:
             output_dir="/tmp/test",
             pr_number="1",
             reviewer_name="security",
-            not_diffed_count=0,
+            review_claimable_count=0,
             has_php=False,
             change_purpose="Adds retry logic.",
             additional_instructions="Focus on error handling.",

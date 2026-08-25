@@ -274,27 +274,25 @@ def _aggregate_coverage(
     }
 
 
-_DEFERRED_HONESTY_FIELDS = ("deferred_reviewed", "unreviewed")
+_REVIEW_CLAIM_ACCOUNTING_FIELDS = (
+    "reviewed_file_claim_count",
+    "unclaimed_review_file_count",
+)
 
 
-def _aggregate_deferred_honesty(
+def _aggregate_review_claim_accounting(
     runs: list[dict[str, Any]], availability: dict[str, dict[str, int]]
 ) -> dict[str, Any]:
-    """Sum derived NOT DIFFED claim/gap populations across measured runs.
+    """Sum reviewed-file claim accounting across measured runs.
 
-    Reuses the "coverage" family (the closest existing family, per its own
-    availability gate) but additionally requires the run to actually carry
-    `deferred_honesty_by_agent` — a run with complete coverage but no such
-    key predates this feature and must not count as a measured zero.
-
-    A run whose `deferred_honesty_by_agent` is present but EMPTY (`{}`) has
+    A run whose `review_claim_accounting_by_agent` is empty has
     no finalized reviewer row to measure. `measured_runs` only counts when
     at least one agent contributed real counts, so missing evidence never
     reads as "measured, zero". `measured_agents`/`unmeasured_agents` make
     that same distinction visible at agent granularity: unmeasured
-    agents are those in `deferred_total_by_agent` (the system saw a
-    deferred-files sidecar for them) but absent from
-    `deferred_honesty_by_agent` (their own review JSON never claimed
+    agents are those in `review_claimable_file_count_by_agent` (the system saw an
+    accounting input for them) but absent from
+    `review_claim_accounting_by_agent` (their own review JSON never claimed
     anything) — derived as a set difference, counted whether or not the
     run as a whole clears the measured_runs bar.
     """
@@ -308,12 +306,14 @@ def _aggregate_deferred_honesty(
         coverage = run.get("coverage")
         if not isinstance(coverage, dict):
             continue
-        by_agent = coverage.get("deferred_honesty_by_agent")
+        by_agent = coverage.get("review_claim_accounting_by_agent")
         if not isinstance(by_agent, dict):
             continue
-        total_by_agent = coverage.get("deferred_total_by_agent")
-        total_by_agent = total_by_agent if isinstance(total_by_agent, dict) else {}
-        unmeasured_agents += len(set(total_by_agent) - set(by_agent))
+        claimable_counts = coverage.get("review_claimable_file_count_by_agent")
+        claimable_counts = (
+            claimable_counts if isinstance(claimable_counts, dict) else {}
+        )
+        unmeasured_agents += len(set(claimable_counts) - set(by_agent))
         if not by_agent:
             continue
         measured_runs += 1
@@ -321,14 +321,14 @@ def _aggregate_deferred_honesty(
         for agent_counts in by_agent.values():
             if not isinstance(agent_counts, dict):
                 continue
-            for name in _DEFERRED_HONESTY_FIELDS:
+            for name in _REVIEW_CLAIM_ACCOUNTING_FIELDS:
                 value = agent_counts.get(name)
                 if isinstance(value, int) and not isinstance(value, bool):
                     counts[name] += value
     return {
         **{
             name: counts[name] if measured_runs else None
-            for name in _DEFERRED_HONESTY_FIELDS
+            for name in _REVIEW_CLAIM_ACCOUNTING_FIELDS
         },
         "measured_runs": measured_runs,
         "measured_agents": measured_agents,
@@ -729,7 +729,9 @@ def aggregate_cohort(runs: Iterable[dict[str, Any]]) -> dict[str, Any]:
 
     dispatch = _aggregate_dispatch(run_list, availability)
     coverage = _aggregate_coverage(run_list, availability)
-    deferred_honesty = _aggregate_deferred_honesty(run_list, availability)
+    review_claim_accounting = _aggregate_review_claim_accounting(
+        run_list, availability
+    )
     outcomes, critic, wall_time = _aggregate_outcomes(run_list, availability)
     synthesis_agents = _aggregate_synthesis_agents(run_list, availability)
     tool_failures = _aggregate_tool_failures(run_list, availability)
@@ -742,7 +744,7 @@ def aggregate_cohort(runs: Iterable[dict[str, Any]]) -> dict[str, Any]:
         "availability": availability,
         "dispatch": dispatch,
         "coverage": coverage,
-        "deferred_honesty": deferred_honesty,
+        "review_claim_accounting": review_claim_accounting,
         "lifecycle": {
             **_lifecycle_block(lifecycle_complete),
             "partial_observed_runs": (

@@ -1205,32 +1205,34 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
 # Review coverage rendering (shared by the record assembler and step 11)
 # ---------------------------------------------------------------------------
 
-def _has_coverage_gap(gaps, unscoped):
+def _has_review_accounting_gap(accounting):
     """True when something is PROVEN uncovered, claims aside.
 
     Budget-starved files and domain-unmatched files are gaps: no reviewer
-    saw them. A deferred-review claim is not — an agent says it read the
+    saw them. A reviewed-file claim is not — an agent says it read the
     file, and the section says in as many words that a claim is not proof.
     Demanding the verdict acknowledge "this gap" on a claims-only run
     converts that hedge into the certainty it was written to avoid.
     """
+    if not isinstance(accounting, dict):
+        return False
     return bool(
-        (gaps if isinstance(gaps, dict) else {})
-        or (unscoped if isinstance(unscoped, list) else [])
+        accounting.get("agents_with_unclaimed_review_by_file") or
+        accounting.get("unscoped_files")
     )
 
 
-def _render_review_coverage_section(gaps, claims, unscoped):
+def _render_review_accounting_section(accounting):
     """Render the report's complete `## Review coverage` section, or "".
 
     One paste, three populations, each with its own honest sentence:
 
     * **gaps** — matched a reviewer domain, then every matching agent's
-      diff budget skipped them and none claimed them off the deferred
+      diff budget skipped them and none claimed them off the review-claimable
       queue.
     * **unscoped** — matched no reviewer domain at all, so no agent's
       scope ever contained them.
-    * **claims** — never diffed inline, but a deferring agent says it
+    * **claims** — never diffed inline, but a reviewer says it
       reviewed them anyway. A claim, never proof of read.
 
     They are never merged: "no one saw it" and "someone says they saw it"
@@ -1239,6 +1241,11 @@ def _render_review_coverage_section(gaps, claims, unscoped):
     whole point — the orchestrator's job here is to paste, not to
     summarize.
     """
+    if not isinstance(accounting, dict):
+        return ""
+    gaps = accounting.get("agents_with_unclaimed_review_by_file")
+    claims = accounting.get("agents_claiming_review_by_file")
+    unscoped = accounting.get("unscoped_files")
     gaps = gaps if isinstance(gaps, dict) else {}
     claims = claims if isinstance(claims, dict) else {}
     unscoped = unscoped if isinstance(unscoped, list) else []
@@ -1250,7 +1257,7 @@ def _render_review_coverage_section(gaps, claims, unscoped):
         lines.append(
             f"{len(gaps)} changed file(s) were skipped by every matching "
             "agent's diff budget and no reviewer reported reviewing them "
-            "from the deferred NOT DIFFED queue:"
+            "from the review-claimable queue:"
         )
         lines.append("")
         for f_path, agents in sorted(gaps.items()):
@@ -1276,12 +1283,12 @@ def _render_review_coverage_section(gaps, claims, unscoped):
             lines.append(f"- {_markdown_code_span(f_path)}")
         lines.append("")
     if claims:
-        lines.append("### Reviewed from the deferred queue — claims, not proof of read")
+        lines.append("### Reviewed-file claims — claims, not proof of read")
         lines.append("")
         lines.append(
             f"{len(claims)} changed file(s) never received their diff "
-            "inline, but a deferring agent claims to have reviewed them "
-            "from the NOT DIFFED queue. These claims are not proof of read:"
+            "inline, but an agent claims to have reviewed them from the "
+            "review-claimable queue. These claims are not proof of read:"
         )
         lines.append("")
         for f_path, agents in sorted(claims.items()):
@@ -2012,17 +2019,12 @@ def _report_authoring_actions(mode, state, context, config, output_dir):
     # re-deriving it. A field run once paraphrased "skipped by every
     # matching agent's diff budget and no reviewer reported reviewing
     # them" into "read by nobody", false for 8 of 41 files.
-    if record_usable and _render_review_coverage_section(
-        state.get("inline_coverage_gaps"),
-        state.get("inline_coverage_claims"),
-        state.get("inline_coverage_unscoped"),
+    if record_usable and _render_review_accounting_section(
+        state.get("review_accounting")
     ):
         gap_clause = (
             " The verdict must acknowledge this gap."
-            if _has_coverage_gap(
-                state.get("inline_coverage_gaps"),
-                state.get("inline_coverage_unscoped"),
-            )
+            if _has_review_accounting_gap(state.get("review_accounting"))
             else ""
         )
         actions.append("")

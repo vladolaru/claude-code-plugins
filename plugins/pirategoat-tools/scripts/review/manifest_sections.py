@@ -12,7 +12,7 @@ from collections import Counter
 from typing import Any, Dict, List, Optional
 
 try:
-    from .agent.coverage import CoverageError, derive_deferred_coverage
+    from .agent.coverage import ReviewAccountingError, derive_review_accounting
     from .reviewer_names import derive_reviewer_name
     from .dependency_refresh import (
         EXIT_STATUSES,
@@ -36,7 +36,7 @@ except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
-    from review.agent.coverage import CoverageError, derive_deferred_coverage
+    from review.agent.coverage import ReviewAccountingError, derive_review_accounting
     from review.reviewer_names import derive_reviewer_name
     from review.dependency_refresh import (
         EXIT_STATUSES,
@@ -372,49 +372,52 @@ def build_dispatch_manifest(output_dir: str, final_info: dict) -> dict:
     return result
 
 
-def _load_deferred_honesty(output_dir: str, agent: str) -> Optional[Dict[str, int]]:
-    """Derive one finalized review's deferred claim/gap counts."""
+def _load_review_claim_accounting(
+    output_dir: str, agent: str
+) -> Optional[Dict[str, int]]:
+    """Derive one finalized review's claim and unclaimed counts."""
     stem = derive_reviewer_name(agent)
     review = read_json_file(output_dir, f"{stem}-review.json")
-    sidecar = read_json_file(output_dir, f"{stem}-deferred-files.json")
-    if review is None or sidecar is None or "deferred_reviewed" not in review:
+    accounting_input = read_json_file(
+        output_dir, f"{stem}-review-accounting-input.json"
+    )
+    if (
+        review is None
+        or accounting_input is None
+        or "reviewed_file_claims" not in review
+    ):
         return None
     try:
-        coverage = derive_deferred_coverage(sidecar, review["deferred_reviewed"])
-    except (CoverageError, TypeError):
+        accounting = derive_review_accounting(
+            accounting_input, review["reviewed_file_claims"]
+        )
+    except (ReviewAccountingError, TypeError):
         return None
-    if coverage.agent_name != agent:
+    if accounting.agent_name != agent:
         return None
     return {
-        "deferred_reviewed": len(coverage.deferred_reviewed),
-        "unreviewed": len(coverage.unreviewed),
+        "reviewed_file_claim_count": len(accounting.reviewed_file_claims),
+        "unclaimed_review_file_count": len(accounting.unclaimed_review_files),
     }
 
 
-def _load_deferred_total(output_dir: str, agent: str) -> Optional[int]:
-    """Read the authoritative deferred-file count `save()` reconciles against.
-
-    `<reviewer>-deferred-files.json` is written by `agent/bootstrap.py`
-    before the agent runs and is the exact set `ReviewOutputBuilder.save()`
-    itself validates ``deferred_reviewed``/``unreviewed`` against — an
-    independent, system-authored source from the agent's own review JSON,
-    fit for pinning the reconciliation between the two. Returns None when
-    the sidecar is absent, unreadable, or malformed: a run predating the
-    sidecar, or one where the reviewer never ran.
-
-    The shared coverage authority validates the complete schema-2 sidecar
-    before the denominator is published.
-    """
-    data = read_json_file(output_dir, f"{derive_reviewer_name(agent)}-deferred-files.json")
+def _load_review_claimable_file_count(
+    output_dir: str, agent: str
+) -> Optional[int]:
+    """Read the authoritative review-claimable file count."""
+    reviewer = derive_reviewer_name(agent)
+    data = read_json_file(
+        output_dir, f"{reviewer}-review-accounting-input.json"
+    )
     if data is None:
         return None
     try:
-        coverage = derive_deferred_coverage(data, [])
-    except CoverageError:
+        accounting = derive_review_accounting(data, [])
+    except ReviewAccountingError:
         return None
-    if coverage.agent_name != agent:
+    if accounting.agent_name != agent:
         return None
-    return len(coverage.unreviewed)
+    return len(accounting.review_claimable_files)
 
 
 def build_coverage_manifest(
@@ -496,25 +499,25 @@ def build_coverage_manifest(
             path for paths in by_agent_sets.values() for path in paths
         )
 
-        # Derived positive-claim/gap populations for NOT DIFFED files
-        # files, read straight off durable per-reviewer sidecars — never
+        # Derived positive-claim/gap populations for NOT DIFFED files,
+        # read straight off durable per-reviewer accounting inputs — never
         # derived from the events already folded into by_agent above,
         # which only carry generated SCOPE (assigned files), not the
-        # deferred-review accounting. Both dicts default to {} (measured,
+        # reviewed-file accounting. Both dicts default to {} (measured,
         # zero reviewers), never omitted, once this builder runs at all;
         # only a run whose manifest predates this feature lacks the keys
-        # entirely (see `_load_deferred_honesty`'s key-presence contract).
-        deferred_honesty_by_agent: Dict[str, Dict[str, int]] = {}
-        deferred_total_by_agent: Dict[str, int] = {}
+        # entirely (see `_load_review_claim_accounting`'s contract).
+        review_claim_accounting_by_agent: Dict[str, Dict[str, int]] = {}
+        review_claimable_file_count_by_agent: Dict[str, int] = {}
         for name in sorted(final_agents):
             if not is_dispatched(final_agents[name].get("status")):
                 continue
-            honesty = _load_deferred_honesty(output_dir, name)
-            if honesty is not None:
-                deferred_honesty_by_agent[name] = honesty
-            total = _load_deferred_total(output_dir, name)
-            if total is not None:
-                deferred_total_by_agent[name] = total
+            accounting = _load_review_claim_accounting(output_dir, name)
+            if accounting is not None:
+                review_claim_accounting_by_agent[name] = accounting
+            claimable_count = _load_review_claimable_file_count(output_dir, name)
+            if claimable_count is not None:
+                review_claimable_file_count_by_agent[name] = claimable_count
 
         return {
             "changed": changed,
@@ -526,7 +529,7 @@ def build_coverage_manifest(
                 for path in sorted(changed_set - reviewable_set)
             ],
             # DIVERGENCE NOTE — this is NOT the same measurement as
-            # reconciliation_context.py's `inline_coverage.files_unscoped`,
+            # reconciliation_context.py's `review_accounting.unscoped_files`,
             # and the two legitimately disagree (a field run read 2 here
             # and 5 there). Both answer "which changed files did no agent's
             # scope contain", from different evidence over different
@@ -548,8 +551,10 @@ def build_coverage_manifest(
             # metrics partition depends on; that one is the did-anyone-
             # actually-see-it accounting the review report must confess.
             "uncovered": sorted(reviewable_set - assigned_set),
-            "deferred_honesty_by_agent": deferred_honesty_by_agent,
-            "deferred_total_by_agent": deferred_total_by_agent,
+            "review_claim_accounting_by_agent": review_claim_accounting_by_agent,
+            "review_claimable_file_count_by_agent": (
+                review_claimable_file_count_by_agent
+            ),
             "semantics": "generated_scope_not_proof_of_model_read",
         }
     except Exception as err:  # noqa: BLE001 — best-effort by design

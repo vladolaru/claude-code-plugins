@@ -32,7 +32,7 @@ try:
     from .atomic_io import atomic_write_json, atomic_write_text
     from .reviewer_lifecycle import close_review_intake
     from .reviewer_names import derive_reviewer_name
-    from .briefings import _render_review_coverage_section
+    from .briefings import _render_review_accounting_section
     from .reconciliation_context import strip_severity_floor_markers
     from . import critic_adjustments
     from . import manifest_sections
@@ -63,7 +63,7 @@ except ImportError:
     from review.atomic_io import atomic_write_json, atomic_write_text
     from review.reviewer_lifecycle import close_review_intake
     from review.reviewer_names import derive_reviewer_name
-    from review.briefings import _render_review_coverage_section
+    from review.briefings import _render_review_accounting_section
     from review.reconciliation_context import strip_severity_floor_markers
     from review import critic_adjustments
     from review import manifest_sections
@@ -503,7 +503,7 @@ def assemble_review_record(output_dir: str, state: dict) -> tuple:
 
     Everything here is composed from renderers that already exist:
     ``render_review_body`` for the findings/clearances body and
-    ``_render_review_coverage_section`` for coverage, both byte-identical
+    ``_render_review_accounting_section`` for accounting, both byte-identical
     to what their own callers produce. The record's own new prose is three
     things — its header, the run notes, and the closing verdict line.
 
@@ -550,13 +550,11 @@ def assemble_review_record(output_dir: str, state: dict) -> tuple:
             "",
             _render_run_notes(state),
         ]
-        coverage = _render_review_coverage_section(
-            state.get("inline_coverage_gaps"),
-            state.get("inline_coverage_claims"),
-            state.get("inline_coverage_unscoped"),
+        accounting = _render_review_accounting_section(
+            state.get("review_accounting")
         )
-        if coverage:
-            sections.extend(["", coverage])
+        if accounting:
+            sections.extend(["", accounting])
         sections.extend([
             "",
             "---",
@@ -1457,44 +1455,21 @@ def _orchestrate_step_9(mode, config, state, context, output_dir):
     # binary, dotfile) stops being invisible — it appears in none of the
     # per-agent buckets by construction.
     recon_json_path = os.path.join(output_dir, "reconciliation-context.json")
-    gaps = {}
-    claims = {}
-    # None, not [] — unmeasured until a coverage payload says otherwise.
-    unscoped = None
+    review_accounting = None
     if os.path.isfile(recon_json_path):
         try:
             with open(recon_json_path) as f:
                 recon = json.load(f)
-            coverage = (
-                recon.get("inline_coverage") or {}
+            accounting = (
+                recon.get("review_accounting")
                 if isinstance(recon, dict)
-                else {}
+                else None
             )
-            if isinstance(coverage, dict):
-                raw_gaps = coverage.get("files_never_inline") or {}
-                if isinstance(raw_gaps, dict):
-                    gaps = raw_gaps
-                raw_claims = coverage.get("files_deferred_reviewed") or {}
-                if isinstance(raw_claims, dict):
-                    claims = raw_claims
-                # `files_unscoped: null` is a run whose builder had no
-                # changed-file list to subtract from — unmeasured. It is
-                # carried through as None rather than flattened to [],
-                # because everything downstream that reads this state (and
-                # the JSON artifact it came from) must be able to tell
-                # "nothing was measured" from "measured, nothing found".
-                # Both render no section today; only one of them may ever
-                # be reported as a clean coverage result.
-                raw_unscoped = coverage.get("files_unscoped")
-                if isinstance(raw_unscoped, list):
-                    unscoped = [f for f in raw_unscoped if isinstance(f, str)]
+            if isinstance(accounting, dict):
+                review_accounting = accounting
         except (json.JSONDecodeError, OSError):
-            gaps = {}
-            claims = {}
-            unscoped = None
-    state["inline_coverage_gaps"] = gaps
-    state["inline_coverage_claims"] = claims
-    state["inline_coverage_unscoped"] = unscoped
+            review_accounting = None
+    state["review_accounting"] = review_accounting
 
     # Assemble the record LAST, once the coverage populations are in state:
     # the record carries them, and assembling before they were loaded would

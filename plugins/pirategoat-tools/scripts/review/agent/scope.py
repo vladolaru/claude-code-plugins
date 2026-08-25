@@ -1565,7 +1565,7 @@ def build_scope(args: argparse.Namespace) -> dict:
         # coverage aggregation subtracts the union of the sidecar's file
         # lists from the changed set to find files no reviewer's domain
         # matched, and under --base-ref-only/--summary the three lists it
-        # had (diffed, budget-deferred, list-only) are all empty because no
+        # had (inline-diff, review-claimable, list-only) are all empty because no
         # diff was ever fetched: every file such an agent owned looked
         # unowned. This field is what those agents contribute.
         "in_scope_files": sorted(domain_matched),
@@ -1705,7 +1705,7 @@ def format_text_output(scope: dict) -> str:
             )
             lines.append(
                 "remains. Claim every NOT DIFFED file you actually read; "
-                "the builder derives the rest as unreviewed."
+                "the builder derives the rest as unclaimed review files."
             )
             # Sort budget-exceeded by size descending so agent sees biggest changes first
             budget_sorted = sorted(
@@ -1762,33 +1762,36 @@ def format_json_output(scope: dict) -> str:
 
 def write_scope_summary(scope: dict, path: str) -> None:
     """Persist a compact machine-readable scope summary for run-level
-    coverage aggregation (reconciliation_context.aggregate_inline_coverage).
+    reviewed-file accounting.
 
     Fail-open: a summary-write failure must never break scope output.
     """
-    # Raw diffstat lines over the reviewer's in-scope workload: inline FILES
-    # plus deferred budget-exceeded files, excluding list-only stats. This is
+    inline_diff_files = sorted(scope.get("diffs", {}) or {})
+    review_claimable_files = list(
+        dict.fromkeys(scope.get("budget_exceeded_files", []) or [])
+    )
+    list_only_files = list(dict.fromkeys(scope.get("list_only_files", []) or []))
+    in_scope_review_files = list(
+        dict.fromkeys([*inline_diff_files, *review_claimable_files])
+    )
+
+    # Raw diffstat lines over the reviewer's accounting workload: inline
+    # files plus review-claimable files, excluding list-only stats. This is
     # the budget-sizing number (bootstrap's tool-call budget input) — NOT
     # total_diff_lines, which counts semantically filtered inline lines only.
     diffstat = scope.get("diffstat", {}) or {}
-    in_scope_files = list(scope.get("files", []) or []) + list(
-        scope.get("budget_exceeded_files", []) or []
-    )
     in_scope_stat_lines = sum(
-        sum(diffstat.get(f, (0, 0))) for f in in_scope_files
+        sum(diffstat.get(f, (0, 0))) for f in in_scope_review_files
     )
     summary = {
-        "schema": 1,
+        "schema": 2,
         "domain": scope.get("domain"),
         "range": scope.get("range"),
         "status": scope.get("status"),
-        "files_with_diffs": sorted(scope.get("diffs", {}) or {}),
-        "budget_exceeded_files": list(scope.get("budget_exceeded_files", []) or []),
-        "list_only_files": list(scope.get("list_only_files", []) or []),
-        # Written in every mode, so run-level coverage can treat the union
-        # of these lists as one uniform "reached some reviewer's scope"
-        # population — see reconciliation_context._SIDECAR_FILE_LISTS.
-        "in_scope_files": list(scope.get("in_scope_files", []) or []),
+        "inline_diff_files": inline_diff_files,
+        "review_claimable_files": review_claimable_files,
+        "list_only_files": list_only_files,
+        "in_scope_review_files": in_scope_review_files,
         "total_diff_lines": scope.get("total_diff_lines", 0),
         "in_scope_stat_lines": in_scope_stat_lines,
         "budget_max": scope.get("budget_max"),

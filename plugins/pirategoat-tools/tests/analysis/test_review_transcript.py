@@ -1151,7 +1151,7 @@ class TestAnalyzeSubagent:
             output_dir=str(output_dir),
             pr_number="42",
             reviewer_name="security",
-            not_diffed_count=0,
+            review_claimable_count=0,
             has_php=False,
             review_budget=80,
         )

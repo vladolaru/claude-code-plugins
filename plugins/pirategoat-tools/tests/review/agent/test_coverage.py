@@ -1,4 +1,4 @@
-"""Tests for authoritative deferred-coverage derivation."""
+"""Tests for authoritative reviewed-file accounting derivation."""
 
 import sys
 from pathlib import Path
@@ -9,75 +9,147 @@ TESTS_DIR = Path(__file__).resolve().parent.parent.parent
 SCRIPTS_DIR = TESTS_DIR.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from review.agent.coverage import CoverageError, derive_deferred_coverage
+from review.agent.coverage import (
+    ReviewAccountingError,
+    derive_review_accounting,
+)
 
 
-def _sidecar(**overrides):
+def _accounting_input(**overrides):
     payload = {
-        "schema": 2,
+        "schema": 3,
         "agent_name": "code-reviewer",
-        "diffed_count": 2,
-        "in_scope_count": 5,
-        "deferred_files": ["src/b.py", "src/c.py", "src/d.py"],
+        "reviewer": "code",
+        "review_claimable_files": ["src/b.py", "src/c.py", "src/d.py"],
+        "inline_diff_file_count": 2,
+        "in_scope_review_file_count": 5,
+        "review_budget": 15,
     }
     payload.update(overrides)
     return payload
 
 
-def test_derives_gaps_and_counts_from_positive_claims():
-    coverage = derive_deferred_coverage(
-        _sidecar(), ["./src/d.py", "src/b.py", "src/b.py"]
+def test_derives_review_accounting_from_normalized_claims_in_authoritative_order():
+    accounting = derive_review_accounting(
+        _accounting_input(), ["./src/d.py", "src/b.py", "src/b.py"]
     )
 
-    assert coverage.deferred_reviewed == ("src/b.py", "src/d.py")
-    assert coverage.unreviewed == ("src/c.py",)
-    assert coverage.files_reviewed == 4
-    assert coverage.in_scope_count == 5
+    assert accounting.agent_name == "code-reviewer"
+    assert accounting.reviewer == "code"
+    assert accounting.review_claimable_files == (
+        "src/b.py",
+        "src/c.py",
+        "src/d.py",
+    )
+    assert accounting.reviewed_file_claims == ("src/b.py", "src/d.py")
+    assert accounting.unclaimed_review_files == ("src/c.py",)
+    assert accounting.inline_diff_file_count == 2
+    assert accounting.review_accounted_file_count == 4
+    assert accounting.in_scope_review_file_count == 5
 
 
-def test_rejects_a_claim_outside_the_authoritative_deferred_set():
-    with pytest.raises(CoverageError, match="not deferred files"):
-        derive_deferred_coverage(_sidecar(deferred_files=["src/b.py"], diffed_count=1, in_scope_count=2), ["src/other.py"])
+def test_rejects_claim_outside_review_claimable_files_as_one_batch():
+    with pytest.raises(
+        ReviewAccountingError,
+        match=r"not review-claimable.*src/other.py.*src/second.py",
+    ):
+        derive_review_accounting(
+            _accounting_input(
+                review_claimable_files=["src/b.py"],
+                inline_diff_file_count=1,
+                in_scope_review_file_count=2,
+            ),
+            ["src/other.py", "src/second.py"],
+        )
 
 
-def test_uses_the_sidecar_order_and_preserves_the_exact_dispatch_identity():
-    coverage = derive_deferred_coverage(
-        _sidecar(agent_name="repo-renewals-reviewer"), ["src/d.py", "src/b.py"]
+def test_empty_claimable_set_keeps_all_inline_files_accounted_for():
+    accounting = derive_review_accounting(
+        _accounting_input(
+            review_claimable_files=[],
+            inline_diff_file_count=3,
+            in_scope_review_file_count=3,
+        ),
+        [],
     )
 
-    assert coverage.agent_name == "repo-renewals-reviewer"
-    assert coverage.deferred_reviewed == ("src/b.py", "src/d.py")
-    assert coverage.unreviewed == ("src/c.py",)
+    assert accounting.reviewed_file_claims == ()
+    assert accounting.unclaimed_review_files == ()
+    assert accounting.review_accounted_file_count == 3
 
 
-def test_empty_deferred_set_keeps_all_inline_coverage():
-    coverage = derive_deferred_coverage(
-        _sidecar(deferred_files=[], diffed_count=3, in_scope_count=3), []
-    )
-
-    assert coverage.deferred_reviewed == ()
-    assert coverage.unreviewed == ()
-    assert coverage.files_reviewed == 3
+def test_normalizes_authoritative_paths_before_rejecting_duplicates():
+    with pytest.raises(ReviewAccountingError, match="must not contain duplicates"):
+        derive_review_accounting(
+            _accounting_input(
+                review_claimable_files=["src/b.py", "./src/b.py"],
+                inline_diff_file_count=1,
+                in_scope_review_file_count=3,
+            ),
+            [],
+        )
 
 
 @pytest.mark.parametrize(
-    "sidecar",
+    "payload, message",
     [
-        {},
-        _sidecar(schema=1),
-        _sidecar(agent_name=""),
-        _sidecar(deferred_files=["src/b.py", 3]),
-        _sidecar(diffed_count=-1),
-        _sidecar(in_scope_count=True),
-        _sidecar(diffed_count=1, in_scope_count=5),
+        ({}, "schema"),
+        (_accounting_input(schema=2), "schema"),
+        (_accounting_input(agent_name=""), "agent_name"),
+        (_accounting_input(reviewer="code-reviewer"), "identity"),
+        (
+            _accounting_input(
+                agent_name="repo-renewals-reviewer", reviewer="repo-renewals"
+            ),
+            None,
+        ),
+        (_accounting_input(review_claimable_files=["src/b.py", 3]), "string-only"),
+        (_accounting_input(inline_diff_file_count=-1), "inline_diff_file_count"),
+        (
+            _accounting_input(in_scope_review_file_count=True),
+            "in_scope_review_file_count",
+        ),
+        (_accounting_input(review_budget=True), "review_budget"),
+        (
+            _accounting_input(
+                inline_diff_file_count=1,
+                in_scope_review_file_count=5,
+            ),
+            "incoherent",
+        ),
     ],
 )
-def test_rejects_missing_or_malformed_sidecars(sidecar):
-    with pytest.raises(CoverageError):
-        derive_deferred_coverage(sidecar, [])
+def test_validates_schema_identity_paths_and_conserved_counts(payload, message):
+    if message is None:
+        accounting = derive_review_accounting(payload, [])
+        assert accounting.agent_name == "repo-renewals-reviewer"
+        assert accounting.reviewer == "repo-renewals"
+        return
+
+    with pytest.raises(ReviewAccountingError, match=message):
+        derive_review_accounting(payload, [])
 
 
-@pytest.mark.parametrize("claim", ["/etc/passwd", "../src/b.py", "C:\\src\\b.py", "."])
-def test_rejects_claims_outside_the_repository_relative_path_grammar(claim):
-    with pytest.raises(CoverageError):
-        derive_deferred_coverage(_sidecar(), [claim])
+@pytest.mark.parametrize(
+    "path",
+    ["/etc/passwd", "../src/b.py", "src/../b.py", "C:\\src\\b.py", "."],
+)
+@pytest.mark.parametrize("location", ["review_claimable_files", "claim"])
+def test_rejects_paths_outside_repository_relative_grammar(path, location):
+    payload = _accounting_input()
+    claims = []
+    if location == "review_claimable_files":
+        payload["review_claimable_files"] = [path]
+        payload["in_scope_review_file_count"] = 3
+    else:
+        claims = [path]
+
+    with pytest.raises(ReviewAccountingError):
+        derive_review_accounting(payload, claims)
+
+
+def test_rejects_non_object_input_and_non_iterable_claims():
+    with pytest.raises(ReviewAccountingError, match="must be an object"):
+        derive_review_accounting([], [])
+    with pytest.raises(ReviewAccountingError, match="claims must be iterable"):
+        derive_review_accounting(_accounting_input(), None)

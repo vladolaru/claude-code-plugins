@@ -56,13 +56,15 @@ def _finish_agent(tmp_path, name, issues=None, verdict="APPROVE"):
     }))
 
 
-def _write_sidecar(tmp_path, reviewer, agent_name, deferred_files):
-    (tmp_path / f"{reviewer}-deferred-files.json").write_text(json.dumps({
-        "schema": 2,
+def _write_accounting_input(tmp_path, reviewer, agent_name, claimable_files):
+    (tmp_path / f"{reviewer}-review-accounting-input.json").write_text(json.dumps({
+        "schema": 3,
         "agent_name": agent_name,
-        "deferred_files": deferred_files,
-        "diffed_count": 1,
-        "in_scope_count": 1 + len(deferred_files),
+        "reviewer": reviewer,
+        "review_claimable_files": claimable_files,
+        "review_budget": 15,
+        "inline_diff_file_count": 1,
+        "in_scope_review_file_count": 1 + len(claimable_files),
     }))
 
 
@@ -191,7 +193,7 @@ class TestCheckStatus:
             {"name": "a11y-reviewer", "status": "DISPATCH"},
         ])
         _start_agent(tmp_path, "a11y-reviewer")
-        _write_sidecar(
+        _write_accounting_input(
             tmp_path, "a11y", "a11y-reviewer", ["src/late.ts"]
         )
         builder = ReviewOutputBuilder(pr_id="13", reviewer="a11y")
@@ -205,7 +207,7 @@ class TestCheckStatus:
             first["candidate_digest"]
         )
 
-        builder.add_deferred_reviewed("src/late.ts")
+        builder.claim_files_reviewed("src/late.ts")
         second = builder.save(str(tmp_path))
         second_status = mod.check_status(str(tmp_path))
         assert second_status["all_done"] is False
@@ -225,7 +227,7 @@ class TestCheckStatus:
         findings = load_agent_findings(
             str(tmp_path), dispatched_agents=["a11y-reviewer"]
         )
-        assert findings["a11y-review"]["deferred_reviewed"] == [
+        assert findings["a11y-review"]["reviewed_file_claims"] == [
             "src/late.ts"
         ]
 

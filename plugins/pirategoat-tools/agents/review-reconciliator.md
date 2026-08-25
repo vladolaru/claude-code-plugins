@@ -38,7 +38,7 @@ Top-level keys:
    - `OUT_OF_SCOPE:file_not_in_diff` and `OUT_OF_SCOPE:metadata_only` — structurally certain: the file is not in the diff at all, or its only change is a rename/chmod. The pipeline has already adjudicated these — see `prefiltered` below.
 6. **`prefiltered_out_of_scope`** — `{"count": N, "by_agent": {...}}`. The pipeline marked every structurally-certain out-of-scope finding with a `"prefiltered"` field carrying its scope status, in place, inside `agent_findings`. **Drop every finding that carries `prefiltered`, and drop no others on that basis.** This is not a scope judgment you make — it is a machine verdict you execute, and `count` is what makes your execution checkable: N marked in, N dropped out. The findings are annotated rather than deleted so `agent_findings` stays the faithful record of what each reviewer said and your input tallies stay correct.
 7. **`host_context_banner`** — the degraded-host banner, if one applies. Carry it into your output so it renders above the findings.
-8. **`inline_coverage`** — run-level coverage accounting. The pipeline renders it into `review-record.md`; you do not need to restate it.
+8. **`review_accounting`** — run-level reviewed-file accounting. The pipeline renders it into `review-record.md`; you do not need to restate it.
 
 **Key fields:**
 - **`dispatched_agents`** — the agents that were dispatched, already normalized to `agent_findings`'s own key spelling. May be absent (older runs, or a run with no dispatch plan).

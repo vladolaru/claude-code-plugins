@@ -23,7 +23,7 @@ from review import (
     dependency_refresh,
     reviewer_lifecycle,
 )
-from review.agent.coverage import derive_deferred_coverage
+from review.agent.coverage import derive_review_accounting
 from review.atomic_io import atomic_write_json
 from review.critic_adjustments import write_findings
 from review.telemetry import ReviewTelemetry
@@ -79,18 +79,22 @@ def _write_critic_snapshot(output_dir, adjustments, *, validate=True):
     return document
 
 
-def _write_required_sidecar(output_dir, reviewer, agent_name=None):
-    Path(output_dir, f"{reviewer}-deferred-files.json").write_text(json.dumps({
-        "schema": 2,
+def _write_required_accounting_input(output_dir, reviewer, agent_name=None):
+    Path(
+        output_dir, f"{reviewer}-review-accounting-input.json"
+    ).write_text(json.dumps({
+        "schema": 3,
         "agent_name": agent_name or f"{reviewer}-reviewer",
-        "deferred_files": [],
-        "diffed_count": 1,
-        "in_scope_count": 1,
+        "reviewer": reviewer,
+        "review_claimable_files": [],
+        "review_budget": 15,
+        "inline_diff_file_count": 1,
+        "in_scope_review_file_count": 1,
     }))
 
 
 def _save_and_finalize(output_dir, reviewer, agent_name=None):
-    _write_required_sidecar(output_dir, reviewer, agent_name)
+    _write_required_accounting_input(output_dir, reviewer, agent_name)
     saved = _output_mod.ReviewOutputBuilder(
         pr_id="42", reviewer=reviewer
     ).save(str(output_dir))
@@ -127,7 +131,7 @@ def _review_json(reviewer):
         "pr_id": "42",
         "reviewer": reviewer,
         "timestamp": "2026-08-10T12:00:00",
-        "schema": 1,
+        "schema": 2,
         "verdict": "approve",
         "summary": {
             "total_issues": 0,
@@ -140,11 +144,16 @@ def _review_json(reviewer):
             },
         },
         "issues": [],
+        "review_claimable_files": [],
+        "reviewed_file_claims": [],
+        "unclaimed_review_files": [],
+        "inline_diff_file_count": 1,
+        "review_accounted_file_count": 1,
+        "in_scope_review_file_count": 1,
         "observations": None,
         "recommendations": None,
         "positive_observations": None,
         "meta": {
-            "files_reviewed": 1,
             "review_duration_ms": 10,
             "confidence_score": 1.0,
             "tool_results_used": None,
@@ -175,31 +184,33 @@ class TestReviewerCandidateFinalizationLifecycle:
         (output_dir / "code-reviewer.started").write_text(
             datetime.now(timezone.utc).isoformat()
         )
-        sidecar = {
-            "schema": 2,
+        accounting_input = {
+            "schema": 3,
             "agent_name": "code-reviewer",
-            "deferred_files": [
+            "reviewer": "code",
+            "review_claimable_files": [
                 "deferred/read.py",
                 "deferred/unread.py",
             ],
-            "diffed_count": 1,
-            "in_scope_count": 3,
+            "review_budget": 15,
+            "inline_diff_file_count": 1,
+            "in_scope_review_file_count": 3,
         }
-        (output_dir / "code-deferred-files.json").write_text(
-            json.dumps(sidecar)
+        (output_dir / "code-review-accounting-input.json").write_text(
+            json.dumps(accounting_input)
         )
         (output_dir / "code-reviewer-scope-summary.json").write_text(
             json.dumps({
-                "schema": 1,
+                "schema": 2,
                 "domain": "code",
                 "status": "OK",
-                "files_with_diffs": ["second.txt"],
-                "budget_exceeded_files": [
+                "inline_diff_files": ["second.txt"],
+                "review_claimable_files": [
                     "deferred/read.py",
                     "deferred/unread.py",
                 ],
                 "list_only_files": [],
-                "in_scope_files": [
+                "in_scope_review_files": [
                     "second.txt",
                     "deferred/read.py",
                     "deferred/unread.py",
@@ -227,7 +238,7 @@ class TestReviewerCandidateFinalizationLifecycle:
         first_bytes = Path(first["candidate"]).read_bytes()
         assert agents_status.check_status(str(output_dir))["all_done"] is False
 
-        builder.add_deferred_reviewed("deferred/read.py")
+        builder.claim_files_reviewed("deferred/read.py")
         last = builder.save(str(output_dir))
         last_bytes = Path(last["candidate"]).read_bytes()
         assert last["candidate_digest"] != first["candidate_digest"]
@@ -275,8 +286,8 @@ class TestReviewerCandidateFinalizationLifecycle:
         context = json.loads(
             (output_dir / "reconciliation-context.json").read_text()
         )
-        coverage = derive_deferred_coverage(
-            sidecar, ["deferred/read.py"]
+        accounting = derive_review_accounting(
+            accounting_input, ["deferred/read.py"]
         )
         events = [
             json.loads(line)
@@ -294,15 +305,19 @@ class TestReviewerCandidateFinalizationLifecycle:
         assert len(saves) == 2
         assert len(completions) == 1
         assert completions[0] > saves[-1]
-        assert canonical["deferred_reviewed"] == list(
-            coverage.deferred_reviewed
+        assert canonical["reviewed_file_claims"] == list(
+            accounting.reviewed_file_claims
         )
-        assert canonical["unreviewed"] == list(coverage.unreviewed)
-        assert canonical["meta"]["files_reviewed"] == coverage.files_reviewed
-        assert context["inline_coverage"]["files_deferred_reviewed"] == {
+        assert canonical["unclaimed_review_files"] == list(
+            accounting.unclaimed_review_files
+        )
+        assert canonical["review_accounted_file_count"] == (
+            accounting.review_accounted_file_count
+        )
+        assert context["review_accounting"]["agents_claiming_review_by_file"] == {
             "deferred/read.py": ["code-reviewer"],
         }
-        assert context["inline_coverage"]["files_never_inline"] == {
+        assert context["review_accounting"]["agents_with_unclaimed_review_by_file"] == {
             "deferred/unread.py": ["code-reviewer"],
         }
         assert (output_dir / "code-review.md").read_text() == (
@@ -314,14 +329,6 @@ class TestReviewerCandidateFinalizationLifecycle:
         )
         assert list(output_dir.glob("*-review.candidate.json")) == []
         assert list(output_dir.glob("*.tmp")) == []
-        serialized = json.dumps({
-            "canonical": canonical,
-            "context": context,
-            "manifest": manifest,
-        })
-        assert "unreviewed_autofilled" not in serialized
-        assert "files_declared_unreviewed" not in serialized
-        assert "files_autofilled_unreviewed" not in serialized
 
 
 class TestCriticAdjudicationLifecycle:
@@ -2324,23 +2331,27 @@ class TestStep9CoverageStateLoading:
         mod._orchestrate_step(9, "full", {}, state, {}, str(tmp_path))
         return state
 
-    def test_all_three_populations_reach_state(self, mod, tmp_path):
+    def test_review_accounting_reaches_state_intact(self, mod, tmp_path):
         gaps = {"src/starved.php": ["code-reviewer"]}
         claims = {"src/big_module.py": ["security-reviewer"]}
-        state = self._load(mod, tmp_path, {"inline_coverage": {
-            "files_never_inline": gaps,
-            "files_deferred_reviewed": claims,
-            "files_unscoped": ["package-lock.json", 7],
-        }})
+        accounting = {
+            "scope_reporting_agent_count": 2,
+            "agents_receiving_inline_diff_by_file": {
+                "src/a.py": ["code-reviewer"]
+            },
+            "agents_claiming_review_by_file": claims,
+            "agents_with_unclaimed_review_by_file": gaps,
+            "unscoped_files": ["package-lock.json"],
+        }
+        state = self._load(
+            mod, tmp_path, {"schema": 3, "review_accounting": accounting}
+        )
 
-        assert state["inline_coverage_gaps"] == gaps
-        assert state["inline_coverage_claims"] == claims
-        # Non-string entries are dropped, not carried into a path list.
-        assert state["inline_coverage_unscoped"] == ["package-lock.json"]
+        assert state["review_accounting"] == accounting
 
     @pytest.mark.parametrize(
         "payload",
-        [None, {"inline_coverage": ["malformed"]}, {"not_coverage": 1}],
+        [None, {"review_accounting": ["malformed"]}, {"not_accounting": 1}],
         ids=["missing-context", "malformed-coverage", "no-coverage-key"],
     )
     def test_stale_populations_are_cleared_not_carried(
@@ -2349,46 +2360,56 @@ class TestStep9CoverageStateLoading:
         """A re-entered step 9 whose context is gone or malformed must not
         keep the previous run's gaps standing — the record would then
         report a coverage problem this run never measured."""
-        stale = {
-            "inline_coverage_gaps": {"src/stale.php": ["code-reviewer"]},
-            "inline_coverage_claims": {"src/stale.py": ["security-reviewer"]},
-        }
+        stale = {"review_accounting": {
+            "agents_with_unclaimed_review_by_file": {
+                "src/stale.php": ["code-reviewer"]
+            }
+        }}
         state = self._load(mod, tmp_path, payload, state=stale)
 
-        assert state["inline_coverage_gaps"] == {}
-        assert state["inline_coverage_claims"] == {}
+        assert state["review_accounting"] is None
 
     def test_unmeasured_unscoped_is_none_not_empty(self, mod, tmp_path):
-        """`files_unscoped: null` is "not measured", not "none found" —
+        """`unscoped_files: null` is "not measured", not "none found" —
         only the second may ever render as a clean coverage result."""
         state = self._load(
             mod, tmp_path,
-            {"inline_coverage": {
-                "files_never_inline": {},
-                "files_deferred_reviewed": {},
-                "files_unscoped": None,
+            {"review_accounting": {
+                "scope_reporting_agent_count": 1,
+                "agents_receiving_inline_diff_by_file": {},
+                "agents_claiming_review_by_file": {},
+                "agents_with_unclaimed_review_by_file": {},
+                "unscoped_files": None,
             }},
-            state={"inline_coverage_unscoped": ["stale.py"]},
+            state={"review_accounting": {"unscoped_files": ["stale.py"]}},
         )
-        assert state["inline_coverage_unscoped"] is None
+        assert state["review_accounting"]["unscoped_files"] is None
 
     def test_measured_empty_unscoped_is_a_list(self, mod, tmp_path):
-        state = self._load(mod, tmp_path, {"inline_coverage": {
-            "files_never_inline": {},
-            "files_deferred_reviewed": {},
-            "files_unscoped": [],
+        state = self._load(mod, tmp_path, {"review_accounting": {
+            "scope_reporting_agent_count": 1,
+            "agents_receiving_inline_diff_by_file": {},
+            "agents_claiming_review_by_file": {},
+            "agents_with_unclaimed_review_by_file": {},
+            "unscoped_files": [],
         }})
-        assert state["inline_coverage_unscoped"] == []
+        assert state["review_accounting"]["unscoped_files"] == []
 
     def test_the_loaded_populations_reach_the_record(self, mod, tmp_path):
         """The whole point of loading them: the assembler renders them."""
         (tmp_path / "review-findings.json").write_text(
             json.dumps(_review_json("review-reconciliator"))
         )
-        self._load(mod, tmp_path, {"inline_coverage": {
-            "files_never_inline": {"src/starved.php": ["code-reviewer"]},
-            "files_deferred_reviewed": {"src/big.py": ["security-reviewer"]},
-            "files_unscoped": ["package-lock.json"],
+        self._load(mod, tmp_path, {"review_accounting": {
+            "scope_reporting_agent_count": 1,
+            "agents_receiving_inline_diff_by_file": {},
+            "agents_with_unclaimed_review_by_file": {
+                "src/starved.php": ["code-reviewer"]
+            },
+            "agents_claiming_review_by_file": {
+                "src/big.py": ["security-reviewer"]
+            },
+            "unscoped_files": ["package-lock.json"],
         }})
 
         record = (tmp_path / "review-record.md").read_text()
@@ -2398,20 +2419,23 @@ class TestStep9CoverageStateLoading:
 
 
 class TestStep9Orchestration:
-    """Step 9 main() loads inline coverage gaps from reconciliation context."""
+    """Step 9 carries review accounting from reconciliation context."""
 
-    def test_step_9_loads_inline_coverage_gaps(self, tmp_path):
+    def test_step_9_loads_review_accounting(self, tmp_path):
         run_pipeline("--step", "1", "--mode", "full",
                    "--output-dir", str(tmp_path), cwd=tmp_path)
-        recon = {
-            "inline_coverage": {
-                "agents_reporting": 2,
-                "files_inline": {"src/a.php": ["code-reviewer"]},
-                "files_never_inline": {
+        accounting = {
+                "scope_reporting_agent_count": 2,
+                "agents_receiving_inline_diff_by_file": {
+                    "src/a.php": ["code-reviewer"]
+                },
+                "agents_claiming_review_by_file": {},
+                "agents_with_unclaimed_review_by_file": {
                     "src/starved.php": ["code-reviewer", "security-reviewer"],
                 },
-            },
+                "unscoped_files": [],
         }
+        recon = {"schema": 3, "review_accounting": accounting}
         (tmp_path / "reconciliation-context.json").write_text(json.dumps(recon))
         (tmp_path / "review-findings.json").write_text(
             json.dumps(_review_json("review-reconciliator"))
@@ -2420,9 +2444,7 @@ class TestStep9Orchestration:
                        "--output-dir", str(tmp_path), cwd=tmp_path)
         assert r.returncode == 0
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
-        assert state.get("inline_coverage_gaps") == {
-            "src/starved.php": ["code-reviewer", "security-reviewer"],
-        }
+        assert state.get("review_accounting") == accounting
         # The record the step assembles carries the measurement. The
         # briefing no longer re-renders it — a second copy is a second
         # thing to paraphrase.
@@ -2436,7 +2458,7 @@ class TestStep9Orchestration:
                        "--output-dir", str(tmp_path), cwd=tmp_path)
         assert r.returncode == 0
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
-        assert state.get("inline_coverage_gaps") == {}
+        assert state.get("review_accounting") is None
 
 
 class TestStep9FindingsMarkdown:

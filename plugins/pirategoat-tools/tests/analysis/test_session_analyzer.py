@@ -54,7 +54,7 @@ def _real_bootstrap_builder_command(tmp_path, *, plugin_version=""):
         output_dir=str(tmp_path),
         pr_number="42",
         reviewer_name="security",
-        not_diffed_count=0,
+        review_claimable_count=0,
         has_php=False,
         plugin_version=plugin_version,
     )
@@ -97,8 +97,13 @@ def _make_review_json(
             "by_severity": severity_counts,
         },
         "issues": issues,
+        "review_claimable_files": [],
+        "reviewed_file_claims": [],
+        "unclaimed_review_files": [],
+        "inline_diff_file_count": 5,
+        "review_accounted_file_count": 5,
+        "in_scope_review_file_count": 5,
         "meta": {
-            "files_reviewed": 5,
             "review_duration_ms": 12000,
             "confidence_score": 0.9,
         },

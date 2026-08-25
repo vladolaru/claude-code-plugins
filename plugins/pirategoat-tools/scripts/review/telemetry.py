@@ -49,57 +49,9 @@ from git_paths import normalize_repo_paths
 
 LOG_DIR = os.path.expanduser("~/.pirategoat-tools/logs/reviews")
 MARKER_FILE = ".telemetry-log-path"
-# Bumped 1 -> 2 alongside review_metrics/contracts.py's
-# _SUPPORTED_MANIFEST_SCHEMA (same lockstep the _OBSERVED_READS_SCHEMA
-# pair follows) when the manifest's `outcome` block gained a verdict-
-# provenance field — see AGENTS.md's Artifact Schemas rule. A manifest
-# written under schema 1 has no such key at all, and readers route anything
-# but the schema they were written against down their existing
-# unsupported path rather than silently reading a field the producer
-# never vouched for.
-#
-# The manifest then gained the top-level `synthesis_agents` section plus
-# its `availability` conjunct (reconciliator/critic lifecycle) WITHOUT a
-# further bump, under the
-# Artifact Schemas rule's carve-out: schema 2 was introduced in 1.114.0
-# and 1.114.0 is still unreleased (the plugin's newest tag is
-# pirategoat-tools/v1.108.0), so no artifact was ever published claiming
-# schema 2 without these keys.
-#
-# The manifest then gained `availability["dependency_refresh"]` and
-# `availability["reviewer_markdown"]` (both sections already existed;
-# only their flags were missing) plus the new top-level
-# `findings_markdown` section and its own flag, again WITHOUT a further
-# bump, under the same still-unreleased carve-out.
-#
-# The `coverage` section then gained `deferred_honesty_by_agent` and
-# `deferred_total_by_agent` (Task 14, backlog #19 — the agent-vs-system
-# NOT DIFFED honesty split), again WITHOUT a further bump under the same
-# carve-out: both keys are optional within `coverage`, so a manifest
-# written before this change simply lacks them (unmeasured), never a
-# manifest claiming schema 2 with a shape schema 2 never had.
-#
-# Reviewer publication then split candidate saves from finalization:
-# `agent_save` is raw diagnostic evidence, while `agent_complete` gained the
-# finalized artifact's SHA-256 digest. No schema bump under the same
-# still-unreleased carve-out. Analysis readers retain compatibility with
-# pre-finalization completion events carrying `resave`.
-#
-# The `outcome` block's verdict-provenance key was then RENAMED
-# `verdict_sync` -> `verdict_source`, again WITHOUT a further bump under
-# the same carve-out. That one is a rename rather than an addition, so it
-# is the sharpest test the carve-out gets: schema 2 was introduced in
-# 1.114.0 and no artifact ever shipped claiming schema 2 with the old
-# spelling, so there is no compatibility boundary to publish. The rename
-# followed the field's meaning — step 11 stopped SYNCING a transcribed
-# verdict into the findings ledger and started DERIVING the published
-# verdict from it, so the block now records which derivation branch
-# produced the verdict rather than how a write back onto the ledger went.
-#
-# Bumping to 3 here would publish a compatibility boundary between two
-# shapes that never both existed in the wild. Revisit the moment 1.114.0
-# is tagged: the next manifest key after that is a real 2 -> 3 bump.
-EVENT_SCHEMA = 2
+# Schema 3 makes the reviewed-file accounting projection mandatory and is
+# consumed in lockstep by review_metrics/contracts.py.
+EVENT_SCHEMA = 3
 # Optional manifest sections whose `availability["<name>"]` boolean shares
 # the section's own top-level key. The analysis consumer's flag/payload
 # consistency pin (`review_metrics` tests) parametrizes over this tuple —

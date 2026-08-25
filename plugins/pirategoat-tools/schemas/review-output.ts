@@ -130,15 +130,14 @@ export interface ReviewOutput {
     // Issues
     issues: Issue[]; // Findings recorded by the producer, possibly carrying a critic_adjustment (see Issue above) if a critic round has touched them.
 
-    // Builder-derived complement of the authoritative deferred sidecar and
-    // validated positive claims (null when the complement is empty).
-    // Canonical repo-relative paths; never affects the verdict.
-    unreviewed: string[] | null;
-
-    // Validated positive deferred-review claims — ALWAYS present (never null;
-    // [] means "claimed nothing"). A claim is a statement, not proof of read,
-    // and never affects the verdict.
-    deferred_reviewed: string[];
+    // Canonical reviewed-file accounting derived from the system-authored
+    // accounting input and the reviewer's validated positive claims.
+    review_claimable_files: string[];
+    reviewed_file_claims: string[];
+    unclaimed_review_files: string[];
+    inline_diff_file_count: number;
+    review_accounted_file_count: number;
+    in_scope_review_file_count: number;
 
     // Recommendations (optional)
     recommendations?: {
@@ -185,9 +184,6 @@ export interface ReviewOutput {
 
     // Metadata
     meta: {
-        // Derived by the builder as inline files plus validated positive
-        // deferred-review claims. Reviewers never state this count.
-        files_reviewed: number;
         // Milliseconds from this actor's dispatch marker to serialization.
         // Null when no marker was found (hand-rolled builder, standalone
         // use, unreadable stamp) — the builder has no clock of its own that

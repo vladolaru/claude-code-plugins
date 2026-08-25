@@ -55,14 +55,18 @@ def _make_valid_json(tmp_dir: str, reviewer: str = "security") -> str:
         recommendation="Use prepared statements",
         line=42,
     )
-    sidecar = os.path.join(tmp_dir, f"{reviewer}-deferred-files.json")
-    with open(sidecar, "w") as f:
+    accounting_input = os.path.join(
+        tmp_dir, f"{reviewer}-review-accounting-input.json"
+    )
+    with open(accounting_input, "w") as f:
         json.dump({
-            "schema": 2,
+            "schema": 3,
             "agent_name": f"{reviewer}-reviewer",
-            "deferred_files": [],
-            "diffed_count": 3,
-            "in_scope_count": 3,
+            "reviewer": reviewer,
+            "review_claimable_files": [],
+            "review_budget": 15,
+            "inline_diff_file_count": 3,
+            "in_scope_review_file_count": 3,
         }, f)
     candidate = builder.save(tmp_dir)
     finalize_candidate(tmp_dir, reviewer, candidate["candidate_digest"])

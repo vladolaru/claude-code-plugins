@@ -200,7 +200,7 @@ def test_build_output_includes_host_section_when_provided():
         scope_output="=== REVIEW SCOPE ===\n(empty)",
         exploration_scope=None, output_dir="/tmp",
         pr_number=None, reviewer_name="test",
-        not_diffed_count=0,
+        review_claimable_count=0,
         has_php=False,
         host_context=manifest,
     )
@@ -216,7 +216,7 @@ def test_build_output_omits_host_section_when_none():
         scope_output="=== REVIEW SCOPE ===\n(empty)",
         exploration_scope=None, output_dir="/tmp",
         pr_number=None, reviewer_name="test",
-        not_diffed_count=0,
+        review_claimable_count=0,
         has_php=False,
         host_context=None,
     )

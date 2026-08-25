@@ -22,14 +22,16 @@ from review.reviewer_lifecycle import close_review_intake
 from review.telemetry import ReviewTelemetry
 
 
-def _write_sidecar(output_dir, reviewer="code", agent_name=None):
-    Path(output_dir, f"{reviewer}-deferred-files.json").write_text(
+def _write_accounting_input(output_dir, reviewer="code", agent_name=None):
+    Path(output_dir, f"{reviewer}-review-accounting-input.json").write_text(
         json.dumps({
-            "schema": 2,
+            "schema": 3,
             "agent_name": agent_name or f"{reviewer}-reviewer",
-            "deferred_files": ["src/deferred.py"],
-            "diffed_count": 1,
-            "in_scope_count": 2,
+            "reviewer": reviewer,
+            "review_claimable_files": ["src/claimable.py"],
+            "review_budget": 15,
+            "inline_diff_file_count": 1,
+            "in_scope_review_file_count": 2,
         })
     )
 
@@ -68,7 +70,7 @@ def _edit_candidate(output_dir, edit):
 
 class TestCandidatePublication:
     def test_save_is_candidate_until_explicit_finalize(self, tmp_path):
-        _write_sidecar(tmp_path)
+        _write_accounting_input(tmp_path)
 
         result = _builder().save(str(tmp_path))
 
@@ -84,7 +86,7 @@ class TestCandidatePublication:
         assert not (tmp_path / "code-review.candidate.json").exists()
 
     def test_second_save_replaces_candidate_and_changes_digest(self, tmp_path):
-        _write_sidecar(tmp_path)
+        _write_accounting_input(tmp_path)
         first = _builder(issue_count=0).save(str(tmp_path))
         first_bytes = (tmp_path / "code-review.candidate.json").read_bytes()
 
@@ -97,7 +99,7 @@ class TestCandidatePublication:
         assert json.loads(second_bytes)["summary"]["total_issues"] == 1
 
     def test_digest_mismatch_never_publishes_an_overlapping_save(self, tmp_path):
-        _write_sidecar(tmp_path)
+        _write_accounting_input(tmp_path)
         observed = _builder(issue_count=0).save(str(tmp_path))
         latest = _builder(issue_count=1).save(str(tmp_path))
 
@@ -113,7 +115,7 @@ class TestCandidatePublication:
     def test_save_after_finalization_is_rejected_without_mutating_canonical(
         self, tmp_path
     ):
-        _write_sidecar(tmp_path)
+        _write_accounting_input(tmp_path)
         saved = _builder().save(str(tmp_path))
         finalize_candidate(str(tmp_path), "code", saved["candidate_digest"])
         canonical = tmp_path / "code-review.json"
@@ -126,7 +128,7 @@ class TestCandidatePublication:
         assert not (tmp_path / "code-review.candidate.json").exists()
 
     def test_manually_edited_candidate_is_rejected_before_publication(self, tmp_path):
-        _write_sidecar(tmp_path)
+        _write_accounting_input(tmp_path)
         result = _builder().save(str(tmp_path))
         candidate = tmp_path / "code-review.candidate.json"
         data = json.loads(candidate.read_text())
@@ -143,7 +145,7 @@ class TestCandidatePublication:
         assert not (tmp_path / "code-review.json").exists()
 
     def test_malformed_candidate_is_rejected_before_publication(self, tmp_path):
-        _write_sidecar(tmp_path)
+        _write_accounting_input(tmp_path)
         _builder().save(str(tmp_path))
         candidate = tmp_path / "code-review.candidate.json"
         malformed = b"{not json"
@@ -157,7 +159,7 @@ class TestCandidatePublication:
         assert not (tmp_path / "code-review.json").exists()
 
     def test_boolean_review_schema_is_rejected_before_publication(self, tmp_path):
-        _write_sidecar(tmp_path)
+        _write_accounting_input(tmp_path)
         _builder().save(str(tmp_path))
         digest = _edit_candidate(
             tmp_path, lambda payload: payload.__setitem__("schema", True)
@@ -179,8 +181,12 @@ class TestCandidatePublication:
             "verdict",
             "summary",
             "issues",
-            "unreviewed",
-            "deferred_reviewed",
+            "review_claimable_files",
+            "reviewed_file_claims",
+            "unclaimed_review_files",
+            "inline_diff_file_count",
+            "review_accounted_file_count",
+            "in_scope_review_file_count",
             "observations",
             "recommendations",
             "positive_observations",
@@ -192,7 +198,7 @@ class TestCandidatePublication:
     def test_missing_required_review_field_is_rejected_before_publication(
         self, tmp_path, required_field
     ):
-        _write_sidecar(tmp_path)
+        _write_accounting_input(tmp_path)
         _builder().save(str(tmp_path))
         digest = _edit_candidate(
             tmp_path, lambda payload: payload.pop(required_field)
@@ -220,7 +226,7 @@ class TestCandidatePublication:
     def test_missing_required_issue_field_is_rejected_before_publication(
         self, tmp_path, required_field
     ):
-        _write_sidecar(tmp_path)
+        _write_accounting_input(tmp_path)
         _builder(issue_count=1).save(str(tmp_path))
         digest = _edit_candidate(
             tmp_path,
@@ -244,7 +250,7 @@ class TestCandidatePublication:
     def test_wrong_review_field_type_is_rejected_before_publication(
         self, tmp_path, field, invalid_value
     ):
-        _write_sidecar(tmp_path)
+        _write_accounting_input(tmp_path)
         _builder().save(str(tmp_path))
         digest = _edit_candidate(
             tmp_path,
@@ -272,7 +278,7 @@ class TestCandidatePublication:
     def test_wrong_issue_field_type_is_rejected_before_publication(
         self, tmp_path, field, invalid_value
     ):
-        _write_sidecar(tmp_path)
+        _write_accounting_input(tmp_path)
         _builder(issue_count=1).save(str(tmp_path))
         digest = _edit_candidate(
             tmp_path,
@@ -287,7 +293,7 @@ class TestCandidatePublication:
         assert not (tmp_path / "code-review.json").exists()
 
     def test_boolean_summary_count_is_rejected_before_publication(self, tmp_path):
-        _write_sidecar(tmp_path)
+        _write_accounting_input(tmp_path)
         _builder(issue_count=1).save(str(tmp_path))
         digest = _edit_candidate(
             tmp_path,
@@ -312,7 +318,7 @@ class TestCandidatePublication:
     def test_missing_required_meta_field_is_rejected_before_publication(
         self, tmp_path, required_field
     ):
-        _write_sidecar(tmp_path)
+        _write_accounting_input(tmp_path)
         _builder().save(str(tmp_path))
         digest = _edit_candidate(
             tmp_path,
@@ -324,37 +330,11 @@ class TestCandidatePublication:
 
         assert not (tmp_path / "code-review.json").exists()
 
-    @pytest.mark.parametrize(
-        ("container", "retired_key"),
-        [
-            ("meta", "unreviewed_" + "autofilled"),
-            ("review", "declared_" + "unreviewed"),
-            ("review", "files_declared_" + "unreviewed"),
-            ("review", "files_autofilled_" + "unreviewed"),
-        ],
-    )
-    def test_retired_coverage_key_is_rejected_before_publication(
-        self, tmp_path, container, retired_key
-    ):
-        _write_sidecar(tmp_path)
-        _builder().save(str(tmp_path))
-
-        def _inject_retired_key(payload):
-            target = payload["meta"] if container == "meta" else payload
-            target[retired_key] = []
-
-        digest = _edit_candidate(tmp_path, _inject_retired_key)
-
-        with pytest.raises(ValueError, match="unexpected"):
-            finalize_candidate(str(tmp_path), "code", digest)
-
-        assert not (tmp_path / "code-review.json").exists()
-
     @pytest.mark.parametrize("skip_reason", [None, "", "   "])
     def test_not_applicable_requires_nonempty_skip_reason(
         self, tmp_path, skip_reason
     ):
-        _write_sidecar(tmp_path)
+        _write_accounting_input(tmp_path)
         builder = _builder()
         builder.mark_not_applicable("No relevant changes")
         builder.save(str(tmp_path))
@@ -372,16 +352,16 @@ class TestCandidatePublication:
 
         assert not (tmp_path / "code-review.json").exists()
 
-    def test_edited_derived_coverage_is_rejected_before_publication(self, tmp_path):
-        _write_sidecar(tmp_path)
+    def test_edited_review_accounting_is_rejected_before_publication(self, tmp_path):
+        _write_accounting_input(tmp_path)
         _builder().save(str(tmp_path))
         candidate = tmp_path / "code-review.candidate.json"
         data = json.loads(candidate.read_text())
-        data["meta"]["files_reviewed"] = 99
+        data["review_accounted_file_count"] = 99
         edited = json.dumps(data).encode()
         candidate.write_bytes(edited)
 
-        with pytest.raises(ValueError, match="derived coverage"):
+        with pytest.raises(ValueError, match="derived accounting"):
             finalize_candidate(
                 str(tmp_path), "code", hashlib.sha256(edited).hexdigest()
             )
@@ -389,7 +369,7 @@ class TestCandidatePublication:
         assert not (tmp_path / "code-review.json").exists()
 
     def test_closed_intake_rejects_candidate_publication(self, tmp_path):
-        _write_sidecar(tmp_path)
+        _write_accounting_input(tmp_path)
         close_review_intake(str(tmp_path), ["code-reviewer"])
 
         with pytest.raises(ValueError, match="intake"):
@@ -401,7 +381,7 @@ class TestCandidatePublication:
     def test_closed_intake_rejects_finalization_without_losing_candidate(
         self, tmp_path
     ):
-        _write_sidecar(tmp_path)
+        _write_accounting_input(tmp_path)
         saved = _builder().save(str(tmp_path))
         close_review_intake(str(tmp_path), ["security-reviewer"])
 
@@ -418,7 +398,7 @@ class TestCandidatePublication:
     ):
         import review.agent.output as output_mod
 
-        _write_sidecar(tmp_path)
+        _write_accounting_input(tmp_path)
 
         def _boom(*args, **kwargs):
             raise OSError("diagnostic telemetry unavailable")
@@ -434,7 +414,7 @@ class TestCandidatePublication:
     def test_finalize_cli_rejects_wrong_digest_then_publishes_exact_candidate(
         self, tmp_path
     ):
-        _write_sidecar(tmp_path)
+        _write_accounting_input(tmp_path)
         saved = _builder().save(str(tmp_path))
         output_py = SCRIPTS_DIR / "review" / "agent" / "output.py"
 
@@ -474,7 +454,7 @@ class TestCandidatePublication:
     def test_concurrent_same_reviewer_saves_leave_one_complete_candidate(
         self, tmp_path
     ):
-        _write_sidecar(tmp_path)
+        _write_accounting_input(tmp_path)
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             results = list(executor.map(
@@ -494,7 +474,7 @@ class TestCandidatePublication:
     ):
         import review.agent.output as output_mod
 
-        _write_sidecar(tmp_path)
+        _write_accounting_input(tmp_path)
 
         def _fail_replace(*args, **kwargs):
             raise OSError("replace unavailable")
@@ -512,7 +492,7 @@ class TestReviewIntakeClose:
     def test_close_discards_only_recognized_dispatched_candidates(
         self, tmp_path
     ):
-        _write_sidecar(tmp_path)
+        _write_accounting_input(tmp_path)
         _builder().save(str(tmp_path))
         unrelated = tmp_path / "foreign-review.candidate.json"
         unrelated.write_text("{}")
@@ -537,7 +517,7 @@ class TestReviewIntakeClose:
     ):
         import review.reviewer_lifecycle as lifecycle_mod
 
-        _write_sidecar(tmp_path)
+        _write_accounting_input(tmp_path)
         _builder().save(str(tmp_path))
         original_unlink = lifecycle_mod.os.unlink
         failed = {"once": False}
@@ -570,7 +550,7 @@ class TestReviewIntakeClose:
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         telemetry = _start_telemetry(tmp_path, output_dir)
-        _write_sidecar(output_dir)
+        _write_accounting_input(output_dir)
         saved = _builder().save(str(output_dir))
 
         def fail_completion(*_args, **_kwargs):
@@ -613,7 +593,7 @@ class TestReviewIntakeClose:
         import review.reviewer_lifecycle as lifecycle_mod
 
         assert output_mod.output_dir_lock is lifecycle_mod.output_dir_lock
-        _write_sidecar(tmp_path)
+        _write_accounting_input(tmp_path)
         mutex = threading.Lock()
         close_holds_lock = threading.Event()
         release_close = threading.Event()
@@ -659,7 +639,7 @@ class TestFinalizationTelemetry:
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         telemetry = _start_telemetry(tmp_path, output_dir)
-        _write_sidecar(output_dir)
+        _write_accounting_input(output_dir)
 
         _builder(issue_count=0).save(str(output_dir))
         saved = _builder(issue_count=1).save(str(output_dir))
@@ -688,7 +668,7 @@ class TestFinalizationTelemetry:
         agent_name = "repo-api-reviewer-v2-reviewer"
         telemetry.log_agent_start(agent_name=agent_name, domain="")
         reviewer = "repo-api-reviewer-v2"
-        _write_sidecar(output_dir, reviewer=reviewer, agent_name=agent_name)
+        _write_accounting_input(output_dir, reviewer=reviewer, agent_name=agent_name)
 
         saved = _builder(reviewer=reviewer).save(str(output_dir))
         finalize_candidate(
@@ -705,7 +685,7 @@ class TestFinalizationTelemetry:
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         telemetry = _start_telemetry(tmp_path, output_dir)
-        _write_sidecar(output_dir)
+        _write_accounting_input(output_dir)
         saved = _builder().save(str(output_dir))
 
         finalize_candidate(str(output_dir), "code", saved["candidate_digest"])
@@ -726,7 +706,7 @@ class TestFinalizationTelemetry:
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         telemetry = _start_telemetry(tmp_path, output_dir)
-        _write_sidecar(output_dir)
+        _write_accounting_input(output_dir)
         saved = _builder().save(str(output_dir))
 
         def _fail_once(*args, **kwargs):

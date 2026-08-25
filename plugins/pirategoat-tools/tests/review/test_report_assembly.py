@@ -3,7 +3,7 @@
 `review-record.md` is assembled by the pipeline, never written or edited by
 an agent. It composes the SAME renderers the other derived Markdown uses
 (`render_review_body` for the findings/clearances body,
-`_render_review_coverage_section` for coverage) plus three thin additions
+`_render_review_accounting_section` for coverage) plus three thin additions
 the record alone needs: its own header, the run notes, and a closing
 verdict line.
 
@@ -124,9 +124,13 @@ class TestRecordAssembly:
     def test_sections_appear_in_the_documented_order(self, out_dir):
         _write_ledger(out_dir)
         state = {
-            "inline_coverage_gaps": {"src/starved.php": ["code-reviewer"]},
-            "inline_coverage_claims": {},
-            "inline_coverage_unscoped": ["package-lock.json"],
+            "review_accounting": {
+                "agents_with_unclaimed_review_by_file": {
+                    "src/starved.php": ["code-reviewer"]
+                },
+                "agents_claiming_review_by_file": {},
+                "unscoped_files": ["package-lock.json"],
+            },
         }
 
         assemble_review_record(str(out_dir), state)
@@ -175,16 +179,18 @@ class TestRecordAssembly:
         claims = {"src/big.py": ["security-reviewer"]}
         unscoped = ["package-lock.json"]
         state = {
-            "inline_coverage_gaps": gaps,
-            "inline_coverage_claims": claims,
-            "inline_coverage_unscoped": unscoped,
+            "review_accounting": {
+                "agents_with_unclaimed_review_by_file": gaps,
+                "agents_claiming_review_by_file": claims,
+                "unscoped_files": unscoped,
+            },
         }
 
         assemble_review_record(str(out_dir), state)
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
-        assert briefings_mod._render_review_coverage_section(
-            gaps, claims, unscoped
+        assert briefings_mod._render_review_accounting_section(
+            state["review_accounting"]
         ) in text
 
     def test_unscoped_line_says_why_it_can_exceed_the_metrics_figure(
@@ -198,7 +204,11 @@ class TestRecordAssembly:
         in one of them.
         """
         _write_ledger(out_dir)
-        state = {"inline_coverage_unscoped": ["assets/logo.png"]}
+        state = {"review_accounting": {
+            "agents_with_unclaimed_review_by_file": {},
+            "agents_claiming_review_by_file": {},
+            "unscoped_files": ["assets/logo.png"],
+        }}
 
         assemble_review_record(str(out_dir), state)
         text = (out_dir / REVIEW_RECORD_MD).read_text()
@@ -684,11 +694,14 @@ class TestBriefingsAreConstantSize:
     def _coverage_state(count):
         return {
             "completed_steps": [],
-            "inline_coverage_gaps": {},
-            "inline_coverage_claims": {},
-            "inline_coverage_unscoped": [
-                f"vendor/generated/module_{i:04d}.lock" for i in range(count)
-            ],
+            "review_accounting": {
+                "agents_with_unclaimed_review_by_file": {},
+                "agents_claiming_review_by_file": {},
+                "unscoped_files": [
+                    f"vendor/generated/module_{i:04d}.lock"
+                    for i in range(count)
+                ],
+            },
             "review_record": {
                 "ran": True, "written": 1, "expected": 1,
                 "status": "complete",

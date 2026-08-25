@@ -62,7 +62,7 @@ def _write_findings(output_dir, issues, **extra):
         "reviewer": "reconciliator",
         "timestamp": "2026-08-13T10:00:00",
         "plugin_version": None,
-        "schema": 1,
+        "schema": 2,
         # Lowercase: this is the per-review ledger vocabulary
         # (schemas/review-output.ts), not the outer-pipeline
         # APPROVE/COMMENT/REQUEST_CHANGES values pipeline-result.json
@@ -70,15 +70,18 @@ def _write_findings(output_dir, issues, **extra):
         "verdict": "request_changes",
         "summary": {"total_issues": len(issues), "by_severity": sev},
         "issues": issues,
-        "unreviewed": None,
-        "deferred_reviewed": [],
+        "review_claimable_files": [],
+        "reviewed_file_claims": [],
+        "unclaimed_review_files": [],
+        "inline_diff_file_count": 1,
+        "review_accounted_file_count": 1,
+        "in_scope_review_file_count": 1,
         "observations": None,
         "recommendations": None,
         "positive_observations": None,
         "clearances": None,
         "narrative_summary": None,
         "meta": {
-            "files_reviewed": 1,
             "review_duration_ms": 10,
             "confidence_score": 0.9,
             "tool_results_used": None,
@@ -2964,15 +2967,18 @@ class TestWithdrawnAssessmentRender:
         data = {
             "pr_id": "42", "reviewer": "reconciliator",
             "timestamp": "2026-08-13T10:00:00", "plugin_version": None,
-            "schema": 1, "verdict": "approve",
+            "schema": 2, "verdict": "approve",
             "summary": {"total_issues": 0, "by_severity": {
                 "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0,
             }},
             "issues": [], "narrative_summary": None,
-            "unreviewed": None, "deferred_reviewed": [], "observations": None,
+            "review_claimable_files": [], "reviewed_file_claims": [],
+            "unclaimed_review_files": [], "inline_diff_file_count": 1,
+            "review_accounted_file_count": 1,
+            "in_scope_review_file_count": 1, "observations": None,
             "recommendations": None, "positive_observations": None,
             "clearances": None,
-            "meta": {"files_reviewed": 1, "review_duration_ms": 1,
+            "meta": {"review_duration_ms": 1,
                      "confidence_score": 0.9},
         }
         data.update(overrides)

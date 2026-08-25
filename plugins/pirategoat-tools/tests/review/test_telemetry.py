@@ -23,7 +23,7 @@ sys.path.insert(0, str(TESTS_DIR))
 from helpers.context_fixtures import COMPLETE_CONTEXT
 from review import dependency_refresh
 from review import synthesis_lifecycle as lifecycle_contract
-from review.reconciliation_context import aggregate_inline_coverage
+from review.reconciliation_context import aggregate_review_accounting
 
 
 def _load_module():
@@ -991,12 +991,12 @@ class TestRunManifest:
                 {"path": "vendor/generated.js", "reason": "noise_filtered"},
             ],
             "uncovered": [],
-            "deferred_honesty_by_agent": {},
-            "deferred_total_by_agent": {},
+            "review_claim_accounting_by_agent": {},
+            "review_claimable_file_count_by_agent": {},
             "semantics": "generated_scope_not_proof_of_model_read",
         }
 
-    def test_manifest_uncovered_and_recon_files_unscoped_diverge_by_design(
+    def test_manifest_uncovered_and_recon_unscoped_files_diverge_by_design(
         self, telemetry, output_dir
     ):
         """The one-definition guarantee, in the shape this repo chose:
@@ -1007,7 +1007,7 @@ class TestRunManifest:
         Both answer "which changed files did no agent's scope contain",
         from different evidence over different populations. Read the
         DIVERGENCE NOTE at `manifest_sections.py`'s `"uncovered"` key and
-        its reciprocal at `reconciliation_context.py`'s `"files_unscoped"`
+        its reciprocal at `reconciliation_context.py`'s `"unscoped_files"`
         before changing either.
         """
         # Non-ASCII on purpose: the changed set arrives Git-C-quoted (a
@@ -1034,18 +1034,18 @@ class TestRunManifest:
         # scope.py runs `-c core.quotepath=false`.
         (output_dir / "security-reviewer-scope-summary.json").write_text(
             json.dumps({
-                "schema": 1,
-                "files_with_diffs": ["src/café.py"],
-                "budget_exceeded_files": [],
+                "schema": 2,
+                "inline_diff_files": ["src/café.py"],
+                "review_claimable_files": [],
                 "list_only_files": [],
-                "in_scope_files": ["src/café.py"],
+                "in_scope_review_files": ["src/café.py"],
             })
         )
 
         manifest_uncovered = _read_manifest(telemetry)["coverage"]["uncovered"]
-        recon_unscoped = aggregate_inline_coverage(
+        recon_unscoped = aggregate_review_accounting(
             str(output_dir), changed_files=changed
-        )["files_unscoped"]
+        )["unscoped_files"]
 
         # Population: the manifest works over `reviewable`, so the
         # noise-filtered file can never appear there — it is reported under
@@ -1463,8 +1463,8 @@ class TestRunManifest:
             "assigned": [],
             "excluded": [],
             "uncovered": [],
-            "deferred_honesty_by_agent": {},
-            "deferred_total_by_agent": {},
+            "review_claim_accounting_by_agent": {},
+            "review_claimable_file_count_by_agent": {},
             "semantics": "generated_scope_not_proof_of_model_read",
         }
 
@@ -1490,7 +1490,7 @@ class TestRunManifest:
         assert manifest["availability"]["coverage"] is False
         assert manifest["coverage"] is None
 
-    def test_coverage_carries_two_derived_populations_per_reviewer(
+    def test_coverage_carries_canonical_review_claim_accounting_per_reviewer(
         self, telemetry, output_dir
     ):
         from review.agent.output import ReviewOutputBuilder, finalize_candidate
@@ -1501,19 +1501,21 @@ class TestRunManifest:
             reviewable=["a.py", "b.py", "c.py"],
             agents=[{"name": "security-reviewer", "status": "DISPATCH"}],
         )
-        (output_dir / "security-deferred-files.json").write_text(json.dumps({
-            "schema": 2,
+        (output_dir / "security-review-accounting-input.json").write_text(json.dumps({
+            "schema": 3,
             "agent_name": "security-reviewer",
-            "deferred_files": ["a.py", "b.py", "c.py"],
-            "diffed_count": 0,
-            "in_scope_count": 3,
+            "reviewer": "security",
+            "review_claimable_files": ["a.py", "b.py", "c.py"],
+            "review_budget": 15,
+            "in_scope_review_file_count": 3,
+            "inline_diff_file_count": 0,
         }))
         telemetry.start(run_id="run-1")
         telemetry.log_agent_start(
             "security-reviewer", scope_paths=["a.py", "b.py", "c.py"]
         )
         builder = ReviewOutputBuilder("42", "security")
-        builder.add_deferred_reviewed("a.py")
+        builder.claim_files_reviewed("a.py")
         saved = builder.save(str(output_dir))
         finalize_candidate(
             str(output_dir), "security", saved["candidate_digest"]
@@ -1521,13 +1523,13 @@ class TestRunManifest:
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
         coverage = _read_manifest(telemetry)["coverage"]
-        assert coverage["deferred_honesty_by_agent"] == {
+        assert coverage["review_claim_accounting_by_agent"] == {
             "security-reviewer": {
-                "deferred_reviewed": 1,
-                "unreviewed": 2,
+                "reviewed_file_claim_count": 1,
+                "unclaimed_review_file_count": 2,
             },
         }
-        assert coverage["deferred_total_by_agent"] == {
+        assert coverage["review_claimable_file_count_by_agent"] == {
             "security-reviewer": 3
         }
 
@@ -1542,12 +1544,14 @@ class TestRunManifest:
             reviewable=["a.py"],
             agents=[{"name": "security-reviewer", "status": "DISPATCH"}],
         )
-        (output_dir / "security-deferred-files.json").write_text(json.dumps({
-            "schema": 2,
+        (output_dir / "security-review-accounting-input.json").write_text(json.dumps({
+            "schema": 3,
             "agent_name": "security-reviewer",
-            "deferred_files": ["a.py"],
-            "diffed_count": 0,
-            "in_scope_count": 1,
+            "reviewer": "security",
+            "review_claimable_files": ["a.py"],
+            "review_budget": 15,
+            "in_scope_review_file_count": 1,
+            "inline_diff_file_count": 0,
         }))
         telemetry.start(run_id="run-1")
         telemetry.log_agent_start("security-reviewer", scope_paths=["a.py"])
@@ -1555,8 +1559,8 @@ class TestRunManifest:
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
         coverage = _read_manifest(telemetry)["coverage"]
-        assert coverage["deferred_honesty_by_agent"] == {}
-        assert coverage["deferred_total_by_agent"] == {
+        assert coverage["review_claim_accounting_by_agent"] == {}
+        assert coverage["review_claimable_file_count_by_agent"] == {
             "security-reviewer": 1
         }
 
