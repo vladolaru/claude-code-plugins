@@ -226,6 +226,15 @@ _CRITIC_SOURCE_CANDIDATES = (
     REVIEW_RECORD_MD, _FINDINGS_MD, _FINDINGS_JSON,
 )
 
+# The complete output of one critic attempt. Step 10 removes this set before
+# handing off a replacement, so every reader sees either the new attempt's
+# snapshot or an honestly incomplete attempt — never the prior decision.
+_CRITIC_OUTPUT_FILENAMES = (
+    "decision-critic-findings.md",
+    critic_adjustments.ADJUSTMENTS_FILENAME,
+    critic_adjustments.CRITIC_VERDICT_FILENAME,
+)
+
 
 def _record_findings_markdown(state, outcome):
     """Record the findings-render outcome AND its degradation flag together.
@@ -1510,14 +1519,9 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
     #
     # 1. Step 10 is genuinely re-entered after a COMPLETED critic (the
     #    skip-decision block below says so in as many words: a rerun once
-    #    the reconciled verdict escalates), and no observation runs
-    #    between step 10 and finalize. A bare re-stamp of the dispatch
-    #    marker would move the dispatch clock past the critic's
-    #    already-written verdict file; finalize would then read that file
-    #    as predating its own dispatch, discard it, and publish an
-    #    11-minute critique as stalled with no duration at all.
-    #    Observing first carries the real completion forward, where it is
-    #    preserved verbatim.
+    #    the reconciled verdict escalates). Observing first closes that
+    #    attempt's measurement before its outputs are retired below; the
+    #    replacement dispatch then becomes the only current attempt.
     #
     # 2. It closes the REVISE window on the RECONCILIATOR. The
     #    orchestrator settles critic adjustments, whose internal applier
@@ -1570,7 +1574,10 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
     state.setdefault("step_decisions", {}).pop("10", None)
     is_quick = config.get("quick", False)
     recon_verdict = state.get("reconciliation_verdict", "")
-    if is_quick and recon_verdict.lower() in ("approve", "comment"):
+    should_skip = (
+        is_quick and recon_verdict.lower() in ("approve", "comment")
+    )
+    if should_skip:
         reason = f"quick mode + reconciliation verdict: {recon_verdict}"
         state["step_decisions"]["10"] = {
             "critic_skipped": True,
@@ -1589,30 +1596,37 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
             "adjustments": [],
         })
         digest = critic_adjustments.proposal_digest(proposal)
-        marker_path = os.path.join(
-            output_dir, critic_adjustments.CRITIC_VERDICT_FILENAME
-        )
-        with atomic_io.output_dir_lock(output_dir):
+
+    # A step-10 re-entry starts a new critic decision, including the
+    # pipeline-owned quick skip. Retire the whole prior attempt under the
+    # same lock as the next marker/snapshot so a failed replacement cannot
+    # leave an old verdict readable as the new result.
+    with atomic_io.output_dir_lock(output_dir):
+        for filename in _CRITIC_OUTPUT_FILENAMES:
             try:
-                os.unlink(marker_path)
+                os.unlink(os.path.join(output_dir, filename))
             except FileNotFoundError:
                 pass
+        try:
+            os.unlink(synthesis_lifecycle.marker_path(
+                output_dir, synthesis_lifecycle.DECISION_CRITIC
+            ))
+        except FileNotFoundError:
+            pass
+
+        if should_skip:
             critic_adjustments.write_adjustments(output_dir, proposal)
-            atomic_write_json(marker_path, {
+            atomic_write_json(os.path.join(
+                output_dir, critic_adjustments.CRITIC_VERDICT_FILENAME
+            ), {
                 "schema": critic_adjustments.VERDICT_MARKER_SCHEMA,
                 "verdict": "SKIPPED",
                 "proposal_digest": digest,
             })
-    else:
-        # Dispatch marker for the critic, written on exactly the branch
-        # whose briefing dispatches one. The skip branch writes no marker
-        # and so earns no lifecycle row: a critic that never ran has no
-        # duration, and a zero-duration row would claim it ran instantly.
-        # Finalize reads the marker's absence the same way — nothing to
-        # stall on.
-        synthesis_lifecycle.mark_dispatched(
-            output_dir, synthesis_lifecycle.DECISION_CRITIC
-        )
+        else:
+            synthesis_lifecycle.mark_dispatched(
+                output_dir, synthesis_lifecycle.DECISION_CRITIC
+            )
 
     return context
 

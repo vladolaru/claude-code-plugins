@@ -495,36 +495,38 @@ class TestStepTenDispatchMarker:
         assert _entry(payload, lifecycle.DECISION_CRITIC) is None
 
 
-class TestStepTenReEntryDoesNotManufactureAStall:
-    """The reproduced defect: a completed critic, then a step-10 re-run.
+class TestStepTenRedispatchStartsFreshAttempt:
+    """A re-entered step 10 measures the old attempt, then replaces it."""
 
-    Step 10 IS re-entered after a completed critic — its own skip-decision
-    comment says so, a rerun once the reconciled verdict escalates — and
-    no observation runs between step 10 and finalize. A bare re-stamp of
-    the dispatch marker moved the clock past the critic's already-written
-    verdict file; finalize then read that file as predating its dispatch,
-    discarded it, and published a finished 11-minute critique as
-    stalled with no duration at all.
-    """
-
-    def test_a_completed_critic_survives_a_step_10_re_entry(self, out):
+    def test_failed_replacement_cannot_reuse_completed_critic(self, out):
         mod = orchestration_mod
         # Step 10 dispatches the critic; it finishes 665s later.
         mod._orchestrate_step_10("full", {}, {}, {}, str(out))
-        dispatched = datetime.fromisoformat(
-            _marker(out, lifecycle.DECISION_CRITIC).read_text()
-        )
+        _marker(out, lifecycle.DECISION_CRITIC).write_text(T0.isoformat())
+        dispatched = T0
         verdict = _critic_snapshot(out, "REVISE")
         _set_mtime(verdict, dispatched + timedelta(seconds=665))
+        critic_findings = out / "decision-critic-findings.md"
+        critic_findings.write_text("prior critic")
 
-        # Step 10 is RE-ENTERED, then finalize runs.
+        # Step 10 is RE-ENTERED, but the replacement critic never saves.
         mod._orchestrate_step_10("full", {}, {}, {}, str(out))
-        mod._orchestrate_step_11("pr", {}, {}, {}, str(out))
+        assert not verdict.exists()
+        assert not (out / critic_adjustments.ADJUSTMENTS_FILENAME).exists()
+        assert not critic_findings.exists()
+
+        state = {}
+        mod._orchestrate_step_11("pr", {}, state, {}, str(out))
 
         entry = _entry(_read(out), lifecycle.DECISION_CRITIC)
-        assert entry["stalled"] is False
-        assert entry["duration_ms"] == 665_000
-        assert entry["verdict"] == "REVISE"
+        assert entry["stalled"] is True
+        assert entry["completed_at"] is None
+        assert entry["duration_ms"] is None
+        assert entry["verdict"] is None
+        assert state["critic_verdict"] == "unavailable"
+        assert "critic was dispatched but produced no verdict" in (
+            state["degradation_notes"]
+        )
 
     def test_step_10_observes_before_it_re_stamps(self, out):
         """The ordering that makes the re-stamp safe, pinned directly."""

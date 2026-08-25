@@ -151,15 +151,10 @@ def mark_dispatched(output_dir, name, *, now=None):
     measurement, never the review.
 
     Re-stamping on a re-entered step is deliberate — the live attempt is
-    the one whose duration means anything — but it is ONLY safe because
-    the caller observes first. Step 10 is genuinely re-entered after a
-    completed critic (its own skip-decision comment says so: a rerun once
-    the reconciled verdict escalates), and a bare re-stamp there moves
-    the dispatch clock past an already-written completion artifact. The
-    next observation then reads the artifact as predating its dispatch,
-    discards it, and reports a finished 11-minute critique as stalled
-    with no duration at all. Observing before re-stamping carries the
-    real completion forward and closes that window.
+    the one whose duration means anything. The caller observes first so
+    the completed prior attempt is measured before its artifacts are
+    retired, then this newer clock prevents that completion from being
+    carried into the replacement attempt.
     """
     stamp = (now or datetime.now(timezone.utc)).isoformat()
     try:
@@ -272,6 +267,19 @@ def _prior_entries(output_dir):
     return kept
 
 
+def _completed_after(entry, started_at):
+    """Whether a recorded completion belongs to this dispatch clock."""
+    if started_at is None:
+        return False
+    try:
+        completed_at = datetime.fromisoformat(entry["completed_at"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    if completed_at.tzinfo is None:
+        return False
+    return completed_at >= started_at
+
+
 def observe(output_dir, *, finalize=False):
     """Record what is observable right now about dispatched agents.
 
@@ -279,10 +287,12 @@ def observe(output_dir, *, finalize=False):
     finalize, an agent with no completion artifact is simply one this
     observation caught mid-flight, which says nothing about the run.
 
-    An already-completed entry is preserved verbatim. Re-deriving it is
-    not merely wasted work: finalize writes review-findings.json, so a
-    later reading of that artifact's mtime would report the
-    reconciliator as having finished at finalize time.
+    An already-completed entry from the current dispatch is preserved
+    verbatim. Re-deriving it is not merely wasted work: finalize writes
+    review-findings.json, so a later reading of that artifact's mtime would
+    report the reconciliator as having finished at finalize time. A newer
+    dispatch marker makes the prior entry stale instead of carrying it into
+    the replacement attempt.
 
     Returns the payload written, or None when nothing could be written.
     """
@@ -290,16 +300,16 @@ def observe(output_dir, *, finalize=False):
 
     entries = []
     for name, artifact_name in SYNTHESIS_AGENTS:
-        carried = prior.get(name)
-        if carried is not None:
-            entries.append(carried)
-            continue
         dispatched, started_at = _read_marker(output_dir, name)
         if not dispatched:
             # No marker: this agent was never dispatched by a build that
             # writes markers. That is an absence, not a zero — it earns
             # no row, and the section's presence is what tells a reader
             # the run was capable of measuring one.
+            continue
+        carried = prior.get(name)
+        if carried is not None and _completed_after(carried, started_at):
+            entries.append(carried)
             continue
         artifact_path = os.path.join(output_dir, artifact_name)
         completed_at = _artifact_mtime(artifact_path)
