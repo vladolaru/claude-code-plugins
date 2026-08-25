@@ -253,19 +253,31 @@ def _aggregate_coverage(
         coverage = run.get("coverage")
         if not isinstance(coverage, dict):
             continue
-        for name in ("changed", "reviewable", "assigned", "excluded", "uncovered"):
+        for name in (
+            "changed_files",
+            "reviewable_files",
+            "assigned_files",
+            "file_exclusions",
+            "unassigned_reviewable_files",
+        ):
             value = coverage.get(name)
             coverage_counts[name] += len(value) if isinstance(value, list) else 0
         coverage_runs += 1
     coverage_rate = (
-        coverage_counts["assigned"] / coverage_counts["reviewable"]
-        if coverage_runs and coverage_counts["reviewable"]
+        coverage_counts["assigned_files"] / coverage_counts["reviewable_files"]
+        if coverage_runs and coverage_counts["reviewable_files"]
         else None
     )
     return {
         **{
             name: coverage_counts[name] if coverage_runs else None
-            for name in ("changed", "reviewable", "assigned", "excluded", "uncovered")
+            for name in (
+                "changed_files",
+                "reviewable_files",
+                "assigned_files",
+                "file_exclusions",
+                "unassigned_reviewable_files",
+            )
         },
         "assignment_rate": coverage_rate,
         "available_runs": coverage_runs,
@@ -350,10 +362,10 @@ def _aggregate_outcomes(
         summary = run.get("outcome", {}).get("summary")
         summary = summary if isinstance(summary, dict) else {}
         if run.get("metric_availability", {}).get("raw_findings") == "complete":
-            raw_total += _nonnegative_int(summary.get("total_agent_issues")) or 0
+            raw_total += _nonnegative_int(summary.get("total_agent_findings")) or 0
             raw_runs += 1
         if run.get("metric_availability", {}).get("final_findings") == "complete":
-            final_total += _nonnegative_int(summary.get("final_issues")) or 0
+            final_total += _nonnegative_int(summary.get("final_finding_count")) or 0
             final_runs += 1
         if run.get("metric_availability", {}).get("critic") == "complete":
             verdict = run.get("outcome", {}).get("critic_verdict")

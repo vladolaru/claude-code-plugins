@@ -111,7 +111,7 @@ def _privacy_reduced_lifecycle_event(
 
     Free-string fields (verdict, domain, model_tier) and scope paths are
     withheld — fresh JSONL events may carry prose the durable sidecar never
-    retained. Validated numeric measurements (durations, issue and severity
+    retained. Validated numeric measurements (durations, finding and severity
     counts, scope sizes, budget targets) are preserved: zeroing them would
     report measured zeros for work that occurred, violating the
     missing/partial-data contract.
@@ -128,7 +128,7 @@ def _privacy_reduced_lifecycle_event(
             **common,
             "duration_ms": event.get("duration_ms"),
             "verdict": "unavailable",
-            "issue_count": event["issue_count"],
+            "finding_count": event["finding_count"],
             "severities": dict(event["severities"]),
         }
         reduced["review_digest"] = event["review_digest"]
@@ -489,19 +489,24 @@ def _canonical_manifest(manifest: dict[str, Any]) -> str:
 
     coverage = canonical.get("coverage")
     if isinstance(coverage, dict):
-        for name in ("changed", "reviewable", "assigned", "uncovered"):
+        for name in (
+            "changed_files",
+            "reviewable_files",
+            "assigned_files",
+            "unassigned_reviewable_files",
+        ):
             values = coverage.get(name)
             if isinstance(values, list):
                 coverage[name] = sorted(set(values))
-        by_agent = coverage.get("by_agent")
+        by_agent = coverage.get("assigned_files_by_agent")
         if isinstance(by_agent, dict):
             for name, values in by_agent.items():
                 if isinstance(values, list):
                     by_agent[name] = sorted(set(values))
-        excluded = coverage.get("excluded")
-        if isinstance(excluded, list):
-            coverage["excluded"] = sorted(
-                excluded,
+        file_exclusions = coverage.get("file_exclusions")
+        if isinstance(file_exclusions, list):
+            coverage["file_exclusions"] = sorted(
+                file_exclusions,
                 key=lambda item: json.dumps(
                     item, sort_keys=True, separators=(",", ":")
                 ),

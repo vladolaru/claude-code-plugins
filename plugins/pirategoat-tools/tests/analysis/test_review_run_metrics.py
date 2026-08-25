@@ -243,14 +243,14 @@ def _manifest(
             },
         },
         "coverage": {
-            "changed": ["src/a.py", "vendor/generated.js"],
-            "reviewable": ["src/a.py"],
-            "by_agent": {"code-reviewer": ["src/a.py"]},
-            "assigned": ["src/a.py"],
-            "excluded": [
+            "changed_files": ["src/a.py", "vendor/generated.js"],
+            "reviewable_files": ["src/a.py"],
+            "assigned_files_by_agent": {"code-reviewer": ["src/a.py"]},
+            "assigned_files": ["src/a.py"],
+            "file_exclusions": [
                 {"path": "vendor/generated.js", "reason": "noise_filtered"}
             ],
-            "uncovered": [],
+            "unassigned_reviewable_files": [],
             "review_claim_accounting_by_agent": {},
             "review_claimable_file_count_by_agent": {},
             "semantics": "generated_scope_not_proof_of_model_read",
@@ -258,12 +258,13 @@ def _manifest(
         "outcome": {
             "summary": {
                 "total_duration_ms": 60_000,
-                "total_agent_issues": 3,
-                "final_issues": 1,
+                "total_agent_findings": 3,
+                "final_finding_count": 1,
             },
             "pipeline_status": "complete",
             "verdict": "COMMENT",
             "critic_verdict": "STAND",
+            "reconciliation": None,
         },
         "availability": {"pipeline": True, "transcript": False, "coverage": True},
     }
@@ -362,10 +363,160 @@ def _agent_complete(
         "agent": agent,
         "duration_ms": 10_000,
         "verdict": "approve",
-        "issue_count": 0,
+        "finding_count": 0,
         "severities": {},
         "review_digest": "a" * 64,
     }
+
+
+def _task_5_manifest(run_id: str = "task-5-run") -> dict:
+    """One schema-3 manifest using only the canonical Task 5 vocabulary."""
+    manifest = _manifest(run_id)
+    manifest["coverage"] = {
+        "changed_files": ["src/a.py", "vendor/generated.js"],
+        "reviewable_files": ["src/a.py"],
+        "assigned_files_by_agent": {"code-reviewer": ["src/a.py"]},
+        "assigned_files": ["src/a.py"],
+        "file_exclusions": [
+            {"path": "vendor/generated.js", "reason": "noise_filtered"},
+        ],
+        "unassigned_reviewable_files": [],
+        "review_claim_accounting_by_agent": {},
+        "review_claimable_file_count_by_agent": {},
+        "semantics": "generated_scope_not_proof_of_model_read",
+    }
+    manifest["outcome"]["summary"] = {
+        "total_duration_ms": 60_000,
+        "total_agent_findings": 3,
+        "final_finding_count": 1,
+    }
+    manifest["outcome"]["reconciliation"] = {
+        "input_finding_count": 3,
+        "contributing_agent_count": 2,
+        "grouped_concern_count": 2,
+        "false_positive_finding_count": 1,
+        "out_of_scope_finding_count": 0,
+        "verified_finding_count": 1,
+        "deduplication_ratio": 1 / 3,
+        "not_applicable_agent_count": 0,
+    }
+    return manifest
+
+
+class TestReviewVocabularyLifecycleMigration:
+    def test_schema_three_manifest_keeps_only_canonical_live_vocabulary(
+        self, tmp_path
+    ):
+        measured = measure_run(
+            _task_5_manifest(), tmp_path, include_transcripts=False
+        )
+
+        assert measured["coverage"] == _task_5_manifest()["coverage"]
+        assert measured["outcome"]["summary"]["total_agent_findings"] == 3
+        assert measured["outcome"]["summary"]["final_finding_count"] == 1
+        assert measured["outcome"]["reconciliation"] == (
+            _task_5_manifest()["outcome"]["reconciliation"]
+        )
+        rendered = json.loads(
+            format_json([measured], aggregate_cohort([measured]))
+        )
+        assert rendered["schema"] == 3
+        assert rendered["runs"][0]["outcome"]["reconciliation"] == (
+            _task_5_manifest()["outcome"]["reconciliation"]
+        )
+        serialized = json.dumps(measured)
+        for retired in (
+            '"changed"', '"reviewable"', '"assigned"', '"excluded"',
+            '"uncovered"', '"issue_count"', '"total_agent_issues"',
+            '"final_issues"', '"input_findings_count"',
+            '"agents_contributing"', '"concerns_after_grouping"',
+            '"false_positives_dropped"', '"out_of_scope_dropped"',
+            '"verified_concerns"', '"merge_ratio"',
+            '"not_applicable_count"',
+        ):
+            assert retired not in serialized
+
+    def test_retired_schema_three_coverage_keys_are_rejected(self, tmp_path):
+        manifest = _task_5_manifest()
+        manifest["coverage"] = {
+            "changed": ["src/a.py"],
+            "reviewable": ["src/a.py"],
+            "by_agent": {"code-reviewer": ["src/a.py"]},
+            "assigned": ["src/a.py"],
+            "excluded": [],
+            "uncovered": [],
+            "review_claim_accounting_by_agent": {},
+            "review_claimable_file_count_by_agent": {},
+            "semantics": "generated_scope_not_proof_of_model_read",
+        }
+
+        measured = measure_run(manifest, tmp_path, include_transcripts=False)
+
+        assert measured["coverage"] is None
+        assert measured["metric_availability"]["coverage"] == "missing"
+
+    def test_completion_lifecycle_uses_finding_count(self, tmp_path):
+        manifest = _task_5_manifest()
+        manifest["agents"] = {
+            "started": [_agent_start(run_id="task-5-run")],
+            "completed": [_agent_complete(run_id="task-5-run")],
+            "incomplete": [],
+        }
+
+        measured = measure_run(manifest, tmp_path, include_transcripts=False)
+
+        assert measured["metric_availability"]["lifecycle"] == "complete"
+        assert measured["agents"]["completed"][0]["finding_count"] == 0
+        assert "issue_count" not in measured["agents"]["completed"][0]
+
+    def test_cohort_aggregates_canonical_coverage_and_finding_totals(self):
+        first = measure_run(
+            _task_5_manifest("task-5-a"),
+            Path("/nonexistent"),
+            include_transcripts=False,
+        )
+        second_manifest = _task_5_manifest("task-5-b")
+        second_manifest["coverage"].update({
+            "changed_files": ["src/b.py"],
+            "reviewable_files": ["src/b.py"],
+            "assigned_files_by_agent": {},
+            "assigned_files": [],
+            "file_exclusions": [],
+            "unassigned_reviewable_files": ["src/b.py"],
+        })
+        second = measure_run(
+            second_manifest,
+            Path("/nonexistent"),
+            include_transcripts=False,
+        )
+
+        cohort = aggregate_cohort([first, second])
+
+        assert cohort["coverage"] == {
+            "changed_files": 3,
+            "reviewable_files": 2,
+            "assigned_files": 1,
+            "file_exclusions": 1,
+            "unassigned_reviewable_files": 1,
+            "assignment_rate": 0.5,
+            "available_runs": 2,
+            "semantics": "generated_scope_not_proof_of_model_read",
+            "availability": cohort["availability"]["coverage"],
+        }
+        assert cohort["outcomes"]["raw_findings"] == 6
+        assert cohort["outcomes"]["final_findings"] == 2
+
+    def test_table_renders_canonical_assignment_and_finding_fields(self):
+        measured = measure_run(
+            _task_5_manifest(),
+            Path("/nonexistent"),
+            include_transcripts=False,
+        )
+
+        row = render._table_row(measured)
+
+        assert row[4] == "1/1/0"
+        assert row[5].startswith("3\u21921/")
 
 
 def _agent_review_draft_saved(
@@ -526,7 +677,7 @@ def _legacy_events(run_id: str | None = "legacy-1") -> list[dict]:
         {
             "event": "pipeline_end",
             "timestamp": "2026-07-18T10:01:00+00:00",
-            "summary": {"total_duration_ms": 60_000, "total_agent_issues": 2},
+            "summary": {"total_duration_ms": 60_000, "total_agent_findings": 2},
             "snapshot": {"findings": "PRIVATE FINDING"},
             "tool_result": "PRIVATE TOOL BODY",
         },
@@ -876,7 +1027,7 @@ class TestLoadRuns:
             agent_name="code-reviewer",
             review_digest="a" * 64,
             verdict="comment",
-            issue_count=2,
+            finding_count=2,
             severities={"high": 1, "medium": 1},
         )
 
@@ -887,7 +1038,7 @@ class TestLoadRuns:
         assert started["scope"] == {"files": 3, "lines": 120, "paths": []}
         assert started["budget_target"] == 20
         assert started["domain"] == ""
-        assert completed["issue_count"] == 2
+        assert completed["finding_count"] == 2
         assert completed["severities"] == {"high": 1, "medium": 1}
         assert completed["verdict"] == "unavailable"
 
@@ -1581,7 +1732,7 @@ class TestLoadRuns:
         first = _legacy_events()
         second = _legacy_events(run_id="legacy-2")
         second[1]["agent"] = "security-reviewer"
-        second[2]["summary"] = {"total_duration_ms": 5, "total_agent_issues": 9}
+        second[2]["summary"] = {"total_duration_ms": 5, "total_agent_findings": 9}
         _write_jsonl(tmp_path / "legacy.jsonl", first + second)
 
         [run] = load_runs(tmp_path)
@@ -1591,7 +1742,7 @@ class TestLoadRuns:
             event["agent"] for event in run["agents"]["started"]
         ] == ["code-reviewer"]
         assert run["run"]["ended_at"] == "2026-07-18T10:01:00+00:00"
-        assert run["outcome"]["summary"].get("total_agent_issues") == 2
+        assert run["outcome"]["summary"].get("total_agent_findings") == 2
 
     def test_damaged_second_start_cannot_hand_the_first_run_the_tails_outcome(
         self, tmp_path
@@ -1603,7 +1754,7 @@ class TestLoadRuns:
         first = _legacy_events()
         second = _legacy_events(run_id="legacy-2")
         second[1]["agent"] = "security-reviewer"
-        second[2]["summary"] = {"total_duration_ms": 5, "total_agent_issues": 9}
+        second[2]["summary"] = {"total_duration_ms": 5, "total_agent_findings": 9}
         second[2]["timestamp"] = "2026-07-18T11:00:00+00:00"
         lines = [json.dumps(event).encode("utf-8") for event in first]
         lines.append(b'{"event": "pipeline_start", "x": "\xff"}')
@@ -1617,7 +1768,7 @@ class TestLoadRuns:
             event["agent"] for event in run["agents"]["started"]
         ] == ["code-reviewer"]
         assert run["run"]["ended_at"] == "2026-07-18T10:01:00+00:00"
-        assert run["outcome"]["summary"].get("total_agent_issues") == 2
+        assert run["outcome"]["summary"].get("total_agent_findings") == 2
 
     def test_foreign_terminal_event_cannot_complete_a_run_missing_its_end(
         self, tmp_path
@@ -1635,7 +1786,7 @@ class TestLoadRuns:
         second[1]["run_id"] = "legacy-2"
         second[1]["agent"] = "security-reviewer"
         second[2]["run_id"] = "legacy-2"
-        second[2]["summary"] = {"total_duration_ms": 5, "total_agent_issues": 9}
+        second[2]["summary"] = {"total_duration_ms": 5, "total_agent_findings": 9}
         second[2]["timestamp"] = "2026-07-18T11:00:00+00:00"
         lines = [json.dumps(event).encode("utf-8") for event in first]
         lines.append(b'{"event": "pipeline_start", "x": "\xff"}')
@@ -1650,7 +1801,7 @@ class TestLoadRuns:
         assert [
             event["agent"] for event in run["agents"]["started"]
         ] == ["code-reviewer"]
-        assert run["outcome"]["summary"].get("total_agent_issues") is None
+        assert run["outcome"]["summary"].get("total_agent_findings") is None
 
     def test_stamped_tail_cannot_complete_an_unstamped_legacy_run(
         self, tmp_path
@@ -1665,7 +1816,7 @@ class TestLoadRuns:
         second[1]["run_id"] = "legacy-2"
         second[1]["agent"] = "security-reviewer"
         second[2]["run_id"] = "legacy-2"
-        second[2]["summary"] = {"total_duration_ms": 5, "total_agent_issues": 9}
+        second[2]["summary"] = {"total_duration_ms": 5, "total_agent_findings": 9}
         second[2]["timestamp"] = "2026-07-18T11:00:00+00:00"
         lines = [json.dumps(event).encode("utf-8") for event in first]
         lines.append(b'{"event": "pipeline_start", "x": "\xff"}')
@@ -1680,7 +1831,7 @@ class TestLoadRuns:
         assert [
             event["agent"] for event in run["agents"]["started"]
         ] == ["code-reviewer"]
-        assert run["outcome"]["summary"].get("total_agent_issues") is None
+        assert run["outcome"]["summary"].get("total_agent_findings") is None
 
     def test_legacy_steps_carry_only_step_events(self, tmp_path):
         """The manifest contract's steps are step events only — a
@@ -1900,7 +2051,7 @@ class TestLoadRuns:
                 "planner_candidate_count", float("inf")
             ),
             lambda manifest: manifest["coverage"].__setitem__(
-                "assigned", ["outside.py"]
+                "assigned_files", ["outside.py"]
             ),
         ],
         ids=[
@@ -2321,7 +2472,7 @@ class TestLoadRuns:
     ):
         first = _manifest("duplicate-run")
         first["coverage"] = {
-            "changed": [
+            "changed_files": [
                 "src/a.py",
                 "src/b.py",
                 "src/c.py",
@@ -2329,14 +2480,16 @@ class TestLoadRuns:
                 "vendor/a.js",
                 "vendor/b.js",
             ],
-            "reviewable": ["src/a.py", "src/b.py", "src/c.py", "src/d.py"],
-            "by_agent": {"code-reviewer": ["src/a.py", "src/b.py"]},
-            "assigned": ["src/a.py", "src/b.py"],
-            "excluded": [
+            "reviewable_files": ["src/a.py", "src/b.py", "src/c.py", "src/d.py"],
+            "assigned_files_by_agent": {
+                "code-reviewer": ["src/a.py", "src/b.py"]
+            },
+            "assigned_files": ["src/a.py", "src/b.py"],
+            "file_exclusions": [
                 {"path": "vendor/a.js", "reason": "noise_filtered"},
                 {"path": "vendor/b.js", "reason": "noise_filtered"},
             ],
-            "uncovered": ["src/c.py", "src/d.py"],
+            "unassigned_reviewable_files": ["src/c.py", "src/d.py"],
             "semantics": "generated_scope_not_proof_of_model_read",
         }
         first["warnings"] = ["registry_unavailable", "agent_transcript_missing"]
@@ -2374,9 +2527,9 @@ class TestLoadRuns:
         second["dispatch"]["invalid_reason_codes"].reverse()
         second["warnings"].reverse()
         second["agents"]["incomplete"].reverse()
-        for name in ("changed", "reviewable", "assigned", "uncovered", "excluded"):
+        for name in ("changed_files", "reviewable_files", "assigned_files", "unassigned_reviewable_files", "file_exclusions"):
             second["coverage"][name].reverse()
-        second["coverage"]["by_agent"]["code-reviewer"].reverse()
+        second["coverage"]["assigned_files_by_agent"]["code-reviewer"].reverse()
         left = tmp_path / "left"
         right = tmp_path / "right"
         _write_manifest(left / "a.manifest.json", first)
@@ -2437,7 +2590,7 @@ class TestLoadRuns:
         first["run"]["repo_path"] = "/Users/person/first-private-repo"
         second = _manifest("duplicate-run")
         second["run"]["repo_path"] = "/Users/person/second-private-repo"
-        second["outcome"]["summary"]["final_issues"] = 99
+        second["outcome"]["summary"]["final_finding_count"] = 99
         second["outcome"]["verdict"] = "PRIVATE CONFLICT PROSE"
         _write_manifest(tmp_path / "a.manifest.json", first)
         _write_manifest(tmp_path / "b.manifest.json", second)
@@ -2454,7 +2607,7 @@ class TestLoadRuns:
         assert cohort["runs"] == 0
         assert cohort["availability"]["dispatch"]["missing"] == 0
         assert cohort["dispatch"]["planner_candidates"] is None
-        assert cohort["coverage"]["changed"] is None
+        assert cohort["coverage"]["changed_files"] is None
         assert cohort["outcomes"]["raw_findings"] is None
         assert cohort["wall_time"]["total_ms"] is None
         serialized = json.dumps(measured)
@@ -2468,7 +2621,7 @@ class TestLoadRuns:
     ):
         first = _manifest("duplicate-run")
         second = _manifest("duplicate-run")
-        second["outcome"]["summary"]["final_issues"] = 2
+        second["outcome"]["summary"]["final_finding_count"] = 2
         left = tmp_path / "left"
         right = tmp_path / "right"
         _write_manifest(left / "a.manifest.json", first)
@@ -2487,7 +2640,7 @@ class TestLoadRuns:
         first["run"]["repo_path"] = "/Users/person/private-first"
         second = copy.deepcopy(first)
         second["run"]["repo_path"] = "/Users/person/private-second"
-        second["outcome"]["summary"]["final_issues"] = 2
+        second["outcome"]["summary"]["final_finding_count"] = 2
         _write_manifest(tmp_path / "a.manifest.json", first)
         _write_manifest(tmp_path / "b.manifest.json", second)
         _write_manifest(
@@ -2578,11 +2731,11 @@ class TestMeasureRun:
         assert measured["metric_availability"]["coverage"] == "partial"
         assert "partial 1/1/0" in format_table([measured], cohort)
         assert cohort["coverage"] == {
-            "changed": None,
-            "reviewable": None,
-            "assigned": None,
-            "excluded": None,
-            "uncovered": None,
+            "changed_files": None,
+            "reviewable_files": None,
+            "assigned_files": None,
+            "file_exclusions": None,
+            "unassigned_reviewable_files": None,
             "assignment_rate": None,
             "available_runs": 0,
             "semantics": "generated_scope_not_proof_of_model_read",
@@ -3787,12 +3940,12 @@ class TestMeasureRun:
             "agents": {},
         }
         observed["coverage"] = {
-            "changed": [],
-            "reviewable": [],
-            "by_agent": {},
-            "assigned": [],
-            "excluded": [],
-            "uncovered": [],
+            "changed_files": [],
+            "reviewable_files": [],
+            "assigned_files_by_agent": {},
+            "assigned_files": [],
+            "file_exclusions": [],
+            "unassigned_reviewable_files": [],
             "review_claim_accounting_by_agent": {},
             "review_claimable_file_count_by_agent": {},
             "semantics": "generated_scope_not_proof_of_model_read",
@@ -3813,12 +3966,12 @@ class TestMeasureRun:
     def test_valid_explicit_empty_coverage_ledger_remains_complete(self, tmp_path):
         manifest = _manifest()
         manifest["coverage"] = {
-            "changed": [],
-            "reviewable": [],
-            "by_agent": {},
-            "assigned": [],
-            "excluded": [],
-            "uncovered": [],
+            "changed_files": [],
+            "reviewable_files": [],
+            "assigned_files_by_agent": {},
+            "assigned_files": [],
+            "file_exclusions": [],
+            "unassigned_reviewable_files": [],
             "review_claim_accounting_by_agent": {},
             "review_claimable_file_count_by_agent": {},
             "semantics": "generated_scope_not_proof_of_model_read",
@@ -3832,17 +3985,17 @@ class TestMeasureRun:
     def test_realistic_coverage_ledger_remains_complete(self, tmp_path):
         manifest = _manifest()
         manifest["coverage"] = {
-            "changed": ["src/a.py", "src/b.py", "vendor/generated.js"],
-            "reviewable": ["src/a.py", "src/b.py"],
-            "by_agent": {
+            "changed_files": ["src/a.py", "src/b.py", "vendor/generated.js"],
+            "reviewable_files": ["src/a.py", "src/b.py"],
+            "assigned_files_by_agent": {
                 "code-reviewer": ["src/a.py", "vendor/generated.js"],
                 "tests-reviewer": ["src/a.py"],
             },
-            "assigned": ["src/a.py"],
-            "excluded": [
+            "assigned_files": ["src/a.py"],
+            "file_exclusions": [
                 {"path": "vendor/generated.js", "reason": "noise_filtered"}
             ],
-            "uncovered": ["src/b.py"],
+            "unassigned_reviewable_files": ["src/b.py"],
             "review_claim_accounting_by_agent": {},
             "review_claimable_file_count_by_agent": {},
             "semantics": "generated_scope_not_proof_of_model_read",
@@ -3875,7 +4028,7 @@ class TestMeasureRun:
         self, tmp_path
     ):
         manifest = _manifest()
-        by_agent = manifest["coverage"]["by_agent"]
+        by_agent = manifest["coverage"]["assigned_files_by_agent"]
         by_agent["Security Reviewer | PRIVATE PROSE"] = by_agent.pop(
             "code-reviewer"
         )
@@ -3890,7 +4043,7 @@ class TestMeasureRun:
         self, tmp_path
     ):
         manifest = _manifest()
-        manifest["coverage"]["assigned"] = ["src/a.py", "src/a.py"]
+        manifest["coverage"]["assigned_files"] = ["src/a.py", "src/a.py"]
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
         cohort = aggregate_cohort([measured])
@@ -3902,31 +4055,33 @@ class TestMeasureRun:
 
     @pytest.mark.parametrize(
         "duplicate_location",
-        ["changed", "reviewable", "by-agent", "excluded", "uncovered"],
-        ids=["changed", "reviewable", "by-agent", "excluded", "uncovered"],
+        ["changed_files", "reviewable_files", "by-agent", "file_exclusions", "unassigned_reviewable_files"],
+        ids=["changed_files", "reviewable_files", "by-agent", "file_exclusions", "unassigned_reviewable_files"],
     )
     def test_coverage_set_like_lists_reject_duplicate_paths(
         self, tmp_path, duplicate_location
     ):
         manifest = _manifest()
         coverage = manifest["coverage"]
-        if duplicate_location == "changed":
-            coverage["changed"].append("src/a.py")
-        elif duplicate_location == "reviewable":
-            coverage["reviewable"].append("src/a.py")
+        if duplicate_location == "changed_files":
+            coverage["changed_files"].append("src/a.py")
+        elif duplicate_location == "reviewable_files":
+            coverage["reviewable_files"].append("src/a.py")
         elif duplicate_location == "by-agent":
-            coverage["by_agent"]["code-reviewer"].append("src/a.py")
-        elif duplicate_location == "excluded":
-            coverage["excluded"].append(
+            coverage["assigned_files_by_agent"]["code-reviewer"].append(
+                "src/a.py"
+            )
+        elif duplicate_location == "file_exclusions":
+            coverage["file_exclusions"].append(
                 {"path": "vendor/generated.js", "reason": "noise_filtered"}
             )
         else:
             coverage.update(
                 {
-                    "changed": ["src/a.py", "src/b.py", "vendor/generated.js"],
-                    "reviewable": ["src/a.py", "src/b.py"],
-                    "assigned": ["src/a.py"],
-                    "uncovered": ["src/b.py", "src/b.py"],
+                    "changed_files": ["src/a.py", "src/b.py", "vendor/generated.js"],
+                    "reviewable_files": ["src/a.py", "src/b.py"],
+                    "assigned_files": ["src/a.py"],
+                    "unassigned_reviewable_files": ["src/b.py", "src/b.py"],
                 }
             )
 
@@ -3944,10 +4099,10 @@ class TestMeasureRun:
         self, tmp_path, assigned, uncovered
     ):
         manifest = _manifest()
-        manifest["coverage"]["assigned"] = assigned
-        manifest["coverage"]["uncovered"] = uncovered
+        manifest["coverage"]["assigned_files"] = assigned
+        manifest["coverage"]["unassigned_reviewable_files"] = uncovered
         if not assigned and not uncovered:
-            manifest["coverage"]["by_agent"] = {}
+            manifest["coverage"]["assigned_files_by_agent"] = {}
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
@@ -3955,7 +4110,7 @@ class TestMeasureRun:
         assert measured["metric_availability"]["coverage"] == "missing"
 
     @pytest.mark.parametrize(
-        "excluded",
+        "file_exclusions",
         [
             [],
             [{"path": "src/a.py", "reason": "noise_filtered"}],
@@ -3967,10 +4122,10 @@ class TestMeasureRun:
         ids=["missing", "reviewable-path", "extra-path"],
     )
     def test_exclusions_must_exactly_equal_changed_minus_reviewable(
-        self, tmp_path, excluded
+        self, tmp_path, file_exclusions
     ):
         manifest = _manifest()
-        manifest["coverage"]["excluded"] = excluded
+        manifest["coverage"]["file_exclusions"] = file_exclusions
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
@@ -3981,14 +4136,14 @@ class TestMeasureRun:
         manifest = _manifest()
         manifest["coverage"].update(
             {
-                "reviewable": ["outside.py"],
-                "by_agent": {},
-                "assigned": [],
-                "excluded": [
+                "reviewable_files": ["outside.py"],
+                "assigned_files_by_agent": {},
+                "assigned_files": [],
+                "file_exclusions": [
                     {"path": "src/a.py", "reason": "noise_filtered"},
                     {"path": "vendor/generated.js", "reason": "noise_filtered"},
                 ],
-                "uncovered": ["outside.py"],
+                "unassigned_reviewable_files": ["outside.py"],
             }
         )
 
@@ -4001,9 +4156,11 @@ class TestMeasureRun:
         manifest = _manifest()
         manifest["coverage"].update(
             {
-                "by_agent": {"code-reviewer": ["outside.py"]},
-                "assigned": [],
-                "uncovered": ["src/a.py"],
+                "assigned_files_by_agent": {
+                    "code-reviewer": ["outside.py"]
+                },
+                "assigned_files": [],
+                "unassigned_reviewable_files": ["src/a.py"],
             }
         )
 
@@ -4014,7 +4171,7 @@ class TestMeasureRun:
 
     def test_by_agent_reviewable_union_must_exactly_equal_assigned(self, tmp_path):
         manifest = _manifest()
-        manifest["coverage"]["by_agent"] = {}
+        manifest["coverage"]["assigned_files_by_agent"] = {}
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
@@ -4026,47 +4183,47 @@ class TestMeasureRun:
         [
             {},
             {
-                "changed": [],
-                "reviewable": [],
-                "by_agent": {},
-                "assigned": [],
-                "excluded": [],
-                "uncovered": [],
+                "changed_files": [],
+                "reviewable_files": [],
+                "assigned_files_by_agent": {},
+                "assigned_files": [],
+                "file_exclusions": [],
+                "unassigned_reviewable_files": [],
             },
             {
-                "changed": [None],
-                "reviewable": [],
-                "by_agent": {},
-                "assigned": [],
-                "excluded": [],
-                "uncovered": [],
+                "changed_files": [None],
+                "reviewable_files": [],
+                "assigned_files_by_agent": {},
+                "assigned_files": [],
+                "file_exclusions": [],
+                "unassigned_reviewable_files": [],
                 "semantics": "generated_scope_not_proof_of_model_read",
             },
             {
-                "changed": [],
-                "reviewable": [],
-                "by_agent": {"code-reviewer": [False]},
-                "assigned": [],
-                "excluded": [],
-                "uncovered": [],
+                "changed_files": [],
+                "reviewable_files": [],
+                "assigned_files_by_agent": {"code-reviewer": [False]},
+                "assigned_files": [],
+                "file_exclusions": [],
+                "unassigned_reviewable_files": [],
                 "semantics": "generated_scope_not_proof_of_model_read",
             },
             {
-                "changed": ["vendor/a.js"],
-                "reviewable": [],
-                "by_agent": {},
-                "assigned": [],
-                "excluded": [{"path": "vendor/a.js"}],
-                "uncovered": [],
+                "changed_files": ["vendor/a.js"],
+                "reviewable_files": [],
+                "assigned_files_by_agent": {},
+                "assigned_files": [],
+                "file_exclusions": [{"path": "vendor/a.js"}],
+                "unassigned_reviewable_files": [],
                 "semantics": "generated_scope_not_proof_of_model_read",
             },
             {
-                "changed": [],
-                "reviewable": [],
-                "by_agent": {},
-                "assigned": [],
-                "excluded": [],
-                "uncovered": [],
+                "changed_files": [],
+                "reviewable_files": [],
+                "assigned_files_by_agent": {},
+                "assigned_files": [],
+                "file_exclusions": [],
+                "unassigned_reviewable_files": [],
                 "semantics": "proof_of_model_read",
             },
         ],
@@ -4137,7 +4294,7 @@ class TestMeasureRun:
                 {
                     "agent": "code-reviewer",
                     "duration_ms": -1,
-                    "issue_count": True,
+                    "finding_count": True,
                     "severities": {"high": float("inf"), "low": 1},
                 }
             ],
@@ -4146,8 +4303,8 @@ class TestMeasureRun:
         manifest["outcome"]["summary"].update(
             {
                 "total_duration_ms": 10**1_000,
-                "total_agent_issues": float("inf"),
-                "final_issues": float("nan"),
+                "total_agent_findings": float("inf"),
+                "final_finding_count": float("nan"),
                 "changed_files_count": True,
             }
         )
@@ -4158,8 +4315,8 @@ class TestMeasureRun:
         assert measured["metric_availability"]["raw_findings"] == "missing"
         assert measured["metric_availability"]["final_findings"] == "missing"
         assert "total_duration_ms" not in measured["outcome"]["summary"]
-        assert "total_agent_issues" not in measured["outcome"]["summary"]
-        assert "final_issues" not in measured["outcome"]["summary"]
+        assert "total_agent_findings" not in measured["outcome"]["summary"]
+        assert "final_finding_count" not in measured["outcome"]["summary"]
         assert "changed_files_count" not in measured["outcome"]["summary"]
         assert "step" not in measured["steps"][0]
         assert "duration_since_prev_ms" not in measured["steps"][0]
@@ -4167,7 +4324,7 @@ class TestMeasureRun:
         assert measured["agents"]["started"][0]["scope"] == {"paths": []}
         completed = measured["agents"]["completed"][0]
         assert "duration_ms" not in completed
-        assert "issue_count" not in completed
+        assert "finding_count" not in completed
         assert completed["severities"] == {"low": 1}
 
         strict = json.loads(
@@ -4192,14 +4349,14 @@ class TestMeasureRun:
             {
                 "agent": "code-reviewer",
                 "duration_ms": 0.9,
-                "issue_count": 1.9,
+                "finding_count": 1.9,
             }
         ]
         manifest["outcome"]["summary"].update(
             {
                 "total_duration_ms": 0.9,
-                "total_agent_issues": 0.9,
-                "final_issues": 1.9,
+                "total_agent_findings": 0.9,
+                "final_finding_count": 1.9,
             }
         )
 
@@ -4211,8 +4368,8 @@ class TestMeasureRun:
         assert "step" not in measured["steps"][0]
         assert "duration_since_prev_ms" not in measured["steps"][0]
         assert "duration_ms" not in measured["agents"]["completed"][0]
-        assert "issue_count" not in measured["agents"]["completed"][0]
-        for name in ("total_duration_ms", "total_agent_issues", "final_issues"):
+        assert "finding_count" not in measured["agents"]["completed"][0]
+        for name in ("total_duration_ms", "total_agent_findings", "final_finding_count"):
             assert name not in measured["outcome"]["summary"]
 
 
@@ -4770,7 +4927,7 @@ class TestLifecycleMeasurement:
             ("started", lambda event: event.__setitem__("timestamp", "2026-07-19T10:00:10")),
             ("started", lambda event: event.__setitem__("agent", "../private")),
             ("started", lambda event: event["scope"].__setitem__("files", 1.0)),
-            ("completed", lambda event: event.__setitem__("issue_count", False)),
+            ("completed", lambda event: event.__setitem__("finding_count", False)),
             ("completed", lambda event: event["severities"].__setitem__("high", -1)),
         ],
         ids=[
@@ -4814,11 +4971,11 @@ class TestLifecycleMeasurement:
         assert measured["lifecycle"] is None
         assert measured["metric_availability"]["lifecycle"] == "missing"
 
-    def test_completion_issue_count_must_match_sanitized_severity_sum(
+    def test_completion_finding_count_must_match_sanitized_severity_sum(
         self, tmp_path
     ):
         completion = _agent_complete()
-        completion["issue_count"] = 2
+        completion["finding_count"] = 2
         completion["severities"] = {"high": 1}
         manifest = _manifest()
         manifest["agents"] = {
@@ -6927,9 +7084,9 @@ class TestAggregateCohort:
         )
         assert cohort["dispatch"]["compared_planner_candidates"] == 2
         assert cohort["dispatch"]["planner_removal_rate"] == pytest.approx(0.5)
-        assert cohort["coverage"]["reviewable"] == 1
-        assert cohort["coverage"]["assigned"] == 1
-        assert cohort["coverage"]["uncovered"] == 0
+        assert cohort["coverage"]["reviewable_files"] == 1
+        assert cohort["coverage"]["assigned_files"] == 1
+        assert cohort["coverage"]["unassigned_reviewable_files"] == 0
         assert cohort["outcomes"]["raw_findings"] == 3
         assert cohort["outcomes"]["final_findings"] == 1
         assert cohort["critic"]["verdicts"] == {"STAND": 1}
@@ -7456,7 +7613,7 @@ class TestFormattingAndCli:
             "Version/Mode",
             "Planner→Actual",
             "Adjustments",
-            "Assigned/Reviewable/Uncovered",
+            "Assigned/Reviewable/Unassigned",
             "Outcome/Critic",
             "Wall",
             "Eff In/Out",
@@ -7825,7 +7982,7 @@ class TestNonCanonicalPathsFailClosed:
         self, tmp_path, bad_path
     ):
         manifest = _manifest("cover-run")
-        manifest["coverage"]["changed"].append(bad_path)
+        manifest["coverage"]["changed_files"].append(bad_path)
         _write_manifest(tmp_path / "review.manifest.json", manifest)
         _write_jsonl(tmp_path / "review.jsonl", _legacy_events("legacy-fallback"))
 
@@ -7838,8 +7995,8 @@ class TestNonCanonicalPathsFailClosed:
         self, tmp_path
     ):
         manifest = _manifest("cover-run")
-        manifest["coverage"]["changed"].append("/abs/noise.js")
-        manifest["coverage"]["excluded"].append(
+        manifest["coverage"]["changed_files"].append("/abs/noise.js")
+        manifest["coverage"]["file_exclusions"].append(
             {"path": "/abs/noise.js", "reason": "noise_filtered"}
         )
         _write_manifest(tmp_path / "review.manifest.json", manifest)

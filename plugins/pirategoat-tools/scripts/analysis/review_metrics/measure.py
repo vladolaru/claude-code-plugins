@@ -635,13 +635,13 @@ def _pipeline_metric_availability(
     raw_state = (
         ("complete" if manifest_complete else "partial")
         if isinstance(summary, dict)
-        and _nonnegative_int(summary.get("total_agent_issues")) is not None
+        and _nonnegative_int(summary.get("total_agent_findings")) is not None
         else "missing"
     )
     final_state = (
         ("complete" if manifest_complete else "partial")
         if isinstance(summary, dict)
-        and _nonnegative_int(summary.get("final_issues")) is not None
+        and _nonnegative_int(summary.get("final_finding_count")) is not None
         else "missing"
     )
     if raw_state == final_state == "complete":

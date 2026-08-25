@@ -163,11 +163,15 @@ _SUMMARY_FIELDS = (
     "agents_dispatched",
     "agents_skipped",
     "agents_completed",
-    "total_agent_issues",
+    "total_agent_findings",
     "final_verdict",
-    "final_issues",
+    "final_finding_count",
 )
 _SEVERITIES = tuple(_TELEMETRY_CONTRACT._SEVERITY_FIELDS)
+_RECONCILIATION_COUNT_FIELDS = tuple(
+    _TELEMETRY_CONTRACT._RECONCILIATION_COUNT_FIELDS
+)
+_RECONCILIATION_FIELDS = frozenset(_TELEMETRY_CONTRACT._RECONCILIATION_FIELDS)
 # Lockstep with review/telemetry.py's EVENT_SCHEMA. Schema 3 requires the
 # reviewed-file accounting projection in every coverage section.
 _SUPPORTED_MANIFEST_SCHEMA = 3

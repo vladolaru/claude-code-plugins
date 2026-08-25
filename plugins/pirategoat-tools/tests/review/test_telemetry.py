@@ -746,7 +746,7 @@ class TestRunManifest:
         telemetry.log_agent_complete(
             agent_name="code-reviewer", review_digest="b" * 64,
             verdict="comment",
-            issue_count=1, severities={"medium": 1},
+            finding_count=1, severities={"medium": 1},
         )
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
@@ -773,7 +773,7 @@ class TestRunManifest:
         telemetry.log_agent_complete(
             agent_name="code-reviewer", review_digest="b" * 64,
             verdict="comment",
-            issue_count=1, severities={"medium": 1},
+            finding_count=1, severities={"medium": 1},
         )
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
@@ -885,7 +885,7 @@ class TestRunManifest:
             agent_name="security-reviewer",
             review_digest=FINAL_DIGEST,
             verdict="comment",
-            issue_count=1,
+            finding_count=1,
             severities={
                 "high": 1,
                 "prompt": "SENSITIVE_AGENT_PROMPT",
@@ -972,14 +972,14 @@ class TestRunManifest:
         manifest = _read_manifest(telemetry)
         assert manifest["availability"]["coverage"] is True
         assert manifest["coverage"] == {
-            "changed": [
+            "changed_files": [
                 "docs/readme.md",
                 "src/a.py",
                 "src/b.py",
                 "vendor/generated.js",
             ],
-            "reviewable": ["docs/readme.md", "src/a.py", "src/b.py"],
-            "by_agent": {
+            "reviewable_files": ["docs/readme.md", "src/a.py", "src/b.py"],
+            "assigned_files_by_agent": {
                 "docs-reviewer": ["docs/readme.md"],
                 "security-reviewer": [
                     "src/a.py",
@@ -987,17 +987,17 @@ class TestRunManifest:
                     "vendor/generated.js",
                 ],
             },
-            "assigned": ["docs/readme.md", "src/a.py", "src/b.py"],
-            "excluded": [
+            "assigned_files": ["docs/readme.md", "src/a.py", "src/b.py"],
+            "file_exclusions": [
                 {"path": "vendor/generated.js", "reason": "noise_filtered"},
             ],
-            "uncovered": [],
+            "unassigned_reviewable_files": [],
             "review_claim_accounting_by_agent": {},
             "review_claimable_file_count_by_agent": {},
             "semantics": "generated_scope_not_proof_of_model_read",
         }
 
-    def test_manifest_uncovered_and_recon_unscoped_files_diverge_by_design(
+    def test_manifest_unassigned_and_recon_unscoped_files_diverge_by_design(
         self, telemetry, output_dir
     ):
         """The one-definition guarantee, in the shape this repo chose:
@@ -1007,7 +1007,8 @@ class TestRunManifest:
 
         Both answer "which changed files did no agent's scope contain",
         from different evidence over different populations. Read the
-        DIVERGENCE NOTE at `manifest_sections.py`'s `"uncovered"` key and
+        DIVERGENCE NOTE at `manifest_sections.py`'s
+        `"unassigned_reviewable_files"` key and
         its reciprocal at `reconciliation_context.py`'s `"unscoped_files"`
         before changing either.
         """
@@ -1043,7 +1044,9 @@ class TestRunManifest:
             })
         )
 
-        manifest_uncovered = _read_manifest(telemetry)["coverage"]["uncovered"]
+        manifest_uncovered = _read_manifest(telemetry)["coverage"][
+            "unassigned_reviewable_files"
+        ]
         recon_unscoped = aggregate_review_accounting(
             str(output_dir), changed_files=changed
         )["unscoped_files"]
@@ -1078,13 +1081,13 @@ class TestRunManifest:
 
         manifest = _read_manifest(telemetry)
         assert manifest["availability"]["coverage"] is True
-        assert manifest["coverage"]["changed"] == [unicode_path]
-        assert manifest["coverage"]["reviewable"] == [unicode_path]
-        assert manifest["coverage"]["by_agent"] == {
+        assert manifest["coverage"]["changed_files"] == [unicode_path]
+        assert manifest["coverage"]["reviewable_files"] == [unicode_path]
+        assert manifest["coverage"]["assigned_files_by_agent"] == {
             "code-reviewer": [unicode_path],
         }
-        assert manifest["coverage"]["assigned"] == [unicode_path]
-        assert manifest["coverage"]["uncovered"] == []
+        assert manifest["coverage"]["assigned_files"] == [unicode_path]
+        assert manifest["coverage"]["unassigned_reviewable_files"] == []
 
     def test_git_quoted_literal_backslash_does_not_collide_with_nested_path(
         self, telemetry, output_dir
@@ -1106,14 +1109,14 @@ class TestRunManifest:
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
         coverage = _read_manifest(telemetry)["coverage"]
-        assert coverage["changed"] == [nested_path, literal_backslash]
-        assert coverage["reviewable"] == [nested_path, literal_backslash]
-        assert coverage["by_agent"]["code-reviewer"] == [
+        assert coverage["changed_files"] == [nested_path, literal_backslash]
+        assert coverage["reviewable_files"] == [nested_path, literal_backslash]
+        assert coverage["assigned_files_by_agent"]["code-reviewer"] == [
             nested_path,
             literal_backslash,
         ]
-        assert coverage["assigned"] == [nested_path, literal_backslash]
-        assert len(coverage["assigned"]) == 2
+        assert coverage["assigned_files"] == [nested_path, literal_backslash]
+        assert len(coverage["assigned_files"]) == 2
 
     def test_quote_delimited_filename_stays_distinct_from_plain_filename(
         self, telemetry, output_dir
@@ -1141,13 +1144,13 @@ class TestRunManifest:
             literal_quoted_path,
         ]
         coverage = manifest["coverage"]
-        assert coverage["changed"] == [literal_quoted_path, plain_path]
-        assert coverage["reviewable"] == [literal_quoted_path, plain_path]
-        assert coverage["by_agent"] == {
+        assert coverage["changed_files"] == [literal_quoted_path, plain_path]
+        assert coverage["reviewable_files"] == [literal_quoted_path, plain_path]
+        assert coverage["assigned_files_by_agent"] == {
             "code-reviewer": [literal_quoted_path],
         }
-        assert coverage["assigned"] == [literal_quoted_path]
-        assert coverage["uncovered"] == [plain_path]
+        assert coverage["assigned_files"] == [literal_quoted_path]
+        assert coverage["unassigned_reviewable_files"] == [plain_path]
 
     def test_raw_quote_delimited_scope_path_without_escape_is_not_git_wrapper(
         self, telemetry
@@ -1240,9 +1243,9 @@ class TestRunManifest:
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
         coverage = _read_manifest(telemetry)["coverage"]
-        assert coverage["by_agent"] == {}
-        assert coverage["assigned"] == []
-        assert coverage["uncovered"] == ["src/a.py"]
+        assert coverage["assigned_files_by_agent"] == {}
+        assert coverage["assigned_files"] == []
+        assert coverage["unassigned_reviewable_files"] == ["src/a.py"]
 
     def test_planned_but_never_started_agent_leaves_file_uncovered(
         self, telemetry, output_dir
@@ -1257,9 +1260,9 @@ class TestRunManifest:
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
         coverage = _read_manifest(telemetry)["coverage"]
-        assert coverage["by_agent"] == {}
-        assert coverage["assigned"] == []
-        assert coverage["uncovered"] == ["src/a.py"]
+        assert coverage["assigned_files_by_agent"] == {}
+        assert coverage["assigned_files"] == []
+        assert coverage["unassigned_reviewable_files"] == ["src/a.py"]
 
     def test_retries_merge_scope_paths_for_the_same_agent(
         self, telemetry, output_dir
@@ -1279,7 +1282,7 @@ class TestRunManifest:
         )
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
-        assert _read_manifest(telemetry)["coverage"]["by_agent"] == {
+        assert _read_manifest(telemetry)["coverage"]["assigned_files_by_agent"] == {
             "security-reviewer": ["src/a.py", "src/b.py"],
         }
 
@@ -1299,10 +1302,10 @@ class TestRunManifest:
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
         coverage = _read_manifest(telemetry)["coverage"]
-        assert coverage["by_agent"] == {
+        assert coverage["assigned_files_by_agent"] == {
             "a11y-reviewer": ["templates/page.php"],
         }
-        assert coverage["assigned"] == ["templates/page.php"]
+        assert coverage["assigned_files"] == ["templates/page.php"]
 
     @pytest.mark.parametrize(
         "context_payload,plan_payload",
@@ -1458,12 +1461,12 @@ class TestRunManifest:
         manifest = _read_manifest(telemetry)
         assert manifest["availability"]["coverage"] is True
         assert manifest["coverage"] == {
-            "changed": [],
-            "reviewable": [],
-            "by_agent": {},
-            "assigned": [],
-            "excluded": [],
-            "uncovered": [],
+            "changed_files": [],
+            "reviewable_files": [],
+            "assigned_files_by_agent": {},
+            "assigned_files": [],
+            "file_exclusions": [],
+            "unassigned_reviewable_files": [],
             "review_claim_accounting_by_agent": {},
             "review_claimable_file_count_by_agent": {},
             "semantics": "generated_scope_not_proof_of_model_read",
@@ -2542,7 +2545,7 @@ class TestSnapshot:
         agents = events[-1]["snapshot"]["agent_results"]
         assert "security" in agents
         assert agents["security"]["verdict"] == "comment"
-        assert agents["security"]["issue_count"] == 2
+        assert agents["security"]["finding_count"] == 2
         assert agents["security"]["severities"]["high"] == 1
 
     def test_extracts_agent_advisory_measurement(self, mod, output_dir, tmp_path):
@@ -2664,7 +2667,7 @@ class TestSnapshot:
         events = _read_events(t.log_path)
         f = events[-1]["snapshot"]["findings"]
         assert f["verdict"] == "comment"
-        assert f["total_issues"] == 3
+        assert f["final_finding_count"] == 3
         assert f["severities"]["high"] == 1
 
     def test_findings_measurement_reaches_summary_and_manifest(
@@ -3046,7 +3049,7 @@ class TestLogAgentComplete:
         telemetry.log_agent_complete(
             agent_name="security-reviewer", review_digest=FINAL_DIGEST,
             verdict="comment",
-            issue_count=2, severities={"high": 1, "medium": 1},
+            finding_count=2, severities={"high": 1, "medium": 1},
         )
         events = _read_events(telemetry.log_path)
         assert events[-1]["event"] == "agent_complete"
@@ -3060,11 +3063,11 @@ class TestLogAgentComplete:
         telemetry.log_agent_complete(
             agent_name="security-reviewer", review_digest=FINAL_DIGEST,
             verdict="comment",
-            issue_count=2, severities={"high": 1, "medium": 1},
+            finding_count=2, severities={"high": 1, "medium": 1},
         )
         events = _read_events(telemetry.log_path)
         assert events[-1]["verdict"] == "comment"
-        assert events[-1]["issue_count"] == 2
+        assert events[-1]["finding_count"] == 2
         assert events[-1]["severities"] == {"high": 1, "medium": 1}
 
     def test_calculates_duration_from_started_file(self, telemetry, output_dir):
@@ -3107,6 +3110,143 @@ class TestLogAgentComplete:
         )
         event = _read_events(telemetry.log_path)[-1]
         assert event["review_digest"] == FINAL_DIGEST
+
+    def test_completion_uses_finding_count_without_retired_issue_count(
+        self, telemetry
+    ):
+        """Renaming only review artifacts would leave lifecycle telemetry
+        teaching and persisting the retired review-domain noun."""
+        telemetry.start(run_id="run-1")
+
+        telemetry.log_agent_complete(
+            agent_name="security-reviewer",
+            review_digest=FINAL_DIGEST,
+            verdict="comment",
+            finding_count=2,
+            severities={"high": 1, "medium": 1},
+        )
+
+        event = _read_events(telemetry.log_path)[-1]
+        assert event["finding_count"] == 2
+        assert "issue_count" not in event
+
+
+class TestReviewVocabularyManifestProjection:
+    def test_manifest_projects_assignment_and_review_claims_separately(
+        self, mod, output_dir, monkeypatch
+    ):
+        monkeypatch.setattr(
+            mod.manifest_sections,
+            "_load_review_claim_accounting",
+            lambda output_dir, agent: {
+                "reviewed_file_claim_count": 1,
+                "unclaimed_review_file_count": 0,
+            },
+        )
+        monkeypatch.setattr(
+            mod.manifest_sections,
+            "_load_review_claimable_file_count",
+            lambda output_dir, agent: 1,
+        )
+
+        coverage = mod.manifest_sections.build_coverage_manifest(
+            str(output_dir),
+            [{
+                "event": "agent_start",
+                "agent": "security-reviewer",
+                "scope": {"paths": ["a.php", "b.php"]},
+            }],
+            {"git": {"changed_files": ["a.php", "b.php"]}},
+            str(output_dir),
+            {
+                "available": True,
+                "duplicates": [],
+                "plan": {"changed_files": ["a.php", "b.php"]},
+                "index": {
+                    "security-reviewer": {"status": "DISPATCH"},
+                },
+            },
+            normalize_paths=lambda paths, **kwargs: list(paths),
+        )
+
+        assert coverage == {
+            "changed_files": ["a.php", "b.php"],
+            "reviewable_files": ["a.php", "b.php"],
+            "assigned_files_by_agent": {
+                "security-reviewer": ["a.php", "b.php"],
+            },
+            "assigned_files": ["a.php", "b.php"],
+            "file_exclusions": [],
+            "unassigned_reviewable_files": [],
+            "review_claim_accounting_by_agent": {
+                "security-reviewer": {
+                    "reviewed_file_claim_count": 1,
+                    "unclaimed_review_file_count": 0,
+                },
+            },
+            "review_claimable_file_count_by_agent": {
+                "security-reviewer": 1,
+            },
+            "semantics": "generated_scope_not_proof_of_model_read",
+        }
+        for retired in (
+            "changed", "reviewable", "by_agent", "assigned", "excluded",
+            "uncovered", "deferred_honesty_by_agent",
+        ):
+            assert retired not in coverage
+
+    def test_finalized_summary_and_reconciliation_use_finding_vocabulary(
+        self, mod, output_dir, tmp_path
+    ):
+        (output_dir / "security-review.json").write_text(json.dumps({
+            "verdict": "comment",
+            "findings": [{"severity": "medium"}],
+        }))
+        reconciliation = {
+            "input_finding_count": 3,
+            "contributing_agent_count": 2,
+            "grouped_concern_count": 2,
+            "false_positive_finding_count": 1,
+            "out_of_scope_finding_count": 0,
+            "verified_finding_count": 1,
+            "deduplication_ratio": 1 / 3,
+            "not_applicable_agent_count": 0,
+        }
+        (output_dir / "review-findings.json").write_text(json.dumps({
+            "verdict": "comment",
+            "findings": [{"severity": "medium"}],
+            "meta": {"reconciliation": reconciliation},
+        }))
+        telemetry = mod.ReviewTelemetry(
+            str(output_dir), log_dir=str(tmp_path / "logs")
+        )
+        telemetry.start(run_id="run-1")
+
+        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
+
+        manifest = _read_manifest(telemetry)
+        summary = manifest["outcome"]["summary"]
+        assert summary["total_agent_findings"] == 1
+        assert summary["final_finding_count"] == 1
+        assert manifest["outcome"]["reconciliation"] == reconciliation
+        serialized = json.dumps(manifest)
+        for retired in (
+            "total_agent_issues", "final_issues", "total_issues",
+            "input_findings_count", "agents_contributing",
+            "concerns_after_grouping", "false_positives_dropped",
+            "out_of_scope_dropped", "verified_concerns", "merge_ratio",
+            "not_applicable_count",
+        ):
+            assert retired not in serialized
+
+    def test_missing_reconciliation_is_null_not_an_empty_measurement(
+        self, telemetry
+    ):
+        telemetry.start(run_id="run-1")
+
+        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
+
+        assert _read_manifest(telemetry)["outcome"]["reconciliation"] is None
 
 
 # ── _build_summary override counting ────────────────────────────
@@ -4373,7 +4513,7 @@ class TestSynthesisAgentsManifest:
                 t.log_agent_start(name, domain="code", model_tier="sonnet")
                 t.log_agent_complete(
                     name, review_digest=FINAL_DIGEST,
-                    verdict="approve", issue_count=0,
+                    verdict="approve", finding_count=0,
                 )
             t.finalize(step=11, phase="OUTPUT", title="Present Results")
             return _read_manifest(t)

@@ -494,7 +494,7 @@ def build_coverage_manifest(
                 path for path in scope_paths if path in changed_set
             )
 
-        by_agent = {
+        assigned_files_by_agent = {
             name: sorted(paths)
             for name, paths in sorted(by_agent_sets.items())
         }
@@ -523,11 +523,11 @@ def build_coverage_manifest(
                 review_claimable_file_count_by_agent[name] = claimable_count
 
         return {
-            "changed": changed,
-            "reviewable": reviewable,
-            "by_agent": by_agent,
-            "assigned": sorted(assigned_set),
-            "excluded": [
+            "changed_files": changed,
+            "reviewable_files": reviewable,
+            "assigned_files_by_agent": assigned_files_by_agent,
+            "assigned_files": sorted(assigned_set),
+            "file_exclusions": [
                 {"path": path, "reason": "noise_filtered"}
                 for path in sorted(changed_set - reviewable_set)
             ],
@@ -537,23 +537,23 @@ def build_coverage_manifest(
             # and 5 there). Both answer "which changed files did no agent's
             # scope contain", from different evidence over different
             # populations:
-            #   * here — population `reviewable` (changed MINUS
+            #   * here — population `reviewable_files` (`changed_files` MINUS
             #     noise-filtered), evidence the dispatch-time `agent_start`
             #     SCOPE events of agents whose final status is dispatched.
-            #     It must exactly partition `reviewable` with `assigned`
-            #     (`sanitize.py` enforces `assigned | uncovered ==
-            #     reviewable`), so noise-filtered files can never appear
-            #     here — they are reported under `excluded` instead.
+            #     It must exactly partition `reviewable_files` with
+            #     `assigned_files` (`sanitize.py` enforces the partition),
+            #     so noise-filtered files can never appear here — they are
+            #     reported under `file_exclusions` instead.
             #   * there — population the full `changed_files` list,
             #     evidence the runtime `*-scope-summary*.json` sidecars an
             #     agent writes when it actually runs. Noise-filtered and
             #     domain-unmatched files DO appear there, and an agent that
             #     was dispatched but died before writing a sidecar leaves
-            #     its files unscoped there while they stay `assigned` here.
+            #     its files unscoped there while they stay assigned here.
             # Keep both. This one is the plan-vs-changed accounting the
             # metrics partition depends on; that one is the did-anyone-
             # actually-see-it accounting the review report must confess.
-            "uncovered": sorted(reviewable_set - assigned_set),
+            "unassigned_reviewable_files": sorted(reviewable_set - assigned_set),
             "review_claim_accounting_by_agent": review_claim_accounting_by_agent,
             "review_claimable_file_count_by_agent": (
                 review_claimable_file_count_by_agent

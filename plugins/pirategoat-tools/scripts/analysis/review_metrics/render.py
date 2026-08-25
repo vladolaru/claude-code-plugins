@@ -141,15 +141,15 @@ def _table_row(run: dict[str, Any]) -> list[str]:
             else "n/a"
         )
     coverage_text = (
-        f"{len(coverage.get('assigned', []))}/"
-        f"{len(coverage.get('reviewable', []))}/"
-        f"{len(coverage.get('uncovered', []))}"
+        f"{len(coverage.get('assigned_files', []))}/"
+        f"{len(coverage.get('reviewable_files', []))}/"
+        f"{len(coverage.get('unassigned_reviewable_files', []))}"
         if coverage is not None else "—"
     )
     if coverage is not None and metrics.get("coverage") == "partial":
         coverage_text = f"partial {coverage_text}"
-    raw = _format_count(summary.get("total_agent_issues"))
-    final = _format_count(summary.get("final_issues"))
+    raw = _format_count(summary.get("total_agent_findings"))
+    final = _format_count(summary.get("final_finding_count"))
     critic_state = metrics.get("critic", "missing")
     critic_verdict = outcome.get("critic_verdict")
     if critic_state == "complete" and critic_verdict in _CRITIC_VERDICTS:
@@ -210,7 +210,7 @@ def format_table(runs: list[dict[str, Any]], aggregate: dict[str, Any]) -> str:
         "Version/Mode",
         "Planner→Actual",
         "Adjustments",
-        "Assigned/Reviewable/Uncovered",
+        "Assigned/Reviewable/Unassigned",
         "Outcome/Critic",
         "Wall",
         "Recon/Critic",

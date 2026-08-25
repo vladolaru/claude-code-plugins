@@ -249,13 +249,13 @@ def _completion_was_logged(output_dir, agent_name, review_digest):
 
 
 def _log_agent_complete_telemetry(
-    output_dir, agent_name, verdict, issue_count, severities, review_digest
+    output_dir, agent_name, verdict, finding_count, severities, review_digest
 ):
     telemetry = _telemetry_for_output(output_dir)
     telemetry.log_agent_complete(
         agent_name=agent_name,
         verdict=verdict,
-        issue_count=issue_count,
+        finding_count=finding_count,
         severities=severities,
         review_digest=review_digest,
     )

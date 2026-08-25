@@ -12,6 +12,7 @@ Zero external dependencies (stdlib only).
 import glob as glob_mod
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -109,10 +110,23 @@ _AGENT_COMPLETE_MANIFEST_FIELDS = (
     "agent",
     "duration_ms",
     "verdict",
-    "issue_count",
+    "finding_count",
     "review_digest",
 )
 _SEVERITY_FIELDS = _VALID_SEVERITIES
+_RECONCILIATION_COUNT_FIELDS = (
+    "input_finding_count",
+    "contributing_agent_count",
+    "grouped_concern_count",
+    "false_positive_finding_count",
+    "out_of_scope_finding_count",
+    "verified_finding_count",
+    "not_applicable_agent_count",
+)
+_RECONCILIATION_FIELDS = frozenset((
+    *_RECONCILIATION_COUNT_FIELDS,
+    "deduplication_ratio",
+))
 
 
 def _advisory_measurement(data: Any) -> Dict[str, Any]:
@@ -359,7 +373,7 @@ class ReviewTelemetry:
 
     def log_agent_complete(self, agent_name: str, review_digest: str,
                            verdict: str = "",
-                           issue_count: int = 0,
+                           finding_count: int = 0,
                            severities: Optional[dict] = None) -> None:
         """Append the digest-bound completion of one finalized review."""
         if self.log_path is None:
@@ -374,7 +388,7 @@ class ReviewTelemetry:
             "agent": agent_name,
             "duration_ms": duration_ms,
             "verdict": verdict,
-            "issue_count": issue_count,
+            "finding_count": finding_count,
             "severities": severities or {},
             "review_digest": review_digest,
         }
@@ -713,6 +727,7 @@ class ReviewTelemetry:
         incomplete = _incomplete_agent_executions(started, completed)
 
         pipeline_result = self._read_json_file("pipeline-result.json") or {}
+        findings = self._extract_findings()
         summary = end.get("summary", {})
         if not isinstance(summary, dict):
             summary = {}
@@ -743,6 +758,9 @@ class ReviewTelemetry:
                 "verdict": pipeline_result.get("verdict"),
                 "critic_verdict": pipeline_result.get("critic_verdict"),
                 "verdict_source": pipeline_result.get("verdict_source"),
+                "reconciliation": (
+                    findings.get("reconciliation") if findings else None
+                ),
             },
             "availability": {
                 "pipeline": True,
@@ -1117,7 +1135,7 @@ class ReviewTelemetry:
                     ))
                     results[base] = {
                         "verdict": data.get("verdict"),
-                        "issue_count": len(findings),
+                        "finding_count": len(findings),
                         "severities": severities,
                     }
                     results[base].update(_advisory_measurement(data))
@@ -1142,13 +1160,40 @@ class ReviewTelemetry:
             ))
             findings = {
                 "verdict": data.get("verdict"),
-                "total_issues": len(ledger_findings),
+                "final_finding_count": len(ledger_findings),
                 "severities": severities,
+                "reconciliation": self._extract_reconciliation(data),
             }
             findings.update(_advisory_measurement(data))
             return findings
         except (json.JSONDecodeError, KeyError):
             return None
+
+    @staticmethod
+    def _extract_reconciliation(data: dict) -> Optional[dict]:
+        """Project exact structured reconciliation measurements."""
+        meta = data.get("meta")
+        reconciliation = (
+            meta.get("reconciliation") if isinstance(meta, dict) else None
+        )
+        if not isinstance(reconciliation, dict):
+            return None
+        result = {}
+        for name in _RECONCILIATION_COUNT_FIELDS:
+            value = reconciliation.get(name)
+            if type(value) is not int or value < 0:
+                return None
+            result[name] = value
+        ratio = reconciliation.get("deduplication_ratio")
+        if (
+            not isinstance(ratio, (int, float))
+            or isinstance(ratio, bool)
+            or not math.isfinite(ratio)
+            or not 0 <= ratio <= 1
+        ):
+            return None
+        result["deduplication_ratio"] = ratio
+        return result
 
     def _build_summary(
         self,
@@ -1180,14 +1225,16 @@ class ReviewTelemetry:
         agents = extracts["agents"]
         if agents:
             summary["agents_completed"] = len(agents)
-            summary["total_agent_issues"] = sum(
-                a.get("issue_count", 0) for a in agents.values() if "error" not in a
+            summary["total_agent_findings"] = sum(
+                a.get("finding_count", 0)
+                for a in agents.values()
+                if "error" not in a
             )
 
         findings = extracts["findings"]
         if findings:
             summary["final_verdict"] = findings.get("verdict")
-            summary["final_issues"] = findings.get("total_issues")
+            summary["final_finding_count"] = findings.get("final_finding_count")
             summary["final_severities"] = findings.get("severities")
             if "advisory_suppressed" in findings:
                 summary["final_advisory_suppressed"] = (

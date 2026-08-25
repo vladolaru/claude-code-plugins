@@ -20,6 +20,8 @@ from .contracts import (
     _MAX_WALL_TIME_MS,
     _OPTIONAL_SECTION_AVAILABILITY_KEYS,
     _PRODUCER_AGENT_NAME_RE,
+    _RECONCILIATION_COUNT_FIELDS,
+    _RECONCILIATION_FIELDS,
     _RETAINED_CRITIC_VALUES,
     _SAFE_RUN_ID_RE,
     _SEVERITIES,
@@ -306,7 +308,7 @@ def _sanitize_agent_event(value: object, *, completed: bool) -> dict[str, Any]:
     if schema is not None:
         result["schema"] = schema
     if completed:
-        for name in ("duration_ms", "issue_count"):
+        for name in ("duration_ms", "finding_count"):
             count = _nonnegative_int(value.get(name))
             if count is not None:
                 result[name] = count
@@ -405,7 +407,7 @@ def _strict_lifecycle_event(
                 value.get("duration_ms") is not None
                 and _nonnegative_exact_int(value.get("duration_ms")) is None
             )
-            or _nonnegative_exact_int(value.get("issue_count")) is None
+            or _nonnegative_exact_int(value.get("finding_count")) is None
             or not _bounded_event_string(value.get("verdict"))
             or not isinstance(value.get("severities"), dict)
             or not _lowercase_sha256(review_digest)
@@ -419,7 +421,7 @@ def _strict_lifecycle_event(
             if count is None:
                 return None
             severities[name] = count
-        if value["issue_count"] != sum(severities.values()):
+        if value["finding_count"] != sum(severities.values()):
             return None
         result = {
             "schema": value["schema"],
@@ -429,7 +431,7 @@ def _strict_lifecycle_event(
             "agent": value["agent"],
             "duration_ms": value.get("duration_ms"),
             "verdict": value["verdict"],
-            "issue_count": value["issue_count"],
+            "finding_count": value["finding_count"],
             "severities": severities,
         }
         result["review_digest"] = review_digest
@@ -924,12 +926,12 @@ def _sanitize_coverage(value: object) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
     required = {
-        "changed",
-        "reviewable",
-        "by_agent",
-        "assigned",
-        "excluded",
-        "uncovered",
+        "changed_files",
+        "reviewable_files",
+        "assigned_files_by_agent",
+        "assigned_files",
+        "file_exclusions",
+        "unassigned_reviewable_files",
         "review_claim_accounting_by_agent",
         "review_claimable_file_count_by_agent",
         "semantics",
@@ -940,13 +942,18 @@ def _sanitize_coverage(value: object) -> dict[str, Any] | None:
         return None
 
     path_lists: dict[str, list[str]] = {}
-    for name in ("changed", "reviewable", "assigned", "uncovered"):
+    for name in (
+        "changed_files",
+        "reviewable_files",
+        "assigned_files",
+        "unassigned_reviewable_files",
+    ):
         paths = _strict_repo_read_paths(value.get(name))
         if paths is None or len(paths) != len(set(paths)):
             return None
         path_lists[name] = paths
 
-    by_agent = value.get("by_agent")
+    by_agent = value.get("assigned_files_by_agent")
     if not isinstance(by_agent, dict):
         return None
     safe_by_agent: dict[str, list[str]] = {}
@@ -961,27 +968,27 @@ def _sanitize_coverage(value: object) -> dict[str, Any] | None:
             return None
         safe_by_agent[name] = paths
 
-    raw_excluded = value.get("excluded")
+    raw_excluded = value.get("file_exclusions")
     if not isinstance(raw_excluded, list):
         return None
-    excluded: list[dict[str, str]] = []
+    file_exclusions: list[dict[str, str]] = []
     for item in raw_excluded:
         if not isinstance(item, dict) or set(item) != {"path", "reason"}:
             return None
         path = _safe_repo_read_path(item.get("path"))
         if path is None or item.get("reason") != "noise_filtered":
             return None
-        excluded.append({"path": path, "reason": "noise_filtered"})
+        file_exclusions.append({"path": path, "reason": "noise_filtered"})
 
-    changed = set(path_lists["changed"])
-    reviewable = set(path_lists["reviewable"])
-    assigned = set(path_lists["assigned"])
-    uncovered = set(path_lists["uncovered"])
-    excluded_paths = [item["path"] for item in excluded]
+    changed = set(path_lists["changed_files"])
+    reviewable = set(path_lists["reviewable_files"])
+    assigned = set(path_lists["assigned_files"])
+    unassigned_reviewable = set(path_lists["unassigned_reviewable_files"])
+    excluded_paths = [item["path"] for item in file_exclusions]
     if (
         not reviewable <= changed
-        or not assigned.isdisjoint(uncovered)
-        or assigned | uncovered != reviewable
+        or not assigned.isdisjoint(unassigned_reviewable)
+        or assigned | unassigned_reviewable != reviewable
         or len(excluded_paths) != len(set(excluded_paths))
         or set(excluded_paths) != changed - reviewable
         or any(not set(paths) <= changed for paths in safe_by_agent.values())
@@ -994,12 +1001,14 @@ def _sanitize_coverage(value: object) -> dict[str, Any] | None:
         return None
 
     result: dict[str, Any] = {
-        "changed": path_lists["changed"],
-        "reviewable": path_lists["reviewable"],
-        "by_agent": safe_by_agent,
-        "assigned": path_lists["assigned"],
-        "excluded": excluded,
-        "uncovered": path_lists["uncovered"],
+        "changed_files": path_lists["changed_files"],
+        "reviewable_files": path_lists["reviewable_files"],
+        "assigned_files_by_agent": safe_by_agent,
+        "assigned_files": path_lists["assigned_files"],
+        "file_exclusions": file_exclusions,
+        "unassigned_reviewable_files": path_lists[
+            "unassigned_reviewable_files"
+        ],
         "semantics": "generated_scope_not_proof_of_model_read",
     }
 
@@ -1508,10 +1517,34 @@ def _sanitize_summary(value: object) -> dict[str, Any]:
     return summary
 
 
+def _sanitize_reconciliation(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, dict) or set(value) != _RECONCILIATION_FIELDS:
+        return None
+    result: dict[str, Any] = {}
+    for name in _RECONCILIATION_COUNT_FIELDS:
+        count = _nonnegative_exact_int(value.get(name))
+        if count is None:
+            return None
+        result[name] = count
+    ratio = value.get("deduplication_ratio")
+    if (
+        not isinstance(ratio, (int, float))
+        or isinstance(ratio, bool)
+        or not math.isfinite(ratio)
+        or not 0 <= ratio <= 1
+    ):
+        return None
+    result["deduplication_ratio"] = ratio
+    return result
+
+
 def _sanitize_outcome(value: object) -> dict[str, Any]:
     value = value if isinstance(value, dict) else {}
     summary = _sanitize_summary(value.get("summary"))
-    result = {"summary": summary}
+    result = {
+        "summary": summary,
+        "reconciliation": _sanitize_reconciliation(value.get("reconciliation")),
+    }
     result.update(
         _safe_scalar_map(
             value,
