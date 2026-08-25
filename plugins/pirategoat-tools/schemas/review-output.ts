@@ -22,7 +22,7 @@
  */
 
 /**
- * Severity levels for issues
+ * Severity levels for findings
  */
 export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 
@@ -39,10 +39,10 @@ export type ConfidenceScore = number; // 0.0 - 1.0
 /**
  * A decision-critic action, and the provenance it leaves on the finding it
  * touched. `critic_adjustments.py` writes this directly onto the target
- * issue object — for `add`, onto the newly created issue; for
+ * finding object — for `add`, onto the newly created finding; for
  * `promote`/`demote`/`rescope`/`correct`, onto the finding it patched
- * in-place (still inside `issues`); for `remove`, onto the finding as it is
- * moved into `removed_by_critic`. Never written by anything else.
+ * in-place (still inside `findings`); for `remove`, onto the finding as it is
+ * moved into `findings_removed_by_critic`. Never written by anything else.
  */
 export interface CriticAdjustment {
     action: 'promote' | 'demote' | 'rescope' | 'correct' | 'add' | 'remove';
@@ -50,14 +50,14 @@ export interface CriticAdjustment {
     // The pre-patch value of just the fields this adjustment changed —
     // present only for promote/demote/rescope/correct. Absent for `add`
     // (nothing pre-existed) and `remove` (the whole finding is the change).
-    prior?: Partial<Pick<Issue, 'severity' | 'title' | 'description' | 'recommendation' | 'file' | 'line' | 'category' | 'confidence'>>;
+    prior?: Partial<Pick<Finding, 'severity' | 'title' | 'description' | 'recommendation' | 'file' | 'line' | 'category' | 'confidence'>>;
 }
 
 /**
- * Base issue structure common to all review types
+ * Verdict-bearing finding common to all review types.
  */
-export interface Issue {
-    id: string; // Unique identifier for this issue
+export interface Finding {
+    id: string; // Monotonic canonical identifier: fN
     category: string; // bug | security | performance | architecture | style
     severity: Severity;
     severity_floor?: Severity; // Lowest severity allowed after verification/reconciliation
@@ -75,29 +75,25 @@ export interface Issue {
     channel?: 'blocking' | 'advisory'; // Exact accepted input vocabulary. 'blocking' is the default and is canonicalized to absence; entitled 'advisory' findings remain listed but are excluded from the verdict.
     // Present when a decision-critic batch touched this finding: promoted,
     // demoted, rescoped, corrected, or added it, or (on entries moved into
-    // `removed_by_critic` below) removed it. Absent on every finding no
+    // `findings_removed_by_critic` below) removed it. Absent on every finding no
     // critic round has adjusted.
     critic_adjustment?: CriticAdjustment;
 }
 
 /**
- * Auditable absence claim: "nothing depends on this" with the exact
- * verification method stated so downstream stages can judge coverage.
- * A negative search proves only that the searched pattern is absent —
- * the method field is what makes that limit visible.
+ * Auditable verification work carried through reconciliation structurally.
  */
-export interface Clearance {
-    claim: string; // The absence being asserted
-    method: string; // Exact searches run / files read (required)
-    // Hit counts, file:line list, and — in a reconciled ledger — the
-    // agents the clearance came from ("per security-reviewer,
-    // concurrency-reviewer — 0 in-tree consumers"). Attribution rides in
-    // this free-text field by convention, with no field of its own:
-    // reconciliation collapses method-correlated clearances into ONE
-    // entry, so the names of every agent that ran the shared probe are
-    // what has to survive the merge. Unvalidated by construction — the
-    // contract lives in agents/review-reconciliator.md.
-    evidence?: string | null;
+export interface ReviewCheck {
+    id: string; // Monotonic canonical identifier: cN
+    question: string;
+    method: string;
+    result: string;
+    source_reviewers: string[];
+}
+
+export interface InvalidatedAssessment {
+    text: string;
+    invalidated_by_adjustment_ids: string[];
 }
 
 /**
@@ -109,13 +105,13 @@ export interface ReviewOutput {
     reviewer: string; // 'architecture' | 'security' | 'performance' | 'tests' | 'patterns'
     timestamp: string; // ISO 8601
     plugin_version: string | null; // pirategoat-tools version that produced this artifact; null when the producer could not name itself
-    schema: number; // Shape of this artifact — see SCHEMA MAINTENANCE above
+    schema: number; // Current producer value is 2; see SCHEMA MAINTENANCE above
 
     // Summary
     verdict: Verdict;
     skip_reason?: string; // Why the agent did not review (only when verdict is 'not_applicable')
     summary: {
-        total_issues: number;
+        total_findings: number;
         by_severity: {
             critical: number;
             high: number;
@@ -123,12 +119,12 @@ export interface ReviewOutput {
             low: number;
             info: number;
         };
-        advisory_suppressed: number; // Advisory-tagged findings excluded from the verdict; always present, including 0 (and 0 for not_applicable).
-        verdict_without_advisory?: Verdict; // Present only when advisory_suppressed > 0 and the verdict over all findings would be stricter.
+        suppressed_advisory_finding_count: number; // Advisory-tagged findings excluded from the verdict; always present, including 0 (and 0 for not_applicable).
+        verdict_without_advisory?: Verdict; // Present only when suppression is non-zero and the verdict over all findings would be stricter.
     };
 
-    // Issues
-    issues: Issue[]; // Findings recorded by the producer, possibly carrying a critic_adjustment (see Issue above) if a critic round has touched them.
+    findings: Finding[];
+    checks: ReviewCheck[]; // Always present, including an empty array.
 
     // Canonical reviewed-file accounting derived from the system-authored
     // accounting input and the reviewer's validated positive claims.
@@ -160,27 +156,10 @@ export interface ReviewOutput {
     // when the producer said nothing. Rendered as the "## Assessment"
     // section of the derived Markdown.
     //
-    // Also null when a decision-critic batch WITHDREW it: the critic's
-    // adjustment vocabulary addresses issues, not ledger-level prose, so an
-    // assessment the applied batch may have contradicted is retracted
-    // rather than corrected. The retracted text moves to
-    // withdrawn_narrative_summary below; a non-empty
-    // withdrawn_narrative_summary is what the renderer reads as "withdrawn"
-    // rather than "never written".
-    //
-    // Non-null BESIDE a withdrawal record means the orchestrator supplied a
-    // post-critic assessment through the validated adjudication request. The
-    // settle command checkpoints it under `adjudication.revised_narrative`,
-    // and apply_adjustments() moves it into this field. The renderer
-    // attributes it accordingly — the reconciler's marker would credit prose
-    // that was retracted a step earlier.
-    narrative_summary: string | null;
-
-    // Clearances (optional) — auditable absence claims ("nothing depends on
-    // the removed X") carrying the verification method. Unlike positives,
-    // these flow into the reconciliation context so clearance-vs-finding
-    // conflicts are visible downstream.
-    clearances?: Clearance[];
+    // Also null when an applied decision-critic batch invalidated it. A
+    // non-null value beside invalidated_assessments is the orchestrator's
+    // revised_assessment installed by the adjustment applier.
+    assessment: string | null;
 
     // Metadata
     meta: {
@@ -190,21 +169,22 @@ export interface ReviewOutput {
         // spans the review, so absence is reported as absence.
         review_duration_ms: number | null;
         confidence_score: ConfidenceScore; // Overall confidence
-        tool_results_used?: string[]; // e.g., ['test-results', 'semgrep']
+        next_finding_number: number;
+        next_check_number: number;
 
         // Reconciliation accounting — present only on review-findings.json,
         // written by the review-reconciliator after semantic dedup, scope
         // checking, and fact verification. Renders as the "**Pipeline:**"
         // line and the not-applicable coverage line.
         reconciliation?: {
-            input_findings_count: number;
-            agents_contributing: number;
-            concerns_after_grouping: number;
-            false_positives_dropped: number;
-            out_of_scope_dropped: number;
-            verified_concerns: number;
-            merge_ratio: number;
-            not_applicable_count: number;
+            input_finding_count: number;
+            contributing_agent_count: number;
+            grouped_concern_count: number;
+            false_positive_finding_count: number;
+            out_of_scope_finding_count: number;
+            verified_finding_count: number;
+            deduplication_ratio: number;
+            not_applicable_agent_count: number;
             not_applicable_agents: Array<{ name: string; skip_reason: string }>;
             reviewing_agents: string[];
             dispatched_agents: string[];
@@ -249,17 +229,20 @@ export interface ReviewOutput {
     // published pipeline verdict from it.
     verdict_before_adjustments?: Verdict | null;
 
-    // Findings the critic removed. Moved out of `issues` rather than
-    // deleted, each carrying the `critic_adjustment` record (see Issue
+    // Findings the critic removed. Moved out of `findings` rather than
+    // deleted, each carrying the `critic_adjustment` record (see Finding
     // above) that removed it, so the decision stays auditable. Rendered as
     // the "## Removed by the Decision Critic" section.
-    removed_by_critic?: Issue[];
+    findings_removed_by_critic?: Finding[];
+
+    // Checks removed by an applied critic batch remain auditable here.
+    checks_removed_by_critic?: ReviewCheck[];
 
     // Critic decisions the orchestrator's adjudication request refuted. The
     // settle command derives `rejected: true` plus `rejection_reason` in the
     // checkpointed decision-critic-adjustments.json document.
     // Present after the first batch that settled at least one rejection.
-    // A rejected entry is never applied to `issues` — the target finding
+    // A rejected entry is never applied to `findings` — the target finding
     // is never mutated — so this is the canonical place a rejection is
     // auditable. The shared Markdown renderer projects each record as an
     // explicit `adjustment_id — refuted` line.
@@ -275,13 +258,8 @@ export interface ReviewOutput {
         rejection_reason: string;
     }>;
 
-    // Assessments retracted by an applying batch, oldest first. Each entry
-    // keeps the prose and the ids of the decisions that cost it its
-    // standing — withdrawn, never silently dropped.
-    withdrawn_narrative_summary?: Array<{
-        text: string;
-        withdrawn_by: string[];
-    }>;
+    // Assessments invalidated by an applying batch, oldest first.
+    invalidated_assessments?: InvalidatedAssessment[];
 }
 
 /**

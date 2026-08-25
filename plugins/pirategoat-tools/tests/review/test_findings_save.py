@@ -25,9 +25,9 @@ SCRIPT = SCRIPTS_DIR / "review" / "findings_save.py"
 def _valid_findings(**overrides):
     doc = {
         "verdict": "request_changes",
-        "issues": [
+        "findings": [
             {
-                "id": "aaaa1111",
+                "id": "f1",
                 "category": "security",
                 "severity": "high",
                 "title": "Unsanitized input",
@@ -39,15 +39,76 @@ def _valid_findings(**overrides):
             },
         ],
         "summary": {
-            "total_issues": 1,
+            "total_findings": 1,
             "by_severity": {
                 "critical": 0, "high": 1, "medium": 0, "low": 0, "info": 0,
             },
+            "suppressed_advisory_finding_count": 0,
         },
-        "narrative_summary": "One high-severity issue found.",
-        "clearances": [
-            {"claim": "no callers", "method": "grep", "evidence": "0 hits"},
+        "assessment": "One high-severity finding found.",
+        "checks": [
+            {
+                "id": "c1",
+                "question": "Are there any callers?",
+                "method": "grep",
+                "result": "0 hits",
+                "source_reviewers": ["security"],
+            },
         ],
+        "meta": {"next_finding_number": 2, "next_check_number": 2},
+    }
+    doc.update(overrides)
+    if "meta" not in overrides:
+        findings = doc.get("findings")
+        checks = doc.get("checks")
+        doc["meta"] = {
+            "next_finding_number": (
+                len(findings) + 1 if isinstance(findings, list) else 2
+            ),
+            "next_check_number": (
+                len(checks) + 1 if isinstance(checks, list) else 2
+            ),
+        }
+    return doc
+
+
+def _valid_schema2_findings(**overrides):
+    doc = {
+        "verdict": "request_changes",
+        "findings": [
+            {
+                "id": "f1",
+                "category": "security",
+                "severity": "high",
+                "title": "Unsanitized input",
+                "description": "User input reaches the query unsanitized.",
+                "file": "src/foo.php",
+                "line": 42,
+                "recommendation": "Sanitize before use.",
+                "confidence": 0.9,
+            },
+        ],
+        "summary": {
+            "total_findings": 1,
+            "by_severity": {
+                "critical": 0, "high": 1, "medium": 0, "low": 0, "info": 0,
+            },
+            "suppressed_advisory_finding_count": 0,
+        },
+        "assessment": "One high-severity finding remains.",
+        "checks": [
+            {
+                "id": "c1",
+                "question": "Are there any safe call sites?",
+                "method": "Read every caller.",
+                "result": "No.",
+                "source_reviewers": ["security"],
+            },
+        ],
+        "meta": {
+            "next_finding_number": 2,
+            "next_check_number": 2,
+        },
     }
     doc.update(overrides)
     return doc
@@ -67,6 +128,76 @@ class TestFindingsSave:
         path.write_text(json.dumps(doc))
         return path
 
+    def test_accepts_canonical_findings_checks_and_assessment(self, tmp_path):
+        findings = self._write_findings(tmp_path, _valid_schema2_findings())
+
+        result = self._run_save(tmp_path, findings)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        saved = json.loads((tmp_path / "review-findings.json").read_text())
+        assert saved["findings"][0]["id"] == "f1"
+        assert saved["checks"][0]["source_reviewers"] == ["security"]
+        assert saved["assessment"] == "One high-severity finding remains."
+        assert "issues" not in saved
+        assert "clearances" not in saved
+        assert "narrative_summary" not in saved
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("checks", None),
+            ("checks", {}),
+            ("assessment", ["not", "text"]),
+        ],
+    )
+    def test_rejects_noncanonical_checks_or_assessment(
+        self, tmp_path, field, value
+    ):
+        findings = self._write_findings(
+            tmp_path, _valid_schema2_findings(**{field: value})
+        )
+
+        result = self._run_save(tmp_path, findings)
+
+        assert result.returncode != 0
+        assert field in result.stdout
+        assert not (tmp_path / "review-findings.json").exists()
+
+    def test_rejects_mutable_or_malformed_check_identity(self, tmp_path):
+        checks = _valid_schema2_findings()["checks"]
+        checks[0]["source_reviewers"] = ["security", "", 7]
+        findings = self._write_findings(
+            tmp_path, _valid_schema2_findings(checks=checks)
+        )
+
+        result = self._run_save(tmp_path, findings)
+
+        assert result.returncode != 0
+        assert "source_reviewers" in result.stdout
+        assert not (tmp_path / "review-findings.json").exists()
+
+    def test_rejects_retired_tool_metadata(self, tmp_path):
+        doc = _valid_schema2_findings()
+        doc["meta"]["tool_results_used"] = ["rg"]
+        findings = self._write_findings(tmp_path, doc)
+
+        result = self._run_save(tmp_path, findings)
+
+        assert result.returncode != 0
+        assert "tool_results_used" in result.stdout
+        assert not (tmp_path / "review-findings.json").exists()
+
+    def test_rejects_summary_without_advisory_finding_count(self, tmp_path):
+        doc = _valid_schema2_findings()
+        del doc["summary"]["suppressed_advisory_finding_count"]
+        findings = self._write_findings(tmp_path, doc)
+
+        result = self._run_save(tmp_path, findings)
+
+        assert result.returncode != 0
+        assert "suppressed_advisory_finding_count" in result.stdout
+        assert not (tmp_path / "review-findings.json").exists()
+
     def test_valid_findings_saved_atomically(self, tmp_path):
         findings = self._write_findings(tmp_path, _valid_findings())
 
@@ -77,13 +208,13 @@ class TestFindingsSave:
         assert ledger_path.is_file()
         saved = json.loads(ledger_path.read_text())
         assert saved["verdict"] == "request_changes"
-        assert len(saved["issues"]) == 1
+        assert len(saved["findings"]) == 1
 
     def test_echo_format(self, tmp_path):
         doc = _valid_findings(
-            issues=[
+            findings=[
                 {
-                    "id": f"id{i}",
+                    "id": f"f{i + 1}",
                     "category": "general",
                     "severity": sev,
                     "title": "t",
@@ -99,15 +230,19 @@ class TestFindingsSave:
                 )
             ],
             summary={
-                "total_issues": 8,
+                "total_findings": 8,
                 "by_severity": {
                     "critical": 0, "high": 1, "medium": 6, "low": 1, "info": 0,
                 },
+                "suppressed_advisory_finding_count": 0,
             },
-            clearances=[
-                {"claim": f"c{i}", "method": "grep", "evidence": "0 hits"}
-                for i in range(12)
-            ],
+            checks=[{
+                "id": f"c{i + 1}",
+                "question": f"Check {i + 1}?",
+                "method": "grep",
+                "result": "0 hits",
+                "source_reviewers": ["security"],
+            } for i in range(12)],
         )
         findings = self._write_findings(tmp_path, doc)
 
@@ -119,16 +254,16 @@ class TestFindingsSave:
             "RECORDED FINDINGS: 8 (critical 0, high 1, medium 6, low 1)"
             in result.stdout
         )
-        assert "CLEARANCES: 12 | NARRATIVE: present" in result.stdout
+        assert "CHECKS: 12 | ASSESSMENT: present" in result.stdout
 
-    def test_echo_reflects_absent_narrative_and_no_clearances(self, tmp_path):
-        doc = _valid_findings(narrative_summary=None, clearances=[])
+    def test_echo_reflects_absent_assessment_and_no_checks(self, tmp_path):
+        doc = _valid_findings(assessment=None, checks=[])
         findings = self._write_findings(tmp_path, doc)
 
         result = self._run_save(tmp_path, findings)
 
         assert result.returncode == 0, result.stdout + result.stderr
-        assert "CLEARANCES: 0 | NARRATIVE: absent" in result.stdout
+        assert "CHECKS: 0 | ASSESSMENT: absent" in result.stdout
 
     def test_rejects_non_object_top_level(self, tmp_path):
         findings = self._write_findings(tmp_path, ["not", "an", "object"])
@@ -161,7 +296,7 @@ class TestFindingsSave:
 
         assert result.returncode != 0
         assert "REJECTED" in result.stdout
-        assert "does not match the issues-derived verdict" in result.stdout
+        assert "does not match the findings-derived verdict" in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
 
     def test_rejects_uppercase_verdict(self, tmp_path):
@@ -179,7 +314,7 @@ class TestFindingsSave:
 
     def test_rejects_count_mismatch(self, tmp_path):
         doc = _valid_findings()
-        doc["summary"]["total_issues"] = 5  # actual issues list has 1 entry
+        doc["summary"]["total_findings"] = 5  # actual findings list has 1 entry
         findings = self._write_findings(tmp_path, doc)
 
         result = self._run_save(tmp_path, findings)
@@ -192,7 +327,7 @@ class TestFindingsSave:
     def test_rejects_by_severity_mismatch(self, tmp_path):
         doc = _valid_findings()
         doc["summary"]["by_severity"]["high"] = 0
-        doc["summary"]["by_severity"]["low"] = 1  # doesn't match the 1 high issue
+        doc["summary"]["by_severity"]["low"] = 1  # doesn't match the 1 high finding
         findings = self._write_findings(tmp_path, doc)
 
         result = self._run_save(tmp_path, findings)
@@ -210,7 +345,7 @@ class TestFindingsSave:
     )
     def test_rejects_issue_missing_required_field(self, tmp_path, missing_field):
         doc = _valid_findings()
-        del doc["issues"][0][missing_field]
+        del doc["findings"][0][missing_field]
         findings = self._write_findings(tmp_path, doc)
 
         result = self._run_save(tmp_path, findings)
@@ -222,18 +357,18 @@ class TestFindingsSave:
 
     def test_accepts_null_line_for_file_scoped_issue(self, tmp_path):
         doc = _valid_findings()
-        doc["issues"][0]["line"] = None
+        doc["findings"][0]["line"] = None
         findings = self._write_findings(tmp_path, doc)
 
         result = self._run_save(tmp_path, findings)
 
         assert result.returncode == 0, result.stdout + result.stderr
         saved = json.loads((tmp_path / "review-findings.json").read_text())
-        assert saved["issues"][0]["line"] is None
+        assert saved["findings"][0]["line"] is None
 
     def test_rejects_issue_invalid_severity(self, tmp_path):
         doc = _valid_findings()
-        doc["issues"][0]["severity"] = "catastrophic"
+        doc["findings"][0]["severity"] = "catastrophic"
         findings = self._write_findings(tmp_path, doc)
 
         result = self._run_save(tmp_path, findings)
@@ -244,7 +379,7 @@ class TestFindingsSave:
         assert not (tmp_path / "review-findings.json").exists()
 
     def test_rejects_issue_not_an_object(self, tmp_path):
-        doc = _valid_findings(issues=["not an object"])
+        doc = _valid_findings(findings=["not an object"])
         findings = self._write_findings(tmp_path, doc)
 
         result = self._run_save(tmp_path, findings)
@@ -254,7 +389,7 @@ class TestFindingsSave:
         assert not (tmp_path / "review-findings.json").exists()
 
     def test_rejects_issues_not_a_list(self, tmp_path):
-        doc = _valid_findings(issues={"not": "a list"})
+        doc = _valid_findings(findings={"not": "a list"})
         findings = self._write_findings(tmp_path, doc)
 
         result = self._run_save(tmp_path, findings)
@@ -263,24 +398,24 @@ class TestFindingsSave:
         assert "REJECTED" in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
 
-    def test_rejects_clearances_not_a_list(self, tmp_path):
-        """A truthy non-list `clearances` (e.g. an integer) must be
+    def test_rejects_checks_not_a_list(self, tmp_path):
+        """A truthy non-list `checks` (e.g. an integer) must be
         rejected here — not merely tolerated by `_echo()` after the
-        ledger is already written. `findings.get("clearances") or []`
+        ledger is already written. `findings.get("checks") or []`
         only normalizes FALSY values; a truthy non-list would otherwise
         reach `len()`/iteration in `_echo()` post-write."""
-        doc = _valid_findings(clearances=12)
+        doc = _valid_findings(checks=12)
         findings = self._write_findings(tmp_path, doc)
 
         result = self._run_save(tmp_path, findings)
 
         assert result.returncode != 0
         assert "REJECTED" in result.stdout
-        assert "clearances" in result.stdout.lower()
+        assert "checks" in result.stdout.lower()
         assert not (tmp_path / "review-findings.json").exists()
 
     def test_rejects_clearance_entry_not_an_object(self, tmp_path):
-        doc = _valid_findings(clearances=["not an object"])
+        doc = _valid_findings(checks=["not an object"])
         findings = self._write_findings(tmp_path, doc)
 
         result = self._run_save(tmp_path, findings)
@@ -300,7 +435,7 @@ class TestFindingsSave:
         ],
     )
     def test_rejects_clearance_wrong_shape(self, tmp_path, bad_clearance):
-        doc = _valid_findings(clearances=[bad_clearance])
+        doc = _valid_findings(checks=[bad_clearance])
         findings = self._write_findings(tmp_path, doc)
 
         result = self._run_save(tmp_path, findings)
@@ -309,15 +444,15 @@ class TestFindingsSave:
         assert "REJECTED" in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
 
-    def test_rejects_narrative_summary_wrong_type(self, tmp_path):
-        doc = _valid_findings(narrative_summary=["not", "a", "string"])
+    def test_rejects_assessment_wrong_type(self, tmp_path):
+        doc = _valid_findings(assessment=["not", "a", "string"])
         findings = self._write_findings(tmp_path, doc)
 
         result = self._run_save(tmp_path, findings)
 
         assert result.returncode != 0
         assert "REJECTED" in result.stdout
-        assert "narrative_summary" in result.stdout.lower()
+        assert "assessment" in result.stdout.lower()
         assert not (tmp_path / "review-findings.json").exists()
 
     def test_rejects_missing_findings_file(self, tmp_path):
@@ -339,7 +474,7 @@ class TestFindingsSave:
 
     def test_collects_multiple_problems(self, tmp_path):
         doc = _valid_findings(verdict="MAYBE")
-        doc["issues"][0]["severity"] = "catastrophic"
+        doc["findings"][0]["severity"] = "catastrophic"
         findings = self._write_findings(tmp_path, doc)
 
         result = self._run_save(tmp_path, findings)
@@ -376,15 +511,19 @@ class TestFindingsSave:
     def test_accepts_every_reconciler_verdict(
         self, tmp_path, verdict, severity, counts
     ):
-        issues = []
+        findings = []
         if severity is not None:
-            issue = _valid_findings()["issues"][0]
-            issue["severity"] = severity
-            issues.append(issue)
+            finding = _valid_findings()["findings"][0]
+            finding["severity"] = severity
+            findings.append(finding)
         doc = _valid_findings(
             verdict=verdict,
-            issues=issues,
-            summary={"total_issues": len(issues), "by_severity": counts},
+            findings=findings,
+            summary={
+                "total_findings": len(findings),
+                "by_severity": counts,
+                "suppressed_advisory_finding_count": 0,
+            },
         )
         findings = self._write_findings(tmp_path, doc)
 
@@ -407,15 +546,16 @@ class TestFindingsSave:
         assert "REJECTED" in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
 
-    def test_accepts_empty_issues_with_approve(self, tmp_path):
+    def test_accepts_empty_findings_with_approve(self, tmp_path):
         doc = _valid_findings(
             verdict="approve",
-            issues=[],
+            findings=[],
             summary={
-                "total_issues": 0,
+                "total_findings": 0,
                 "by_severity": {
                     "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0,
                 },
+                "suppressed_advisory_finding_count": 0,
             },
         )
         findings = self._write_findings(tmp_path, doc)

@@ -2332,7 +2332,7 @@ class TestRunManifest:
         (output_dir / "review-findings.json").write_text(json.dumps({
             "verdict": "comment",
             "summary": "FINDING_SECRET",
-            "issues": [{
+            "findings": [{
                 "severity": "medium",
                 "description": "FINDING_SECRET",
             }],
@@ -2529,7 +2529,7 @@ class TestSnapshot:
         log_dir = tmp_path / "logs"
         review = {
             "verdict": "comment",
-            "issues": [
+            "findings": [
                 {"severity": "high", "title": "XSS vuln"},
                 {"severity": "medium", "title": "Missing escape"},
             ],
@@ -2549,10 +2549,10 @@ class TestSnapshot:
         review = {
             "verdict": "approve",
             "summary": {
-                "advisory_suppressed": 2,
+                "suppressed_advisory_finding_count": 2,
                 "verdict_without_advisory": "block",
             },
-            "issues": [{"severity": "critical", "channel": "advisory"}],
+            "findings": [{"severity": "critical", "channel": "advisory"}],
         }
         (output_dir / "security-review.json").write_text(json.dumps(review))
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(tmp_path / "logs"))
@@ -2567,49 +2567,49 @@ class TestSnapshot:
         [
             pytest.param(
                 "approve",
-                {"advisory_suppressed": True, "verdict_without_advisory": "block"},
+                {"suppressed_advisory_finding_count": True, "verdict_without_advisory": "block"},
                 None,
                 id="boolean-count",
             ),
             pytest.param(
                 "approve",
-                {"advisory_suppressed": -1, "verdict_without_advisory": "block"},
+                {"suppressed_advisory_finding_count": -1, "verdict_without_advisory": "block"},
                 None,
                 id="negative-count",
             ),
             pytest.param(
                 "approve",
-                {"advisory_suppressed": 1, "verdict_without_advisory": "banana"},
+                {"suppressed_advisory_finding_count": 1, "verdict_without_advisory": "banana"},
                 1,
                 id="unknown-verdict",
             ),
             pytest.param(
                 "approve",
-                {"advisory_suppressed": 1, "verdict_without_advisory": []},
+                {"suppressed_advisory_finding_count": 1, "verdict_without_advisory": []},
                 1,
                 id="non-string-verdict",
             ),
             pytest.param(
                 "approve",
-                {"advisory_suppressed": 1, "verdict_without_advisory": "not_applicable"},
+                {"suppressed_advisory_finding_count": 1, "verdict_without_advisory": "not_applicable"},
                 1,
                 id="not-applicable-counterfactual",
             ),
             pytest.param(
                 "block",
-                {"advisory_suppressed": 1, "verdict_without_advisory": "block"},
+                {"suppressed_advisory_finding_count": 1, "verdict_without_advisory": "block"},
                 1,
                 id="equal-counterfactual",
             ),
             pytest.param(
                 "request_changes",
-                {"advisory_suppressed": 1, "verdict_without_advisory": "comment"},
+                {"suppressed_advisory_finding_count": 1, "verdict_without_advisory": "comment"},
                 1,
                 id="softer-counterfactual",
             ),
             pytest.param(
                 "banana",
-                {"advisory_suppressed": 1, "verdict_without_advisory": "block"},
+                {"suppressed_advisory_finding_count": 1, "verdict_without_advisory": "block"},
                 1,
                 id="unknown-actual-verdict",
             ),
@@ -2621,7 +2621,7 @@ class TestSnapshot:
         (output_dir / "security-review.json").write_text(json.dumps({
             "verdict": verdict,
             "summary": summary,
-            "issues": [],
+            "findings": [],
         }))
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(tmp_path / "logs"))
 
@@ -2637,7 +2637,7 @@ class TestSnapshot:
         """review-findings.json is reconciled output, not an agent result."""
         log_dir = tmp_path / "logs"
         (output_dir / "review-findings.json").write_text(json.dumps(
-            {"verdict": "comment", "issues": [{"severity": "high"}]}
+            {"verdict": "comment", "findings": [{"severity": "high"}]}
         ))
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
         t.start(pr_number="42")
@@ -2651,7 +2651,7 @@ class TestSnapshot:
         log_dir = tmp_path / "logs"
         findings = {
             "verdict": "comment",
-            "issues": [
+            "findings": [
                 {"severity": "high", "title": "Real issue"},
                 {"severity": "medium", "title": "Minor issue"},
                 {"severity": "low", "title": "Nit"},
@@ -2673,10 +2673,10 @@ class TestSnapshot:
         findings = {
             "verdict": "approve",
             "summary": {
-                "advisory_suppressed": 1,
+                "suppressed_advisory_finding_count": 1,
                 "verdict_without_advisory": "block",
             },
-            "issues": [{"severity": "critical", "channel": "advisory"}],
+            "findings": [{"severity": "critical", "channel": "advisory"}],
         }
         (output_dir / "review-findings.json").write_text(json.dumps(findings))
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(tmp_path / "logs"))
@@ -2700,10 +2700,10 @@ class TestSnapshot:
         (output_dir / "review-findings.json").write_text(json.dumps({
             "verdict": "approve",
             "summary": {
-                "advisory_suppressed": True,
+                "suppressed_advisory_finding_count": True,
                 "verdict_without_advisory": "banana",
             },
-            "issues": [],
+            "findings": [],
         }))
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(tmp_path / "logs"))
 
@@ -2718,10 +2718,10 @@ class TestSnapshot:
         (output_dir / "review-findings.json").write_text(json.dumps({
             "verdict": "block",
             "summary": {
-                "advisory_suppressed": 1,
+                "suppressed_advisory_finding_count": 1,
                 "verdict_without_advisory": "comment",
             },
-            "issues": [],
+            "findings": [],
         }))
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(tmp_path / "logs"))
 

@@ -83,11 +83,11 @@ _BUILDER_ENV_OPTIONAL = frozenset({
     "PIRATEGOAT_REVIEW_BUDGET",
 })
 _BUILDER_ENV_NAMES = frozenset(_BUILDER_ENV_REQUIRED | _BUILDER_ENV_OPTIONAL)
-# Must mirror ReviewOutputBuilder.add_issue()'s FULL positional order — a
+# Must mirror ReviewOutputBuilder.add_finding()'s FULL positional order — a
 # parameter missing here is silently dropped from fully positional calls
 # (a dropped severity_floor records the pre-floor severity). A contract
 # test derives the expected tuple from the real signature.
-_BUILDER_ISSUE_POSITIONAL = (
+_BUILDER_FINDING_POSITIONAL = (
     "severity",
     "title",
     "file",
@@ -100,7 +100,7 @@ _BUILDER_ISSUE_POSITIONAL = (
     "source_cited",
     "severity_floor",
 )
-# Mirrors ReviewOutputBuilder.add_issue severity normalization: severities
+# Mirrors ReviewOutputBuilder.add_finding severity normalization: severities
 # are lowercased and a severity_floor promotes lower severities to it. The
 # reconstruction must match what the builder actually saved.
 _SEVERITY_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
@@ -186,7 +186,7 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
     Compliant reviewers save through a mandated Bash heredoc instead of a
     Write call, so the serialized review JSON never appears in the
     transcript. The heredoc body is literal Python, though: parse it and
-    reconstruct the issues from the builder.add_issue() calls so quality
+    reconstruct the findings from the builder.add_finding() calls so quality
     metrics keep working. Non-literal argument values degrade to omitted
     fields; an unparseable body degrades to None.
     """
@@ -205,7 +205,7 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
 
     # Reconstruction models execution by SOURCE POSITION, which is only
     # valid for the mandated straight-line heredoc. Any control flow or
-    # deferred/conditional evaluation (an add_issue() under `if False:`,
+    # deferred/conditional evaluation (an add_finding() under `if False:`,
     # inside a function body, behind `and`/`or` short-circuiting, in a
     # comprehension) would let ast.walk() collect calls that never ran —
     # fabricating findings. Fail closed: a non-straight-line body is not
@@ -217,7 +217,7 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
 
     # The builder persists its accumulated state at save_draft(): only issues
     # added BEFORE the final save call entered the saved JSON. An
-    # add_issue() after the last save executed but persisted nothing —
+    # add_finding() after the last save executed but persisted nothing —
     # collecting it would fabricate findings into the quality report.
     # Source position approximates execution order exactly for the
     # mandated straight-line heredoc.
@@ -242,7 +242,7 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
 
     # save_draft() persists one opened builder's accumulated state. The
     # final artifact holds only issues added to the last builder opened
-    # before the final save. Collecting earlier instances' add_issue()
+    # before the final save. Collecting earlier instances' add_finding()
     # calls would merge superseded findings into the record.
     # Position alone is not identity: issues bind to the SAVED receiver's
     # variable, so a second builder variable's calls are never merged in.
@@ -322,12 +322,12 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
     ):
         return None
 
-    issues: list[dict[str, Any]] = []
+    findings: list[dict[str, Any]] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
-        if not (isinstance(func, ast.Attribute) and func.attr == "add_issue"):
+        if not (isinstance(func, ast.Attribute) and func.attr == "add_finding"):
             continue
         receiver = func.value
         if not (
@@ -343,21 +343,21 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
             node.lineno, node.col_offset
         ) < final_ctor_pos:
             continue
-        issue: dict[str, Any] = {}
-        for name, arg in zip(_BUILDER_ISSUE_POSITIONAL, node.args):
+        finding: dict[str, Any] = {}
+        for name, arg in zip(_BUILDER_FINDING_POSITIONAL, node.args):
             try:
-                issue[name] = ast.literal_eval(arg)
+                finding[name] = ast.literal_eval(arg)
             except (ValueError, SyntaxError):
                 pass
         for keyword in node.keywords:
             if keyword.arg is None:
                 continue
             try:
-                issue[keyword.arg] = ast.literal_eval(keyword.value)
+                finding[keyword.arg] = ast.literal_eval(keyword.value)
             except (ValueError, SyntaxError):
                 pass
-        _normalize_builder_severity(issue)
-        issues.append(issue)
+        _normalize_builder_severity(finding)
+        findings.append(finding)
 
     # A heredoc that never calls builder.save_draft() persisted nothing — its
     # findings must not be fabricated into a review record. (The save
@@ -371,7 +371,7 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
         "path": posixpath.join(
             env["PIRATEGOAT_OUTPUT_DIR"], f"{reviewer}-review.json"
         ),
-        "content": json.dumps({"reviewer": reviewer, "issues": issues}),
+        "content": json.dumps({"reviewer": reviewer, "findings": findings}),
         "source": "bash_builder_heredoc",
     }
 
@@ -803,7 +803,7 @@ def format_text_report(dispatches: list[tuple[dict, dict]], agent_name: str | No
                 # so a real one-finding save would render as ~0 findings).
                 review_json = _parse_review_write_output(wo)
                 if review_json is not None:
-                    count_display = f"{len(review_json['issues'])} findings"
+                    count_display = f"{len(review_json['findings'])} findings"
                 else:
                     finding_count = content.count("## Finding") + content.count("### PAT-") + content.count('"id"')
                     count_display = f"~{finding_count} findings"
@@ -910,13 +910,13 @@ def extract_agent_findings(write_output: Any) -> dict[str, Any]:
     if not isinstance(write_output, dict):
         return empty
 
-    issues = write_output.get("issues", [])
-    if not isinstance(issues, list):
+    review_findings = write_output.get("findings", [])
+    if not isinstance(review_findings, list):
         return empty
 
     # Count by severity — prefer summary if present and consistent, else count from issues
     severity_counts: dict[str, int] = {}
-    for issue in issues:
+    for issue in review_findings:
         if not isinstance(issue, dict):
             continue
         sev = issue.get("severity", "unknown")
@@ -924,7 +924,7 @@ def extract_agent_findings(write_output: Any) -> dict[str, Any]:
 
     # Normalize issue dicts to ensure file/line/severity/title are present
     normalized_issues = []
-    for issue in issues:
+    for issue in review_findings:
         if not isinstance(issue, dict):
             continue
         normalized_issues.append({
@@ -963,7 +963,7 @@ def _parse_review_write_output(write_output: Any) -> dict[str, Any] | None:
         return None
     if not isinstance(review_json.get("reviewer"), str):
         return None
-    if not isinstance(review_json.get("issues"), list):
+    if not isinstance(review_json.get("findings"), list):
         return None
 
     return review_json

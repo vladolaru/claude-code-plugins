@@ -134,7 +134,7 @@ def _review_json(reviewer):
         "schema": 2,
         "verdict": "approve",
         "summary": {
-            "total_issues": 0,
+            "total_findings": 0,
             "by_severity": {
                 "critical": 0,
                 "high": 0,
@@ -143,7 +143,7 @@ def _review_json(reviewer):
                 "info": 0,
             },
         },
-        "issues": [],
+        "findings": [],
         "review_claimable_files": [],
         "reviewed_file_claims": [],
         "unclaimed_review_files": [],
@@ -153,10 +153,13 @@ def _review_json(reviewer):
         "observations": None,
         "recommendations": None,
         "positive_observations": None,
+        "checks": [],
+        "assessment": None,
         "meta": {
             "review_duration_ms": 10,
             "confidence_score": 1.0,
-            "tool_results_used": None,
+            "next_finding_number": 1,
+            "next_check_number": 1,
         },
     }
 
@@ -348,7 +351,7 @@ class TestCriticAdjudicationLifecycle:
         assert started.returncode == 0, started.stderr
 
         ledger = _review_json("reconciliator")
-        ledger["issues"] = [
+        ledger["findings"] = [
             {
                 "id": issue_id,
                 "category": "general",
@@ -360,10 +363,10 @@ class TestCriticAdjudicationLifecycle:
                 "recommendation": "recommendation",
                 "confidence": 0.9,
             }
-            for issue_id in ("aaaa1111", "bbbb2222", "cccc3333")
+            for issue_id in ("f1", "f2", "f3")
         ]
         ledger["summary"] = {
-            "total_issues": 3,
+            "total_findings": 3,
             "by_severity": {
                 "critical": 0,
                 "high": 0,
@@ -385,19 +388,19 @@ class TestCriticAdjudicationLifecycle:
             "adjustments": [
                 {
                     "action": "promote",
-                    "id": "aaaa1111",
+                    "id": "f1",
                     "fields": {"severity": "high"},
                     "rationale": "The impact is release-blocking.",
                 },
                 {
                     "action": "demote",
-                    "id": "bbbb2222",
+                    "id": "f2",
                     "fields": {"severity": "info"},
                     "rationale": "The impact is informational.",
                 },
                 {
                     "action": "promote",
-                    "id": "cccc3333",
+                    "id": "f3",
                     "fields": {"severity": "medium"},
                     "rationale": "The impact warrants follow-up.",
                 },
@@ -442,7 +445,7 @@ class TestCriticAdjudicationLifecycle:
                 "adjustment_id": proposal_ids[1],
                 "rejection_reason": "The source probe refuted the premise.",
             }],
-            "revised_narrative": (
+            "revised_assessment": (
                 "One promotion was verified, one demotion was refuted, "
                 "and one promotion was not checked."
             ),
@@ -2529,8 +2532,8 @@ class TestStep9FindingsMarkdown:
     @staticmethod
     def _findings(**extra):
         data = _review_json("reconciliator")
-        data["issues"] = [{
-            "id": "aaaa1111",
+        data["findings"] = [{
+            "id": "f1",
             "category": "general",
             "severity": "high",
             "title": "Unescaped output",
@@ -2540,7 +2543,7 @@ class TestStep9FindingsMarkdown:
             "recommendation": "r",
             "confidence": 0.9,
         }]
-        data["summary"]["total_issues"] = 1
+        data["summary"]["total_findings"] = 1
         data["summary"]["by_severity"]["high"] = 1
         data.update(extra)
         return data
@@ -2624,7 +2627,7 @@ class TestStep10Orchestration:
 
     def _findings(self, tmp_path, verdict):
         (tmp_path / "review-findings.json").write_text(
-            json.dumps({"verdict": verdict, "issues": []})
+            json.dumps({"verdict": verdict, "findings": []})
         )
 
     def test_step_10_records_the_reconciliation_verdict(self, tmp_path):
@@ -2735,7 +2738,7 @@ class TestStep11Orchestration:
             cwd=tmp_path,
         )
         (tmp_path / "review-findings.json").write_text(
-            '{"verdict": "approve", "issues": []}'
+            '{"verdict": "approve", "findings": []}'
         )
 
         prepared = run_pipeline(
@@ -2792,8 +2795,8 @@ class TestStep11Orchestration:
         )
         finding = _review_json("review-reconciliator")
         finding["verdict"] = "request_changes"
-        finding["issues"] = [{
-            "id": "aaaa1111",
+        finding["findings"] = [{
+            "id": "f1",
             "category": "general",
             "severity": "high",
             "title": "Unescaped output",
@@ -2803,12 +2806,12 @@ class TestStep11Orchestration:
             "recommendation": "r",
             "confidence": 0.9,
         }]
-        finding["summary"]["total_issues"] = 1
+        finding["summary"]["total_findings"] = 1
         finding["summary"]["by_severity"]["high"] = 1
         write_findings(str(tmp_path), finding)
         _write_critic_snapshot(tmp_path, [{
             "action": "obliterate",
-            "id": "aaaa1111",
+            "id": "f1",
             "fields": {},
             "rationale": "invalid first attempt",
         }], validate=False)
@@ -2831,7 +2834,7 @@ class TestStep11Orchestration:
         report.write_text(stale_report)
         _write_critic_snapshot(tmp_path, [{
             "action": "demote",
-            "id": "aaaa1111",
+            "id": "f1",
             "fields": {"severity": "low"},
             "rationale": "guarded upstream",
         }])
@@ -2852,7 +2855,7 @@ class TestStep11Orchestration:
         assert 11 not in state["completed_steps"]
         assert "regenerate" in changed.stdout.lower()
         settled = json.loads((tmp_path / "review-findings.json").read_text())
-        assert settled["issues"][0]["severity"] == "low"
+        assert settled["findings"][0]["severity"] == "low"
         assert settled["verdict"] == "approve"
 
         unchanged = run_pipeline(
@@ -2894,7 +2897,7 @@ class TestStep11Orchestration:
             "--output-dir", str(tmp_path), cwd=tmp_path,
         )
         (tmp_path / "review-findings.json").write_text(
-            '{"verdict": "approve", "issues": []}'
+            '{"verdict": "approve", "findings": []}'
         )
 
         prepared = run_pipeline(
@@ -2919,7 +2922,7 @@ class TestStep11Orchestration:
                    "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         report = tmp_path / "review-report.md"
         report.write_text("# Review Report\nFindings here.")
-        (tmp_path / "review-findings.json").write_text('{"verdict": "request_changes", "issues": []}')
+        (tmp_path / "review-findings.json").write_text('{"verdict": "request_changes", "findings": []}')
         r = run_pipeline("--step", "11", "--mode", "pr",
                        "--output-dir", str(tmp_path), cwd=tmp_path)
         assert r.returncode == 0
@@ -2954,7 +2957,7 @@ class TestStep11Orchestration:
         run_pipeline("--step", "1", "--mode", "pr",
                    "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         (tmp_path / "review-report.md").write_text("# Review")
-        (tmp_path / "review-findings.json").write_text('{"verdict": "comment", "issues": []}')
+        (tmp_path / "review-findings.json").write_text('{"verdict": "comment", "findings": []}')
         _publish_step_11(tmp_path, tmp_path)
         findings = json.loads((tmp_path / "review-findings.json").read_text())
         assert findings["verdict"] == "comment"
@@ -3305,7 +3308,7 @@ class TestStep8ReviewFileStems:
         }]}
         (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
         (tmp_path / "repo-api-reviewer-v2-review.json").write_text(
-            json.dumps({"reviewer": "repo-api-reviewer-v2", "issues": []})
+            json.dumps({"reviewer": "repo-api-reviewer-v2", "findings": []})
         )
         fake_done = subprocess.CompletedProcess(
             [], returncode=0, stdout="", stderr=""

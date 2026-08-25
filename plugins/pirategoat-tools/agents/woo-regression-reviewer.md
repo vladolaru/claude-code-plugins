@@ -138,7 +138,7 @@ If an invariant does not apply, say so explicitly. Every `APPLIES` or `UNCERTAIN
 - **medium**: plausible breakage with a visible error, constrained blast radius, unreleased surface, maintainer-intended contract change needing review.
 - **low**: cosmetic, observability, docs, migration hygiene.
 
-**Structured floors (do not breach):** A floor is issue metadata, not a category inference or description convention. For every floored finding, pass the named argument to `builder.add_issue(...)`.
+**Structured floors (do not breach):** A floor is finding metadata, not a category inference or description convention. For every floored finding, pass the named argument to `builder.add_finding(...)`.
 
 - Public-contract changes — required interface/abstract method added, public/extensible signature changed, `do_action`/`apply_filters` removed or renamed, serialized/queued format changed — rate at least Medium and pass `severity_floor="medium"`. Explain the out-of-tree consumer risk in the description.
 - Rate silent false-success High by default and pass `severity_floor="high"`. A downgrade is allowed only with a quoted, verified structural reason that proves no production or extension consumer can reach the path; in that case rate Medium and pass `severity_floor="medium"`. "Experimental package", "feature-flag gated", "unreleased UI", "Internal namespace", and "unlikely in practice" are blast-radius descriptors, not structural reasons.

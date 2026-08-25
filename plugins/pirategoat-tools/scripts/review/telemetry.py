@@ -123,7 +123,7 @@ def _advisory_measurement(data: Any) -> Dict[str, Any]:
     if not isinstance(summary, dict):
         return {}
 
-    suppressed = summary.get("advisory_suppressed")
+    suppressed = summary.get("suppressed_advisory_finding_count")
     if (not isinstance(suppressed, int)
             or isinstance(suppressed, bool)
             or suppressed < 0):
@@ -1110,13 +1110,14 @@ class ReviewTelemetry:
                     continue
                 try:
                     data = read.findings
-                    issues = data.get("issues", [])
+                    findings = data.get("findings", [])
                     severities = dict(Counter(
-                        i.get("severity", "medium").lower() for i in issues
+                        finding.get("severity", "medium").lower()
+                        for finding in findings
                     ))
                     results[base] = {
                         "verdict": data.get("verdict"),
-                        "issue_count": len(issues),
+                        "issue_count": len(findings),
                         "severities": severities,
                     }
                     results[base].update(_advisory_measurement(data))
@@ -1134,13 +1135,14 @@ class ReviewTelemetry:
             return None
         try:
             data = read.findings
-            issues = data.get("issues", [])
+            ledger_findings = data.get("findings", [])
             severities = dict(Counter(
-                i.get("severity", "medium").lower() for i in issues
+                finding.get("severity", "medium").lower()
+                for finding in ledger_findings
             ))
             findings = {
                 "verdict": data.get("verdict"),
-                "total_issues": len(issues),
+                "total_issues": len(ledger_findings),
                 "severities": severities,
             }
             findings.update(_advisory_measurement(data))

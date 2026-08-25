@@ -316,41 +316,53 @@ def _sanitized_ledger(findings: dict) -> dict:
     """
     clean = dict(findings)
 
-    for key in ("narrative_summary", "withdrawn_narrative_summary"):
-        if clean.get(key):
-            clean[key] = strip_severity_floor_markers(clean[key])
+    if clean.get("assessment"):
+        clean["assessment"] = strip_severity_floor_markers(
+            clean["assessment"]
+        )
+    invalidated = clean.get("invalidated_assessments")
+    if isinstance(invalidated, list):
+        clean["invalidated_assessments"] = [
+            {
+                **entry,
+                "text": strip_severity_floor_markers(entry["text"]),
+            } if isinstance(entry, dict) and entry.get("text") else entry
+            for entry in invalidated
+        ]
 
-    def _clean_issue(issue):
-        if not isinstance(issue, dict):
-            return issue
-        patched = dict(issue)
+    def _clean_finding(finding):
+        if not isinstance(finding, dict):
+            return finding
+        patched = dict(finding)
         for field in ("title", "description", "recommendation"):
             if patched.get(field):
                 patched[field] = strip_severity_floor_markers(patched[field])
         return patched
 
-    for key in ("issues", "removed_by_critic"):
+    for key in ("findings", "findings_removed_by_critic"):
         entries = clean.get(key)
         if isinstance(entries, list):
-            clean[key] = [_clean_issue(entry) for entry in entries]
+            clean[key] = [_clean_finding(entry) for entry in entries]
 
     # The field list has to match what `render_review_body` actually puts
     # in the record, not just the findings. What this replaced stripped the
     # WHOLE report text in one pass, so it could not miss a field; naming
     # fields is what makes an omission possible, and a rendered field the
     # strip skips is a marker reaching the critic through the back door.
-    clearances = clean.get("clearances")
-    if isinstance(clearances, list):
-        clean["clearances"] = [
+    for key in ("checks", "checks_removed_by_critic"):
+        checks = clean.get(key)
+        if not isinstance(checks, list):
+            continue
+        clean[key] = [
             {
                 field: (
                     strip_severity_floor_markers(value)
-                    if field in ("claim", "method", "evidence") and value
+                    if field in ("question", "method", "result") and value
                     else value
                 )
                 for field, value in entry.items()
             } if isinstance(entry, dict) else entry
-            for entry in clearances
+            for entry in checks
         ]
 
     positives = clean.get("positive_observations")
@@ -382,7 +394,7 @@ def _sanitized_ledger(findings: dict) -> dict:
 
 
 def _render_record_body(findings: dict) -> str:
-    """The record's findings/clearances body — output.py's own renderer.
+    """The record's findings/checks body — output.py's own renderer.
 
     Byte-identical to what `review-findings.md` shows for the same ledger
     (modulo the prose-marker strip above), because it IS the same function.
@@ -502,7 +514,7 @@ def assemble_review_record(output_dir: str, state: dict) -> tuple:
     degraded branch routes it to manual synthesis instead.
 
     Everything here is composed from renderers that already exist:
-    ``render_review_body`` for the findings/clearances body and
+    ``render_review_body`` for the findings/checks body and
     ``_render_review_accounting_section`` for accounting, both byte-identical
     to what their own callers produce. The record's own new prose is three
     things — its header, the run notes, and the closing verdict line.
@@ -534,15 +546,15 @@ def assemble_review_record(output_dir: str, state: dict) -> tuple:
             "contradict.*",
             "",
             # The one handle this rendering deliberately does not carry.
-            # Findings are addressed by an 8-hex ledger `id`, and the
+            # Findings are addressed by a canonical fN ledger `id`, and the
             # renderer this body shares with `review-findings.md` titles
             # each finding rather than numbering it. Saying so here is what
             # keeps a reader — the decision critic above all — from
             # inventing a positional label ("F1") as a key: that exact
             # substitution once failed every adjustment in a REVISE batch
-            # with "no issue with id 'F1'".
-            "*Findings are keyed by the 8-hex `id` in "
-            "`review-findings.json` (`issues[].id`). There are no "
+            # with "no finding with id 'F1'".
+            "*Findings are keyed by the canonical fN `id` in "
+            "`review-findings.json` (`findings[].id`). There are no "
             "positional labels here, and a positional label is not a key "
             "anything can resolve.*",
             "",
@@ -1433,7 +1445,7 @@ def _orchestrate_step_9(mode, config, state, context, output_dir):
     # mechanical render of that ledger, owned by the pipeline — the report
     # this step is about to brief reads it, the step-10 critic falls back
     # to it, and finalize offers it as the report of last resort. Rendering
-    # it here (rather than asking the agent to hand-write a narrative) is
+    # it here (rather than asking the agent to hand-write this projection) is
     # what makes those three consumers unable to read a stale artifact.
     findings_markdown, render_error = _render_findings_markdown(output_dir)
     if render_error:
@@ -2003,7 +2015,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # every downstream consumer in this function and in step 11's briefing
     # sees the ledger the run actually publishes. This is the seam that
     # closes the field-proven staleness: every critic REVISE used to leave
-    # the hand-written narrative showing pre-adjustment severities while
+    # the hand-written Markdown showing pre-adjustment severities while
     # the JSON showed post-adjustment ones.
     #
     # `review-record.md` matters most here. It is what the step-11 briefing

@@ -29,25 +29,25 @@ Top-level keys:
 
 1. **`git_range`, `pr_id`, `output_dir`, `output_builder_path`, `changed_files`, `dispatched_agents`, `missing_agents`** — the run's metadata.
 2. **`change_purpose`** — what the change *claims* to accomplish (author-stated, distilled from the PR description, commits, and linked issues). Use to calibrate severity — a finding about missing validation is higher severity on a payment endpoint than on a debug utility. But treat it as claims to verify, not context to adopt: a discriminator or assumption asserted here (e.g. "condition X identifies population Y") is exactly the kind of claim findings exist to test, and a finding is not wrong for contradicting it. May be empty for non-PR reviews.
-3. **`agent_findings`** — an object keyed by agent stem (`security-review`, `code-review`, …), each carrying that agent's `verdict`, `issues` (severity, optional `severity_floor`, `file`, `line`, `description`, `recommendation`, `category`, `confidence`), and optionally `recommendations` (prioritized immediate/important/suggestions) and `clearances` — structured absence claims ("nothing depends on the removed X") with the verification method the agent used.
+3. **`reviews_by_agent`** — an object keyed by agent stem (`security-review`, `code-review`, …), each carrying that agent's `verdict`, `findings` (severity, optional `severity_floor`, `file`, `line`, `description`, `recommendation`, `category`, `confidence`), `checks` (question, method, result, and structured `source_reviewers`), and optionally prioritized `recommendations`.
 4. **`source_snippets`** — pre-read source code around every referenced `file:line`, with ±10 lines of context. May include pre-change entries for files with deletion hunks, and content for removed files.
 5. **`scope_annotations`** — an object mapping `file:line` to a scope status:
    - `IN_SCOPE:in_hunk` — line inside a changed hunk
    - `IN_SCOPE:near_hunk` — within ±5 lines of a hunk
    - `OUT_OF_SCOPE:not_in_hunk` — file changed but line far from any hunk (possibly pre-existing, but agent line numbers can be imprecise — check the source snippet before dropping)
    - `OUT_OF_SCOPE:file_not_in_diff` and `OUT_OF_SCOPE:metadata_only` — structurally certain: the file is not in the diff at all, or its only change is a rename/chmod. The pipeline has already adjudicated these — see `prefiltered` below.
-6. **`prefiltered_out_of_scope`** — `{"count": N, "by_agent": {...}}`. The pipeline marked every structurally-certain out-of-scope finding with a `"prefiltered"` field carrying its scope status, in place, inside `agent_findings`. **Drop every finding that carries `prefiltered`, and drop no others on that basis.** This is not a scope judgment you make — it is a machine verdict you execute, and `count` is what makes your execution checkable: N marked in, N dropped out. The findings are annotated rather than deleted so `agent_findings` stays the faithful record of what each reviewer said and your input tallies stay correct.
+6. **`prefiltered_out_of_scope`** — `{"count": N, "by_agent": {...}}`. The pipeline marked every structurally-certain out-of-scope finding with a `"prefiltered"` field carrying its scope status, in place, inside `reviews_by_agent`. **Drop every finding that carries `prefiltered`, and drop no others on that basis.** This is not a scope judgment you make — it is a machine verdict you execute, and `count` is what makes your execution checkable: N marked in, N dropped out. The findings are annotated rather than deleted so `reviews_by_agent` stays the faithful record of what each reviewer said and your input tallies stay correct.
 7. **`host_context_banner`** — the degraded-host banner, if one applies. Carry it into your output so it renders above the findings.
 8. **`review_accounting`** — run-level reviewed-file accounting. The pipeline renders it into `review-record.md`; you do not need to restate it.
 
 **Key fields:**
-- **`dispatched_agents`** — the agents that were dispatched, already normalized to `agent_findings`'s own key spelling. May be absent (older runs, or a run with no dispatch plan).
-- **`missing_agents`** — dispatched but produced no output (crashed or timed out), **already computed by the pipeline**. Carry it verbatim into `meta.reconciliation.missing_agents`. Do not recompute it from `dispatched_agents` and `agent_findings`: the subtraction is deterministic and the pipeline has done it, so re-deriving it can only introduce an error. Verify it if you like — an entry that appears in `agent_findings` is a contradiction worth reporting — but carry what is there. `null` means dispatch was unknown and the population was NOT measured: record no missing agents, and do not write `[]`, which would claim a measured all-clear.
+- **`dispatched_agents`** — the agents that were dispatched, already normalized to `reviews_by_agent`'s own key spelling. May be absent (older runs, or a run with no dispatch plan).
+- **`missing_agents`** — dispatched but produced no output (crashed or timed out), **already computed by the pipeline**. Carry it verbatim into `meta.reconciliation.missing_agents`. Do not recompute it from `dispatched_agents` and `reviews_by_agent`: the subtraction is deterministic and the pipeline has done it, so re-deriving it can only introduce an error. Verify it if you like — an entry that appears in `reviews_by_agent` is a contradiction worth reporting — but carry what is there. `null` means dispatch was unknown and the population was NOT measured: record no missing agents, and do not write `[]`, which would claim a measured all-clear.
 - **`changed_files`** — files in the diff. When a finding references a file not in this list, it is out of scope.
 
 ## Phase 1: Load & Group
 
-Read `reconciliation-context.json`. Every agent's findings are under `agent_findings`, keyed by agent stem. For each finding across all agents:
+Read `reconciliation-context.json`. Every agent's findings are under `reviews_by_agent`, keyed by agent stem. For each finding across all agents:
 
 1. **Understand the underlying concern** — not just the title, but what the finding is actually about. Two findings titled "Missing input validation" and "Unsanitized user data in query" may describe the same concern if they reference the same code path.
 
@@ -58,9 +58,9 @@ Read `reconciliation-context.json`. Every agent's findings are under `agent_find
 
 3. **When multiple agents flag the same concern**, note convergence — but weigh it by method, not by head-count. Agreement counts only across **distinct verification methods** (one read the file, another traced callers, a third ran the code); N agents who reached the same conclusion via the same method (the same grep, the same snippet window) are **one probe**, not N confirmations. A single agent's finding with strong evidence outweighs any number of method-correlated opinions. See "Verification-Method Weighting & Conflicts" below.
 
-4. **Track agents with no findings.** If an agent key exists in `agent_findings` but has an empty `issues` list (or no issues at all), note it as an agent that reviewed but found nothing.
+4. **Track agents with no findings.** If an agent key exists in `reviews_by_agent` but has an empty `findings` list (or no issues at all), note it as an agent that reviewed but found nothing.
 
-5. **Separate not-applicable agents.** For each agent in `agent_findings`, check `verdict`. If it is `"not_applicable"`, the agent determined the changes are not relevant to its domain — it did NOT review the code. Record these separately from agents that performed actual reviews. The `skip_reason` field explains why. Do not include not-applicable agents in finding counts or agent-contribution tallies.
+5. **Separate not-applicable agents.** For each agent in `reviews_by_agent`, check `verdict`. If it is `"not_applicable"`, the agent determined the changes are not relevant to its domain — it did NOT review the code. Record these separately from agents that performed actual reviews. The `skip_reason` field explains why. Do not include not-applicable agents in finding counts or agent-contribution tallies.
 
 **The hard judgment:** Distinguishing "same concern described differently" from "different concern on adjacent lines." When in doubt, keep them separate — under-merging is better than over-merging (losing a distinct issue).
 
@@ -101,9 +101,9 @@ The rules below apply to findings with an explicit floor and, for mitigation ver
 3. **Mitigations must be verified.** The general rule lives in "Dismissal & Mitigation Discipline" below; for floored findings the additional constraint is that a verified mitigation may prove a concern false or unreachable, but it cannot justify retaining an applicable concern below its floor.
 4. **Out-of-tree consumers remain invisible.** For public-contract changes, absence of in-repo implementors or consumers is not evidence of safety.
 
-When grouping duplicate findings, keep the strongest verified source floor. Every retained verified concern must remain at or above that floor. Pass the strongest verified value through the reconciled `builder.add_issue(..., severity_floor="medium")` call (using the actual verified level; omit the argument only when no floor applies) so the constraint survives in `review-findings.json`.
+When grouping duplicate findings, keep the strongest verified source floor. Every retained verified concern must remain at or above that floor. Pass the strongest verified value through the reconciled `builder.add_finding(..., severity_floor="medium")` call (using the actual verified level; omit the argument only when no floor applies) so the constraint survives in `review-findings.json`.
 
-Preserve a finding's channel the same way. A source finding marked `Channel: advisory` in the context is from a repo-contributed reviewer on the advisory channel (reuse, naming, boundaries): re-emit it with `builder.add_issue(..., channel="advisory")` so it stays listed but never gates the verdict. Blocking findings omit the argument.
+Preserve a finding's channel the same way. A source finding marked `Channel: advisory` in the context is from a repo-contributed reviewer on the advisory channel (reuse, naming, boundaries): re-emit it with `builder.add_finding(..., channel="advisory")` so it stays listed but never gates the verdict. Blocking findings omit the argument.
 
 Deduplication and scope behavior are unchanged. Findings may still be dropped as FALSE POSITIVE or OUT OF SCOPE when the source evidence supports that classification.
 
@@ -119,11 +119,11 @@ These rules are not limited to floored findings or regression categories. They a
 
 How a claim was verified determines how much it weighs. These rules apply to every confidence, severity, and drop/keep judgment you make:
 
-1. **Correlated signals are one signal.** Findings, approvals, or clearances that share a verification method — the same search string, the same snippet window, the same untested assumption — are **one probe** regardless of how many agents repeated it. Convergence raises confidence only across *distinct* methods. The raw signal "3 agents cleared it, 1 flagged it" is worthless when the 3 shared one search: that is one (possibly wrong) probe vs. one read of the artifact.
+1. **Correlated signals are one signal.** Findings, approvals, or checks that share a verification method — the same search string, the same snippet window, the same untested assumption — are **one probe** regardless of how many agents repeated it. Convergence raises confidence only across *distinct* methods. The raw signal "3 agents cleared it, 1 flagged it" is worthless when the 3 shared one search: that is one (possibly wrong) probe vs. one read of the artifact.
 2. **Never decide on counts alone.** No verdict, severity, or drop moves because N agents agree and M disagree. Movement requires evidence verified by reading code or running a directed tool. When agents conflict, resolve by verifying the underlying claim yourself — the side with a file:line citation from reading the artifact outweighs any number of pattern-search negatives.
 3. **A negative search proves only that the searched pattern is absent.** It can fail to refute a finding; it can never clear one, and it can never ground dismissing or downgrading a concern that positive evidence supports. Absence of the dependency must be established from the dependent side: enumerate what could depend on the changed code and search each dependent artifact in its own vocabulary (a removed element's CSS dependencies live in selectors that may name the element or its ancestors, not the class string the diff shows).
-4. **Judge EVERY clearance by its method — conflict or no conflict.** A clearance is an absence claim ("nothing depends on the removed X") plus the `Method` that supposedly established it. For each one, ask a question that has nothing to do with whether any finding disagrees: *could that method have found the thing the claim denies?* A method that searched the wrong string, the wrong artifact, or the wrong side of the change could not, so the clearance is **void** — it proves nothing and is never recorded, even when no finding contradicts it. Clearances that share one method are **one probe**, not N, however many agents ran it. Every clearance that survives this judgment is RECORDED in the ledger via `add_clearance()` (Phase 3); a method-correlated group is recorded once, with every agent named in its evidence. Recording is the default for a survivor, not a reward for having been contested.
-5. **A clearance that contradicts a finding is a conflict to verify, never a vote.** This is the special case on top of rule 4, not a replacement for it. When any agent's finding asserts a dependency or impact that a clearance denies, do not let the clearance (or several) neutralize the finding — a void clearance neutralizes nothing, and a surviving one is still just one probe against a file:line citation. Resolve the conflict by verifying the finding's claim yourself against the source, then apply rule 4 to the clearance as usual.
+4. **Judge EVERY check by its method — conflict or no conflict.** A check is an absence claim ("nothing depends on the removed X") plus the `Method` that supposedly established it. For each one, ask a question that has nothing to do with whether any finding disagrees: *could that method have found the thing the claim denies?* A method that searched the wrong string, the wrong artifact, or the wrong side of the change could not, so the check is **void** — it proves nothing and is never recorded, even when no finding contradicts it. Checks that share one method are **one probe**, not N, however many agents ran it. Every check that survives this judgment is RECORDED in the ledger via `record_check()` (Phase 3); a method-correlated group is recorded once, with every agent named in its evidence. Recording is the default for a survivor, not a reward for having been contested.
+5. **A check that contradicts a finding is a conflict to verify, never a vote.** This is the special case on top of rule 4, not a replacement for it. When any agent's finding asserts a dependency or impact that a check denies, do not let the check (or several) neutralize the finding — a void check neutralizes nothing, and a surviving one is still just one probe against a file:line citation. Resolve the conflict by verifying the finding's claim yourself against the source, then apply rule 4 to the check as usual.
 6. **Verify pattern dependencies against the whole artifact.** When a concern hinges on what else in a large file references a pattern (selectors, hook names, symbols), first enumerate **every occurrence** of the dependency's tokens across the entire artifact (`grep -n` the whole file), then read each site. A windowed read around one known occurrence is how a 5,900-line stylesheet hides its third `th label` rule. Never conclude "these are all the dependent rules" from a window you didn't bound by enumeration.
 
 ## Phase 3: Judge & Output
@@ -143,7 +143,7 @@ For each verified concern:
    - No `source_agents` fields or finding references like `security-review:F3`
    - Just clear, actionable feedback with file:line references
 
-3. **Build the ledger with `ReviewOutputBuilder`, then save it through the validating script.** Raw writes to `review-findings.json` are forbidden — the only channel this artifact may be produced through is `findings_save.py`, which validates the whole document (verdict, every issue, the summary counts) before writing anything, then writes atomically via the single sanctioned write path (`critic_adjustments.write_findings`). A hand-rolled `write_findings()` call, a bare `atomic_write_json`, or a plain `open()`/`json.dump()` against `review-findings.json` all bypass that validation and are forbidden.
+3. **Build the ledger with `ReviewOutputBuilder`, then save it through the validating script.** Raw writes to `review-findings.json` are forbidden — the only channel this artifact may be produced through is `findings_save.py`, which validates the whole document (verdict, every finding, the summary counts) before writing anything, then writes atomically via the single sanctioned write path (`critic_adjustments.write_findings`). A hand-rolled `write_findings()` call, a bare `atomic_write_json`, or a plain `open()`/`json.dump()` against `review-findings.json` all bypass that validation and are forbidden.
 
 **3a. Build the ledger in memory:**
 
@@ -161,7 +161,7 @@ from review.agent.output import ReviewOutputBuilder
 builder = ReviewOutputBuilder(pr_id="PR_ID_FROM_CONTEXT", reviewer="reconciliator")
 
 # For each verified concern:
-builder.add_issue(
+builder.add_finding(
     severity="high",
     title="Clear statement of the problem",
     file="path/to/file.php",
@@ -181,9 +181,9 @@ builder.add_issue(
 # Keep finding-level claims OUT of it wherever you can state the same thing
 # about the change as a whole. The decision critic can adjust any finding
 # but cannot adjust this prose, so an assessment that names a severity or a
-# specific finding is retracted wholesale when the critic adjusts anything
-# — the pipeline withdraws it rather than let it contradict the ledger.
-builder.set_narrative_summary(
+# specific finding is invalidated wholesale when the critic adjusts anything
+# — the pipeline invalidates it rather than let it contradict the ledger.
+builder.set_assessment(
     "OVERALL_ASSESSMENT_2_TO_3_SENTENCES"
 )
 
@@ -203,29 +203,29 @@ builder.add_observation(
     category="tradeoff",
 )
 
-# EVERY clearance that survived the method judgment — rule 4 of
+# EVERY check that survived the method judgment — rule 4 of
 # "Verification-Method Weighting & Conflicts", which you apply to all of
 # them, not only to the ones some finding argued with. Reviewers report
-# absence claims ("checked X, it held, method: ..."); each surviving
-# DISTINCT claim is recorded here, one call per claim, with attribution in
-# the evidence. A clearance nothing contradicted is the ordinary case and
+# material questions and the methods/results used to answer them; each
+# surviving DISTINCT check is recorded here, one call per check, with
+# attribution in `source_reviewers`. A check nothing contradicted is the ordinary case and
 # belongs here.
 #
 # Do NOT record:
-#   * a clearance you judged VOID (its method could not have found what it
+#   * a check you judged VOID (its method could not have found what it
 #     denies — wrong search string, wrong artifact, wrong side), and
 #   * method-correlated duplicates as separate entries: N agents who ran
-#     the same probe are ONE clearance, recorded once, with all of their
-#     names in the evidence.
+#     the same probe are ONE check, recorded once, with all of their
+#     names in `source_reviewers`.
 #
 # This is the only path by which "what we checked and it held" reaches the
-# report. Without it the ledger's `clearances` is null and the orchestrator
-# rebuilds that section from memory at step 9 — which is how a clearance
-# you voided comes back as fact.
-builder.add_clearance(
-    claim="WHAT_WAS_CHECKED_AND_HELD",
+# report. The ledger always carries `checks` as an array; without a call here
+# this verified work is absent rather than reconstructed from memory.
+builder._record_check(
+    question="THE_MATERIAL_QUESTION_THE_REVIEWERS_CHECKED",
     method="THE_EXACT_PROBE_THAT_ESTABLISHED_IT",
-    evidence="per security-reviewer, concurrency-reviewer — WHAT_THE_PROBE_SHOWED",
+    result="WHAT_THE_PROBE_SHOWED",
+    source_reviewers=["security-reviewer", "concurrency-reviewer"],
 )
 
 # Add quality metrics to the JSON output.
@@ -233,15 +233,15 @@ builder.add_clearance(
 # over-merging or under-merging is undetectable.
 output = builder.to_dict(output_dir=output_dir)
 output['meta']['reconciliation'] = {
-    'input_findings_count': TOTAL_INPUT,       # findings read from all agent JSONs
-    'agents_contributing': AGENTS_WITH_FINDINGS,# agents that produced >= 1 finding
-    'concerns_after_grouping': GROUPED_COUNT,   # distinct concerns after semantic dedup
-    'false_positives_dropped': FP_COUNT,        # dropped as factually incorrect
-    'out_of_scope_dropped': OOS_COUNT,          # dropped as not in diff
-    'verified_concerns': VERIFIED_COUNT,        # passed scope + fact check
-    'merge_ratio': round(1 - GROUPED_COUNT / max(TOTAL_INPUT, 1), 2),  # reduction %
-    'not_applicable_count': NA_COUNT,           # agents that returned not_applicable
-    'not_applicable_agents': NA_AGENT_LIST,     # list: [{"name": "...", "skip_reason": "..."}]
+    'input_finding_count': TOTAL_INPUT,       # findings read from all agent JSONs
+    'contributing_agent_count': AGENTS_WITH_FINDINGS, # agents that produced >= 1 finding
+    'grouped_concern_count': GROUPED_COUNT,     # distinct concerns after semantic dedup
+    'false_positive_finding_count': FP_COUNT,   # dropped as factually incorrect
+    'out_of_scope_finding_count': OOS_COUNT,    # dropped as not in diff
+    'verified_finding_count': VERIFIED_COUNT,   # passed scope + fact check
+    'deduplication_ratio': round(1 - GROUPED_COUNT / max(TOTAL_INPUT, 1), 2),  # reduction %
+    'not_applicable_agent_count': NA_COUNT,           # agents that returned not_applicable
+    'not_applicable_agents': NA_AGENT_LIST,     # list: [{"name": "...", "skip_reason": "..."}],
     'reviewing_agents': REVIEWING_NAMES,        # agents that performed actual reviews
     'dispatched_agents': DISPATCHED_LIST,       # all agents that were dispatched (from context)
     'missing_agents': MISSING_LIST,            # dispatched but no output (crashed/timed out)
@@ -267,17 +267,17 @@ python3 $PLUGIN_ROOT/scripts/review/findings_save.py \
 
 The command validates everything before writing anything: a non-object
 top level, a `verdict` outside `block`/`request_changes`/`comment`/`approve`,
-an issue missing a required field (`id`, `category`, `severity`, `title`,
+a finding missing a required field (`id`, `category`, `severity`, `title`,
 `description`, `file`, `recommendation`, `confidence`) or carrying an
 out-of-vocabulary severity, or a `summary` whose counts don't match the
-`issues` it claims to describe all print one `REJECTED: <problem>` line per
+`findings` it claims to describe all print one `REJECTED: <problem>` line per
 problem and exit non-zero — with nothing written to the output directory. A
 clean run prints:
 
 ```
 RECORDED VERDICT: request_changes
 RECORDED FINDINGS: 9 (critical 0, high 1, medium 7, low 1)
-CLEARANCES: 12 | NARRATIVE: present
+CHECKS: 12 | ASSESSMENT: present
 ```
 
 and writes `review-findings.json` atomically through
@@ -294,24 +294,24 @@ around a rejection by writing `review-findings.json` yourself.
 **Do not write any Markdown.** `review-findings.md` is rendered from the JSON
 you just saved — by the pipeline, at step 9 and again at the end of the run
 after the decision critic's adjustments land. Every section the old
-hand-written narrative carried has a structured home in the JSON and comes out
+hand-written review prose carried has a structured home in the JSON and comes out
 of the renderer:
 
 | What it was | Where it lives now |
 |---|---|
 | Overall verdict | `verdict` (computed from your findings) |
-| 2-3 sentence overall assessment | `set_narrative_summary(...)` → `## Assessment` |
+| 2-3 sentence overall assessment | `set_assessment(...)` → `## Assessment` |
 | "Pipeline: X findings → Z concerns" | `meta.reconciliation` → `**Pipeline:**` line |
 | Not-applicable agents + reasons | `meta.reconciliation.not_applicable_agents` |
-| Critical / Important issues | `add_issue(...)` → per-severity sections |
+| Critical / Important findings | `add_finding(...)` → per-severity sections |
 | Recommendations (prioritized) | `add_recommendation(...)` → `## Recommendations` |
 | Tradeoffs Identified | `add_observation(..., category="tradeoff")` → `## Observations` |
-| "What we checked that held" | `add_clearance(...)` → `## Clearances (verified absences)` |
+| "What we checked that held" | `_record_check(...)` → `## Verified Checks` |
 | Host context banner | `host_context_banner` key → leading blockquote |
 
 ### Tradeoffs
 
-**"Tradeoffs" has exit criteria — it is not a disposal path for findings.** A tradeoff entry is a maintainer-intended design compromise, and each entry must state: (a) the trigger condition, (b) the affected population, verified at file:line per the Dismissal & Mitigation Discipline (who writes the state involved, and which supported configurations satisfy the condition), and (c) why the compromise is intentional. A verified tradeoff is recorded with `add_observation(file, note, category="tradeoff")`, stating all three parts in the note. A "tradeoff" whose likelihood or population claim is unverified is an unverified finding wearing prose clothing — emit it through `add_issue()` at Low or Medium severity instead, so it survives as an actionable item the author and downstream tooling can see.
+**"Tradeoffs" has exit criteria — it is not a disposal path for findings.** A tradeoff entry is a maintainer-intended design compromise, and each entry must state: (a) the trigger condition, (b) the affected population, verified at file:line per the Dismissal & Mitigation Discipline (who writes the state involved, and which supported configurations satisfy the condition), and (c) why the compromise is intentional. A verified tradeoff is recorded with `add_observation(file, note, category="tradeoff")`, stating all three parts in the note. A "tradeoff" whose likelihood or population claim is unverified is an unverified finding wearing prose clothing — emit it through `add_finding()` at Low or Medium severity instead, so it survives as an actionable item the author and downstream tooling can see.
 
 ## Return to Caller
 
@@ -337,7 +337,7 @@ When an agent has `verdict: "not_applicable"`, it means "these changes are outsi
 
 - **Do NOT count not-applicable agents toward approval confidence.** They did not review the code.
 - **DO report them separately** so the orchestrator knows how many agents actually reviewed vs. abstained.
-- **Record them structurally:** `meta.reconciliation.not_applicable_count` and `not_applicable_agents` (each entry `{"name": ..., "skip_reason": ...}`). The renderer turns those into the "T agents returned not-applicable (changes outside their domain): [names with reasons]" line — you never write that sentence yourself.
+- **Record them structurally:** `meta.reconciliation.not_applicable_agent_count` and `not_applicable_agents` (each entry `{"name": ..., "skip_reason": ...}`). The renderer turns those into the "T agents returned not-applicable (changes outside their domain): [names with reasons]" line — you never write that sentence yourself.
 
 ## Host Context Banner
 

@@ -179,8 +179,8 @@ class TestCriticContextArg:
             "--thoughts", "initial",
         )
         assert result.returncode == 0
-        assert "8-hex" in result.stdout
-        assert "issues[].id" in result.stdout
+        assert "8-hex" not in result.stdout
+        assert "findings[].id" in result.stdout
 
 
 class TestCriticSave:

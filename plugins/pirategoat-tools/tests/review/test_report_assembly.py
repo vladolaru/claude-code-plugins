@@ -2,7 +2,7 @@
 
 `review-record.md` is assembled by the pipeline, never written or edited by
 an agent. It composes the SAME renderers the other derived Markdown uses
-(`render_review_body` for the findings/clearances body,
+(`render_review_body` for the findings/checks body,
 `_render_review_accounting_section` for coverage) plus three thin additions
 the record alone needs: its own header, the run notes, and a closing
 verdict line.
@@ -11,7 +11,7 @@ The contract these tests pin:
 
 * the record is a projection — re-assembling after a critic batch reflects
   the post-adjustment severities, the recomputed verdict, and the
-  checkpointed adjudication narrative;
+  checkpointed adjudication assessment;
 * the shared bodies are byte-identical to what their own renderers produce,
   so a record can never disagree with `review-findings.md` about a finding
   or with the step-9 coverage measurement about a file;
@@ -45,19 +45,19 @@ from review.orchestration import (
 def _ledger(**overrides):
     """A minimal, valid `review-findings.json` document."""
     findings = {
-        "schema": 3,
+        "schema": 2,
         "reviewer": "review-reconciliator",
         "pr_id": "42",
         "verdict": "request_changes",
         "summary": {
-            "total_issues": 2,
+            "total_findings": 2,
             "by_severity": {
                 "critical": 0, "high": 1, "medium": 1, "low": 0, "info": 0,
             },
         },
-        "issues": [
+        "findings": [
             {
-                "id": "9f3a1c7d",
+                "id": "f1",
                 "severity": "high",
                 "category": "security",
                 "title": "Unescaped output in the admin notice",
@@ -65,9 +65,10 @@ def _ledger(**overrides):
                 "line": 42,
                 "description": "The notice echoes `$_GET['msg']` unescaped.",
                 "recommendation": "Wrap it in `esc_html()`.",
+                "confidence": 0.9,
             },
             {
-                "id": "1b2c3d4e",
+                "id": "f2",
                 "severity": "medium",
                 "category": "reliability",
                 "title": "Retry loop has no ceiling",
@@ -75,15 +76,18 @@ def _ledger(**overrides):
                 "line": 88,
                 "description": "The loop retries forever on a 500.",
                 "recommendation": "Cap the attempts.",
+                "confidence": 0.9,
             },
         ],
         "positive_observations": [],
-        "narrative_summary": "Two real problems, both fixable in one pass.",
-        "clearances": [
+        "assessment": "Two real problems, both fixable in one pass.",
+        "checks": [
             {
-                "claim": "Nothing else calls the removed helper",
+                "id": "c1",
+                "question": "Does anything else call the removed helper?",
                 "method": "git grep across the repo",
-                "evidence": "0 hits outside the deleted file",
+                "result": "0 hits outside the deleted file",
+                "source_reviewers": ["code-reviewer"],
             },
         ],
         "recommendations": {
@@ -110,6 +114,67 @@ def out_dir(tmp_path):
 
 
 class TestRecordAssembly:
+    def test_canonical_findings_checks_and_assessment_render_mechanically(
+        self, out_dir
+    ):
+        findings = {
+            "schema": 2,
+            "reviewer": "reconciliator",
+            "pr_id": "42",
+            "verdict": "request_changes",
+            "summary": {
+                "total_findings": 1,
+                "by_severity": {
+                    "critical": 0,
+                    "high": 1,
+                    "medium": 0,
+                    "low": 0,
+                    "info": 0,
+                },
+                "suppressed_advisory_finding_count": 0,
+            },
+            "findings": [
+                {
+                    "id": "f1",
+                    "severity": "high",
+                    "category": "security",
+                    "title": "Unescaped output",
+                    "file": "src/admin.php",
+                    "line": 42,
+                    "description": "The notice is not escaped.",
+                    "recommendation": "Escape the notice.",
+                    "confidence": 0.95,
+                },
+            ],
+            "checks": [
+                {
+                    "id": "c1",
+                    "question": "Are other callers affected?",
+                    "method": "Read every caller.",
+                    "result": "No.",
+                    "source_reviewers": ["security", "code"],
+                },
+            ],
+            "assessment": "One correction is required.",
+            "positive_observations": ["The helper boundary is clear."],
+            "recommendations": None,
+            "observations": None,
+        }
+        _write_ledger(out_dir, findings)
+
+        outcome, error = assemble_review_record(str(out_dir), {})
+
+        assert error is None
+        assert outcome["status"] == "complete"
+        text = (out_dir / REVIEW_RECORD_MD).read_text()
+        assert "**Total Findings:** 1" in text
+        assert "## High Findings" in text
+        assert "## Verified Checks" in text
+        assert "**Are other callers affected?**" in text
+        assert "Result: No." in text
+        assert "## Assessment\n\nOne correction is required." in text
+        assert "## Positive Observations" in text
+
     def test_writes_the_record_and_reports_a_complete_outcome(self, out_dir):
         _write_ledger(out_dir)
 
@@ -140,8 +205,8 @@ class TestRecordAssembly:
             "# Review Record",
             "## Executive Summary",
             "## Assessment",
-            "## High Issues",
-            "## Clearances (verified absences)",
+            "## High Findings",
+            "## Verified Checks",
             "## Run notes",
             "## Review coverage",
             "Verdict — from the findings ledger",
@@ -156,7 +221,7 @@ class TestRecordAssembly:
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert "**Verdict:** REQUEST_CHANGES" in text
-        assert "**Total Issues:** 2" in text
+        assert "**Total Findings:** 2" in text
         assert "- High: 1" in text
         assert "- Medium: 1" in text
 
@@ -264,7 +329,7 @@ class TestRecordAssembly:
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert "> **⚠ Host Context Banner:** WooCommerce source" in text
-        assert text.index("Host Context Banner") < text.index("## High Issues")
+        assert text.index("Host Context Banner") < text.index("## High Findings")
 
     def test_run_notes_carry_dependency_refresh_and_dispatch(self, out_dir):
         _write_ledger(out_dir)
@@ -387,7 +452,7 @@ class TestRecordIsAProjection:
         *,
         verified=(),
         refuted=(),
-        narrative="Post-critic assessment.",
+        assessment="Post-critic assessment.",
         settle=True,
     ):
         proposal = critic_adjustments.prepare_proposal({
@@ -418,7 +483,7 @@ class TestRecordIsAProjection:
                 }
                 for index, reason in refuted
             ],
-            "revised_narrative": narrative,
+            "revised_assessment": assessment,
         }
         return proposal, critic_adjustments.settle(str(out_dir), request)
 
@@ -430,18 +495,18 @@ class TestRecordIsAProjection:
 
         self._revise(out_dir, [{
             "action": "demote",
-            "id": "9f3a1c7d",
+            "id": "f1",
             "fields": {"severity": "low"},
             "rationale": "the value is escaped one frame up",
-        }], verified=(0,), narrative="Only one real problem after the probe.")
+        }], verified=(0,), assessment="Only one real problem after the probe.")
 
         assemble_review_record(str(out_dir), {})
         after = (out_dir / REVIEW_RECORD_MD).read_text()
 
         # Recomputed verdict (one medium left → comment), post-adjustment
-        # severities, and the orchestrator's replacement narrative.
+        # severities, and the orchestrator's replacement assessment.
         assert "**Verdict:** COMMENT" in after
-        assert "## Low Issues" in after
+        assert "## Low Findings" in after
         assert "Only one real problem after the probe." in after
         assert "Two real problems, both fixable in one pass." not in after
 
@@ -452,13 +517,13 @@ class TestRecordIsAProjection:
         _proposal, result = self._revise(out_dir, [
             {
                 "action": "demote",
-                "id": "9f3a1c7d",
+                "id": "f1",
                 "fields": {"severity": "low"},
                 "rationale": "escaped one frame up",
             },
             {
                 "action": "correct",
-                "id": "1b2c3d4e",
+                "id": "f2",
                 "fields": {"title": "Retry loop has no ceiling (v2)"},
                 "rationale": "clearer title",
             },
@@ -481,13 +546,13 @@ class TestRecordIsAProjection:
         proposal, _result = self._revise(out_dir, [
             {
                 "action": "correct",
-                "id": "9f3a1c7d",
+                "id": "f1",
                 "fields": {"title": "Escaping is already present"},
                 "rationale": "verified against the source",
             },
             {
                 "action": "correct",
-                "id": "1b2c3d4e",
+                "id": "f2",
                 "fields": {"title": "This change does not apply"},
                 "rationale": "critic claim",
             },
@@ -506,13 +571,13 @@ class TestRecordIsAProjection:
         proposal, _result = self._revise(out_dir, [
             {
                 "action": "correct",
-                "id": "9f3a1c7d",
+                "id": "f1",
                 "fields": {"title": "This change does not apply"},
                 "rationale": "critic claim",
             },
             {
                 "action": "correct",
-                "id": "1b2c3d4e",
+                "id": "f2",
                 "fields": {"title": "This change does not apply"},
                 "rationale": "critic claim",
             },
@@ -529,11 +594,11 @@ class TestRecordIsAProjection:
         assert f"- `{ids[0]}` — refuted" in text
         assert f"- `{ids[1]}` — refuted" in text
 
-    def test_withdrawn_narrative_renders_the_explicit_absence(self, out_dir):
+    def test_invalidated_assessment_renders_the_explicit_absence(self, out_dir):
         _write_ledger(out_dir)
         self._revise(out_dir, [{
             "action": "demote",
-            "id": "9f3a1c7d",
+            "id": "f1",
             "fields": {"severity": "low"},
             "rationale": "escaped one frame up",
         }], settle=False)
@@ -542,7 +607,7 @@ class TestRecordIsAProjection:
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert "No current assessment" in text
-        assert "withdrawn under critic revision" in text
+        assert "invalidated by critic revision" in text
         # The retracted text is never presented as current.
         assert "Two real problems, both fixable in one pass." not in text
 
@@ -560,13 +625,13 @@ class TestRecordSanitization:
         self, out_dir
     ):
         findings = _ledger()
-        findings["issues"][0]["description"] = (
+        findings["findings"][0]["description"] = (
             "Unescaped echo.\nSeverity-floor: high; see the notice helper."
         )
-        findings["issues"][0]["recommendation"] = (
+        findings["findings"][0]["recommendation"] = (
             "Severity-floor: high - wrap it in esc_html()."
         )
-        findings["narrative_summary"] = (
+        findings["assessment"] = (
             "Severity-floor: critical; the admin path is exposed."
         )
         _write_ledger(out_dir, findings)
@@ -584,14 +649,16 @@ class TestRecordSanitization:
     ):
         """The builder stripped the WHOLE report text; this strips named
         fields, so the list has to match what `render_review_body` actually
-        puts in the record — clearances, positives, and observations
+        puts in the record — checks, positives, and observations
         included. A field the record renders but the strip skips is a
         marker reaching the critic through the back door."""
         findings = _ledger()
-        findings["clearances"] = [{
-            "claim": "Severity-floor: high; nothing calls the helper",
+        findings["checks"] = [{
+            "id": "c1",
+            "question": "Severity-floor: high; does anything call the helper?",
             "method": "Severity-floor: medium - git grep",
-            "evidence": "Severity-floor: low; 0 hits",
+            "result": "Severity-floor: low; 0 hits",
+            "source_reviewers": ["code-reviewer"],
         }]
         findings["positive_observations"] = [
             "Severity-floor: high; the retry guard is tidy",
@@ -605,15 +672,15 @@ class TestRecordSanitization:
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert "Severity-floor:" not in text
-        assert "nothing calls the helper" in text
+        assert "does anything call the helper?" in text
         assert "git grep" in text
         assert "0 hits" in text
         assert "the retry guard is tidy" in text
         assert "a tradeoff" in text
 
-    def test_removed_by_critic_entries_are_covered(self, out_dir):
+    def test_findings_removed_by_critic_entries_are_covered(self, out_dir):
         findings = _ledger()
-        findings["removed_by_critic"] = [{
+        findings["findings_removed_by_critic"] = [{
             "title": "Severity-floor: high; withdrawn finding",
             "severity": "high", "file": "src/x.php", "line": 1,
             "critic_adjustment": {"rationale": "not reachable"},
@@ -628,7 +695,7 @@ class TestRecordSanitization:
 
     def test_structured_severity_floor_still_renders(self, out_dir):
         findings = _ledger()
-        findings["issues"][0]["severity_floor"] = "high"
+        findings["findings"][0]["severity_floor"] = "high"
         _write_ledger(out_dir, findings)
 
         assemble_review_record(str(out_dir), {})
@@ -645,8 +712,8 @@ class TestRecordSanitization:
         malformed field costs a rendering nicety, never the artifact.
         """
         findings = _ledger()
-        findings["issues"][0]["recommendation"] = ["wrap it", "in esc_html()"]
-        findings["issues"][1]["description"] = None
+        findings["findings"][0]["recommendation"] = ["wrap it", "in esc_html()"]
+        findings["findings"][1]["description"] = None
         findings["recommendations"]["immediate"] = [["escape", "the notice"]]
         _write_ledger(out_dir, findings)
 
@@ -659,7 +726,7 @@ class TestRecordSanitization:
 
     def test_sanitization_does_not_touch_the_ledger_on_disk(self, out_dir):
         findings = _ledger()
-        findings["issues"][0]["description"] = (
+        findings["findings"][0]["description"] = (
             "Unescaped echo.\nSeverity-floor: high; see the helper."
         )
         _write_ledger(out_dir, findings)
@@ -669,7 +736,7 @@ class TestRecordSanitization:
         on_disk = json.loads(
             (out_dir / critic_adjustments.FINDINGS_FILENAME).read_text()
         )
-        assert "Severity-floor: high" in on_disk["issues"][0]["description"]
+        assert "Severity-floor: high" in on_disk["findings"][0]["description"]
 
 
 class TestRecordFailureModes:

@@ -17,7 +17,7 @@ SCRIPT_PATH = PLUGIN_ROOT / "scripts" / "review" / "agents_status.py"
 from review import dispatch_status
 from review import synthesis_lifecycle
 from review.agent.output import ReviewOutputBuilder, finalize_review
-from review.reconciliation_context import load_agent_findings
+from review.reconciliation_context import load_agent_reviews
 from review.reviewer_lifecycle import ReviewPaths
 
 
@@ -51,9 +51,9 @@ def _reviewer_filename(agent_name: str) -> str:
     return f"{base}-review.json"
 
 
-def _finish_agent(tmp_path, name, issues=None, verdict="APPROVE"):
+def _finish_agent(tmp_path, name, findings=None, verdict="APPROVE"):
     (tmp_path / _reviewer_filename(name)).write_text(json.dumps({
-        "issues": issues or [], "verdict": verdict,
+        "findings": findings or [], "verdict": verdict,
     }))
 
 
@@ -116,7 +116,7 @@ class TestCheckStatus:
         authority_dir = tmp_path / "authority"
         authority_dir.mkdir()
         final_path = authority_dir / "final.json"
-        final_path.write_text(json.dumps({"issues": [], "verdict": "approve"}))
+        final_path.write_text(json.dumps({"findings": [], "verdict": "approve"}))
         monkeypatch.setattr(
             mod,
             "review_paths",
@@ -272,10 +272,10 @@ class TestCheckStatus:
             str(tmp_path), "a11y", second["review_digest"]
         )
         assert mod.check_status(str(tmp_path))["all_done"] is True
-        findings = load_agent_findings(
+        reviews = load_agent_reviews(
             str(tmp_path), dispatched_agents=["a11y-reviewer"]
         )
-        assert findings["a11y-review"]["reviewed_file_claims"] == [
+        assert reviews["a11y-review"]["reviewed_file_claims"] == [
             "src/late.ts"
         ]
 
@@ -566,7 +566,7 @@ class TestFilenameConvention:
         plan = {"agents": [{"name": "security-reviewer", "status": "DISPATCH"}]}
         (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
 
-        review = {"issues": [], "verdict": "approve"}
+        review = {"findings": [], "verdict": "approve"}
         (tmp_path / "security-review.json").write_text(json.dumps(review))
 
         result = mod.check_status(str(tmp_path))
@@ -581,7 +581,12 @@ class TestFilenameConvention:
         plan = {"agents": [{"name": "code-reviewer", "status": "DISPATCH"}]}
         (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
 
-        review = {"issues": [{"title": "Bug", "file": "a.py", "severity": "high"}], "verdict": "request_changes"}
+        review = {
+            "findings": [
+                {"title": "Bug", "file": "a.py", "severity": "high"}
+            ],
+            "verdict": "request_changes",
+        }
         (tmp_path / "code-review.json").write_text(json.dumps(review))
 
         result = mod.check_status(str(tmp_path))
@@ -593,7 +598,7 @@ class TestFilenameConvention:
         plan = {"agents": [{"name": "gemini-reviewer", "status": "DISPATCH"}]}
         (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
 
-        review = {"issues": [], "verdict": "approve"}
+        review = {"findings": [], "verdict": "approve"}
         (tmp_path / "gemini-review.json").write_text(json.dumps(review))
 
         result = mod.check_status(str(tmp_path))
@@ -601,16 +606,16 @@ class TestFilenameConvention:
         assert agent["status"] == "FINISHED"
 
 
-class TestIssuesKey:
-    """Status check must read the 'issues' key, not 'findings'."""
+class TestFindingsKey:
+    """Status check reads the canonical findings collection."""
 
-    def test_reads_issues_key(self, mod, tmp_path):
-        """ReviewOutputBuilder emits 'issues', not 'findings'."""
+    def test_reads_findings_key(self, mod, tmp_path):
+        """ReviewOutputBuilder emits findings with canonical severities."""
         plan = {"agents": [{"name": "security-reviewer", "status": "DISPATCH"}]}
         (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
 
         review = {
-            "issues": [
+            "findings": [
                 {"title": "XSS", "file": "a.php", "severity": "critical"},
                 {"title": "CSRF", "file": "b.php", "severity": "high"},
             ],

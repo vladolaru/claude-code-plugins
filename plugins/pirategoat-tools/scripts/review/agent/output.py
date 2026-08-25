@@ -8,7 +8,7 @@ Usage:
     from review.agent.output import ReviewOutputBuilder
 
     builder = ReviewOutputBuilder.open(output_dir, "123", "security")
-    builder.add_issue(
+    builder.add_finding(
         severity="critical",
         title="SQL Injection",
         file="src/User.php",
@@ -29,6 +29,7 @@ Usage:
 import hashlib
 import json
 import os
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -301,16 +302,21 @@ def _atomic_replace_bytes(path: str, data: bytes) -> None:
 
 def render_draft_index(review: dict) -> str:
     """Render concise mutable review state for continuation bootstrap."""
-    issues = review.get("issues") or []
-    clearances = review.get("clearances") or []
+    findings = review.get("findings") or []
+    checks = review.get("checks") or []
     lines = [
         "DRAFT INDEX:",
-        f"  findings {len(issues)} | checks {len(clearances)}",
+        f"  findings {len(findings)} | checks {len(checks)}",
     ]
-    for issue in issues:
+    for finding in findings:
         lines.append(
-            f"  finding {issue['id']}: {issue['severity']} "
-            f"{json.dumps(issue['title'], ensure_ascii=False)}"
+            f"  finding {finding['id']}: {finding['severity']} "
+            f"{json.dumps(finding['title'], ensure_ascii=False)}"
+        )
+    for check in checks:
+        lines.append(
+            f"  check {check['id']}: "
+            f"{json.dumps(check['question'], ensure_ascii=False)}"
         )
     return "\n".join(lines)
 
@@ -371,8 +377,8 @@ def _rejected_critic_decision(record):
 def render_review_body(data: Dict) -> str:
     """Everything a rendered review says beneath its title.
 
-    Banner, executive summary, assessment, critic accounting, issues,
-    recommendations, clearances, critic removals, positives, observations —
+    Banner, executive summary, assessment, critic accounting, findings,
+    recommendations, checks, critic removals, positives, observations —
     the whole document minus the H1. Shared verbatim by
     ``render_markdown()`` (which supplies the per-reviewer title) and by
     the review-record assembler in ``orchestration.py`` (which supplies its
@@ -403,13 +409,20 @@ def render_review_body(data: Dict) -> str:
         md.append("\n")
     md.append("## Executive Summary\n\n")
     md.append(f"**Verdict:** {data['verdict'].upper()}\n")
-    md.append(f"**Total Issues:** {data['summary']['total_issues']}\n\n")
+    md.append(
+        f"**Total Findings:** {data['summary']['total_findings']}\n\n"
+    )
 
-    advisory_suppressed = data['summary'].get('advisory_suppressed', 0)
-    if advisory_suppressed:
-        finding_word = "finding" if advisory_suppressed == 1 else "findings"
+    suppressed_advisory_findings = data['summary'].get(
+        'suppressed_advisory_finding_count', 0
+    )
+    if suppressed_advisory_findings:
+        finding_word = (
+            "finding" if suppressed_advisory_findings == 1 else "findings"
+        )
         md.append(
-            f"**Advisory suppression:** {advisory_suppressed} {finding_word} "
+            f"**Advisory suppression:** {suppressed_advisory_findings} "
+            f"{finding_word} "
             "excluded from the verdict"
         )
         verdict_without_advisory = data['summary'].get(
@@ -422,7 +435,7 @@ def render_review_body(data: Dict) -> str:
             )
         md.append("\n\n")
 
-    if data['summary']['total_issues'] > 0:
+    if data['summary']['total_findings'] > 0:
         counts = data['summary']['by_severity']
         md.append(f"- Critical: {counts['critical']}\n")
         md.append(f"- High: {counts['high']}\n")
@@ -441,12 +454,12 @@ def render_review_body(data: Dict) -> str:
     recon = meta.get('reconciliation') if isinstance(meta, dict) else None
     if isinstance(recon, dict):
         md.append(
-            f"**Pipeline:** {recon.get('input_findings_count', 0)} findings "
-            f"from {recon.get('agents_contributing', 0)} reviewing agents "
-            f"\u2192 {recon.get('verified_concerns', 0)} verified concerns "
-            f"({recon.get('concerns_after_grouping', 0)} concerns after "
-            f"grouping, {recon.get('false_positives_dropped', 0)} false "
-            f"positives dropped, {recon.get('out_of_scope_dropped', 0)} "
+            f"**Pipeline:** {recon.get('input_finding_count', 0)} findings "
+            f"from {recon.get('contributing_agent_count', 0)} reviewing agents "
+            f"\u2192 {recon.get('verified_finding_count', 0)} verified findings "
+            f"({recon.get('grouped_concern_count', 0)} concerns after "
+            f"grouping, {recon.get('false_positive_finding_count', 0)} false "
+            f"positives dropped, {recon.get('out_of_scope_finding_count', 0)} "
             "out-of-scope dropped). Full metrics in "
             "`review-findings.json` \u2192 `meta.reconciliation`.\n\n"
         )
@@ -471,32 +484,32 @@ def render_review_body(data: Dict) -> str:
     # would drop the one judgment a list of findings cannot express.
     #
     # It is also the one part of this document the decision critic cannot
-    # correct: its adjustment vocabulary addresses issues, and this is
-    # ledger-level prose. So an applying batch WITHDRAWS it
+    # correct: its adjustment vocabulary addresses findings, and this is
+    # ledger-level prose. So an applying batch INVALIDATES it
     # (critic_adjustments.py) rather than leaving a stale claim rendered
-    # above the list that contradicts it, and this renders the withdrawal
+    # above the list that contradicts it, and this renders the invalidation
     # instead of silently dropping the section — an absent Assessment and a
     # retracted one are different facts. Prose that survived a critic round
     # untouched still renders as prose: that is the STAND case, and the
     # marker below says exactly whose words they are.
-    withdrawn = data.get('withdrawn_narrative_summary')
-    if data.get('narrative_summary'):
+    invalidated = data.get('invalidated_assessments')
+    if data.get('assessment'):
         md.append("## Assessment\n\n")
-        md.append(f"{data['narrative_summary']}\n\n")
-        # Whose words these are depends on whether a batch already withdrew
-        # the reconciler's. After a withdrawal the standing text is the
-        # orchestrator's `revised_narrative`, carried in through the
+        md.append(f"{data['assessment']}\n\n")
+        # Whose words these are depends on whether a batch already invalidated
+        # the reconciler's. After invalidation the standing text is the
+        # orchestrator's `revised_assessment`, carried in through the
         # adjustments channel — attributing it to the reconciler would
         # credit prose that was retracted a step earlier.
         md.append(
             "*Post-critic assessment, written after the critic "
             "adjustments applied.*\n\n"
-            if withdrawn else
+            if invalidated else
             "*Reconciler-authored assessment, not adjusted by the decision "
             "critic.*\n\n"
         )
-    elif withdrawn:
-        # Keyed on the withdrawal record itself, not on
+    elif invalidated:
+        # Keyed on the invalidation record itself, not on
         # applied_critic_adjustments: a ledger that never carried a summary
         # records no withdrawal, and rendering a retraction notice for it
         # would claim an act that never happened.
@@ -510,12 +523,12 @@ def render_review_body(data: Dict) -> str:
         md.append("## Assessment\n\n")
         md.append(
             # "the standing assessment", not "the reconciler's": on a second
-            # reconciliation-plus-critic round the withdrawn text may be the
-            # orchestrator's own `revised_narrative` from the first round,
+            # reconciliation-plus-critic round the invalidated text may be the
+            # orchestrator's own `revised_assessment` from the first round,
             # and naming an author this section cannot know would be a
             # claim rather than a description.
-            "No current assessment: the standing assessment was withdrawn "
-            "under critic revision and not replaced; see the findings.\n\n"
+            "No current assessment: the standing assessment was invalidated "
+            "by critic revision and not replaced; see the findings.\n\n"
         )
 
     # What the orchestrator did with every critic decision, from the ledger's
@@ -546,27 +559,35 @@ def render_review_body(data: Dict) -> str:
             md.append(f"- `{adjustment_id}` — {outcome}\n")
         md.append("\n")
 
-    # Issues — every severity that counts toward total_issues must render,
+    # Findings — every severity that counts toward total_findings must render,
     # or the Markdown claims findings it doesn't show.
     for sev in ['critical', 'high', 'medium', 'low', 'info']:
-        sev_issues = [i for i in data['issues'] if i['severity'] == sev]
+        severity_findings = [
+            finding
+            for finding in data['findings']
+            if finding['severity'] == sev
+        ]
 
-        if sev_issues:
-            md.append(f"## {sev.title()} Issues\n\n")
+        if severity_findings:
+            md.append(f"## {sev.title()} Findings\n\n")
 
-            for issue in sev_issues:
-                md.append(f"### {issue['title']}\n\n")
-                if issue['line']:
-                    location = f"**File:** `{issue['file']}` line {issue['line']}"
-                elif issue.get('scope') == 'file':
-                    location = f"**File:** `{issue['file']}` (file-scoped)"
+            for finding in severity_findings:
+                md.append(f"### {finding['title']}\n\n")
+                if finding['line']:
+                    location = (
+                        f"**File:** `{finding['file']}` line {finding['line']}"
+                    )
+                elif finding.get('scope') == 'file':
+                    location = f"**File:** `{finding['file']}` (file-scoped)"
                 else:
-                    location = f"**File:** `{issue['file']}`"
+                    location = f"**File:** `{finding['file']}`"
                 md.append(location + "\n\n")
-                md.append(f"{issue['description']}\n\n")
-                if issue.get('severity_floor'):
-                    md.append(f"**Severity floor:** {issue['severity_floor']}\n\n")
-                md.append(f"**Fix:** {issue['recommendation']}\n\n")
+                md.append(f"{finding['description']}\n\n")
+                if finding.get('severity_floor'):
+                    md.append(
+                        f"**Severity floor:** {finding['severity_floor']}\n\n"
+                    )
+                md.append(f"**Fix:** {finding['recommendation']}\n\n")
 
     # Recommendations — prioritized, and rendered because the producer
     # recorded them. They were silently dropped from every derived
@@ -597,21 +618,52 @@ def render_review_body(data: Dict) -> str:
             md.append("## Recommendations\n\n")
             md.extend(groups)
 
-    # Clearances — absence claims with their verification method
-    if data.get('clearances'):
-        md.append("## Clearances (verified absences)\n\n")
-        for c in data['clearances']:
-            md.append(f"- **{c['claim']}**\n")
-            md.append(f"  - Method: {c['method']}\n")
-            if c.get('evidence'):
-                md.append(f"  - Evidence: {c['evidence']}\n")
+    checks = data.get('checks')
+    if checks:
+        heading = (
+            "Verified Checks"
+            if (
+                isinstance(recon, dict)
+                or data.get('reviewer') in {
+                    'reconciliator', 'review-reconciliator'
+                }
+            )
+            else "Checks Performed"
+        )
+        md.append(f"## {heading}\n\n")
+        for check in checks:
+            md.append(f"- **{check['question']}**\n")
+            md.append(f"  - Method: {check['method']}\n")
+            md.append(f"  - Result: {check['result']}\n")
+            md.append(
+                "  - Source reviewers: "
+                + ", ".join(check['source_reviewers'])
+                + "\n"
+            )
+        md.append("\n")
+
+    removed_checks = data.get('checks_removed_by_critic')
+    if isinstance(removed_checks, list) and removed_checks:
+        md.append("## Checks Removed by the Decision Critic\n\n")
+        for check in removed_checks:
+            if not isinstance(check, dict):
+                continue
+            adjustment = check.get('critic_adjustment')
+            rationale = (
+                adjustment.get('rationale')
+                if isinstance(adjustment, dict) else None
+            )
+            md.append(
+                f"- **{check.get('question')}** — "
+                f"{rationale or 'no rationale recorded'}\n"
+            )
         md.append("\n")
 
     # What the critic took out. The ledger deliberately moves a removed
-    # finding into `removed_by_critic` rather than deleting it, so the
+    # finding into `findings_removed_by_critic` rather than deleting it, so the
     # decision stays auditable; a reading copy that dropped the section
     # would hide exactly the record the JSON went out of its way to keep.
-    removed = data.get('removed_by_critic')
+    removed = data.get('findings_removed_by_critic')
     if isinstance(removed, list) and removed:
         md.append("## Removed by the Decision Critic\n\n")
         for entry in removed:
@@ -696,17 +748,18 @@ class ReviewOutputBuilder:
         self.pr_id = pr_id if isinstance(pr_id, str) else str(pr_id)
         self.reviewer = reviewer
         self.timestamp = datetime.now().isoformat()
-        self.issues = []
+        self.findings = []
         self.observations = []
         self.recommendations = {'immediate': [], 'important': [], 'suggestions': []}
         self.positive_observations = []
-        self.clearances = []
+        self.checks = []
         # Agent-authored: the producer's own reading of the change as a
         # whole. The reconciliator's overall-state prose lives here.
-        self.narrative_summary = None
+        self.assessment = None
+        self.next_finding_number = 1
+        self.next_check_number = 1
         # Agent-authored: review-claimable files the reviewer claims it read.
         self.reviewed_file_claims = []
-        self.tool_results_used = []
         self.overall_confidence = 0.95
         self._not_applicable = False
         self._skip_reason = None
@@ -749,7 +802,7 @@ class ReviewOutputBuilder:
         """Rehydrate every builder-owned field from a validated review."""
         builder = cls(review["pr_id"], review["reviewer"])
         builder.timestamp = review["timestamp"]
-        builder.issues = list(review["issues"])
+        builder.findings = list(review["findings"])
         builder.observations = list(review.get("observations") or [])
         recommendations = review.get("recommendations") or {}
         builder.recommendations = {
@@ -759,11 +812,12 @@ class ReviewOutputBuilder:
         builder.positive_observations = list(
             review.get("positive_observations") or []
         )
-        builder.clearances = list(review.get("clearances") or [])
-        builder.narrative_summary = review.get("narrative_summary")
+        builder.checks = list(review["checks"])
+        builder.assessment = review.get("assessment")
         builder.reviewed_file_claims = list(review["reviewed_file_claims"])
         meta = review["meta"]
-        builder.tool_results_used = list(meta.get("tool_results_used") or [])
+        builder.next_finding_number = meta["next_finding_number"]
+        builder.next_check_number = meta["next_check_number"]
         builder.overall_confidence = meta["confidence_score"]
         builder._not_applicable = review["verdict"] == "not_applicable"
         builder._skip_reason = review.get("skip_reason")
@@ -778,7 +832,175 @@ class ReviewOutputBuilder:
         self._base_digest = base_digest
         return self
 
-    def add_issue(
+    def _allocate_finding_id(self) -> str:
+        finding_id = f"f{self.next_finding_number}"
+        self.next_finding_number += 1
+        return finding_id
+
+    def _allocate_check_id(self) -> str:
+        check_id = f"c{self.next_check_number}"
+        self.next_check_number += 1
+        return check_id
+
+    @staticmethod
+    def _entry_index(entries: list, entry_id: str, kind: str) -> int:
+        for index, entry in enumerate(entries):
+            if isinstance(entry, dict) and entry.get("id") == entry_id:
+                return index
+        raise ValueError(f"unknown {kind} id: {entry_id}")
+
+    def update_finding(self, finding_id: str, **fields) -> None:
+        """Strictly patch one finding without changing its identity."""
+        allowed = {
+            "category",
+            "severity",
+            "title",
+            "description",
+            "file",
+            "line",
+            "recommendation",
+            "confidence",
+            "behavior_evidence",
+            "source_cited",
+            "severity_floor",
+            "channel",
+            "code_snippet",
+            "references",
+        }
+        rejected = sorted(set(fields) - allowed)
+        if rejected:
+            raise ValueError(
+                "update_finding cannot update field(s): "
+                + ", ".join(rejected)
+            )
+        if not fields:
+            raise ValueError("update_finding requires at least one field")
+        index = self._entry_index(self.findings, finding_id, "finding")
+        candidate = dict(self.findings[index])
+        candidate.update(fields)
+        if "severity" in fields and isinstance(candidate["severity"], str):
+            candidate["severity"] = candidate["severity"].lower()
+        if "severity_floor" in fields and isinstance(
+            candidate["severity_floor"], str
+        ):
+            candidate["severity_floor"] = candidate["severity_floor"].lower()
+        for field in ("title", "description", "recommendation"):
+            if field in fields:
+                candidate[field] = _coerce_text(
+                    fields[field], single_line=field == "title"
+                )
+        if candidate.get("line") is None:
+            candidate["scope"] = "file"
+        else:
+            candidate.pop("scope", None)
+        floor = candidate.get("severity_floor")
+        severity = candidate.get("severity")
+        if (
+            floor in _SEVERITY_RANK
+            and severity in _SEVERITY_RANK
+            and _SEVERITY_RANK[severity] < _SEVERITY_RANK[floor]
+        ):
+            candidate["severity"] = floor
+        if (
+            candidate.get("channel") == "advisory"
+            and self._known_advisory_entitlement() is False
+        ):
+            raise ValueError(
+                "Cannot record advisory finding: this reviewer is not "
+                "entitled to the advisory channel."
+            )
+        _validate_finding_shape(candidate, index)
+        self.findings[index] = candidate
+        self._invocation_delta.append(f"updated finding {finding_id}")
+
+    def remove_finding(self, finding_id: str) -> None:
+        """Remove one finding without recycling its stable ID."""
+        index = self._entry_index(self.findings, finding_id, "finding")
+        self.findings.pop(index)
+        self._invocation_delta.append(f"removed finding {finding_id}")
+
+    def record_check(self, question: str, method: str, result: str) -> str:
+        """Record one reviewer-performed check with builder-owned metadata."""
+        return self._record_check(
+            question,
+            method,
+            result,
+            source_reviewers=[self.reviewer],
+        )
+
+    def _record_check(
+        self,
+        question: str,
+        method: str,
+        result: str,
+        *,
+        source_reviewers: List[str],
+    ) -> str:
+        """Internal synthesis path for structurally merged check sources."""
+        values = [
+            _coerce_text(value).strip()
+            for value in (question, method, result)
+        ]
+        if not all(values):
+            raise ValueError(
+                "record_check requires non-empty question, method, and result"
+            )
+        if (
+            not isinstance(source_reviewers, list)
+            or not source_reviewers
+            or any(
+                not isinstance(source, str) or not source.strip()
+                for source in source_reviewers
+            )
+        ):
+            raise ValueError(
+                "record_check source_reviewers must be non-empty strings"
+            )
+        normalized_sources = list(
+            dict.fromkeys(source.strip() for source in source_reviewers)
+        )
+        check_id = self._allocate_check_id()
+        self.checks.append({
+            "id": check_id,
+            "question": values[0],
+            "method": values[1],
+            "result": values[2],
+            "source_reviewers": normalized_sources,
+        })
+        self._invocation_delta.append(
+            f"added check {check_id} "
+            f"{json.dumps(values[0], ensure_ascii=False)}"
+        )
+        return check_id
+
+    def update_check(self, check_id: str, **fields) -> None:
+        """Strictly patch check content without changing identity or sources."""
+        allowed = {"question", "method", "result"}
+        rejected = sorted(set(fields) - allowed)
+        if rejected:
+            raise ValueError(
+                "update_check cannot update field(s): "
+                + ", ".join(rejected)
+            )
+        if not fields:
+            raise ValueError("update_check requires at least one field")
+        index = self._entry_index(self.checks, check_id, "check")
+        candidate = dict(self.checks[index])
+        candidate.update(
+            (field, _coerce_text(value).strip())
+            for field, value in fields.items()
+        )
+        _validate_check_shape(candidate, index)
+        self.checks[index] = candidate
+        self._invocation_delta.append(f"updated check {check_id}")
+
+    def remove_check(self, check_id: str) -> None:
+        """Remove one check without recycling its stable ID."""
+        index = self._entry_index(self.checks, check_id, "check")
+        self.checks.pop(index)
+        self._invocation_delta.append(f"removed check {check_id}")
+
+    def add_finding(
         self,
         severity: str,
         title: str,
@@ -795,13 +1017,13 @@ class ReviewOutputBuilder:
         channel: Optional[str] = None,
         **extra_fields
     ) -> Optional[str]:
-        """Add an issue. Returns issue ID.
+        """Add a finding and return its builder-generated stable ID.
 
         Line is required for point defects — the reviewer protocol mandates
         diff-anchored findings for anything that has a line. Findings that are
         line-less BY NATURE (missing test coverage, missing assertions,
         git-history precedent, cross-file architecture) may pass line=None:
-        they are recorded as first-class FILE-SCOPED issues (line: null,
+        they are recorded as first-class FILE-SCOPED findings (line: null,
         scope: "file") that count toward the verdict, with a stderr NOTE so
         accidental line omission stays visible.
         Use add_observation() only for genuinely informational notes that
@@ -857,16 +1079,16 @@ class ReviewOutputBuilder:
                     "entitled to the advisory channel."
                 )
 
-        # Validate line — None records a first-class file-scoped issue (loud),
+        # Validate line — None records a first-class file-scoped finding (loud),
         # hard enforcement for invalid values (0, negative, non-int).
         file_scoped = line is None
         if file_scoped:
             # A legitimately line-less finding (missing coverage, precedent,
-            # cross-file architecture) is a real, verdict-counting issue.
+            # cross-file architecture) is a real, verdict-counting finding.
             # Point defects still need line= — hence the stderr NOTE.
             print(
                 f"NOTE: recording '{title}' ({severity_value}) as a "
-                f"FILE-SCOPED issue for '{file}' because line=None. "
+                f"FILE-SCOPED finding for '{file}' because line=None. "
                 f"It counts toward the verdict. If this finding points at a "
                 f"specific line, re-add it with line=<source line>.",
                 file=sys.stderr,
@@ -889,10 +1111,10 @@ class ReviewOutputBuilder:
                 file=sys.stderr,
             )
 
-        issue_id = str(uuid.uuid4())[:8]
+        finding_id = self._allocate_finding_id()
 
-        issue = {
-            'id': issue_id,
+        finding = {
+            'id': finding_id,
             'category': category,
             'severity': severity_value,
             'title': _coerce_text(title, single_line=True),
@@ -904,29 +1126,29 @@ class ReviewOutputBuilder:
             **extra_fields
         }
         if file_scoped:
-            issue['scope'] = 'file'
+            finding['scope'] = 'file'
         if behavior_evidence is not None:
-            issue['behavior_evidence'] = behavior_evidence
+            finding['behavior_evidence'] = behavior_evidence
         if source_cited is not None:
-            issue['source_cited'] = source_cited
+            finding['source_cited'] = source_cited
         if floor_value is not None:
-            issue['severity_floor'] = floor_value
+            finding['severity_floor'] = floor_value
         if channel == 'advisory':
-            issue['channel'] = channel
+            finding['channel'] = channel
 
-        self.issues.append(issue)
+        self.findings.append(finding)
         self._invocation_delta.append(
-            f"added finding {issue_id} "
-            f"{json.dumps(issue['title'], ensure_ascii=False)}"
+            f"added finding {finding_id} "
+            f"{json.dumps(finding['title'], ensure_ascii=False)}"
         )
-        return issue_id
+        return finding_id
 
     def add_observation(self, file: str, note: str, category: str = "general"):
         """Add a file-level observation (not a finding).
 
         Observations are informational notes about files that don't have a
         specific line reference. They don't affect the verdict and are
-        displayed separately from issues.
+        displayed separately from findings.
         """
         self.observations.append({
             "file": file,
@@ -934,7 +1156,7 @@ class ReviewOutputBuilder:
             "category": category,
         })
 
-    def set_narrative_summary(self, text):
+    def set_assessment(self, text):
         """Record the overall-state prose this artifact's verdict summarizes.
 
         Two or three sentences answering "what is the overall state of this
@@ -945,57 +1167,16 @@ class ReviewOutputBuilder:
         distinguish "said nothing" from "said ''".
         """
         coerced = _coerce_text(text).strip()
-        self.narrative_summary = coerced or None
+        self.assessment = coerced or None
 
     def add_recommendation(self, priority: str, text: str):
         """Add recommendation (priority: immediate, important, suggestions)."""
         if priority in self.recommendations:
             self.recommendations[priority].append(_coerce_text(text))
 
-    def add_positive(self, observation: str):
+    def add_positive_observation(self, observation: str):
         """Add positive observation."""
-        self.positive_observations.append(observation)
-
-    def add_clearance(self, claim: str, method: str, evidence: Optional[str] = None):
-        """Record an auditable absence claim ("nothing depends on this").
-
-        Use for blast-radius clears: "no CSS selects the removed element",
-        "no caller uses the deleted parameter", "no test targets this row".
-        Unlike positive observations (which reconciliation excludes),
-        clearances flow into the reconciliation context WITH their method,
-        so conflicts with other agents' findings are visible and search
-        coverage can be judged downstream.
-
-        Args:
-            claim: The absence being asserted.
-            method: The exact searches run / files read that ground the claim
-                (e.g. "grep -rn 'th label' client/legacy/css/; read each hit").
-                Required — an absence claim without its method is unauditable.
-            evidence: Optional supporting detail — hit counts, a file:line
-                list, and, at reconciliation, WHO the clearance came from
-                ("per security-reviewer, concurrency-reviewer — 0 in-tree
-                consumers"). Attribution rides here by convention rather
-                than in its own field because the reconciliator collapses
-                method-correlated clearances into one entry: the names of
-                every agent that ran the shared probe are what survives
-                that merge, and they have nowhere else to go. Nothing
-                validates the convention — it is a documented contract
-                between `agents/review-reconciliator.md` and this field's
-                readers.
-        """
-        if not claim or not claim.strip():
-            raise ValueError("add_clearance requires a non-empty claim.")
-        if not method or not method.strip():
-            raise ValueError(
-                "add_clearance requires a non-empty method — state the exact "
-                "searches/reads that ground the claim so downstream stages "
-                "can judge their coverage."
-            )
-        self.clearances.append({
-            "claim": claim.strip(),
-            "method": method.strip(),
-            "evidence": evidence.strip() if evidence and evidence.strip() else None,
-        })
+        self.positive_observations.append(_coerce_text(observation))
 
     @staticmethod
     def _resolve_plugin_version(output_dir: Optional[str]) -> Optional[str]:
@@ -1247,13 +1428,16 @@ class ReviewOutputBuilder:
     def _validate_advisory_serialization(
         self, output_dir: Optional[str]
     ) -> None:
-        """Reject explicitly unentitled advisory issues at finalization.
+        """Reject explicitly unentitled advisory findings at finalization.
 
         Missing or malformed sidecars remain deliberately fail-open after the
         channel vocabulary has been validated. An explicit false is the only
         authoritative denial.
         """
-        if not any(issue.get("channel") == "advisory" for issue in self.issues):
+        if not any(
+            finding.get("channel") == "advisory"
+            for finding in self.findings
+        ):
             return
         if self._load_advisory_entitlement(output_dir, self.reviewer) is False:
             raise ValueError(
@@ -1306,11 +1490,6 @@ class ReviewOutputBuilder:
             raise ValueError(f"Confidence must be 0.0-1.0, got {score}")
         self.overall_confidence = score
 
-    def add_tool_result(self, tool_name: str):
-        """Record tool result used."""
-        if tool_name not in self.tool_results_used:
-            self.tool_results_used.append(tool_name)
-
     def mark_not_applicable(self, reason: str):
         """Mark this review as not applicable — changes not relevant to this domain.
 
@@ -1324,25 +1503,26 @@ class ReviewOutputBuilder:
                 "mark_not_applicable requires a non-empty reason explaining "
                 "why the changes are not relevant to this domain."
             )
-        if self.issues:
+        if self.findings:
             raise ValueError(
-                f"Cannot mark review as not_applicable — {len(self.issues)} issue(s) "
-                "already recorded. An agent that found issues reviewed the code; "
+                "Cannot mark review as not_applicable — "
+                f"{len(self.findings)} finding(s) already recorded. "
+                "An agent that found findings reviewed the code; "
                 "it should not also claim the changes are irrelevant."
             )
         self._not_applicable = True
         self._skip_reason = reason.strip()
 
     def _calculate_verdict(self) -> str:
-        """Auto-calculate verdict from issues."""
+        """Auto-calculate verdict from findings."""
         if self._not_applicable:
             return 'not_applicable'
-        return derive_review_state(self.issues)['verdict']
+        return derive_review_state(self.findings)['verdict']
 
     def to_dict(
         self, *, output_dir: Optional[str] = None, review_accounting=None
     ) -> Dict:
-        """Build as dictionary, revalidating advisory issues when directed.
+        """Build as dictionary, revalidating advisory findings when directed.
 
         Without an explicit directory, manual and legacy callers retain the
         deliberate fail-open, vocabulary-only advisory behavior.
@@ -1355,16 +1535,16 @@ class ReviewOutputBuilder:
             self._validate_advisory_serialization(output_dir)
         review_duration = self._review_duration_ms(output_dir)
 
-        derived = derive_review_state(self.issues)
+        derived = derive_review_state(self.findings)
         verdict = 'not_applicable' if self._not_applicable else derived['verdict']
         summary = {
-            'total_issues': len(self.issues),
+            'total_findings': len(self.findings),
             'by_severity': derived['counts'],
         }
         if self._not_applicable:
             # The abstention short-circuits before channel tags are consulted,
             # so no finding was excluded from its verdict calculation.
-            summary['advisory_suppressed'] = 0
+            summary['suppressed_advisory_finding_count'] = 0
         else:
             summary.update(derived['advisory'])
 
@@ -1376,7 +1556,7 @@ class ReviewOutputBuilder:
             'schema': REVIEW_OUTPUT_SCHEMA,
             'verdict': verdict,
             'summary': summary,
-            'issues': self.issues,
+            'findings': self.findings,
             'review_claimable_files': (
                 list(review_accounting.review_claimable_files)
                 if review_accounting else None
@@ -1404,12 +1584,13 @@ class ReviewOutputBuilder:
             'observations': self.observations if self.observations else None,
             'recommendations': self.recommendations if any(self.recommendations.values()) else None,
             'positive_observations': self.positive_observations if self.positive_observations else None,
-            'clearances': self.clearances if self.clearances else None,
-            'narrative_summary': self.narrative_summary,
+            'checks': list(self.checks),
+            'assessment': self.assessment,
             'meta': {
                 'review_duration_ms': review_duration,
                 'confidence_score': self.overall_confidence,
-                'tool_results_used': self.tool_results_used if self.tool_results_used else None
+                'next_finding_number': self.next_finding_number,
+                'next_check_number': self.next_check_number,
             }
         }
         if self._skip_reason:
@@ -1501,12 +1682,12 @@ class ReviewOutputBuilder:
             for severity in _VALID_SEVERITIES
             if summary["by_severity"][severity]
         ]
-        findings = f"findings {summary['total_issues']}"
+        findings = f"findings {summary['total_findings']}"
         if severity_parts:
             findings += f" ({', '.join(severity_parts)})"
         totals = [findings]
-        if review.get("clearances"):
-            totals.append(f"checks {len(review['clearances'])}")
+        if review["checks"]:
+            totals.append(f"checks {len(review['checks'])}")
         if review.get("observations"):
             totals.append(f"observations {len(review['observations'])}")
 
@@ -1562,7 +1743,7 @@ _REQUIRED_REVIEW_FIELDS = frozenset({
     "schema",
     "verdict",
     "summary",
-    "issues",
+    "findings",
     "review_claimable_files",
     "reviewed_file_claims",
     "unclaimed_review_files",
@@ -1572,13 +1753,13 @@ _REQUIRED_REVIEW_FIELDS = frozenset({
     "observations",
     "recommendations",
     "positive_observations",
-    "clearances",
-    "narrative_summary",
+    "checks",
+    "assessment",
     "meta",
 })
 _OPTIONAL_REVIEW_FIELDS = frozenset({"skip_reason"})
 _ALLOWED_REVIEW_FIELDS = _REQUIRED_REVIEW_FIELDS | _OPTIONAL_REVIEW_FIELDS
-_REQUIRED_ISSUE_FIELDS = frozenset({
+_REQUIRED_FINDING_FIELDS = frozenset({
     "id",
     "category",
     "severity",
@@ -1592,7 +1773,8 @@ _REQUIRED_ISSUE_FIELDS = frozenset({
 _REQUIRED_META_FIELDS = frozenset({
     "review_duration_ms",
     "confidence_score",
-    "tool_results_used",
+    "next_finding_number",
+    "next_check_number",
 })
 _OPTIONAL_META_FIELDS = frozenset()
 _ALLOWED_META_FIELDS = _REQUIRED_META_FIELDS | _OPTIONAL_META_FIELDS
@@ -1608,71 +1790,160 @@ def _is_string_list(value):
     )
 
 
-def _validate_issue_shape(issue, index):
-    """Validate fields emitted by ``ReviewOutputBuilder.add_issue``."""
-    if not isinstance(issue, dict):
-        raise ValueError(f"review issue {index} must be an object")
-    missing = sorted(_REQUIRED_ISSUE_FIELDS - set(issue))
+def _canonical_id_number(value, prefix, label):
+    if not isinstance(value, str) or not re.fullmatch(
+        rf"{prefix}[1-9][0-9]*", value
+    ):
+        raise ValueError(f"{label}.id must be a canonical {prefix}N id")
+    return int(value[1:])
+
+
+def _validate_finding_shape(finding, index):
+    """Validate fields emitted by ``ReviewOutputBuilder.add_finding``."""
+    if not isinstance(finding, dict):
+        raise ValueError(f"review finding {index} must be an object")
+    missing = sorted(_REQUIRED_FINDING_FIELDS - set(finding))
     if missing:
         raise ValueError(
-            f"review issue {index} is missing required fields: "
+            f"review finding {index} is missing required fields: "
             + ", ".join(missing)
         )
+    _canonical_id_number(finding["id"], "f", f"review finding {index}")
     for field in (
-        "id",
         "category",
         "title",
         "description",
         "file",
         "recommendation",
     ):
-        if not isinstance(issue[field], str):
+        if not isinstance(finding[field], str):
             raise ValueError(
-                f"review issue {index}.{field} must be a string"
+                f"review finding {index}.{field} must be a string"
             )
-    if issue["severity"] not in _VALID_SEVERITIES:
+    if finding["severity"] not in _VALID_SEVERITIES:
         raise ValueError(
-            f"review issue {index}.severity is invalid"
+            f"review finding {index}.severity is invalid"
         )
-    if not _is_confidence(issue["confidence"]):
+    if not _is_confidence(finding["confidence"]):
         raise ValueError(
-            f"review issue {index}.confidence must be 0.0-1.0"
+            f"review finding {index}.confidence must be 0.0-1.0"
         )
-    if "line" in issue and (
-        issue["line"] is not None
-        and (type(issue["line"]) is not int or issue["line"] <= 0)
+    if "line" in finding and (
+        finding["line"] is not None
+        and (type(finding["line"]) is not int or finding["line"] <= 0)
     ):
         raise ValueError(
-            f"review issue {index}.line must be positive or null"
+            f"review finding {index}.line must be positive or null"
         )
-    if "scope" in issue and issue["scope"] != "file":
+    if "scope" in finding and finding["scope"] != "file":
         raise ValueError(
-            f"review issue {index}.scope must be 'file'"
-        )
-    if "severity_floor" in issue and issue["severity_floor"] not in _VALID_SEVERITIES:
-        raise ValueError(
-            f"review issue {index}.severity_floor is invalid"
-        )
-    if "channel" in issue and issue["channel"] not in _VALID_CHANNELS:
-        raise ValueError(
-            f"review issue {index}.channel is invalid"
+            f"review finding {index}.scope must be 'file'"
         )
     if (
-        "behavior_evidence" in issue
-        and issue["behavior_evidence"] not in ("cited", "inferred")
+        "severity_floor" in finding
+        and finding["severity_floor"] not in _VALID_SEVERITIES
     ):
         raise ValueError(
-            f"review issue {index}.behavior_evidence is invalid"
+            f"review finding {index}.severity_floor is invalid"
+        )
+    if "channel" in finding and finding["channel"] not in _VALID_CHANNELS:
+        raise ValueError(
+            f"review finding {index}.channel is invalid"
+        )
+    if (
+        "behavior_evidence" in finding
+        and finding["behavior_evidence"] not in ("cited", "inferred")
+    ):
+        raise ValueError(
+            f"review finding {index}.behavior_evidence is invalid"
         )
     for field in ("code_snippet", "source_cited"):
-        if field in issue and not isinstance(issue[field], str):
+        if field in finding and not isinstance(finding[field], str):
             raise ValueError(
-                f"review issue {index}.{field} must be a string"
+                f"review finding {index}.{field} must be a string"
             )
-    if "references" in issue and not _is_string_list(issue["references"]):
+    if (
+        "references" in finding
+        and not _is_string_list(finding["references"])
+    ):
         raise ValueError(
-            f"review issue {index}.references must be strings"
+            f"review finding {index}.references must be strings"
         )
+
+
+def _validate_check_shape(check, index):
+    """Validate one canonical check without inferring materiality."""
+    required = {"id", "question", "method", "result", "source_reviewers"}
+    if not isinstance(check, dict):
+        raise ValueError(f"review check {index} must be an object")
+    if set(check) != required:
+        missing = sorted(required - set(check))
+        unexpected = sorted(set(check) - required)
+        details = []
+        if missing:
+            details.append("missing " + ", ".join(missing))
+        if unexpected:
+            details.append("unexpected " + ", ".join(unexpected))
+        raise ValueError(
+            f"review check {index} has invalid fields: " + "; ".join(details)
+        )
+    _canonical_id_number(check["id"], "c", f"review check {index}")
+    for field in ("question", "method", "result"):
+        if not isinstance(check[field], str) or not check[field].strip():
+            raise ValueError(
+                f"review check {index}.{field} must be a non-empty string"
+            )
+    sources = check["source_reviewers"]
+    if (
+        not isinstance(sources, list)
+        or not sources
+        or any(
+            not isinstance(source, str) or not source.strip()
+            for source in sources
+        )
+        or len(sources) != len(set(sources))
+    ):
+        raise ValueError(
+            f"review check {index}.source_reviewers must be unique "
+            "non-empty strings"
+        )
+
+
+def validate_review_domain(findings, checks, assessment, meta):
+    """Validate the builder-owned finding/check/assessment domain model."""
+    if not isinstance(findings, list):
+        raise ValueError("review findings must be a list")
+    finding_numbers = []
+    for index, finding in enumerate(findings):
+        _validate_finding_shape(finding, index)
+        finding_numbers.append(int(finding["id"][1:]))
+    if len(finding_numbers) != len(set(finding_numbers)):
+        raise ValueError("review finding ids must be unique")
+
+    if not isinstance(checks, list):
+        raise ValueError("review checks must be a list")
+    check_numbers = []
+    for index, check in enumerate(checks):
+        _validate_check_shape(check, index)
+        check_numbers.append(int(check["id"][1:]))
+    if len(check_numbers) != len(set(check_numbers)):
+        raise ValueError("review check ids must be unique")
+
+    if assessment is not None and not isinstance(assessment, str):
+        raise ValueError("review assessment must be a string or null")
+    if not isinstance(meta, dict):
+        raise ValueError("review meta must be an object")
+    for field, numbers in (
+        ("next_finding_number", finding_numbers),
+        ("next_check_number", check_numbers),
+    ):
+        value = meta.get(field)
+        if type(value) is not int or value < 1:
+            raise ValueError(f"review meta.{field} must be a positive integer")
+        if numbers and value <= max(numbers):
+            raise ValueError(
+                f"review meta.{field} must be greater than every live id"
+            )
 
 
 def _validate_optional_review_fields(review):
@@ -1706,30 +1977,6 @@ def _validate_optional_review_fields(review):
         if value is not None and not _is_string_list(value):
             raise ValueError(f"review {field} must be strings or null")
 
-    clearances = review.get("clearances")
-    if clearances is not None:
-        if not isinstance(clearances, list):
-            raise ValueError("review clearances must be a list or null")
-        for index, clearance in enumerate(clearances):
-            if not isinstance(clearance, dict):
-                raise ValueError(
-                    f"review clearance {index} must be an object"
-                )
-            for field in ("claim", "method"):
-                value = clearance.get(field)
-                if not isinstance(value, str) or not value.strip():
-                    raise ValueError(
-                        f"review clearance {index}.{field} "
-                        "must be a non-empty string"
-                    )
-            evidence = clearance.get("evidence")
-            if evidence is not None and not isinstance(evidence, str):
-                raise ValueError(
-                    f"review clearance {index}.evidence "
-                    "must be a string or null"
-                )
-
-
 def _validate_review_shape(review, reviewer):
     """Validate the complete builder-owned review shape before derivation."""
     missing = sorted(_REQUIRED_REVIEW_FIELDS - set(review))
@@ -1758,10 +2005,6 @@ def _validate_review_shape(review, reviewer):
         review["plugin_version"], str
     ):
         raise ValueError("review plugin_version must be a string or null")
-    if review["narrative_summary"] is not None and not isinstance(
-        review["narrative_summary"], str
-    ):
-        raise ValueError("review narrative_summary must be a string or null")
     for field in (
         "review_claimable_files",
         "reviewed_file_claims",
@@ -1778,12 +2021,6 @@ def _validate_review_shape(review, reviewer):
             raise ValueError(
                 f"review {field} must be a non-negative integer"
             )
-
-    issues = review["issues"]
-    if not isinstance(issues, list):
-        raise ValueError("review issues must be a list")
-    for index, issue in enumerate(issues):
-        _validate_issue_shape(issue, index)
 
     meta = review["meta"]
     if not isinstance(meta, dict):
@@ -1809,11 +2046,12 @@ def _validate_review_shape(review, reviewer):
         raise ValueError(
             "review meta.confidence_score must be 0.0-1.0"
         )
-    tools = meta.get("tool_results_used")
-    if tools is not None and not _is_string_list(tools):
-        raise ValueError(
-            "review meta.tool_results_used must be strings or null"
-        )
+    validate_review_domain(
+        review["findings"],
+        review["checks"],
+        review["assessment"],
+        meta,
+    )
     _validate_optional_review_fields(review)
 
 
@@ -1827,19 +2065,19 @@ def _validate_review(output_dir, reviewer, paths, review_bytes):
         raise ValueError("malformed review: expected an object")
     _validate_review_shape(review, reviewer)
 
-    issues = review["issues"]
+    findings = review["findings"]
     summary = review["summary"]
-    if not isinstance(issues, list) or not isinstance(summary, dict):
-        raise ValueError("review issues/summary are malformed")
+    if not isinstance(findings, list) or not isinstance(summary, dict):
+        raise ValueError("review findings/summary are malformed")
     try:
-        derived = derive_review_state(issues)
+        derived = derive_review_state(findings)
     except ValueError as exc:
-        raise ValueError(f"review issues are malformed: {exc}") from exc
+        raise ValueError(f"review findings are malformed: {exc}") from exc
     expected_verdict = derived["verdict"]
     if review.get("verdict") == "not_applicable":
         skip_reason = review.get("skip_reason")
         if (
-            issues
+            findings
             or not isinstance(skip_reason, str)
             or not skip_reason.strip()
         ):
@@ -1850,15 +2088,15 @@ def _validate_review(output_dir, reviewer, paths, review_bytes):
             "review skip_reason requires a not_applicable verdict"
         )
     if review.get("verdict") != expected_verdict:
-        raise ValueError("review verdict does not match its issues")
+        raise ValueError("review verdict does not match its findings")
     expected_summary = {
-        "total_issues": len(issues),
+        "total_findings": len(findings),
         "by_severity": derived["counts"],
         **derived["advisory"],
     }
     severity_counts = summary.get("by_severity")
     if (
-        type(summary.get("total_issues")) is not int
+        type(summary.get("total_findings")) is not int
         or not isinstance(severity_counts, dict)
         or set(severity_counts) != set(_VALID_SEVERITIES)
         or any(
@@ -1866,15 +2104,15 @@ def _validate_review(output_dir, reviewer, paths, review_bytes):
             or severity_counts[severity] < 0
             for severity in _VALID_SEVERITIES
         )
-        or type(summary.get("advisory_suppressed")) is not int
-        or summary["advisory_suppressed"] < 0
+        or type(summary.get("suppressed_advisory_finding_count")) is not int
+        or summary["suppressed_advisory_finding_count"] < 0
         or (
             "verdict_without_advisory" in summary
             and summary["verdict_without_advisory"] not in VERDICT_RANK
         )
         or summary != expected_summary
     ):
-        raise ValueError("review summary does not match its issues")
+        raise ValueError("review summary does not match its findings")
 
     accounting_input = _read_json_object(
         paths.accounting_input, "review-accounting input"
@@ -1959,7 +2197,7 @@ def finalize_review(output_dir: str, reviewer: str, review_digest: str):
                 output_dir,
                 agent_name,
                 review["verdict"],
-                review["summary"]["total_issues"],
+                review["summary"]["total_findings"],
                 review["summary"]["by_severity"],
                 review_digest,
             )
@@ -1999,7 +2237,7 @@ def repair_finalized_completion(output_dir: str, reviewer: str):
             output_dir,
             agent_name,
             review["verdict"],
-            review["summary"]["total_issues"],
+            review["summary"]["total_findings"],
             review["summary"]["by_severity"],
             review_digest,
         )

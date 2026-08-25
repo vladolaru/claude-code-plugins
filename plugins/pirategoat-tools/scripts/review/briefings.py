@@ -1415,7 +1415,7 @@ def _step_9_review_report(mode, state, context, config, output_dir):
         actions.append(
             f"**The review record is assembled at `{od}/{REVIEW_RECORD_MD}`.** "
             "The pipeline wrote it from the findings ledger and this run's "
-            "own measurements — findings, clearances, the reconciler's "
+            "own measurements — findings, verified checks, the reconciler's "
             "assessment, run notes, and the coverage measurement. Nothing "
             "in it was authored by an agent."
         )
@@ -1671,7 +1671,7 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append("    }")
     actions.append("  ],")
     actions.append(
-        '  "revised_narrative": "<post-critic assessment of the settled ledger>"'
+        '  "revised_assessment": "<post-critic assessment of the settled ledger>"'
     )
     actions.append("}")
     actions.append("```")
@@ -2020,12 +2020,12 @@ def _report_authoring_actions(mode, state, context, config, output_dir):
         actions.append(
             f"**What held comes from the ledger, never from memory.** Any "
             f"\"what we checked and it held\" / \"verified absences\" "
-            f"content in the report is quoted from the `## Clearances "
-            f"(verified absences)` section of the record — the "
-            f"reconciliator recorded there exactly the clearances that "
+            f"content in the report is quoted from the `## Verified Checks` "
+            f"section of the record — the reconciliator recorded there "
+            f"exactly the checks that "
             f"survived its method judgment, with attribution. Do not "
             f"reconstruct that list from what you recall reviewers saying: "
-            f"a clearance the reconciliator voided as method-inadequate "
+            f"a check the reconciliator rejected as method-inadequate "
             f"would come back as fact. If that section is absent, nothing "
             f"was recorded as held — write no such section rather than "
             f"filling one in."

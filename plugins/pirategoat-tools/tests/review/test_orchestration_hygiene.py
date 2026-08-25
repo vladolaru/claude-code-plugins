@@ -388,12 +388,12 @@ def _seed_step_11(out):
         "schema": 2,
         "verdict": "APPROVE",
         "summary": {
-            "total_issues": 0,
+            "total_findings": 0,
             "by_severity": {
                 "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0,
             },
         },
-        "issues": [],
+        "findings": [],
         "review_claimable_files": [],
         "reviewed_file_claims": [],
         "unclaimed_review_files": [],
@@ -403,12 +403,13 @@ def _seed_step_11(out):
         "observations": None,
         "recommendations": None,
         "positive_observations": None,
-        "clearances": None,
-        "narrative_summary": None,
+        "checks": [],
+        "assessment": None,
         "meta": {
             "review_duration_ms": 10,
             "confidence_score": 0.9,
-            "tool_results_used": None,
+            "next_finding_number": 1,
+            "next_check_number": 1,
         },
     })
     proposal = critic_adjustments.prepare_proposal({

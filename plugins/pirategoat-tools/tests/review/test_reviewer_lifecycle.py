@@ -53,7 +53,7 @@ def _open_builder(output_dir, *, reviewer="code", pr_id="42"):
 
 
 def _add_finding(builder, title="Finding"):
-    return builder.add_issue(
+    return builder.add_finding(
         severity="low",
         title=title,
         file="src/code.py",
@@ -102,25 +102,23 @@ class TestDraftOpenAndReplacement:
         finding_id = _add_finding(builder)
         builder.add_observation("src/code.py", "Observed", "behavior")
         builder.add_recommendation("important", "Improve this")
-        builder.add_positive("Good boundary")
-        builder.add_clearance("Safe path", "read exact caller", "No gap")
-        builder.set_narrative_summary("The implementation needs one fix.")
+        builder.add_positive_observation("Good boundary")
+        builder.record_check("Safe path", "read exact caller", "No gap")
+        builder.set_assessment("The implementation needs one fix.")
         builder.claim_files_reviewed("src/claimable.py")
-        builder.add_tool_result("rg")
         builder.set_confidence(0.81)
         builder.save_draft()
 
         reopened = _open_builder(tmp_path)
 
         assert reopened.timestamp == builder.timestamp
-        assert [issue["id"] for issue in reopened.issues] == [finding_id]
+        assert [issue["id"] for issue in reopened.findings] == [finding_id]
         assert reopened.observations == builder.observations
         assert reopened.recommendations == builder.recommendations
         assert reopened.positive_observations == builder.positive_observations
-        assert reopened.clearances == builder.clearances
-        assert reopened.narrative_summary == builder.narrative_summary
+        assert reopened.checks == builder.checks
+        assert reopened.assessment == builder.assessment
         assert reopened.reviewed_file_claims == ["src/claimable.py"]
-        assert reopened.tool_results_used == ["rg"]
         assert reopened.overall_confidence == 0.81
 
     @pytest.mark.parametrize(
@@ -175,7 +173,7 @@ class TestDraftOpenAndReplacement:
         present = _open_builder(tmp_path)
 
         assert present.pr_id == "42"
-        assert present.issues[0]["id"] == finding_id
+        assert present.findings[0]["id"] == finding_id
 
     def test_stale_builder_cannot_replace_newer_draft(self, tmp_path):
         _write_accounting_input(tmp_path)
@@ -190,7 +188,7 @@ class TestDraftOpenAndReplacement:
 
         assert json.loads(
             Path(tmp_path, "code-review.draft.json").read_text()
-        )["issues"][0]["title"] == "First"
+        )["findings"][0]["title"] == "First"
 
     def test_winning_builder_can_save_repeated_replacements(self, tmp_path):
         _write_accounting_input(tmp_path)
@@ -201,7 +199,7 @@ class TestDraftOpenAndReplacement:
 
         assert first["review_digest"] != second["review_digest"]
         assert json.loads(Path(second["draft"]).read_text())["summary"][
-            "total_issues"
+            "total_findings"
         ] == 1
 
     def test_atomic_replace_failure_leaves_no_draft_or_staging_file(

@@ -2,7 +2,7 @@
 Tests for ReviewOutputBuilder — direct unit tests on the producer API.
 
 Validates the structured review output builder that all reviewer agents use
-to emit findings. Tests cover initialization, issue addition with validation,
+to emit findings. Tests cover initialization, finding addition with validation,
 recommendations, verdicts, serialization (dict, JSON, markdown), and file output.
 
 Zero external dependencies beyond stdlib + pytest.
@@ -97,22 +97,207 @@ def test_accounting_reads_follow_the_bound_review_paths(
 
 
 # =============================================================================
-# TestAddIssue
+# TestFindingAndCheckDomainModel
 # =============================================================================
 
 
-class TestAddIssue:
-    """add_issue validates inputs, stores all fields, and returns an ID."""
+class TestFindingAndCheckDomainModel:
+    """Schema-2 drafts expose only the canonical review-domain contract."""
 
-    def test_returns_8_char_id(self):
+    def test_ids_are_monotonic_and_removed_ids_are_not_reused(self, tmp_path):
+        _write_required_accounting_input(tmp_path, "security")
+        builder = ReviewOutputBuilder.open(tmp_path, "42", "security")
+
+        assert builder.add_finding(
+            severity="high",
+            title="First",
+            file="src/a.py",
+            description="A verified defect.",
+            recommendation="Correct it.",
+            line=10,
+        ) == "f1"
+        assert builder.record_check(
+            "Can input reach SQL?", "Read callers", "Yes"
+        ) == "c1"
+        builder.remove_finding("f1")
+        builder.remove_check("c1")
+        builder.save_draft()
+
+        reopened = ReviewOutputBuilder.open(tmp_path, "42", "security")
+        assert reopened.add_finding(
+            severity="medium",
+            title="Second",
+            file="src/b.py",
+            description="Another verified defect.",
+            recommendation="Correct this one too.",
+            line=20,
+        ) == "f2"
+        assert reopened.record_check(
+            "Does the fallback still run?", "Read the branch", "No"
+        ) == "c2"
+        review = reopened.to_dict()
+        assert review["meta"]["next_finding_number"] == 3
+        assert review["meta"]["next_check_number"] == 3
+
+    def test_updates_preserve_ids_and_check_sources(self):
+        builder = ReviewOutputBuilder("42", "security")
+        finding_id = builder.add_finding(
+            severity="medium",
+            title="Original",
+            file="src/a.py",
+            description="Original description.",
+            recommendation="Original recommendation.",
+            line=10,
+        )
+        check_id = builder.record_check(
+            "Does the caller validate?", "Read the caller", "Not yet"
+        )
+
+        builder.update_finding(
+            finding_id, severity="high", title="Updated"
+        )
+        builder.update_check(check_id, result="Yes")
+
+        review = builder.to_dict()
+        assert review["findings"][0]["id"] == finding_id
+        assert review["findings"][0]["severity"] == "high"
+        assert review["findings"][0]["title"] == "Updated"
+        assert review["checks"][0] == {
+            "id": check_id,
+            "question": "Does the caller validate?",
+            "method": "Read the caller",
+            "result": "Yes",
+            "source_reviewers": ["security"],
+        }
+
+    @pytest.mark.parametrize(
+        ("method", "entry_id", "patch", "match"),
+        [
+            ("update_finding", "f1", {"id": "f9"}, "cannot update field"),
+            ("update_finding", "f1", {"unknown": "x"}, "cannot update field"),
+            ("update_check", "c1", {"id": "c9"}, "cannot update field"),
+            (
+                "update_check",
+                "c1",
+                {"source_reviewers": ["other"]},
+                "cannot update field",
+            ),
+        ],
+    )
+    def test_mutations_reject_immutable_or_unknown_patch_fields(
+        self, method, entry_id, patch, match
+    ):
+        builder = ReviewOutputBuilder("42", "security")
+        builder.add_finding(
+            severity="medium",
+            title="Original",
+            file="src/a.py",
+            description="Original description.",
+            recommendation="Original recommendation.",
+            line=10,
+        )
+        builder.record_check(
+            "Does the caller validate?", "Read the caller", "Not yet"
+        )
+        before = builder.to_dict()
+
+        with pytest.raises(ValueError, match=match):
+            getattr(builder, method)(entry_id, **patch)
+
+        assert builder.to_dict() == before
+
+    @pytest.mark.parametrize(
+        ("method", "entry_id", "patch"),
+        [
+            ("update_finding", "f99", {"title": "Missing"}),
+            ("remove_finding", "f99", None),
+            ("update_check", "c99", {"result": "Missing"}),
+            ("remove_check", "c99", None),
+        ],
+    )
+    def test_unknown_id_rejection_is_atomic(self, method, entry_id, patch):
+        builder = ReviewOutputBuilder("42", "security")
+        builder.add_finding(
+            severity="medium",
+            title="Original",
+            file="src/a.py",
+            description="Original description.",
+            recommendation="Original recommendation.",
+            line=10,
+        )
+        builder.record_check(
+            "Does the caller validate?", "Read the caller", "Not yet"
+        )
+        before = builder.to_dict()
+
+        with pytest.raises(ValueError, match="unknown"):
+            if patch is None:
+                getattr(builder, method)(entry_id)
+            else:
+                getattr(builder, method)(entry_id, **patch)
+
+        assert builder.to_dict() == before
+
+    def test_schema_has_checks_assessment_and_no_tool_metadata(self):
+        review = ReviewOutputBuilder("42", "security").to_dict()
+
+        assert review["findings"] == []
+        assert review["checks"] == []
+        assert review["assessment"] is None
+        assert "issues" not in review
+        assert "clearances" not in review
+        assert "narrative_summary" not in review
+        assert "tool_results_used" not in review["meta"]
+
+    def test_assessment_and_positive_observation_use_canonical_methods(self):
+        builder = ReviewOutputBuilder("42", "reconciliator")
+
+        builder.set_assessment("The change needs one correction.")
+        builder.add_positive_observation("The validation helper is clear.")
+
+        review = builder.to_dict()
+        assert review["assessment"] == "The change needs one correction."
+        assert review["positive_observations"] == [
+            "The validation helper is clear."
+        ]
+        for retired in (
+            "add_issue",
+            "add_clearance",
+            "set_narrative_summary",
+            "add_positive",
+            "add_tool_result",
+        ):
+            assert not hasattr(builder, retired)
+
+    def test_not_applicable_records_only_the_reason(self):
+        builder = ReviewOutputBuilder("42", "security")
+
+        builder.mark_not_applicable("No security-relevant files changed.")
+
+        review = builder.to_dict()
+        assert review["verdict"] == "not_applicable"
+        assert review["skip_reason"] == "No security-relevant files changed."
+        assert review["findings"] == []
+        assert review["checks"] == []
+        assert review["positive_observations"] is None
+
+
+# =============================================================================
+# TestAddFinding
+# =============================================================================
+
+
+class TestAddFinding:
+    """add_finding validates inputs, stores all fields, and returns an ID."""
+
+    def test_returns_canonical_id(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        issue_id = b.add_issue("high", "Title", "f.py", "desc", "rec", line=1)
-        assert isinstance(issue_id, str)
-        assert len(issue_id) == 8
+        finding_id = b.add_finding("high", "Title", "f.py", "desc", "rec", line=1)
+        assert finding_id == "f1"
 
     def test_stores_all_fields(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_issue(
+        b.add_finding(
             severity="high",
             title="SQL Injection",
             file="src/db.php",
@@ -122,25 +307,25 @@ class TestAddIssue:
             line=42,
             confidence=0.9,
         )
-        issue = b.issues[0]
-        assert issue["severity"] == "high"
-        assert issue["title"] == "SQL Injection"
-        assert issue["file"] == "src/db.php"
-        assert issue["description"] == "Direct input in query"
-        assert issue["recommendation"] == "Use prepared statements"
-        assert issue["category"] == "sql-injection"
-        assert issue["line"] == 42
-        assert issue["confidence"] == 0.9
+        finding = b.findings[0]
+        assert finding["severity"] == "high"
+        assert finding["title"] == "SQL Injection"
+        assert finding["file"] == "src/db.php"
+        assert finding["description"] == "Direct input in query"
+        assert finding["recommendation"] == "Use prepared statements"
+        assert finding["category"] == "sql-injection"
+        assert finding["line"] == 42
+        assert finding["confidence"] == 0.9
 
     def test_severity_case_insensitive(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_issue("HIGH", "Title", "f.py", "desc", "rec", line=1)
-        assert b.issues[0]["severity"] == "high"
+        b.add_finding("HIGH", "Title", "f.py", "desc", "rec", line=1)
+        assert b.findings[0]["severity"] == "high"
 
     def test_invalid_severity_raises(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         with pytest.raises(ValueError, match="Invalid severity"):
-            b.add_issue("urgent", "Title", "f.py", "desc", "rec", line=1)
+            b.add_finding("urgent", "Title", "f.py", "desc", "rec", line=1)
 
     @pytest.mark.parametrize(
         ("severity", "floor", "expected"),
@@ -156,7 +341,7 @@ class TestAddIssue:
     ):
         b = ReviewOutputBuilder(pr_id="1", reviewer="woo-regression")
 
-        b.add_issue(
+        b.add_finding(
             severity,
             "Title",
             "f.php",
@@ -166,9 +351,9 @@ class TestAddIssue:
             severity_floor=floor,
         )
 
-        issue = b.issues[0]
-        assert issue["severity"] == expected
-        assert issue["severity_floor"] == floor.lower()
+        finding = b.findings[0]
+        assert finding["severity"] == expected
+        assert finding["severity_floor"] == floor.lower()
 
     @pytest.mark.parametrize(
         "floor",
@@ -181,7 +366,7 @@ class TestAddIssue:
         b = ReviewOutputBuilder(pr_id="1", reviewer="woo-regression")
 
         with pytest.raises(ValueError, match="severity_floor"):
-            b.add_issue(
+            b.add_finding(
                 "medium",
                 "Title",
                 "f.php",
@@ -194,13 +379,13 @@ class TestAddIssue:
     def test_severity_floor_is_optional(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
 
-        b.add_issue("medium", "Title", "f.php", "desc", "rec", line=1)
+        b.add_finding("medium", "Title", "f.php", "desc", "rec", line=1)
 
-        assert "severity_floor" not in b.issues[0]
+        assert "severity_floor" not in b.findings[0]
 
     def test_markdown_renders_severity_floor(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="woo-regression")
-        b.add_issue(
+        b.add_finding(
             "medium",
             "Title",
             "f.php",
@@ -214,93 +399,88 @@ class TestAddIssue:
 
     def test_confidence_boundaries_valid(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_issue("high", "A", "f.py", "d", "r", line=1, confidence=0.0)
-        b.add_issue("high", "B", "f.py", "d", "r", line=2, confidence=1.0)
-        assert b.issues[0]["confidence"] == 0.0
-        assert b.issues[1]["confidence"] == 1.0
+        b.add_finding("high", "A", "f.py", "d", "r", line=1, confidence=0.0)
+        b.add_finding("high", "B", "f.py", "d", "r", line=2, confidence=1.0)
+        assert b.findings[0]["confidence"] == 0.0
+        assert b.findings[1]["confidence"] == 1.0
 
     def test_confidence_boundaries_invalid(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         with pytest.raises(ValueError, match="Confidence"):
-            b.add_issue("high", "A", "f.py", "d", "r", line=1, confidence=-0.1)
+            b.add_finding("high", "A", "f.py", "d", "r", line=1, confidence=-0.1)
         with pytest.raises(ValueError, match="Confidence"):
-            b.add_issue("high", "B", "f.py", "d", "r", line=1, confidence=1.1)
+            b.add_finding("high", "B", "f.py", "d", "r", line=1, confidence=1.1)
 
     def test_extra_kwargs_preserved(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_issue(
+        b.add_finding(
             "high", "Title", "f.py", "desc", "rec",
             line=1,
             vulnerability_type="xss",
             cwe_id="CWE-79",
         )
-        issue = b.issues[0]
-        assert issue["vulnerability_type"] == "xss"
-        assert issue["cwe_id"] == "CWE-79"
+        finding = b.findings[0]
+        assert finding["vulnerability_type"] == "xss"
+        assert finding["cwe_id"] == "CWE-79"
 
-    def test_line_default_none_records_file_scoped_issue(self):
-        """Default line=None records a first-class file-scoped issue."""
+    def test_line_default_none_records_file_scoped_finding(self):
+        """Default line=None records a first-class file-scoped finding."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        issue_id = b.add_issue("medium", "Title", "f.py", "desc", "rec")
-        assert len(b.issues) == 1
+        finding_id = b.add_finding("medium", "Title", "f.py", "desc", "rec")
+        assert len(b.findings) == 1
         assert len(b.observations) == 0
-        assert isinstance(issue_id, str) and len(issue_id) == 8
+        assert finding_id == "f1"
 
 
 # =============================================================================
-# TestAddClearance
+# TestRecordCheck
 # =============================================================================
 
 
-class TestAddClearance:
-    """add_clearance records auditable 'nothing depends on this' claims.
+class TestRecordCheck:
+    """record_check stores auditable verification work."""
 
-    Clearances exist so blast-radius clears carry their verification method
-    downstream — the 2026-07-16 run had three agents clear a regression via
-    the same wrong grep, invisible to reconciliation because clears lived in
-    free-text positives."""
-
-    def test_stores_claim_method_evidence(self):
+    def test_stores_question_method_result_and_source(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="a11y")
-        b.add_clearance(
-            claim="No CSS or JS depends on the removed label element",
+        check_id = b.record_check(
+            question="Does CSS or JS depend on the removed label element?",
             method="grep -rn 'th label' client/legacy/css/; read each hit",
-            evidence="3 occurrences read: admin.scss:5354, :5367, :5567",
+            result="3 occurrences read: admin.scss:5354, :5367, :5567",
         )
         d = b.to_dict()
-        assert d["clearances"] == [{
-            "claim": "No CSS or JS depends on the removed label element",
+        assert check_id == "c1"
+        assert d["checks"] == [{
+            "id": "c1",
+            "question": "Does CSS or JS depend on the removed label element?",
             "method": "grep -rn 'th label' client/legacy/css/; read each hit",
-            "evidence": "3 occurrences read: admin.scss:5354, :5367, :5567",
+            "result": "3 occurrences read: admin.scss:5354, :5367, :5567",
+            "source_reviewers": ["a11y"],
         }]
 
-    def test_evidence_optional(self):
+    def test_no_checks_serializes_empty_array(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="a11y")
-        b.add_clearance(claim="No E2E test targets the radio row", method="grep 'radio' e2e/")
-        assert b.to_dict()["clearances"][0]["evidence"] is None
+        assert b.to_dict()["checks"] == []
 
-    def test_no_clearances_serializes_none(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="a11y")
-        assert b.to_dict()["clearances"] is None
-
-    def test_empty_claim_raises(self):
+    def test_empty_question_raises(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="a11y")
         with pytest.raises(ValueError):
-            b.add_clearance(claim="  ", method="grep foo")
+            b.record_check(question="  ", method="grep foo", result="none")
 
     def test_empty_method_raises(self):
-        """A clearance without its method is exactly the unauditable claim
-        this API exists to prevent."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="a11y")
         with pytest.raises(ValueError):
-            b.add_clearance(claim="No blast radius", method="")
+            b.record_check(question="Any blast radius?", method="", result="none")
 
     def test_renders_in_markdown_with_method(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="a11y")
-        b.add_clearance(claim="No CSS depends on the label", method="grep 'th label' admin.scss")
+        b.record_check(
+            question="Does CSS depend on the label?",
+            method="grep 'th label' admin.scss",
+            result="No dependencies found.",
+        )
         md = b.to_markdown()
-        assert "## Clearances" in md
-        assert "No CSS depends on the label" in md
+        assert "## Checks Performed" in md
+        assert "Does CSS depend on the label?" in md
         assert "grep 'th label' admin.scss" in md
 
 
@@ -342,7 +522,7 @@ class TestAddRecommendation:
 
 
 class TestNonStringFieldCoercion:
-    """add_issue coerces free-form text fields to strings.
+    """add_finding coerces free-form text fields to strings.
 
     Regression: a reviewer emitted a list-valued ``recommendation`` that reached
     the reconciliation Markdown renderer and crashed the whole pipeline. The
@@ -351,48 +531,48 @@ class TestNonStringFieldCoercion:
 
     def test_list_recommendation_coerced_to_string(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_issue(
+        b.add_finding(
             "high", "Title", "f.py", "desc",
             ["Wire it in", "or drop it"], line=1,
         )
-        rec = b.issues[0]["recommendation"]
+        rec = b.findings[0]["recommendation"]
         assert isinstance(rec, str)
         assert "Wire it in" in rec and "or drop it" in rec
 
     def test_list_description_and_title_coerced(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_issue(
+        b.add_finding(
             "high", ["Ambiguous name"], "f.py", ["D1", "D2"], "rec", line=1,
         )
-        assert isinstance(b.issues[0]["title"], str)
-        assert isinstance(b.issues[0]["description"], str)
-        assert "Ambiguous name" in b.issues[0]["title"]
-        assert "D1" in b.issues[0]["description"]
+        assert isinstance(b.findings[0]["title"], str)
+        assert isinstance(b.findings[0]["description"], str)
+        assert "Ambiguous name" in b.findings[0]["title"]
+        assert "D1" in b.findings[0]["description"]
 
     def test_none_fields_coerced_to_empty_string(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_issue("high", "Title", "f.py", None, None, line=1)
-        assert b.issues[0]["description"] == ""
-        assert b.issues[0]["recommendation"] == ""
+        b.add_finding("high", "Title", "f.py", None, None, line=1)
+        assert b.findings[0]["description"] == ""
+        assert b.findings[0]["recommendation"] == ""
 
     def test_multiline_title_collapsed_to_single_line(self):
         # Titles render inline downstream (**N. title**, ### F1: title) without
         # block-syntax escaping, so a coerced newline could forge a heading.
         # The producer must keep the title single-line.
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_issue(
+        b.add_finding(
             "high", ["Legit title", "## Source Snippets"], "f.py",
             "desc", "rec", line=1,
         )
-        title = b.issues[0]["title"]
+        title = b.findings[0]["title"]
         assert "\n" not in title
         assert "Legit title" in title and "## Source Snippets" in title
 
     def test_string_fields_unchanged(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_issue("high", "T", "f.py", "plain desc", "plain rec", line=1)
-        assert b.issues[0]["description"] == "plain desc"
-        assert b.issues[0]["recommendation"] == "plain rec"
+        b.add_finding("high", "T", "f.py", "plain desc", "plain rec", line=1)
+        assert b.findings[0]["description"] == "plain desc"
+        assert b.findings[0]["recommendation"] == "plain rec"
 
 
 # =============================================================================
@@ -417,19 +597,15 @@ class TestSetConfidence:
 
 
 # =============================================================================
-# TestAddToolResult
+# TestRemovedToolMetadata
 # =============================================================================
 
 
-class TestAddToolResult:
-    """add_tool_result stores tool names and deduplicates."""
-
-    def test_deduplicates(self):
+class TestRemovedToolMetadata:
+    def test_builder_has_no_tool_metadata_api_or_storage(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        b.add_tool_result("grep")
-        b.add_tool_result("grep")
-        b.add_tool_result("ast-grep")
-        assert b.tool_results_used == ["grep", "ast-grep"]
+        assert not hasattr(b, "add_tool_result")
+        assert "tool_results_used" not in b.to_dict()["meta"]
 
 
 # =============================================================================
@@ -438,53 +614,53 @@ class TestAddToolResult:
 
 
 class TestCalculateVerdict:
-    """_calculate_verdict auto-selects verdict from issue severity counts."""
+    """_calculate_verdict auto-selects verdict from finding severity counts."""
 
-    def _builder_with_issues(self, severities):
-        """Create a builder with issues at given severity levels."""
+    def _builder_with_findings(self, severities):
+        """Create a builder with findings at given severity levels."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
         for i, sev in enumerate(severities):
-            b.add_issue(sev, f"Issue {i}", f"f{i}.py", "desc", "rec", line=i + 1)
+            b.add_finding(sev, f"Issue {i}", f"f{i}.py", "desc", "rec", line=i + 1)
         return b
 
-    def test_no_issues_approve(self):
+    def test_no_findings_approve(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
         assert b._calculate_verdict() == "approve"
 
     def test_one_critical_blocks(self):
-        b = self._builder_with_issues(["critical"])
+        b = self._builder_with_findings(["critical"])
         assert b._calculate_verdict() == "block"
 
     def test_two_high_request_changes(self):
-        b = self._builder_with_issues(["high", "high"])
+        b = self._builder_with_findings(["high", "high"])
         verdict = b._calculate_verdict()
         assert verdict == "request_changes"
         assert verdict != "block"
 
     def test_three_high_blocks(self):
-        b = self._builder_with_issues(["high", "high", "high"])
+        b = self._builder_with_findings(["high", "high", "high"])
         assert b._calculate_verdict() == "block"
 
     def test_one_high_request_changes(self):
-        b = self._builder_with_issues(["high"])
+        b = self._builder_with_findings(["high"])
         assert b._calculate_verdict() == "request_changes"
 
     def test_four_medium_comment(self):
-        b = self._builder_with_issues(["medium"] * 4)
+        b = self._builder_with_findings(["medium"] * 4)
         verdict = b._calculate_verdict()
         assert verdict == "comment"
         assert verdict != "request_changes"
 
     def test_five_medium_request_changes(self):
-        b = self._builder_with_issues(["medium"] * 5)
+        b = self._builder_with_findings(["medium"] * 5)
         assert b._calculate_verdict() == "request_changes"
 
     def test_one_medium_comment(self):
-        b = self._builder_with_issues(["medium"])
+        b = self._builder_with_findings(["medium"])
         assert b._calculate_verdict() == "comment"
 
     def test_low_and_info_only_approve(self):
-        b = self._builder_with_issues(["low", "info", "low", "info"])
+        b = self._builder_with_findings(["low", "info", "low", "info"])
         assert b._calculate_verdict() == "approve"
 
 
@@ -498,25 +674,25 @@ class TestToDict:
 
     def test_all_top_level_keys(self):
         b = ReviewOutputBuilder(pr_id="99", reviewer="arch")
-        b.add_issue("medium", "Title", "f.py", "desc", "rec", line=1)
+        b.add_finding("medium", "Title", "f.py", "desc", "rec", line=1)
         d = b.to_dict()
         expected_keys = {
             "pr_id", "reviewer", "timestamp", "plugin_version", "schema",
             "verdict",
-            "summary", "issues", "unclaimed_review_files", "reviewed_file_claims",
+            "summary", "findings", "unclaimed_review_files", "reviewed_file_claims",
             "review_claimable_files", "inline_diff_file_count",
             "review_accounted_file_count", "in_scope_review_file_count",
             "observations", "recommendations", "positive_observations",
-            "clearances", "narrative_summary", "meta",
+            "checks", "assessment", "meta",
         }
         assert expected_keys == set(d.keys())
 
     def test_severity_counts_correct(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        b.add_issue("critical", "A", "a.py", "d", "r", line=1)
-        b.add_issue("high", "B", "b.py", "d", "r", line=2)
-        b.add_issue("high", "C", "c.py", "d", "r", line=3)
-        b.add_issue("medium", "D", "d.py", "d", "r", line=4)
+        b.add_finding("critical", "A", "a.py", "d", "r", line=1)
+        b.add_finding("high", "B", "b.py", "d", "r", line=2)
+        b.add_finding("high", "C", "c.py", "d", "r", line=3)
+        b.add_finding("medium", "D", "d.py", "d", "r", line=4)
         d = b.to_dict()
         counts = d["summary"]["by_severity"]
         assert counts["critical"] == 1
@@ -618,21 +794,22 @@ class TestToDict:
     def test_meta_structure(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
         b.set_confidence(0.8)
-        b.add_tool_result("grep")
         d = b.to_dict()
         meta = d["meta"]
         assert d["review_accounted_file_count"] is None
         assert meta["confidence_score"] == 0.8
-        assert meta["tool_results_used"] == ["grep"]
+        assert "tool_results_used" not in meta
+        assert meta["next_finding_number"] == 1
+        assert meta["next_check_number"] == 1
         assert "review_duration_ms" in meta
 
     def test_no_channel_records_zero_advisory_suppression(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="security")
-        b.add_issue("high", "Title", "f.py", "desc", "rec", line=1)
+        b.add_finding("high", "Title", "f.py", "desc", "rec", line=1)
 
         summary = b.to_dict()["summary"]
 
-        assert summary["advisory_suppressed"] == 0
+        assert summary["suppressed_advisory_finding_count"] == 0
         assert "verdict_without_advisory" not in summary
 
     def test_pr_id_coerced_to_string(self):
@@ -656,32 +833,32 @@ class TestToMarkdown:
         md = b.to_markdown()
         assert "# Security Review - PR #42" in md
 
-    def test_issues_grouped_by_severity(self):
+    def test_findings_grouped_by_severity(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        b.add_issue("low", "Low Issue", "a.py", "desc", "rec", line=1)
-        b.add_issue("critical", "Critical Issue", "b.py", "desc", "rec", line=2)
-        b.add_issue("high", "High Issue", "c.py", "desc", "rec", line=3)
+        b.add_finding("low", "Low Issue", "a.py", "desc", "rec", line=1)
+        b.add_finding("critical", "Critical Issue", "b.py", "desc", "rec", line=2)
+        b.add_finding("high", "High Issue", "c.py", "desc", "rec", line=3)
         md = b.to_markdown()
         # Critical section should appear before High, High before Low
-        crit_pos = md.index("## Critical Issues")
-        high_pos = md.index("## High Issues")
-        low_pos = md.index("## Low Issues")
+        crit_pos = md.index("## Critical Findings")
+        high_pos = md.index("## High Findings")
+        low_pos = md.index("## Low Findings")
         assert crit_pos < high_pos < low_pos
 
     def test_positive_observations_section(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        b.add_positive("Well-structured code")
+        b.add_positive_observation("Well-structured code")
         md = b.to_markdown()
         assert "## Positive Observations" in md
         assert "Well-structured code" in md
 
-    def test_info_issues_render_in_markdown(self):
-        """Info issues count toward total_issues, so Markdown must show them —
+    def test_info_findings_render_in_markdown(self):
+        """Info findings count toward total_findings, so Markdown must show them —
         omitting them reports 'Total Issues: 1' with no visible finding."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        b.add_issue("info", "Anchored info finding", "a.py", "desc", "rec", line=3)
+        b.add_finding("info", "Anchored info finding", "a.py", "desc", "rec", line=3)
         md = b.to_markdown()
-        assert "## Info Issues" in md
+        assert "## Info Findings" in md
         assert "Anchored info finding" in md
 
 
@@ -696,11 +873,13 @@ class TestRenderMarkdown:
     @staticmethod
     def _rich_builder():
         b = ReviewOutputBuilder(pr_id="7", reviewer="security")
-        b.add_issue("high", "Title A", "a.py", "desc", "rec", line=3)
-        b.add_issue("info", "Note B", "b.py", "desc", "rec", line=None)
+        b.add_finding("high", "Title A", "a.py", "desc", "rec", line=3)
+        b.add_finding("info", "Note B", "b.py", "desc", "rec", line=None)
         b.add_observation("c.py", "an observation")
-        b.add_positive("something good")
-        b.add_clearance(claim="no X remains", method="grep -rn X", evidence="0 hits")
+        b.add_positive_observation("something good")
+        b.record_check(
+            question="Does X remain?", method="grep -rn X", result="0 hits"
+        )
         return b
 
     def test_matches_builder_to_markdown(self):
@@ -713,30 +892,30 @@ class TestRenderMarkdown:
         b = self._rich_builder()
         assert render_markdown(json.loads(b.to_json())) == b.to_markdown()
 
-    def test_legacy_issue_shape_renders_plain_file_location(self):
-        """*-review.json files from builder versions predating the `scope`
-        field carry line=null with no scope key — the renderer must fall
-        back to the plain file location, not crash or mislabel."""
+    def test_file_location_without_scope_renders_plainly(self):
         data = self._rich_builder().to_dict()
-        data["issues"] = [{
+        data["findings"] = [{
+            "id": "f1",
             "severity": "high",
-            "title": "Legacy issue",
+            "title": "Finding",
             "file": "f.py",
             "line": None,
+            "category": "general",
+            "confidence": 0.9,
             "description": "d",
             "recommendation": "r",
         }]
         data["summary"] = {
-            "total_issues": 1,
+            "total_findings": 1,
             "by_severity": {"critical": 0, "high": 1, "medium": 0, "low": 0, "info": 0},
         }
         rendered = render_markdown(data)
         assert "**File:** `f.py`\n" in rendered
         assert "(file-scoped)" not in rendered
 
-    def test_legacy_summary_without_advisory_measurement_still_renders(self):
+    def test_summary_without_advisory_measurement_still_renders(self):
         data = self._rich_builder().to_dict()
-        data["summary"].pop("advisory_suppressed")
+        data["summary"].pop("suppressed_advisory_finding_count")
         data["summary"].pop("verdict_without_advisory", None)
 
         rendered = render_markdown(data)
@@ -773,7 +952,7 @@ class TestMaterializeMarkdown:
         with tempfile.TemporaryDirectory() as d:
             for reviewer in ("security", "performance"):
                 b = ReviewOutputBuilder(pr_id="1", reviewer=reviewer)
-                b.add_issue("high", "T", "f.py", "d", "r", line=1)
+                b.add_finding("high", "T", "f.py", "d", "r", line=1)
                 _write_required_accounting_input(d, reviewer)
                 _save_and_finalize(b, d)
             written = materialize_markdown(d)
@@ -819,7 +998,7 @@ class TestMaterializeMarkdown:
         assert output_py.is_file(), output_py  # layout guard: tests/review/agent -> plugin root
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
-            b.add_issue("high", "CLI Title", "f.py", "d", "r", line=1)
+            b.add_finding("high", "CLI Title", "f.py", "d", "r", line=1)
             _write_required_accounting_input(d, "security")
             _save_and_finalize(b, d)
             result = subprocess.run(
@@ -860,7 +1039,7 @@ class TestSaveDraft:
     def test_creates_only_the_draft_json(self):
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
-            b.add_issue("high", "Title", "f.py", "desc", "rec", line=1)
+            b.add_finding("high", "Title", "f.py", "desc", "rec", line=1)
             _write_required_accounting_input(d, "security")
             _save_draft(b, d)
             assert os.path.isfile(
@@ -878,7 +1057,7 @@ class TestSaveDraft:
             with open(os.path.join(d, "security-reviewer.started"), "w") as f:
                 f.write(datetime.now(timezone.utc).isoformat())
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
-            b.add_issue("high", "Title", "f.py", "desc", "rec", line=1)
+            b.add_finding("high", "Title", "f.py", "desc", "rec", line=1)
             _write_required_accounting_input(d, "security")
             _save_draft(b, d)
             with open(os.path.join(d, "security-review.draft.json")) as f:
@@ -919,8 +1098,8 @@ class TestSaveDraft:
     def test_prints_compact_totals_to_stdout(self, capsys):
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
-            b.add_issue("high", "A", "a.py", "d", "r", line=1)
-            b.add_issue("medium", "B", "b.py", "d", "r", line=2)
+            b.add_finding("high", "A", "a.py", "d", "r", line=1)
+            b.add_finding("medium", "B", "b.py", "d", "r", line=2)
             b.add_observation("c.py", "FYI note")
             _write_required_accounting_input(d, "security")
             _save_draft(b, d)
@@ -933,7 +1112,7 @@ class TestSaveDraft:
             assert "critical 0" not in out
 
     def test_prints_zero_counts_when_empty(self, capsys):
-        """An empty save is echoed too — '0 issues recorded' must be visible."""
+        """An empty save is echoed too — '0 findings recorded' must be visible."""
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
             _write_required_accounting_input(d, "security")
@@ -969,7 +1148,7 @@ class TestSaveDraft:
 
 
 class TestFileScopedIssues:
-    """line=None records a first-class file-scoped issue (no silent demotion).
+    """line=None records a first-class file-scoped finding (no silent demotion).
 
     Some finding classes are line-less BY NATURE — missing test coverage,
     missing assertions, git-history precedent, cross-file architecture. These
@@ -978,21 +1157,21 @@ class TestFileScopedIssues:
     on stderr so lazy line omission stays loud).
     """
 
-    def test_line_none_records_issue_with_null_line_and_file_scope(self):
+    def test_line_none_records_finding_with_null_line_and_file_scope(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        issue_id = b.add_issue("high", "Title", "f.py", "desc", "rec", line=None)
-        assert isinstance(issue_id, str) and len(issue_id) == 8
-        assert len(b.issues) == 1
+        finding_id = b.add_finding("high", "Title", "f.py", "desc", "rec", line=None)
+        assert finding_id == "f1"
+        assert len(b.findings) == 1
         assert len(b.observations) == 0
-        issue = b.issues[0]
-        assert issue["line"] is None
-        assert issue["scope"] == "file"
-        assert issue["id"] == issue_id
+        finding = b.findings[0]
+        assert finding["line"] is None
+        assert finding["scope"] == "file"
+        assert finding["id"] == finding_id
 
     def test_reproduction_lineless_high_counts_toward_severity_and_verdict(self):
         """The RCA reproduction: a line-less HIGH must not silently drop."""
         b = ReviewOutputBuilder(pr_id="0", reviewer="js-tests")
-        b.add_issue(
+        b.add_finding(
             severity="high",
             title="whole-file has no test",
             file="src/foo.ts",
@@ -1002,43 +1181,43 @@ class TestFileScopedIssues:
         )
         d = b.to_dict()
         assert d["summary"]["by_severity"]["high"] == 1
-        assert d["summary"]["total_issues"] == 1
-        assert len(d["issues"]) == 1
+        assert d["summary"]["total_findings"] == 1
+        assert len(d["findings"]) == 1
         assert d["verdict"] == "request_changes"
 
     def test_line_none_prints_stderr_note(self, capsys):
         """The file-scoped path is loud — names the title and severity."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_issue("high", "Missing coverage", "f.py", "desc", "rec", line=None)
+        b.add_finding("high", "Missing coverage", "f.py", "desc", "rec", line=None)
         err = capsys.readouterr().err
         assert "file-scoped" in err.lower()
         assert "Missing coverage" in err
         assert "high" in err.lower()
 
-    def test_line_anchored_issue_has_no_scope_field(self):
-        """Schema stays additive — line-anchored issues are unchanged."""
+    def test_line_anchored_finding_has_no_scope_field(self):
+        """Schema stays additive — line-anchored findings are unchanged."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_issue("high", "Title", "f.py", "desc", "rec", line=42)
-        assert "scope" not in b.issues[0]
-        assert b.issues[0]["line"] == 42
+        b.add_finding("high", "Title", "f.py", "desc", "rec", line=42)
+        assert "scope" not in b.findings[0]
+        assert b.findings[0]["line"] == 42
 
-    def test_file_scoped_issue_renders_under_severity_section(self):
+    def test_file_scoped_finding_renders_under_severity_section(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="js-tests")
-        b.add_issue(
+        b.add_finding(
             "high", "whole-file has no test", "src/foo.ts", "desc", "rec",
             category="missing-coverage",
         )
         md = b.to_markdown()
-        assert "## High Issues" in md
+        assert "## High Findings" in md
         assert "whole-file has no test" in md
         assert "`src/foo.ts` (file-scoped)" in md
 
-    def test_file_scoped_issue_json_roundtrip(self):
+    def test_file_scoped_finding_json_roundtrip(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_issue("medium", "Title", "f.py", "desc", "rec", line=None)
+        b.add_finding("medium", "Title", "f.py", "desc", "rec", line=None)
         parsed = json.loads(b.to_json())
-        assert parsed["issues"][0]["line"] is None
-        assert parsed["issues"][0]["scope"] == "file"
+        assert parsed["findings"][0]["line"] is None
+        assert parsed["findings"][0]["scope"] == "file"
 
 
 # =============================================================================
@@ -1053,13 +1232,13 @@ class TestLineRequired:
         """Line 0 is invalid (lines are 1-indexed)."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         with pytest.raises(ValueError, match="line.*positive"):
-            b.add_issue("high", "Title", "f.py", "desc", "rec", line=0)
+            b.add_finding("high", "Title", "f.py", "desc", "rec", line=0)
 
     def test_line_negative_raises(self):
         """Negative line is invalid."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         with pytest.raises(ValueError, match="line.*positive"):
-            b.add_issue("high", "Title", "f.py", "desc", "rec", line=-1)
+            b.add_finding("high", "Title", "f.py", "desc", "rec", line=-1)
 
 
 # =============================================================================
@@ -1087,7 +1266,7 @@ class TestAddObservation:
         assert len(d["observations"]) == 1
 
     def test_observations_do_not_affect_verdict(self):
-        """Observations don't count as issues — verdict unaffected."""
+        """Observations don't count as findings — verdict unaffected."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         b.add_observation("f.py", "Looks risky", category="security")
         assert b._calculate_verdict() == "approve"
@@ -1344,11 +1523,11 @@ class TestNotApplicable:
         with pytest.raises(ValueError, match="reason"):
             b.mark_not_applicable("   ")
 
-    def test_raises_if_issues_already_recorded(self):
-        """mark_not_applicable rejects mixed state — issues + not_applicable is contradictory."""
+    def test_raises_if_findings_already_recorded(self):
+        """mark_not_applicable rejects mixed state — findings + not_applicable is contradictory."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_issue("high", "XSS", "f.php", "desc", "rec", line=1)
-        with pytest.raises(ValueError, match="issue.*already recorded"):
+        b.add_finding("high", "XSS", "f.php", "desc", "rec", line=1)
+        with pytest.raises(ValueError, match="finding.*already recorded"):
             b.mark_not_applicable("Agent mistakenly started before checking relevance")
 
     def test_in_json_output(self):
@@ -1366,9 +1545,9 @@ class TestNotApplicable:
         assert d["skip_reason"] == "No relevant changes"
 
     def test_normal_approve_has_no_skip_reason(self):
-        """A normal approve (no issues, no mark_not_applicable) has no skip_reason."""
+        """A normal approve (no findings, no mark_not_applicable) has no skip_reason."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_positive("Clean code")
+        b.add_positive_observation("Clean code")
         d = b.to_dict()
         assert d["verdict"] == "approve"
         assert "skip_reason" not in d
@@ -1393,7 +1572,7 @@ class TestAdvisoryChannel:
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
 
         with pytest.raises(ValueError, match="Advisory"):
-            b.add_issue(severity="high", title="Duplication", file="a.php",
+            b.add_finding(severity="high", title="Duplication", file="a.php",
                         description="d", recommendation="r", line=5,
                         channel="Advisory")
 
@@ -1407,7 +1586,7 @@ class TestAdvisoryChannel:
             {"schema": 1, "advisory_entitled": True},
         )
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
-        b.add_issue(severity="high", title="Duplication", file="a.php",
+        b.add_finding(severity="high", title="Duplication", file="a.php",
                     description="d", recommendation="r", line=5, channel="advisory")
         assert b._calculate_verdict() == "approve"
 
@@ -1421,7 +1600,7 @@ class TestAdvisoryChannel:
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
 
         with pytest.raises(ValueError, match="advisory.*not entitled"):
-            b.add_issue(
+            b.add_finding(
                 severity="high",
                 title="Duplication",
                 file="a.php",
@@ -1438,7 +1617,7 @@ class TestAdvisoryChannel:
         monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
 
-        b.add_issue(
+        b.add_finding(
             severity="high", title="Duplication", file="a.php",
             description="d", recommendation="r", line=5, channel="advisory",
         )
@@ -1452,7 +1631,7 @@ class TestAdvisoryChannel:
         monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "repo-reuse")
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
 
-        b.add_issue(
+        b.add_finding(
             severity="high", title="Duplication", file="a.php",
             description="d", recommendation="r", line=5, channel="advisory",
         )
@@ -1469,7 +1648,7 @@ class TestAdvisoryChannel:
         )
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
 
-        b.add_issue(
+        b.add_finding(
             severity="high", title="Duplication", file="a.php",
             description="d", recommendation="r", line=5, channel="advisory",
         )
@@ -1484,7 +1663,7 @@ class TestAdvisoryChannel:
         (tmp_path / "repo-reuse-advisory-entitlement.json").write_bytes(b"\xff")
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
 
-        b.add_issue(
+        b.add_finding(
             severity="high", title="Duplication", file="a.php",
             description="d", recommendation="r", line=5, channel="advisory",
         )
@@ -1508,7 +1687,7 @@ class TestAdvisoryChannel:
         self._arm_entitlement(tmp_path, monkeypatch, "repo-reuse", payload)
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
 
-        b.add_issue(
+        b.add_finding(
             severity="high", title="Duplication", file="a.php",
             description="d", recommendation="r", line=5, channel="advisory",
         )
@@ -1521,7 +1700,7 @@ class TestAdvisoryChannel:
         monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
         monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
         b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
-        b.add_issue(
+        b.add_finding(
             severity="high", title="Duplication", file="a.php",
             description="d", recommendation="r", line=5, channel="advisory",
         )
@@ -1539,7 +1718,7 @@ class TestAdvisoryChannel:
         monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
         monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
         b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
-        b.add_issue(
+        b.add_finding(
             severity="critical", title="Duplication", file="a.php",
             description="d", recommendation="r", line=5, channel="advisory",
         )
@@ -1557,7 +1736,7 @@ class TestAdvisoryChannel:
         monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
         monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
         b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
-        b.add_issue(
+        b.add_finding(
             severity="critical", title="Duplication", file="a.php",
             description="d", recommendation="r", line=5, channel="advisory",
         )
@@ -1575,7 +1754,7 @@ class TestAdvisoryChannel:
         monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
         monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
         b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
-        b.add_issue(
+        b.add_finding(
             severity="high", title="Duplication", file="a.php",
             description="d", recommendation="r", line=5, channel="advisory",
         )
@@ -1590,13 +1769,13 @@ class TestAdvisoryChannel:
 
     def test_advisory_critical_does_not_gate(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
-        b.add_issue(severity="critical", title="x", file="a.php",
+        b.add_finding(severity="critical", title="x", file="a.php",
                     description="d", recommendation="r", line=5, channel="advisory")
         assert b._calculate_verdict() == "approve"
 
     def test_critical_advisory_records_stricter_counterfactual(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
-        b.add_issue(
+        b.add_finding(
             severity="critical", title="x", file="a.php",
             description="d", recommendation="r", line=5,
             channel="advisory",
@@ -1605,14 +1784,14 @@ class TestAdvisoryChannel:
         output = b.to_dict()
 
         assert output["verdict"] == "approve"
-        assert output["summary"]["advisory_suppressed"] == 1
+        assert output["summary"]["suppressed_advisory_finding_count"] == 1
         assert output["summary"]["verdict_without_advisory"] == "block"
         assert "Advisory suppression:** 1 finding excluded" in render_markdown(output)
         assert "verdict without suppression: BLOCK" in render_markdown(output)
 
     def test_advisory_count_without_verdict_softening_omits_counterfactual(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
-        b.add_issue(
+        b.add_finding(
             severity="low", title="x", file="a.php",
             description="d", recommendation="r", line=5,
             channel="advisory",
@@ -1621,18 +1800,18 @@ class TestAdvisoryChannel:
         output = b.to_dict()
 
         assert output["verdict"] == "approve"
-        assert output["summary"]["advisory_suppressed"] == 1
+        assert output["summary"]["suppressed_advisory_finding_count"] == 1
         assert "verdict_without_advisory" not in output["summary"]
         assert "Advisory suppression:** 1 finding excluded" in render_markdown(output)
 
     def test_advisory_count_when_verdict_already_strict_omits_counterfactual(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
-        b.add_issue(
+        b.add_finding(
             severity="critical", title="advisory", file="a.php",
             description="d", recommendation="r", line=5,
             channel="advisory",
         )
-        b.add_issue(
+        b.add_finding(
             severity="critical", title="blocking", file="b.php",
             description="d", recommendation="r", line=6,
         )
@@ -1640,13 +1819,13 @@ class TestAdvisoryChannel:
         output = b.to_dict()
 
         assert output["verdict"] == "block"
-        assert output["summary"]["advisory_suppressed"] == 1
+        assert output["summary"]["suppressed_advisory_finding_count"] == 1
         assert "verdict_without_advisory" not in output["summary"]
 
     def test_not_applicable_does_not_claim_advisory_suppression(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
         b.mark_not_applicable("No relevant changes")
-        b.add_issue(
+        b.add_finding(
             severity="critical", title="advisory", file="a.php",
             description="d", recommendation="r", line=5,
             channel="advisory",
@@ -1655,33 +1834,33 @@ class TestAdvisoryChannel:
         output = b.to_dict()
 
         assert output["verdict"] == "not_applicable"
-        assert output["summary"]["advisory_suppressed"] == 0
+        assert output["summary"]["suppressed_advisory_finding_count"] == 0
         assert "verdict_without_advisory" not in output["summary"]
 
     def test_blocking_channel_is_implicit_and_still_gates(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-runtime")
-        b.add_issue(severity="critical", title="x", file="a.php",
+        b.add_finding(severity="critical", title="x", file="a.php",
                     description="d", recommendation="r", line=5, channel="blocking")
-        assert "channel" not in b.issues[0]
+        assert "channel" not in b.findings[0]
         assert b._calculate_verdict() == "block"
 
     def test_no_channel_is_backward_compatible(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="security")
-        b.add_issue(severity="high", title="x", file="a.php",
+        b.add_finding(severity="high", title="x", file="a.php",
                     description="d", recommendation="r", line=5)
         assert b._calculate_verdict() == "request_changes"
 
-    def test_advisory_channel_persisted_in_issue(self):
+    def test_advisory_channel_persisted_in_finding(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
-        b.add_issue(severity="low", title="x", file="a.php",
+        b.add_finding(severity="low", title="x", file="a.php",
                     description="d", recommendation="r", line=5, channel="advisory")
-        assert b.issues[0]["channel"] == "advisory"
+        assert b.findings[0]["channel"] == "advisory"
 
     def test_mixed_channels(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-mix")
-        b.add_issue(severity="critical", title="adv", file="a.php",
+        b.add_finding(severity="critical", title="adv", file="a.php",
                     description="d", recommendation="r", line=5, channel="advisory")
-        b.add_issue(severity="medium", title="block", file="a.php",
+        b.add_finding(severity="medium", title="block", file="a.php",
                     description="d", recommendation="r", line=6, channel="blocking")
         # Only the blocking medium counts → comment (not block from the advisory critical).
         assert b._calculate_verdict() == "comment"
@@ -2297,11 +2476,11 @@ class TestTypeScriptContractLockstep:
 
 
 # =============================================================================
-# TestNarrativeSummary
+# TestAssessment
 # =============================================================================
 
 
-class TestNarrativeSummary:
+class TestAssessment:
     """The reconciliator's overall-state prose needs a structured home.
 
     Before the .md became a script render, that prose lived only in a
@@ -2311,28 +2490,28 @@ class TestNarrativeSummary:
 
     def test_absent_by_default_but_the_key_is_always_present(self):
         d = ReviewOutputBuilder(pr_id="1", reviewer="pr").to_dict()
-        assert d["narrative_summary"] is None
+        assert d["assessment"] is None
 
-    def test_set_narrative_summary_serializes(self):
+    def test_set_assessment_serializes(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
-        b.set_narrative_summary("The change is sound but under-tested.")
-        assert b.to_dict()["narrative_summary"] == (
+        b.set_assessment("The change is sound but under-tested.")
+        assert b.to_dict()["assessment"] == (
             "The change is sound but under-tested."
         )
 
     def test_non_string_prose_is_coerced_like_every_other_free_field(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
-        b.set_narrative_summary(["line one", "line two"])
-        assert b.to_dict()["narrative_summary"] == "line one\nline two"
+        b.set_assessment(["line one", "line two"])
+        assert b.to_dict()["assessment"] == "line one\nline two"
 
     def test_blank_prose_records_absence_not_an_empty_string(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
-        b.set_narrative_summary("   ")
-        assert b.to_dict()["narrative_summary"] is None
+        b.set_assessment("   ")
+        assert b.to_dict()["assessment"] is None
 
     def test_renders_as_an_assessment_section(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
-        b.set_narrative_summary("Two sentences of judgment.")
+        b.set_assessment("Two sentences of judgment.")
         rendered = render_markdown(b.to_dict())
         assert "## Assessment\n\nTwo sentences of judgment." in rendered
 
@@ -2355,7 +2534,7 @@ class TestReconciliationSectionsRender:
     @staticmethod
     def _findings(**extra):
         b = ReviewOutputBuilder(pr_id="9", reviewer="reconciliator")
-        b.add_issue("high", "Real problem", "a.py", "d", "r", line=4)
+        b.add_finding("high", "Real problem", "a.py", "d", "r", line=4)
         data = b.to_dict()
         data.update(extra)
         return data
@@ -2363,14 +2542,14 @@ class TestReconciliationSectionsRender:
     def test_pipeline_metrics_line_renders_from_meta_reconciliation(self):
         data = self._findings()
         data["meta"]["reconciliation"] = {
-            "input_findings_count": 12,
-            "agents_contributing": 4,
-            "concerns_after_grouping": 5,
-            "false_positives_dropped": 3,
-            "out_of_scope_dropped": 1,
-            "verified_concerns": 4,
-            "merge_ratio": 0.58,
-            "not_applicable_count": 0,
+            "input_finding_count": 12,
+            "contributing_agent_count": 4,
+            "grouped_concern_count": 5,
+            "false_positive_finding_count": 3,
+            "out_of_scope_finding_count": 1,
+            "verified_finding_count": 4,
+            "deduplication_ratio": 0.58,
+            "not_applicable_agent_count": 0,
             "not_applicable_agents": [],
             "reviewing_agents": ["code-reviewer"],
             "dispatched_agents": ["code-reviewer"],
@@ -2388,14 +2567,14 @@ class TestReconciliationSectionsRender:
         one hint a reader has that more accounting exists."""
         data = self._findings()
         data["meta"]["reconciliation"] = {
-            "input_findings_count": 12,
-            "agents_contributing": 4,
-            "concerns_after_grouping": 5,
-            "false_positives_dropped": 3,
-            "out_of_scope_dropped": 1,
-            "verified_concerns": 4,
-            "merge_ratio": 0.58,
-            "not_applicable_count": 0,
+            "input_finding_count": 12,
+            "contributing_agent_count": 4,
+            "grouped_concern_count": 5,
+            "false_positive_finding_count": 3,
+            "out_of_scope_finding_count": 1,
+            "verified_finding_count": 4,
+            "deduplication_ratio": 0.58,
+            "not_applicable_agent_count": 0,
             "not_applicable_agents": [],
             "reviewing_agents": [],
             "dispatched_agents": [],
@@ -2410,14 +2589,14 @@ class TestReconciliationSectionsRender:
     def test_not_applicable_agents_are_reported_with_reasons(self):
         data = self._findings()
         data["meta"]["reconciliation"] = {
-            "input_findings_count": 1,
-            "agents_contributing": 1,
-            "concerns_after_grouping": 1,
-            "false_positives_dropped": 0,
-            "out_of_scope_dropped": 0,
-            "verified_concerns": 1,
-            "merge_ratio": 0.0,
-            "not_applicable_count": 1,
+            "input_finding_count": 1,
+            "contributing_agent_count": 1,
+            "grouped_concern_count": 1,
+            "false_positive_finding_count": 0,
+            "out_of_scope_finding_count": 0,
+            "verified_finding_count": 1,
+            "deduplication_ratio": 0.0,
+            "not_applicable_agent_count": 1,
             "not_applicable_agents": [
                 {"name": "a11y-reviewer", "skip_reason": "no UI changed"},
             ],
@@ -2510,8 +2689,8 @@ class TestMaterializeFindingsMarkdown:
     def test_suffix_selects_the_findings_artifact(self):
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
-            b.add_issue("high", "T", "f.py", "d", "r", line=1)
-            b.set_narrative_summary("Overall: needs work.")
+            b.add_finding("high", "T", "f.py", "d", "r", line=1)
+            b.set_assessment("Overall: needs work.")
             data = b.to_dict()
             Path(d, "review-findings.json").write_text(json.dumps(data))
             written = materialize_markdown(d, suffix="review-findings.json")
@@ -2554,7 +2733,7 @@ class TestMaterializeFindingsMarkdown:
         )
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
-            b.add_issue("high", "T", "f.py", "d", "r", line=1)
+            b.add_finding("high", "T", "f.py", "d", "r", line=1)
             Path(d, "review-findings.json").write_text(json.dumps(b.to_dict()))
             result = subprocess.run(
                 [sys.executable, str(output_py), "materialize", d,
@@ -2600,7 +2779,7 @@ class TestAssessmentProvenance:
     """`## Assessment` is prose about a ledger that keeps changing.
 
     The reconciler writes it; the decision critic then mutates the findings
-    it summarizes. The critic's vocabulary reaches every issue but no
+    it summarizes. The critic's vocabulary reaches every finding but no
     ledger-level prose, so a withdrawn or demoted finding described in the
     Assessment survives every correction channel — the rendered file
     contradicting the list printed beneath it.
@@ -2609,42 +2788,42 @@ class TestAssessmentProvenance:
     @staticmethod
     def _findings(**extra):
         b = ReviewOutputBuilder(pr_id="9", reviewer="reconciliator")
-        b.add_issue("low", "Minor problem", "a.py", "d", "r", line=4)
+        b.add_finding("low", "Minor problem", "a.py", "d", "r", line=4)
         data = b.to_dict()
         data.update(extra)
         return data
 
     def test_prose_carries_a_provenance_marker(self):
-        data = self._findings(narrative_summary="All clear on the whole.")
+        data = self._findings(assessment="All clear on the whole.")
         rendered = render_markdown(data)
         assert "## Assessment\n\nAll clear on the whole." in rendered
         assert "reconciler-authored" in rendered.lower()
         assert "not adjusted by the decision critic" in rendered.lower()
 
-    def test_withdrawn_summary_renders_the_withdrawal_notice(self):
+    def test_invalidated_assessment_renders_the_invalidation_notice(self):
         data = self._findings(
-            narrative_summary=None,
+            assessment=None,
             applied_critic_adjustments=["a1b2c3"],
-            withdrawn_narrative_summary=[
-                {"text": "Old claim.", "withdrawn_by": ["a1b2c3"]}
+            invalidated_assessments=[
+                {"text": "Old claim.", "invalidated_by_adjustment_ids": ["a1b2c3"]}
             ],
         )
         rendered = render_markdown(data)
         assert "## Assessment" in rendered
-        assert "withdrawn" in rendered.lower()
-        # An explicit absence, not a pointer at a file nobody may open: a
-        # withdrawn-and-unreplaced assessment says it has no current one.
+        assert "invalidated" in rendered.lower()
+        # An explicit absence, not a pointer at a file nobody may open: an
+        # invalidated-and-unreplaced assessment says it has no current one.
         assert "no current assessment" in rendered.lower()
         assert "not replaced" in rendered.lower()
         assert "Old claim." not in rendered
 
-    def test_applied_batch_without_a_withdrawal_claims_no_retraction(self):
+    def test_applied_batch_without_an_invalidation_claims_no_retraction(self):
         """A reconciler that never wrote a summary has nothing to retract:
-        the writer side refuses to fabricate an empty withdrawal entry, and
-        the renderer must not assert one either. The withdrawal record —
+        the writer side refuses to fabricate an empty invalidation entry, and
+        the renderer must not assert one either. The invalidation record —
         not the applied-ids list — is the signal."""
         data = self._findings(
-            narrative_summary=None,
+            assessment=None,
             applied_critic_adjustments=["a1b2c3"],
         )
         assert "## Assessment" not in render_markdown(data)
@@ -2652,11 +2831,11 @@ class TestAssessmentProvenance:
     def test_no_summary_and_no_adjustments_renders_no_assessment(self):
         assert "## Assessment" not in render_markdown(self._findings())
 
-    def test_an_empty_adjustment_list_is_not_a_withdrawal(self):
+    def test_an_empty_adjustment_list_is_not_an_invalidation(self):
         """A ledger the critic reached but never changed said nothing about
         the assessment — the reconciler simply wrote none."""
         data = self._findings(
-            narrative_summary=None, applied_critic_adjustments=[],
+            assessment=None, applied_critic_adjustments=[],
         )
         assert "## Assessment" not in render_markdown(data)
 
@@ -2664,12 +2843,12 @@ class TestAssessmentProvenance:
         """Defensive: an older ledger patched before the invalidation
         existed keeps its prose rather than being retroactively hidden."""
         data = self._findings(
-            narrative_summary="Legacy prose.",
+            assessment="Legacy prose.",
             applied_critic_adjustments=["a1b2c3"],
         )
         rendered = render_markdown(data)
         assert "Legacy prose." in rendered
-        assert "withdrawn" not in rendered.lower()
+        assert "invalidated" not in rendered.lower()
 
     def test_mixed_applied_and_refuted_decisions_render_completely(self):
         rendered = render_markdown(self._findings(
@@ -2708,9 +2887,9 @@ class TestRemovedByCriticSection:
     @staticmethod
     def _with_removed(removed):
         b = ReviewOutputBuilder(pr_id="9", reviewer="reconciliator")
-        b.add_issue("low", "Kept", "a.py", "d", "r", line=4)
+        b.add_finding("low", "Kept", "a.py", "d", "r", line=4)
         data = b.to_dict()
-        data["removed_by_critic"] = removed
+        data["findings_removed_by_critic"] = removed
         return data
 
     def test_removed_findings_render_with_their_rationale(self):
@@ -2763,7 +2942,7 @@ class TestRendererFaithfulness:
     @staticmethod
     def _base():
         b = ReviewOutputBuilder(pr_id="9", reviewer="reconciliator")
-        b.add_issue("low", "T", "a.py", "d", "r", line=4)
+        b.add_finding("low", "T", "a.py", "d", "r", line=4)
         return b.to_dict()
 
     def test_multiline_banner_quotes_every_line(self):

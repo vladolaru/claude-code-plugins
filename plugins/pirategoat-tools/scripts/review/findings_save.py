@@ -11,8 +11,8 @@ hand-written ledger after the fact.
 
 Every problem is collected before anything is decided, the same
 all-or-nothing style ``critic_adjustments.validate_adjustments_document()``
-and ``critic.py``'s ``run_save()`` use: a bad verdict, a missing required issue
-field, and a summary/issues count mismatch are independent facts, and
+and ``critic.py``'s ``run_save()`` use: a bad verdict, a missing required finding
+field, and a summary/findings count mismatch are independent facts, and
 reporting only the first would make a caller fix one problem at a time
 instead of seeing the whole rejection at once. On ANY problem, nothing is
 written, and every problem is echoed as its own ``REJECTED: <problem>``
@@ -33,35 +33,34 @@ import sys
 
 try:
     from . import critic_adjustments
+    from .agent import output as review_output
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
     from review import critic_adjustments
+    from review.agent import output as review_output
 
 
 # The reconciled ledger's verdict vocabulary. Matches EXACTLY the range
-# `_verdict_for_issues()` (scripts/review/agent/output.py) can return —
-# the function every ReviewOutputBuilder.to_dict() call computes the
-# verdict through, including the reconciliator's own build in
+# `derive_review_state()` (scripts/review/verdict_rules.py) can return — the
+# function every ReviewOutputBuilder.to_dict() call computes the verdict
+# through, including the reconciliator's own build in
 # agents/review-reconciliator.md. Deliberately EXCLUDES 'not_applicable'
 # from schemas/review-output.ts's broader `Verdict` type: that value is a
 # per-reviewer abstention (`mark_not_applicable()`, which refuses to run
-# if any issue was already recorded) that the reconciliator never emits —
+# if any finding was already recorded) that the reconciliator never emits —
 # it always produces a reconciled ledger for the whole PR, never abstains
-# from it. Literal, not imported: output.py's `_VERDICT_RANK`/
-# `_verdict_for_issues` are the canonical source and are not part of its
-# public surface, so this constant is kept as its own spelling rather than
-# reaching into another module's private names for a small closed set of
-# strings.
+# from it. Literal, not imported: the shared derivation's verdict range is a
+# small closed set, so this module keeps the reconciler-specific subset here.
 RECONCILER_VERDICTS = ("block", "request_changes", "comment", "approve")
 
-# Fields every issue entry must carry to be a well-formed ReviewOutputBuilder
-# issue (see Issue in schemas/review-output.ts and add_issue() in
+# Fields every finding entry must carry to be a well-formed ReviewOutputBuilder
+# finding (see Finding in schemas/review-output.ts and add_finding() in
 # review/agent/output.py, which always sets exactly these. ``line`` is
 # required but nullable: null identifies a file-scoped finding, while an
-# absent key is a malformed issue that the renderer cannot consume.
-REQUIRED_ISSUE_FIELDS = (
+# absent key is a malformed finding that the renderer cannot consume.
+REQUIRED_FINDING_FIELDS = (
     "id", "category", "severity", "title", "description", "file",
     "line", "recommendation", "confidence",
 )
@@ -107,8 +106,9 @@ def validate_findings(payload):
 
     Returns a list of human-readable problems; an empty list means valid.
     Checks: top-level object; ``verdict`` in the reconciler vocabulary;
-    ``issues`` is a list of well-formed entries (required fields present,
-    severity in vocabulary); and ``summary`` counts match the ``issues``
+    ``findings`` is a list of well-formed entries, ``checks`` is always a
+    list, ``assessment`` is string-or-null, and ``summary`` counts match the
+    ``findings``
     population, reusing ``critic_adjustments._recount_summary()`` — the
     same recount the ledger's other writers already trust — rather than
     re-deriving the count logic here.
@@ -125,80 +125,70 @@ def validate_findings(payload):
             f"got {verdict!r}"
         )
 
-    issues = payload.get("issues")
-    if not isinstance(issues, list):
-        problems.append("'issues' must be a list")
-        issues = []
+    retired = sorted(
+        key
+        for key in ("issues", "clearances", "narrative_summary")
+        if key in payload
+    )
+    if retired:
+        problems.append(
+            "retired review-domain field(s): " + ", ".join(retired)
+        )
+    meta = payload.get("meta")
+    if isinstance(meta, dict) and "tool_results_used" in meta:
+        problems.append(
+            "retired review-domain field: meta.tool_results_used"
+        )
 
-    for idx, issue in enumerate(issues):
-        label = f"issues[{idx}]"
-        if not isinstance(issue, dict):
+    findings = payload.get("findings")
+    if not isinstance(findings, list):
+        problems.append("'findings' must be a list")
+        findings = []
+
+    for idx, finding in enumerate(findings):
+        label = f"findings[{idx}]"
+        if not isinstance(finding, dict):
             problems.append(f"{label} must be an object")
             continue
-        missing = [f for f in REQUIRED_ISSUE_FIELDS if f not in issue]
+        missing = [
+            field
+            for field in REQUIRED_FINDING_FIELDS
+            if field not in finding
+        ]
         if missing:
             problems.append(
                 f"{label}: missing required field(s) {', '.join(missing)}"
             )
             continue
-        severity = issue.get("severity")
+        severity = finding.get("severity")
         if severity not in critic_adjustments.VALID_SEVERITIES:
             problems.append(
                 f"{label}: invalid severity {severity!r} "
                 f"(allowed: {', '.join(critic_adjustments.VALID_SEVERITIES)})"
             )
 
-    # 'clearances' is null or a list of {claim, method, evidence} dicts —
-    # the exact shape ReviewOutputBuilder.add_clearance() produces (both
-    # claim and method are enforced non-empty strings there; evidence is
-    # a stripped string or None). Validating this here is what keeps
-    # _echo() safe to call unconditionally after a successful write: an
-    # unvalidated non-list (or malformed entry) would len()/iterate and
-    # crash AFTER write_findings() already committed the ledger — exactly
-    # the failure mode this whole module exists to prevent.
-    clearances = payload.get("clearances")
-    if clearances is not None:
-        if not isinstance(clearances, list):
-            problems.append("'clearances' must be null or a list")
-        else:
-            for idx, clearance in enumerate(clearances):
-                label = f"clearances[{idx}]"
-                if not isinstance(clearance, dict):
-                    problems.append(f"{label} must be an object")
-                    continue
-                claim = clearance.get("claim")
-                if not isinstance(claim, str) or not claim.strip():
-                    problems.append(
-                        f"{label}: 'claim' must be a non-empty string"
-                    )
-                method = clearance.get("method")
-                if not isinstance(method, str) or not method.strip():
-                    problems.append(
-                        f"{label}: 'method' must be a non-empty string"
-                    )
-                evidence = clearance.get("evidence")
-                if evidence is not None and not isinstance(evidence, str):
-                    problems.append(
-                        f"{label}: 'evidence' must be a string or null"
-                    )
+    if "checks" not in payload:
+        problems.append("'checks' must be present as a list")
+    if "assessment" not in payload:
+        problems.append("'assessment' must be present as a string or null")
+    if isinstance(findings, list) and not problems:
+        try:
+            review_output.validate_review_domain(
+                findings,
+                payload.get("checks"),
+                payload.get("assessment"),
+                payload.get("meta"),
+            )
+        except ValueError as err:
+            problems.append(str(err))
 
-    # 'narrative_summary' is null or a string (set_narrative_summary()
-    # coerces to exactly one of those). Not a crash risk for _echo() —
-    # its isinstance(narrative, str) check already tolerates any other
-    # type by reading as "absent" — but validated anyway for the same
-    # reason every other field here is: a shape the producer never
-    # writes is a malformed ledger, not a value to silently reinterpret.
-    narrative = payload.get("narrative_summary")
-    if narrative is not None and not isinstance(narrative, str):
-        problems.append("'narrative_summary' must be a string or null")
-
-    # Summary consistency only makes sense once issues are well-formed —
+    # Summary consistency only makes sense once findings are well-formed —
     # otherwise the recount itself would raise on the same defect already
     # reported above (a non-object entry, an out-of-vocabulary severity).
-    if isinstance(payload.get("issues"), list) and not problems:
+    if isinstance(payload.get("findings"), list) and not problems:
         scratch = {}
         try:
-            derived = critic_adjustments._recount_summary(scratch, issues)
+            derived = critic_adjustments._recount_summary(scratch, findings)
         except ValueError as err:
             problems.append(str(err))
         else:
@@ -206,25 +196,51 @@ def validate_findings(payload):
             if verdict != expected_verdict:
                 problems.append(
                     f"'verdict' {verdict!r} does not match the "
-                    f"issues-derived verdict {expected_verdict!r}"
+                    f"findings-derived verdict {expected_verdict!r}"
                 )
             expected = scratch["summary"]
             actual = payload.get("summary")
             if not isinstance(actual, dict):
                 problems.append("'summary' must be an object")
             else:
-                if actual.get("total_issues") != expected["total_issues"]:
+                if (
+                    actual.get("total_findings")
+                    != expected["total_findings"]
+                ):
                     problems.append(
-                        "'summary.total_issues' "
-                        f"({actual.get('total_issues')!r}) does not match "
-                        f"the {expected['total_issues']} issue(s) recorded"
+                        "'summary.total_findings' "
+                        f"({actual.get('total_findings')!r}) does not match "
+                        f"the {expected['total_findings']} finding(s) recorded"
                     )
                 if actual.get("by_severity") != expected["by_severity"]:
                     problems.append(
                         "'summary.by_severity' "
                         f"({actual.get('by_severity')!r}) does not match "
-                        f"the issues' actual severities "
+                        f"the findings' actual severities "
                         f"({expected['by_severity']!r})"
+                    )
+                if (
+                    actual.get("suppressed_advisory_finding_count")
+                    != expected["suppressed_advisory_finding_count"]
+                ):
+                    problems.append(
+                        "'summary.suppressed_advisory_finding_count' "
+                        f"({actual.get('suppressed_advisory_finding_count')!r}) "
+                        "does not match the findings-derived count "
+                        f"({expected['suppressed_advisory_finding_count']!r})"
+                    )
+                if actual.get("verdict_without_advisory") != expected.get(
+                    "verdict_without_advisory"
+                ):
+                    problems.append(
+                        "'summary.verdict_without_advisory' does not match "
+                        "the findings-derived verdict"
+                    )
+                unexpected_summary = sorted(set(actual) - set(expected))
+                if unexpected_summary:
+                    problems.append(
+                        "'summary' has unexpected field(s): "
+                        + ", ".join(unexpected_summary)
                     )
 
     return problems
@@ -232,21 +248,25 @@ def validate_findings(payload):
 
 def _echo(findings):
     """Print the RECORDED lines the brief specifies for a successful save."""
-    issues = findings.get("issues") or []
+    recorded_findings = findings.get("findings") or []
     counts = {sev: 0 for sev in _ECHO_SEVERITIES}
-    for issue in issues:
-        sev = issue.get("severity")
+    for finding in recorded_findings:
+        sev = finding.get("severity")
         if sev in counts:
             counts[sev] += 1
     breakdown = ", ".join(f"{sev} {counts[sev]}" for sev in _ECHO_SEVERITIES)
 
-    clearances = findings.get("clearances") or []
-    narrative = findings.get("narrative_summary")
-    narrative_state = "present" if isinstance(narrative, str) and narrative.strip() else "absent"
+    checks = findings["checks"]
+    assessment = findings.get("assessment")
+    assessment_state = (
+        "present"
+        if isinstance(assessment, str) and assessment.strip()
+        else "absent"
+    )
 
     print(f"RECORDED VERDICT: {findings.get('verdict')}")
-    print(f"RECORDED FINDINGS: {len(issues)} ({breakdown})")
-    print(f"CLEARANCES: {len(clearances)} | NARRATIVE: {narrative_state}")
+    print(f"RECORDED FINDINGS: {len(recorded_findings)} ({breakdown})")
+    print(f"CHECKS: {len(checks)} | ASSESSMENT: {assessment_state}")
 
 
 def run_save(args):

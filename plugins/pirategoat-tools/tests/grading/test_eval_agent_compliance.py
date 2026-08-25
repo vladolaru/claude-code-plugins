@@ -44,7 +44,7 @@ run_grade_only = _eval_mod.run_grade_only
 def _write_review_pair(output_dir: Path, reviewer: str = "security") -> None:
     """Produce a real review output pair with the production builder."""
     builder = ReviewOutputBuilder.open(output_dir, "1", reviewer)
-    builder.add_issue(
+    builder.add_finding(
         severity="high",
         title="Unescaped output",
         file="src/render.php",
@@ -52,6 +52,11 @@ def _write_review_pair(output_dir: Path, reviewer: str = "security") -> None:
         recommendation="Wrap in esc_html()",
         category="xss",
         line=42,
+    )
+    builder.record_check(
+        "Can request input reach rendered output?",
+        "Trace the request value to the rendering sink",
+        "Yes; the value reaches the sink without escaping.",
     )
     (output_dir / f"{reviewer}-review-accounting-input.json").write_text(json.dumps({
         "schema": 3,

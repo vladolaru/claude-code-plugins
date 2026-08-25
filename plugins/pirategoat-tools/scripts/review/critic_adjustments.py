@@ -5,10 +5,10 @@ The lifecycle has three owners and one channel per transition. The critic
 authors proposal-only fields through ``critic.py --save``; this module assigns
 stable adjustment IDs and digest-binds the immutable proposal to the committed
 verdict marker. The orchestrator submits only verified IDs, refuted IDs with
-reasons, and a revised narrative through :func:`settle`; the script derives the
+reasons, and a revised assessment through :func:`settle`; the script derives the
 unchecked complement and persists a complete adjudication checkpoint. Finally,
 ``_apply_adjustments_locked()`` is the sole post-reconciliation ledger mutator,
-carrying provenance, narrative replacement, recounting, and verdict derivation
+carrying provenance, assessment replacement, recounting, and verdict derivation
 into ``review-findings.json``.
 
 Settlement builds and validates the complete document-plus-ledger apply plan
@@ -19,7 +19,7 @@ crash after the checkpoint is resumed exactly once by public
 :func:`apply_adjustments`. That public entry point is an explicit recovery path;
 if an older orchestrator reaches it without a checkpoint, it first prepares an
 honest ``defensive_apply`` adjudication with all entries ``not_checked`` and no
-invented narrative, validates the same plan, and only then records it.
+invented assessment, validates the same plan, and only then records it.
 """
 
 import argparse
@@ -66,13 +66,13 @@ SPOT_CHECK_VALUES = (
 )
 
 # The orchestrator's post-critic assessment, inside the script-owned
-# adjudication checkpoint. An applying batch withdraws the reconciler's
-# (see WITHDRAWN_SUMMARY_KEY below) and nothing used to replace it, so a
+# adjudication checkpoint. An applying batch invalidates the reconciler's
+# assessment (see INVALIDATED_ASSESSMENTS_KEY below), and without a replacement
 # REVISE run published a ledger whose Assessment section was a pointer to
 # prose only a human could read. This is that assessment's machine-readable
-# seat: on apply it BECOMES the ledger's narrative_summary, with the
-# withdrawal record left intact beside it.
-REVISED_NARRATIVE_KEY = "revised_narrative"
+# seat: on apply it BECOMES the ledger's assessment, with the invalidation
+# record left intact beside it.
+REVISED_ASSESSMENT_KEY = "revised_assessment"
 
 ADJUSTMENTS_FILENAME = "decision-critic-adjustments.json"
 FINDINGS_FILENAME = "review-findings.json"
@@ -86,7 +86,7 @@ CRITIC_VERDICT_FILENAME = "decision-critic-verdict.json"
 APPLIED_IDS_KEY = "applied_critic_adjustments"
 
 # Where the ledger's pre-adjustment verdict goes the FIRST time an applying
-# batch changes it — the same audit spirit as WITHDRAWN_SUMMARY_KEY below.
+# batch changes it — the same audit spirit as INVALIDATED_ASSESSMENTS_KEY below.
 # First time only: a second round must name what the ledger came in as, not
 # what the previous round left behind.
 VERDICT_BEFORE_ADJUSTMENTS_KEY = "verdict_before_adjustments"
@@ -137,13 +137,13 @@ _ADJUDICATION_KEYS = frozenset({
     "source",
     PROPOSAL_DIGEST_KEY,
     RECORDED_AT_KEY,
-    REVISED_NARRATIVE_KEY,
+    REVISED_ASSESSMENT_KEY,
 })
 _SETTLEMENT_REQUEST_KEYS = frozenset({
     "schema",
     "verified",
     "refuted",
-    REVISED_NARRATIVE_KEY,
+    REVISED_ASSESSMENT_KEY,
 })
 _REFUTED_REQUEST_KEYS = frozenset({"adjustment_id", "rejection_reason"})
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -176,23 +176,23 @@ ApplyPlan = collections.namedtuple(
     ),
 )
 
-# Where a withdrawn `narrative_summary` goes. The adjustment vocabulary
-# addresses issues — severity, title, scope, the fields of one finding —
+# Where an invalidated `assessment` goes. The adjustment vocabulary addresses
+# findings — severity, title, scope, the fields of one finding —
 # and deliberately cannot address ledger-level prose. That leaves the
 # reconciler's assessment as the one part of the artifact a critic round
 # can invalidate but not correct: "one CRITICAL blocker" stays written
 # above a list where the critical has just been demoted to low.
 #
 # The pipeline cannot re-derive that prose (it is LLM output, not a
-# projection of the findings), so an applying batch withdraws it rather
-# than leaving it to contradict the ledger it summarizes. Withdrawn, not
+# projection of the findings), so an applying batch invalidates it rather
+# than leaving it to contradict the ledger it summarizes. Invalidated, not
 # deleted: the text moves here beside the ids of the decisions that
-# withdrew it, the same way a removed finding moves into
-# `removed_by_critic` carrying the action that removed it. A list, because
-# a second reconciliation-plus-critic round is a second withdrawal and
+# invalidated it, the same way a removed finding moves into
+# `findings_removed_by_critic` carrying the action that removed it. A list,
+# because a second reconciliation-plus-critic round is a second invalidation and
 # must not erase the first.
-WITHDRAWN_SUMMARY_KEY = "withdrawn_narrative_summary"
-NARRATIVE_SUMMARY_KEY = "narrative_summary"
+INVALIDATED_ASSESSMENTS_KEY = "invalidated_assessments"
+ASSESSMENT_KEY = "assessment"
 
 # The one verdict that sanctions applying adjustments. Everything else —
 # STAND, ESCALATE, an unrecognized string, a missing file — refuses.
@@ -548,16 +548,16 @@ def validate_adjustments_document(payload):
             f"{ADJUDICATION_KEY}: {RECORDED_AT_KEY!r} must be an aware "
             f"RFC 3339 timestamp"
         )
-    revised = adjudication.get(REVISED_NARRATIVE_KEY)
+    revised = adjudication.get(REVISED_ASSESSMENT_KEY)
     if source == ADJUDICATION_SOURCE_ORCHESTRATOR:
         if not isinstance(revised, str) or not revised.strip():
             problems.append(
-                f"{ADJUDICATION_KEY}: orchestrator revised_narrative must "
+                f"{ADJUDICATION_KEY}: orchestrator revised_assessment must "
                 f"be a non-empty string"
             )
     elif source == ADJUDICATION_SOURCE_DEFENSIVE and revised is not None:
         problems.append(
-            f"{ADJUDICATION_KEY}: defensive_apply revised_narrative must be null"
+            f"{ADJUDICATION_KEY}: defensive_apply revised_assessment must be null"
         )
     if source == ADJUDICATION_SOURCE_DEFENSIVE and any(
         isinstance(entry, dict)
@@ -762,28 +762,28 @@ def _validate_fields(fields, entry_label):
             )
 
 
-def _apply_scope_pairing(issue, line_is_null):
-    """Keep `scope` and `line` consistent for one issue.
+def _apply_scope_pairing(finding, line_is_null):
+    """Keep `scope` and `line` consistent for one finding.
 
     The contract is a pair, not two independent fields: schemas/
     review-output.ts declares `scope?: 'file'` as "present (with
     line: null) when the finding is file-scoped", and output.py sets
-    `issue['scope'] = 'file'` only for file-scoped findings, which its
+    `finding['scope'] = 'file'` only for file-scoped findings, which its
     Markdown renderer then branches on. A patch that moved `line`
     without moving `scope` would publish a line-anchored finding still
     marked file-scoped, or a null line with no marker at all.
     """
     if line_is_null:
-        issue["scope"] = "file"
+        finding["scope"] = "file"
     else:
-        issue.pop("scope", None)
+        finding.pop("scope", None)
 
 
-def _recount_summary(findings, issues):
+def _recount_summary(review, findings):
     """Project the shared review-state derivation into the ledger summary.
 
     An out-of-vocabulary severity would silently drop out of
-    `by_severity` while still counting in `total_issues`, publishing a
+    `by_severity` while still counting in `total_findings`, publishing a
     summary that undercounts its own list. Every write through this
     module is validated, so the only source is a malformed pre-existing
     ledger — which is worth failing on, not smoothing over.
@@ -792,11 +792,11 @@ def _recount_summary(findings, issues):
     verdict without choosing a population or applying thresholds itself.
     """
     try:
-        derived = derive_review_state(issues)
+        derived = derive_review_state(findings)
     except ValueError as error:
         raise ValueError(f"{FINDINGS_FILENAME}: {error}") from error
-    summary = findings.setdefault("summary", {})
-    summary["total_issues"] = len(issues)
+    summary = review.setdefault("summary", {})
+    summary["total_findings"] = len(findings)
     summary["by_severity"] = derived["counts"]
     summary.pop("verdict_without_advisory", None)
     summary.update(derived["advisory"])
@@ -969,10 +969,10 @@ def _validate_settlement_request(request, known_ids):
         problems.append(
             f"adjudication request: 'schema' must be {ADJUDICATION_SCHEMA}"
         )
-    revised = request.get(REVISED_NARRATIVE_KEY)
+    revised = request.get(REVISED_ASSESSMENT_KEY)
     if not isinstance(revised, str) or not revised.strip():
         problems.append(
-            "adjudication request: 'revised_narrative' must be a non-empty "
+            "adjudication request: 'revised_assessment' must be a non-empty "
             "string"
         )
 
@@ -1034,7 +1034,7 @@ def _validate_settlement_request(request, known_ids):
     return problems, decisions
 
 
-def _build_adjudication_checkpoint(document, decisions, narrative, *, source):
+def _build_adjudication_checkpoint(document, decisions, assessment, *, source):
     checkpoint = copy.deepcopy(document)
     digest = proposal_digest(checkpoint)
     for entry in checkpoint["adjustments"]:
@@ -1051,18 +1051,18 @@ def _build_adjudication_checkpoint(document, decisions, narrative, *, source):
         "source": source,
         PROPOSAL_DIGEST_KEY: digest,
         RECORDED_AT_KEY: datetime.now(timezone.utc).isoformat(),
-        REVISED_NARRATIVE_KEY: narrative,
+        REVISED_ASSESSMENT_KEY: assessment,
     }
     return checkpoint
 
 
-def _checkpoint_matches_request(document, decisions, narrative):
+def _checkpoint_matches_request(document, decisions, assessment):
     adjudication = document.get(ADJUDICATION_KEY)
     if not isinstance(adjudication, dict):
         return False
     if adjudication.get("source") != ADJUDICATION_SOURCE_ORCHESTRATOR:
         return False
-    if adjudication.get(REVISED_NARRATIVE_KEY) != narrative:
+    if adjudication.get(REVISED_ASSESSMENT_KEY) != assessment:
         return False
     for entry in document["adjustments"]:
         expected, reason = decisions.get(
@@ -1094,10 +1094,10 @@ def settle(output_dir, request):
         problems, decisions = _validate_settlement_request(request, known_ids)
         if problems:
             raise AdjustmentValidationError(problems)
-        narrative = request[REVISED_NARRATIVE_KEY]
+        assessment = request[REVISED_ASSESSMENT_KEY]
         existing = document.get(ADJUDICATION_KEY)
         if existing is not None:
-            if not _checkpoint_matches_request(document, decisions, narrative):
+            if not _checkpoint_matches_request(document, decisions, assessment):
                 raise ValueError(
                     "critic proposal is already settled with a different "
                     "adjudication request"
@@ -1107,7 +1107,7 @@ def settle(output_dir, request):
             document = _build_adjudication_checkpoint(
                 document,
                 decisions,
-                narrative,
+                assessment,
                 source=ADJUDICATION_SOURCE_ORCHESTRATOR,
             )
             settlement_status = "settled"
@@ -1154,31 +1154,31 @@ def pending_count(output_dir):
     return count
 
 
-def _withdraw_narrative_summary(findings, recorded_ids):
-    """Retract prose the applied batch may have just contradicted.
+def _invalidate_assessment(review, recorded_ids):
+    """Invalidate prose the applied batch may have just contradicted.
 
     Called only when a batch actually applied, so a refused, settled, or
     fully rejected call leaves the assessment exactly as the reconciler
-    wrote it — nothing changed, nothing to withdraw.
+    wrote it — nothing changed, nothing to invalidate.
 
-    A ledger with no summary records no withdrawal: there is no text to
-    keep auditable, and fabricating an empty entry would claim a retraction
+    A ledger with no assessment records no invalidation: there is no text to
+    keep auditable, and fabricating an empty entry would claim an invalidation
     that never happened.
     """
-    prior = findings.get(NARRATIVE_SUMMARY_KEY)
-    findings[NARRATIVE_SUMMARY_KEY] = None
+    prior = review.get(ASSESSMENT_KEY)
+    review[ASSESSMENT_KEY] = None
     if not isinstance(prior, str) or not prior.strip():
         return
-    withdrawn = findings.get(WITHDRAWN_SUMMARY_KEY)
-    if not isinstance(withdrawn, list):
-        withdrawn = []
-    withdrawn.append({
+    invalidated = review.get(INVALIDATED_ASSESSMENTS_KEY)
+    if not isinstance(invalidated, list):
+        invalidated = []
+    invalidated.append({
         "text": prior,
         # The exact decisions that cost the assessment its standing, so the
-        # retraction can be read back against the batch that caused it.
-        "withdrawn_by": list(recorded_ids),
+        # invalidation can be read back against the batch that caused it.
+        "invalidated_by_adjustment_ids": list(recorded_ids),
     })
-    findings[WITHDRAWN_SUMMARY_KEY] = withdrawn
+    review[INVALIDATED_ASSESSMENTS_KEY] = invalidated
 
 
 def _read_findings_for_apply(output_dir):
@@ -1249,7 +1249,7 @@ def _validate_unlanded_entry(entry, by_id, label):
     target = by_id.get(target_id)
     if target is None:
         raise ValueError(
-            f"{label}: no issue with id {target_id!r} in {FINDINGS_FILENAME}"
+            f"{label}: no finding with id {target_id!r} in {FINDINGS_FILENAME}"
         )
     _validate_pending_mutation(entry, target, label)
 
@@ -1292,27 +1292,27 @@ def _build_apply_plan(document, findings):
     adjudication = document[ADJUDICATION_KEY]
     planned_document = copy.deepcopy(document)
     planned_findings = copy.deepcopy(findings)
-    issues = planned_findings.get("issues")
-    if not isinstance(issues, list):
-        raise ValueError(f"{FINDINGS_FILENAME} has no issues list")
+    ledger_findings = planned_findings.get("findings")
+    if not isinstance(ledger_findings, list):
+        raise ValueError(f"{FINDINGS_FILENAME} has no findings list")
     if not isinstance(planned_findings.get("summary"), dict):
         raise ValueError(f"{FINDINGS_FILENAME} has no summary object")
     try:
-        derive_review_state(issues)
+        derive_review_state(ledger_findings)
     except ValueError as error:
         raise ValueError(f"{FINDINGS_FILENAME}: {error}") from error
 
     by_id = {}
-    for index, issue in enumerate(issues):
-        issue_id = issue.get("id")
-        if not isinstance(issue_id, str) or not issue_id:
+    for index, finding in enumerate(ledger_findings):
+        finding_id = finding.get("id")
+        if not isinstance(finding_id, str) or not finding_id:
             continue
-        if issue_id in by_id:
+        if finding_id in by_id:
             raise ValueError(
-                f"{FINDINGS_FILENAME}: duplicate issue id {issue_id!r} "
+                f"{FINDINGS_FILENAME}: duplicate finding id {finding_id!r} "
                 f"at position {index}"
             )
-        by_id[issue_id] = issue
+        by_id[finding_id] = finding
 
     applied_records = _load_recorded_records(planned_findings)
     rejected_records = _load_rejected_records(planned_findings)
@@ -1395,7 +1395,7 @@ def _build_apply_plan(document, findings):
             "rationale": entry["rationale"],
         }
         if action == "add":
-            new_issue = {
+            new_finding = {
                 "id": _new_finding_id(entry["adjustment_id"], set(by_id)),
                 "category": fields.get("category", "general"),
                 "confidence": fields.get("confidence", 0.9),
@@ -1403,19 +1403,22 @@ def _build_apply_plan(document, findings):
                 **fields,
                 "critic_adjustment": provenance,
             }
-            _apply_scope_pairing(new_issue, new_issue.get("line") is None)
-            issues.append(new_issue)
-            by_id[new_issue["id"]] = new_issue
+            _apply_scope_pairing(new_finding, new_finding.get("line") is None)
+            ledger_findings.append(new_finding)
+            by_id[new_finding["id"]] = new_finding
         elif action == "remove":
-            removed = planned_findings.get("removed_by_critic")
+            removed = planned_findings.get("findings_removed_by_critic")
             if removed is not None and not isinstance(removed, list):
                 raise ValueError(
-                    f"{FINDINGS_FILENAME}: 'removed_by_critic' must be a list"
+                    f"{FINDINGS_FILENAME}: 'findings_removed_by_critic' "
+                    "must be a list"
                 )
             target = by_id.pop(entry["id"])
-            issues.remove(target)
+            ledger_findings.remove(target)
             target["critic_adjustment"] = provenance
-            planned_findings.setdefault("removed_by_critic", []).append(target)
+            planned_findings.setdefault(
+                "findings_removed_by_critic", []
+            ).append(target)
         else:
             target = by_id[entry["id"]]
             provenance["prior"] = {key: target.get(key) for key in fields}
@@ -1431,7 +1434,7 @@ def _build_apply_plan(document, findings):
         applied += 1
 
     if applied:
-        derived = _recount_summary(planned_findings, issues)
+        derived = _recount_summary(planned_findings, ledger_findings)
         recomputed = derived["verdict"]
         if planned_findings.get("verdict") != recomputed:
             planned_findings.setdefault(
@@ -1440,10 +1443,10 @@ def _build_apply_plan(document, findings):
             )
             planned_findings["verdict"] = recomputed
         planned_findings[APPLIED_IDS_KEY] = applied_records
-        _withdraw_narrative_summary(planned_findings, batch_ids)
-        revised = adjudication.get(REVISED_NARRATIVE_KEY)
+        _invalidate_assessment(planned_findings, batch_ids)
+        revised = adjudication.get(REVISED_ASSESSMENT_KEY)
         if isinstance(revised, str) and revised.strip():
-            planned_findings[NARRATIVE_SUMMARY_KEY] = revised
+            planned_findings[ASSESSMENT_KEY] = revised
     if rejection_records:
         planned_findings[REJECTED_ADJUSTMENTS_KEY] = (
             rejected_records + rejection_records

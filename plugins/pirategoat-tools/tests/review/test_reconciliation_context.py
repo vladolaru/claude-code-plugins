@@ -48,19 +48,19 @@ def mod():
 # Test fixture helpers
 # ---------------------------------------------------------------------------
 
-def _make_issue(
+def _make_finding(
     severity="medium",
-    title="Test issue",
+    title="Test finding",
     file="src/app.py",
     line=42,
-    description="Some issue found",
+    description="Some finding found",
     recommendation="Fix it",
     category="general",
     confidence=0.9,
     severity_floor=None,
 ):
-    """Create a single issue dict matching ReviewOutputBuilder format."""
-    issue = {
+    """Create a single finding dict matching ReviewOutputBuilder format."""
+    finding = {
         "id": "abc12345",
         "category": category,
         "severity": severity,
@@ -72,8 +72,8 @@ def _make_issue(
         "confidence": confidence,
     }
     if severity_floor is not None:
-        issue["severity_floor"] = severity_floor
-    return issue
+        finding["severity_floor"] = severity_floor
+    return finding
 
 
 def _write_summary(
@@ -122,7 +122,7 @@ def _write_review(output_dir, stem, claims):
     """
     payload = {
         "reviewer": stem.replace("-review", ""),
-        "issues": [],
+        "findings": [],
         "reviewed_file_claims": claims,
     }
     with open(os.path.join(output_dir, f"{stem}.json"), "w") as f:
@@ -147,10 +147,10 @@ def _write_accounting_input(output_dir, reviewer, claimable, *, inline_count=0):
     return payload
 
 
-def _make_context_with_findings(agent_findings):
+def _make_context_with_findings(reviews_by_agent):
     """Create a minimal reconciliation context dict with given agent findings."""
     return {
-        "agent_findings": agent_findings,
+        "reviews_by_agent": reviews_by_agent,
         "source_snippets": {},
         "scope_annotations": {},
         "changed_files": ["src/app.py"],
@@ -166,15 +166,15 @@ def _make_review_json(
     reviewer="security",
     pr_id="42",
     verdict="comment",
-    issues=None,
+    findings=None,
 ):
     """Create a complete review JSON dict matching ReviewOutputBuilder output."""
-    if issues is None:
-        issues = [_make_issue()]
+    if findings is None:
+        findings = [_make_finding()]
 
     severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
-    for issue in issues:
-        sev = issue.get("severity", "medium")
+    for finding in findings:
+        sev = finding.get("severity", "medium")
         if sev in severity_counts:
             severity_counts[sev] += 1
 
@@ -185,10 +185,10 @@ def _make_review_json(
         "schema": 2,
         "verdict": verdict,
         "summary": {
-            "total_issues": len(issues),
+            "total_findings": len(findings),
             "by_severity": severity_counts,
         },
-        "issues": issues,
+        "findings": findings,
         "review_claimable_files": [],
         "reviewed_file_claims": [],
         "unclaimed_review_files": [],
@@ -211,7 +211,7 @@ def _make_review_json(
 # ===========================================================================
 
 class TestLoadAgentFindings:
-    """Tests for load_agent_findings()."""
+    """Tests for load_agent_reviews()."""
 
     def test_loads_review_jsons(self, mod, tmp_path):
         """Loads *-review.json files and keys by stem."""
@@ -221,7 +221,7 @@ class TestLoadAgentFindings:
             json.dumps(_make_review_json(reviewer="code"))
         )
 
-        result = mod.load_agent_findings(str(tmp_path))
+        result = mod.load_agent_reviews(str(tmp_path))
         assert "security-review" in result
         assert "code-review" in result
         assert result["security-review"]["reviewer"] == "security"
@@ -243,18 +243,18 @@ class TestLoadAgentFindings:
         (tmp_path / "decision-critic-verdict.json").write_text('{"verdict": "STAND"}')
         (tmp_path / "clarity-assessment.json").write_text('{"clear": true}')
 
-        result = mod.load_agent_findings(str(tmp_path))
+        result = mod.load_agent_reviews(str(tmp_path))
         assert len(result) == 1
         assert "security-review" in result
 
     def test_handles_empty_directory(self, mod, tmp_path):
         """Empty directory returns empty dict."""
-        result = mod.load_agent_findings(str(tmp_path))
+        result = mod.load_agent_reviews(str(tmp_path))
         assert result == {}
 
     def test_handles_nonexistent_directory(self, mod, tmp_path):
         """Non-existent directory returns empty dict with warning."""
-        result = mod.load_agent_findings(str(tmp_path / "nonexistent"))
+        result = mod.load_agent_reviews(str(tmp_path / "nonexistent"))
         assert result == {}
 
     def test_skips_malformed_json(self, mod, tmp_path):
@@ -264,7 +264,7 @@ class TestLoadAgentFindings:
         )
         (tmp_path / "broken-review.json").write_text("{ not valid json !!!")
 
-        result = mod.load_agent_findings(str(tmp_path))
+        result = mod.load_agent_reviews(str(tmp_path))
         assert "security-review" in result
         assert "broken-review" not in result
 
@@ -274,7 +274,7 @@ class TestLoadAgentFindings:
         )
         (tmp_path / "broken-review.json").write_text("[]")
 
-        result = mod.load_agent_findings(str(tmp_path))
+        result = mod.load_agent_reviews(str(tmp_path))
 
         assert "security-review" in result
         assert "broken-review" not in result
@@ -287,7 +287,7 @@ class TestLoadAgentFindings:
         (tmp_path / "security-review.md").write_text("# Review")
         (tmp_path / "notes.txt").write_text("some notes")
 
-        result = mod.load_agent_findings(str(tmp_path))
+        result = mod.load_agent_reviews(str(tmp_path))
         assert len(result) == 1
         assert "security-review" in result
 
@@ -304,7 +304,7 @@ class TestLoadAgentFindings:
         )
 
         # Only security-reviewer and performance-reviewer are dispatched
-        result = mod.load_agent_findings(
+        result = mod.load_agent_reviews(
             str(tmp_path),
             dispatched_agents=["security-reviewer", "performance-reviewer"],
         )
@@ -322,7 +322,7 @@ class TestLoadAgentFindings:
             json.dumps(_make_review_json(reviewer="performance"))
         )
 
-        result = mod.load_agent_findings(str(tmp_path), dispatched_agents=None)
+        result = mod.load_agent_reviews(str(tmp_path), dispatched_agents=None)
         assert len(result) == 2
 
     def test_dispatched_agents_empty_list_loads_nothing(self, mod, tmp_path):
@@ -331,7 +331,7 @@ class TestLoadAgentFindings:
             json.dumps(_make_review_json(reviewer="security"))
         )
 
-        result = mod.load_agent_findings(str(tmp_path), dispatched_agents=[])
+        result = mod.load_agent_reviews(str(tmp_path), dispatched_agents=[])
         assert len(result) == 0
 
 
@@ -355,12 +355,12 @@ def test_reconciler_entitlement_write_error_removes_stale_target(
 
 class TestSeverityFloorNormalization:
     def test_structured_floor_wins_over_legacy_marker(self, mod):
-        issue = _make_issue(
+        finding = _make_finding(
             severity_floor="medium",
             description="Severity-floor: silent false-success",
         )
 
-        assert mod.resolve_severity_floor(issue) == "medium"
+        assert mod.resolve_severity_floor(finding) == "medium"
 
     @pytest.mark.parametrize(
         ("description", "expected"),
@@ -386,30 +386,30 @@ class TestSeverityFloorNormalization:
         self, mod, description, expected
     ):
         assert mod.resolve_severity_floor(
-            _make_issue(description=description)
+            _make_finding(description=description)
         ) == expected
 
     def test_category_alone_does_not_create_floor(self, mod):
         assert mod.resolve_severity_floor(
-            _make_issue(category="scheduled-action")
+            _make_finding(category="scheduled-action")
         ) is None
 
     def test_unknown_legacy_marker_does_not_guess_floor(self, mod):
         assert mod.resolve_severity_floor(
-            _make_issue(description="Severity-floor: future policy")
+            _make_finding(description="Severity-floor: future policy")
         ) is None
 
     def test_legacy_marker_requires_a_marker_separator(self, mod):
         assert mod.resolve_severity_floor(
-            _make_issue(
+            _make_finding(
                 description="Severity-floor: silent false-success was rejected"
             )
         ) is None
 
     def test_loading_findings_materializes_legacy_floor(self, mod, tmp_path):
         review = _make_review_json(
-            issues=[
-                _make_issue(
+            findings=[
+                _make_finding(
                     description=(
                         "Severity-floor: public-contract change; consumers exist"
                     ),
@@ -418,20 +418,20 @@ class TestSeverityFloorNormalization:
         )
         (tmp_path / "woo-regression-review.json").write_text(json.dumps(review))
 
-        loaded = mod.load_agent_findings(str(tmp_path))
+        loaded = mod.load_agent_reviews(str(tmp_path))
 
-        issue = loaded["woo-regression-review"]["issues"][0]
-        assert issue["severity_floor"] == "medium"
+        finding = loaded["woo-regression-review"]["findings"][0]
+        assert finding["severity_floor"] == "medium"
 
     def test_resolves_floor_from_list_description(self, mod):
         # A malformed (list-valued) description must not silently drop a
-        # mandatory floor marker: load_agent_findings pops severity_floor when
+        # mandatory floor marker: load_agent_reviews pops severity_floor when
         # resolve_severity_floor returns None, so returning None here would
         # downgrade the finding.
-        issue = _make_issue(
+        finding = _make_finding(
             description=["Finding body.", "Severity-floor: high — verified"]
         )
-        assert mod.resolve_severity_floor(issue) == "high"
+        assert mod.resolve_severity_floor(finding) == "high"
 
 
 # ===========================================================================
@@ -442,11 +442,11 @@ class TestExtractReferences:
     """Tests for extract_references()."""
 
     def test_extracts_unique_refs(self, mod):
-        """Extracts file:line pairs from agent issues."""
+        """Extracts file:line pairs from agent findings."""
         findings = {
-            "security-review": _make_review_json(issues=[
-                _make_issue(file="src/auth.py", line=10),
-                _make_issue(file="src/db.py", line=20),
+            "security-review": _make_review_json(findings=[
+                _make_finding(file="src/auth.py", line=10),
+                _make_finding(file="src/db.py", line=20),
             ]),
         }
         refs = mod.extract_references(findings)
@@ -457,13 +457,13 @@ class TestExtractReferences:
     def test_deduplicates_same_file(self, mod):
         """Same file from multiple agents is deduplicated, lines merged."""
         findings = {
-            "security-review": _make_review_json(issues=[
-                _make_issue(file="src/auth.py", line=10),
-                _make_issue(file="src/auth.py", line=30),
+            "security-review": _make_review_json(findings=[
+                _make_finding(file="src/auth.py", line=10),
+                _make_finding(file="src/auth.py", line=30),
             ]),
-            "performance-review": _make_review_json(issues=[
-                _make_issue(file="src/auth.py", line=20),
-                _make_issue(file="src/auth.py", line=10),  # duplicate line
+            "performance-review": _make_review_json(findings=[
+                _make_finding(file="src/auth.py", line=20),
+                _make_finding(file="src/auth.py", line=10),  # duplicate line
             ]),
         }
         refs = mod.extract_references(findings)
@@ -474,8 +474,8 @@ class TestExtractReferences:
     def test_skips_missing_lines(self, mod):
         """Issues without a valid line field are skipped."""
         findings = {
-            "security-review": _make_review_json(issues=[
-                _make_issue(file="src/auth.py", line=10),
+            "security-review": _make_review_json(findings=[
+                _make_finding(file="src/auth.py", line=10),
                 {
                     "id": "x",
                     "severity": "medium",
@@ -515,9 +515,9 @@ class TestExtractReferences:
         assert refs == []
 
     def test_handles_findings_with_no_issues(self, mod):
-        """Findings with no issues list returns empty refs."""
+        """Findings with no findings list returns empty refs."""
         findings = {
-            "security-review": {"verdict": "approve"},  # no issues key
+            "security-review": {"verdict": "approve"},  # no findings key
         }
         refs = mod.extract_references(findings)
         assert refs == []
@@ -525,10 +525,10 @@ class TestExtractReferences:
     def test_lines_are_sorted(self, mod):
         """Lines within a file reference are sorted ascending."""
         findings = {
-            "a-review": _make_review_json(issues=[
-                _make_issue(file="src/app.py", line=50),
-                _make_issue(file="src/app.py", line=10),
-                _make_issue(file="src/app.py", line=30),
+            "a-review": _make_review_json(findings=[
+                _make_finding(file="src/app.py", line=50),
+                _make_finding(file="src/app.py", line=10),
+                _make_finding(file="src/app.py", line=30),
             ]),
         }
         refs = mod.extract_references(findings)
@@ -1334,7 +1334,7 @@ class TestFullScript:
         # Create a review file
         review = _make_review_json(
             reviewer="security",
-            issues=[_make_issue(file="src/auth.py", line=10)],
+            findings=[_make_finding(file="src/auth.py", line=10)],
         )
         (tmp_path / "security-review.json").write_text(json.dumps(review))
 
@@ -1360,7 +1360,7 @@ class TestFullScript:
         ctx = json.loads(ctx_path.read_text())
         expected_keys = {
             "schema",
-            "agent_findings",
+            "reviews_by_agent",
             "source_snippets",
             "scope_annotations",
             "changed_files",
@@ -1378,7 +1378,7 @@ class TestFullScript:
         assert ctx["schema"] == 3
 
         # Verify specific values
-        assert "security-review" in ctx["agent_findings"]
+        assert "security-review" in ctx["reviews_by_agent"]
         assert ctx["changed_files"] == ["src/auth.py", "src/db.py"]
         assert ctx["git_range"] == "abc123..HEAD"
         assert ctx["change_purpose"] == "Fix auth bug"
@@ -1439,7 +1439,7 @@ class TestFullScript:
         assert result.returncode == 0
 
         ctx = json.loads((tmp_path / "reconciliation-context.json").read_text())
-        assert ctx["agent_findings"] == {}
+        assert ctx["reviews_by_agent"] == {}
 
     def test_missing_required_args(self, tmp_path):
         """Missing --output-dir or --git-range exits with code 2 (argparse)."""
@@ -1449,9 +1449,9 @@ class TestFullScript:
     def test_scope_annotations_present(self, tmp_path):
         """Scope annotations are correctly populated with file:line keys."""
         review = _make_review_json(
-            issues=[
-                _make_issue(file="src/auth.py", line=10),
-                _make_issue(file="src/other.py", line=20),
+            findings=[
+                _make_finding(file="src/auth.py", line=10),
+                _make_finding(file="src/other.py", line=20),
             ],
         )
         (tmp_path / "security-review.json").write_text(json.dumps(review))
@@ -1475,7 +1475,7 @@ class TestFullScript:
         for agent in ["security", "performance", "patterns"]:
             review = _make_review_json(
                 reviewer=agent,
-                issues=[_make_issue(file=f"src/{agent}.py", line=10)],
+                findings=[_make_finding(file=f"src/{agent}.py", line=10)],
             )
             (tmp_path / f"{agent}-review.json").write_text(json.dumps(review))
 
@@ -1487,18 +1487,18 @@ class TestFullScript:
         assert result.returncode == 0
 
         ctx = json.loads((tmp_path / "reconciliation-context.json").read_text())
-        assert len(ctx["agent_findings"]) == 3
-        assert "security-review" in ctx["agent_findings"]
-        assert "performance-review" in ctx["agent_findings"]
-        assert "patterns-review" in ctx["agent_findings"]
+        assert len(ctx["reviews_by_agent"]) == 3
+        assert "security-review" in ctx["reviews_by_agent"]
+        assert "performance-review" in ctx["reviews_by_agent"]
+        assert "patterns-review" in ctx["reviews_by_agent"]
 
     def test_upstream_advisory_entitles_reconciler_serialization(
         self, tmp_path, monkeypatch
     ):
-        issue = _make_issue(severity="critical")
-        issue["channel"] = "advisory"
+        finding = _make_finding(severity="critical")
+        finding["channel"] = "advisory"
         (tmp_path / "repo-reuse-review.json").write_text(json.dumps(
-            _make_review_json(reviewer="repo-reuse", issues=[issue])
+            _make_review_json(reviewer="repo-reuse", findings=[finding])
         ))
 
         result = self._run(
@@ -1516,7 +1516,7 @@ class TestFullScript:
         monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
         monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
         builder = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
-        builder.add_issue(
+        builder.add_finding(
             severity="critical", title="Advisory", file="src/app.py",
             description="d", recommendation="r", line=1,
             channel="advisory",
@@ -1546,7 +1546,7 @@ class TestFullScript:
         monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
         monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
         builder = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
-        builder.add_issue(
+        builder.add_finding(
             severity="high", title="Advisory", file="src/app.py",
             description="d", recommendation="r", line=1,
             channel="advisory",
@@ -1592,7 +1592,7 @@ class TestFullScript:
         """--dispatched-agents with names produces the expected list."""
         review = _make_review_json(
             reviewer="security",
-            issues=[_make_issue(file="src/auth.py", line=10)],
+            findings=[_make_finding(file="src/auth.py", line=10)],
         )
         (tmp_path / "security-review.json").write_text(json.dumps(review))
 
@@ -1605,7 +1605,7 @@ class TestFullScript:
         assert result.returncode == 0
 
         ctx = json.loads((tmp_path / "reconciliation-context.json").read_text())
-        # Names are normalized: -reviewer → -review to match agent_findings keys
+        # Names are normalized: -reviewer → -review to match reviews_by_agent keys
         assert ctx["dispatched_agents"] == [
             "security-review", "performance-review"
         ]
@@ -1617,7 +1617,7 @@ class TestFullScript:
         kept honest by hand. The agent reads the JSON."""
         review = _make_review_json(
             reviewer="security",
-            issues=[_make_issue(file="src/auth.py", line=10)],
+            findings=[_make_finding(file="src/auth.py", line=10)],
         )
         (tmp_path / "security-review.json").write_text(json.dumps(review))
 
@@ -1642,7 +1642,7 @@ class TestFullScript:
         """Reconciliation context building has no human-artifact side effect."""
         review = _make_review_json(
             reviewer="security",
-            issues=[_make_issue(file="src/auth.py", line=10)],
+            findings=[_make_finding(file="src/auth.py", line=10)],
         )
         (tmp_path / "security-review.json").write_text(json.dumps(review))
 
@@ -1779,9 +1779,9 @@ class TestPrefilterAnnotation:
         )
 
     def test_out_of_scope_findings_are_annotated_in_place(self, mod, tmp_path):
-        review = _make_review_json(reviewer="security", issues=[
-            _make_issue(file="src/untouched.py", line=10, title="Out"),
-            _make_issue(file="src/app.py", line=42, title="In"),
+        review = _make_review_json(reviewer="security", findings=[
+            _make_finding(file="src/untouched.py", line=10, title="Out"),
+            _make_finding(file="src/app.py", line=42, title="In"),
         ])
         (tmp_path / "security-review.json").write_text(json.dumps(review))
 
@@ -1791,19 +1791,19 @@ class TestPrefilterAnnotation:
         ctx = json.loads(
             (tmp_path / "reconciliation-context.json").read_text()
         )
-        issues = ctx["agent_findings"]["security-review"]["issues"]
-        by_title = {i["title"]: i for i in issues}
+        findings = ctx["reviews_by_agent"]["security-review"]["findings"]
+        by_title = {i["title"]: i for i in findings}
         assert by_title["Out"]["prefiltered"] == (
             "OUT_OF_SCOPE:file_not_in_diff"
         )
         assert "prefiltered" not in by_title["In"]
 
     def test_the_finding_is_kept_not_removed(self, mod, tmp_path):
-        """`agent_findings` is the record of what each reviewer said, and
+        """`reviews_by_agent` is the record of what each reviewer said, and
         the reconciliation metrics are counted from it. Deleting entries
         would make both silently wrong."""
-        review = _make_review_json(reviewer="security", issues=[
-            _make_issue(file="src/untouched.py", line=10),
+        review = _make_review_json(reviewer="security", findings=[
+            _make_finding(file="src/untouched.py", line=10),
         ])
         (tmp_path / "security-review.json").write_text(json.dumps(review))
 
@@ -1813,17 +1813,17 @@ class TestPrefilterAnnotation:
         ctx = json.loads(
             (tmp_path / "reconciliation-context.json").read_text()
         )
-        assert len(ctx["agent_findings"]["security-review"]["issues"]) == 1
+        assert len(ctx["reviews_by_agent"]["security-review"]["findings"]) == 1
 
     def test_a_checkable_count_travels_beside_the_annotations(
         self, mod, tmp_path
     ):
         """The agent's drop is verifiable against a number it did not
         compute: N annotated in, N dropped out."""
-        review = _make_review_json(reviewer="security", issues=[
-            _make_issue(file="src/untouched.py", line=10, title="A"),
-            _make_issue(file="src/other.py", line=1, title="B"),
-            _make_issue(file="src/app.py", line=42, title="C"),
+        review = _make_review_json(reviewer="security", findings=[
+            _make_finding(file="src/untouched.py", line=10, title="A"),
+            _make_finding(file="src/other.py", line=1, title="B"),
+            _make_finding(file="src/app.py", line=42, title="C"),
         ])
         (tmp_path / "security-review.json").write_text(json.dumps(review))
 
@@ -1838,8 +1838,8 @@ class TestPrefilterAnnotation:
         }
 
     def test_a_clean_run_reports_a_measured_zero(self, mod, tmp_path):
-        review = _make_review_json(reviewer="security", issues=[
-            _make_issue(file="src/app.py", line=42),
+        review = _make_review_json(reviewer="security", findings=[
+            _make_finding(file="src/app.py", line=42),
         ])
         (tmp_path / "security-review.json").write_text(json.dumps(review))
 
@@ -1861,7 +1861,7 @@ class TestPrefilterAnnotation:
             "src/meta.py:3": "OUT_OF_SCOPE:metadata_only",
             "src/app.py:9": "IN_SCOPE:in_hunk",
         }
-        findings = {"security-review": {"issues": [
+        findings = {"security-review": {"findings": [
             {"file": "src/app.py", "line": 42},
             {"file": "src/gone.py", "line": 1},
             {"file": "src/meta.py", "line": 3},
@@ -1870,7 +1870,7 @@ class TestPrefilterAnnotation:
 
         summary = mod.annotate_prefiltered_findings(findings, annotations)
 
-        marks = [i.get("prefiltered") for i in findings["security-review"]["issues"]]
+        marks = [i.get("prefiltered") for i in findings["security-review"]["findings"]]
         assert marks == [
             None, "OUT_OF_SCOPE:file_not_in_diff",
             "OUT_OF_SCOPE:metadata_only", None,
@@ -1881,29 +1881,29 @@ class TestPrefilterAnnotation:
         """File-scoped findings carry `line: null` and have no annotation
         key; scope for them is "the file is in changed_files", which this
         function does not measure."""
-        findings = {"a-review": {"issues": [{"file": "src/x.py", "line": None}]}}
+        findings = {"a-review": {"findings": [{"file": "src/x.py", "line": None}]}}
         summary = mod.annotate_prefiltered_findings(findings, {})
-        assert "prefiltered" not in findings["a-review"]["issues"][0]
+        assert "prefiltered" not in findings["a-review"]["findings"][0]
         assert summary == {"count": 0, "by_agent": {}}
 
     def test_a_stale_annotation_from_reused_input_is_cleared(self, mod):
         """The function OWNS the key: an in-scope finding that arrives
         carrying a `prefiltered` marker (hand-edited input, a reused dict)
         must not keep it — a stale marker silently deletes a real finding."""
-        findings = {"a-review": {"issues": [
+        findings = {"a-review": {"findings": [
             {"file": "src/app.py", "line": 9, "prefiltered": "OUT_OF_SCOPE:metadata_only"},
         ]}}
         summary = mod.annotate_prefiltered_findings(
             findings, {"src/app.py:9": "IN_SCOPE:in_hunk"}
         )
-        assert "prefiltered" not in findings["a-review"]["issues"][0]
+        assert "prefiltered" not in findings["a-review"]["findings"][0]
         assert summary == {"count": 0, "by_agent": {}}
 
     def test_malformed_shapes_do_not_raise(self, mod):
         findings = {
-            "a-review": {"issues": "not-a-list"},
+            "a-review": {"findings": "not-a-list"},
             "b-review": "not-a-dict",
-            "c-review": {"issues": [None, 7, {"file": "src/gone.py", "line": 1}]},
+            "c-review": {"findings": [None, 7, {"file": "src/gone.py", "line": 1}]},
         }
         summary = mod.annotate_prefiltered_findings(
             findings, {"src/gone.py:1": "OUT_OF_SCOPE:file_not_in_diff"}
@@ -2304,10 +2304,10 @@ class TestReviewStem:
     def test_mid_string_reviewer_id_output_is_loaded(self, mod, tmp_path):
         (tmp_path / "repo-api-reviewer-v2-review.json").write_text(json.dumps({
             "reviewer": "repo-api-reviewer-v2",
-            "issues": [],
+            "findings": [],
             "verdict": "approve",
         }))
-        findings = mod.load_agent_findings(
+        findings = mod.load_agent_reviews(
             str(tmp_path),
             dispatched_agents=["repo-api-reviewer-v2-reviewer"],
         )

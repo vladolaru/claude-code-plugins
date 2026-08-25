@@ -797,7 +797,7 @@ def render_repo_review_rules_section(rules) -> str:
         lines += [
             "CHANNEL CONTRACT: a finding you raise BECAUSE OF a rule marked",
             'channel="advisory" MUST be recorded with',
-            'add_issue(..., channel="advisory"). Advisory findings are listed in',
+            'add_finding(..., channel="advisory"). Advisory findings are listed in',
             "the review but never gate the verdict. Findings from your own domain",
             "review (not caused by an advisory rule) carry no channel argument.",
             "",
@@ -1191,7 +1191,7 @@ def build_output(
             f.write(
                 "# WARNING: When you read this file, the Read tool adds display line numbers\n"
                 "# (e.g., 227→...). These are line numbers WITHIN THIS PATCH FILE, NOT source\n"
-                "# file line numbers. For add_issue(line=...), use the source file line numbers\n"
+                "# file line numbers. For add_finding(line=...), use the source file line numbers\n"
                 "# from the @@ hunk headers (e.g., @@ -0,0 +1,116 @@ means source starts at line 1).\n"
                 "#\n"
             )
@@ -1305,13 +1305,13 @@ def build_output(
         "builder = ReviewOutputBuilder.open("
         "output_dir, pr_id, reviewer_name)"
     )
-    lines.append(f'builder.add_issue(severity="high", title="Issue title", file="path/to/file.py",')
+    lines.append(f'builder.add_finding(severity="high", title="Finding title", file="path/to/file.py",')
     lines.append(f'    description="What is wrong", recommendation="How to fix",')
     lines.append(f'    category="category-name", line=42, confidence=0.9)')
-    lines.append(f'builder.add_positive("Positive observation text")')
-    lines.append(f'builder.add_clearance(claim="Nothing depends on the removed X",')
-    lines.append(f'    method="exact searches run / files read",  # REQUIRED — see Absence Claims rules')
-    lines.append(f'    evidence="hit counts, file:line list")     # optional')
+    lines.append(f'builder.add_positive_observation("Positive observation text")')
+    lines.append(f'builder.record_check(question="Does anything depend on the removed X?",')
+    lines.append(f'    method="exact searches run / files read",')
+    lines.append(f'    result="hit counts and file:line evidence")')
     lines.append(f'# builder.claim_files_reviewed("path/read1.py", "path/read2.py")  # uncomment with actual NOT DIFFED paths you read')
     lines.append(f'builder.set_confidence(0.85)')
     lines.append('builder.save_draft()')

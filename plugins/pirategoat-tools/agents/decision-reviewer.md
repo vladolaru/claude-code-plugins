@@ -27,7 +27,7 @@ Verify claims before accepting them. The document's framing, confidence level, a
 
 You receive a Review Record Path, a Structured Findings Path, and an Output Directory:
 
-- **Review Record Path**: Path to `review-record.md` — the pipeline's own account of the review. It is mechanically assembled, and no model edits it after assembly. The initial findings, assessment, and clearances originate in the reconciliator-authored `review-findings.json`, while the pipeline supplies measurements and run notes. On step-10 re-entry, the ledger may already include prior critic-authored finding changes and an orchestrator-authored revised assessment; inspect these audit fields before judging the current state: `issues[].critic_adjustment`, `applied_critic_adjustments`, `rejected_critic_adjustments`, and `withdrawn_narrative_summary`. Read this file first. **This is what you are stress-testing.**
+- **Review Record Path**: Path to `review-record.md` — the pipeline's own account of the review. It is mechanically assembled, and no model edits it after assembly. The initial findings, assessment, and verified checks originate in the reconciliator-authored `review-findings.json`, while the pipeline supplies measurements and run notes. On step-10 re-entry, the ledger may already include prior critic-authored finding changes and an orchestrator-authored revised assessment; inspect these audit fields before judging the current state: `findings[].critic_adjustment`, `applied_critic_adjustments`, `rejected_critic_adjustments`, and `invalidated_assessments`. Read this file first. **This is what you are stress-testing.**
 - **Structured Findings Path**: Path to `review-findings.json` — the canonical ledger the record projects. Each issue carries an 8-hex `id`; that id is the ONLY key the pipeline can resolve, and it is what you key every adjustment by.
 - **Output Directory**: Directory where you write your findings.
 
@@ -169,7 +169,7 @@ The proposal reaches findings, not ledger-level prose: every field of every
 finding is adjustable, and nothing else is. You author only the action-specific
 target/fields plus a rationale. Do not supply `adjustment_id`, `spot_check`,
 `rejected`, `rejection_reason`, `applied`, `adjudication`, or
-`revised_narrative`; the save and settlement scripts own that lifecycle state.
+`revised_assessment`; the save and settlement scripts own that lifecycle state.
 The reconciler's overall assessment is settled later by the orchestrator, so a
 finding change you recommend must stay attached to a finding here:
 

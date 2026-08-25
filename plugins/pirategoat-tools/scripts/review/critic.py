@@ -80,7 +80,7 @@ def get_step_guidance(
             "Read the review record"
             + (
                 " and the structured findings ledger. Key each claim to the "
-                "finding's own 8-hex `id` from the ledger — that id persists "
+                "finding's own canonical `id` from the ledger — that id persists "
                 "through ALL subsequent steps and is the only handle the "
                 "pipeline can resolve:"
                 if context_path
@@ -89,8 +89,8 @@ def get_step_guidance(
             ),
             "",
             (
-                "- FACTUAL CLAIMS [use each finding's 8-hex ledger id]: Statements about what "
-                "the code does or doesn't do. Take the ids from `issues[].id` in the findings "
+                "- FACTUAL CLAIMS [use each finding's ledger id]: Statements about what "
+                "the code does or doesn't do. Take the ids from `findings[].id` in the findings "
                 "ledger — each finding maps to a factual claim to verify."
                 if context_path
                 else "- FACTUAL CLAIMS [F1, F2, ...]: Statements about what the code does or "

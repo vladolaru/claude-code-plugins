@@ -1923,7 +1923,7 @@ class TestStep10DecisionCritic:
         assert "settle" in revise_text and "--output-dir" in revise_text
         assert '"verified"' in revise_text
         assert '"refuted"' in revise_text
-        assert '"revised_narrative"' in revise_text
+        assert '"revised_assessment"' in revise_text
         assert '"adjustment_id"' in revise_text
         assert "RECORDED ADJUDICATION" in revise_text
         assert "PROPOSAL DIGEST" in revise_text
@@ -1937,7 +1937,7 @@ class TestStep10DecisionCritic:
 
         assert 'give every entry a `"spot_check"` field' not in revise_text
         assert 'mark any adjustment' not in revise_text
-        assert 'top-level `"revised_narrative"`' not in revise_text
+        assert 'top-level `"revised_assessment"`' not in revise_text
         assert (
             f'critic_adjustments.py --output-dir "{tmp_path}"'
             not in revise_text
@@ -2367,7 +2367,7 @@ class TestStep11ReportAuthoring:
 
     def test_what_held_is_sourced_from_the_ledger_not_memory(self, mod):
         text = "\n".join(self._guidance(mod)["actions"])
-        assert "## Clearances (verified absences)" in text
+        assert "## Verified Checks" in text
         assert "never from memory" in text
         assert "write no such section" in text
 

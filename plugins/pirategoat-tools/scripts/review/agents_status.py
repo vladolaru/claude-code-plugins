@@ -145,9 +145,10 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
             try:
                 with open(review_path) as f:
                     review = json.load(f)
-                issues = review.get("issues", [])
+                findings = review.get("findings", [])
                 counts = dict(Counter(
-                    f.get("severity", "medium").lower() for f in issues
+                    finding.get("severity", "medium").lower()
+                    for finding in findings
                 ))
                 verdict = review.get("verdict", "UNKNOWN")
                 agents.append({

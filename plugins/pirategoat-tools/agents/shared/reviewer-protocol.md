@@ -98,7 +98,6 @@ Scan the diff hunks (changed lines, not just file names): **does anything relate
 
 ```python
 builder.mark_not_applicable("No changes relevant to [your domain] — diff contains only [brief description]")
-builder.add_positive("Diff scanned — no changes relevant to [your domain]")
 builder.save_draft()
 # Inspect the receipt, then run its exact FINALIZE REVIEW command in a separate tool turn.
 # Return STATUS: FINISHED only after that command prints REVIEW FINALIZED.
@@ -119,7 +118,7 @@ This backstops false-positive dispatch — triage matched on file paths/keywords
 
 Explore freely (conventions, call sites, similar patterns) — exploration informs review but never produces findings.
 
-**STOP CHECK — before every `add_issue()` call:**
+**STOP CHECK — before every `add_finding()` call:**
 
 State the file path and line number, then verify:
 1. Is this file in `CHANGED_FILES`? (NO → drop)
@@ -127,7 +126,7 @@ State the file path and line number, then verify:
 
 Both must be YES. Findings on unchanged code are false positives.
 
-**Exception — findings that are line-less BY NATURE.** Some legitimate findings have no line to anchor to: a whole changed file has no test coverage, a git-history precedent applies to the change, a cross-file architectural concern. For these, call `add_issue(..., line=None)` — the builder records a **file-scoped issue** (`line: null`, `scope: "file"`) that counts toward the verdict. Check 1 still applies: the file must be in `CHANGED_FILES`. Never use `line=None` for a point defect that has a line — that weakens verification downstream.
+**Exception — findings that are line-less BY NATURE.** Some legitimate findings have no line to anchor to: a whole changed file has no test coverage, a git-history precedent applies to the change, a cross-file architectural concern. For these, call `add_finding(..., line=None)` — the builder records a **file-scoped finding** (`line: null`, `scope: "file"`) that counts toward the verdict. Check 1 still applies: the file must be in `CHANGED_FILES`. Never use `line=None` for a point defect that has a line — that weakens verification downstream.
 
 **CRITICAL — use SOURCE FILE line numbers only:**
 
@@ -138,7 +137,7 @@ The Read tool's display numbers (e.g., `227→+class Foo`) are positions *within
 
 When uncertain, read the actual source file to confirm.
 
-**Finding quality gates** (verify each before `add_issue()`):
+**Finding quality gates** (verify each before `add_finding()`):
 1. **Changed code only.** Report issues INTRODUCED by this change.
 2. **Bet your reputation.** Uncertain → verify deeper or drop.
 3. **Review the change, not the codebase.** Evaluate THIS CHANGE only.
@@ -196,7 +195,7 @@ Rules for any "nothing depends on this" / "no blast radius" / "no consumers" cla
 
 1. **Search the dependent side, in its own vocabulary.** Enumerate what COULD depend on the changed code, and search each dependent artifact for the terms *it* would use — not the literal string you saw in the diff. For removed markup: CSS selectors that could match it (element names, ancestor/sibling combinators, ancestor classes — not just its own class), JS/DOM queries, test locators, AT semantics. For removed functions: callers, hook registrations, string-built call sites, subclasses. For removed config: readers, defaults, migrations.
 2. **Reading beats searching.** When the dependent artifact is identifiable (the stylesheet, the consumer module, the test file), enumerate ALL occurrences of the dependency's tokens across the whole artifact and read each site — do not conclude from a single grep or a single windowed read.
-3. **State your method or the claim doesn't count.** Record every clearance via `builder.add_clearance(claim=..., method=..., evidence=...)` — never as a free-text positive. The `method` field must state the exact search commands/terms used and files read, so downstream stages can judge coverage: "grepped `.titledesc label` across plugins/ — no hits" is auditable (and its gap is findable); "no blast radius found" is not. Clearances flow into reconciliation where conflicts with other agents' findings are resolved by verification; positives do not.
+3. **State your method and result or the check doesn't count.** When the task requires a material negative or blast-radius conclusion, record it via `builder.record_check(question=..., method=..., result=...)` — never as a free-text positive. The `method` field must state the exact search commands/terms used and files read, and `result` must state what the probe observed, so downstream stages can judge coverage: "grepped `.titledesc label` across plugins/ — 0 hits" is auditable (and its gap is findable); "no blast radius found" is not. Checks flow into reconciliation where conflicts with other agents' findings are resolved by verification; positives do not.
 4. **A negative search cannot ground an approval alone.** It may support one alongside dependent-side verification. If you cannot search the dependent side (out-of-tree consumers, unresolvable hosts), say so explicitly instead of clearing.
 
 ## Output Directory
@@ -223,14 +222,13 @@ mkdir -p "$OUTPUT_DIR"
 This is a non-executable API reference. Bootstrap's **OUTPUT INSTRUCTIONS** block is the sole canonical executable builder command; if bootstrap fails, stop and report the failure instead of reconstructing a command from this reference.
 
 **Core methods:**
-- `builder.add_issue(severity, title, file, description, recommendation, category="general", line=<required for point defects>, confidence=0.9)` - Add diff-anchored finding. Pass `line=None` ONLY for findings that are line-less by nature (missing test coverage, precedent, cross-file architecture) — recorded as a verdict-counting file-scoped issue
+- `builder.add_finding(severity, title, file, description, recommendation, category="general", line=<required for point defects>, confidence=0.9)` - Add diff-anchored finding. Pass `line=None` ONLY for findings that are line-less by nature (missing test coverage, precedent, cross-file architecture) — recorded as a verdict-counting file-scoped finding
 - `builder.add_observation(file, note, category="general")` - Add informational file-level note (doesn't affect verdict — do NOT use for real findings)
-- `builder.add_clearance(claim, method, evidence=None)` - Record an absence claim ("nothing depends on the removed X") with the exact searches/reads that ground it. Required for any blast-radius clear — see "Absence Claims" section
+- `builder.record_check(question, method, result)` - Record a material verification check with the exact question, searches/reads, and observed result. Required for material negative or blast-radius conclusions — see "Absence Claims" section
 - `builder.claim_files_reviewed(*files)` - Claim NOT DIFFED files you actually read from the review-claimable queue (a statement, not proof — surfaced as a claim downstream). The builder validates this entire batch against the authoritative review-accounting input, derives every unclaimed review file, and derives the accounted-file count from inline files plus validated claims.
 - `builder.retract_reviewed_file_claims(*files)` - Retract reviewed-file claims that no longer reflect what you actually read before saving again.
-- `builder.add_tool_result("ToolName")` - Track tools used
 - `builder.set_confidence(0.0-1.0)` - Set overall confidence
-- `builder.add_positive("observation")` - Note good patterns
+- `builder.add_positive_observation("observation")` - Note good patterns
 - `builder.save_draft()` - Atomically replace the bound mutable draft and print its DRAFT TOTALS plus an exact FINALIZE REVIEW command. Inspect the receipt and optionally continue; in a separate tool turn run that exact command, and treat the review as finished only after it prints REVIEW FINALIZED.
 
 **Valid severities:** `critical`, `high`, `medium`, `low`, `info`

@@ -90,9 +90,9 @@ _CRITIC_SEVERITY_FLOOR_MARKER_RE = re.compile(
 )
 
 
-def resolve_structured_severity_floor(issue: Dict[str, Any]) -> Optional[str]:
+def resolve_structured_severity_floor(finding: Dict[str, Any]) -> Optional[str]:
     """Return a valid explicit floor without consulting description prose."""
-    structured = issue.get("severity_floor")
+    structured = finding.get("severity_floor")
     if (
         isinstance(structured, str)
         and structured.lower() in _VALID_SEVERITY_FLOORS
@@ -101,18 +101,18 @@ def resolve_structured_severity_floor(issue: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def resolve_severity_floor(issue: Dict[str, Any]) -> Optional[str]:
+def resolve_severity_floor(finding: Dict[str, Any]) -> Optional[str]:
     """Resolve a structured or backward-compatible description floor."""
-    structured = resolve_structured_severity_floor(issue)
+    structured = resolve_structured_severity_floor(finding)
     if structured is not None:
         return structured
 
     # Coerce first: a malformed (list/non-string) description must not silently
-    # drop a mandatory floor. load_agent_findings pops severity_floor when this
+    # drop a mandatory floor. load_agent_reviews pops severity_floor when this
     # returns None, so returning None for a list that carries a legacy marker
     # would downgrade the finding. _coerce_text joins list items on newlines,
     # keeping the MULTILINE ^Severity-floor: anchor matchable.
-    description = _coerce_text(issue.get("description", ""))
+    description = _coerce_text(finding.get("description", ""))
     numeric = _NUMERIC_SEVERITY_FLOOR_RE.search(description)
     if numeric:
         return numeric.group(1).lower()
@@ -181,7 +181,7 @@ def _review_stem(agent: str) -> str:
 def _load_review_payload(output_dir: str, agent: str) -> Optional[Dict[str, Any]]:
     """Read one agent's review JSON, or None when it is unreadable.
 
-    ``load_agent_findings`` reads the same files for the findings payload
+    ``load_agent_reviews`` reads the same files for the findings payload
     through its own path and failure policy — it reports malformed output on
     stderr and skips it, which is not what run-level file accounting wants.
     """
@@ -397,7 +397,7 @@ def aggregate_review_accounting(
 
 def compute_missing_agents(
     dispatched_stems: Optional[List[str]],
-    agent_findings: Dict[str, Any],
+    reviews_by_agent: Dict[str, Any],
 ) -> Optional[List[str]]:
     """Which dispatched agents produced no output — measured, not asked for.
 
@@ -408,7 +408,7 @@ def compute_missing_agents(
     carries this list rather than recomputing it from two others, and a
     model that fumbles a set difference cannot cost the run a missing agent.
 
-    `dispatched_stems` is already in `agent_findings`'s key spelling (see
+    `dispatched_stems` is already in `reviews_by_agent`'s key spelling (see
     `_review_stem`). Returns:
 
     * ``None`` when dispatch is unknown (no plan; `--dispatched-agents`
@@ -424,7 +424,7 @@ def compute_missing_agents(
     """
     if dispatched_stems is None:
         return None
-    return sorted(set(dispatched_stems) - set(agent_findings))
+    return sorted(set(dispatched_stems) - set(reviews_by_agent))
 
 
 # The two out-of-scope statuses that carry no judgment: the file is not in
@@ -442,19 +442,19 @@ _PREFILTER_KEY = "prefiltered"
 
 
 def annotate_prefiltered_findings(
-    agent_findings: Dict[str, Any],
+    reviews_by_agent: Dict[str, Any],
     scope_annotations: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Mark structurally-certain out-of-scope findings, in place.
 
-    Mutates `agent_findings` and returns the audit summary
+    Mutates `reviews_by_agent` and returns the audit summary
     ``{"count": N, "by_agent": {...}}``.
 
     Why annotate rather than delete. The retired Markdown projection
     removed these findings before the reconciliator saw them: a real
     machine guarantee, but an invisible one — the drop left no trace in any
     artifact, so nobody could audit what had been decided on their behalf.
-    Deleting them from the JSON would be worse still: `agent_findings` is
+    Deleting them from the JSON would be worse still: `reviews_by_agent` is
     also the record of what each reviewer actually said, and the
     reconciliation metrics (`input_findings_count`, per-agent tallies) are
     counted from it, so removals would silently shift numbers nothing else
@@ -474,28 +474,28 @@ def annotate_prefiltered_findings(
     pipeline step 8 is the whole review.
     """
     by_agent: Dict[str, int] = {}
-    for agent, payload in agent_findings.items():
+    for agent, payload in reviews_by_agent.items():
         if not isinstance(payload, dict):
             continue
-        issues = payload.get("issues")
-        if not isinstance(issues, list):
+        findings = payload.get("findings")
+        if not isinstance(findings, list):
             continue
-        for issue in issues:
-            if not isinstance(issue, dict):
+        for finding in findings:
+            if not isinstance(finding, dict):
                 continue
-            issue.pop(_PREFILTER_KEY, None)
-            file_path = issue.get("file")
-            line = issue.get("line")
+            finding.pop(_PREFILTER_KEY, None)
+            file_path = finding.get("file")
+            line = finding.get("line")
             if not file_path or not line:
                 continue
             status = scope_annotations.get(f"{file_path}:{line}")
             if status in _PREFILTER_SCOPES:
-                issue[_PREFILTER_KEY] = status
+                finding[_PREFILTER_KEY] = status
                 by_agent[agent] = by_agent.get(agent, 0) + 1
     return {"count": sum(by_agent.values()), "by_agent": by_agent}
 
 
-def load_agent_findings(
+def load_agent_reviews(
     output_dir: str,
     dispatched_agents: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
@@ -518,12 +518,12 @@ def load_agent_findings(
         Dict keyed by agent name (e.g., "security-review") with the parsed
         JSON content as the value.
     """
-    findings = {}
+    reviews = {}
     output_path = Path(output_dir)
 
     if not output_path.is_dir():
         print(f"WARNING: output directory does not exist: {output_dir}", file=sys.stderr)
-        return findings
+        return reviews
 
     # Build allowed file stems from dispatch plan agent names.
     allowed_stems: Optional[frozenset] = None
@@ -549,43 +549,43 @@ def load_agent_findings(
                     file=sys.stderr,
                 )
                 continue
-            issues = data.get("issues", [])
-            if isinstance(issues, list):
-                for issue in issues:
-                    if not isinstance(issue, dict):
+            review_findings = data.get("findings", [])
+            if isinstance(review_findings, list):
+                for finding in review_findings:
+                    if not isinstance(finding, dict):
                         continue
-                    floor = resolve_severity_floor(issue)
+                    floor = resolve_severity_floor(finding)
                     if floor is None:
-                        issue.pop("severity_floor", None)
+                        finding.pop("severity_floor", None)
                     else:
-                        issue["severity_floor"] = floor
+                        finding["severity_floor"] = floor
             # Key by filename without .json extension (e.g., "security-review")
             agent_name = entry.stem
-            findings[agent_name] = data
+            reviews[agent_name] = data
         except (json.JSONDecodeError, OSError) as exc:
             print(f"WARNING: skipping malformed file {entry.name}: {exc}", file=sys.stderr)
 
-    return findings
+    return reviews
 
 
 def persist_reconciler_advisory_entitlement(
-    output_dir: str, agent_findings: Dict[str, Any]
+    output_dir: str, reviews_by_agent: Dict[str, Any]
 ) -> None:
-    """Persist whether loaded upstream issues entitle advisory reconciliation.
+    """Persist whether loaded upstream findings entitle advisory reconciliation.
 
-    Only the exact ``channel == "advisory"`` marker on an upstream issue
+    Only the exact ``channel == "advisory"`` marker on an upstream finding
     grants entitlement. The sidecar is written even when false and write
     failures are deliberately fail-open for compatibility with manual and
     older runs.
     """
     advisory_entitled = False
-    for finding in agent_findings.values():
-        issues = finding.get("issues", []) if isinstance(finding, dict) else []
-        if not isinstance(issues, list):
+    for review in reviews_by_agent.values():
+        findings = review.get("findings", []) if isinstance(review, dict) else []
+        if not isinstance(findings, list):
             continue
         if any(
-            isinstance(issue, dict) and issue.get("channel") == "advisory"
-            for issue in issues
+            isinstance(finding, dict) and finding.get("channel") == "advisory"
+            for finding in findings
         ):
             advisory_entitled = True
             break
@@ -605,10 +605,10 @@ def persist_reconciler_advisory_entitlement(
             pass
 
 
-def extract_references(agent_findings: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Extract unique file:line references from all agent issues.
+def extract_references(reviews_by_agent: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Extract unique file:line references from all agent findings.
 
-    Scans the 'issues' list in each agent's findings and collects unique
+    Scans the 'findings' list in each agent's findings and collects unique
     file paths with their referenced line numbers.
 
     Returns:
@@ -616,20 +616,20 @@ def extract_references(agent_findings: Dict[str, Any]) -> List[Dict[str, Any]]:
         - "file": str — the file path as reported by the agent
         - "lines": List[int] — sorted, deduplicated line numbers
 
-        Skips issues without a valid integer 'line' field.
+        Skips findings without a valid integer 'line' field.
     """
     file_lines: Dict[str, set] = {}
 
-    for _agent_name, data in agent_findings.items():
-        issues = data.get("issues", [])
-        if not isinstance(issues, list):
+    for _agent_name, data in reviews_by_agent.items():
+        findings = data.get("findings", [])
+        if not isinstance(findings, list):
             continue
 
-        for issue in issues:
-            if not isinstance(issue, dict):
+        for finding in findings:
+            if not isinstance(finding, dict):
                 continue
-            file_path = issue.get("file")
-            line = issue.get("line")
+            file_path = finding.get("file")
+            line = finding.get("line")
 
             if not file_path or not isinstance(file_path, str):
                 continue
@@ -991,7 +991,7 @@ def check_scope(
     1. **File-level** — Is the file in the diff at all?
     2. **Hunk-level** — Is the referenced line in or near a changed hunk?
 
-    This prevents pre-existing issues on untouched lines of a touched file
+    This prevents pre-existing findings on untouched lines of a touched file
     from being reported as if this patch introduced them.
 
     Args:
@@ -1178,10 +1178,10 @@ def main() -> int:
 
     try:
         # 1. Load agent findings (filtered to dispatch plan when provided)
-        agent_findings = load_agent_findings(output_dir, dispatched_agents)
+        reviews_by_agent = load_agent_reviews(output_dir, dispatched_agents)
 
         # 2. Extract file:line references
-        references = extract_references(agent_findings)
+        references = extract_references(reviews_by_agent)
 
         # 3. Parse diff hunks once — reused for scope checking and snippet
         #    reading.  files_with_deletions identifies surviving files that
@@ -1210,7 +1210,7 @@ def main() -> int:
         # 6. Adjudicate the two structurally-certain out-of-scope statuses
         #    HERE, so the reconciliator obeys a computed flag instead of
         #    re-deriving scope. Findings are annotated, never removed:
-        #    `agent_findings` stays the faithful record of what each
+        #    `reviews_by_agent` stays the faithful record of what each
         #    reviewer said, and the count travels beside it so the drop is
         #    auditable and the agent's compliance is checkable.
         stems = (
@@ -1218,13 +1218,13 @@ def main() -> int:
             if dispatched_agents is not None else None
         )
         prefiltered = annotate_prefiltered_findings(
-            agent_findings, scope_annotations
+            reviews_by_agent, scope_annotations
         )
 
         # Build the context object
         context: Dict[str, Any] = {
             "schema": 3,
-            "agent_findings": agent_findings,
+            "reviews_by_agent": reviews_by_agent,
             "source_snippets": source_snippets,
             "scope_annotations": scope_annotations,
             "changed_files": changed_files,
@@ -1247,14 +1247,14 @@ def main() -> int:
             # Dispatched but silent — measured here, not left as arithmetic
             # for the reconciliator. `None` when dispatch is unknown, which
             # is a different fact from a measured empty list.
-            "missing_agents": compute_missing_agents(stems, agent_findings),
+            "missing_agents": compute_missing_agents(stems, reviews_by_agent),
             # How many findings the pipeline adjudicated structurally out of
             # scope, and for whom. The reconciliator drops every finding
             # carrying `prefiltered`; this count is what makes that
             # obedience checkable.
             "prefiltered_out_of_scope": prefiltered,
         }
-        # Dispatched agents, normalized to match agent_findings keys
+        # Dispatched agents, normalized to match reviews_by_agent keys
         # (e.g., "security-reviewer" → "security-review"). Present only
         # when dispatch was actually known — its absence and
         # `missing_agents: null` say the same thing, in the same run.
@@ -1264,7 +1264,7 @@ def main() -> int:
         # Write to output directory
         output_path = os.path.join(output_dir, "reconciliation-context.json")
         os.makedirs(output_dir, exist_ok=True)
-        persist_reconciler_advisory_entitlement(output_dir, agent_findings)
+        persist_reconciler_advisory_entitlement(output_dir, reviews_by_agent)
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(context, f, indent=2, ensure_ascii=False)
 

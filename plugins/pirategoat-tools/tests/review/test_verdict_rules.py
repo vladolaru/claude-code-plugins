@@ -51,7 +51,7 @@ class TestVerdictForCounts:
 
 
 class TestDeriveReviewState:
-    def test_advisory_issues_count_without_gating(self):
+    def test_advisory_findings_count_without_gating(self):
         issues = [
             {"severity": "high", "channel": "advisory"},
             {"severity": "low"},
@@ -68,7 +68,7 @@ class TestDeriveReviewState:
         }
         assert derived["verdict"] == "approve"
         assert derived["advisory"] == {
-            "advisory_suppressed": 1,
+            "suppressed_advisory_finding_count": 1,
             "verdict_without_advisory": "request_changes",
         }
 
@@ -89,7 +89,9 @@ class TestOutputBuilderUsesTheSharedLadder:
     def test_builder_verdict_matches_the_shared_rule(self, severities, expected):
         builder = output_mod.ReviewOutputBuilder(pr_id="1", reviewer="security")
         for index, sev in enumerate(severities):
-            builder.add_issue(sev, f"t{index}", "f.py", "d", "r", line=index + 1)
+            builder.add_finding(
+                sev, f"t{index}", "f.py", "d", "r", line=index + 1
+            )
         assert builder.to_dict()["verdict"] == expected
 
     def test_output_module_delegates_rather_than_reimplementing(self):

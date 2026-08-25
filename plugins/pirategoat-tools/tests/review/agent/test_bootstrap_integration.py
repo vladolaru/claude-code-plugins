@@ -190,7 +190,7 @@ class TestCategoryRepresentatives:
         monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
         monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "repo-renewals")
         builder = ReviewOutputBuilder(pr_id="1", reviewer="repo-renewals")
-        builder.add_issue(
+        builder.add_finding(
             severity="critical", title="Advisory", file="src/app.py",
             description="d", recommendation="r", line=1,
             channel="advisory",
@@ -621,7 +621,7 @@ class TestCanonicalExecutableBuilderSource:
             })
         )
         builder = ReviewOutputBuilder.open(tmp_path, "42", "security")
-        finding_id = builder.add_issue(
+        finding_id = builder.add_finding(
             severity="medium",
             title="Existing finding",
             file="src/code.py",
@@ -1082,13 +1082,13 @@ class TestDecisionReviewerContract:
 
         assert "mechanically assembled" in critic
         assert "no model edits it after assembly" in critic
-        assert "initial findings, assessment, and clearances" in critic
+        assert "initial findings, assessment, and verified checks" in critic
         assert "reconciliator-authored `review-findings.json`" in critic
         assert "pipeline supplies measurements and run notes" in critic
-        assert "`issues[].critic_adjustment`" in critic
+        assert "`findings[].critic_adjustment`" in critic
         assert "`applied_critic_adjustments`" in critic
         assert "`rejected_critic_adjustments`" in critic
-        assert "`withdrawn_narrative_summary`" in critic
+        assert "`invalidated_assessments`" in critic
         assert "inspect these audit fields" in critic
         assert "nothing in it was authored by an agent" not in critic
 
@@ -1162,7 +1162,7 @@ class TestDismissalDisciplineContract:
     def test_tradeoffs_section_has_exit_criteria(self):
         text = (PLUGIN_ROOT / "agents/review-reconciliator.md").read_text()
         assert "not a disposal path for findings" in text
-        assert "`add_issue()` at Low or Medium" in text
+        assert "`add_finding()` at Low or Medium" in text
 
 
 class TestVerificationMethodContract:
@@ -1194,7 +1194,7 @@ class TestVerificationMethodContract:
         assert "distinct verification methods" in text
         assert "More agents = higher confidence" not in text
 
-    def test_reconciliator_treats_clearance_conflicts_as_verification_targets(self):
+    def test_reconciliator_treats_check_conflicts_as_verification_targets(self):
         """A clearance that contradicts a finding is resolved by verifying
         the finding, not by counting sides.
 
@@ -1208,11 +1208,11 @@ class TestVerificationMethodContract:
         assert "never a vote" in text
         # And the judgment that voids a bad-method clearance is not gated
         # on some finding having disagreed with it first.
-        assert "Judge EVERY clearance by its method" in text
+        assert "Judge EVERY check by its method" in text
 
-    def test_protocol_requires_add_clearance_for_absence_claims(self):
+    def test_protocol_requires_record_check_for_absence_claims(self):
         text = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
-        assert "add_clearance" in text
+        assert "record_check" in text
 
     def test_protocol_has_absence_claim_rules(self):
         text = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
@@ -1369,10 +1369,10 @@ class TestReviewOutputBuilderAPIExample:
             has_php=False,
         )
 
-    def test_output_contains_add_issue_example(self, tmp_path):
-        """The usage example must show add_issue() with named parameters."""
+    def test_output_contains_add_finding_example(self, tmp_path):
+        """The usage example must show add_finding() with named parameters."""
         output = self._build(tmp_path)
-        assert "add_issue(" in output
+        assert "add_finding(" in output
         assert "severity=" in output
         assert "title=" in output
         assert "file=" in output
@@ -1380,9 +1380,9 @@ class TestReviewOutputBuilderAPIExample:
         assert "recommendation=" in output
 
     def test_output_contains_add_positive_example(self, tmp_path):
-        """The usage example must show add_positive()."""
+        """The usage example must show add_positive_observation()."""
         output = self._build(tmp_path)
-        assert "add_positive(" in output
+        assert "add_positive_observation(" in output
 
     def test_output_contains_bound_save_draft_example(self, tmp_path):
         """The example opens against output_dir and saves without a path."""
@@ -1802,7 +1802,7 @@ class TestRepoRuleAndRefModeSelection:
             "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
         )
         assert result.returncode == 0
-        assert 'add_issue(..., channel="advisory")' in result.stdout
+        assert 'add_finding(..., channel="advisory")' in result.stdout
 
         entitlement = json.loads(
             (tmp_path / "performance-advisory-entitlement.json").read_text()
@@ -1812,7 +1812,7 @@ class TestRepoRuleAndRefModeSelection:
         monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
         monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "performance")
         builder = ReviewOutputBuilder(pr_id="1", reviewer="performance")
-        builder.add_issue(
+        builder.add_finding(
             severity="high", title="Advisory", file="src/app.py",
             description="d", recommendation="r", line=1,
             channel="advisory",
@@ -1841,7 +1841,7 @@ class TestRepoRuleAndRefModeSelection:
         monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "performance")
         builder = ReviewOutputBuilder(pr_id="1", reviewer="performance")
         with pytest.raises(ValueError, match="advisory.*not entitled"):
-            builder.add_issue(
+            builder.add_finding(
                 severity="high", title="Advisory", file="src/app.py",
                 description="d", recommendation="r", line=1,
                 channel="advisory",
