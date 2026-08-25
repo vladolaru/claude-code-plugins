@@ -22,6 +22,10 @@ import pytest
 TESTS_DIR = Path(__file__).resolve().parent.parent  # analysis/ -> tests/
 PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPT_PATH = PLUGIN_ROOT / "scripts" / "analysis" / "session_analyzer.py"
+SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
+
+sys.path.insert(0, str(SCRIPTS_DIR))
+from review.agent.output import ReviewOutputBuilder
 
 _spec = importlib.util.spec_from_file_location("analyze_reviewer_sessions", str(SCRIPT_PATH))
 _mod = importlib.util.module_from_spec(_spec)
@@ -33,6 +37,34 @@ _bootstrap_spec = importlib.util.spec_from_file_location(
 )
 _bootstrap_mod = importlib.util.module_from_spec(_bootstrap_spec)
 _bootstrap_spec.loader.exec_module(_bootstrap_mod)
+
+
+def _known_empty_review(reviewer="security"):
+    """Literal proof that an invocation starts without prior builder state."""
+    return {
+        "reviewer": reviewer,
+        "findings": [],
+        "checks": [],
+        "reviewed_file_claims": [],
+        "meta": {
+            "next_finding_number": 1,
+            "next_check_number": 1,
+        },
+    }
+
+
+def _write_accounting_input(output_dir, reviewer="security", claimable=()):
+    Path(output_dir, f"{reviewer}-review-accounting-input.json").write_text(
+        json.dumps({
+            "schema": 3,
+            "agent_name": f"{reviewer}-reviewer",
+            "reviewer": reviewer,
+            "review_claimable_files": list(claimable),
+            "inline_diff_file_count": 0,
+            "in_scope_review_file_count": len(claimable),
+            "review_budget": 15,
+        })
+    )
 
 
 def _real_bootstrap_builder_command(tmp_path, *, plugin_version=""):
@@ -503,6 +535,22 @@ def _builder_heredoc(reviewer="security", body=None):
     )
 
 
+def _fresh_builder_record(command, reviewer="security"):
+    """Reconstruct with explicit proof that no earlier draft exists."""
+    return _mod._builder_review_from_heredoc(
+        command,
+        prior_review=_known_empty_review(reviewer),
+    )
+
+
+def _parse_with_empty_draft(log, path="/tmp/pr-review-42/security-review.json"):
+    """Parse a transcript whose caller proves this artifact starts empty."""
+    return _mod.parse_subagent_log(
+        str(log),
+        prior_review_states={path: _known_empty_review()},
+    )
+
+
 def _bash_entry(command, tool_id="bash-1"):
     return {
         "type": "assistant",
@@ -577,6 +625,7 @@ class TestBashBuilderRecognition:
             "PIRATEGOAT_OUTPUT_DIR='/tmp/pr-review-42' "
             "PIRATEGOAT_REVIEWER_NAME='security' "
             "PIRATEGOAT_PR_ID='42' python3 <<'PY'\n"
+            "builder = ReviewOutputBuilder.open('/tmp/pr-review-42', '42', 'security')\n"
             "builder.save_draft()\n"
             "PY"
         )
@@ -609,6 +658,7 @@ class TestBashBuilderRecognition:
             "PIRATEGOAT_PR_ID='42' "
             "PIRATEGOAT_PLUGIN_VERSION='1.114.0' "
             "PIRATEGOAT_REVIEW_BUDGET='80' python3 <<'PY'\n"
+            "builder = ReviewOutputBuilder.open('/tmp/pr-review-42', '42', 'security')\n"
             "builder.save_draft()\n"
             "PY"
         )
@@ -677,7 +727,7 @@ class TestBashBuilderRecognition:
         assert _mod._categorize_tool_call("Bash", {"command": command})["category"] != "builder-output"
 
     def test_synthesizes_review_record_from_heredoc(self):
-        record = _mod._builder_review_from_heredoc(_builder_heredoc())
+        record = _fresh_builder_record(_builder_heredoc())
 
         assert record is not None
         assert record["path"] == "/tmp/pr-review-42/security-review.json"
@@ -702,7 +752,7 @@ class TestBashBuilderRecognition:
         )
         with monkeypatch.context() as analysis_host:
             analysis_host.setattr(_mod.os, "path", ntpath)
-            record = _mod._builder_review_from_heredoc(command)
+            record = _fresh_builder_record(command)
 
         assert record["path"] == "/out/security-review.json"
 
@@ -740,7 +790,7 @@ class TestBashBuilderRecognition:
             '    0.9, None, None, "high")\n'
             "builder.save_draft()\n"
         )
-        record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
+        record = _fresh_builder_record(_builder_heredoc(body=body))
 
         [finding] = json.loads(record["content"])["findings"]
         assert finding["severity"] == "high"
@@ -756,7 +806,7 @@ class TestBashBuilderRecognition:
             'builder.add_finding("high", "T", "src/f.php", "d", "r", "xss", 42)\n'
             "builder.save_draft()\n"
         )
-        record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
+        record = _fresh_builder_record(_builder_heredoc(body=body))
 
         [finding] = json.loads(record["content"])["findings"]
         assert finding["category"] == "xss"
@@ -773,7 +823,7 @@ class TestBashBuilderRecognition:
             '    severity_floor="medium")\n'
             "builder.save_draft()\n"
         )
-        record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
+        record = _fresh_builder_record(_builder_heredoc(body=body))
 
         [finding] = json.loads(record["content"])["findings"]
         assert finding["severity"] == "medium"
@@ -798,7 +848,7 @@ class TestBashBuilderRecognition:
             'builder.claim_files_reviewed("src/never-saved.php")\n'
         )
 
-        record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
+        record = _fresh_builder_record(_builder_heredoc(body=body))
         review = json.loads(record["content"])
 
         assert review["findings"] == [{
@@ -845,9 +895,7 @@ class TestBashBuilderRecognition:
             "builder.save_draft()\n"
         )
 
-        assert _mod._builder_review_from_heredoc(
-            _builder_heredoc(body=body)
-        ) is None
+        assert _fresh_builder_record(_builder_heredoc(body=body)) is None
 
     def test_finding_added_after_final_save_is_not_reconstructed(self):
         """The builder persists its state at save(): an add_finding() after
@@ -862,7 +910,7 @@ class TestBashBuilderRecognition:
             'builder.add_finding(severity="critical", title="Never saved", file="b.php",\n'
             '    description="d", recommendation="r", line=2)\n'
         )
-        record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
+        record = _fresh_builder_record(_builder_heredoc(body=body))
 
         findings = json.loads(record["content"])["findings"]
         assert [finding["title"] for finding in findings] == ["Persisted"]
@@ -881,36 +929,81 @@ class TestBashBuilderRecognition:
             '    description="d", recommendation="r", line=2)\n'
             "builder.save_draft()\n"
         )
-        record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
+        record = _fresh_builder_record(_builder_heredoc(body=body))
 
         findings = json.loads(record["content"])["findings"]
         assert [finding["title"] for finding in findings] == ["First", "Second"]
 
-    def test_builder_reassignment_supersedes_earlier_findings(self):
-        """save() persists ONE builder instance's state: a heredoc that
-        reassigns the builder to correct its review and saves again leaves
-        only the final instance's findings in the artifact. Reconstructing
-        the superseded instance's findings would merge discarded findings
-        into severity, overlap, and survival metrics."""
+    def test_continuation_matches_real_builder_with_explicit_prior_state(
+        self, tmp_path
+    ):
+        """Known prior bytes must survive an add-only continuation."""
+        _write_accounting_input(
+            tmp_path,
+            claimable=("src/large-a.php", "src/large-b.php"),
+        )
+        first = ReviewOutputBuilder.open(tmp_path, "42", "security")
+        first.add_finding(
+            "high", "Initial", "src/a.php", "d1", "r1", line=3
+        )
+        first.record_check("Initial check?", "Read initial path", "Yes")
+        first.claim_files_reviewed("src/large-a.php")
+        first.save_draft()
+        prior = json.loads(
+            (tmp_path / "security-review.draft.json").read_text()
+        )
+
+        body = (
+            "from review.agent.output import ReviewOutputBuilder\n"
+            f'builder = ReviewOutputBuilder.open("{tmp_path}", "42", "security")\n'
+            'builder.add_finding("medium", "Added", "src/b.php", "d2", "r2", line=7)\n'
+            'builder.record_check("Continuation check?", "Read added path", "Yes")\n'
+            'builder.claim_files_reviewed("src/large-b.php")\n'
+            "builder.save_draft()\n"
+        )
+        actual_builder = ReviewOutputBuilder.open(tmp_path, "42", "security")
+        actual_builder.add_finding(
+            "medium", "Added", "src/b.php", "d2", "r2", line=7
+        )
+        actual_builder.record_check(
+            "Continuation check?", "Read added path", "Yes"
+        )
+        actual_builder.claim_files_reviewed("src/large-b.php")
+        actual_builder.save_draft()
+        actual = json.loads(
+            (tmp_path / "security-review.draft.json").read_text()
+        )
+
+        record = _mod._builder_review_from_heredoc(
+            _builder_heredoc(body=body), prior_review=prior
+        )
+        reconstructed = json.loads(record["content"])
+
+        assert reconstructed["findings"] == actual["findings"]
+        assert reconstructed["checks"] == actual["checks"]
+        assert (
+            reconstructed["reviewed_file_claims"]
+            == actual["reviewed_file_claims"]
+        )
+        assert reconstructed["meta"] == {
+            "next_finding_number": actual["meta"]["next_finding_number"],
+            "next_check_number": actual["meta"]["next_check_number"],
+        }
+
+    def test_continuation_without_prior_state_fails_closed(self):
         body = (
             "from review.agent.output import ReviewOutputBuilder\n"
             'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
-            'builder.add_finding(severity="critical", title="Superseded", file="a.php",\n'
-            '    description="d", recommendation="r", line=1)\n'
-            "builder.save_draft()\n"
-            'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
-            'builder.add_finding(severity="low", title="Final", file="b.php",\n'
-            '    description="d", recommendation="r", line=2)\n'
+            'builder.add_finding("medium", "Added", "src/b.php", "d", "r", line=7)\n'
             "builder.save_draft()\n"
         )
-        record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
 
-        findings = json.loads(record["content"])["findings"]
-        assert [finding["title"] for finding in findings] == ["Final"]
+        assert _mod._builder_review_from_heredoc(
+            _builder_heredoc(body=body)
+        ) is None
 
-    def test_reconstruction_binds_findings_to_the_saved_receiver(self):
-        """add_finding() on a builder variable other than the saved receiver
-        persisted nothing — collecting it fabricates findings."""
+    def test_reconstruction_rejects_multiple_open_receivers(self):
+        """An unrelated open receiver is outside the canonical one-shot form."""
         body = (
             "from review.agent.output import ReviewOutputBuilder\n"
             'other = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
@@ -920,11 +1013,9 @@ class TestBashBuilderRecognition:
             'saved.save_draft()\n'
         )
 
-        record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
-
-        assert record is not None
-        findings = json.loads(record["content"])["findings"]
-        assert [finding["title"] for finding in findings] == ["Saved"]
+        assert _mod._builder_review_from_heredoc(
+            _builder_heredoc(body=body), prior_review=_known_empty_review()
+        ) is None
 
     def test_reconstruction_fails_closed_on_non_name_receiver(self):
         """A save through anything but a plain variable is ambiguous."""
@@ -935,7 +1026,7 @@ class TestBashBuilderRecognition:
             'holder.b.save("/tmp/pr-review-42")\n'
         )
 
-        record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
+        record = _fresh_builder_record(_builder_heredoc(body=body))
 
         assert record is None
 
@@ -951,7 +1042,7 @@ class TestBashBuilderRecognition:
             'saved.save_draft()\n'
         )
 
-        record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
+        record = _fresh_builder_record(_builder_heredoc(body=body))
 
         assert record is None
 
@@ -964,7 +1055,7 @@ class TestBashBuilderRecognition:
             'saved.save_draft()\n'
         )
 
-        record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
+        record = _fresh_builder_record(_builder_heredoc(body=body))
 
         assert record is None
 
@@ -989,10 +1080,23 @@ class TestBashBuilderRecognition:
         ]
         log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
 
-        data = _mod.parse_subagent_log(str(log))
+        data = _parse_with_empty_draft(log)
 
         assert len(data["write_outputs"]) == 1
         assert data["write_outputs"][0]["source"] == "bash_builder_heredoc"
+
+    def test_parse_subagent_log_drops_unknown_open_state(self, tmp_path):
+        """The parser cannot infer an empty draft from a first observed open."""
+        log = tmp_path / "agent.jsonl"
+        entries = [
+            _bash_entry(_builder_heredoc(), tool_id="builder-1"),
+            _tool_result_entry("builder-1"),
+        ]
+        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+        data = _mod.parse_subagent_log(str(log))
+
+        assert data["write_outputs"] == []
 
     def test_failed_builder_heredoc_does_not_count_as_saved(self, tmp_path):
         """A heredoc that exited with an error saved nothing — its findings
@@ -1004,7 +1108,7 @@ class TestBashBuilderRecognition:
         ]
         log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
 
-        data = _mod.parse_subagent_log(str(log))
+        data = _parse_with_empty_draft(log)
 
         assert data["write_outputs"] == []
 
@@ -1040,7 +1144,7 @@ class TestBashBuilderRecognition:
         ]
         log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
 
-        data = _mod.parse_subagent_log(str(log))
+        data = _parse_with_empty_draft(log)
 
         assert data["write_outputs"] == []
 
@@ -1078,7 +1182,7 @@ class TestBashBuilderRecognition:
         ]
         log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
 
-        data = _mod.parse_subagent_log(str(log))
+        data = _parse_with_empty_draft(log)
 
         assert len(data["write_outputs"]) == 1
         assert "KEPT" in data["write_outputs"][0]["content"]
@@ -1092,7 +1196,7 @@ class TestBashBuilderRecognition:
         ]
         reversed_log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
 
-        data = _mod.parse_subagent_log(str(reversed_log))
+        data = _parse_with_empty_draft(reversed_log)
 
         assert len(data["write_outputs"]) == 1
         assert "KEPT" in data["write_outputs"][0]["content"]
@@ -1128,7 +1232,7 @@ class TestBashBuilderRecognition:
         ]
         log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
 
-        data = _mod.parse_subagent_log(str(log))
+        data = _parse_with_empty_draft(log)
 
         assert data["write_outputs"] == []
 
@@ -1155,7 +1259,7 @@ class TestBashBuilderRecognition:
         ]
         log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
 
-        data = _mod.parse_subagent_log(str(log))
+        data = _parse_with_empty_draft(log)
 
         assert len(data["write_outputs"]) == 1
 
@@ -1167,7 +1271,7 @@ class TestBashBuilderRecognition:
             'builder.add_finding(severity="high", title="Unsaved", file="f.php",\n'
             '    description="d", recommendation="r", line=3)\n'
         )
-        assert _mod._builder_review_from_heredoc(_builder_heredoc(body=body)) is None
+        assert _fresh_builder_record(_builder_heredoc(body=body)) is None
 
     def test_corrected_rerun_counts_once_with_final_content(self, tmp_path):
         """Successful saves overwrite the same artifact — quality reports
@@ -1182,8 +1286,7 @@ class TestBashBuilderRecognition:
         corrected_body = (
             "from review.agent.output import ReviewOutputBuilder\n"
             'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
-            'builder.add_finding(severity="high", title="Corrected", file="f.php",\n'
-            '    description="d", recommendation="r", line=3)\n'
+            'builder.update_finding("f1", title="Corrected")\n'
             'builder.add_finding(severity="low", title="Added", file="g.php",\n'
             '    description="d", recommendation="r", line=9)\n'
             "builder.save_draft()\n"
@@ -1197,7 +1300,7 @@ class TestBashBuilderRecognition:
         ]
         log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
 
-        data = _mod.parse_subagent_log(str(log))
+        data = _parse_with_empty_draft(log)
 
         [record] = data["write_outputs"]
         findings = json.loads(record["content"])["findings"]
@@ -1209,7 +1312,7 @@ class TestBashBuilderRecognition:
         entries = [_bash_entry(_builder_heredoc(), tool_id="builder-dangling")]
         log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
 
-        data = _mod.parse_subagent_log(str(log))
+        data = _parse_with_empty_draft(log)
 
         assert data["write_outputs"] == []
 
@@ -1218,7 +1321,7 @@ class TestBashBuilderRecognition:
             {"agent_name": "security-reviewer"},
             {
                 "write_outputs": [
-                    _mod._builder_review_from_heredoc(_builder_heredoc())
+                    _fresh_builder_record(_builder_heredoc())
                 ],
                 "files_read": [],
                 "bash_commands": [],
@@ -1261,7 +1364,7 @@ class TestStraightLineReconstruction:
                 f"{guard}\n"
                 "builder.save_draft()\n"
             )
-            record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
+            record = _fresh_builder_record(_builder_heredoc(body=body))
 
             assert record is None, case
 
@@ -1279,7 +1382,7 @@ class TestTextReportFindingCounts:
             _tool_result_entry("builder-1"),
         ]
         log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
-        data = _mod.parse_subagent_log(str(log))
+        data = _parse_with_empty_draft(log)
         # A prose save has no exact structure — it keeps the heuristic,
         # displayed as approximate.
         data["write_outputs"].append({
@@ -1327,7 +1430,7 @@ class TestSaveIntegrity:
         ]
         log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
 
-        data = _mod.parse_subagent_log(str(log))
+        data = _parse_with_empty_draft(log)
 
         assert data["write_outputs"] == []
 
@@ -1340,7 +1443,7 @@ class TestSaveIntegrity:
         ]
         log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
 
-        data = _mod.parse_subagent_log(str(log))
+        data = _parse_with_empty_draft(log)
 
         assert data["write_outputs"] == []
 
@@ -1354,7 +1457,7 @@ class TestSaveIntegrity:
         ]
         log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
 
-        data = _mod.parse_subagent_log(str(log))
+        data = _parse_with_empty_draft(log)
 
         assert data["write_outputs"] == []
 
@@ -1375,7 +1478,7 @@ class TestSaveIntegrity:
         ]
         log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
 
-        data = _mod.parse_subagent_log(str(log))
+        data = _parse_with_empty_draft(log)
 
         [record] = data["write_outputs"]
         assert record["source"] == "bash_builder_heredoc"
@@ -1393,7 +1496,7 @@ class TestSaveIntegrity:
         ]
         log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
 
-        data = _mod.parse_subagent_log(str(log))
+        data = _parse_with_empty_draft(log)
 
         [record] = data["write_outputs"]
         assert "source" not in record
@@ -1415,7 +1518,9 @@ class TestSaveIntegrity:
         ]
         log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
 
-        data = _mod.parse_subagent_log(str(log))
+        data = _parse_with_empty_draft(
+            log, path="/out/security-review.json"
+        )
 
         [record] = data["write_outputs"]
         assert record["source"] == "bash_builder_heredoc"
@@ -1431,7 +1536,7 @@ class TestSaveIntegrity:
         ]
         log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
 
-        data = _mod.parse_subagent_log(str(log))
+        data = _parse_with_empty_draft(log)
 
         assert data["write_outputs"] == [
             {"path": 7, "content": "first malformed path"},
@@ -1456,7 +1561,7 @@ class TestSaveIntegrity:
         ]
         log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
 
-        data = _mod.parse_subagent_log(str(log))
+        data = _parse_with_empty_draft(log)
 
         [record] = data["write_outputs"]
         assert record["source"] == "bash_builder_heredoc"
@@ -1474,7 +1579,7 @@ class TestSaveIntegrity:
         ]
         log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
 
-        data = _mod.parse_subagent_log(str(log))
+        data = _parse_with_empty_draft(log)
 
         [record] = data["write_outputs"]
         assert record["path"] == "/tmp/pr-review-42/security-review.json"
@@ -1508,7 +1613,7 @@ class TestSaveIntegrity:
         ]
         log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
 
-        data = _mod.parse_subagent_log(str(log))
+        data = _parse_with_empty_draft(log)
 
         assert data["write_outputs"] == []
 
@@ -1522,7 +1627,7 @@ class TestSaveIntegrity:
         ]
         log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
 
-        data = _mod.parse_subagent_log(str(log))
+        data = _parse_with_empty_draft(log)
 
         assert [record["path"] for record in data["write_outputs"]] == [
             "/tmp/pr-review-42/notes.md",

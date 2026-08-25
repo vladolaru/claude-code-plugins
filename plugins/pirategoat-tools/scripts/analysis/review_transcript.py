@@ -3,16 +3,24 @@
 
 from __future__ import annotations
 
-import ast
 import hashlib
 import json
 import os
 import re
 import shlex
+import sys
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from review_builder_ast import (  # noqa: E402
+    BUILDER_ENV_NAMES,
+    BUILDER_ENV_OPTIONAL,
+    BUILDER_ENV_REQUIRED,
+    recognize_canonical_builder_program,
+)
 
 
 _USAGE_FIELDS = (
@@ -56,39 +64,11 @@ _SAFE_TOOL_NAMES = {
 }
 _SHELL_OPERATORS = {";", "&", "&&", "|", "||", "<", ">", "<<", ">>"}
 _UNRESOLVED_PATH = re.compile(r"[$`*?\[\]{}]")
-# The builder envelope's identity is its heredoc shape plus these four
-# assignments, which every generation of bootstrap has emitted. Mirrors
-# session_analyzer's pair of the same name.
-_BOOTSTRAP_BUILDER_ENV_REQUIRED = frozenset({
-    "PIRATEGOAT_PLUGIN_ROOT",
-    "PIRATEGOAT_OUTPUT_DIR",
-    "PIRATEGOAT_REVIEWER_NAME",
-    "PIRATEGOAT_PR_ID",
-})
-# 1.114.0 appended the producing plugin version. It is additive and no
-# measurement here reads its value — recognition is the only thing the
-# envelope is used for — so BOTH generations are equally measurable and
-# both are recognized. Rejecting the older form would report
-# `builder_attempted: false` for saves that demonstrably happened, and a
-# measured false is a wrong answer, not a missing one. Historical
-# transcripts are immutable; a reader that stops recognizing them does not
-# drop them from the cohort, it lies about them.
-_BOOTSTRAP_BUILDER_ENV_OPTIONAL = frozenset({
-    "PIRATEGOAT_PLUGIN_VERSION",
-    # HISTORICAL-ENVELOPE ALLOWANCE ONLY — not live. 1.114.0 briefly carried
-    # the call-budget target on this envelope; a later fix moved the budget
-    # to the deferred-files sidecar and the live envelope never emits this
-    # name again (pinned by test_envelope_never_carries_a_budget_assignment
-    # in test_bootstrap_integration.py). It stays in this recognition set
-    # so run12's own recorded transcripts — which DO carry it — are not
-    # misread as no-save on re-analysis: historical transcripts are
-    # immutable, and a reader that stops recognizing them lies about them,
-    # exactly like the PLUGIN_VERSION case above.
-    "PIRATEGOAT_REVIEW_BUDGET",
-})
-_BOOTSTRAP_BUILDER_ENV = frozenset(
-    _BOOTSTRAP_BUILDER_ENV_REQUIRED | _BOOTSTRAP_BUILDER_ENV_OPTIONAL
-)
+# Public aliases retained for measurement-contract tests. The shared parser
+# owns their values and preserves the historical optional envelope names.
+_BOOTSTRAP_BUILDER_ENV_REQUIRED = BUILDER_ENV_REQUIRED
+_BOOTSTRAP_BUILDER_ENV_OPTIONAL = BUILDER_ENV_OPTIONAL
+_BOOTSTRAP_BUILDER_ENV = BUILDER_ENV_NAMES
 # Both current and legacy names of the subagent dispatch tool. Dispatch
 # anomalies (dangling, malformed, duplicated calls) are the correlation
 # machinery's domain — every unresolved-evidence carve-out must exempt both.
@@ -1302,64 +1282,7 @@ def _opaque_target(value: object) -> str:
 
 def _is_bootstrap_builder_heredoc(command: object) -> bool:
     """Recognize an exact pipeline-owned save-draft attempt."""
-    if not isinstance(command, str):
-        return False
-    lines = command.splitlines()
-    first_line = lines[0] if lines else ""
-    try:
-        tokens = shlex.split(first_line)
-    except ValueError:
-        return False
-    if tokens[-2:] != ["python3", "<<PY"]:
-        return False
-    assignments = tokens[:-2]
-    if not (
-        len(_BOOTSTRAP_BUILDER_ENV_REQUIRED)
-        <= len(assignments)
-        <= len(_BOOTSTRAP_BUILDER_ENV)
-    ):
-        return False
-
-    names: list[str] = []
-    for token in assignments:
-        name, separator, _value = token.partition("=")
-        if separator != "=":
-            return False
-        names.append(name)
-    unique = set(names)
-    if len(unique) != len(names):
-        return False
-    # Every required name present, and nothing beyond the known
-    # optionals: a foreign assignment means this is not an envelope any bootstrap
-    # generation emitted, and its contents are not ours to interpret.
-    if not _BOOTSTRAP_BUILDER_ENV_REQUIRED <= unique <= _BOOTSTRAP_BUILDER_ENV:
-        return False
-
-    end = next(
-        (index for index, line in enumerate(lines[1:], 1) if line.strip() == "PY"),
-        None,
-    )
-    if end is None:
-        return False
-    try:
-        tree = ast.parse("\n".join(lines[1:end]))
-    except SyntaxError:
-        return False
-
-    # open() only initializes or rehydrates working state. Saved-output
-    # evidence is an exact top-level, zero-argument save_draft() call; do not
-    # infer it from prose, a generic save method, a nested branch, or the
-    # digest argument that later appears in the printed finalization command.
-    return any(
-        isinstance(statement, ast.Expr)
-        and isinstance(statement.value, ast.Call)
-        and not statement.value.args
-        and not statement.value.keywords
-        and isinstance(statement.value.func, ast.Attribute)
-        and statement.value.func.attr == "save_draft"
-        and isinstance(statement.value.func.value, ast.Name)
-        for statement in tree.body
-    )
+    return recognize_canonical_builder_program(command) is not None
 
 
 def _file_target(value: object, repo_root: str | Path) -> str:

@@ -155,7 +155,11 @@ def _builder_envelope(body: str | None, *, header: str | None = None) -> str:
     return (
         header
         if body is None
-        else f"{header}\n{body}\nbuilder.save_draft()\nPY"
+        else (
+            f"{header}\n"
+            "builder = ReviewOutputBuilder.open('/output', '42', 'security')\n"
+            f"{body}\nbuilder.save_draft()\nPY"
+        )
     )
 
 
@@ -1066,7 +1070,9 @@ class TestAnalyzeSubagent:
         command = (
             "PIRATEGOAT_PLUGIN_ROOT=/plugin PIRATEGOAT_OUTPUT_DIR=/output "
             "PIRATEGOAT_REVIEWER_NAME=security PIRATEGOAT_PR_ID=42 "
-            "python3 <<'PY'\nbuilder.save_draft()\nPY"
+            "python3 <<'PY'\n"
+            "builder = ReviewOutputBuilder.open('/output', '42', 'security')\n"
+            "builder.save_draft()\nPY"
         )
         transcript = _write_jsonl(
             tmp_path / "legacy-envelope.jsonl",
@@ -1109,6 +1115,16 @@ class TestAnalyzeSubagent:
         )
         assert is_bootstrap_builder_heredoc(
             current + opened + "builder.save_draft()\nPY"
+        )
+        assert not is_bootstrap_builder_heredoc(
+            current + opened + "other.save_draft()\nPY"
+        )
+        assert not is_bootstrap_builder_heredoc(
+            current + opened + "alias = builder\nalias.save_draft()\nPY"
+        )
+        assert not is_bootstrap_builder_heredoc(
+            current + opened
+            + "raise SystemExit(0)\nbuilder.save_draft()\nPY"
         )
         assert is_bootstrap_builder_heredoc(
             current + opened + "builder.save_draft()\n"
@@ -1238,10 +1254,6 @@ class TestAnalyzeSubagent:
             pytest.param(
                 _builder_envelope('builder.add_positive("left" + "right")'),
                 id="concatenation",
-            ),
-            pytest.param(
-                _builder_envelope("raise SystemExit(0)"),
-                id="early-exit",
             ),
             pytest.param(
                 _builder_envelope(
@@ -1449,7 +1461,7 @@ class TestAnalyzeSubagent:
     def test_builder_success_on_different_target_marks_failure_recovered(
         self, tmp_path
     ):
-        failed_command = _builder_envelope("raise SystemExit(1)")
+        failed_command = _builder_envelope("print('attempt')")
         successful_command = _builder_envelope('builder.add_positive("safe")')
         transcript = _write_jsonl(
             tmp_path / "builder-different-target-recovery.jsonl",
@@ -1528,7 +1540,7 @@ class TestAnalyzeSubagent:
         assert failure["recovered"] is True
 
     def test_bash_failure_cannot_recover_through_write_success(self, tmp_path):
-        command = _builder_envelope("raise SystemExit(1)")
+        command = _builder_envelope("print('attempt')")
         transcript = _write_jsonl(
             tmp_path / "bash-to-write.jsonl",
             [
