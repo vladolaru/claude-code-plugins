@@ -1248,6 +1248,12 @@ class TestScopeSummaryJson:
             },
             "budget_exceeded_files": ["tests/test_big.php"],
             "list_only_files": ["package-lock.json"],
+            "in_scope_files": [
+                "src/a.php",
+                "src/b.php",
+                "tests/test_big.php",
+                "package-lock.json",
+            ],
             "total_diff_lines": 42,
             "budget_max": 2000,
         }
@@ -1265,6 +1271,7 @@ class TestScopeSummaryJson:
             "src/a.php",
             "src/b.php",
             "tests/test_big.php",
+            "package-lock.json",
         ]
         assert data["total_diff_lines"] == 42
         # Raw diffstat over inline + budget-exceeded files, excluding the
@@ -1291,7 +1298,10 @@ class TestScopeSummaryJson:
         assert data["inline_diff_files"] == []
         assert data["review_claimable_files"] == []
         assert data["list_only_files"] == []
-        assert data["in_scope_review_files"] == []
+        assert data["in_scope_review_files"] == ["src/a.php", "src/b.php"]
+        # Scoping visibility is broader than the accounting denominator:
+        # these modes fetched no diff, so they contribute no budget lines.
+        assert data["in_scope_stat_lines"] == 0
 
     def test_write_scope_summary_tolerates_minimal_scope(self, tmp_path):
         # NO_DOMAIN_FILES scopes lack diffs/budget keys — must not raise.

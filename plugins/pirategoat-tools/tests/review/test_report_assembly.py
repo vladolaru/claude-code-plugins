@@ -193,6 +193,34 @@ class TestRecordAssembly:
             state["review_accounting"]
         ) in text
 
+    @pytest.mark.parametrize("covered_by", ["inline", "claim"])
+    def test_per_agent_unclaimed_work_is_not_rendered_as_a_run_gap_when_covered_elsewhere(
+        self, out_dir, covered_by
+    ):
+        _write_ledger(out_dir)
+        state = {"review_accounting": {
+            "agents_receiving_inline_diff_by_file": (
+                {"src/shared.php": ["code-reviewer"]}
+                if covered_by == "inline" else {}
+            ),
+            "agents_claiming_review_by_file": (
+                {"src/shared.php": ["code-reviewer"]}
+                if covered_by == "claim" else {}
+            ),
+            "agents_with_unclaimed_review_by_file": {
+                "src/shared.php": ["security-reviewer"]
+            },
+            "unscoped_files": [],
+        }}
+
+        assemble_review_record(str(out_dir), state)
+        text = (out_dir / REVIEW_RECORD_MD).read_text()
+
+        assert "skipped by every matching agent's diff budget" not in text
+        assert not briefings_mod._has_review_accounting_gap(
+            state["review_accounting"]
+        )
+
     def test_unscoped_line_says_why_it_can_exceed_the_metrics_figure(
         self, out_dir
     ):

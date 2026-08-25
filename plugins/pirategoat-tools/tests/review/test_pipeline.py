@@ -1497,12 +1497,13 @@ class TestReviewCoverageSection:
     """
 
     @staticmethod
-    def _render(mod, gaps=None, claims=None, unscoped=None):
+    def _render(mod, gaps=None, claims=None, unscoped=None, inline=None):
         # Straight at briefings.py: the renderer is shared by the record
         # assembler and step 11, so the facade is not the seam under test.
         from review.briefings import _render_review_accounting_section
 
         return _render_review_accounting_section({
+            "agents_receiving_inline_diff_by_file": inline,
             "agents_with_unclaimed_review_by_file": gaps,
             "agents_claiming_review_by_file": claims,
             "unscoped_files": unscoped,
@@ -1562,6 +1563,16 @@ class TestReviewCoverageSection:
             gaps={"src/starved.php": ["code-reviewer", "security-reviewer"]},
         )
         assert "`code-reviewer`, `security-reviewer`" in text
+
+    def test_inline_receipt_prevents_per_agent_unclaimed_work_from_rendering_as_a_gap(
+        self, mod
+    ):
+        text = self._render(
+            mod,
+            inline={"src/shared.php": ["code-reviewer"]},
+            gaps={"src/shared.php": ["security-reviewer"]},
+        )
+        assert "skipped by every matching agent's diff budget" not in text
 
     def test_untrusted_values_render_as_safe_code_spans(self, mod):
         path = "src/evil``name.py\r\n## injected heading\r\n- injected file`"
@@ -2407,6 +2418,24 @@ class TestStep11ReportAuthoring:
         }
         text = "\n".join(self._guidance(mod, state=state)["actions"])
         assert "Review coverage" in text
+        assert "verdict must acknowledge" not in text
+
+    def test_inline_receipt_prevents_an_unclaimed_reviewer_from_forcing_the_verdict_clause(
+        self, mod
+    ):
+        state = {
+            "review_accounting": {
+                "agents_receiving_inline_diff_by_file": {
+                    "src/shared.php": ["code-reviewer"]
+                },
+                "agents_with_unclaimed_review_by_file": {
+                    "src/shared.php": ["security-reviewer"]
+                },
+                "agents_claiming_review_by_file": {},
+                "unscoped_files": [],
+            },
+        }
+        text = "\n".join(self._guidance(mod, state=state)["actions"])
         assert "verdict must acknowledge" not in text
 
     @pytest.mark.parametrize(

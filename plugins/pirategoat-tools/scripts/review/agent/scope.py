@@ -1771,17 +1771,23 @@ def write_scope_summary(scope: dict, path: str) -> None:
         dict.fromkeys(scope.get("budget_exceeded_files", []) or [])
     )
     list_only_files = list(dict.fromkeys(scope.get("list_only_files", []) or []))
-    in_scope_review_files = list(
+    accounting_files = list(
         dict.fromkeys([*inline_diff_files, *review_claimable_files])
     )
+    # `in_scope_files` is the every-mode routing population. In modes that
+    # never fetch a diff it remains populated while every accounting-specific
+    # population is empty. The fallback keeps direct/minimal callers useful.
+    raw_in_scope_files = scope.get("in_scope_files", accounting_files)
+    in_scope_review_files = list(
+        dict.fromkeys(raw_in_scope_files or [])
+    )
 
-    # Raw diffstat lines over the reviewer's accounting workload: inline
-    # files plus review-claimable files, excluding list-only stats. This is
-    # the budget-sizing number (bootstrap's tool-call budget input) — NOT
-    # total_diff_lines, which counts semantically filtered inline lines only.
+    # Raw diffstat lines over the reviewer's accounting denominator: inline
+    # files plus review-claimable files. The broader every-mode scoping
+    # population above deliberately does not affect budget/progress counts.
     diffstat = scope.get("diffstat", {}) or {}
     in_scope_stat_lines = sum(
-        sum(diffstat.get(f, (0, 0))) for f in in_scope_review_files
+        sum(diffstat.get(f, (0, 0))) for f in accounting_files
     )
     summary = {
         "schema": 2,

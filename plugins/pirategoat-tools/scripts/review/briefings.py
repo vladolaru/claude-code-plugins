@@ -1205,19 +1205,46 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
 # Review coverage rendering (shared by the record assembler and step 11)
 # ---------------------------------------------------------------------------
 
+def _run_wide_review_gaps(accounting):
+    """Return unclaimed files that no reviewer received inline or claimed.
+
+    `agents_with_unclaimed_review_by_file` is deliberately per-agent: one
+    reviewer can leave a file unclaimed while another received it inline or
+    claimed it from their queue. Only the set difference is a run-wide gap.
+    """
+    if not isinstance(accounting, dict):
+        return {}
+    unclaimed = accounting.get("agents_with_unclaimed_review_by_file")
+    if not isinstance(unclaimed, dict):
+        return {}
+    covered_elsewhere = set()
+    for field in (
+        "agents_receiving_inline_diff_by_file",
+        "agents_claiming_review_by_file",
+    ):
+        population = accounting.get(field)
+        if isinstance(population, dict):
+            covered_elsewhere.update(population)
+    return {
+        path: agents
+        for path, agents in unclaimed.items()
+        if path not in covered_elsewhere
+    }
+
+
 def _has_review_accounting_gap(accounting):
     """True when something is PROVEN uncovered, claims aside.
 
-    Budget-starved files and domain-unmatched files are gaps: no reviewer
-    saw them. A reviewed-file claim is not — an agent says it read the
-    file, and the section says in as many words that a claim is not proof.
-    Demanding the verdict acknowledge "this gap" on a claims-only run
-    converts that hedge into the certainty it was written to avoid.
+    Files starved for every reviewer and domain-unmatched files are gaps.
+    Inline receipt or a reviewed-file claim makes a file accounted for at
+    run level; the latter remains a claim rather than proof of read. Demanding
+    the verdict acknowledge "this gap" on a claims-only run converts that
+    hedge into the certainty it was written to avoid.
     """
     if not isinstance(accounting, dict):
         return False
     return bool(
-        accounting.get("agents_with_unclaimed_review_by_file") or
+        _run_wide_review_gaps(accounting) or
         accounting.get("unscoped_files")
     )
 
@@ -1227,9 +1254,8 @@ def _render_review_accounting_section(accounting):
 
     One paste, three populations, each with its own honest sentence:
 
-    * **gaps** — matched a reviewer domain, then every matching agent's
-      diff budget skipped them and none claimed them off the review-claimable
-      queue.
+    * **gaps** — matched a reviewer domain, received no inline diff, and
+      earned no reviewed-file claim from any matching reviewer.
     * **unscoped** — matched no reviewer domain at all, so no agent's
       scope ever contained them.
     * **claims** — never diffed inline, but a reviewer says it
@@ -1243,7 +1269,7 @@ def _render_review_accounting_section(accounting):
     """
     if not isinstance(accounting, dict):
         return ""
-    gaps = accounting.get("agents_with_unclaimed_review_by_file")
+    gaps = _run_wide_review_gaps(accounting)
     claims = accounting.get("agents_claiming_review_by_file")
     unscoped = accounting.get("unscoped_files")
     gaps = gaps if isinstance(gaps, dict) else {}

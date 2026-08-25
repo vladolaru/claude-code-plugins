@@ -1943,6 +1943,29 @@ class TestAggregateReviewAccounting:
             ],
         }
 
+    def test_inline_receipt_keeps_other_agents_unclaimed_work_from_becoming_a_run_gap(
+        self, mod, tmp_path
+    ):
+        """The aggregate keeps both per-agent facts; its report consumer must
+        not strengthen one reviewer's unfinished work into a run-wide gap."""
+        _write_summary(
+            str(tmp_path), "security-reviewer", [], ["src/shared.php"],
+        )
+        _write_summary(
+            str(tmp_path), "code-reviewer", ["src/shared.php"], [],
+        )
+
+        accounting = mod.aggregate_review_accounting(str(tmp_path))
+
+        assert accounting["agents_receiving_inline_diff_by_file"] == {
+            "src/shared.php": ["code-reviewer"]
+        }
+        assert accounting["agents_with_unclaimed_review_by_file"] == {
+            "src/shared.php": ["security-reviewer"]
+        }
+        from review.briefings import _has_review_accounting_gap
+        assert not _has_review_accounting_gap(accounting)
+
     def test_malformed_summary_skipped(self, mod, tmp_path):
         (tmp_path / "broken-scope-summary.json").write_text("{not json")
         _write_summary(
