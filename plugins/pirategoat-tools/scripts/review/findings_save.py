@@ -71,6 +71,14 @@ REQUIRED_FINDING_FIELDS = (
 _ECHO_SEVERITIES = ("critical", "high", "medium", "low")
 
 FINDINGS_FILENAME = critic_adjustments.FINDINGS_FILENAME
+CRITIC_OWNED_LEDGER_FIELDS = (
+    critic_adjustments.APPLIED_IDS_KEY,
+    critic_adjustments.REJECTED_ADJUSTMENTS_KEY,
+    critic_adjustments.VERDICT_BEFORE_ADJUSTMENTS_KEY,
+    critic_adjustments.INVALIDATED_ASSESSMENTS_KEY,
+    "findings_removed_by_critic",
+    "checks_removed_by_critic",
+)
 
 
 def _read_findings_json(path, problems):
@@ -148,6 +156,13 @@ def validate_findings(payload):
         problems.append(
             "retired review-domain field: meta.tool_results_used"
         )
+    actor_supplied = sorted(
+        key for key in CRITIC_OWNED_LEDGER_FIELDS if key in payload
+    )
+    if actor_supplied:
+        problems.append(
+            "critic-owned lifecycle field(s): " + ", ".join(actor_supplied)
+        )
 
     findings = payload.get("findings")
     if not isinstance(findings, list):
@@ -175,11 +190,23 @@ def validate_findings(payload):
                 f"{label}: invalid severity {severity!r} "
                 f"(allowed: {', '.join(critic_adjustments.VALID_SEVERITIES)})"
             )
+        if "critic_adjustment" in finding:
+            problems.append(
+                f"{label}: critic_adjustment is script-owned provenance"
+            )
 
     if "checks" not in payload:
         problems.append("'checks' must be present as a list")
     if "assessment" not in payload:
         problems.append("'assessment' must be present as a string or null")
+    checks = payload.get("checks")
+    if isinstance(checks, list):
+        for idx, check in enumerate(checks):
+            if isinstance(check, dict) and "critic_adjustment" in check:
+                problems.append(
+                    f"checks[{idx}]: critic_adjustment is script-owned "
+                    "provenance"
+                )
     if isinstance(findings, list) and not problems:
         try:
             review_output.validate_review_domain(

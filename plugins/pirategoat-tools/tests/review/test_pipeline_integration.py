@@ -56,7 +56,7 @@ _render_markdown = _output_mod.render_markdown
 
 def _write_critic_snapshot(output_dir, adjustments, *, validate=True):
     """Publish one digest-bound REVISE snapshot for integration tests."""
-    payload = {"schema": 1, "adjustments": adjustments}
+    payload = {"schema": 2, "adjustments": adjustments}
     if validate:
         document = critic_adjustments.prepare_proposal(payload)
         critic_adjustments.write_adjustments(str(output_dir), document)
@@ -71,7 +71,7 @@ def _write_critic_snapshot(output_dir, adjustments, *, validate=True):
     atomic_write_json(
         str(Path(output_dir) / critic_adjustments.CRITIC_VERDICT_FILENAME),
         {
-            "schema": 1,
+            "schema": 2,
             "verdict": "REVISE",
             "proposal_digest": critic_adjustments.proposal_digest(document),
         },
@@ -384,23 +384,23 @@ class TestCriticAdjudicationLifecycle:
         critic_findings.write_text("# Decision critic\n\nThree proposals.\n")
         proposal_request = tmp_path / "critic-proposal.json"
         proposal_request.write_text(json.dumps({
-            "schema": 1,
+            "schema": 2,
             "adjustments": [
                 {
                     "action": "promote",
-                    "id": "f1",
+                    "target": {"kind": "finding", "id": "f1"},
                     "fields": {"severity": "high"},
                     "rationale": "The impact is release-blocking.",
                 },
                 {
                     "action": "demote",
-                    "id": "f2",
+                    "target": {"kind": "finding", "id": "f2"},
                     "fields": {"severity": "info"},
                     "rationale": "The impact is informational.",
                 },
                 {
                     "action": "promote",
-                    "id": "f3",
+                    "target": {"kind": "finding", "id": "f3"},
                     "fields": {"severity": "medium"},
                     "rationale": "The impact warrants follow-up.",
                 },
@@ -433,13 +433,13 @@ class TestCriticAdjudicationLifecycle:
         ]
         assert len(set(proposal_ids)) == 3
         assert marker == {
-            "schema": 1,
+            "schema": 2,
             "verdict": "REVISE",
             "proposal_digest": critic_adjustments.proposal_digest(proposal),
         }
 
         settlement = critic_adjustments.settle(str(output_dir), {
-            "schema": 1,
+            "schema": 2,
             "verified": [proposal_ids[0]],
             "refuted": [{
                 "adjustment_id": proposal_ids[1],
@@ -2811,7 +2811,7 @@ class TestStep11Orchestration:
         write_findings(str(tmp_path), finding)
         _write_critic_snapshot(tmp_path, [{
             "action": "obliterate",
-            "id": "f1",
+            "target": {"kind": "finding", "id": "f1"},
             "fields": {},
             "rationale": "invalid first attempt",
         }], validate=False)
@@ -2834,7 +2834,7 @@ class TestStep11Orchestration:
         report.write_text(stale_report)
         _write_critic_snapshot(tmp_path, [{
             "action": "demote",
-            "id": "f1",
+            "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "low"},
             "rationale": "guarded upstream",
         }])

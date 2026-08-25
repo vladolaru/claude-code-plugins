@@ -47,11 +47,17 @@ except ImportError:
 atomic_write_json = atomic_io.atomic_write_json
 
 ACTIONS = ("promote", "demote", "rescope", "correct", "add", "remove")
+TARGET_FINDING = "finding"
+TARGET_CHECK = "check"
+TARGET_KINDS = (TARGET_FINDING, TARGET_CHECK)
 # `scope` is deliberately absent: it is derived from `line` to preserve the
-# pairing described below, never set by the critic. `id` is absent because
-# ids are generated here, never assigned by the critic.
-PATCH_FIELDS = ("severity", "title", "description", "recommendation",
-                "file", "line", "category", "confidence")
+# pairing described below, never set by the critic. IDs, provenance, and
+# lifecycle fields are absent because they belong to the ledger and script.
+FINDING_PATCH_FIELDS = (
+    "severity", "title", "description", "recommendation", "file", "line",
+    "category", "confidence",
+)
+CHECK_PATCH_FIELDS = ("question", "method", "result")
 ADD_REQUIRED_FIELDS = ("severity", "title", "file", "description",
                        "recommendation")
 # Script-derived per-entry outcomes from the orchestrator's exact settlement
@@ -102,16 +108,15 @@ VERDICT_BEFORE_ADJUSTMENTS_KEY = "verdict_before_adjustments"
 # see _load_rejected_records() for the read side of the idempotence check.
 REJECTED_ADJUSTMENTS_KEY = "rejected_critic_adjustments"
 
-# The only `schema` value ADJUSTMENTS_FILENAME is accepted under.
-# decision-reviewer.md's proposal template writes `"schema": 1` alongside
-# `"adjustments"`; a doc carrying any other value — or none —
+# The only `schema` value ADJUSTMENTS_FILENAME is accepted under. A document
+# carrying any other value — or none —
 # is out of that template and refused whole, the same all-or-nothing way
 # an unknown action or an unaddressable id is: a critic decision written
 # against a contract this module does not honor must fail loudly rather
 # than being silently accepted and possibly misread.
-ADJUSTMENTS_SCHEMA = 1
-VERDICT_MARKER_SCHEMA = 1
-ADJUDICATION_SCHEMA = 1
+ADJUSTMENTS_SCHEMA = 2
+VERDICT_MARKER_SCHEMA = 2
+ADJUDICATION_SCHEMA = 2
 VALID_CRITIC_VERDICTS = ("STAND", "REVISE", "ESCALATE", "SKIPPED")
 ADJUDICATION_SOURCE_ORCHESTRATOR = "orchestrator"
 ADJUDICATION_SOURCE_DEFENSIVE = "defensive_apply"
@@ -124,7 +129,7 @@ PROPOSAL_DIGEST_KEY = "proposal_digest"
 RECORDED_AT_KEY = "recorded_at"
 
 _PROPOSAL_TOP_LEVEL_KEYS = frozenset({"schema", "adjustments"})
-_PROPOSAL_ENTRY_KEYS = frozenset({"action", "id", "fields", "rationale"})
+_PROPOSAL_ENTRY_KEYS = frozenset({"action", "target", "fields", "rationale"})
 _LIFECYCLE_ENTRY_KEYS = frozenset({
     "adjustment_id",
     SPOT_CHECK_KEY,
@@ -177,8 +182,8 @@ ApplyPlan = collections.namedtuple(
 )
 
 # Where an invalidated `assessment` goes. The adjustment vocabulary addresses
-# findings — severity, title, scope, the fields of one finding —
-# and deliberately cannot address ledger-level prose. That leaves the
+# finding fields and the content of recorded checks, but deliberately cannot
+# address ledger-level prose. That leaves the
 # reconciler's assessment as the one part of the artifact a critic round
 # can invalidate but not correct: "one CRITICAL blocker" stays written
 # above a list where the critical has just been demoted to low.
@@ -236,6 +241,79 @@ def _extra_key_problems(value, allowed, label):
     ]
 
 
+def _validate_target(target, action, label):
+    """Validate one action-discriminated finding/check target."""
+    if not isinstance(target, dict):
+        return [f"{label}: 'target' must be an object"]
+    expected = {"kind"} if action == "add" else {"kind", "id"}
+    allowed = expected | ({"id"} if action == "add" else set())
+    problems = _extra_key_problems(target, allowed, f"{label}.target")
+    if action == "add" and "id" in target:
+        problems.append(
+            f"{label}.target: add target must not include id; the ledger "
+            "allocates it"
+        )
+    missing = sorted(expected - set(target))
+    for key in missing:
+        problems.append(f"{label}: missing required target.{key}")
+    kind = target.get("kind")
+    if kind not in TARGET_KINDS:
+        problems.append(
+            f"{label}.target: 'kind' must be one of {', '.join(TARGET_KINDS)}"
+        )
+        return problems
+    if action == "add":
+        if kind != TARGET_FINDING:
+            problems.append(f"{label}: add can target only a finding")
+        return problems
+    target_id = target.get("id")
+    if not isinstance(target_id, str) or not target_id:
+        problems.append(f"{label}.target: 'id' must be a non-empty string")
+    elif kind == TARGET_FINDING and not re.fullmatch(r"f[1-9][0-9]*", target_id):
+        problems.append(f"{label}.target: finding id must use canonical fN form")
+    elif kind == TARGET_CHECK and not re.fullmatch(r"c[1-9][0-9]*", target_id):
+        problems.append(f"{label}.target: check id must use canonical cN form")
+    return problems
+
+
+def _validate_field_value(key, value, label):
+    if key == "severity" and value not in VALID_SEVERITIES:
+        return (
+            f"{label}: invalid severity {value!r} "
+            f"(allowed: {', '.join(VALID_SEVERITIES)})"
+        )
+    if key == "line" and value is not None and (
+        isinstance(value, bool) or not isinstance(value, int) or value <= 0
+    ):
+        return (
+            f"{label}: line must be a positive (1-indexed) integer or null, "
+            f"got {value!r}"
+        )
+    if key in ("question", "method", "result") and (
+        not isinstance(value, str) or not value.strip()
+    ):
+        return f"{label}: {key!r} must be a non-empty string"
+    return None
+
+
+def _validate_fields(fields, allowed_fields, label):
+    """Reject anything outside one target kind's adjustable vocabulary."""
+    if not isinstance(fields, dict):
+        return [f"{label}: 'fields' must be an object"]
+    problems = []
+    for key, value in fields.items():
+        if key not in allowed_fields:
+            problems.append(
+                f"{label}: field {key!r} is not adjustable "
+                f"(allowed: {', '.join(allowed_fields)})"
+            )
+            continue
+        problem = _validate_field_value(key, value, label)
+        if problem:
+            problems.append(problem)
+    return problems
+
+
 def _validate_proposal_entry(entry, label, *, require_adjustment_id):
     """Validate the immutable proposal half of one lifecycle entry."""
     if not isinstance(entry, dict):
@@ -256,21 +334,26 @@ def _validate_proposal_entry(entry, label, *, require_adjustment_id):
     if not isinstance(rationale, str) or not rationale.strip():
         problems.append(f"{label}: 'rationale' must be a non-empty string")
 
+    target = entry.get("target")
+    problems.extend(_validate_target(target, action, label))
+    kind = target.get("kind") if isinstance(target, dict) else None
+
     fields = entry.get("fields")
     if fields is None and action == "remove":
         fields = {}
-    try:
-        _validate_fields(fields, label)
-    except ValueError as error:
-        problems.append(str(error))
-    else:
+    allowed_fields = (
+        CHECK_PATCH_FIELDS if kind == TARGET_CHECK else FINDING_PATCH_FIELDS
+    )
+    field_problems = _validate_fields(fields, allowed_fields, label)
+    problems.extend(field_problems)
+    if not field_problems:
         if action in ("promote", "demote") and set(fields) != {"severity"}:
             problems.append(
                 f"{label}: {action} requires exactly the severity field"
             )
-        elif action == "rescope" and set(fields) != {"line"}:
+        elif action == "rescope" and set(fields) != {"file", "line"}:
             problems.append(
-                f"{label}: rescope requires exactly the line field"
+                f"{label}: rescope requires exactly the file and line fields"
             )
         elif action == "correct" and not fields:
             problems.append(
@@ -285,17 +368,10 @@ def _validate_proposal_entry(entry, label, *, require_adjustment_id):
         elif action == "remove" and fields:
             problems.append(f"{label}: remove does not accept replacement fields")
 
-    target_id = entry.get("id")
-    if action == "add":
-        if target_id is not None:
-            problems.append(
-                f"{label}: ids are generated, not assigned — the critic "
-                f"must not invent ids"
-            )
-    elif action in ACTIONS and (
-        not isinstance(target_id, str) or not target_id
-    ):
-        problems.append(f"{label}: 'id' must be a non-empty target id")
+    if kind == TARGET_CHECK and action not in ("correct", "remove"):
+        problems.append(
+            f"{label}: {action!r} is not allowed for check targets"
+        )
 
     if require_adjustment_id:
         adjustment_id = entry.get("adjustment_id")
@@ -332,7 +408,9 @@ def _validate_proposal_entries(adjustments, *, require_adjustment_id):
                     seen_adjustment_ids[adjustment_id] = index
 
         action = entry.get("action")
-        target_id = entry.get("id")
+        target = entry.get("target")
+        target_kind = target.get("kind") if isinstance(target, dict) else None
+        target_id = target.get("id") if isinstance(target, dict) else None
         if (
             action not in ACTIONS
             or action == "add"
@@ -340,20 +418,21 @@ def _validate_proposal_entries(adjustments, *, require_adjustment_id):
             or not target_id
         ):
             continue
-        if target_id in seen_targets:
-            first_index, first_action = seen_targets[target_id]
+        target_key = (target_kind, target_id)
+        if target_key in seen_targets:
+            first_index, first_action = seen_targets[target_key]
             if first_action == "remove":
                 problems.append(
-                    f"{label}: id {target_id!r} is removed by "
+                    f"{label}: target {target_kind} {target_id!r} is removed by "
                     f"adjustment[{first_index}] in this batch"
                 )
             else:
                 problems.append(
-                    f"{label}: duplicate target {target_id!r} — merge "
-                    f"finding-level changes into one entry per finding"
+                    f"{label}: duplicate target {target_kind} {target_id!r} — "
+                    f"merge changes into one entry per target"
                 )
         else:
-            seen_targets[target_id] = (index, action)
+            seen_targets[target_key] = (index, action)
     return problems
 
 
@@ -412,7 +491,7 @@ def immutable_proposal_projection(document: Mapping[str, object]):
             projected.append({
                 key: copy.deepcopy(entry[key])
                 for key in (
-                    "adjustment_id", "action", "id", "fields", "rationale"
+                    "adjustment_id", "action", "target", "fields", "rationale"
                 )
                 if key in entry
             })
@@ -550,10 +629,12 @@ def validate_adjustments_document(payload):
         )
     revised = adjudication.get(REVISED_ASSESSMENT_KEY)
     if source == ADJUDICATION_SOURCE_ORCHESTRATOR:
-        if not isinstance(revised, str) or not revised.strip():
+        if revised is not None and (
+            not isinstance(revised, str) or not revised.strip()
+        ):
             problems.append(
-                f"{ADJUDICATION_KEY}: orchestrator revised_assessment must "
-                f"be a non-empty string"
+                f"{ADJUDICATION_KEY}: orchestrator revised_assessment must be "
+                f"null or a non-empty string"
             )
     elif source == ADJUDICATION_SOURCE_DEFENSIVE and revised is not None:
         problems.append(
@@ -737,31 +818,6 @@ def write_findings(output_dir, findings):
     atomic_write_json(os.path.join(output_dir, FINDINGS_FILENAME), findings)
 
 
-def _validate_fields(fields, entry_label):
-    """Reject anything outside the adjustable field vocabulary."""
-    if not isinstance(fields, dict):
-        raise ValueError(f"{entry_label}: 'fields' must be an object")
-    for key, value in fields.items():
-        if key not in PATCH_FIELDS:
-            raise ValueError(
-                f"{entry_label}: field {key!r} is not adjustable "
-                f"(allowed: {', '.join(PATCH_FIELDS)})"
-            )
-        if key == "severity" and value not in VALID_SEVERITIES:
-            raise ValueError(
-                f"{entry_label}: invalid severity {value!r} "
-                f"(allowed: {', '.join(VALID_SEVERITIES)})"
-            )
-        if key == "line" and value is not None and (
-            isinstance(value, bool) or not isinstance(value, int)
-            or value <= 0
-        ):
-            raise ValueError(
-                f"{entry_label}: line must be a positive (1-indexed) "
-                f"integer or null, got {value!r}"
-            )
-
-
 def _apply_scope_pairing(finding, line_is_null):
     """Keep `scope` and `line` consistent for one finding.
 
@@ -804,23 +860,7 @@ def _recount_summary(review, findings):
 
 
 def _applied_record(value):
-    """Normalize one `applied_critic_adjustments` entry to its record shape.
-
-    Returns `{"adjustment_id": ..., "spot_check": ...}`, or None when the
-    entry is neither shape this key has ever held.
-
-    The bare-string shape is what the key held before it grew a spot_check
-    half, inside the same unreleased window. It is accepted on READ so a run
-    directory carrying such a ledger keeps its idempotence — the id is what
-    that bookkeeping turns on, and re-applying a landed batch would let
-    `prior` report the critic's own output as the reconciled state. It is
-    never WRITTEN: every record this module emits carries both halves, with
-    the un-recorded spot_check reading as the honest SPOT_CHECK_NOT_CHECKED.
-    """
-    if isinstance(value, str) and value:
-        return {
-            "adjustment_id": value, SPOT_CHECK_KEY: SPOT_CHECK_NOT_CHECKED,
-        }
+    """Validate one schema-2 applied adjustment record."""
     if (
         isinstance(value, dict)
         and isinstance(value.get("adjustment_id"), str)
@@ -849,39 +889,40 @@ def _load_recorded_records(findings):
 
 
 def _load_rejected_records(findings):
-    """Read the rejection audit records the findings file already contains.
-
-    Schema-1 records written before spot-check provenance omit ``spot_check``;
-    the rejection bucket itself means ``refuted``, so normalize that one
-    historical omission while rejecting malformed record shapes.
-    """
+    """Read complete schema-2 rejection audit records."""
     recorded = findings.get(REJECTED_ADJUSTMENTS_KEY)
     if recorded is None:
         return []
     required = {
-        "adjustment_id", "action", "target_id", "rejection_reason",
+        "adjustment_id", "action", "target", SPOT_CHECK_KEY,
+        "rejection_reason",
     }
     records = []
     if isinstance(recorded, list):
         for value in recorded:
-            if not isinstance(value, dict) or not required <= set(value):
+            if not isinstance(value, dict) or set(value) != required:
                 break
             adjustment_id = value.get("adjustment_id")
             action = value.get("action")
-            target_id = value.get("target_id")
+            target = value.get("target")
             reason = value.get("rejection_reason")
-            spot_check = value.get(SPOT_CHECK_KEY, SPOT_CHECK_REFUTED)
+            spot_check = value.get(SPOT_CHECK_KEY)
             if not (
                 isinstance(adjustment_id, str)
                 and adjustment_id
-                and (action is None or isinstance(action, str))
-                and (target_id is None or isinstance(target_id, str))
+                and action in ACTIONS
+                and isinstance(target, dict)
+                and not _validate_target(target, action, "rejection record")
+                and not (
+                    target.get("kind") == TARGET_CHECK
+                    and action not in ("correct", "remove")
+                )
                 and isinstance(reason, str)
                 and reason.strip()
                 and spot_check == SPOT_CHECK_REFUTED
             ):
                 break
-            records.append({**value, SPOT_CHECK_KEY: SPOT_CHECK_REFUTED})
+            records.append(dict(value))
     if not isinstance(recorded, list) or len(records) != len(recorded):
         raise ValueError(
             f"{FINDINGS_FILENAME}: {REJECTED_ADJUSTMENTS_KEY!r} must be a "
@@ -961,7 +1002,7 @@ def settlement_counts(document):
 
 def _validate_settlement_request(request, known_ids):
     if not isinstance(request, dict):
-        return ["adjudication request must be a JSON object"], {}
+        return ["adjudication request must be a JSON object"], {}, None
     problems = _extra_key_problems(
         request, _SETTLEMENT_REQUEST_KEYS, "adjudication request"
     )
@@ -970,11 +1011,14 @@ def _validate_settlement_request(request, known_ids):
             f"adjudication request: 'schema' must be {ADJUDICATION_SCHEMA}"
         )
     revised = request.get(REVISED_ASSESSMENT_KEY)
-    if not isinstance(revised, str) or not revised.strip():
+    if revised is not None and (
+        not isinstance(revised, str) or not revised.strip()
+    ):
         problems.append(
-            "adjudication request: 'revised_assessment' must be a non-empty "
-            "string"
+            "adjudication request: 'revised_assessment' must be null or a "
+            "non-empty string"
         )
+    normalized_assessment = revised.strip() if isinstance(revised, str) else None
 
     verified = request.get("verified")
     decisions = {}
@@ -1031,7 +1075,7 @@ def _validate_settlement_request(request, known_ids):
     for adjustment_id in decisions:
         if adjustment_id not in known_ids:
             problems.append(f"unknown adjustment id {adjustment_id!r}")
-    return problems, decisions
+    return problems, decisions, normalized_assessment
 
 
 def _build_adjudication_checkpoint(document, decisions, assessment, *, source):
@@ -1091,10 +1135,11 @@ def settle(output_dir, request):
         known_ids = {
             entry["adjustment_id"] for entry in document["adjustments"]
         }
-        problems, decisions = _validate_settlement_request(request, known_ids)
+        problems, decisions, assessment = _validate_settlement_request(
+            request, known_ids
+        )
         if problems:
             raise AdjustmentValidationError(problems)
-        assessment = request[REVISED_ASSESSMENT_KEY]
         existing = document.get(ADJUDICATION_KEY)
         if existing is not None:
             if not _checkpoint_matches_request(document, decisions, assessment):
@@ -1176,7 +1221,7 @@ def _invalidate_assessment(review, recorded_ids):
         "text": prior,
         # The exact decisions that cost the assessment its standing, so the
         # invalidation can be read back against the batch that caused it.
-        "invalidated_by_adjustment_ids": list(recorded_ids),
+        "invalidated_by_critic_adjustment_ids": list(recorded_ids),
     })
     review[INVALIDATED_ASSESSMENTS_KEY] = invalidated
 
@@ -1191,18 +1236,12 @@ def _read_findings_for_apply(output_dir):
     return read.findings
 
 
-def _new_finding_id(adjustment_id, occupied_ids):
-    """Derive a stable 8-hex finding id from the script-assigned decision id."""
-    candidate = adjustment_id[:8]
-    if re.fullmatch(r"[0-9a-f]{8}", candidate) and candidate not in occupied_ids:
-        return candidate
-    counter = 0
-    while True:
-        encoded = f"{adjustment_id}:{counter}".encode("utf-8")
-        candidate = hashlib.sha256(encoded).hexdigest()[:8]
-        if candidate not in occupied_ids:
-            return candidate
-        counter += 1
+def _changed_fields(target, fields):
+    return {
+        key: value
+        for key, value in fields.items()
+        if target.get(key) != value
+    }
 
 
 def _validate_pending_mutation(entry, target, label):
@@ -1228,36 +1267,39 @@ def _validate_pending_mutation(entry, target, label):
                 f"{label}: demote must decrease severity, not change "
                 f"{current!r} to {replacement!r}"
             )
-        return
+        return dict(fields)
     if action not in ("correct", "rescope"):
-        return
+        return dict(fields)
+    changed = _changed_fields(target, fields)
     candidate = copy.deepcopy(target)
-    candidate.update(fields)
+    candidate.update(changed)
     if "line" in fields:
         _apply_scope_pairing(candidate, fields["line"] is None)
     if candidate == target:
         raise ValueError(
-            f"{label}: {action} would not change the finding"
+            f"{label}: {action} would not change the {entry['target']['kind']}"
         )
+    return changed
 
 
-def _validate_unlanded_entry(entry, by_id, label):
+def _validate_unlanded_entry(entry, indexes, label):
     """Resolve and validate one proposal whose outcome is not in the ledger."""
     if entry["action"] == "add":
-        return
-    target_id = entry["id"]
-    target = by_id.get(target_id)
+        return None, dict(entry.get("fields") or {})
+    kind = entry["target"]["kind"]
+    target_id = entry["target"]["id"]
+    target = indexes[kind].get(target_id)
     if target is None:
         raise ValueError(
-            f"{label}: no finding with id {target_id!r} in {FINDINGS_FILENAME}"
+            f"{label}: no {kind} with id {target_id!r} in {FINDINGS_FILENAME}"
         )
-    _validate_pending_mutation(entry, target, label)
+    return target, _validate_pending_mutation(entry, target, label)
 
 
 def _validate_rejection_provenance(entry, record, label):
     expected = {
         "action": entry["action"],
-        "target_id": entry.get("id"),
+        "target": entry["target"],
         SPOT_CHECK_KEY: SPOT_CHECK_REFUTED,
         "rejection_reason": entry["rejection_reason"],
     }
@@ -1295,6 +1337,9 @@ def _build_apply_plan(document, findings):
     ledger_findings = planned_findings.get("findings")
     if not isinstance(ledger_findings, list):
         raise ValueError(f"{FINDINGS_FILENAME} has no findings list")
+    ledger_checks = planned_findings.get("checks")
+    if not isinstance(ledger_checks, list):
+        raise ValueError(f"{FINDINGS_FILENAME} has no checks list")
     if not isinstance(planned_findings.get("summary"), dict):
         raise ValueError(f"{FINDINGS_FILENAME} has no summary object")
     try:
@@ -1302,17 +1347,28 @@ def _build_apply_plan(document, findings):
     except ValueError as error:
         raise ValueError(f"{FINDINGS_FILENAME}: {error}") from error
 
-    by_id = {}
-    for index, finding in enumerate(ledger_findings):
-        finding_id = finding.get("id")
-        if not isinstance(finding_id, str) or not finding_id:
-            continue
-        if finding_id in by_id:
-            raise ValueError(
-                f"{FINDINGS_FILENAME}: duplicate finding id {finding_id!r} "
-                f"at position {index}"
-            )
-        by_id[finding_id] = finding
+    indexes = {TARGET_FINDING: {}, TARGET_CHECK: {}}
+    for kind, values in (
+        (TARGET_FINDING, ledger_findings),
+        (TARGET_CHECK, ledger_checks),
+    ):
+        for index, value in enumerate(values):
+            if not isinstance(value, dict):
+                raise ValueError(
+                    f"{FINDINGS_FILENAME}: {kind} at position {index} must be "
+                    "an object"
+                )
+            target_id = value.get("id")
+            if not isinstance(target_id, str) or not target_id:
+                raise ValueError(
+                    f"{FINDINGS_FILENAME}: {kind} at position {index} has no id"
+                )
+            if target_id in indexes[kind]:
+                raise ValueError(
+                    f"{FINDINGS_FILENAME}: duplicate {kind} id {target_id!r} "
+                    f"at position {index}"
+                )
+            indexes[kind][target_id] = value
 
     applied_records = _load_recorded_records(planned_findings)
     rejected_records = _load_rejected_records(planned_findings)
@@ -1372,15 +1428,16 @@ def _build_apply_plan(document, findings):
             continue
 
         action = entry["action"]
-        fields = entry.get("fields") or {}
-        _validate_unlanded_entry(entry, by_id, label)
-        pending.append((entry, action, fields))
+        target, changed_fields = _validate_unlanded_entry(
+            entry, indexes, label
+        )
+        pending.append((entry, target, changed_fields))
 
     rejection_records = [
         {
             "adjustment_id": entry["adjustment_id"],
             "action": entry["action"],
-            "target_id": entry.get("id"),
+            "target": copy.deepcopy(entry["target"]),
             SPOT_CHECK_KEY: SPOT_CHECK_REFUTED,
             "rejection_reason": entry["rejection_reason"],
         }
@@ -1389,14 +1446,35 @@ def _build_apply_plan(document, findings):
 
     applied = 0
     batch_ids = []
-    for entry, action, fields in pending:
+    for entry, target, fields in pending:
+        action = entry["action"]
+        kind = entry["target"]["kind"]
         provenance = {
             "action": action,
             "rationale": entry["rationale"],
         }
         if action == "add":
+            meta = planned_findings.get("meta")
+            if not isinstance(meta, dict):
+                raise ValueError(f"{FINDINGS_FILENAME} has no meta object")
+            next_number = meta.get("next_finding_number")
+            if (
+                isinstance(next_number, bool)
+                or not isinstance(next_number, int)
+                or next_number < 1
+            ):
+                raise ValueError(
+                    f"{FINDINGS_FILENAME}: meta.next_finding_number must be a "
+                    "positive integer"
+                )
+            finding_id = f"f{next_number}"
+            if finding_id in indexes[TARGET_FINDING]:
+                raise ValueError(
+                    f"{FINDINGS_FILENAME}: meta.next_finding_number would reuse "
+                    f"existing id {finding_id!r}"
+                )
             new_finding = {
-                "id": _new_finding_id(entry["adjustment_id"], set(by_id)),
+                "id": finding_id,
                 "category": fields.get("category", "general"),
                 "confidence": fields.get("confidence", 0.9),
                 "line": fields.get("line"),
@@ -1405,25 +1483,30 @@ def _build_apply_plan(document, findings):
             }
             _apply_scope_pairing(new_finding, new_finding.get("line") is None)
             ledger_findings.append(new_finding)
-            by_id[new_finding["id"]] = new_finding
+            indexes[TARGET_FINDING][finding_id] = new_finding
+            meta["next_finding_number"] = next_number + 1
         elif action == "remove":
-            removed = planned_findings.get("findings_removed_by_critic")
+            collection = (
+                ledger_findings if kind == TARGET_FINDING else ledger_checks
+            )
+            removed_key = (
+                "findings_removed_by_critic"
+                if kind == TARGET_FINDING
+                else "checks_removed_by_critic"
+            )
+            removed = planned_findings.get(removed_key)
             if removed is not None and not isinstance(removed, list):
                 raise ValueError(
-                    f"{FINDINGS_FILENAME}: 'findings_removed_by_critic' "
-                    "must be a list"
+                    f"{FINDINGS_FILENAME}: {removed_key!r} must be a list"
                 )
-            target = by_id.pop(entry["id"])
-            ledger_findings.remove(target)
+            indexes[kind].pop(entry["target"]["id"])
+            collection.remove(target)
             target["critic_adjustment"] = provenance
-            planned_findings.setdefault(
-                "findings_removed_by_critic", []
-            ).append(target)
+            planned_findings.setdefault(removed_key, []).append(target)
         else:
-            target = by_id[entry["id"]]
             provenance["prior"] = {key: target.get(key) for key in fields}
             target.update(fields)
-            if "line" in fields:
+            if kind == TARGET_FINDING and "line" in fields:
                 _apply_scope_pairing(target, fields["line"] is None)
             target["critic_adjustment"] = provenance
         applied_records.append({
@@ -1453,7 +1536,7 @@ def _build_apply_plan(document, findings):
         )
 
     if applied or catch_up:
-        for entry, _action, _fields in pending:
+        for entry, _target, _fields in pending:
             entry["applied"] = True
         for entry in catch_up:
             entry["applied"] = True
@@ -1620,7 +1703,10 @@ def main():
             f"REFUTED: {counts[SPOT_CHECK_REFUTED]} | "
             f"NOT_CHECKED: {counts[SPOT_CHECK_NOT_CHECKED]}"
         )
-        print("REVISED ASSESSMENT: present")
+        print(
+            "REVISED ASSESSMENT: "
+            f"{'present' if request.get(REVISED_ASSESSMENT_KEY) else 'absent'}"
+        )
         print(f"PROPOSAL DIGEST: {result[PROPOSAL_DIGEST_KEY]}")
         apply_result = result["apply"]
         if (

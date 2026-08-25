@@ -46,13 +46,13 @@ def _write_critic_snapshot(output_dir, verdict):
     from review.atomic_io import atomic_write_json
 
     proposal = critic_adjustments.prepare_proposal({
-        "schema": 1, "adjustments": [],
+        "schema": 2, "adjustments": [],
     })
     critic_adjustments.write_adjustments(str(output_dir), proposal)
     atomic_write_json(
         str(Path(output_dir) / critic_adjustments.CRITIC_VERDICT_FILENAME),
         {
-            "schema": 1,
+            "schema": 2,
             "verdict": verdict,
             "proposal_digest": critic_adjustments.proposal_digest(proposal),
         },
@@ -1934,8 +1934,9 @@ class TestStep10DecisionCritic:
         )
         revise_text = self._revise_section(guidance)
 
-        assert "REVISED ASSESSMENT: present" in revise_text
+        assert "REVISED ASSESSMENT: present|absent" in revise_text
         assert "revised assessment" in revise_text
+        assert "optional" in revise_text
         assert "REVISED NARRATIVE" not in revise_text
         assert "revised narrative" not in revise_text
 
@@ -3229,9 +3230,9 @@ class TestStep10WritesItsOwnSkipVerdict:
         )
         from review import critic_adjustments
 
-        assert proposal == {"schema": 1, "adjustments": []}
+        assert proposal == {"schema": 2, "adjustments": []}
         assert written == {
-            "schema": 1,
+            "schema": 2,
             "verdict": "SKIPPED",
             "proposal_digest": critic_adjustments.proposal_digest(proposal),
         }

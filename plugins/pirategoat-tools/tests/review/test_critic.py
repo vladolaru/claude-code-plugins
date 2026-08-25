@@ -204,8 +204,40 @@ class TestCriticSave:
 
     def _write_adjustments(self, tmp_path, adjustments):
         path = tmp_path / "a.json"
-        path.write_text(json.dumps({"schema": 1, "adjustments": adjustments}))
+        path.write_text(json.dumps({"schema": 2, "adjustments": adjustments}))
         return path
+
+    def test_save_accepts_schema_two_target_union(self, tmp_path):
+        findings = self._write_findings(tmp_path)
+        adjustments = tmp_path / "schema-two-adjustments.json"
+        adjustments.write_text(json.dumps({
+            "schema": 2,
+            "adjustments": [{
+                "action": "correct",
+                "target": {"kind": "check", "id": "c1"},
+                "fields": {"result": "No production caller reaches it."},
+                "rationale": "The recorded result was too broad.",
+            }],
+        }))
+
+        result = self._run_save(
+            tmp_path,
+            "--verdict", "REVISE",
+            "--findings", str(findings),
+            "--adjustments", str(adjustments),
+        )
+
+        assert result.returncode == 0
+        proposal = json.loads(
+            (tmp_path / "decision-critic-adjustments.json").read_text()
+        )
+        marker = json.loads(
+            (tmp_path / "decision-critic-verdict.json").read_text()
+        )
+        assert proposal["schema"] == marker["schema"] == 2
+        assert proposal["adjustments"][0]["target"] == {
+            "kind": "check", "id": "c1",
+        }
 
     @staticmethod
     def _args(tmp_path, verdict, findings, adjustments=None):
@@ -225,15 +257,15 @@ class TestCriticSave:
         paths["findings"].write_text("# Previous complete findings\n")
         entries = [{
             "adjustment_id": "previous-decision",
-            "action": "promote", "id": "aaaa1111",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "high"}, "rationale": "previous",
         }] if verdict == "REVISE" else []
         paths["adjustments"].write_text(json.dumps({
-            "schema": 1, "adjustments": entries,
+            "schema": 2, "adjustments": entries,
         }))
         proposal = json.loads(paths["adjustments"].read_text())
         paths["verdict"].write_text(json.dumps({
-            "schema": 1,
+            "schema": 2,
             "verdict": verdict,
             "proposal_digest": critic_adjustments_module.proposal_digest(
                 proposal
@@ -269,7 +301,7 @@ class TestCriticSave:
         paths = self._write_complete_snapshot(tmp_path, verdict="STAND")
         findings = self._write_findings(tmp_path, "# Replacement findings\n")
         adjustments = self._write_adjustments(tmp_path, [{
-            "action": "promote", "id": "aaaa1111",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "critical"}, "rationale": "replacement",
         }])
         real_write_adjustments = critic_adjustments_module.write_adjustments
@@ -288,7 +320,7 @@ class TestCriticSave:
 
         assert paths["findings"].read_text() == "# Replacement findings\n"
         assert json.loads(paths["adjustments"].read_text()) == {
-            "schema": 1, "adjustments": [],
+            "schema": 2, "adjustments": [],
         }
         assert not paths["verdict"].exists()
         assert read_critic_verdict(str(tmp_path)) is None
@@ -335,7 +367,7 @@ class TestCriticSave:
     def test_critic_save_writes_a_complete_snapshot(self, tmp_path):
         findings = self._write_findings(tmp_path)
         adjustments = self._write_adjustments(tmp_path, [{
-            "action": "promote", "id": "aaaa1111",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "high"}, "rationale": "r",
         }])
 
@@ -354,7 +386,7 @@ class TestCriticSave:
             (tmp_path / "decision-critic-adjustments.json").read_text()
         )
         assert verdict_doc == {
-            "schema": 1,
+            "schema": 2,
             "verdict": "REVISE",
             "proposal_digest": critic_adjustments_module.proposal_digest(
                 proposal
@@ -396,7 +428,7 @@ class TestCriticSave:
         not just one."""
         findings = self._write_findings(tmp_path)
         adjustments = self._write_adjustments(tmp_path, [{
-            "action": "promote", "id": "aaaa1111",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "high"}, "rationale": "r",
         }])
 
@@ -421,11 +453,11 @@ class TestCriticSave:
         findings = self._write_findings(tmp_path)
         snapshot = tmp_path / "decision-critic-adjustments.json"
         snapshot.write_text(json.dumps({
-            "schema": 1,
+            "schema": 2,
             "adjustments": [{
                 "adjustment_id": "stale-revise",
                 "action": "promote",
-                "id": "aaaa1111",
+                "target": {"kind": "finding", "id": "f1"},
                 "fields": {"severity": "high"},
                 "rationale": "pending from an earlier attempt",
             }],
@@ -438,16 +470,16 @@ class TestCriticSave:
         assert result.returncode == 0, result.stdout + result.stderr
         assert (tmp_path / "decision-critic-findings.md").is_file()
         assert json.loads(snapshot.read_text()) == {
-            "schema": 1, "adjustments": [],
+            "schema": 2, "adjustments": [],
         }
         verdict_doc = json.loads(
             (tmp_path / "decision-critic-verdict.json").read_text()
         )
         assert verdict_doc == {
-            "schema": 1,
+            "schema": 2,
             "verdict": verdict,
             "proposal_digest": critic_adjustments_module.proposal_digest(
-                {"schema": 1, "adjustments": []}
+                {"schema": 2, "adjustments": []}
             ),
         }
         assert f"RECORDED VERDICT: {verdict}" in result.stdout
@@ -460,7 +492,7 @@ class TestCriticSave:
         level with a bad verdict AND an invalid batch in the same call."""
         findings = self._write_findings(tmp_path)
         adjustments = self._write_adjustments(tmp_path, [{
-            "action": "obliterate", "id": "aaaa1111",
+            "action": "obliterate", "target": {"kind": "finding", "id": "f1"},
             "fields": {}, "rationale": "r",
         }])
 
@@ -486,7 +518,7 @@ class TestCriticSave:
     def test_critic_save_rejects_invalid_batch(self, tmp_path):
         findings = self._write_findings(tmp_path)
         adjustments = self._write_adjustments(tmp_path, [{
-            "action": "obliterate", "id": "aaaa1111",
+            "action": "obliterate", "target": {"kind": "finding", "id": "f1"},
             "fields": {}, "rationale": "r",
         }])
 
@@ -505,7 +537,7 @@ class TestCriticSave:
     def test_critic_save_echo_names_what_was_recorded(self, tmp_path):
         findings = self._write_findings(tmp_path)
         adjustments = self._write_adjustments(tmp_path, [{
-            "action": "promote", "id": "aaaa1111",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "high"}, "rationale": "r",
         }])
 
@@ -558,10 +590,10 @@ class TestSourceBoundCriticSave:
     def test_save_assigns_ids_and_commits_the_proposal_digest(self, tmp_path):
         findings = self._write_findings(tmp_path)
         proposal_input = self._write_payload(tmp_path, {
-            "schema": 1,
+            "schema": 2,
             "adjustments": [{
                 "action": "demote",
-                "id": "aaaa1111",
+                "target": {"kind": "finding", "id": "f1"},
                 "fields": {"severity": "medium"},
                 "rationale": "The claimed impact is narrower than stated.",
             }],
@@ -581,7 +613,7 @@ class TestSourceBoundCriticSave:
         adjustment_id = proposal["adjustments"][0]["adjustment_id"]
         assert adjustment_id
         assert marker == {
-            "schema": 1,
+            "schema": 2,
             "verdict": "REVISE",
             "proposal_digest": critic_adjustments_module.proposal_digest(
                 proposal
@@ -606,9 +638,9 @@ class TestSourceBoundCriticSave:
         marker = json.loads(
             (tmp_path / "decision-critic-verdict.json").read_text()
         )
-        assert proposal == {"schema": 1, "adjustments": []}
+        assert proposal == {"schema": 2, "adjustments": []}
         assert marker == {
-            "schema": 1,
+            "schema": 2,
             "verdict": verdict,
             "proposal_digest": critic_adjustments_module.proposal_digest(
                 proposal
@@ -631,13 +663,13 @@ class TestSourceBoundCriticSave:
         findings = self._write_findings(tmp_path)
         entry = {
             "action": "demote",
-            "id": "aaaa1111",
+            "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "medium"},
             "rationale": "The claimed impact is narrower than stated.",
             forbidden: value,
         }
         proposal_input = self._write_payload(tmp_path, {
-            "schema": 1,
+            "schema": 2,
             "adjustments": [entry],
         })
         old_findings = tmp_path / "decision-critic-findings.md"
@@ -672,10 +704,10 @@ class TestSourceBoundCriticSave:
     ):
         findings = self._write_findings(tmp_path)
         payload = {
-            "schema": 1,
+            "schema": 2,
             "adjustments": [{
                 "action": "demote",
-                "id": "aaaa1111",
+                "target": {"kind": "finding", "id": "f1"},
                 "fields": {"severity": "medium"},
                 "rationale": "Narrower than stated.",
             }],
@@ -696,10 +728,10 @@ class TestSourceBoundCriticSave:
     ):
         findings = self._write_findings(tmp_path)
         proposal_input = self._write_payload(tmp_path, {
-            "schema": 1,
+            "schema": 2,
             "adjustments": [{
                 "action": "demote",
-                "id": "aaaa1111",
+                "target": {"kind": "finding", "id": "f1"},
                 "fields": {"severity": "medium"},
                 "rationale": "Narrower than stated.",
             }],

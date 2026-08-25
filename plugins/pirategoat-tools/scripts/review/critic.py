@@ -80,18 +80,18 @@ def get_step_guidance(
             "Read the review record"
             + (
                 " and the structured findings ledger. Key each claim to the "
-                "finding's own canonical `id` from the ledger — that id persists "
-                "through ALL subsequent steps and is the only handle the "
-                "pipeline can resolve:"
+                "target's canonical ledger id: `fN` for a finding or `cN` for "
+                "a recorded check. That kind/id pair persists through ALL "
+                "subsequent steps and is the handle the pipeline resolves:"
                 if context_path
                 else ". Extract and assign stable IDs that will persist through ALL "
                 "subsequent steps:"
             ),
             "",
             (
-                "- FACTUAL CLAIMS [use each finding's ledger id]: Statements about what "
-                "the code does or doesn't do. Take the ids from `findings[].id` in the findings "
-                "ledger — each finding maps to a factual claim to verify."
+                "- FACTUAL CLAIMS [use each finding/check ledger id]: Statements about "
+                "what the code does or doesn't do. Take ids from `findings[].id` and "
+                "`checks[].id`; preserve whether each target is a finding or check."
                 if context_path
                 else "- FACTUAL CLAIMS [F1, F2, ...]: Statements about what the code does or "
                 "doesn't do (\"line 54 is missing an is_array guard\", \"the function uses "

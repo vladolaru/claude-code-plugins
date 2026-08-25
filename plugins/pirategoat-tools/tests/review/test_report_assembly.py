@@ -456,14 +456,14 @@ class TestRecordIsAProjection:
         settle=True,
     ):
         proposal = critic_adjustments.prepare_proposal({
-            "schema": 1,
+            "schema": 2,
             "adjustments": adjustments,
         })
         critic_adjustments.write_adjustments(str(out_dir), proposal)
         atomic_write_json(
             str(out_dir / critic_adjustments.CRITIC_VERDICT_FILENAME),
             {
-                "schema": 1,
+                "schema": 2,
                 "verdict": "REVISE",
                 "proposal_digest": critic_adjustments.proposal_digest(
                     proposal
@@ -474,7 +474,7 @@ class TestRecordIsAProjection:
             return proposal, critic_adjustments.apply_adjustments(str(out_dir))
         ids = [entry["adjustment_id"] for entry in proposal["adjustments"]]
         request = {
-            "schema": 1,
+            "schema": 2,
             "verified": [ids[index] for index in verified],
             "refuted": [
                 {
@@ -495,7 +495,7 @@ class TestRecordIsAProjection:
 
         self._revise(out_dir, [{
             "action": "demote",
-            "id": "f1",
+            "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "low"},
             "rationale": "the value is escaped one frame up",
         }], verified=(0,), assessment="Only one real problem after the probe.")
@@ -517,13 +517,13 @@ class TestRecordIsAProjection:
         _proposal, result = self._revise(out_dir, [
             {
                 "action": "demote",
-                "id": "f1",
+                "target": {"kind": "finding", "id": "f1"},
                 "fields": {"severity": "low"},
                 "rationale": "escaped one frame up",
             },
             {
                 "action": "correct",
-                "id": "f2",
+                "target": {"kind": "finding", "id": "f2"},
                 "fields": {"title": "Retry loop has no ceiling (v2)"},
                 "rationale": "clearer title",
             },
@@ -546,13 +546,13 @@ class TestRecordIsAProjection:
         proposal, _result = self._revise(out_dir, [
             {
                 "action": "correct",
-                "id": "f1",
+                "target": {"kind": "finding", "id": "f1"},
                 "fields": {"title": "Escaping is already present"},
                 "rationale": "verified against the source",
             },
             {
                 "action": "correct",
-                "id": "f2",
+                "target": {"kind": "finding", "id": "f2"},
                 "fields": {"title": "This change does not apply"},
                 "rationale": "critic claim",
             },
@@ -571,13 +571,13 @@ class TestRecordIsAProjection:
         proposal, _result = self._revise(out_dir, [
             {
                 "action": "correct",
-                "id": "f1",
+                "target": {"kind": "finding", "id": "f1"},
                 "fields": {"title": "This change does not apply"},
                 "rationale": "critic claim",
             },
             {
                 "action": "correct",
-                "id": "f2",
+                "target": {"kind": "finding", "id": "f2"},
                 "fields": {"title": "This change does not apply"},
                 "rationale": "critic claim",
             },
@@ -598,7 +598,7 @@ class TestRecordIsAProjection:
         _write_ledger(out_dir)
         self._revise(out_dir, [{
             "action": "demote",
-            "id": "f1",
+            "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "low"},
             "rationale": "escaped one frame up",
         }], settle=False)

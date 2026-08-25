@@ -2491,7 +2491,7 @@ class TestTypeScriptContractLockstep:
         assert match is not None
         assert match.group(1).strip() == "string | null"
 
-    def test_legacy_rejected_spot_check_is_optional(self):
+    def test_schema_two_rejected_spot_check_is_required(self):
         schema = (PLUGIN_ROOT / "schemas" / "review-output.ts").read_text()
         rejected = re.search(
             r"rejected_critic_adjustments\?: Array<\{(.*?)\}>;",
@@ -2499,8 +2499,8 @@ class TestTypeScriptContractLockstep:
             re.DOTALL,
         )
         assert rejected is not None
-        assert re.search(r"spot_check\?:\s*'refuted';", rejected.group(1))
-        assert "absent on legacy schema-1 records" in schema
+        assert re.search(r"spot_check:\s*'refuted';", rejected.group(1))
+        assert "spot_check?:" not in rejected.group(1)
 
 
 # =============================================================================
@@ -2831,9 +2831,14 @@ class TestAssessmentProvenance:
     def test_invalidated_assessment_renders_the_invalidation_notice(self):
         data = self._findings(
             assessment=None,
-            applied_critic_adjustments=["a1b2c3"],
+            applied_critic_adjustments=[{
+                "adjustment_id": "a1b2c3", "spot_check": "not_checked",
+            }],
             invalidated_assessments=[
-                {"text": "Old claim.", "invalidated_by_adjustment_ids": ["a1b2c3"]}
+                {
+                    "text": "Old claim.",
+                    "invalidated_by_critic_adjustment_ids": ["a1b2c3"],
+                }
             ],
         )
         rendered = render_markdown(data)
@@ -2868,14 +2873,15 @@ class TestAssessmentProvenance:
         assert "## Assessment" not in render_markdown(data)
 
     def test_surviving_prose_beside_adjustments_still_renders_as_prose(self):
-        """Defensive: an older ledger patched before the invalidation
-        existed keeps its prose rather than being retroactively hidden."""
+        """Applied provenance alone does not claim assessment invalidation."""
         data = self._findings(
-            assessment="Legacy prose.",
-            applied_critic_adjustments=["a1b2c3"],
+            assessment="Standing prose.",
+            applied_critic_adjustments=[{
+                "adjustment_id": "a1b2c3", "spot_check": "not_checked",
+            }],
         )
         rendered = render_markdown(data)
-        assert "Legacy prose." in rendered
+        assert "Standing prose." in rendered
         assert "invalidated" not in rendered.lower()
 
     def test_mixed_applied_and_refuted_decisions_render_completely(self):
@@ -2884,7 +2890,11 @@ class TestAssessmentProvenance:
                 {"adjustment_id": "applied-one", "spot_check": "verified"},
             ],
             rejected_critic_adjustments=[
-                {"adjustment_id": "refuted-one", "rejection_reason": "no"},
+                {
+                    "adjustment_id": "refuted-one", "action": "remove",
+                    "target": {"kind": "finding", "id": "f1"},
+                    "spot_check": "refuted", "rejection_reason": "no",
+                },
             ],
         ))
         assert "## Critic Adjustment Decisions" in rendered
@@ -2894,8 +2904,16 @@ class TestAssessmentProvenance:
     def test_all_refuted_decisions_render_without_an_applied_bucket(self):
         rendered = render_markdown(self._findings(
             rejected_critic_adjustments=[
-                {"adjustment_id": "refuted-one", "spot_check": "refuted"},
-                {"adjustment_id": "refuted-two", "rejection_reason": "no"},
+                {
+                    "adjustment_id": "refuted-one", "action": "remove",
+                    "target": {"kind": "finding", "id": "f1"},
+                    "spot_check": "refuted", "rejection_reason": "refuted",
+                },
+                {
+                    "adjustment_id": "refuted-two", "action": "correct",
+                    "target": {"kind": "check", "id": "c1"},
+                    "spot_check": "refuted", "rejection_reason": "no",
+                },
             ],
         ))
         assert "## Critic Adjustment Decisions" in rendered

@@ -111,7 +111,7 @@ def _write_snapshot_document(output_dir, document, verdict="REVISE"):
     atomic_write_json(
         str(output_dir / "decision-critic-verdict.json"),
         {
-            "schema": 1,
+            "schema": 2,
             "verdict": verdict,
             "proposal_digest": critic_adjustments_module.proposal_digest(
                 document
@@ -145,7 +145,7 @@ def _write_adjustments(output_dir, adjustments, **document_extra):
         and ({"spot_check", "rejected", "rejection_reason", "applied"} & set(entry))
         for entry in entries
     ) or "revised_assessment" in document_extra
-    document = {"schema": 1, "adjustments": entries}
+    document = {"schema": 2, "adjustments": entries}
     if lifecycle:
         for entry in entries:
             if not isinstance(entry, dict):
@@ -158,7 +158,7 @@ def _write_adjustments(output_dir, adjustments, **document_extra):
             "revised_assessment", "Fixture post-critic assessment."
         )
         document["adjudication"] = {
-            "schema": 1,
+            "schema": 2,
             "source": "orchestrator",
             "proposal_digest": critic_adjustments_module.proposal_digest(
                 document
@@ -176,21 +176,21 @@ def _write_critic_verdict(output_dir, verdict):
     if verdict == "REVISE" and adjustments_path.is_file():
         document = json.loads(adjustments_path.read_text())
     else:
-        document = {"schema": 1, "adjustments": []}
+        document = {"schema": 2, "adjustments": []}
     return _write_snapshot_document(output_dir, document, verdict=verdict)
 
 
 def _commit_critic_snapshot(output_dir, adjustments, verdict="REVISE"):
     """Publish the live marker/proposal pair through the production helpers."""
     proposal = critic_adjustments_module.prepare_proposal({
-        "schema": 1,
+        "schema": 2,
         "adjustments": adjustments if verdict == "REVISE" else [],
     })
     critic_adjustments_module.write_adjustments(str(output_dir), proposal)
     atomic_write_json(
         str(Path(output_dir) / "decision-critic-verdict.json"),
         {
-            "schema": 1,
+            "schema": 2,
             "verdict": verdict,
             "proposal_digest": critic_adjustments_module.proposal_digest(
                 proposal
@@ -213,7 +213,7 @@ def _settlement_request(
         for index, reason in refuted
     ]
     return {
-        "schema": 1,
+        "schema": 2,
         "verified": verified_ids,
         "refuted": refuted_entries,
         "revised_assessment": assessment,
@@ -232,6 +232,16 @@ def _finding(id_, severity="low"):
     return {"id": id_, "severity": severity, "title": "t", "file": "f.go",
             "line": 10, "description": "d", "recommendation": "r",
             "category": "general", "confidence": 0.9}
+
+
+def _check(id_, *, result="No matching callers."):
+    return {
+        "id": id_,
+        "question": "Do any in-tree callers use the removed parameter?",
+        "method": "rg removed_parameter src tests",
+        "result": result,
+        "source_reviewers": ["ecosystem-integration"],
+    }
 
 
 def _publish_step_11(output_dir, state=None):
@@ -271,7 +281,7 @@ class TestApplyAdjustments:
     def test_promote_patches_severity_with_provenance(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1", "low")])
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "medium"},
             "rationale": "affects future strategy authors",
         }])
@@ -288,7 +298,7 @@ class TestApplyAdjustments:
     def test_add_appends_full_finding_with_generated_id(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1")])
         _write_adjustments(tmp_path, [{
-            "action": "add", "id": None,
+            "action": "add", "target": {"kind": "finding"},
             "fields": {"severity": "low", "title": "stale README",
                        "file": "internal/strategy/README.md",
                        "description": "teaches the deleted warm path",
@@ -299,13 +309,13 @@ class TestApplyAdjustments:
         data = json.loads((tmp_path / "review-findings.json").read_text())
         assert data["summary"]["total_findings"] == 2
         added = data["findings"][1]
-        assert len(added["id"]) == 8
+        assert added["id"] == "f2"
         assert added["critic_adjustment"]["action"] == "add"
 
     def test_remove_moves_finding_out_with_provenance(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1"), _finding("f2")])
         _write_adjustments(tmp_path, [{
-            "action": "remove", "id": "f2",
+            "action": "remove", "target": {"kind": "finding", "id": "f2"},
             "fields": {}, "rationale": "false positive — refuted by source",
         }])
         apply_adjustments(str(tmp_path))
@@ -317,12 +327,12 @@ class TestApplyAdjustments:
     def test_unknown_id_fails_loudly_and_writes_nothing(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1")])
         _write_adjustments(tmp_path, [
-            {"action": "promote", "id": "f1",
+            {"action": "promote", "target": {"kind": "finding", "id": "f1"},
              "fields": {"severity": "high"}, "rationale": "r"},
-            {"action": "promote", "id": "zzzz9999",
+            {"action": "promote", "target": {"kind": "finding", "id": "f9"},
              "fields": {"severity": "high"}, "rationale": "r"},
         ])
-        with pytest.raises(ValueError, match="zzzz9999"):
+        with pytest.raises(ValueError, match="f9"):
             apply_adjustments(str(tmp_path))
         data = json.loads((tmp_path / "review-findings.json").read_text())
         assert data["findings"][0]["severity"] == "low"  # entry 1 NOT applied either
@@ -330,13 +340,13 @@ class TestApplyAdjustments:
     def test_invalid_action_and_field_rejected(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1")])
         _write_adjustments(tmp_path, [{
-            "action": "obliterate", "id": "f1",
+            "action": "obliterate", "target": {"kind": "finding", "id": "f1"},
             "fields": {}, "rationale": "r",
         }])
         with pytest.raises(ValueError, match="obliterate"):
             apply_adjustments(str(tmp_path))
         _write_adjustments(tmp_path, [{
-            "action": "correct", "id": "f1",
+            "action": "correct", "target": {"kind": "finding", "id": "f1"},
             "fields": {"verdict": "APPROVE"}, "rationale": "r",
         }])
         with pytest.raises(ValueError, match="verdict"):
@@ -345,7 +355,7 @@ class TestApplyAdjustments:
     def test_rejected_entries_are_skipped(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1", "low")])
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "critical"},
             "rationale": "r", "rejected": True,
             "rejection_reason": "spot-check refuted the claim",
@@ -358,7 +368,7 @@ class TestApplyAdjustments:
     def test_second_run_is_idempotent(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1", "low")])
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "medium"}, "rationale": "r",
         }])
         apply_adjustments(str(tmp_path))
@@ -380,11 +390,11 @@ class TestApplyAdjustments:
             _finding("f3", "medium"),
         ])
         _write_adjustments(tmp_path, [
-            {"action": "promote", "id": "f1",
+            {"action": "promote", "target": {"kind": "finding", "id": "f1"},
              "fields": {"severity": "high"}, "rationale": "wider blast radius"},
-            {"action": "remove", "id": "f3",
+            {"action": "remove", "target": {"kind": "finding", "id": "f3"},
              "fields": {}, "rationale": "refuted by source"},
-            {"action": "add", "id": None,
+            {"action": "add", "target": {"kind": "finding"},
              "fields": {"severity": "critical", "title": "unbounded retry",
                         "file": "internal/queue/retry.go",
                         "description": "no ceiling on attempts",
@@ -419,7 +429,7 @@ class TestApplyAdjustments:
         """
         _write_findings(tmp_path, [_finding("f1", "low")])
         _write_adjustments(tmp_path, [{
-            "action": "add", "id": None,
+            "action": "add", "target": {"kind": "finding"},
             "fields": {"severity": "high", "title": "unbounded retry",
                        "file": "internal/queue/retry.go",
                        "description": "no ceiling on attempts",
@@ -433,10 +443,7 @@ class TestApplyAdjustments:
         data = json.loads((tmp_path / "review-findings.json").read_text())
         assert len(data["findings"]) == 2
         added = data["findings"][1]
-        assert re.fullmatch(r"[0-9a-f]{8}", added["id"]), (
-            f"generated id must be 8 lowercase hex chars, got {added['id']!r}"
-        )
-        assert added["id"] != "f1"
+        assert added["id"] == "f2"
         assert added["title"] == "unbounded retry"
         assert added["critic_adjustment"] == {
             "action": "add", "rationale": "critic found it independently",
@@ -452,7 +459,7 @@ class TestApplyAdjustments:
         TestCrashSafety pins for `promote`, exercised here for `add`."""
         _write_findings(tmp_path, [_finding("f1", "low")])
         _write_adjustments(tmp_path, [{
-            "action": "add", "id": None,
+            "action": "add", "target": {"kind": "finding"},
             "fields": {"severity": "high", "title": "unbounded retry",
                        "file": "internal/queue/retry.go",
                        "description": "no ceiling on attempts",
@@ -489,7 +496,7 @@ class TestRejectionAudit:
     def test_rejected_entry_lands_in_the_findings_audit_trail(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1", "low")])
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "critical"},
             "rationale": "r", "rejected": True,
             "rejection_reason": "spot-check refuted the claim",
@@ -503,7 +510,7 @@ class TestRejectionAudit:
         assert len(records) == 1
         record = records[0]
         assert record["action"] == "promote"
-        assert record["target_id"] == "f1"
+        assert record["target"] == {"kind": "finding", "id": "f1"}
         assert record["spot_check"] == "refuted"
         assert record["rejection_reason"] == "spot-check refuted the claim"
         assert record["adjustment_id"]  # allocated so a re-run can dedupe
@@ -513,7 +520,7 @@ class TestRejectionAudit:
     ):
         _write_findings(tmp_path, [_finding("f1", "low")])
         _write_adjustments(tmp_path, [{
-            "action": "demote", "id": "f1",
+            "action": "demote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "info"},
             "rationale": "r", "rejected": True,
             "rejection_reason": "spot-check refuted it",
@@ -536,13 +543,13 @@ class TestRejectionAudit:
             tmp_path, [_finding("f1", "low"), _finding("f2", "low")]
         )
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "high"}, "rationale": "r",
             "rejected": True, "rejection_reason": "first round refutation",
         }])
         apply_adjustments(str(tmp_path))
         _write_adjustments(tmp_path, [{
-            "action": "demote", "id": "f2",
+            "action": "demote", "target": {"kind": "finding", "id": "f2"},
             "fields": {"severity": "info"}, "rationale": "r",
             "rejected": True, "rejection_reason": "second round refutation",
         }])
@@ -550,7 +557,7 @@ class TestRejectionAudit:
         data = json.loads((tmp_path / "review-findings.json").read_text())
         records = data[REJECTED_ADJUSTMENTS_KEY]
         assert len(records) == 2
-        assert {r["target_id"] for r in records} == {"f1", "f2"}
+        assert {r["target"]["id"] for r in records} == {"f1", "f2"}
         assert {r["rejection_reason"] for r in records} == {
             "first round refutation", "second round refutation",
         }
@@ -563,7 +570,7 @@ class TestRejectionAudit:
         rejection never mutates `findings`."""
         _write_findings(tmp_path, [_finding("f1", "low")])
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "high"}, "rationale": "r",
             "rejected": True, "rejection_reason": "refuted",
         }])
@@ -576,9 +583,9 @@ class TestRejectionAudit:
             tmp_path, [_finding("f1", "low"), _finding("f2", "low")]
         )
         _write_adjustments(tmp_path, [
-            {"action": "promote", "id": "f1",
+            {"action": "promote", "target": {"kind": "finding", "id": "f1"},
              "fields": {"severity": "high"}, "rationale": "r"},
-            {"action": "demote", "id": "f2",
+            {"action": "demote", "target": {"kind": "finding", "id": "f2"},
              "fields": {"severity": "info"}, "rationale": "r",
              "rejected": True, "rejection_reason": "refuted"},
         ])
@@ -590,7 +597,7 @@ class TestRejectionAudit:
         assert data["findings"][1]["severity"] == "low"  # rejected, untouched
         records = data[REJECTED_ADJUSTMENTS_KEY]
         assert len(records) == 1
-        assert records[0]["target_id"] == "f2"
+        assert records[0]["target"] == {"kind": "finding", "id": "f2"}
 
     @pytest.mark.parametrize("bad_reason", [None, "", "   "])
     def test_missing_or_blank_rejection_reason_refuses_the_whole_batch(
@@ -602,7 +609,7 @@ class TestRejectionAudit:
         instead of silently writing an empty string into the ledger."""
         _write_findings(tmp_path, [_finding("f1", "low")])
         entry = {
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "high"}, "rationale": "r",
             "rejected": True,
         }
@@ -621,7 +628,7 @@ class TestRejectionAudit:
         contradictory post-hoc settlement flags before touching the ledger."""
         _write_findings(tmp_path, [_finding("f1", "low")])
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "high"}, "rationale": "r",
         }])
         apply_adjustments(str(tmp_path))
@@ -663,7 +670,7 @@ class TestCrashSafety:
     ):
         _write_findings(tmp_path, [_finding("f1", "low")])
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "medium"}, "rationale": "r",
         }])
         apply_adjustments(str(tmp_path))
@@ -702,14 +709,14 @@ class TestCrashSafety:
         ]
         _write_findings(tmp_path, [_finding("f1", "low")])
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "medium"}, "rationale": "r",
         }])
         apply_adjustments(str(tmp_path))
         assert sorted(p.name for p in tmp_path.iterdir()) == expected
 
         _write_adjustments(tmp_path, [{
-            "action": "obliterate", "id": "f1",
+            "action": "obliterate", "target": {"kind": "finding", "id": "f1"},
             "fields": {}, "rationale": "r",
         }])
         with pytest.raises(ValueError):
@@ -719,9 +726,9 @@ class TestCrashSafety:
     def test_duplicate_adjustment_ids_are_rejected(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1"), _finding("f2")])
         _write_adjustments(tmp_path, [
-            {"adjustment_id": "dup", "action": "promote", "id": "f1",
+            {"adjustment_id": "dup", "action": "promote", "target": {"kind": "finding", "id": "f1"},
              "fields": {"severity": "high"}, "rationale": "r"},
-            {"adjustment_id": "dup", "action": "promote", "id": "f2",
+            {"adjustment_id": "dup", "action": "promote", "target": {"kind": "finding", "id": "f2"},
              "fields": {"severity": "high"}, "rationale": "r"},
         ])
         with pytest.raises(ValueError, match="duplicate adjustment_id"):
@@ -734,9 +741,9 @@ class TestBatchCoherence:
     def test_duplicate_target_in_one_batch_is_rejected(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1", "low")])
         _write_adjustments(tmp_path, [
-            {"action": "promote", "id": "f1",
+            {"action": "promote", "target": {"kind": "finding", "id": "f1"},
              "fields": {"severity": "high"}, "rationale": "r"},
-            {"action": "correct", "id": "f1",
+            {"action": "correct", "target": {"kind": "finding", "id": "f1"},
              "fields": {"title": "clearer title"}, "rationale": "r"},
         ])
         with pytest.raises(ValueError, match="duplicate target"):
@@ -750,9 +757,9 @@ class TestBatchCoherence:
     ):
         _write_findings(tmp_path, [_finding("f1"), _finding("f2")])
         _write_adjustments(tmp_path, [
-            {"action": "remove", "id": "f2",
+            {"action": "remove", "target": {"kind": "finding", "id": "f2"},
              "fields": {}, "rationale": "false positive"},
-            {"action": "promote", "id": "f2",
+            {"action": "promote", "target": {"kind": "finding", "id": "f2"},
              "fields": {"severity": "high"}, "rationale": "r"},
         ])
         with pytest.raises(ValueError, match="removed by adjustment\\[0\\]"):
@@ -763,10 +770,11 @@ class TestBatchCoherence:
     def test_entry_without_an_id_fails_as_unknown_id(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1")])
         _write_adjustments(tmp_path, [{
-            "action": "promote", "fields": {"severity": "high"},
+            "action": "promote", "target": {"kind": "finding"},
+            "fields": {"severity": "high"},
             "rationale": "r",
         }])
-        with pytest.raises(ValueError, match="non-empty target id"):
+        with pytest.raises(ValueError, match="target.id"):
             apply_adjustments(str(tmp_path))
 
     def test_findings_finding_without_an_id_is_not_addressable(self, tmp_path):
@@ -774,11 +782,12 @@ class TestBatchCoherence:
         del idless["id"]
         _write_findings(tmp_path, [idless])
         _write_adjustments(tmp_path, [{
-            "action": "promote", "fields": {"severity": "high"},
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
+            "fields": {"severity": "high"},
             "rationale": "r",
         }])
         # A None target must not silently match an id-less finding.
-        with pytest.raises(ValueError, match="non-empty target id"):
+        with pytest.raises(ValueError, match="finding at position 0 has no id"):
             apply_adjustments(str(tmp_path))
 
     def test_add_rejects_a_critic_supplied_id_in_both_spellings(
@@ -788,14 +797,14 @@ class TestBatchCoherence:
         base_fields = {"severity": "low", "title": "t", "file": "f.go",
                        "description": "d", "recommendation": "r"}
         _write_adjustments(tmp_path, [{
-            "action": "add", "id": "f3",
+            "action": "add", "target": {"kind": "finding", "id": "f3"},
             "fields": dict(base_fields), "rationale": "r",
         }])
-        with pytest.raises(ValueError, match="ids are generated"):
+        with pytest.raises(ValueError, match="must not include id"):
             apply_adjustments(str(tmp_path))
 
         _write_adjustments(tmp_path, [{
-            "action": "add", "id": None,
+            "action": "add", "target": {"kind": "finding"},
             "fields": {**base_fields, "id": "f3"}, "rationale": "r",
         }])
         with pytest.raises(ValueError, match="'id' is not adjustable"):
@@ -809,7 +818,7 @@ class TestBatchCoherence:
         raw["findings"].append({**_finding("f2"), "severity": "blocker"})
         (tmp_path / "review-findings.json").write_text(json.dumps(raw))
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "medium"}, "rationale": "r",
         }])
         with pytest.raises(ValueError, match="f2"):
@@ -826,7 +835,7 @@ class TestBatchCoherence:
         module's ValueError contract — the one step 11 catches."""
         (tmp_path / "review-findings.json").write_text(json.dumps(shape))
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "medium"}, "rationale": "r",
         }])
         with pytest.raises(ValueError, match="must be a JSON object"):
@@ -845,9 +854,9 @@ class TestValidateProposalInput:
 
     def test_valid_batch_returns_no_problems(self):
         assert validate_proposal_input({
-            "schema": 1,
+            "schema": 2,
             "adjustments": [{
-                "action": "promote", "id": "f1",
+                "action": "promote", "target": {"kind": "finding", "id": "f1"},
                 "fields": {"severity": "high"}, "rationale": "r",
             }],
         }) == []
@@ -858,31 +867,31 @@ class TestValidateProposalInput:
         ]
 
     def test_wrong_schema_is_a_problem(self):
-        problems = validate_proposal_input({"schema": 2, "adjustments": []})
+        problems = validate_proposal_input({"schema": 1, "adjustments": []})
         assert len(problems) == 1
-        assert "'schema' must be 1" in problems[0]
+        assert "'schema' must be 2" in problems[0]
 
     def test_adjustments_not_a_list_is_a_problem(self):
-        assert validate_proposal_input({"schema": 1, "adjustments": "nope"}) == [
+        assert validate_proposal_input({"schema": 2, "adjustments": "nope"}) == [
             "decision-critic-adjustments.json: 'adjustments' must be a list"
         ]
 
     def test_missing_adjustments_key_is_a_problem(self):
-        assert validate_proposal_input({"schema": 1}) == [
+        assert validate_proposal_input({"schema": 2}) == [
             "decision-critic-adjustments.json: 'adjustments' must be a list"
         ]
 
     def test_entry_not_an_object_is_a_problem(self):
         assert validate_proposal_input({
-            "schema": 1, "adjustments": ["not-a-dict"],
+            "schema": 2, "adjustments": ["not-a-dict"],
         }) == ["adjustment[0] must be an object"]
 
     def test_adjustment_id_is_not_a_proposal_field(self):
         problems = validate_proposal_input({
-            "schema": 1,
+            "schema": 2,
             "adjustments": [{
                 "adjustment_id": "caller-owned", "action": "promote",
-                "id": "f1",
+                "target": {"kind": "finding", "id": "f1"},
                 "fields": {"severity": "high"}, "rationale": "r",
             }],
         })
@@ -890,9 +899,9 @@ class TestValidateProposalInput:
 
     def test_unknown_action_is_a_problem(self):
         problems = validate_proposal_input({
-            "schema": 1,
+            "schema": 2,
             "adjustments": [{
-                "action": "obliterate", "id": "f1",
+                "action": "obliterate", "target": {"kind": "finding", "id": "f1"},
                 "fields": {}, "rationale": "r",
             }],
         })
@@ -900,9 +909,9 @@ class TestValidateProposalInput:
 
     def test_invalid_field_is_a_problem(self):
         problems = validate_proposal_input({
-            "schema": 1,
+            "schema": 2,
             "adjustments": [{
-                "action": "correct", "id": "f1",
+                "action": "correct", "target": {"kind": "finding", "id": "f1"},
                 "fields": {"verdict": "APPROVE"}, "rationale": "r",
             }],
         })
@@ -910,9 +919,9 @@ class TestValidateProposalInput:
 
     def test_add_missing_required_fields_is_a_problem(self):
         problems = validate_proposal_input({
-            "schema": 1,
+            "schema": 2,
             "adjustments": [{
-                "action": "add", "id": None,
+                "action": "add", "target": {"kind": "finding"},
                 "fields": {"severity": "low"}, "rationale": "r",
             }],
         })
@@ -920,15 +929,15 @@ class TestValidateProposalInput:
 
     def test_add_with_a_critic_supplied_id_is_a_problem(self):
         problems = validate_proposal_input({
-            "schema": 1,
+            "schema": 2,
             "adjustments": [{
-                "action": "add", "id": "f3",
+                "action": "add", "target": {"kind": "finding", "id": "f3"},
                 "fields": {"severity": "low", "title": "t", "file": "f.go",
                            "description": "d", "recommendation": "r"},
                 "rationale": "r",
             }],
         })
-        assert any("ids are generated" in p for p in problems)
+        assert any("must not include id" in p for p in problems)
 
     @pytest.mark.parametrize(
         "action,fields,problem",
@@ -941,11 +950,11 @@ class TestValidateProposalInput:
             ),
             ("demote", {"title": "not a severity"},
              "demote requires exactly the severity field"),
-            ("rescope", {}, "rescope requires exactly the line field"),
+            ("rescope", {}, "rescope requires exactly the file and line fields"),
             (
                 "rescope",
-                {"line": 20, "file": "other.go"},
-                "rescope requires exactly the line field",
+                {"line": 20},
+                "rescope requires exactly the file and line fields",
             ),
             ("correct", {}, "correct requires at least one field"),
             (
@@ -958,10 +967,10 @@ class TestValidateProposalInput:
         self, action, fields, problem
     ):
         problems = validate_proposal_input({
-            "schema": 1,
+            "schema": 2,
             "adjustments": [{
                 "action": action,
-                "id": "f1",
+                "target": {"kind": "finding", "id": "f1"},
                 "fields": fields,
                 "rationale": "r",
             }],
@@ -971,24 +980,26 @@ class TestValidateProposalInput:
 
     def test_a_proposal_may_target_each_finding_only_once(self):
         problems = validate_proposal_input({
-            "schema": 1,
+            "schema": 2,
             "adjustments": [
                 {
                     "action": "promote",
-                    "id": "f1",
+                    "target": {"kind": "finding", "id": "f1"},
                     "fields": {"severity": "high"},
                     "rationale": "r",
                 },
                 {
                     "action": "correct",
-                    "id": "f1",
+                    "target": {"kind": "finding", "id": "f1"},
                     "fields": {"title": "Clearer title"},
                     "rationale": "r",
                 },
             ],
         })
 
-        assert any("duplicate target 'f1'" in problem for problem in problems)
+        assert any(
+            "duplicate target finding 'f1'" in problem for problem in problems
+        )
 
     def test_two_independent_problems_are_both_reported(self):
         """The proposal validator collects every independent problem
@@ -996,11 +1007,11 @@ class TestValidateProposalInput:
         finds. apply_adjustments() only ever surfaces `problems[0]`, so
         this can only be pinned by calling the validator directly."""
         problems = validate_proposal_input({
-            "schema": 1,
+            "schema": 2,
             "adjustments": [
-                {"action": "obliterate", "id": "f1",
+                {"action": "obliterate", "target": {"kind": "finding", "id": "f1"},
                  "fields": {}, "rationale": "r"},
-                {"action": "add", "id": "f3",
+                {"action": "add", "target": {"kind": "finding", "id": "f3"},
                  "fields": {"severity": "low", "title": "t", "file": "f.go",
                             "description": "d", "recommendation": "r"},
                  "rationale": "r"},
@@ -1008,11 +1019,11 @@ class TestValidateProposalInput:
         })
         assert len(problems) == 2
         assert any("unknown action" in p and "obliterate" in p for p in problems)
-        assert any("ids are generated" in p for p in problems)
+        assert any("must not include id" in p for p in problems)
 
 
 class TestAdjustmentsSchemaValidation:
-    """decision-reviewer.md's taught template always writes `"schema": 1`
+    """decision-reviewer.md's taught template always writes `"schema": 2`
     alongside `"adjustments"`; a doc out of that template is refused
     whole, the same all-or-nothing way an unknown action is."""
 
@@ -1021,26 +1032,26 @@ class TestAdjustmentsSchemaValidation:
     def _write_raw_adjustments(self, output_dir, doc):
         _write_snapshot_document(output_dir, doc)
 
-    def test_schema_1_proceeds(self, tmp_path):
+    def test_schema_2_proceeds(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1", "low")])
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "high"}, "rationale": "r",
         }])
         result = apply_adjustments(str(tmp_path))
         assert result["status"] == "applied"
         assert result["applied"] == 1
 
-    def test_schema_2_refuses_the_whole_batch(self, tmp_path):
+    def test_schema_1_refuses_the_whole_batch(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1", "low")])
         self._write_raw_adjustments(tmp_path, {
-            "schema": 2,
+            "schema": 1,
             "adjustments": [{
-                "action": "promote", "id": "f1",
+                "action": "promote", "target": {"kind": "finding", "id": "f1"},
                 "fields": {"severity": "high"}, "rationale": "r",
             }],
         })
-        with pytest.raises(ValueError, match="'schema' must be 1"):
+        with pytest.raises(ValueError, match="'schema' must be 2"):
             apply_adjustments(str(tmp_path))
         data = json.loads((tmp_path / "review-findings.json").read_text())
         assert data["findings"][0]["severity"] == "low"  # nothing written
@@ -1055,26 +1066,26 @@ class TestAdjustmentsSchemaValidation:
         _write_findings(tmp_path, [_finding("f1", "low")])
         self._write_raw_adjustments(tmp_path, {
             "adjustments": [{
-                "action": "promote", "id": "f1",
+                "action": "promote", "target": {"kind": "finding", "id": "f1"},
                 "fields": {"severity": "high"}, "rationale": "r",
             }],
         })
-        with pytest.raises(ValueError, match="'schema' must be 1"):
+        with pytest.raises(ValueError, match="'schema' must be 2"):
             apply_adjustments(str(tmp_path))
         data = json.loads((tmp_path / "review-findings.json").read_text())
         assert data["findings"][0]["severity"] == "low"  # nothing written
 
     def test_schema_as_a_string_refuses(self, tmp_path):
-        """`"1"` is not `1` — no type coercion for the schema gate."""
+        """`"2"` is not `2` — no type coercion for the schema gate."""
         _write_findings(tmp_path, [_finding("f1", "low")])
         self._write_raw_adjustments(tmp_path, {
-            "schema": "1",
+            "schema": "2",
             "adjustments": [{
-                "action": "promote", "id": "f1",
+                "action": "promote", "target": {"kind": "finding", "id": "f1"},
                 "fields": {"severity": "high"}, "rationale": "r",
             }],
         })
-        with pytest.raises(ValueError, match="'schema' must be 1"):
+        with pytest.raises(ValueError, match="'schema' must be 2"):
             apply_adjustments(str(tmp_path))
 
     @pytest.mark.parametrize("shape", [[{"id": "f1"}], "hello", 5])
@@ -1107,7 +1118,7 @@ class TestScopeLinePairing:
     def test_add_without_a_line_is_marked_file_scoped(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1")])
         _write_adjustments(tmp_path, [{
-            "action": "add", "id": None,
+            "action": "add", "target": {"kind": "finding"},
             "fields": {"severity": "low", "title": "stale README",
                        "file": "README.md", "description": "d",
                        "recommendation": "r"},
@@ -1123,7 +1134,7 @@ class TestScopeLinePairing:
     def test_add_with_a_line_carries_no_scope_marker(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1")])
         _write_adjustments(tmp_path, [{
-            "action": "add", "id": None,
+            "action": "add", "target": {"kind": "finding"},
             "fields": {"severity": "low", "title": "t", "file": "f.go",
                        "description": "d", "recommendation": "r", "line": 42},
             "rationale": "r",
@@ -1139,8 +1150,9 @@ class TestScopeLinePairing:
         file_scoped = {**_finding("f1"), "line": None, "scope": "file"}
         _write_findings(tmp_path, [file_scoped])
         _write_adjustments(tmp_path, [{
-            "action": "rescope", "id": "f1",
-            "fields": {"line": 88}, "rationale": "pinned to the call site",
+            "action": "rescope", "target": {"kind": "finding", "id": "f1"},
+            "fields": {"file": "f.go", "line": 88},
+            "rationale": "pinned to the call site",
         }])
         apply_adjustments(str(tmp_path))
         finding = json.loads(
@@ -1153,8 +1165,9 @@ class TestScopeLinePairing:
         line_anchored = {**_finding("f1"), "line": 12}
         _write_findings(tmp_path, [line_anchored])
         _write_adjustments(tmp_path, [{
-            "action": "rescope", "id": "f1",
-            "fields": {"line": None}, "rationale": "the whole file drifted",
+            "action": "rescope", "target": {"kind": "finding", "id": "f1"},
+            "fields": {"file": "f.go", "line": None},
+            "rationale": "the whole file drifted",
         }])
         apply_adjustments(str(tmp_path))
         finding = json.loads(
@@ -1167,7 +1180,7 @@ class TestScopeLinePairing:
         file_scoped = {**_finding("f1"), "line": None, "scope": "file"}
         _write_findings(tmp_path, [file_scoped])
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "high"}, "rationale": "r",
         }])
         apply_adjustments(str(tmp_path))
@@ -1186,8 +1199,8 @@ class TestScopeLinePairing:
         the builder itself would have refused."""
         _write_findings(tmp_path, [_finding("f1")])
         _write_adjustments(tmp_path, [{
-            "action": "rescope", "id": "f1",
-            "fields": {"line": bad_line}, "rationale": "r",
+            "action": "rescope", "target": {"kind": "finding", "id": "f1"},
+            "fields": {"file": "f.go", "line": bad_line}, "rationale": "r",
         }])
         with pytest.raises(ValueError, match="line must be a positive"):
             apply_adjustments(str(tmp_path))
@@ -1216,7 +1229,7 @@ class TestCLI:
     def test_cli_applies_and_reports_result_json_on_stdout(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1", "low")])
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "medium"}, "rationale": "r",
         }])
         proc = self._run(tmp_path)
@@ -1235,9 +1248,9 @@ class TestCLI:
         the CLI's except tuple does not cover — no ERROR: line at all."""
         _write_findings(tmp_path, [_finding("f1"), _finding("f2")])
         _write_adjustments(tmp_path, [
-            {"action": "remove", "id": "f2",
+            {"action": "remove", "target": {"kind": "finding", "id": "f2"},
              "fields": {}, "rationale": "false positive"},
-            {"action": "correct", "id": "f2",
+            {"action": "correct", "target": {"kind": "finding", "id": "f2"},
              "fields": {"title": "t2"}, "rationale": "r"},
         ])
         proc = self._run(tmp_path)
@@ -1251,7 +1264,7 @@ class TestCLI:
     def test_cli_fails_loudly_on_invalid_action(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1", "low")])
         _write_adjustments(tmp_path, [{
-            "action": "obliterate", "id": "f1",
+            "action": "obliterate", "target": {"kind": "finding", "id": "f1"},
             "fields": {}, "rationale": "r",
         }])
         proc = self._run(tmp_path)
@@ -1273,7 +1286,7 @@ class TestCriticVerdictGate:
     def test_apply_refuses_without_verdict_file(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1", "low")])
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "critical"}, "rationale": "r",
         }])
         (tmp_path / "decision-critic-verdict.json").unlink()
@@ -1294,7 +1307,7 @@ class TestCriticVerdictGate:
     def test_apply_refuses_on_stand(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1", "low")])
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "critical"}, "rationale": "r",
         }])
         _write_critic_verdict(tmp_path, "STAND")
@@ -1321,7 +1334,7 @@ class TestCriticVerdictGate:
         """
         _write_findings(tmp_path, [_finding("f1", "low")])
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "critical"}, "rationale": "r",
         }])
         _write_critic_verdict(tmp_path, near_miss)
@@ -1340,7 +1353,7 @@ class TestCriticVerdictGate:
     def test_apply_refuses_on_unparseable_verdict(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1", "low")])
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "critical"}, "rationale": "r",
         }])
         (tmp_path / "decision-critic-verdict.json").write_text("{not json")
@@ -1356,7 +1369,7 @@ class TestCriticVerdictGate:
     def test_apply_proceeds_on_revise(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1", "low")])
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "critical"}, "rationale": "r",
         }])
         _write_critic_verdict(tmp_path, "REVISE")
@@ -1372,7 +1385,7 @@ class TestCriticVerdictGate:
     def test_cli_exit_code_on_refusal(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1", "low")])
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "critical"}, "rationale": "r",
         }])
         _write_critic_verdict(tmp_path, "STAND")
@@ -1431,10 +1444,10 @@ class TestReadCriticVerdict:
         self, tmp_path
     ):
         proposal = critic_adjustments_module.prepare_proposal({
-            "schema": 1,
+            "schema": 2,
             "adjustments": [{
                 "action": "demote",
-                "id": "f1",
+                "target": {"kind": "finding", "id": "f1"},
                 "fields": {"severity": "low"},
                 "rationale": "Guarded upstream.",
             }],
@@ -1449,10 +1462,10 @@ class TestReadCriticVerdict:
     ):
         _write_findings(tmp_path, [_finding("f1", "high")])
         proposal = critic_adjustments_module.prepare_proposal({
-            "schema": 1,
+            "schema": 2,
             "adjustments": [{
                 "action": "demote",
-                "id": "f1",
+                "target": {"kind": "finding", "id": "f1"},
                 "fields": {"severity": "low"},
                 "rationale": "Guarded upstream.",
             }],
@@ -1716,7 +1729,7 @@ class TestCriticInputRoundTrip:
         assert visible_ids
 
         proposal = _write_adjustments(tmp_path, [{
-            "action": "promote", "id": visible_ids[0],
+            "action": "promote", "target": {"kind": "finding", "id": visible_ids[0]},
             "fields": {"severity": "high"},
             "rationale": "the exploit path is reachable from the REST route",
         }])
@@ -1786,7 +1799,7 @@ class TestStepElevenAppliesAdjustments:
         _write_findings(tmp_path, [_finding("f1", "low")],
                         verdict="approve")
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "critical"}, "rationale": "r",
         }])
         _write_critic_verdict(tmp_path, "REVISE")
@@ -1809,7 +1822,7 @@ class TestStepElevenAppliesAdjustments:
         _write_findings(tmp_path, [_finding("f1", "low")])
         _write_adjustments(tmp_path, [{
             "action": "promote",
-            "id": "f1",
+            "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "high"},
             "rationale": "r",
         }])
@@ -1834,7 +1847,7 @@ class TestStepElevenAppliesAdjustments:
     def test_invalid_adjustments_degrade_instead_of_crashing(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1", "low")])
         _write_adjustments(tmp_path, [{
-            "action": "obliterate", "id": "f1",
+            "action": "obliterate", "target": {"kind": "finding", "id": "f1"},
             "fields": {}, "rationale": "r",
         }])
         _write_critic_verdict(tmp_path, "REVISE")
@@ -1906,7 +1919,7 @@ class TestStepElevenAppliesAdjustments:
         """
         _write_findings(tmp_path, [_finding("f1", "low")])
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "critical"}, "rationale": "r",
         }])
         document = json.loads(
@@ -1934,7 +1947,7 @@ class TestStepElevenAppliesAdjustments:
         """No verdict file is not an implicit REVISE."""
         _write_findings(tmp_path, [_finding("f1", "low")])
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "critical"}, "rationale": "r",
         }])
         (tmp_path / "decision-critic-verdict.json").unlink()
@@ -1959,10 +1972,10 @@ class TestStepElevenAppliesAdjustments:
         """
         _write_findings(tmp_path, [_finding("f1", "low")])
         _write_adjustments(tmp_path, [
-            {"action": "promote", "id": "f1",
+            {"action": "promote", "target": {"kind": "finding", "id": "f1"},
              "fields": {"severity": "medium"}, "rationale": "r",
              "applied": True},
-            {"action": "remove", "id": "f1", "rationale": "r",
+            {"action": "remove", "target": {"kind": "finding", "id": "f1"}, "rationale": "r",
              "rejected": True, "rejection_reason": "spot-check refuted it"},
         ])
         _write_critic_verdict(tmp_path, "STAND")
@@ -1987,7 +2000,7 @@ class TestStepElevenAppliesAdjustments:
         # raw rewrite here would simulate a hand edit instead.
         write_findings(str(tmp_path), data)
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "critical"}, "rationale": "r",
             "adjustment_id": "f4",
         }])
@@ -2011,7 +2024,7 @@ class TestStepElevenAppliesAdjustments:
             json.dumps([_finding("f1", "low")])
         )
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "medium"}, "rationale": "r",
         }])
         _write_critic_verdict(tmp_path, "REVISE")
@@ -2055,7 +2068,7 @@ class TestStepElevenRerendersFindingsMarkdown:
             "## High Issues\n\n### Unescaped output\n"
         )
         _write_adjustments(tmp_path, [{
-            "action": "demote", "id": "f1",
+            "action": "demote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "low"}, "rationale": "guarded upstream",
         }])
 
@@ -2349,7 +2362,7 @@ class TestNarrativeSummaryInvalidation:
     def test_an_applying_batch_withdraws_the_summary(self, tmp_path):
         self._seed(tmp_path)
         _write_adjustments(tmp_path, [{
-            "action": "demote", "id": "f1",
+            "action": "demote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "low"}, "rationale": "guarded upstream",
         }])
         result = apply_adjustments(tmp_path)
@@ -2360,7 +2373,7 @@ class TestNarrativeSummaryInvalidation:
     def test_the_invalidated_text_stays_auditable(self, tmp_path):
         self._seed(tmp_path)
         _write_adjustments(tmp_path, [{
-            "action": "demote", "id": "f1",
+            "action": "demote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "low"}, "rationale": "guarded upstream",
         }])
         apply_adjustments(tmp_path)
@@ -2370,15 +2383,15 @@ class TestNarrativeSummaryInvalidation:
         assert invalidated[0]["text"] == self._SUMMARY
         # Tied to the exact decisions that caused it, the same way each
         # touched finding names the action that touched it.
-        assert invalidated[0]["invalidated_by_adjustment_ids"] == _applied_ids(data)
+        assert invalidated[0]["invalidated_by_critic_adjustment_ids"] == _applied_ids(data)
 
     def test_a_second_withdrawal_names_only_its_own_batch(self, tmp_path):
-        """invalidated_by_adjustment_ids is causal attribution, not history: a second
+        """invalidated_by_critic_adjustment_ids is causal attribution, not history: a second
         reconciliation round's withdrawal must name the batch that caused
         it, never the cumulative applied-ids list."""
         self._seed(tmp_path)
         _write_adjustments(tmp_path, [{
-            "action": "demote", "id": "f1",
+            "action": "demote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "low"}, "rationale": "first round",
         }])
         apply_adjustments(tmp_path)
@@ -2389,7 +2402,7 @@ class TestNarrativeSummaryInvalidation:
         data["assessment"] = "Fresh assessment after round two."
         findings_path.write_text(json.dumps(data))
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "medium"}, "rationale": "second round",
         }])
         apply_adjustments(tmp_path)
@@ -2400,15 +2413,15 @@ class TestNarrativeSummaryInvalidation:
             i for i in _applied_ids(data) if i not in first_batch
         ]
         assert second_batch
-        assert invalidated[1]["invalidated_by_adjustment_ids"] == second_batch
-        assert invalidated[0]["invalidated_by_adjustment_ids"] == first_batch
+        assert invalidated[1]["invalidated_by_critic_adjustment_ids"] == second_batch
+        assert invalidated[0]["invalidated_by_critic_adjustment_ids"] == first_batch
 
     def test_a_batch_that_applies_nothing_leaves_the_summary_alone(
         self, tmp_path
     ):
         self._seed(tmp_path)
         _write_adjustments(tmp_path, [{
-            "action": "demote", "id": "f1",
+            "action": "demote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "low"}, "rationale": "r",
             "rejected": True, "rejection_reason": "spot-check refuted it",
         }])
@@ -2421,7 +2434,7 @@ class TestNarrativeSummaryInvalidation:
     def test_a_refused_call_leaves_the_summary_alone(self, tmp_path):
         self._seed(tmp_path)
         _write_adjustments(tmp_path, [{
-            "action": "demote", "id": "f1",
+            "action": "demote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "low"}, "rationale": "r",
         }])
         _write_critic_verdict(tmp_path, "STAND")
@@ -2432,7 +2445,7 @@ class TestNarrativeSummaryInvalidation:
     def test_no_summary_to_withdraw_records_no_withdrawal(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1", "critical")])
         _write_adjustments(tmp_path, [{
-            "action": "demote", "id": "f1",
+            "action": "demote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "low"}, "rationale": "r",
         }])
         apply_adjustments(tmp_path)
@@ -2445,7 +2458,7 @@ class TestNarrativeSummaryInvalidation:
         not be erased by the second."""
         self._seed(tmp_path)
         _write_adjustments(tmp_path, [{
-            "action": "demote", "id": "f1",
+            "action": "demote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "low"}, "rationale": "r",
         }])
         apply_adjustments(tmp_path)
@@ -2455,7 +2468,7 @@ class TestNarrativeSummaryInvalidation:
         data["assessment"] = "Second assessment."
         atomic_write_json(str(tmp_path / "review-findings.json"), data)
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "high"}, "rationale": "r2",
         }])
         apply_adjustments(tmp_path)
@@ -2488,7 +2501,7 @@ class TestStepElevenWithdrawsContradictedProse:
             ),
         )
         _write_adjustments(tmp_path, [{
-            "action": "demote", "id": "f1",
+            "action": "demote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "low"}, "rationale": "guarded upstream",
         }])
         _write_critic_verdict(tmp_path, "REVISE")
@@ -2527,10 +2540,10 @@ class TestCheckPassthrough:
         self, tmp_path, revise_verdict
     ):
         _write_findings(
-            tmp_path, [_finding("F1")], checks=self.CHECKS
+            tmp_path, [_finding("f1")], checks=self.CHECKS
         )
         _write_adjustments(tmp_path, [
-            {"adjustment_id": "A1", "action": "promote", "id": "F1",
+            {"adjustment_id": "A1", "action": "promote", "target": {"kind": "finding", "id": "f1"},
              "fields": {"severity": "high"}, "rationale": "r"},
         ])
 
@@ -2714,13 +2727,13 @@ class TestSpotCheckVocabulary:
     def _document(self, **entry_extra):
         entry = {
             "adjustment_id": "script-owned",
-            "action": "demote", "id": "f1",
+            "action": "demote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "low"}, "rationale": "guarded upstream",
         }
         entry.update(entry_extra)
-        document = {"schema": 1, "adjustments": [entry]}
+        document = {"schema": 2, "adjustments": [entry]}
         document["adjudication"] = {
-            "schema": 1,
+            "schema": 2,
             "source": "orchestrator",
             "proposal_digest": critic_adjustments_module.proposal_digest(
                 document
@@ -2786,10 +2799,10 @@ class TestSpotCheckVocabulary:
 
     def test_the_critic_proposal_gate_rejects_spot_check(self):
         problems = validate_proposal_input({
-            "schema": 1,
+            "schema": 2,
             "adjustments": [{
                 "action": "demote",
-                "id": "f1",
+                "target": {"kind": "finding", "id": "f1"},
                 "fields": {"severity": "low"},
                 "rationale": "guarded upstream",
                 "spot_check": "verified",
@@ -2806,7 +2819,7 @@ class TestSpotCheckRecordedInTheLedger:
     def _apply(self, tmp_path, **entry_extra):
         _write_findings(tmp_path, [_finding("f1", "high")])
         entry = {
-            "action": "demote", "id": "f1",
+            "action": "demote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "low"}, "rationale": "guarded upstream",
         }
         entry.update(entry_extra)
@@ -2832,24 +2845,22 @@ class TestSpotCheckRecordedInTheLedger:
             adjustments["adjustments"][0]["adjustment_id"]
         )
 
-    def test_a_legacy_string_record_still_reads_as_applied(self, tmp_path):
-        """A ledger written before the record grew a shape must not
-        re-apply its own settled decisions — idempotence is keyed on the
-        id, whichever way the id was stored."""
+    def test_a_schema_one_string_record_is_rejected(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1", "high")])
         data = json.loads((tmp_path / "review-findings.json").read_text())
         data[APPLIED_IDS_KEY] = ["legacy-id"]
         write_findings(str(tmp_path), data)
         _write_adjustments(tmp_path, [{
             "adjustment_id": "legacy-id", "action": "demote",
-            "id": "f1", "fields": {"severity": "low"},
+            "target": {"kind": "finding", "id": "f1"}, "fields": {"severity": "low"},
             "rationale": "already landed",
         }])
-        assert apply_adjustments(str(tmp_path))["applied"] == 0
-        after = json.loads((tmp_path / "review-findings.json").read_text())
-        assert after["findings"][0]["severity"] == "high"
+        with pytest.raises(ValueError, match="applied_critic_adjustments"):
+            apply_adjustments(str(tmp_path))
 
-    def test_pending_count_reads_both_record_shapes(self, tmp_path):
+    def test_pending_count_does_not_treat_schema_one_records_as_landed(
+        self, tmp_path
+    ):
         _write_findings(tmp_path, [
             _finding("f1", "high"), _finding("f2", "low"),
         ])
@@ -2859,12 +2870,12 @@ class TestSpotCheckRecordedInTheLedger:
         ]
         write_findings(str(tmp_path), data)
         _write_adjustments(tmp_path, [
-            {"adjustment_id": "legacy-id", "action": "demote", "id": "f1",
+            {"adjustment_id": "legacy-id", "action": "demote", "target": {"kind": "finding", "id": "f1"},
              "fields": {"severity": "low"}, "rationale": "r"},
-            {"adjustment_id": "new-id", "action": "promote", "id": "f2",
+            {"adjustment_id": "new-id", "action": "promote", "target": {"kind": "finding", "id": "f2"},
              "fields": {"severity": "critical"}, "rationale": "r"},
         ])
-        assert pending_count(str(tmp_path)) == 0
+        assert pending_count(str(tmp_path)) == 1
 
 
 class TestRevisedNarrative:
@@ -2888,21 +2899,21 @@ class TestRevisedNarrative:
 
     def _write_doc(self, tmp_path, **doc_extra):
         entry = {
-            "action": "demote", "id": "f1",
+            "action": "demote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "low"}, "rationale": "guarded upstream",
         }
         _write_adjustments(tmp_path, [entry], **doc_extra)
 
     def test_a_non_string_revised_assessment_rejects_the_batch(self):
         problems = validate_proposal_input({
-            "schema": 1, "adjustments": [], "revised_assessment": ["a", "b"],
+            "schema": 2, "adjustments": [], "revised_assessment": ["a", "b"],
         })
         assert problems and "revised_assessment" in problems[0]
 
     def test_a_string_revised_assessment_is_accepted_in_adjudication(self):
-        document = {"schema": 1, "adjustments": []}
+        document = {"schema": 2, "adjustments": []}
         document["adjudication"] = {
-            "schema": 1,
+            "schema": 2,
             "source": "orchestrator",
             "proposal_digest": critic_adjustments_module.proposal_digest(
                 document
@@ -2996,7 +3007,7 @@ class TestWithdrawnAssessmentRender:
 
     def test_invalidated_without_replacement_says_so(self):
         md = self._render(invalidated_assessments=[
-            {"text": "One CRITICAL blocker.", "invalidated_by_adjustment_ids": ["a1"]},
+            {"text": "One CRITICAL blocker.", "invalidated_by_critic_adjustment_ids": ["a1"]},
         ])
         assert "No current assessment" in md
         assert "not replaced" in md
@@ -3006,7 +3017,7 @@ class TestWithdrawnAssessmentRender:
         md = self._render(
             assessment="After spot-checking: guarded upstream.",
             invalidated_assessments=[
-                {"text": "One CRITICAL blocker.", "invalidated_by_adjustment_ids": ["a1"]},
+                {"text": "One CRITICAL blocker.", "invalidated_by_critic_adjustment_ids": ["a1"]},
             ],
         )
         assert "After spot-checking: guarded upstream." in md
@@ -3030,7 +3041,13 @@ class TestWithdrawnAssessmentRender:
                 {"adjustment_id": "aaaa", "spot_check": "verified"},
             ],
             rejected_critic_adjustments=[
-                {"adjustment_id": "bbbb", "rejection_reason": "refuted"},
+                {
+                    "adjustment_id": "bbbb",
+                    "action": "remove",
+                    "target": {"kind": "finding", "id": "f1"},
+                    "spot_check": "refuted",
+                    "rejection_reason": "refuted",
+                },
             ],
         )
         assert "## Critic Adjustment Decisions" in md
@@ -3039,16 +3056,24 @@ class TestWithdrawnAssessmentRender:
 
     def test_all_refuted_decisions_still_render(self):
         md = self._render(rejected_critic_adjustments=[
-            {"adjustment_id": "aaaa", "spot_check": "refuted"},
-            {"adjustment_id": "bbbb", "rejection_reason": "not true"},
+            {
+                "adjustment_id": "aaaa", "action": "remove",
+                "target": {"kind": "finding", "id": "f1"},
+                "spot_check": "refuted", "rejection_reason": "refuted",
+            },
+            {
+                "adjustment_id": "bbbb", "action": "correct",
+                "target": {"kind": "check", "id": "c1"},
+                "spot_check": "refuted", "rejection_reason": "not true",
+            },
         ])
         assert "## Critic Adjustment Decisions" in md
         assert "- `aaaa` — refuted" in md
         assert "- `bbbb` — refuted" in md
 
-    def test_legacy_applied_ids_render_not_checked(self):
+    def test_schema_one_applied_ids_do_not_render(self):
         md = self._render(applied_critic_adjustments=["legacy-id"])
-        assert "- `legacy-id` — not_checked" in md
+        assert "Critic Adjustment Decisions" not in md
 
     def test_malformed_decision_records_are_ignored(self):
         md = self._render(
@@ -3080,7 +3105,7 @@ class TestLedgerVerdictRecompute:
         _write_findings(tmp_path, [_finding("f1", "high")],
                         verdict="request_changes")
         _write_adjustments(tmp_path, [{
-            "action": "demote", "id": "f1",
+            "action": "demote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "low"}, "rationale": "guarded upstream",
         }])
         apply_adjustments(str(tmp_path))
@@ -3091,7 +3116,7 @@ class TestLedgerVerdictRecompute:
         _write_findings(tmp_path, [_finding("f1", "medium")],
                         verdict="comment")
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "critical"}, "rationale": "unguarded",
         }])
         apply_adjustments(str(tmp_path))
@@ -3107,7 +3132,7 @@ class TestLedgerVerdictRecompute:
             verdict="request_changes",
         )
         _write_adjustments(tmp_path, [{
-            "action": "correct", "id": "f2",
+            "action": "correct", "target": {"kind": "finding", "id": "f2"},
             "fields": {"title": "corrected title"},
             "rationale": "clarify the existing finding",
         }])
@@ -3130,7 +3155,7 @@ class TestLedgerVerdictRecompute:
         _write_findings(tmp_path, [_finding("f1", "high")],
                         verdict="request_changes")
         _write_adjustments(tmp_path, [{
-            "action": "demote", "id": "f1",
+            "action": "demote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "low"}, "rationale": "guarded upstream",
         }])
         apply_adjustments(str(tmp_path))
@@ -3143,12 +3168,12 @@ class TestLedgerVerdictRecompute:
         _write_findings(tmp_path, [_finding("f1", "high")],
                         verdict="request_changes")
         _write_adjustments(tmp_path, [{
-            "action": "demote", "id": "f1",
+            "action": "demote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "low"}, "rationale": "round one",
         }])
         apply_adjustments(str(tmp_path))
         _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "f1",
+            "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "medium"}, "rationale": "round two",
         }])
         apply_adjustments(str(tmp_path))
@@ -3165,7 +3190,7 @@ class TestLedgerVerdictRecompute:
                         verdict="deliberately-stale")
         _write_adjustments(tmp_path, [{
             "adjustment_id": "landed", "applied": True, "action": "demote",
-            "id": "f1", "fields": {"severity": "low"}, "rationale": "r",
+            "target": {"kind": "finding", "id": "f1"}, "fields": {"severity": "low"}, "rationale": "r",
         }])
         ledger = json.loads((tmp_path / "review-findings.json").read_text())
         ledger[APPLIED_IDS_KEY] = [{
@@ -3182,7 +3207,7 @@ class TestLedgerVerdictRecompute:
                                    _finding("f2", "high")],
                         verdict="request_changes")
         _write_adjustments(tmp_path, [{
-            "action": "demote", "id": "f1",
+            "action": "demote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "low"}, "rationale": "guarded upstream",
         }])
         apply_adjustments(str(tmp_path))
@@ -3196,11 +3221,447 @@ class TestLedgerVerdictRecompute:
 # =============================================================================
 
 
+class TestSchemaTwoTargetUnion:
+    @staticmethod
+    def _entry(action, *, kind="finding", id_="f1", fields=None):
+        target = {"kind": kind}
+        if id_ is not None:
+            target["id"] = id_
+        return {
+            "action": action,
+            "target": target,
+            "fields": {} if fields is None else fields,
+            "rationale": "Verified correction.",
+        }
+
+    @staticmethod
+    def _commit(tmp_path, adjustments, *, verdict="REVISE"):
+        proposal = critic_adjustments_module.prepare_proposal({
+            "schema": 2,
+            "adjustments": adjustments if verdict == "REVISE" else [],
+        })
+        critic_adjustments_module.write_adjustments(str(tmp_path), proposal)
+        atomic_write_json(
+            str(tmp_path / "decision-critic-verdict.json"),
+            {
+                "schema": 2,
+                "verdict": verdict,
+                "proposal_digest": critic_adjustments_module.proposal_digest(
+                    proposal
+                ),
+            },
+        )
+        return proposal
+
+    @staticmethod
+    def _settle(tmp_path, proposal, *, verified=(0,), refuted=(), assessment=None):
+        ids = [entry["adjustment_id"] for entry in proposal["adjustments"]]
+        request = {
+            "schema": 2,
+            "verified": [ids[index] for index in verified],
+            "refuted": [
+                {
+                    "adjustment_id": ids[index],
+                    "rejection_reason": reason,
+                }
+                for index, reason in refuted
+            ],
+        }
+        if assessment is not None:
+            request["revised_assessment"] = assessment
+        return critic_adjustments_module.settle(str(tmp_path), request)
+
+    @pytest.mark.parametrize(
+        ("action", "fields"),
+        [
+            ("promote", {"severity": "high"}),
+            ("demote", {"severity": "low"}),
+            ("rescope", {"file": "src/b.py", "line": 20}),
+            ("correct", {"description": "Corrected description."}),
+            ("remove", {}),
+        ],
+    )
+    def test_finding_mutations_require_kind_and_id(self, action, fields):
+        payload = {
+            "schema": 2,
+            "adjustments": [self._entry(action, fields=fields)],
+        }
+
+        assert validate_proposal_input(payload) == []
+
+    def test_add_finding_has_no_caller_supplied_id(self):
+        entry = self._entry(
+            "add",
+            id_=None,
+            fields={
+                "severity": "high",
+                "title": "Missing authorization",
+                "file": "src/api.py",
+                "line": 42,
+                "description": "State changes before authorization.",
+                "recommendation": "Authorize before mutation.",
+                "category": "security",
+                "confidence": 0.98,
+            },
+        )
+        payload = {"schema": 2, "adjustments": [entry]}
+
+        assert validate_proposal_input(payload) == []
+        entry["target"]["id"] = "f9"
+        assert "must not include id" in " ".join(
+            validate_proposal_input(payload)
+        )
+
+    @pytest.mark.parametrize(
+        ("action", "fields"),
+        [
+            ("correct", {"result": "No production caller reaches it."}),
+            ("remove", {}),
+        ],
+    )
+    def test_checks_support_only_correction_and_removal(self, action, fields):
+        payload = {
+            "schema": 2,
+            "adjustments": [
+                self._entry(action, kind="check", id_="c1", fields=fields)
+            ],
+        }
+
+        assert validate_proposal_input(payload) == []
+
+    @pytest.mark.parametrize(
+        ("action", "fields"),
+        [
+            ("promote", {"severity": "high"}),
+            ("demote", {"severity": "low"}),
+            ("rescope", {"file": "src/b.py", "line": 20}),
+            (
+                "add",
+                {
+                    "severity": "low",
+                    "title": "Invented check",
+                    "file": "src/b.py",
+                    "description": "The critic did not perform this check.",
+                    "recommendation": "Do not add it.",
+                },
+            ),
+        ],
+    )
+    def test_check_targets_reject_finding_only_actions(self, action, fields):
+        payload = {
+            "schema": 2,
+            "adjustments": [
+                self._entry(
+                    action,
+                    kind="check",
+                    id_=None if action == "add" else "c1",
+                    fields=fields,
+                )
+            ],
+        }
+
+        problems = validate_proposal_input(payload)
+
+        assert problems
+        assert "check" in " ".join(problems)
+
+    @pytest.mark.parametrize("field", ["id", "source_reviewers", "severity"])
+    def test_check_correction_rejects_immutable_or_finding_fields(self, field):
+        payload = {
+            "schema": 2,
+            "adjustments": [
+                self._entry(
+                    "correct",
+                    kind="check",
+                    id_="c1",
+                    fields={field: "replacement"},
+                )
+            ],
+        }
+
+        assert field in " ".join(validate_proposal_input(payload))
+
+    def test_non_add_target_requires_id_and_add_rejects_surplus_id(self):
+        missing = {
+            "schema": 2,
+            "adjustments": [
+                self._entry("remove", kind="check", id_=None, fields={})
+            ],
+        }
+        surplus = {
+            "schema": 2,
+            "adjustments": [self._entry(
+                "add",
+                id_="f9",
+                fields={
+                    "severity": "low",
+                    "title": "Added finding",
+                    "file": "src/b.py",
+                    "description": "A verified defect.",
+                    "recommendation": "Correct it.",
+                },
+            )],
+        }
+
+        assert "target.id" in " ".join(validate_proposal_input(missing))
+        assert "must not include id" in " ".join(
+            validate_proposal_input(surplus)
+        )
+
+    def test_duplicate_target_is_kind_aware(self):
+        duplicate = {
+            "schema": 2,
+            "adjustments": [
+                self._entry(
+                    "correct", fields={"description": "First correction."}
+                ),
+                self._entry(
+                    "remove", fields={},
+                ),
+            ],
+        }
+        distinct_kinds = {
+            "schema": 2,
+            "adjustments": [
+                self._entry(
+                    "correct", fields={"description": "First correction."}
+                ),
+                self._entry(
+                    "correct",
+                    kind="check",
+                    id_="c1",
+                    fields={"result": "Corrected result."},
+                ),
+            ],
+        }
+
+        assert "duplicate target finding 'f1'" in " ".join(
+            validate_proposal_input(duplicate)
+        )
+        assert validate_proposal_input(distinct_kinds) == []
+
+    def test_schema_one_is_rejected_without_a_compatibility_reader(self):
+        payload = {
+            "schema": 1,
+            "adjustments": [
+                self._entry("correct", fields={"description": "Corrected."})
+            ],
+        }
+
+        assert "schema' must be 2" in " ".join(
+            validate_proposal_input(payload)
+        )
+
+    def test_proposal_digest_commits_nested_target_but_not_lifecycle_state(self):
+        proposal = critic_adjustments_module.prepare_proposal({
+            "schema": 2,
+            "adjustments": [
+                self._entry("correct", fields={"description": "Corrected."})
+            ],
+        })
+        original = critic_adjustments_module.proposal_digest(proposal)
+        with_lifecycle = json.loads(json.dumps(proposal))
+        with_lifecycle["adjustments"][0].update({
+            "spot_check": "verified",
+            "applied": True,
+        })
+
+        assert critic_adjustments_module.proposal_digest(with_lifecycle) == original
+        with_lifecycle["adjustments"][0]["target"]["id"] = "f2"
+        assert critic_adjustments_module.proposal_digest(with_lifecycle) != original
+
+    def test_add_uses_ledger_allocator_and_increments_it(self, tmp_path):
+        _write_findings(
+            tmp_path,
+            [_finding("f1")],
+            assessment="Original assessment.",
+            meta={
+                "review_duration_ms": 10,
+                "confidence_score": 0.9,
+                "next_finding_number": 7,
+                "next_check_number": 1,
+            },
+        )
+        proposal = self._commit(tmp_path, [self._entry(
+            "add",
+            id_=None,
+            fields={
+                "severity": "medium",
+                "title": "Missing validation",
+                "file": "src/api.py",
+                "line": 42,
+                "description": "The input reaches mutation unchecked.",
+                "recommendation": "Validate before mutation.",
+            },
+        )])
+
+        self._settle(tmp_path, proposal)
+
+        ledger = json.loads((tmp_path / "review-findings.json").read_text())
+        assert [finding["id"] for finding in ledger["findings"]] == ["f1", "f7"]
+        assert ledger["meta"]["next_finding_number"] == 8
+        assert ledger["findings"][1]["critic_adjustment"]["action"] == "add"
+
+    def test_check_correction_captures_only_changed_prior_fields_and_replays(
+        self, tmp_path
+    ):
+        check = _check("c1")
+        _write_findings(
+            tmp_path,
+            [_finding("f1")],
+            checks=[check],
+            assessment="Original assessment.",
+            meta={
+                "review_duration_ms": 10,
+                "confidence_score": 0.9,
+                "next_finding_number": 2,
+                "next_check_number": 2,
+            },
+        )
+        proposal = self._commit(tmp_path, [self._entry(
+            "correct",
+            kind="check",
+            id_="c1",
+            fields={
+                "method": check["method"],
+                "result": "No production caller reaches it.",
+            },
+        )])
+
+        self._settle(
+            tmp_path,
+            proposal,
+            assessment="The corrected check supports the review.",
+        )
+        ledger_path = tmp_path / "review-findings.json"
+        first_bytes = ledger_path.read_bytes()
+        ledger = json.loads(first_bytes)
+        adjustment_id = proposal["adjustments"][0]["adjustment_id"]
+        assert ledger["checks"][0]["source_reviewers"] == [
+            "ecosystem-integration"
+        ]
+        assert ledger["checks"][0]["critic_adjustment"]["prior"] == {
+            "result": "No matching callers."
+        }
+        assert ledger["invalidated_assessments"] == [{
+            "text": "Original assessment.",
+            "invalidated_by_critic_adjustment_ids": [adjustment_id],
+        }]
+        assert ledger["assessment"] == (
+            "The corrected check supports the review."
+        )
+
+        retry = self._settle(
+            tmp_path,
+            proposal,
+            assessment="The corrected check supports the review.",
+        )
+
+        assert retry["status"] == "already_settled"
+        assert ledger_path.read_bytes() == first_bytes
+
+    def test_check_removal_moves_the_complete_entry_to_its_own_container(
+        self, tmp_path
+    ):
+        check = _check("c1")
+        _write_findings(
+            tmp_path,
+            [_finding("f1")],
+            checks=[check],
+            assessment="Original assessment.",
+            meta={
+                "review_duration_ms": 10,
+                "confidence_score": 0.9,
+                "next_finding_number": 2,
+                "next_check_number": 2,
+            },
+        )
+        proposal = self._commit(tmp_path, [
+            self._entry("remove", kind="check", id_="c1", fields={})
+        ])
+
+        self._settle(tmp_path, proposal)
+
+        ledger = json.loads((tmp_path / "review-findings.json").read_text())
+        assert ledger["checks"] == []
+        removed = ledger["checks_removed_by_critic"]
+        assert {key: removed[0][key] for key in check} == check
+        assert removed[0]["critic_adjustment"]["action"] == "remove"
+
+    def test_unknown_check_target_is_rejected_before_checkpoint(self, tmp_path):
+        _write_findings(
+            tmp_path,
+            [_finding("f1")],
+            checks=[_check("c1")],
+            assessment="Original assessment.",
+            meta={
+                "review_duration_ms": 10,
+                "confidence_score": 0.9,
+                "next_finding_number": 2,
+                "next_check_number": 2,
+            },
+        )
+        proposal = self._commit(tmp_path, [self._entry(
+            "remove", kind="check", id_="c9", fields={}
+        )])
+        paths = (
+            tmp_path / "decision-critic-adjustments.json",
+            tmp_path / "review-findings.json",
+        )
+        before = tuple(path.read_bytes() for path in paths)
+
+        with pytest.raises(ValueError, match="no check with id 'c9'"):
+            self._settle(tmp_path, proposal)
+
+        assert tuple(path.read_bytes() for path in paths) == before
+
+    def test_refuted_and_noop_corrections_leave_assessment_untouched(
+        self, tmp_path
+    ):
+        _write_findings(
+            tmp_path,
+            [_finding("f1")],
+            assessment="Original assessment.",
+        )
+        refuted = self._commit(tmp_path, [self._entry(
+            "correct", fields={"description": "Changed description."}
+        )])
+        self._settle(
+            tmp_path,
+            refuted,
+            verified=(),
+            refuted=((0, "Source confirms the original description."),),
+        )
+        after_refuted = json.loads(
+            (tmp_path / "review-findings.json").read_text()
+        )
+        assert after_refuted["assessment"] == "Original assessment."
+        assert "invalidated_assessments" not in after_refuted
+
+        other_dir = tmp_path / "noop"
+        other_dir.mkdir()
+        _write_findings(
+            other_dir,
+            [_finding("f1")],
+            assessment="Original assessment.",
+        )
+        no_op = self._commit(other_dir, [self._entry(
+            "correct", fields={"description": "d"}
+        )])
+        ledger_path = other_dir / "review-findings.json"
+        before_noop = ledger_path.read_bytes()
+
+        with pytest.raises(ValueError, match="would not change"):
+            self._settle(other_dir, no_op)
+
+        assert ledger_path.read_bytes() == before_noop
+
+
 class TestProposalPreparation:
     def _entry(self, **extra):
         entry = {
             "action": "demote",
-            "id": "f1",
+            "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "medium"},
             "rationale": "The claimed impact is narrower than stated.",
         }
@@ -3209,9 +3670,9 @@ class TestProposalPreparation:
 
     def test_prepare_assigns_unique_stable_ids(self):
         payload = {
-            "schema": 1,
+            "schema": 2,
             "adjustments": [self._entry(), {
-                **self._entry(), "id": "f2",
+                **self._entry(), "target": {"kind": "finding", "id": "f2"},
             }],
         }
 
@@ -3238,9 +3699,9 @@ class TestProposalPreparation:
         )
 
         proposal = critic_adjustments_module.prepare_proposal({
-            "schema": 1,
+            "schema": 2,
             "adjustments": [self._entry(), {
-                **self._entry(), "id": "f2",
+                **self._entry(), "target": {"kind": "finding", "id": "f2"},
             }],
         })
 
@@ -3249,14 +3710,14 @@ class TestProposalPreparation:
         ] == ["same", "different"]
 
     def test_prepare_rejects_duplicate_targets_before_assigning_ids(self):
-        with pytest.raises(ValueError, match="duplicate target 'f1'"):
+        with pytest.raises(ValueError, match="duplicate target finding 'f1'"):
             critic_adjustments_module.prepare_proposal({
-                "schema": 1,
+                "schema": 2,
                 "adjustments": [
                     self._entry(),
                     {
                         "action": "correct",
-                        "id": "f1",
+                        "target": {"kind": "finding", "id": "f1"},
                         "fields": {"title": "Clearer title"},
                         "rationale": "Clarify the mechanism.",
                     },
@@ -3276,7 +3737,7 @@ class TestProposalPreparation:
     def test_prepare_rejects_lifecycle_fields(self, forbidden, value):
         with pytest.raises(ValueError, match=forbidden):
             critic_adjustments_module.prepare_proposal({
-                "schema": 1,
+                "schema": 2,
                 "adjustments": [self._entry(**{forbidden: value})],
             })
 
@@ -3284,15 +3745,15 @@ class TestProposalPreparation:
         "payload,problem",
         [
             (
-                {"schema": 1, "adjustments": [], "revised_assessment": "x"},
+                {"schema": 2, "adjustments": [], "revised_assessment": "x"},
                 "revised_assessment",
             ),
             (
-                {"schema": 1, "adjustments": [], "adjudication": {}},
+                {"schema": 2, "adjustments": [], "adjudication": {}},
                 "adjudication",
             ),
             (
-                {"schema": 1, "adjustments": [], "counts": {}},
+                {"schema": 2, "adjustments": [], "counts": {}},
                 "counts",
             ),
         ],
@@ -3305,7 +3766,7 @@ class TestProposalPreparation:
 
     def test_proposal_digest_ignores_adjudication_and_apply_state(self):
         proposal = critic_adjustments_module.prepare_proposal({
-            "schema": 1,
+            "schema": 2,
             "adjustments": [self._entry()],
         })
         before = critic_adjustments_module.proposal_digest(proposal)
@@ -3314,7 +3775,7 @@ class TestProposalPreparation:
             "applied": True,
         })
         proposal["adjudication"] = {
-            "schema": 1,
+            "schema": 2,
             "source": "orchestrator",
             "proposal_digest": before,
             "recorded_at": "2026-08-24T10:00:00+00:00",
@@ -3325,9 +3786,9 @@ class TestProposalPreparation:
 
     def test_persisted_document_requires_unique_script_assigned_ids(self):
         entry = self._entry()
-        missing = {"schema": 1, "adjustments": [entry]}
+        missing = {"schema": 2, "adjustments": [entry]}
         duplicate = {
-            "schema": 1,
+            "schema": 2,
             "adjustments": [
                 {"adjustment_id": "dup", **entry},
                 {"adjustment_id": "dup", **entry, "id": "f2"},
@@ -3352,19 +3813,19 @@ class TestAdjudicationRequest:
     ENTRIES = [
         {
             "action": "demote",
-            "id": "f1",
+            "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "medium"},
             "rationale": "Narrower than stated.",
         },
         {
             "action": "promote",
-            "id": "f2",
+            "target": {"kind": "finding", "id": "f2"},
             "fields": {"severity": "critical"},
             "rationale": "The source confirms a wider impact.",
         },
         {
             "action": "correct",
-            "id": "f3",
+            "target": {"kind": "finding", "id": "f3"},
             "fields": {"title": "Corrected title"},
             "rationale": "The original title overstates the mechanism.",
         },
@@ -3510,7 +3971,7 @@ class TestAdjudicationRequest:
         _write_findings(tmp_path, [_finding("f1", "low")])
         proposal = _commit_critic_snapshot(tmp_path, [{
             "action": "promote",
-            "id": "missing-id",
+            "target": {"kind": "finding", "id": "f9"},
             "fields": {"severity": "high"},
             "rationale": "The proposal points at a missing finding.",
         }])
@@ -3519,7 +3980,7 @@ class TestAdjudicationRequest:
         findings_path = tmp_path / "review-findings.json"
         before = (adj_path.read_bytes(), findings_path.read_bytes())
 
-        with pytest.raises(ValueError, match="no finding with id 'missing-id'"):
+        with pytest.raises(ValueError, match="no finding with id 'f9'"):
             critic_adjustments_module.settle(str(tmp_path), request)
 
         assert (adj_path.read_bytes(), findings_path.read_bytes()) == before
@@ -3529,19 +3990,19 @@ class TestAdjudicationRequest:
     ):
         _write_findings(tmp_path, [_finding("f1", "low")])
         document = {
-            "schema": 1,
+            "schema": 2,
             "adjustments": [
                 {
                     "adjustment_id": "first",
                     "action": "promote",
-                    "id": "f1",
+                    "target": {"kind": "finding", "id": "f1"},
                     "fields": {"severity": "high"},
                     "rationale": "First mutation.",
                 },
                 {
                     "adjustment_id": "second",
                     "action": "correct",
-                    "id": "f1",
+                    "target": {"kind": "finding", "id": "f1"},
                     "fields": {"title": "Clearer title"},
                     "rationale": "Second mutation.",
                 },
@@ -3549,7 +4010,7 @@ class TestAdjudicationRequest:
         }
         _write_snapshot_document(tmp_path, document)
         request = {
-            "schema": 1,
+            "schema": 2,
             "verified": ["first", "second"],
             "refuted": [],
             "revised_assessment": "Settled assessment.",
@@ -3558,7 +4019,7 @@ class TestAdjudicationRequest:
         findings_path = tmp_path / "review-findings.json"
         before = (adj_path.read_bytes(), findings_path.read_bytes())
 
-        with pytest.raises(ValueError, match="duplicate target 'f1'"):
+        with pytest.raises(ValueError, match="duplicate target finding 'f1'"):
             critic_adjustments_module.settle(str(tmp_path), request)
 
         assert (adj_path.read_bytes(), findings_path.read_bytes()) == before
@@ -3587,7 +4048,7 @@ class TestAdjudicationRequest:
                 "The proposed mutation is a no-op.",
             ),
             (
-                "missing-id",
+                "f9",
                 {"severity": "critical"},
                 "The proposed target does not exist.",
             ),
@@ -3605,7 +4066,7 @@ class TestAdjudicationRequest:
         _write_findings(tmp_path, [_finding("f1", "high")])
         proposal = _commit_critic_snapshot(tmp_path, [{
             "action": "promote",
-            "id": target_id,
+            "target": {"kind": "finding", "id": target_id},
             "fields": fields,
             "rationale": "The orchestrator probe will reject this proposal.",
         }])
@@ -3633,7 +4094,7 @@ class TestAdjudicationRequest:
         assert findings[REJECTED_ADJUSTMENTS_KEY] == [{
             "adjustment_id": adjustment_id,
             "action": "promote",
-            "target_id": target_id,
+            "target": {"kind": "finding", "id": target_id},
             "spot_check": "refuted",
             "rejection_reason": rejection_reason,
         }]
@@ -3662,7 +4123,7 @@ class TestAdjudicationRequest:
                 "correct would not change the finding",
             ),
             (
-                "rescope", "low", {"line": 10},
+                "rescope", "low", {"file": "f.go", "line": 10},
                 "rescope would not change the finding",
             ),
         ],
@@ -3673,7 +4134,7 @@ class TestAdjudicationRequest:
         _write_findings(tmp_path, [_finding("f1", current)])
         proposal = _commit_critic_snapshot(tmp_path, [{
             "action": action,
-            "id": "f1",
+            "target": {"kind": "finding", "id": "f1"},
             "fields": fields,
             "rationale": "This mutation is not coherent with the ledger.",
         }])
@@ -3703,7 +4164,7 @@ class TestAuthoritativeLedgerApplicationState:
             "adjustment_id": "state-one",
             "applied": True,
             "action": "demote",
-            "id": "f1",
+            "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "low"},
             "rationale": "Guarded upstream.",
         })
@@ -3721,7 +4182,7 @@ class TestAuthoritativeLedgerApplicationState:
             "adjustment_id": "state-pending",
             "applied": True,
             "action": "demote",
-            "id": "f1",
+            "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "low"},
             "rationale": "Guarded upstream.",
         })
@@ -3735,7 +4196,7 @@ class TestAuthoritativeLedgerApplicationState:
                 "adjustment_id": "state-two",
                 "applied": True,
                 "action": "demote",
-                "id": "f1",
+                "target": {"kind": "finding", "id": "f1"},
                 "fields": {"severity": "low"},
                 "rationale": "Guarded upstream.",
             },
@@ -3745,7 +4206,7 @@ class TestAuthoritativeLedgerApplicationState:
             rejected_critic_adjustments=[{
                 "adjustment_id": "state-two",
                 "action": "demote",
-                "target_id": "f1",
+                "target": {"kind": "finding", "id": "f1"},
                 "spot_check": "refuted",
                 "rejection_reason": "Contradictory provenance.",
             }],
@@ -3764,7 +4225,7 @@ class TestAuthoritativeLedgerApplicationState:
                 "adjustment_id": "state-three",
                 "spot_check": "verified",
                 "action": "demote",
-                "id": "f1",
+                "target": {"kind": "finding", "id": "f1"},
                 "fields": {"severity": "low"},
                 "rationale": "Guarded upstream.",
             },
@@ -3788,14 +4249,14 @@ class TestAuthoritativeLedgerApplicationState:
                 "rejected": True,
                 "rejection_reason": "Checkpoint reason.",
                 "action": "demote",
-                "id": "f1",
+                "target": {"kind": "finding", "id": "f1"},
                 "fields": {"severity": "low"},
                 "rationale": "Guarded upstream.",
             },
             rejected_critic_adjustments=[{
                 "adjustment_id": "state-four",
                 "action": "demote",
-                "target_id": "f1",
+                "target": {"kind": "finding", "id": "f1"},
                 "spot_check": "refuted",
                 "rejection_reason": "Different ledger reason.",
             }],
@@ -3807,7 +4268,7 @@ class TestAuthoritativeLedgerApplicationState:
 
         assert tuple(path.read_bytes() for path in paths) == before
 
-    def test_legacy_rejection_without_spot_check_matches_refuted_checkpoint(
+    def test_schema_one_rejection_without_spot_check_is_rejected(
         self, tmp_path
     ):
         paths = self._write_settled_entry(
@@ -3818,22 +4279,21 @@ class TestAuthoritativeLedgerApplicationState:
                 "rejected": True,
                 "rejection_reason": "Checkpoint reason.",
                 "action": "demote",
-                "id": "f1",
+                "target": {"kind": "finding", "id": "f1"},
                 "fields": {"severity": "low"},
                 "rationale": "Guarded upstream.",
             },
             rejected_critic_adjustments=[{
                 "adjustment_id": "state-five",
                 "action": "demote",
-                "target_id": "f1",
+                "target": {"kind": "finding", "id": "f1"},
                 "rejection_reason": "Checkpoint reason.",
             }],
         )
         before = tuple(path.read_bytes() for path in paths)
 
-        result = apply_adjustments(str(tmp_path))
-
-        assert result["status"] == "nothing_pending"
+        with pytest.raises(ValueError, match="rejected_critic_adjustments"):
+            apply_adjustments(str(tmp_path))
         assert tuple(path.read_bytes() for path in paths) == before
 
 
@@ -3841,13 +4301,13 @@ class TestSourceBindingAndRecovery:
     ENTRIES = [
         {
             "action": "demote",
-            "id": "f1",
+            "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "low"},
             "rationale": "Guarded upstream.",
         },
         {
             "action": "correct",
-            "id": "f2",
+            "target": {"kind": "finding", "id": "f2"},
             "fields": {"title": "Corrected title"},
             "rationale": "The source uses a narrower mechanism.",
         },
@@ -3864,7 +4324,9 @@ class TestSourceBindingAndRecovery:
         [
             lambda entry: entry.update({"adjustment_id": "raw-edit"}),
             lambda entry: entry.update({"action": "promote"}),
-            lambda entry: entry.update({"id": "f2"}),
+            lambda entry: entry.update({
+                "target": {"kind": "finding", "id": "f2"}
+            }),
             lambda entry: entry.update({"fields": {"severity": "critical"}}),
             lambda entry: entry.update({"rationale": "Raw edit."}),
         ],
@@ -4091,10 +4553,10 @@ class TestSourceBindingAndRecovery:
         findings_source.write_text("# New findings\n")
         proposal_source = tmp_path / "new-proposal.json"
         proposal_source.write_text(json.dumps({
-            "schema": 1,
+            "schema": 2,
             "adjustments": [{
                 "action": "promote",
-                "id": "f2",
+                "target": {"kind": "finding", "id": "f2"},
                 "fields": {"severity": "high"},
                 "rationale": "New source evidence.",
             }],
@@ -4170,7 +4632,7 @@ class TestAdjudicationCLI:
         _write_findings(tmp_path, [_finding("f1", "high")])
         return _commit_critic_snapshot(tmp_path, [{
             "action": "demote",
-            "id": "f1",
+            "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "low"},
             "rationale": "Guarded upstream.",
         }])

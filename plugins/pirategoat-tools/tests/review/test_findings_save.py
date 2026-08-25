@@ -574,6 +574,47 @@ class TestFindingsSave:
         assert "REJECTED" in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
 
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "applied_critic_adjustments",
+            "rejected_critic_adjustments",
+            "findings_removed_by_critic",
+            "checks_removed_by_critic",
+            "invalidated_assessments",
+            "verdict_before_adjustments",
+        ],
+    )
+    def test_rejects_actor_supplied_critic_lifecycle_fields(
+        self, tmp_path, field
+    ):
+        findings = self._write_findings(
+            tmp_path, _valid_schema2_findings(**{field: []})
+        )
+
+        result = self._run_save(tmp_path, findings)
+
+        assert result.returncode != 0
+        assert "critic-owned lifecycle" in result.stdout
+        assert not (tmp_path / "review-findings.json").exists()
+
+    @pytest.mark.parametrize("collection", ["findings", "checks"])
+    def test_rejects_actor_supplied_critic_provenance(
+        self, tmp_path, collection
+    ):
+        doc = _valid_schema2_findings()
+        doc[collection][0]["critic_adjustment"] = {
+            "action": "correct",
+            "rationale": "Caller invented provenance.",
+        }
+        findings = self._write_findings(tmp_path, doc)
+
+        result = self._run_save(tmp_path, findings)
+
+        assert result.returncode != 0
+        assert "script-owned provenance" in result.stdout
+        assert not (tmp_path / "review-findings.json").exists()
+
     def test_accepts_empty_findings_with_approve(self, tmp_path):
         doc = _valid_findings(
             verdict="approve",

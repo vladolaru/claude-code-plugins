@@ -413,13 +413,13 @@ def _seed_step_11(out):
         },
     })
     proposal = critic_adjustments.prepare_proposal({
-        "schema": 1, "adjustments": [],
+        "schema": 2, "adjustments": [],
     })
     critic_adjustments.write_adjustments(str(out), proposal)
     atomic_write_json(
         str(out / critic_adjustments.CRITIC_VERDICT_FILENAME),
         {
-            "schema": 1,
+            "schema": 2,
             "verdict": "STAND",
             "proposal_digest": critic_adjustments.proposal_digest(proposal),
         },

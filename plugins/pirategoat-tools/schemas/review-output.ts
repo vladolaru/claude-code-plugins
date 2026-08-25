@@ -37,12 +37,8 @@ export type Verdict = 'block' | 'request_changes' | 'approve' | 'comment' | 'not
 export type ConfidenceScore = number; // 0.0 - 1.0
 
 /**
- * A decision-critic action, and the provenance it leaves on the finding it
- * touched. `critic_adjustments.py` writes this directly onto the target
- * finding object — for `add`, onto the newly created finding; for
- * `promote`/`demote`/`rescope`/`correct`, onto the finding it patched
- * in-place (still inside `findings`); for `remove`, onto the finding as it is
- * moved into `findings_removed_by_critic`. Never written by anything else.
+ * A decision-critic action, and the provenance it leaves on the finding or
+ * check it touched. `critic_adjustments.py` is the sole writer.
  */
 export interface CriticAdjustment {
     action: 'promote' | 'demote' | 'rescope' | 'correct' | 'add' | 'remove';
@@ -50,7 +46,7 @@ export interface CriticAdjustment {
     // The pre-patch value of just the fields this adjustment changed —
     // present only for promote/demote/rescope/correct. Absent for `add`
     // (nothing pre-existed) and `remove` (the whole finding is the change).
-    prior?: Partial<Pick<Finding, 'severity' | 'title' | 'description' | 'recommendation' | 'file' | 'line' | 'category' | 'confidence'>>;
+    prior?: Partial<Pick<Finding, 'severity' | 'title' | 'description' | 'recommendation' | 'file' | 'line' | 'category' | 'confidence'>> & Partial<Pick<ReviewCheck, 'question' | 'method' | 'result'>>;
 }
 
 /**
@@ -89,12 +85,20 @@ export interface ReviewCheck {
     method: string;
     result: string;
     source_reviewers: string[];
+    // Present only after critic_adjustments.py corrected this check, or on a
+    // complete check moved into checks_removed_by_critic.
+    critic_adjustment?: CriticAdjustment;
 }
 
 export interface InvalidatedAssessment {
     text: string;
-    invalidated_by_adjustment_ids: string[];
+    invalidated_by_critic_adjustment_ids: string[];
 }
+
+export type CriticTarget =
+    | { kind: 'finding'; id: string }
+    | { kind: 'check'; id: string }
+    | { kind: 'finding' }; // `add`, before ledger-owned fN allocation
 
 /**
  * Common review output structure for all agents
@@ -211,14 +215,10 @@ export interface ReviewOutput {
     // Rendered with rejected decisions in the "## Critic Adjustment
     // Decisions" list.
     //
-    // Readers must tolerate a bare-string entry: that is the shape this key
-    // held earlier in the same unreleased window, and apply_adjustments()
-    // still reads it (as "not_checked") so a ledger written then keeps its
-    // idempotence. Nothing writes that shape any more.
-    applied_critic_adjustments?: Array<
-        { adjustment_id: string; spot_check: 'verified' | 'refuted' | 'not_checked' }
-        | string
-    >;
+    applied_critic_adjustments?: Array<{
+        adjustment_id: string;
+        spot_check: 'verified' | 'not_checked';
+    }>;
 
     // The ledger's verdict BEFORE any critic batch applied, recorded the
     // first time an applying batch changed it — first time only, so a
@@ -251,10 +251,9 @@ export interface ReviewOutput {
     // adjustment_id so a resumed or repeated apply never appends a duplicate.
     rejected_critic_adjustments?: Array<{
         adjustment_id: string;
-        action: string | null;
-        target_id: string | null; // null for a rejected `add` (no target)
-        // absent on legacy schema-1 records; this bucket implies refuted
-        spot_check?: 'refuted';
+        action: 'promote' | 'demote' | 'rescope' | 'correct' | 'add' | 'remove';
+        target: CriticTarget;
+        spot_check: 'refuted';
         rejection_reason: string;
     }>;
 

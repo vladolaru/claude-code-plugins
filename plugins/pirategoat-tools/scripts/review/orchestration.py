@@ -1931,9 +1931,9 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
             "critic was dispatched but produced no verdict"
         )
 
-    # Carry any pending critic adjustments into the findings ledger before
-    # the verdict is derived from it — but only under REVISE, the one that
-    # sanctions them. The step-10 REVISE briefing has the orchestrator
+    # Carry any pending finding/check critic adjustments into the ledger
+    # before the verdict is derived from it — but only under REVISE, the one
+    # that sanctions them. The step-10 REVISE briefing has the orchestrator
     # spot-check each entry and submit only positive verified/refuted claims
     # through settle, so here it is the defensive re-run: any
     # orchestrator — bot or interactive — can stop short of the step-10

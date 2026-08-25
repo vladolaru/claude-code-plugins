@@ -328,7 +328,7 @@ def render_markdown(data: Dict) -> str:
     to_dict()/to_json() produce and the *-review.json file holds — so a
     rendering can never disagree with the artifact it came from.
 
-    Keys present in schema 1 are required (missing means KeyError — the
+    Keys present in schema 2 are required (missing means KeyError — the
     caller's problem); later schema additions are read with .get() and
     render only when present.
 
@@ -345,13 +345,13 @@ def render_markdown(data: Dict) -> str:
 
 
 def _applied_critic_decision(record):
-    """Normalize one applied-decision record for Markdown projection."""
-    if isinstance(record, str) and record:
-        return record, 'not_checked'
-    if not isinstance(record, dict):
+    """Project one complete schema-2 applied-decision record."""
+    if not isinstance(record, dict) or set(record) != {
+        'adjustment_id', 'spot_check'
+    }:
         return None
     adjustment_id = record.get('adjustment_id')
-    outcome = record.get('spot_check', 'not_checked')
+    outcome = record.get('spot_check')
     if (
         not isinstance(adjustment_id, str) or not adjustment_id
         or outcome not in ('verified', 'refuted', 'not_checked')
@@ -361,14 +361,16 @@ def _applied_critic_decision(record):
 
 
 def _rejected_critic_decision(record):
-    """Normalize one rejected-decision record, including legacy records."""
-    if not isinstance(record, dict):
+    """Project one complete schema-2 rejected-decision record."""
+    if not isinstance(record, dict) or set(record) != {
+        'adjustment_id', 'action', 'target', 'spot_check', 'rejection_reason'
+    }:
         return None
     adjustment_id = record.get('adjustment_id')
     outcome = record.get('spot_check')
     if (
         not isinstance(adjustment_id, str) or not adjustment_id
-        or outcome not in (None, 'refuted')
+        or outcome != 'refuted'
     ):
         return None
     return adjustment_id, 'refuted'
@@ -383,7 +385,7 @@ def render_review_body(data: Dict) -> str:
     ``render_markdown()`` (which supplies the per-reviewer title) and by
     the review-record assembler in ``orchestration.py`` (which supplies its
     own). Same contract as ``render_markdown()``: a pure function of the
-    canonical dict, schema-1 keys required, later additions read with
+    canonical dict, schema-2 keys required, later additions read with
     ``.get()``.
     """
     md = []
@@ -1880,11 +1882,12 @@ def _validate_finding_shape(finding, index):
 def _validate_check_shape(check, index):
     """Validate one canonical check without inferring materiality."""
     required = {"id", "question", "method", "result", "source_reviewers"}
+    allowed = required | {"critic_adjustment"}
     if not isinstance(check, dict):
         raise ValueError(f"review check {index} must be an object")
-    if set(check) != required:
+    if not required <= set(check) or not set(check) <= allowed:
         missing = sorted(required - set(check))
-        unexpected = sorted(set(check) - required)
+        unexpected = sorted(set(check) - allowed)
         details = []
         if missing:
             details.append("missing " + ", ".join(missing))

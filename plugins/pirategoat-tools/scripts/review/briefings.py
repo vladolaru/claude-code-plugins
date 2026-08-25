@@ -1572,7 +1572,7 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     if has_findings:
         # Two paths, both read directly — no context document is built.
         # The record IS the curated read (it renders the ledger through the
-        # same renderer, with each finding's 8-hex `id` on it), and the
+        # same renderer, with each finding's `fN` and check's `cN` id), and the
         # ledger itself is the machine-readable anchor the critic keys its
         # adjustments by. A builder that merged them into a third file
         # existed only because the record did not.
@@ -1595,7 +1595,7 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         "write a canonical `decision-critic-*` artifact directly."
     )
     actions.append(
-        "On REVISE, also author every finding-level adjustment in "
+        "On REVISE, also author every finding or check adjustment in "
         "`$TMPDIR/decision-critic-adjustments.json` and pass it to the "
         "same `critic.py --save` command, "
         "per your agent instructions. "
@@ -1653,12 +1653,12 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     )
     actions.append(
         "2) Spot-check the claims with `git grep`/`Read`, then author ONLY "
-        "this schema-1 adjudication request under `$TMPDIR` (create the "
+        "this schema-2 adjudication request under `$TMPDIR` (create the "
         "directory first if needed):"
     )
     actions.append("```json")
     actions.append("{")
-    actions.append('  "schema": 1,')
+    actions.append('  "schema": 2,')
     actions.append('  "verified": ["<script-assigned-adjustment-id>"],')
     actions.append('  "refuted": [')
     actions.append("    {")
@@ -1671,7 +1671,7 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append("    }")
     actions.append("  ],")
     actions.append(
-        '  "revised_assessment": "<post-critic assessment of the settled ledger>"'
+        '  "revised_assessment": "<optional post-critic assessment>"'
     )
     actions.append("}")
     actions.append("```")
@@ -1683,7 +1683,8 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         "derived as `not_checked`. Do not enumerate `not_checked`, counts, "
         "timestamps, serialized `spot_check` values, rejection flags, or "
         "application state. The orchestrator never edits the committed "
-        "proposal."
+        "proposal. `revised_assessment` is optional: omit it when no "
+        "replacement assessment should be installed."
     )
     actions.append(
         "3) Save the request as `$TMPDIR/critic-adjudication.json`, then run "
@@ -1698,7 +1699,7 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append(
         "A successful handoff reports `RECORDED ADJUDICATION`, the derived "
         "`VERIFIED | REFUTED | NOT_CHECKED` counts, `REVISED ASSESSMENT: "
-        "present`, the `PROPOSAL DIGEST`, and the `APPLY` result. On any "
+        "present|absent`, the `PROPOSAL DIGEST`, and the `APPLY` result. On any "
         "`REJECTED:` line, correct only the temp request and resubmit it; "
         "never edit the output artifact or bypass `settle`."
     )
@@ -1710,9 +1711,11 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     )
     actions.append(
         "Never hand-edit `review-findings.json` either: the application "
-        "phase carries provenance, withdraws the reconciler's prior "
-        "assessment, installs the request's revised assessment, recounts "
-        "findings, and derives the final ledger verdict."
+        "phase carries provenance, invalidates the reconciler's prior "
+        "assessment only when an accepted operation really changes the ledger, "
+        "installs a supplied revised assessment, recounts findings, and derives "
+        "the final ledger verdict. Refuted and rejected-before-apply operations "
+        "do not invalidate or replace the assessment."
     )
     actions.append(
         f"4) Nothing else to edit. The pipeline re-assembles "

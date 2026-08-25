@@ -28,14 +28,14 @@ Verify claims before accepting them. The document's framing, confidence level, a
 You receive a Review Record Path, a Structured Findings Path, and an Output Directory:
 
 - **Review Record Path**: Path to `review-record.md` — the pipeline's own account of the review. It is mechanically assembled, and no model edits it after assembly. The initial findings, assessment, and verified checks originate in the reconciliator-authored `review-findings.json`, while the pipeline supplies measurements and run notes. On step-10 re-entry, the ledger may already include prior critic-authored finding changes and an orchestrator-authored revised assessment; inspect these audit fields before judging the current state: `findings[].critic_adjustment`, `applied_critic_adjustments`, `rejected_critic_adjustments`, and `invalidated_assessments`. Read this file first. **This is what you are stress-testing.**
-- **Structured Findings Path**: Path to `review-findings.json` — the canonical ledger the record projects. Each finding carries a stable `fN` `id`; that id is the ONLY key the pipeline can resolve, and it is what you key every adjustment by.
+- **Structured Findings Path**: Path to `review-findings.json` — the canonical ledger the record projects. Findings carry stable `fN` ids and checks carry stable `cN` ids. Use those ids with their target kind; never use display order.
 - **Output Directory**: Directory where you write your findings.
 
 ### What each file gives you
 
 `review-record.md` renders the findings grouped by severity, each with its file:line, description, optional severity floor, and recommendation — plus the sections a bare findings list cannot carry: `## Assessment` (the reconciler's, or a post-critic replacement, or an explicit statement that the standing assessment was withdrawn), `## Verified Checks` with the verification method behind each, `## Run notes`, and `## Review coverage` when the run measured a gap. Use the coverage section to judge whether the review's confidence is earned: a review that reached 30 of 41 changed files is not the same claim as one that reached all of them. Treat a stated severity floor as a claim to verify, not something to silently discard.
 
-`review-findings.json` is where the ids live. Read it for `findings[].id`, and use those ids — never a positional label based on rendering order — when you reference a finding in your critique and when you write adjustments. `meta.reconciliation` there carries the pipeline statistics (input count, merge ratio, agents contributing, false positives dropped); use them to assess whether the reconciliation itself was thorough.
+`review-findings.json` is where the ids live. Read `findings[].id` and `checks[].id`, and use those ids with the matching `finding` or `check` target kind — never a positional label based on rendering order — when you write adjustments. `meta.reconciliation` there carries the pipeline statistics (input count, merge ratio, agents contributing, false positives dropped); use them to assess whether the reconciliation itself was thorough.
 
 **There is no report yet, and that is deliberate.** `review-report.md` — the document a human actually reads — is authored after you, once, from whatever state your verdict leaves the ledger in. Nothing you say has to chase prose that already exists.
 
@@ -43,7 +43,7 @@ You receive a Review Record Path, a Structured Findings Path, and an Output Dire
 
 ## Step 1: Gather the Subject Matter
 
-**Normal path (record + ledger):** Read `review-record.md` — this is what you are critiquing — then `review-findings.json` for the ids and the reconciliation metrics. Key every claim you decompose to the finding's stable `fN` `id`, so your critique and your adjustments address the same thing the pipeline can resolve.
+**Normal path (record + ledger):** Read `review-record.md` — this is what you are critiquing — then `review-findings.json` for the ids and reconciliation metrics. Key finding claims to stable `fN` ids and check claims to stable `cN` ids.
 
 **Degraded path (plain document, no ledger):** Read the document at the provided path. This is all you have — no structured findings, no reconciliation metrics. Assign your own claim IDs during decomposition and verify claims directly against the source code.
 
@@ -157,7 +157,7 @@ exist):
 ```
 
 **3b. On REVISE only, also write the machine-readable form** to
-`$TMPDIR/decision-critic-adjustments.json`. Every finding-level adjustment you
+`$TMPDIR/decision-critic-adjustments.json`. Every finding or check adjustment you
 recommend must be recorded there so the pipeline can carry it into
 `review-findings.json` — a recommendation that exists only as prose cannot
 reach the machine-readable ledger. On STAND or ESCALATE, skip this file
@@ -165,21 +165,15 @@ entirely — the save command below rejects a STAND/ESCALATE verdict submitted
 alongside a non-empty adjustments batch, since that is a contradiction, not a
 degraded case to quarantine downstream.
 
-The proposal reaches findings, not ledger-level prose: every field of every
-finding is adjustable, and nothing else is. You author only the action-specific
-target/fields plus a rationale. Do not supply `adjustment_id`, `spot_check`,
-`rejected`, `rejection_reason`, `applied`, `adjudication`, or
-`revised_assessment`; the save and settlement scripts own that lifecycle state.
-The reconciler's overall assessment is settled later by the orchestrator, so a
-finding change you recommend must stay attached to a finding here:
+The proposal reaches findings and recorded checks, not ledger-level prose. You author only the action-specific target/fields plus a rationale. Do not supply target ids for `add`, any ids inside `fields`, `source_reviewers`, `critic_adjustment`, `adjustment_id`, `spot_check`, `rejected`, `rejection_reason`, `applied`, `adjudication`, or `revised_assessment`; the save and settlement scripts own identity, provenance, and lifecycle state. The reconciler's overall assessment is settled later by the orchestrator, so a content change must stay attached to a finding or check here:
 
 ```json
 {
-  "schema": 1,
+  "schema": 2,
   "adjustments": [
     {
       "action": "promote | demote | rescope | correct | add | remove",
-      "id": "<the fN ledger id from review-findings.json, or null for add>",
+      "target": {"kind": "finding", "id": "<the fN ledger id>"},
       "fields": {"severity": "medium"},
       "rationale": "<one sentence grounding the change in your evidence>"
     }
@@ -187,27 +181,22 @@ finding change you recommend must stay attached to a finding here:
 }
 ```
 
-**`rescope` patches `line` — nothing else.** Use it when a finding belongs
-at a different source line than reported, or when it turns out to describe
-the whole file rather than one line (or vice versa):
+For `add`, the target is exactly `{"kind": "finding"}` with no id; the ledger allocates the next monotonic `fN`. For every other action the target is exactly `{"kind": "finding", "id": "fN"}` or, for supported check actions, `{"kind": "check", "id": "cN"}`.
+
+**`rescope` patches the coherent `file` and `line` pair.** Use it when a finding belongs at a different location or when it turns out to describe the whole file rather than one line:
 
 ```json
-{"action": "rescope", "id": "f1", "fields": {"line": 88}, "rationale": "pinned to the actual call site, not the import line the reviewer cited"}
-{"action": "rescope", "id": "f1", "fields": {"line": null}, "rationale": "the concern applies to the whole file, not one line"}
+{"action": "rescope", "target": {"kind": "finding", "id": "f1"}, "fields": {"file": "src/api.py", "line": 88}, "rationale": "pinned to the actual call site, not the import line the reviewer cited"}
+{"action": "rescope", "target": {"kind": "finding", "id": "f1"}, "fields": {"file": "src/api.py", "line": null}, "rationale": "the concern applies to the whole file, not one line"}
 ```
 
-`fields: {"line": N}` (a positive, 1-indexed integer) moves the finding to
-source line `N` and clears any stale `scope: "file"` marker. `fields:
-{"line": null}` marks it file-scoped instead — the ledger records `scope:
-"file"` beside the null line. The pipeline keeps `scope`/`line` paired for
-you; you only ever patch `line`, never `scope` directly.
+`line: N` is a positive, 1-indexed source line and clears any stale `scope: "file"` marker. `line: null` marks the finding file-scoped; the pipeline records `scope: "file"` beside it. Never patch `scope` directly.
 
 Allowed `fields` keys: `severity`, `title`, `description`, `recommendation`,
 `file`, `line`, `category`, `confidence`. A `severity` must be one of
 `critical`, `high`, `medium`, `low`, `info` — anything else fails the whole
 batch. An `add` entry must include `severity`, `title`, `file`,
-`description`, `recommendation`, and must leave `id` null — ids are
-generated by the pipeline, never assigned by you. `line` is a positive
+`description`, and `recommendation`; its target has no id because ids are allocated by the pipeline. `line` is a positive
 1-indexed integer or null. Key every entry by the stable `fN` `id` from
 `review-findings.json` — never a positional label like "F1", which is a
 rendering artifact no ledger contains. Target each finding with at most ONE entry
@@ -215,6 +204,8 @@ rendering artifact no ledger contains. Target each finding with at most ONE entr
 entry removes. On STAND or ESCALATE, do not author this file at all — the
 save command below rejects a STAND/ESCALATE verdict submitted alongside a
 non-empty adjustments batch.
+
+Checks support only `correct` and `remove`. A check correction may change one or more of `question`, `method`, and `result`; it may never change `id` or `source_reviewers`. A check removal moves the complete entry into `checks_removed_by_critic`. There is no check `add`, `promote`, `demote`, or `rescope`, and no check severity field.
 
 **3c. Save through the script.** This is the only write path into your own
 `decision-critic-*` artifacts. Never write `decision-critic-findings.md`,
@@ -241,7 +232,7 @@ python3 $PLUGIN_ROOT/scripts/review/critic.py --save \
   --output-dir "<Output Directory>"
 ```
 
-The command validates everything before writing anything: an unrecognized verdict, a missing or unreadable findings/adjustments file, a non-proposal field, an invalid adjustments batch, REVISE without adjustments, or STAND/ESCALATE with adjustments all print one `REJECTED: <problem>` line per problem and exit non-zero with the previous complete snapshot untouched. On REVISE it assigns a unique stable `adjustment_id` to every accepted entry, then under the shared output-directory lock invalidates the old marker, writes `decision-critic-findings.md`, writes the normalized proposal through the adjustments module's sole writer, and commits both payloads by writing `decision-critic-verdict.json` last as `{"schema": 1, "verdict": "<VERDICT>", "proposal_digest": "<sha256>"}`. STAND and ESCALATE commit the digest of canonical `{"schema": 1, "adjustments": []}`. A clean run prints `RECORDED VERDICT`, every assigned ID under `RECORDED ADJUSTMENTS`, and `PROPOSAL DIGEST`; an interrupted publication has no readable marker and is safe to retry. If validation rejects your batch, fix the named problem in your `$TMPDIR` files and re-run the same command — do not work around a rejection by writing output artifacts yourself.
+The command validates everything before writing anything: an unrecognized verdict, a missing or unreadable findings/adjustments file, a non-proposal field, an invalid adjustments batch, REVISE without adjustments, or STAND/ESCALATE with adjustments all print one `REJECTED: <problem>` line per problem and exit non-zero with the previous complete snapshot untouched. On REVISE it assigns a unique stable `adjustment_id` to every accepted entry, then under the shared output-directory lock invalidates the old marker, writes `decision-critic-findings.md`, writes the normalized proposal through the adjustments module's sole writer, and commits both payloads by writing `decision-critic-verdict.json` last as `{"schema": 2, "verdict": "<VERDICT>", "proposal_digest": "<sha256>"}`. STAND and ESCALATE commit the digest of canonical `{"schema": 2, "adjustments": []}`. A clean run prints `RECORDED VERDICT`, every assigned ID under `RECORDED ADJUSTMENTS`, and `PROPOSAL DIGEST`; an interrupted publication has no readable marker and is safe to retry. If validation rejects your batch, fix the named problem in your `$TMPDIR` files and re-run the same command — do not work around a rejection by writing output artifacts yourself.
 
 ## Return to Caller
 
