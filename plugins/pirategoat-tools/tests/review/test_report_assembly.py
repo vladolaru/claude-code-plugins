@@ -90,6 +90,12 @@ def _ledger(**overrides):
                 "source_reviewers": ["code-reviewer"],
             },
         ],
+        "meta": {
+            "review_duration_ms": 10,
+            "confidence_score": 0.9,
+            "next_finding_number": 3,
+            "next_check_number": 2,
+        },
         "recommendations": {
             "immediate": ["Escape the admin notice."],
             "important": [],

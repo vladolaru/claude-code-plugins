@@ -1806,6 +1806,35 @@ def _canonical_id_number(value, prefix, label):
     return int(value[1:])
 
 
+def validate_finding_content_field(field, value, label):
+    """Validate one critic-adjustable value against the review domain."""
+    if field in (
+        "category",
+        "title",
+        "description",
+        "file",
+        "recommendation",
+    ):
+        if not isinstance(value, str):
+            raise ValueError(f"{label}.{field} must be a string")
+        return
+    if field == "severity":
+        if value not in _VALID_SEVERITIES:
+            raise ValueError(f"{label}.severity is invalid")
+        return
+    if field == "confidence":
+        if not _is_confidence(value):
+            raise ValueError(f"{label}.confidence must be 0.0-1.0")
+        return
+    if field == "line" and value is not None and (
+        type(value) is not int or value <= 0
+    ):
+        raise ValueError(
+            f"{label}.line must be a positive (1-indexed) integer or null, "
+            f"got {value!r}"
+        )
+
+
 def _validate_finding_shape(finding, index):
     """Validate fields emitted by ``ReviewOutputBuilder.add_finding``."""
     if not isinstance(finding, dict):
@@ -1819,29 +1848,16 @@ def _validate_finding_shape(finding, index):
     _canonical_id_number(finding["id"], "f", f"review finding {index}")
     for field in (
         "category",
+        "severity",
         "title",
         "description",
         "file",
+        "line",
         "recommendation",
+        "confidence",
     ):
-        if not isinstance(finding[field], str):
-            raise ValueError(
-                f"review finding {index}.{field} must be a string"
-            )
-    if finding["severity"] not in _VALID_SEVERITIES:
-        raise ValueError(
-            f"review finding {index}.severity is invalid"
-        )
-    if not _is_confidence(finding["confidence"]):
-        raise ValueError(
-            f"review finding {index}.confidence must be 0.0-1.0"
-        )
-    if "line" in finding and (
-        finding["line"] is not None
-        and (type(finding["line"]) is not int or finding["line"] <= 0)
-    ):
-        raise ValueError(
-            f"review finding {index}.line must be positive or null"
+        validate_finding_content_field(
+            field, finding[field], f"review finding {index}"
         )
     if "scope" in finding and finding["scope"] != "file":
         raise ValueError(

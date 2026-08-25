@@ -57,6 +57,17 @@ def _write_findings(output_dir, findings, **extra):
     sev = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
     for i in findings:
         sev[i["severity"]] += 1
+    checks = extra.get("checks", [])
+    finding_numbers = [
+        int(item["id"][1:])
+        for item in findings
+        if re.fullmatch(r"f[1-9][0-9]*", item.get("id", ""))
+    ]
+    check_numbers = [
+        int(item["id"][1:])
+        for item in checks
+        if re.fullmatch(r"c[1-9][0-9]*", item.get("id", ""))
+    ]
     data = {
         "pr_id": "42",
         "reviewer": "reconciliator",
@@ -83,13 +94,13 @@ def _write_findings(output_dir, findings, **extra):
         "observations": None,
         "recommendations": None,
         "positive_observations": None,
-        "checks": [],
+        "checks": checks,
         "assessment": None,
         "meta": {
             "review_duration_ms": 10,
             "confidence_score": 0.9,
-            "next_finding_number": len(findings) + 1,
-            "next_check_number": 1,
+            "next_finding_number": max(finding_numbers, default=0) + 1,
+            "next_check_number": max(check_numbers, default=0) + 1,
         },
     }
     data.update(extra)
@@ -3311,6 +3322,113 @@ class TestSchemaTwoTargetUnion:
         assert "must not include id" in " ".join(
             validate_proposal_input(payload)
         )
+
+    @pytest.mark.parametrize("action", ["add", "correct"])
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("severity", "urgent"),
+            ("title", None),
+            ("description", []),
+            ("recommendation", 7),
+            ("file", None),
+            ("line", 0),
+            ("category", {}),
+            ("confidence", True),
+            ("confidence", -0.01),
+            ("confidence", 1.01),
+        ],
+    )
+    def test_finding_content_values_follow_the_canonical_domain_contract(
+        self, action, field, value
+    ):
+        fields = {
+            "severity": "medium",
+            "title": "Missing validation",
+            "file": "src/api.py",
+            "line": 42,
+            "description": "The input reaches mutation unchecked.",
+            "recommendation": "Validate before mutation.",
+            "category": "security",
+            "confidence": 0.9,
+        }
+        if action == "correct":
+            fields = {field: value}
+        else:
+            fields[field] = value
+        payload = {
+            "schema": 2,
+            "adjustments": [self._entry(
+                action,
+                id_=None if action == "add" else "f1",
+                fields=fields,
+            )],
+        }
+
+        problems = validate_proposal_input(payload)
+
+        assert problems
+        assert field in " ".join(problems)
+
+    @pytest.mark.parametrize("action", ["add", "correct"])
+    def test_line_is_the_nullable_finding_content_field(self, action):
+        fields = {
+            "severity": "medium",
+            "title": "Missing validation",
+            "file": "src/api.py",
+            "line": None,
+            "description": "The input reaches mutation unchecked.",
+            "recommendation": "Validate before mutation.",
+        }
+        if action == "correct":
+            fields = {"line": None}
+        payload = {
+            "schema": 2,
+            "adjustments": [self._entry(
+                action,
+                id_=None if action == "add" else "f1",
+                fields=fields,
+            )],
+        }
+
+        assert validate_proposal_input(payload) == []
+
+    @pytest.mark.parametrize("action", ["add", "correct"])
+    def test_invalid_planned_finding_leaves_checkpoint_and_ledger_unchanged(
+        self, tmp_path, action
+    ):
+        _write_findings(tmp_path, [_finding("f1")])
+        entry = self._entry(
+            action,
+            id_=None if action == "add" else "f1",
+            fields={
+                "severity": "medium",
+                "title": "Invalid file",
+                "file": None,
+                "description": "The file value violates the domain.",
+                "recommendation": "Name the affected file.",
+            } if action == "add" else {"file": None},
+        )
+        entry["adjustment_id"] = "invalid-file"
+        _write_snapshot_document(
+            tmp_path,
+            {"schema": 2, "adjustments": [entry]},
+        )
+        request = {
+            "schema": 2,
+            "verified": ["invalid-file"],
+            "refuted": [],
+        }
+        paths = (
+            tmp_path / "decision-critic-adjustments.json",
+            tmp_path / "review-findings.json",
+        )
+        before = tuple(path.read_bytes() for path in paths)
+
+        with pytest.raises(ValueError, match=r"file.*string"):
+            critic_adjustments_module.settle(str(tmp_path), request)
+
+        assert tuple(path.read_bytes() for path in paths) == before
 
     @pytest.mark.parametrize(
         ("action", "fields"),

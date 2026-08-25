@@ -378,6 +378,7 @@ class TestCriticAdjudicationLifecycle:
         ledger["verdict"] = verdict_for_counts(
             ledger["summary"]["by_severity"]
         )
+        ledger["meta"]["next_finding_number"] = 4
         write_findings(str(output_dir), ledger)
 
         critic_findings = tmp_path / "critic-findings.md"
@@ -2808,6 +2809,7 @@ class TestStep11Orchestration:
         }]
         finding["summary"]["total_findings"] = 1
         finding["summary"]["by_severity"]["high"] = 1
+        finding["meta"]["next_finding_number"] = 2
         write_findings(str(tmp_path), finding)
         _write_critic_snapshot(tmp_path, [{
             "action": "obliterate",

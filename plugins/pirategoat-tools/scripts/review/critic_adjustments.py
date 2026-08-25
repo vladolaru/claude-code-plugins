@@ -36,12 +36,20 @@ from typing import Mapping
 
 try:
     from . import atomic_io
+    from .agent.output import (
+        validate_finding_content_field,
+        validate_review_domain,
+    )
     from .verdict_rules import VALID_SEVERITIES, derive_review_state
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
     from review import atomic_io
+    from review.agent.output import (
+        validate_finding_content_field,
+        validate_review_domain,
+    )
     from review.verdict_rules import VALID_SEVERITIES, derive_review_state
 
 atomic_write_json = atomic_io.atomic_write_json
@@ -277,18 +285,11 @@ def _validate_target(target, action, label):
 
 
 def _validate_field_value(key, value, label):
-    if key == "severity" and value not in VALID_SEVERITIES:
-        return (
-            f"{label}: invalid severity {value!r} "
-            f"(allowed: {', '.join(VALID_SEVERITIES)})"
-        )
-    if key == "line" and value is not None and (
-        isinstance(value, bool) or not isinstance(value, int) or value <= 0
-    ):
-        return (
-            f"{label}: line must be a positive (1-indexed) integer or null, "
-            f"got {value!r}"
-        )
+    if key in FINDING_PATCH_FIELDS:
+        try:
+            validate_finding_content_field(key, value, label)
+        except ValueError as error:
+            return str(error)
     if key in ("question", "method", "result") and (
         not isinstance(value, str) or not value.strip()
     ):
@@ -1534,6 +1535,17 @@ def _build_apply_plan(document, findings):
         planned_findings[REJECTED_ADJUSTMENTS_KEY] = (
             rejected_records + rejection_records
         )
+
+    if applied or rejection_records:
+        try:
+            validate_review_domain(
+                ledger_findings,
+                ledger_checks,
+                planned_findings.get(ASSESSMENT_KEY),
+                planned_findings.get("meta"),
+            )
+        except ValueError as error:
+            raise ValueError(f"{FINDINGS_FILENAME}: {error}") from error
 
     if applied or catch_up:
         for entry, _target, _fields in pending:

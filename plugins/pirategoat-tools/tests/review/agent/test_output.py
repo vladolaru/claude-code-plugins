@@ -2493,14 +2493,54 @@ class TestTypeScriptContractLockstep:
 
     def test_schema_two_rejected_spot_check_is_required(self):
         schema = (PLUGIN_ROOT / "schemas" / "review-output.ts").read_text()
-        rejected = re.search(
-            r"rejected_critic_adjustments\?: Array<\{(.*?)\}>;",
-            schema,
-            re.DOTALL,
+        assert "spot_check: 'refuted';" in schema
+        assert "spot_check?: 'refuted';" not in schema
+
+    def test_critic_types_correlate_actions_targets_and_persisted_provenance(
+        self,
+    ):
+        schema = (PLUGIN_ROOT / "schemas" / "review-output.ts").read_text()
+
+        assert "export type FindingId = `f${number}`;" in schema
+        assert "export type CheckId = `c${number}`;" in schema
+        assert "export type CriticProposalAdjustment =" in schema
+        assert "critic_adjustment?: FindingCriticAdjustment;" in schema
+        assert "critic_adjustment?: CheckCriticAdjustment;" in schema
+        assert (
+            "rejected_critic_adjustments?: CriticRejectedAdjustment[];"
+            in schema
         )
-        assert rejected is not None
-        assert re.search(r"spot_check:\s*'refuted';", rejected.group(1))
-        assert "spot_check?:" not in rejected.group(1)
+        assert "export interface CriticAdjustment" not in schema
+        assert "export type CriticTarget =" not in schema
+
+        proposal = schema.split(
+            "export type CriticProposalAdjustment =", 1
+        )[1].split("type WithAdjustmentId", 1)[0]
+        assert proposal.count("action: 'add'") == 1
+        assert "action: 'add'; target: FindingAddTarget" in proposal
+        assert (
+            "action: 'promote' | 'demote'; target: FindingTarget"
+            in proposal
+        )
+        assert "action: 'rescope'; target: FindingTarget" in proposal
+        assert "action: 'correct'; target: FindingTarget" in proposal
+        assert "action: 'correct'; target: CheckTarget" in proposal
+        assert "action: 'remove'; target: FindingTarget" in proposal
+        assert "action: 'remove'; target: CheckTarget" in proposal
+        assert (
+            "CriticActionTarget<CriticProposalAdjustment>"
+            in schema
+        )
+
+        check_provenance = schema.split(
+            "export type CheckCriticAdjustment =", 1
+        )[1].split("type CriticActionTarget", 1)[0]
+        assert "action: 'remove'" in check_provenance
+        assert "action: 'correct'" in check_provenance
+        assert not any(
+            action in check_provenance
+            for action in ("'add'", "'promote'", "'demote'", "'rescope'")
+        )
 
 
 # =============================================================================

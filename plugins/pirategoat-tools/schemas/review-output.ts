@@ -37,23 +37,17 @@ export type Verdict = 'block' | 'request_changes' | 'approve' | 'comment' | 'not
 export type ConfidenceScore = number; // 0.0 - 1.0
 
 /**
- * A decision-critic action, and the provenance it leaves on the finding or
- * check it touched. `critic_adjustments.py` is the sole writer.
+ * Canonical ledger identifiers. Runtime validation narrows these template
+ * forms to positive integers with no leading zero.
  */
-export interface CriticAdjustment {
-    action: 'promote' | 'demote' | 'rescope' | 'correct' | 'add' | 'remove';
-    rationale: string; // The critic's stated reason; '' when none was given.
-    // The pre-patch value of just the fields this adjustment changed —
-    // present only for promote/demote/rescope/correct. Absent for `add`
-    // (nothing pre-existed) and `remove` (the whole finding is the change).
-    prior?: Partial<Pick<Finding, 'severity' | 'title' | 'description' | 'recommendation' | 'file' | 'line' | 'category' | 'confidence'>> & Partial<Pick<ReviewCheck, 'question' | 'method' | 'result'>>;
-}
+export type FindingId = `f${number}`;
+export type CheckId = `c${number}`;
 
 /**
  * Verdict-bearing finding common to all review types.
  */
 export interface Finding {
-    id: string; // Monotonic canonical identifier: fN
+    id: FindingId; // Monotonic canonical identifier: fN
     category: string; // bug | security | performance | architecture | style
     severity: Severity;
     severity_floor?: Severity; // Lowest severity allowed after verification/reconciliation
@@ -73,21 +67,21 @@ export interface Finding {
     // demoted, rescoped, corrected, or added it, or (on entries moved into
     // `findings_removed_by_critic` below) removed it. Absent on every finding no
     // critic round has adjusted.
-    critic_adjustment?: CriticAdjustment;
+    critic_adjustment?: FindingCriticAdjustment;
 }
 
 /**
  * Auditable verification work carried through reconciliation structurally.
  */
 export interface ReviewCheck {
-    id: string; // Monotonic canonical identifier: cN
+    id: CheckId; // Monotonic canonical identifier: cN
     question: string;
     method: string;
     result: string;
     source_reviewers: string[];
     // Present only after critic_adjustments.py corrected this check, or on a
     // complete check moved into checks_removed_by_critic.
-    critic_adjustment?: CriticAdjustment;
+    critic_adjustment?: CheckCriticAdjustment;
 }
 
 export interface InvalidatedAssessment {
@@ -95,10 +89,89 @@ export interface InvalidatedAssessment {
     invalidated_by_critic_adjustment_ids: string[];
 }
 
-export type CriticTarget =
-    | { kind: 'finding'; id: string }
-    | { kind: 'check'; id: string }
-    | { kind: 'finding' }; // `add`, before ledger-owned fN allocation
+type AtLeastOne<T> = {
+    [Key in keyof T]-?: Required<Pick<T, Key>> & Partial<Omit<T, Key>>;
+}[keyof T];
+
+type FindingPatchFields = Pick<Finding, 'severity' | 'title' | 'description' | 'recommendation' | 'file' | 'line' | 'category' | 'confidence'>;
+export type FindingCorrectionFields = AtLeastOne<FindingPatchFields>;
+export type CheckCorrectionFields = AtLeastOne<Pick<ReviewCheck, 'question' | 'method' | 'result'>>;
+export type FindingAddFields = Pick<Finding, 'severity' | 'title' | 'file' | 'description' | 'recommendation'> & Partial<Pick<Finding, 'line' | 'category' | 'confidence'>>;
+
+export type FindingTarget = { kind: 'finding'; id: FindingId };
+export type CheckTarget = { kind: 'check'; id: CheckId };
+export type FindingAddTarget = { kind: 'finding'; id?: never };
+
+/**
+ * The exact adjustment shapes accepted from the decision critic. Actions,
+ * targets, and fields stay correlated so an actor cannot supply ledger-owned
+ * identity, lifecycle, or provenance fields.
+ */
+export type CriticProposalAdjustment =
+    | { action: 'add'; target: FindingAddTarget; fields: FindingAddFields; rationale: string }
+    | { action: 'promote' | 'demote'; target: FindingTarget; fields: Pick<Finding, 'severity'>; rationale: string }
+    | { action: 'rescope'; target: FindingTarget; fields: Pick<Finding, 'file' | 'line'>; rationale: string }
+    | { action: 'correct'; target: FindingTarget; fields: FindingCorrectionFields; rationale: string }
+    | { action: 'correct'; target: CheckTarget; fields: CheckCorrectionFields; rationale: string }
+    | { action: 'remove'; target: FindingTarget; fields: Record<string, never>; rationale: string }
+    | { action: 'remove'; target: CheckTarget; fields: Record<string, never>; rationale: string };
+
+type WithAdjustmentId<Adjustment> = Adjustment extends unknown
+    ? Adjustment & { adjustment_id: string }
+    : never;
+export type PreparedCriticAdjustment = WithAdjustmentId<CriticProposalAdjustment>;
+
+type WithSettlement<Adjustment> = Adjustment extends unknown
+    ? Adjustment & (
+        | { spot_check: 'refuted'; rejected: true; rejection_reason: string; applied?: never }
+        | { spot_check: 'verified' | 'not_checked'; rejected?: never; rejection_reason?: never; applied?: true }
+    )
+    : never;
+export type SettledCriticAdjustment = WithSettlement<PreparedCriticAdjustment>;
+
+export interface CriticAdjudication {
+    schema: 2;
+    source: 'orchestrator' | 'defensive_apply';
+    proposal_digest: string;
+    recorded_at: string;
+    revised_assessment: string | null;
+}
+
+export type CriticAdjustmentsDocument =
+    | { schema: 2; adjustments: PreparedCriticAdjustment[]; adjudication?: never }
+    | { schema: 2; adjustments: SettledCriticAdjustment[]; adjudication: CriticAdjudication };
+
+/**
+ * The changed-fields-only provenance carried by accepted ledger operations.
+ * `critic_adjustments.py` is the sole writer.
+ */
+export type FindingCriticAdjustment =
+    | { action: 'add' | 'remove'; rationale: string; prior?: never }
+    | { action: 'promote' | 'demote'; rationale: string; prior: Pick<Finding, 'severity'> }
+    | { action: 'rescope'; rationale: string; prior: AtLeastOne<Pick<Finding, 'file' | 'line'>> }
+    | { action: 'correct'; rationale: string; prior: FindingCorrectionFields };
+
+export type CheckCriticAdjustment =
+    | { action: 'remove'; rationale: string; prior?: never }
+    | { action: 'correct'; rationale: string; prior: CheckCorrectionFields };
+
+type CriticActionTarget<Adjustment> = Adjustment extends {
+    action: infer Action;
+    target: infer Target;
+}
+    ? { action: Action; target: Target }
+    : never;
+
+export type CriticRejectedAdjustment = CriticActionTarget<CriticProposalAdjustment> & {
+    adjustment_id: string;
+    spot_check: 'refuted';
+    rejection_reason: string;
+};
+
+export interface CriticAppliedAdjustment {
+    adjustment_id: string;
+    spot_check: 'verified' | 'not_checked';
+}
 
 /**
  * Common review output structure for all agents
@@ -215,10 +288,7 @@ export interface ReviewOutput {
     // Rendered with rejected decisions in the "## Critic Adjustment
     // Decisions" list.
     //
-    applied_critic_adjustments?: Array<{
-        adjustment_id: string;
-        spot_check: 'verified' | 'not_checked';
-    }>;
+    applied_critic_adjustments?: CriticAppliedAdjustment[];
 
     // The ledger's verdict BEFORE any critic batch applied, recorded the
     // first time an applying batch changed it — first time only, so a
@@ -249,13 +319,7 @@ export interface ReviewOutput {
     // Cumulative across every batch the ledger absorbs, the same way
     // applied_critic_adjustments is; apply_adjustments() dedupes by
     // adjustment_id so a resumed or repeated apply never appends a duplicate.
-    rejected_critic_adjustments?: Array<{
-        adjustment_id: string;
-        action: 'promote' | 'demote' | 'rescope' | 'correct' | 'add' | 'remove';
-        target: CriticTarget;
-        spot_check: 'refuted';
-        rejection_reason: string;
-    }>;
+    rejected_critic_adjustments?: CriticRejectedAdjustment[];
 
     // Assessments invalidated by an applying batch, oldest first.
     invalidated_assessments?: InvalidatedAssessment[];
