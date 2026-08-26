@@ -811,7 +811,6 @@ class ReviewOutputBuilder:
         self._paths = None
         self._base_digest = None
         self._last_saved_review = None
-        self._last_accounting = None
         self._invocation_delta = []
 
     @classmethod
@@ -1234,13 +1233,11 @@ class ReviewOutputBuilder:
         1. ``PIRATEGOAT_PLUGIN_VERSION`` in the builder envelope, which
            bootstrap fills from the run's ``run-config.json`` stamp. Always
            present in the envelope, sometimes empty (unresolvable run).
-        2. That same stamp read directly, when serialization was given an
-           explicit output directory. This is the reconciliator's path: it
-           is dispatched by the orchestrator rather than bootstrap, so no
-           envelope reaches it, yet ``review-findings.json`` — the artifact
-           a human actually receives — must still name its producer.
+        2. That same stamp read from the bound output directory's
+           ``run-config.json``, for a builder that has one and no envelope.
 
-        Fails open to None everywhere. An unstamped artifact is honest about
+        Fails open to None everywhere — an unbound builder outside the
+        envelope has no honest answer. An unstamped artifact is honest about
         not knowing; it is never an error and never a guess.
         """
         env_value = os.environ.get("PIRATEGOAT_PLUGIN_VERSION")
@@ -1263,14 +1260,18 @@ class ReviewOutputBuilder:
     def _bound_accounting(self):
         """Accounting derived from the bound input, or None when not bound.
 
-        Add-time feedback only: save_draft() derives again and fails closed.
+        Add-time feedback only: save_draft() derives again, with the real
+        claims, and fails closed. The facts this serves — ``channels`` and
+        ``review_claimable_files`` — are claim-independent, so it derives
+        with no claims: a claim outside the claimable set is save_draft()'s
+        to reject, not a reason to go silent at add time.
         """
         if self._paths is None:
             return None
         try:
             with open(self._paths.accounting_input, "r", encoding="utf-8") as handle:
                 data = json.load(handle)
-            return derive_review_accounting(data, self.reviewed_file_claims)
+            return derive_review_accounting(data, [])
         except (OSError, UnicodeDecodeError, json.JSONDecodeError, ReviewAccountingError):
             return None
 
@@ -1575,7 +1576,6 @@ class ReviewOutputBuilder:
                 f"findings use channel(s) {off_channel} not among this reviewer's "
                 f"channels {list(review_accounting.channels)}"
             )
-        self._last_accounting = review_accounting
         draft_bytes = self.to_json(
             review_accounting=review_accounting,
         ).encode("utf-8")
@@ -1604,9 +1604,11 @@ class ReviewOutputBuilder:
 
         self._base_digest = review_digest
         self._last_saved_review = review
-        return self._draft_receipt(review_digest)
+        return self._draft_receipt(review_digest, review_accounting)
 
-    def _draft_receipt(self, review_digest: str) -> dict[str, str]:
+    def _draft_receipt(
+        self, review_digest: str, review_accounting
+    ) -> dict[str, str]:
         """Print and return the compact next-action surface for one save."""
         review = self._last_saved_review
         summary = review["summary"]
@@ -1638,10 +1640,7 @@ class ReviewOutputBuilder:
             if len(unclaimed) > 3:
                 shown += f" (+{len(unclaimed) - 3} more)"
             # A target of ~0 calls is not a target worth repeating.
-            budget = (
-                self._last_accounting.review_budget
-                if self._last_accounting else None
-            )
+            budget = review_accounting.review_budget
             if budget:
                 shown += f" | target ~{budget} tool calls"
             print(

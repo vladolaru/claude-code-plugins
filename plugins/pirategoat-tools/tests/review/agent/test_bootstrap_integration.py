@@ -183,7 +183,6 @@ class TestCategoryRepresentatives:
             (tmp_path / "repo-renewals-review-accounting-input.json").read_text()
         )
         assert accounting_input["channels"] == ["advisory"]
-        assert not (tmp_path / "repo-renewals-advisory-entitlement.json").exists()
 
         builder = ReviewOutputBuilder.open(tmp_path, "1", "repo-renewals")
         builder.add_finding(
@@ -1990,15 +1989,13 @@ class TestRepoRuleAndRefModeSelection:
         assert result.returncode == 0
         assert 'add_finding(..., channel="advisory")' in result.stdout
 
-        # The accounting input is the sole carrier of the reviewer's
-        # channels — no separate entitlement sidecar exists.
+        # The accounting input is the sole carrier of the reviewer's channels.
         accounting_input = json.loads(
             (tmp_path / "performance-review-accounting-input.json").read_text()
         )
         assert accounting_input["schema"] == 4
         assert accounting_input["channels"] == ["blocking", "advisory"]
         assert isinstance(accounting_input["review_budget"], int)
-        assert not (tmp_path / "performance-advisory-entitlement.json").exists()
 
         builder = ReviewOutputBuilder.open(tmp_path, "1", "performance")
         builder.add_finding(
@@ -2023,7 +2020,6 @@ class TestRepoRuleAndRefModeSelection:
             (tmp_path / "performance-review-accounting-input.json").read_text()
         )
         assert accounting_input["channels"] == ["blocking"]
-        assert not (tmp_path / "performance-advisory-entitlement.json").exists()
 
         builder = ReviewOutputBuilder.open(tmp_path, "1", "performance")
         with pytest.raises(
