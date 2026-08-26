@@ -1810,7 +1810,7 @@ class TestStep10DecisionCritic:
         assert "Never report the batch in aggregate anywhere" in revise
 
     def test_outcome_instruction_carries_no_aggregate_phrasing(self, mod):
-        """An "all N spot-checked" phrase may appear in exactly one place:
+        """An "all N probed" phrase may appear in exactly one place:
         the sentence that forbids it.
 
         Scoped per SENTENCE, not per action string. Filtering by whole
@@ -1823,7 +1823,7 @@ class TestStep10DecisionCritic:
             mod.get_step_guidance(10, "pr", {"completed_steps": []}, {})
         )
         aggregate = re.compile(r'all ["\u201c]?(?:N|\d+)["\u201d]? '
-                               r'(?:spot-check|verif|check)')
+                               r'(?:prob|verif|check)')
         sentences = re.split(r'(?<=[.:])\s+', revise)
         offenders = [
             sentence for sentence in sentences

@@ -339,8 +339,8 @@ def render_draft_index(review: dict) -> str:
 def render_markdown(data: Dict) -> str:
     """Human-readable Markdown rendered from a review's canonical dict.
 
-    A pure function of the JSON representation — the same dict
-    to_dict()/to_json() produce and the *-review.json file holds — so a
+    A pure function of the JSON representation — the dict save_draft()
+    writes and the *-review.json file holds (or a findings ledger) — so a
     rendering can never disagree with the artifact it came from.
 
     Keys present in schema 2 are required (missing means KeyError — the
@@ -400,7 +400,7 @@ def _rejected_critic_decision(record):
 def render_review_body(data: Dict) -> str:
     """Everything a rendered review says beneath its title.
 
-    Banner, executive summary, assessment, critic accounting, findings,
+    Banner, executive summary, assessment, critic decisions, findings,
     recommendations, checks, critic removals, positives, observations —
     the whole document minus the H1. Shared verbatim by
     ``render_markdown()`` (which supplies the per-reviewer title) and by
@@ -469,7 +469,7 @@ def render_review_body(data: Dict) -> str:
         files = ", ".join(f"`{f}`" for f in data['unclaimed_review_files'])
         md.append(f"**Not reviewed (budget):** {files}\n\n")
 
-    # Reconciliation accounting — the narrative's "Pipeline:" line, now
+    # Reconciliation block — the narrative's "Pipeline:" line, now
     # rendered from the metrics the producer already records under
     # meta.reconciliation. Absent for ordinary reviewers, whose meta
     # carries no such block.

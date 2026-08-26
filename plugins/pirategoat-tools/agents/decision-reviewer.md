@@ -210,9 +210,9 @@ Checks support only `correct` and `remove`. A check correction may change one or
 **3c. Save through the script.** This is the only write path into your own
 `decision-critic-*` artifacts. Never write `decision-critic-findings.md`,
 `decision-critic-adjustments.json`, or `decision-critic-verdict.json` yourself,
-and never ask the caller to hand-edit `review-findings.json`; the orchestrator's
-separate settlement channel validates its spot checks before the ledger applier
-carries your proposal downstream.
+and never ask the caller to hand-edit `review-findings.json`; the orchestrator
+adjudicates your proposal separately, and `adjudicate` records each entry's
+outcome in the ledger.
 
 ```bash
 PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)

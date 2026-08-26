@@ -207,7 +207,6 @@ Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/
 | `TestRemovedToolMetadata` | Reviewer artifacts expose no tool-result metadata API or field |
 | `TestCalculateVerdict` | All 9 verdict boundaries (approve/comment/request_changes/block) |
 | `TestToDict` | Exact schema-2 top-level shape, summary, counters, reviewed-file placeholders before publication, and plugin-version resolution |
-| `TestToMarkdown` | Header format, findings grouped by severity, checks, assessment, and positive observations |
 | `TestRenderMarkdown` | Markdown is a pure function of the canonical JSON dict — same dict in, same Markdown out |
 | `TestMaterializeMarkdown` | The on-demand `materialize` CLI/function reads finalized canonical JSON and writes its derived Markdown |
 | `TestSaveDraft` | `save_draft()` atomically replaces the complete mutable draft, emits exact totals/change receipt/finalization command, and never publishes final JSON or Markdown |
@@ -228,6 +227,7 @@ Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/
 | `TestAssessmentProvenance` | `## Assessment` is prose about a ledger that keeps changing after critic adjustments — provenance is pinned so a stale claim can't outlive the finding it described |
 | `TestRemovedByCriticSection` | The ledger deliberately keeps what the critic took out, rendered as an audit section rather than silently vanishing |
 | `TestRendererFaithfulness` | Minors that all share one failure mode: the renderer showing content that contradicts what the JSON actually says (e.g. a header claiming a section exists over content that was dropped) |
+| `TestReviewerFilePartition` | The six-field reviewed-files envelope validates itself: a coherent claimed/unclaimed partition of the assignment's claimable files passes, and every incoherent variant (unknown claim, wrong unclaimed set, mismatched count, duplicate claim) is rejected |
 
 ### Reviewer Lifecycle Tests (`review/test_reviewer_lifecycle.py`)
 

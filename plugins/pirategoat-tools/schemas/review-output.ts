@@ -291,7 +291,7 @@ export interface ReviewDocument extends ReviewContent {
 export type LedgerVerdict = Exclude<Verdict, 'not_applicable'>;
 
 /**
- * The reconciliation accounting stamped onto the ledger's meta —
+ * The reconciliation block stamped onto the ledger's meta —
  * RECONCILIATION_FIELDS in scripts/review/findings_ledger.py. Renders as
  * the "**Pipeline:**" line and the not-applicable coverage line. The four
  * judgment counts (grouped/verified/false_positive/out_of_scope) are the
@@ -322,10 +322,11 @@ export interface FindingsLedger extends ReviewContent {
     verdict: LedgerVerdict;
     meta: ReviewMeta & { reconciliation: Reconciliation };
 
-    // Host context banner — present only when upstream host discovery was
-    // degraded, copied through by the reconciliator. Rendered as a
-    // blockquote directly under the H1.
-    host_context_banner?: HostContextBanner | null;
+    // Host context banner — stamped by findings_save.py from
+    // reconciliation-context.json; an agent-authored banner is refused at
+    // the producer gate. Present only when upstream host discovery was
+    // degraded. Rendered as a blockquote directly under the H1.
+    host_context_banner?: HostContextBanner;
 
     // Decision-critic provenance — present only once critic_adjustments.py
     // has applied a batch.
@@ -348,7 +349,7 @@ export interface FindingsLedger extends ReviewContent {
     // post-batch severities through the shared ladder in
     // scripts/review/verdict_rules.py, because step 11 DERIVES the
     // published pipeline verdict from it.
-    verdict_before_adjustments?: Verdict | null;
+    verdict_before_adjustments?: LedgerVerdict;
 
     // Findings the critic removed. Moved out of `findings` rather than
     // deleted, each carrying the `critic_adjustment` record (see Finding

@@ -1658,7 +1658,7 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         f"probe each material claim."
     )
     actions.append(
-        "2) Spot-check the claims with `git grep`/`Read`, then author ONLY "
+        "2) Probe the claims with `git grep`/`Read`, then author ONLY "
         "this schema-2 adjudication request under `$TMPDIR` (create the "
         "directory first if needed):"
     )
@@ -1732,9 +1732,9 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append(
         "   The script-derived per-entry outcome reaches the record on "
         "its own. Never report the batch in aggregate anywhere — \"all N "
-        "spot-checked\" over a batch where one entry went unprobed publishes "
+        "probed\" over a batch where one entry went unprobed publishes "
         "that entry as verified, which is the exact false claim per-entry "
-        "accounting exists to prevent."
+        "outcome tracking exists to prevent."
     )
     actions.append("")
     actions.append(
