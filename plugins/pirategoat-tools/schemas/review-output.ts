@@ -177,7 +177,7 @@ export interface CriticAppliedAdjustment {
 }
 
 /**
- * The orchestrator's settle request — the sole input to
+ * The orchestrator's adjudication request — the sole input to
  * critic_adjustments.adjudicate(). Schema 2 (ADJUDICATION_SCHEMA). Every
  * committed adjustment id absent from both `verified` and `refuted` is
  * recorded as 'not_checked'.
@@ -331,15 +331,14 @@ export interface FindingsLedger extends ReviewContent {
     // has applied a batch.
 
     // One record per adjustment this ledger already contains. Present after
-    // the first applied batch. `adjustment_id` is the idempotence
-    // bookkeeping — a crash between the two writes converges on it —
-    // and `outcome` is script-derived from the orchestrator's exact
-    // AdjudicationRequest, checkpointed in decision-critic-adjustments.json,
-    // and carried here on apply. IDs omitted from the positive verified and
-    // refuted claims are derived as "not_checked". Step 11's defensive
-    // recovery records every entry that way when no adjudication exists.
-    // Rendered with rejected decisions in the "## Critic Adjustment
-    // Decisions" list.
+    // the first adjudicated batch. `adjustment_id` is the idempotence
+    // bookkeeping — adjudicate() refuses a proposal whose ids are already
+    // recorded here rather than reapplying it — and `outcome` is
+    // script-derived from the orchestrator's exact AdjudicationRequest
+    // (adjudicate()'s stdin input, never persisted) and recorded here in
+    // one locked write. IDs omitted from the positive verified and refuted
+    // claims are derived as "not_checked". Rendered with rejected decisions
+    // in the "## Critic Adjustment Decisions" list.
     applied_critic_adjustments?: CriticAppliedAdjustment[];
 
     // The ledger's verdict BEFORE any critic batch applied, recorded the
@@ -360,17 +359,18 @@ export interface FindingsLedger extends ReviewContent {
     // Checks removed by an applied critic batch remain auditable here.
     checks_removed_by_critic?: ReviewCheck[];
 
-    // Critic decisions the orchestrator's AdjudicationRequest refuted. The
-    // settle command derives `outcome: 'refuted'` plus `rejection_reason`
-    // in the checkpointed decision-critic-adjustments.json document.
-    // Present after the first batch that settled at least one rejection.
+    // Critic decisions the orchestrator's AdjudicationRequest refuted.
+    // adjudicate() derives `outcome: 'refuted'` plus `rejection_reason`
+    // here, in this ledger, in the same locked write as
+    // applied_critic_adjustments.
+    // Present after the first batch that refuted at least one entry.
     // A rejected entry is never applied to `findings` — the target finding
     // is never mutated — so this is the canonical place a rejection is
     // auditable. The shared Markdown renderer projects each record as an
     // explicit `adjustment_id — refuted` line.
-    // Cumulative across every batch the ledger absorbs, the same way
-    // applied_critic_adjustments is; apply_adjustments() dedupes by
-    // adjustment_id so a resumed or repeated apply never appends a duplicate.
+    // Cumulative across every proposal the ledger adjudicates, the same way
+    // applied_critic_adjustments is; adjudicate() refuses outright rather
+    // than duplicating if a proposal's ids are already recorded here.
     rejected_critic_adjustments?: CriticRejectedAdjustment[];
 
     // Assessments invalidated by an applying batch, oldest first.

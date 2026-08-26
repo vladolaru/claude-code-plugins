@@ -12,7 +12,7 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 ### Added
 
 - **`--refresh-deps`** — interactive refresh remains opt-in and orchestrator-adaptive after a clean tracked-worktree safety check, then publishes a schema-validated report through one atomic save command that records final tracked state; defaults off and stays disabled for bots. Historical skipped-only measurements remain reader-only without fabricated current-report fields, malformed measurements sanitize defensively, and missing request files remain I/O failures rather than invalid reports.
-- **Reviewer drafts are resumable and finalize with one digest-bound command**; the finalized review embeds its reviewed-file accounting, which downstream readers use as-is.
+- **Reviewer drafts are resumable and finalize with one digest-bound command**; the finalized review embeds its reviewed-file claims, which downstream readers use as-is.
 - **One findings/checks/assessment vocabulary end to end**; readers reject retired shapes instead of reading them as empty.
 - **Detection benchmark** — the compliance eval grades reviewer findings against per-scenario answer keys (`--trials N`, `--report-out`).
 - **Worktree hygiene measurement** — step-3 snapshot plus a finalize sweep of the pipeline's own probe residue, recorded in the manifest and `pipeline-result.json`.
@@ -43,7 +43,7 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 - **The decision critic publishes a proposal that is never rewritten**, and the orchestrator's adjudication is recorded by applying it to the ledger once.
 - **Agents are handed JSON** — the reconciliator reads `reconciliation-context.json` and the decision critic reads `review-record.md` beside `review-findings.json`; the two Markdown projections written for agent eyes only (`reconciliation-context.md`, `critic-context.md`) are gone, along with the per-run context-building step that produced the second one.
 - **Missing agents and structurally out-of-scope findings stay machine-computed** — `reconciliation-context.json` carries a `missing_agents` list (`null` when dispatch was unknown) and marks each structurally out-of-scope finding with `prefiltered` beside a checkable count, so the reconciliator carries and obeys those measurements instead of re-deriving them.
-- **The reconciliator authors its four concern counts and the pipeline stamps the rest** (input counts, agent lists, host banner) at ledger save; the ledger no longer carries reviewer accounting.
+- **The reconciliator authors its four concern counts and the pipeline stamps the rest** (input counts, agent lists, host banner) at ledger save; the ledger no longer carries the reviewer assignment and reviewed files.
 
 ### Fixed
 
@@ -65,7 +65,7 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 - **Detection benchmark hardened** — per-entry status is stamped by the producing code path, and reviewer-path matching canonicalizes against the eval root.
 - **Doc-drift guards** pin the AGENTS.md registry reference and README model tiers to `agent_registry.json` in both directions.
 - **Test estate** — 273 redundant pins removed with coverage increased (11 previously-unpinned guards now pinned); every cut mutation-verified.
-- **`schemas/review-output.ts` reconciled** — critic-adjustment provenance added, interfaces the pipeline never produced were dropped, `ReviewDocument` and `FindingsLedger` split into their own interfaces since only the ledger carries reconciliation, and the adjudicated-decision field is renamed `spot_check` to `outcome`.
+- **`schemas/review-output.ts` reconciled** — critic-adjustment provenance added, interfaces the pipeline never produced were dropped, `ReviewDocument` and `FindingsLedger` split into their own interfaces since only the ledger carries reconciliation, and the adjudicated-decision field is renamed from `spot_check` to `outcome`.
 - **Step handoffs pin a no-truncation rule** — every next-step and blocks-progress footer now tells the orchestrator to run the printed command unfiltered, since piping it through `head`/`tail`/`grep` was eating load-bearing briefing lines.
 - **`wp-architecture-reviewer` requires an actual PHP file** — keyword matches like "hook" or "filter" in commit messages no longer dispatch it into a pure-TS/JS diff.
 

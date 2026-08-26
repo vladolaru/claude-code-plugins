@@ -4,7 +4,7 @@ Testing for pirategoat-tools uses fast, deterministic code-based graders — no 
 
 ## Architecture Overview
 
-Audited against `ls -R plugins/pirategoat-tools/tests/` on 2026-08-20 (excludes `__pycache__/` and `.pytest_cache/`, which are build artifacts, not test files). **No `__init__.py` anywhere in this tree** — see [Package namespace rule](#package-namespace-rule) below; `test_pytest_layout.py` enforces it repo-wide.
+Audited against `ls -R plugins/pirategoat-tools/tests/` on 2026-08-26 (excludes `__pycache__/` and `.pytest_cache/`, which are build artifacts, not test files). **No `__init__.py` anywhere in this tree** — see [Package namespace rule](#package-namespace-rule) below; `test_pytest_layout.py` enforces it repo-wide.
 
 ```
 tests/
@@ -49,6 +49,7 @@ tests/
 │       ├── test_diff_noise_filter.py # Semantic diff noise filter tests
 │       ├── test_ecosystem_integration_reviewer.py  # ecosystem-integration-reviewer compliance test
 │       ├── test_output.py            # ReviewOutputBuilder unit tests
+│       ├── test_review_assignment.py # Reviewer assignment + reviewed-file derivation tests
 │       ├── test_scope.py             # Scope filtering unit tests
 │       └── test_scope_routing.py     # Domain routing (direct function calls + branch freshness)
 ├── linear/                           # Tests for scripts/linear/
@@ -57,6 +58,7 @@ tests/
 │   └── test_events.py               # Pipeline events tests
 ├── iterative_review/                 # Tests for scripts/iterative_review/
 │   ├── test_briefing.py              # Iterative review briefing tests
+│   ├── test_claude.py                # Claude Code fallback backend output-parsing tests
 │   ├── test_cli.py                   # CLI argument tests
 │   ├── test_codex.py                 # Codex integration tests
 │   ├── test_effort.py                # Adaptive reasoning-effort resolution tests
@@ -98,7 +100,8 @@ tests/
 │   ├── graders.py                    # Shared grading functions
 │   ├── command_helpers.py            # Shared helpers for command tests
 │   ├── context_fixtures.py          # Review context fixture generators
-│   └── pipeline_process.py           # Shared subprocess helper for invoking review/pipeline.py
+│   ├── pipeline_process.py           # Shared subprocess helper for invoking review/pipeline.py
+│   └── review_fixtures.py            # Canonical finalized-review/ledger fixtures for consumer-boundary tests
 └── fixtures/
     ├── no-code-changes.diff          # Docs-only diff for NO_DOMAIN_FILES tests
     ├── php-source.diff               # PHP source: SQL injection, tight coupling
@@ -329,13 +332,13 @@ Direct unit tests on `FindingsLedgerBuilder` — the reconciliator's `ReviewOutp
 
 ### Findings Save Tests (`review/test_findings_save.py`)
 
-Sibling design to `review/test_critic.py`'s `TestCriticSave`: `findings_save.py` is the ONLY channel `agents/review-reconciliator.md` may write `review-findings.json` through. `TestFindingsSave` runs the CLI as a subprocess against one default reconciliation context and covers the canonical-shape and producer-boundary rejections: missing or wrong schema, retired tool metadata, malformed findings/checks/assessment, a verdict that does not match its findings or is not lowercase, a count or by-severity mismatch, non-object/non-list inputs, an absent or unreadable `--findings` file, and multiple simultaneous problems all echoed as separate `REJECTED:` lines with nothing written.
+Sibling design to `review/test_critic.py`'s `TestCriticSave`: `findings_save.py` is the ONLY channel `agents/review-reconciliator.md` may write `review-findings.json` through. `TestFindingsSave` runs the CLI as a subprocess against one default reconciliation context and covers the canonical-shape and producer-boundary rejections: missing or wrong schema, retired tool metadata, malformed findings/checks/assessment, a verdict that does not match its findings or is not lowercase, a count or by-severity mismatch, non-object/non-list inputs, an absent or unreadable `--findings` file, multiple simultaneous problems all echoed as separate `REJECTED:` lines with nothing written, and — the critic-boundary cases — `test_rejects_actor_supplied_critic_lifecycle_fields` and `test_rejects_actor_supplied_critic_provenance`, which reject an agent-authored critic-owned lifecycle field or a hand-added `critic_adjustment` provenance record before anything is written.
 
 A set of module-level functions cover what is specific to this channel rather than the shared document validator:
 
 - `test_save_stamps_pipeline_facts_from_context` — every `RECONCILIATION_PIPELINE_FIELDS` value (input finding count, contributing agent count, reviewing/not-applicable/dispatched/missing agents) is filled from `reconciliation-context.json`, never authored by the agent
 - `test_save_rejects_verified_count_that_disagrees_with_findings`, `test_save_rejects_grouped_count_above_the_input_population` — the agent's own judgment counts are cross-checked against the findings it actually recorded and the input population the context measured
-- `test_save_rejects_pipeline_fields_authored_by_the_agent`, `test_save_rejects_actor_supplied_critic_lifecycle_fields`, `test_save_rejects_actor_supplied_critic_provenance`, `test_save_rejects_a_host_context_banner_authored_by_the_agent` — an agent attempting to author a pipeline- or critic-owned field is rejected before the canonical validator runs
+- `test_save_rejects_pipeline_fields_authored_by_the_agent`, `test_save_rejects_a_host_context_banner_authored_by_the_agent` — an agent attempting to author a pipeline-owned reconciliation field or the host banner is rejected before the canonical validator runs
 - `test_save_copies_degraded_host_banner`, `test_save_leaves_an_undegraded_host_banner_off_the_ledger` — the banner reaches the ledger only from the context, and only when it is actually degraded
 - `test_save_rejects_advisory_finding_without_advisory_source`, `test_save_accepts_an_advisory_finding_a_source_review_carried` — an advisory-channel finding must trace back to a source review that itself carried the advisory channel
 - `test_save_rejects_a_run_with_no_reconciliation_context` — a missing `reconciliation-context.json` refuses the save outright, since there is nothing to stamp the ledger's pipeline-owned facts from
