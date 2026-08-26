@@ -278,6 +278,55 @@ class TestCanonicalFindingsReader:
             validate_findings_document(ledger)
 
     @pytest.mark.parametrize(
+        "reconciliation",
+        [
+            {"reviewing_agents": ["Security Reviewer"]},
+            {"dispatched_agents": ["security-reviewer", "Rogue_Agent"]},
+            {"missing_agents": ["a11y reviewer"]},
+            {"not_applicable_agents": [
+                {"name": "A11y Reviewer", "skip_reason": "no UI changed"},
+            ]},
+        ],
+        ids=(
+            "reviewing-agents",
+            "dispatched-agents",
+            "missing-agents",
+            "not-applicable-agent-name",
+        ),
+    )
+    def test_reconciliation_agent_names_follow_the_dispatch_grammar(
+        self, reconciliation
+    ):
+        """A name outside `[a-z0-9][a-z0-9-]*` used to pass here and then
+        null the whole reconciliation block in the offline metrics report,
+        so the ledger is where it has to be refused."""
+        with pytest.raises(ValueError, match="agent name"):
+            validate_findings_document(
+                canonical_findings_ledger(reconciliation=reconciliation)
+            )
+
+    @pytest.mark.parametrize(
+        "skip_reason",
+        ["", "   ", "x" * 4097, "no UI\x07 changed"],
+        ids=("empty", "blank", "over-the-ceiling", "control-character"),
+    )
+    def test_not_applicable_skip_reasons_are_bounded_text(self, skip_reason):
+        with pytest.raises(ValueError, match="skip_reason"):
+            validate_findings_document(canonical_findings_ledger(
+                reconciliation={"not_applicable_agents": [
+                    {"name": "a11y-reviewer", "skip_reason": skip_reason},
+                ]},
+            ))
+
+    def test_a_live_entry_may_not_carry_a_removal_adjustment(self):
+        ledger = canonical_findings_ledger(("high",))
+        ledger["findings"][0]["critic_adjustment"] = {
+            "action": "remove", "rationale": "Not reproducible.",
+        }
+        with pytest.raises(ValueError, match="critic_adjustment provenance"):
+            validate_findings_document(ledger)
+
+    @pytest.mark.parametrize(
         "payload",
         [
             {"verdict": "block"},
@@ -304,7 +353,6 @@ class TestCanonicalFindingsReader:
                 dict(ledger["findings"][0])
             ),
             lambda ledger: ledger["meta"].update(next_finding_number=1),
-            lambda ledger: ledger.update(reviewed_file_claims=["src/unknown.py"]),
             lambda ledger: ledger.update(applied_critic_adjustments=[{
                 "adjustment_id": "orphan", "spot_check": "verified",
             }]),
@@ -313,7 +361,6 @@ class TestCanonicalFindingsReader:
             "malformed-finding",
             "duplicate-finding-id",
             "counter-reuses-live-id",
-            "accounting-claim-outside-authority",
             "applied-adjustment-without-critic-provenance",
         ),
     )

@@ -90,9 +90,9 @@ def canonical_findings_ledger(severities=(), *, checks=(), reconciliation=None):
         "out_of_scope_concern_count": 0,
         "input_finding_count": count,
         "contributing_agent_count": 1 if count else 0,
-        "reviewing_agents": ["security-review"],
+        "reviewing_agents": ["security-reviewer"],
         "not_applicable_agents": [],
-        "dispatched_agents": ["security-review"],
+        "dispatched_agents": ["security-reviewer"],
         "missing_agents": [],
         **(reconciliation or {}),
     }

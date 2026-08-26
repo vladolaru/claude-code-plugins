@@ -23,6 +23,11 @@ _TELEMETRY_CONTRACT = _load_exact_path_module(
     _REVIEW_DIR / "telemetry.py",
     "review telemetry contract unavailable",
 )
+_FINDINGS_LEDGER_CONTRACT = _load_exact_path_module(
+    "review_findings_ledger_contract",
+    _REVIEW_DIR / "findings_ledger.py",
+    "review findings ledger contract unavailable",
+)
 _DISPATCH_STATUS_CONTRACT = _load_exact_path_module(
     "review_dispatch_status_contract",
     _REVIEW_DIR / "dispatch_status.py",
@@ -193,13 +198,17 @@ _SUMMARY_FIELDS = (
     "final_finding_count",
 )
 _SEVERITIES = tuple(_TELEMETRY_CONTRACT._SEVERITY_FIELDS)
+# The ledger's producer owns the reconciliation block; telemetry projects it
+# verbatim. These come from that producer, not from the projection.
 _RECONCILIATION_COUNT_FIELDS = tuple(
-    _TELEMETRY_CONTRACT._RECONCILIATION_COUNT_FIELDS
+    _FINDINGS_LEDGER_CONTRACT.RECONCILIATION_COUNT_FIELDS
 )
 _RECONCILIATION_AGENT_FIELDS = tuple(
-    _TELEMETRY_CONTRACT._RECONCILIATION_AGENT_FIELDS
+    _FINDINGS_LEDGER_CONTRACT.RECONCILIATION_AGENT_LIST_FIELDS
 )
-_RECONCILIATION_FIELDS = frozenset(_TELEMETRY_CONTRACT._RECONCILIATION_FIELDS)
+_RECONCILIATION_FIELDS = frozenset(
+    _FINDINGS_LEDGER_CONTRACT.RECONCILIATION_FIELDS
+)
 # Lockstep with review/telemetry.py's EVENT_SCHEMA. Schema 3 requires the
 # reviewed-file accounting projection in every coverage section.
 _SUPPORTED_MANIFEST_SCHEMA = 3

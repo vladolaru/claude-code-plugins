@@ -2682,7 +2682,7 @@ class TestReconciliationSectionsRender:
                 "not_applicable_agents": [
                     {"name": "a11y-reviewer", "skip_reason": "no UI changed"},
                 ],
-                "dispatched_agents": ["security-review", "a11y-reviewer"],
+                "dispatched_agents": ["security-reviewer", "a11y-reviewer"],
             },
         ))
         assert "1 agent returned not-applicable" in rendered

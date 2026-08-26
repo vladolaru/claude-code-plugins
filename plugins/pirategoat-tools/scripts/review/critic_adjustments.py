@@ -30,6 +30,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from typing import Mapping
@@ -41,10 +42,12 @@ try:
         validate_review_content,
         validate_review_domain,
     )
+    from .dispatch_status import AGENT_NAME_RE
     from .findings_ledger import (
         LEDGER_SCHEMA,
+        RECONCILIATION_AGENT_LIST_FIELDS,
+        RECONCILIATION_COUNT_FIELDS,
         RECONCILIATION_FIELDS,
-        RECONCILIATION_JUDGMENT_FIELDS,
     )
     from .verdict_rules import VALID_SEVERITIES, derive_review_state
 except ImportError:
@@ -57,10 +60,12 @@ except ImportError:
         validate_review_content,
         validate_review_domain,
     )
+    from review.dispatch_status import AGENT_NAME_RE
     from review.findings_ledger import (
         LEDGER_SCHEMA,
+        RECONCILIATION_AGENT_LIST_FIELDS,
+        RECONCILIATION_COUNT_FIELDS,
         RECONCILIATION_FIELDS,
-        RECONCILIATION_JUDGMENT_FIELDS,
     )
     from review.verdict_rules import VALID_SEVERITIES, derive_review_state
 
@@ -83,6 +88,10 @@ ADD_REQUIRED_FIELDS = ("severity", "title", "file", "description",
 # Script-derived per-entry outcomes from the orchestrator's exact settlement
 # request. The request names only positive verified/refuted claims; omitted
 # committed IDs become SPOT_CHECK_NOT_CHECKED.
+# Free-text ledger fields are bounded here because the ledger is their one
+# authority; the offline metrics sanitizer applies the same ceiling.
+MAX_LEDGER_TEXT_LENGTH = 4096
+
 SPOT_CHECK_KEY = "spot_check"
 SPOT_CHECK_VERIFIED = "verified"
 SPOT_CHECK_REFUTED = "refuted"
@@ -818,13 +827,56 @@ def _validate_unique_strings(value, label, *, nullable=False):
         raise ValueError(f"{label} must be a list of unique non-empty strings")
 
 
+def _is_agent_name(value):
+    """The one producer agent-name grammar, shared with dispatch."""
+    return (
+        isinstance(value, str) and AGENT_NAME_RE.fullmatch(value) is not None
+    )
+
+
+def _validate_agent_names(value, label, *, nullable=False):
+    if nullable and value is None:
+        return
+    if (
+        not isinstance(value, list)
+        or any(not _is_agent_name(item) for item in value)
+        or len(value) != len(set(value))
+    ):
+        raise ValueError(
+            f"{label} must be a list of unique lowercase agent names"
+        )
+
+
+def _validate_bounded_text(value, label):
+    """Non-empty prose bounded for the machine readers that carry it on.
+
+    The ledger is the authority on this text, so the bound lives here: the
+    reconciliation block flows verbatim into the telemetry manifest and from
+    there into offline metrics reports, whose sanitizer drops the whole block
+    rather than one oversized or control-character-bearing string.
+    """
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or len(value) > MAX_LEDGER_TEXT_LENGTH
+        or "\x00" in value
+        or any(
+            character not in ("\n", "\t")
+            and unicodedata.category(character) in ("Cc", "Cf")
+            for character in value
+        )
+    ):
+        raise ValueError(
+            f"{label} must be non-empty text of at most "
+            f"{MAX_LEDGER_TEXT_LENGTH} characters with no control characters"
+        )
+
+
 def _validate_reconciliation(value):
     label = f"{FINDINGS_FILENAME}: meta.reconciliation"
     if not isinstance(value, dict) or set(value) != RECONCILIATION_FIELDS:
         raise ValueError(f"{label} must have the exact canonical fields")
-    for field in RECONCILIATION_JUDGMENT_FIELDS + (
-        "input_finding_count", "contributing_agent_count",
-    ):
+    for field in RECONCILIATION_COUNT_FIELDS:
         _require_nonnegative_integer(value[field], f"{label}.{field}")
     judged = (
         value["verified_concern_count"]
@@ -836,31 +888,23 @@ def _validate_reconciliation(value):
             f"{label}: classification counts do not partition "
             "grouped_concern_count"
         )
-    _validate_unique_strings(
-        value["reviewing_agents"], f"{label}.reviewing_agents"
-    )
-    _validate_unique_strings(
-        value["dispatched_agents"], f"{label}.dispatched_agents", nullable=True
-    )
-    _validate_unique_strings(
-        value["missing_agents"], f"{label}.missing_agents", nullable=True
-    )
+    for field in RECONCILIATION_AGENT_LIST_FIELDS:
+        _validate_agent_names(
+            value[field],
+            f"{label}.{field}",
+            nullable=field != "reviewing_agents",
+        )
     not_applicable = value["not_applicable_agents"]
     if not isinstance(not_applicable, list):
         raise ValueError(f"{label}.not_applicable_agents must be a list")
     names = []
     for index, agent in enumerate(not_applicable):
-        if (
-            not isinstance(agent, dict)
-            or set(agent) != {"name", "skip_reason"}
-            or not isinstance(agent.get("name"), str)
-            or not agent["name"].strip()
-            or not isinstance(agent.get("skip_reason"), str)
-            or not agent["skip_reason"].strip()
-        ):
-            raise ValueError(
-                f"{label}.not_applicable_agents[{index}] is malformed"
-            )
+        entry = f"{label}.not_applicable_agents[{index}]"
+        if not isinstance(agent, dict) or set(agent) != {"name", "skip_reason"}:
+            raise ValueError(f"{entry} is malformed")
+        if not _is_agent_name(agent["name"]):
+            raise ValueError(f"{entry}.name must be a lowercase agent name")
+        _validate_bounded_text(agent["skip_reason"], f"{entry}.skip_reason")
         names.append(agent["name"])
     if len(names) != len(set(names)):
         raise ValueError(f"{label}.not_applicable_agents contains duplicates")
@@ -898,18 +942,15 @@ def _validate_critic_provenance(value, label, *, removed):
 
     The applier is the only writer of this block and it writes one shape;
     this boundary checks that shape, not a per-action grammar the applier
-    cannot emit. The one asymmetry worth keeping is that an entry parked in
-    a `*_removed_by_critic` list must say a removal put it there.
+    cannot emit. The one action that is not free is `remove`: it belongs to
+    an entry parked in a `*_removed_by_critic` list, and to nothing else.
     """
-    if removed and (
-        not isinstance(value, dict) or value.get("action") != "remove"
-    ):
-        raise ValueError(f"{label}: a removed entry needs a remove adjustment")
-    if value is None:
+    if value is None and not removed:
         return
     if (
         not isinstance(value, dict)
         or value.get("action") not in ACTIONS
+        or (value["action"] == "remove") != removed
         or not isinstance(value.get("rationale"), str)
         or not value["rationale"].strip()
         or ("prior" in value and not isinstance(value["prior"], dict))

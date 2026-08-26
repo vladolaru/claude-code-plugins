@@ -8,11 +8,16 @@ reviewer's draft/final lifecycle, which a synthesized cross-review artifact
 does not have. This is the one deliberate subclass of ReviewOutputBuilder;
 do not grow a hierarchy under it.
 """
+import os
+import sys
 from typing import Dict
 
 try:
     from .agent.output import ReviewOutputBuilder
 except ImportError:
+    _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _scripts_parent not in sys.path:
+        sys.path.insert(0, _scripts_parent)
     from review.agent.output import ReviewOutputBuilder
 
 LEDGER_SCHEMA = 3
@@ -33,6 +38,18 @@ RECONCILIATION_PIPELINE_FIELDS = (
     "not_applicable_agents",
     "dispatched_agents",
     "missing_agents",
+)
+# The rosters inside the pipeline half. Every entry is a dispatch agent name;
+# `dispatched_agents` and `missing_agents` are null when dispatch was unknown.
+RECONCILIATION_AGENT_LIST_FIELDS = (
+    "reviewing_agents",
+    "dispatched_agents",
+    "missing_agents",
+)
+# Every reconciliation field that must be a non-negative integer.
+RECONCILIATION_COUNT_FIELDS = RECONCILIATION_JUDGMENT_FIELDS + (
+    "input_finding_count",
+    "contributing_agent_count",
 )
 RECONCILIATION_FIELDS = frozenset(
     RECONCILIATION_JUDGMENT_FIELDS + RECONCILIATION_PIPELINE_FIELDS

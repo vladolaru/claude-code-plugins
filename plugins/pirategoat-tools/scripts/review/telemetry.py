@@ -34,10 +34,6 @@ try:
     )
     from .atomic_io import atomic_write_json
     from .critic_adjustments import FINDINGS_READ_OK, read_findings_file
-    from .findings_ledger import (
-        RECONCILIATION_FIELDS,
-        RECONCILIATION_JUDGMENT_FIELDS,
-    )
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
@@ -55,10 +51,6 @@ except ImportError:
     )
     from review.atomic_io import atomic_write_json
     from review.critic_adjustments import FINDINGS_READ_OK, read_findings_file
-    from review.findings_ledger import (
-        RECONCILIATION_FIELDS,
-        RECONCILIATION_JUDGMENT_FIELDS,
-    )
 
 from git_paths import normalize_repo_paths
 
@@ -129,20 +121,6 @@ _AGENT_COMPLETE_MANIFEST_FIELDS = (
     "review_digest",
 )
 _SEVERITY_FIELDS = _VALID_SEVERITIES
-# The ledger's producer owns the reconciliation block, and its reader
-# boundary validates it. Telemetry projects it verbatim; these names are
-# published for the analysis layer, which re-validates a manifest it did not
-# write (analysis/review_metrics/contracts.py reads them from here).
-_RECONCILIATION_COUNT_FIELDS = RECONCILIATION_JUDGMENT_FIELDS + (
-    "input_finding_count",
-    "contributing_agent_count",
-)
-_RECONCILIATION_AGENT_FIELDS = (
-    "reviewing_agents",
-    "dispatched_agents",
-    "missing_agents",
-)
-_RECONCILIATION_FIELDS = RECONCILIATION_FIELDS
 
 
 def _advisory_measurement(data: Any) -> Dict[str, Any]:
