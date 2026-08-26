@@ -2489,16 +2489,28 @@ class TestTypeScriptContractLockstep:
     """
 
     @staticmethod
-    def _review_output_interface() -> str:
+    def _interface_body(name: str, *, extends: str = "") -> str:
         schema = (PLUGIN_ROOT / "schemas" / "review-output.ts").read_text()
-        match = re.search(
-            r"export interface ReviewOutput\s*\{(.*?)\n\}", schema, re.DOTALL
-        )
-        assert match is not None, "review-output.ts must declare ReviewOutput"
+        suffix = f" extends {extends}" if extends else ""
+        pattern = r"export interface " + name + suffix + r"\s*\{(.*?)\n\}"
+        match = re.search(pattern, schema, re.DOTALL)
+        assert match is not None, f"review-output.ts must declare {name}"
         return match.group(1)
 
+    @classmethod
+    def _review_document_interface(cls) -> str:
+        """ReviewContent's body plus ReviewDocument's own extension body —
+        the flattened shape a per-reviewer <reviewer>-review.json actually
+        carries (`extends` means ReviewDocument's own text repeats none of
+        ReviewContent's fields)."""
+        return (
+            cls._interface_body("ReviewContent")
+            + "\n"
+            + cls._interface_body("ReviewDocument", extends="ReviewContent")
+        )
+
     def test_identity_block_matches_the_serialized_artifact(self):
-        interface = self._review_output_interface()
+        interface = self._review_document_interface()
         declared = set(re.findall(r"^\s*(\w+)\??:", interface, re.MULTILINE))
         serialized = set(ReviewOutputBuilder(pr_id="1", reviewer="pr").to_dict())
 
@@ -2507,75 +2519,72 @@ class TestTypeScriptContractLockstep:
         assert identity <= serialized
 
     def test_retired_version_field_is_gone_from_both_sides(self):
-        interface = self._review_output_interface()
+        interface = self._review_document_interface()
         assert not re.search(r"^\s*version\??:", interface, re.MULTILINE)
         assert "version" not in ReviewOutputBuilder(pr_id="1", reviewer="pr").to_dict()
 
     def test_schema_is_declared_as_a_number(self):
-        interface = self._review_output_interface()
+        interface = self._interface_body("ReviewContent")
         match = re.search(r"^\s*schema:\s*([^;]+);", interface, re.MULTILINE)
         assert match is not None
         assert match.group(1).strip() == "number"
 
     def test_plugin_version_is_declared_nullable(self):
         """Absence is part of the contract, not an error state."""
-        interface = self._review_output_interface()
+        interface = self._review_document_interface()
         match = re.search(
             r"^\s*plugin_version:\s*([^;]+);", interface, re.MULTILINE
         )
         assert match is not None
         assert match.group(1).strip() == "string | null"
 
-    def test_schema_two_rejected_spot_check_is_required(self):
+    def test_schema_two_rejected_outcome_is_required(self):
         schema = (PLUGIN_ROOT / "schemas" / "review-output.ts").read_text()
-        assert "spot_check: 'refuted';" in schema
-        assert "spot_check?: 'refuted';" not in schema
+        assert "outcome: 'refuted';" in schema
+        assert "outcome?: 'refuted';" not in schema
 
-    def test_critic_types_correlate_actions_targets_and_persisted_provenance(
-        self,
-    ):
+    def test_ts_schema_field_sets_match_python_validators(self):
+        """schemas/review-output.ts declares exactly the field sets the two
+        live Python validators require: REVIEW_CONTENT_FIELDS/REVIEWER_FIELDS
+        in agent/output.py for ReviewContent/ReviewDocument, and
+        RECONCILIATION_FIELDS plus the ledger's own optional extension keys
+        for Reconciliation/FindingsLedger.
+        """
+        import review.findings_ledger as findings_ledger
+
         schema = (PLUGIN_ROOT / "schemas" / "review-output.ts").read_text()
+        for interface in (
+            "interface ReviewContent",
+            "interface ReviewDocument",
+            "interface FindingsLedger",
+            "interface Reconciliation",
+            "interface AdjudicationRequest",
+        ):
+            assert interface in schema
+        for retired in (
+            "spot_check", "CriticAdjudication", "proposal_digest: string",
+            "defensive_apply", "recorded_at",
+        ):
+            assert retired not in schema
 
-        assert "export type FindingId = `f${number}`;" in schema
-        assert "export type CheckId = `c${number}`;" in schema
-        assert "export type CriticProposalAdjustment =" in schema
-        assert "critic_adjustment?: FindingCriticAdjustment;" in schema
-        assert "critic_adjustment?: CheckCriticAdjustment;" in schema
-        assert (
-            "rejected_critic_adjustments?: CriticRejectedAdjustment[];"
-            in schema
-        )
-        assert "export interface CriticAdjustment" not in schema
-        assert "export type CriticTarget =" not in schema
+        def top_level_fields(body):
+            return set(re.findall(r"^ {4}(\w+)\??:", body, re.MULTILINE))
 
-        proposal = schema.split(
-            "export type CriticProposalAdjustment =", 1
-        )[1].split("type WithAdjustmentId", 1)[0]
-        assert proposal.count("action: 'add'") == 1
-        assert "action: 'add'; target: FindingAddTarget" in proposal
-        assert (
-            "action: 'promote' | 'demote'; target: FindingTarget"
-            in proposal
-        )
-        assert "action: 'rescope'; target: FindingTarget" in proposal
-        assert "action: 'correct'; target: FindingTarget" in proposal
-        assert "action: 'correct'; target: CheckTarget" in proposal
-        assert "action: 'remove'; target: FindingTarget" in proposal
-        assert "action: 'remove'; target: CheckTarget" in proposal
-        assert (
-            "CriticActionTarget<CriticProposalAdjustment>"
-            in schema
-        )
+        content_body = self._interface_body("ReviewContent")
+        assert top_level_fields(content_body) == REVIEW_CONTENT_FIELDS | {"skip_reason"}
 
-        check_provenance = schema.split(
-            "export type CheckCriticAdjustment =", 1
-        )[1].split("type CriticActionTarget", 1)[0]
-        assert "action: 'remove'" in check_provenance
-        assert "action: 'correct'" in check_provenance
-        assert not any(
-            action in check_provenance
-            for action in ("'add'", "'promote'", "'demote'", "'rescope'")
-        )
+        document_body = self._interface_body("ReviewDocument", extends="ReviewContent")
+        assert top_level_fields(document_body) == REVIEWER_FIELDS | {"schema"}
+
+        ledger_body = self._interface_body("FindingsLedger", extends="ReviewContent")
+        ledger_optional_fields = {
+            field for field in top_level_fields(ledger_body)
+            if f"{field}?:" in ledger_body
+        }
+        assert ledger_optional_fields == critic_adjustments._LEDGER_EXTENSION_FIELDS
+
+        reconciliation_body = self._interface_body("Reconciliation")
+        assert top_level_fields(reconciliation_body) == findings_ledger.RECONCILIATION_FIELDS
 
 
 # =============================================================================

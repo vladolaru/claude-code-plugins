@@ -5,15 +5,18 @@
  * enabling reliable parsing, automation, and integration.
  *
  * SCHEMA MAINTENANCE: the artifacts declared here carry an integer `schema`
- * field (REVIEW_OUTPUT_SCHEMA in scripts/review/agent/output.py). When their
- * shape changes — a key added, removed, or re-typed — bump it in the SAME
- * commit as the change, update the interface below to match, and note the
- * bump in the changelog. A schema number that lags the shape is worse than
- * none: it states a compatibility guarantee the producer is not honoring.
- * One carve-out, spelled out beside REVIEW_OUTPUT_SCHEMA and in AGENTS.md: a
- * shape change made inside the SAME unreleased version that introduced the
- * current number updates this file without moving the number, because the
- * number only guarantees anything once released.
+ * field — REVIEW_OUTPUT_SCHEMA in scripts/review/agent/output.py for
+ * ReviewDocument (current value 2), LEDGER_SCHEMA in
+ * scripts/review/findings_ledger.py for FindingsLedger (current value 3).
+ * When either shape changes — a key added, removed, or re-typed — bump the
+ * matching constant in the SAME commit as the change, update the interface
+ * below to match, and note the bump in the changelog. A schema number that
+ * lags the shape is worse than none: it states a compatibility guarantee
+ * the producer is not honoring.
+ * One carve-out, spelled out beside REVIEW_OUTPUT_SCHEMA/LEDGER_SCHEMA and
+ * in AGENTS.md: a shape change made inside the SAME unreleased version that
+ * introduced the current number updates this file without moving the
+ * number, because the number only guarantees anything once released.
  * Other artifact families carry their own `schema` constants; see the
  * Artifact Schemas section of the plugin's AGENTS.md for the full list and
  * for which artifacts deliberately carry no schema at all.
@@ -121,25 +124,17 @@ type WithAdjustmentId<Adjustment> = Adjustment extends unknown
     : never;
 export type PreparedCriticAdjustment = WithAdjustmentId<CriticProposalAdjustment>;
 
-type WithSettlement<Adjustment> = Adjustment extends unknown
-    ? Adjustment & (
-        | { spot_check: 'refuted'; rejected: true; rejection_reason: string; applied?: never }
-        | { spot_check: 'verified' | 'not_checked'; rejected?: never; rejection_reason?: never; applied?: true }
-    )
-    : never;
-export type SettledCriticAdjustment = WithSettlement<PreparedCriticAdjustment>;
-
-export interface CriticAdjudication {
+/**
+ * The committed critic proposal — decision-critic-adjustments.json — schema
+ * 2 (ADJUSTMENTS_SCHEMA in scripts/review/critic_adjustments.py). The
+ * critic never authors adjudication state; that lives only in the ledger
+ * (see CriticAppliedAdjustment / CriticRejectedAdjustment below) and in the
+ * orchestrator's one-shot AdjudicationRequest.
+ */
+export type CriticAdjustmentsDocument = {
     schema: 2;
-    source: 'orchestrator' | 'defensive_apply';
-    proposal_digest: string;
-    recorded_at: string;
-    revised_assessment: string | null;
-}
-
-export type CriticAdjustmentsDocument =
-    | { schema: 2; adjustments: PreparedCriticAdjustment[]; adjudication?: never }
-    | { schema: 2; adjustments: SettledCriticAdjustment[]; adjudication: CriticAdjudication };
+    adjustments: PreparedCriticAdjustment[];
+};
 
 /**
  * The changed-fields-only provenance carried by accepted ledger operations.
@@ -162,29 +157,66 @@ type CriticActionTarget<Adjustment> = Adjustment extends {
     ? { action: Action; target: Target }
     : never;
 
+/**
+ * The three outcomes an adjudicated critic decision can land in — OUTCOMES
+ * in scripts/review/critic_adjustments.py. `not_checked` is the
+ * script-derived default for every committed adjustment id the
+ * orchestrator's AdjudicationRequest did not name.
+ */
+export type AdjudicationOutcome = 'verified' | 'refuted' | 'not_checked';
+
 export type CriticRejectedAdjustment = CriticActionTarget<CriticProposalAdjustment> & {
     adjustment_id: string;
-    spot_check: 'refuted';
+    outcome: 'refuted';
     rejection_reason: string;
 };
 
 export interface CriticAppliedAdjustment {
     adjustment_id: string;
-    spot_check: 'verified' | 'not_checked';
+    outcome: 'verified' | 'not_checked';
 }
 
 /**
- * Common review output structure for all agents
+ * The orchestrator's settle request — the sole input to
+ * critic_adjustments.adjudicate(). Schema 2 (ADJUDICATION_SCHEMA). Every
+ * committed adjustment id absent from both `verified` and `refuted` is
+ * recorded as 'not_checked'.
  */
-export interface ReviewOutput {
-    // Metadata
+export interface AdjudicationRequest {
+    schema: 2;
+    verified: string[];
+    refuted: Array<{ adjustment_id: string; rejection_reason: string }>;
+    revised_assessment: string | null;
+}
+
+/**
+ * Reviewer-authored bookkeeping common to every content-bearing review
+ * artifact.
+ */
+export interface ReviewMeta {
+    // Milliseconds from this actor's dispatch marker to serialization.
+    // Null when no marker was found (hand-rolled builder, standalone
+    // use, unreadable stamp) — the builder has no clock of its own that
+    // spans the review, so absence is reported as absence.
+    review_duration_ms: number | null;
+    confidence_score: ConfidenceScore; // Overall confidence
+    next_finding_number: number;
+    next_check_number: number;
+}
+
+/**
+ * Review content shared by every content-bearing review artifact — exactly
+ * the fields REVIEW_CONTENT_FIELDS (plus optional skip_reason) requires in
+ * scripts/review/agent/output.py — before either the reviewer envelope
+ * (ReviewDocument) or the reconciliation extensions (FindingsLedger) are
+ * layered on.
+ */
+export interface ReviewContent {
     pr_id: string;
-    reviewer: string; // 'architecture' | 'security' | 'performance' | 'tests' | 'patterns'
     timestamp: string; // ISO 8601
     plugin_version: string | null; // pirategoat-tools version that produced this artifact; null when the producer could not name itself
-    schema: number; // Current producer value is 2; see SCHEMA MAINTENANCE above
+    schema: number; // 2 on ReviewDocument, 3 on FindingsLedger; see SCHEMA MAINTENANCE above
 
-    // Summary
     verdict: Verdict;
     skip_reason?: string; // Why the agent did not review (only when verdict is 'not_applicable')
     summary: {
@@ -203,91 +235,111 @@ export interface ReviewOutput {
     findings: Finding[];
     checks: ReviewCheck[]; // Always present, including an empty array.
 
-    // Canonical reviewed-file accounting derived from the system-authored
-    // accounting input and the reviewer's validated positive claims.
-    review_claimable_files: string[];
-    reviewed_file_claims: string[];
-    unclaimed_review_files: string[];
-    inline_diff_file_count: number;
-    review_accounted_file_count: number;
-    in_scope_review_file_count: number;
-
-    // Recommendations (optional)
-    recommendations?: {
-        immediate: string[]; // Must fix before merge
-        important: string[]; // Should fix soon
-        suggestions: string[]; // Nice to have
-    };
-
-    // Positive observations (optional)
-    positive_observations?: string[];
-
     // File-level informational notes that do NOT count toward the verdict.
     // The reconciliator records verified, maintainer-intended tradeoffs here
     // (category: "tradeoff") — trigger condition, affected population
-    // verified at file:line, and why the compromise is intentional.
-    observations?: Array<{ file: string; note: string; category: string }> | null;
+    // verified at file:line, and why the compromise is intentional. The key
+    // is always present; null when there is nothing to record.
+    observations: Array<{ file: string; note: string; category: string }> | null;
+
+    // The key is always present; null when the producer proposed none.
+    recommendations: {
+        immediate: string[]; // Must fix before merge
+        important: string[]; // Should fix soon
+        suggestions: string[]; // Nice to have
+    } | null;
+
+    // The key is always present; null when the producer offered none.
+    positive_observations: string[] | null;
 
     // The producer's own reading of the change as a whole — two or three
     // sentences the list of findings cannot express. Always present, null
     // when the producer said nothing. Rendered as the "## Assessment"
     // section of the derived Markdown.
     //
-    // Also null when an applied decision-critic batch invalidated it. A
-    // non-null value beside invalidated_assessments is the orchestrator's
-    // revised_assessment installed by the adjustment applier.
+    // On FindingsLedger, also null when an applied decision-critic batch
+    // invalidated it — see FindingsLedger.invalidated_assessments below. A
+    // non-null value beside it is the orchestrator's revised_assessment
+    // installed by the adjustment applier.
     assessment: string | null;
 
-    // Metadata
-    meta: {
-        // Milliseconds from this actor's dispatch marker to serialization.
-        // Null when no marker was found (hand-rolled builder, standalone
-        // use, unreadable stamp) — the builder has no clock of its own that
-        // spans the review, so absence is reported as absence.
-        review_duration_ms: number | null;
-        confidence_score: ConfidenceScore; // Overall confidence
-        next_finding_number: number;
-        next_check_number: number;
+    meta: ReviewMeta;
+}
 
-        // Reconciliation accounting — present only on review-findings.json,
-        // written by the review-reconciliator after semantic dedup, scope
-        // checking, and fact verification. Renders as the "**Pipeline:**"
-        // line and the not-applicable coverage line.
-        reconciliation?: {
-            input_finding_count: number;
-            contributing_agent_count: number;
-            grouped_concern_count: number;
-            false_positive_finding_count: number;
-            out_of_scope_finding_count: number;
-            verified_finding_count: number;
-            deduplication_ratio: number;
-            not_applicable_agent_count: number;
-            not_applicable_agents: Array<{ name: string; skip_reason: string }>;
-            reviewing_agents: string[];
-            dispatched_agents: string[];
-            missing_agents: string[];
-        };
-    };
+/**
+ * One reviewer's immutable final artifact — <reviewer>-review.json — schema
+ * 2. ReviewContent plus the reviewer identity and the six canonical
+ * reviewed-file accounting fields (REVIEWER_FIELDS in
+ * scripts/review/agent/output.py), derived from the system-authored
+ * accounting input and the reviewer's validated positive claims.
+ */
+export interface ReviewDocument extends ReviewContent {
+    schema: 2;
+    reviewer: string; // 'architecture' | 'security' | 'performance' | 'tests' | 'patterns'
+    review_claimable_files: string[];
+    reviewed_file_claims: string[];
+    unclaimed_review_files: string[];
+    inline_diff_file_count: number;
+    review_accounted_file_count: number;
+    in_scope_review_file_count: number;
+}
 
-    // Host context banner — present only on review-findings.json, copied
-    // through by the reconciliator when upstream host discovery was
-    // degraded. Rendered as a blockquote directly under the H1.
+/**
+ * The reconciler never abstains — review-findings.json always carries one
+ * of the four gating verdicts, never 'not_applicable'.
+ */
+export type LedgerVerdict = Exclude<Verdict, 'not_applicable'>;
+
+/**
+ * The reconciliation accounting stamped onto the ledger's meta —
+ * RECONCILIATION_FIELDS in scripts/review/findings_ledger.py. Renders as
+ * the "**Pipeline:**" line and the not-applicable coverage line. The four
+ * judgment counts (grouped/verified/false_positive/out_of_scope) are the
+ * reconciliator's own; the remaining six are pipeline-measured and stitched
+ * on by findings_save.py — the builder never authors them.
+ */
+export interface Reconciliation {
+    grouped_concern_count: number;
+    verified_concern_count: number;
+    false_positive_concern_count: number;
+    out_of_scope_concern_count: number;
+    input_finding_count: number;
+    contributing_agent_count: number;
+    reviewing_agents: string[];
+    dispatched_agents: string[] | null;
+    missing_agents: string[] | null;
+    not_applicable_agents: Array<{ name: string; skip_reason: string }>;
+}
+
+/**
+ * The reconciled findings ledger — review-findings.json — schema 3.
+ * ReviewContent plus the required reconciliation block and the
+ * decision-critic's applied/rejected provenance extensions, each present
+ * only once the matching stage has actually run.
+ */
+export interface FindingsLedger extends ReviewContent {
+    schema: 3;
+    verdict: LedgerVerdict;
+    meta: ReviewMeta & { reconciliation: Reconciliation };
+
+    // Host context banner — present only when upstream host discovery was
+    // degraded, copied through by the reconciliator. Rendered as a
+    // blockquote directly under the H1.
     host_context_banner?: HostContextBanner | null;
 
-    // Decision-critic provenance — present only on review-findings.json,
-    // and only once critic_adjustments.py has applied a batch.
+    // Decision-critic provenance — present only once critic_adjustments.py
+    // has applied a batch.
 
     // One record per adjustment this ledger already contains. Present after
     // the first applied batch. `adjustment_id` is the idempotence
     // bookkeeping — a crash between the two writes converges on it —
-    // and `spot_check` is script-derived from the orchestrator's exact
-    // settlement request, checkpointed in decision-critic-adjustments.json,
+    // and `outcome` is script-derived from the orchestrator's exact
+    // AdjudicationRequest, checkpointed in decision-critic-adjustments.json,
     // and carried here on apply. IDs omitted from the positive verified and
     // refuted claims are derived as "not_checked". Step 11's defensive
     // recovery records every entry that way when no adjudication exists.
     // Rendered with rejected decisions in the "## Critic Adjustment
     // Decisions" list.
-    //
     applied_critic_adjustments?: CriticAppliedAdjustment[];
 
     // The ledger's verdict BEFORE any critic batch applied, recorded the
@@ -308,9 +360,9 @@ export interface ReviewOutput {
     // Checks removed by an applied critic batch remain auditable here.
     checks_removed_by_critic?: ReviewCheck[];
 
-    // Critic decisions the orchestrator's adjudication request refuted. The
-    // settle command derives `rejected: true` plus `rejection_reason` in the
-    // checkpointed decision-critic-adjustments.json document.
+    // Critic decisions the orchestrator's AdjudicationRequest refuted. The
+    // settle command derives `outcome: 'refuted'` plus `rejection_reason`
+    // in the checkpointed decision-critic-adjustments.json document.
     // Present after the first batch that settled at least one rejection.
     // A rejected entry is never applied to `findings` — the target finding
     // is never mutated — so this is the canonical place a rejection is
