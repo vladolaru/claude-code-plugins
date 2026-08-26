@@ -401,31 +401,20 @@ def build_dispatch_manifest(output_dir: str, final_info: dict) -> dict:
 def _load_review_claim_accounting(
     output_dir: str, agent: str
 ) -> Optional[Dict[str, int]]:
-    """Derive one finalized review's claim and unclaimed counts."""
+    """Count one finalized review's claimed and unclaimed files.
+
+    Read off the document, not re-derived: finalization already proved the
+    two lists a coherent partition of the reviewer's claimable set.
+    """
     reviewer = derive_reviewer_name(agent)
     paths = review_paths(output_dir, reviewer)
     try:
         review = load_review_document(paths.final, reviewer)
     except ValueError:
-        review = None
-    accounting_input = _read_json_path(paths.accounting_input)
-    if (
-        review is None
-        or accounting_input is None
-        or "reviewed_file_claims" not in review
-    ):
-        return None
-    try:
-        accounting = derive_review_accounting(
-            accounting_input, review["reviewed_file_claims"]
-        )
-    except (ReviewAccountingError, TypeError):
-        return None
-    if accounting.agent_name != agent:
         return None
     return {
-        "reviewed_file_claim_count": len(accounting.reviewed_file_claims),
-        "unclaimed_review_file_count": len(accounting.unclaimed_review_files),
+        "reviewed_file_claim_count": len(review["reviewed_file_claims"]),
+        "unclaimed_review_file_count": len(review["unclaimed_review_files"]),
     }
 
 
@@ -525,14 +514,16 @@ def build_coverage_manifest(
             path for paths in by_agent_sets.values() for path in paths
         )
 
-        # Derived positive-claim/gap populations for NOT DIFFED files,
-        # read straight off durable per-reviewer accounting inputs — never
-        # derived from the events already folded into by_agent above,
-        # which only carry generated SCOPE (assigned files), not the
-        # reviewed-file accounting. Both dicts default to {} (measured,
-        # zero reviewers), never omitted, once this builder runs at all;
-        # only a run whose manifest predates this feature lacks the keys
-        # entirely (see `_load_review_claim_accounting`'s contract).
+        # Positive-claim/gap populations for NOT DIFFED files: the claim
+        # counts come off each finalized review document, the claimable
+        # count off the durable accounting input that also serves agents
+        # that never finalized — never derived from the events already
+        # folded into by_agent above, which only carry generated SCOPE
+        # (assigned files), not the reviewed-file accounting. Both dicts
+        # default to {} (measured, zero reviewers), never omitted, once
+        # this builder runs at all; only a run whose manifest predates this
+        # feature lacks the keys entirely (see
+        # `_load_review_claim_accounting`'s contract).
         review_claim_accounting_by_agent: Dict[str, Dict[str, int]] = {}
         review_claimable_file_count_by_agent: Dict[str, int] = {}
         for name in sorted(final_agents):

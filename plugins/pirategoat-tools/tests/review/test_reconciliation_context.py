@@ -22,8 +22,9 @@ PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 SCRIPT_PATH = SCRIPTS_DIR / "review" / "reconciliation_context.py"
 sys.path.insert(0, str(SCRIPTS_DIR))
+sys.path.insert(0, str(TESTS_DIR))
 
-from review.agent.coverage import derive_review_accounting
+from helpers.review_fixtures import canonical_review_document
 from review.reviewer_lifecycle import ReviewPaths
 
 
@@ -110,25 +111,22 @@ def _write_summary(
         }, f)
 
 
-def _write_review(output_dir, stem, claims):
+def _write_review(output_dir, stem, claims, claimable=None):
     """Write <stem>.json — the real filename an agent's review carries.
 
     Takes the review STEM, not the agent name: several tests exist to pin
     the stem-derivation rule itself, so deriving it here would hide the
     thing under test.
 
-    Every current review carries the positive reviewed-file claim list.
+    The document is the canonical finalized one, so the accounting
+    partition consumers read is embedded in it: `claimable` defaults to the
+    claims (nothing left unclaimed) and widens when a test needs unclaimed
+    review files.
     """
-    payload = _make_review_json(
-        reviewer=stem.removesuffix("-review"), findings=[]
-    )
-    payload["review_claimable_files"] = list(claims)
-    payload["reviewed_file_claims"] = list(claims)
-    payload["review_accounted_file_count"] = (
-        payload["inline_diff_file_count"] + len(claims)
-    )
-    payload["in_scope_review_file_count"] = (
-        payload["inline_diff_file_count"] + len(claims)
+    payload = canonical_review_document(
+        stem.removesuffix("-review"),
+        review_claimable_files=list(claims if claimable is None else claimable),
+        reviewed_file_claims=list(claims),
     )
     with open(os.path.join(output_dir, f"{stem}.json"), "w") as f:
         json.dump(payload, f)
@@ -1430,7 +1428,6 @@ class TestFullScript:
             "output_dir",
             "output_builder_path",
             "host_context_banner",
-            "review_accounting",
             "missing_agents",
             "prefiltered_out_of_scope",
         }
@@ -1444,50 +1441,6 @@ class TestFullScript:
         assert ctx["change_purpose"] == "Fix auth bug"
         assert ctx["pr_id"] == "42"
         assert ctx["output_builder_path"].endswith("output.py")
-
-    def test_changed_files_reach_the_unscoped_computation(self, tmp_path):
-        """The seam R3 depends on: `build_context` must hand the CLI's
-        changed-file list to the coverage aggregator, or `unscoped_files`
-        is unmeasurable in production."""
-        _write_summary(str(tmp_path), "security-reviewer", ["src/auth.py"], [])
-
-        result = self._run(
-            "--output-dir", str(tmp_path),
-            "--git-range", "abc123..HEAD",
-            "--changed-files", "src/auth.py,package-lock.json",
-            cwd=tmp_path,
-        )
-
-        assert result.returncode == 0, f"stderr: {result.stderr}"
-        ctx = json.loads(
-            (tmp_path / "reconciliation-context.json").read_text()
-        )
-        assert ctx["review_accounting"]["unscoped_files"] == [
-            "package-lock.json"
-        ]
-
-    def test_empty_changed_files_flag_reads_as_unmeasured(self, tmp_path):
-        """orchestration.py always passes `--changed-files`, and passes ""
-        when review-context.json carries no CSV.
-
-        That is the production path on which the unmeasured branch is
-        reached. Before this, it published `unscoped_files: []` — a clean
-        coverage bill for a population nothing had measured.
-        """
-        _write_summary(str(tmp_path), "security-reviewer", ["src/auth.py"], [])
-
-        result = self._run(
-            "--output-dir", str(tmp_path),
-            "--git-range", "abc123..HEAD",
-            "--changed-files", "",
-            cwd=tmp_path,
-        )
-
-        assert result.returncode == 0, f"stderr: {result.stderr}"
-        ctx = json.loads(
-            (tmp_path / "reconciliation-context.json").read_text()
-        )
-        assert ctx["review_accounting"]["unscoped_files"] is None
 
     def test_empty_output_dir(self, tmp_path):
         """Runs successfully with no review files."""
@@ -1915,32 +1868,25 @@ class TestAggregateReviewAccounting:
             final=str(authority_dir / "final.json"),
             accounting_input=str(authority_dir / "accounting.json"),
         )
-        review = _make_review_json(reviewer="security", findings=[])
-        review["review_claimable_files"] = ["src/read.php", "src/unread.php"]
-        review["reviewed_file_claims"] = ["src/read.php"]
-        review["unclaimed_review_files"] = ["src/unread.php"]
-        review["inline_diff_file_count"] = 0
-        review["review_accounted_file_count"] = 1
-        review["in_scope_review_file_count"] = 2
-        Path(paths.final).write_text(json.dumps(review))
-        Path(paths.accounting_input).write_text(json.dumps({
-            "schema": 4,
-            "agent_name": "security-reviewer",
-            "reviewer": "security",
-            "review_claimable_files": ["src/read.php", "src/unread.php"],
-            "review_budget": 15,
-            "inline_diff_file_count": 0,
-            "in_scope_review_file_count": 2,
-            "channels": ["blocking"],
-        }))
+        Path(paths.final).write_text(json.dumps(canonical_review_document(
+            "security",
+            review_claimable_files=["src/read.php", "src/unread.php"],
+            reviewed_file_claims=["src/read.php"],
+        )))
         monkeypatch.setattr(mod, "review_paths", lambda *_args: paths)
 
-        accounting = mod._load_agent_review_accounting(
+        claimed, unclaimed = mod._load_agent_review_accounting(
             str(tmp_path), "security-reviewer"
         )
 
-        assert accounting.reviewed_file_claims == ("src/read.php",)
-        assert accounting.unclaimed_review_files == ("src/unread.php",)
+        assert claimed == ["src/read.php"]
+        assert unclaimed == ["src/unread.php"]
+
+    def test_context_carries_no_review_accounting(self, mod):
+        """The reconciliator does not read this measurement, so the context
+        does not carry it (TestFullScript pins the exact key set) and no
+        reader for it survives. Step 9 aggregates it for the record."""
+        assert not hasattr(mod, "review_accounting_from_context")
 
     def test_returns_none_without_summaries(self, mod, tmp_path):
         assert mod.aggregate_review_accounting(str(tmp_path)) is None
@@ -2012,29 +1958,27 @@ class TestAggregateReviewAccounting:
         cov = mod.aggregate_review_accounting(str(tmp_path))
         assert cov["agents_with_unclaimed_review_by_file"]["ci.yml"] == ["security-reviewer"]
 
-    def test_claims_and_gaps_match_the_authoritative_builder_helper(
+    def test_claims_come_from_the_final_document_not_the_sidecar(
         self, mod, tmp_path
     ):
-        claimable = ["src/read.php", "src/unread.php"]
+        """Finalization already proved the document's partition coherent;
+        re-deriving it from the sidecar can only disagree with it."""
+        claimable = ["src/a.py", "src/b.py"]
         _write_summary(str(tmp_path), "security-reviewer", [], claimable)
-        accounting_input = _write_accounting_input(
-            str(tmp_path), "security", claimable, inline_count=2
-        )
         _write_review(
-            str(tmp_path), "security-review", claims=["src/read.php"]
+            str(tmp_path), "security-review",
+            claims=["src/a.py"], claimable=claimable,
         )
+        # A sidecar that disagrees must not be consulted after finalization.
+        _write_accounting_input(str(tmp_path), "security", ["src/zzz.py"])
 
         cov = mod.aggregate_review_accounting(str(tmp_path))
-        expected = derive_review_accounting(
-            accounting_input, ["src/read.php"]
-        )
 
         assert cov["agents_claiming_review_by_file"] == {
-            path: ["security-reviewer"] for path in expected.reviewed_file_claims
+            "src/a.py": ["security-reviewer"]
         }
         assert cov["agents_with_unclaimed_review_by_file"] == {
-            path: ["security-reviewer"]
-            for path in expected.unclaimed_review_files
+            "src/b.py": ["security-reviewer"]
         }
 
     @pytest.mark.parametrize(
@@ -2042,10 +1986,18 @@ class TestAggregateReviewAccounting:
         ids=["raw-string", "malformed-entry"],
     )
     def test_malformed_claims_credit_nothing(self, mod, tmp_path, claims):
+        """A document whose claim list is not a list of paths is not a
+        finalized review: it credits nothing, and every review-claimable
+        file its scope summary reported stays visible as unclaimed work."""
         claimable = ["src/read.php", "src/unread.php"]
         _write_summary(str(tmp_path), "security-reviewer", [], claimable)
-        _write_accounting_input(str(tmp_path), "security", claimable)
-        _write_review(str(tmp_path), "security-review", claims=claims)
+        review = canonical_review_document(
+            "security",
+            review_claimable_files=claimable,
+            reviewed_file_claims=["src/read.php"],
+        )
+        review["reviewed_file_claims"] = claims
+        (tmp_path / "security-review.json").write_text(json.dumps(review))
 
         cov = mod.aggregate_review_accounting(str(tmp_path))
 
@@ -2060,8 +2012,6 @@ class TestAggregateReviewAccounting:
     ):
         for agent in ("security-reviewer", "code-reviewer"):
             _write_summary(str(tmp_path), agent, [], ["src/shared.php"])
-        _write_accounting_input(str(tmp_path), "security", ["src/shared.php"])
-        _write_accounting_input(str(tmp_path), "code", ["src/shared.php"])
         _write_review(
             str(tmp_path), "security-review", claims=["src/shared.php"]
         )

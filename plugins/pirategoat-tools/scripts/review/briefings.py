@@ -1164,7 +1164,7 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
     else:
         actions.append("**2. Dispatch `review-reconciliator`** with:")
     actions.extend([
-        f"- **Reconciliation context:** `{od}/reconciliation-context.json` (pre-gathered: all agent findings, source snippets, scope annotations, run-level coverage)",
+        f"- **Reconciliation context:** `{od}/reconciliation-context.json` (pre-gathered: all agent findings, source snippets, scope annotations)",
         f"- **Output builder path:** `{SCRIPTS_DIR / 'agent' / 'output.py'}`",
         f"- Output directory: `{od}`",
     ])

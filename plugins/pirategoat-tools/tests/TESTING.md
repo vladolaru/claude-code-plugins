@@ -239,7 +239,7 @@ Direct tests for the mutable-draft/immutable-final state machine and schema-2 re
 
 ### Reconciliation Context Tests (`review/test_reconciliation_context.py`)
 
-Direct unit tests on `scripts/review/reconciliation_context.py` — finalized-review loading, scope and hunk checking, source-snippet extraction, severity normalization, and schema-3 reviewed-file accounting. The module builds schema-3 `reconciliation-context.json` and nothing else now: its two Markdown renderers (`to_markdown` for the reconciliator, `build_critic_context` for the decision critic) were projections whose only readers were agents, and both are gone — the agents read the JSON, and the decision critic reads `review-record.md` beside it.
+Direct unit tests on `scripts/review/reconciliation_context.py` — finalized-review loading, scope and hunk checking, source-snippet extraction, severity normalization, and run-level reviewed-file accounting for pipeline step 9. The module builds schema-3 `reconciliation-context.json` and nothing else now: its two Markdown renderers (`to_markdown` for the reconciliator, `build_critic_context` for the decision critic) were projections whose only readers were agents, and both are gone — the agents read the JSON, and the decision critic reads `review-record.md` beside it.
 
 | Class | What it verifies |
 |---|---|
@@ -256,7 +256,7 @@ Direct unit tests on `scripts/review/reconciliation_context.py` — finalized-re
 | `TestFindFileHunks` | File lookup distinguishes matching, missing, and metadata-only diff entries |
 | `TestResolveOutputBuilderPath` | The reconciler uses the installed plugin's output authority rather than a reviewed-repo lookalike |
 | `TestFullScript` | The CLI writes exact schema-3 reconciliation context from finalized schema-2 reviews and canonical accounting inputs |
-| `TestAggregateReviewAccounting` | `aggregate_review_accounting()` carries inline-diff receipt, reviewed-file claims, and unclaimed review files per agent through the shared authority; malformed claims receive no credit, and one reviewer's claim cannot conceal another reviewer's unclaimed work |
+| `TestAggregateReviewAccounting` | `aggregate_review_accounting()` carries inline-diff receipt per agent from the scope sidecars and each reviewer's claimed/unclaimed files from its finalized review, never re-derived from the accounting-input sidecar; a malformed document receives no credit, and one reviewer's claim cannot conceal another reviewer's unclaimed work |
 | `TestUnscopedFiles` | `unscoped_files` — the changed files no reviewer's scope contained in any form, with the measured-empty case distinct from `None` when no changed-file list was supplied |
 | `TestAgentsReportingCountsAgents` | `scope_reporting_agent_count` counts distinct agent names, not scope-summary files — reviewers with a secondary `-config-ops` summary still count once |
 | `TestMissingAgentDetection` | `compute_missing_agents()` keeps dispatched-minus-reporting a MEASUREMENT rather than the reconciliator's arithmetic — sorted for stable diffs, `None` (never `[]`) when dispatch is unknown, measured-empty for an explicitly empty dispatch, and no negative population from an undispatched reporter. Crossed through the CLI to the JSON both ways |

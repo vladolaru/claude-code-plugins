@@ -37,29 +37,12 @@ except ImportError:
     from review.reviewer_names import derive_reviewer_name
     from review.reviewer_lifecycle import review_paths
 
-from review.agent.coverage import (
-    ReviewAccountingError,
-    derive_review_accounting,
-)
 from review.agent.output import load_review_document
 
 from git_paths import normalize_repo_paths
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
 RECONCILIATION_CONTEXT_SCHEMA = 3
-
-_REVIEW_ACCOUNTING_FIELDS = frozenset({
-    "scope_reporting_agent_count",
-    "unscoped_files",
-    "agents_receiving_inline_diff_by_file",
-    "agents_claiming_review_by_file",
-    "agents_with_unclaimed_review_by_file",
-})
-_REVIEW_ACCOUNTING_POPULATIONS = frozenset({
-    "agents_receiving_inline_diff_by_file",
-    "agents_claiming_review_by_file",
-    "agents_with_unclaimed_review_by_file",
-})
 
 # Files in the output directory that are NOT agent review outputs.
 # These are pipeline infrastructure files that should be skipped when
@@ -103,72 +86,6 @@ _CRITIC_SEVERITY_FLOOR_MARKER_RE = re.compile(
     rf"{_LEGACY_SEVERITY_FLOOR_PATTERN})"
     rf"(?!\w)[ \t]*(?:(?:[;—-])[ \t]*)?"
 )
-
-
-def _validate_string_list(value: Any, label: str, *, allow_none=False) -> None:
-    if allow_none and value is None:
-        return
-    if (
-        not isinstance(value, list)
-        or any(not isinstance(item, str) or not item for item in value)
-        or len(value) != len(set(value))
-    ):
-        suffix = " or null" if allow_none else ""
-        raise ValueError(f"{label} must be unique non-empty strings{suffix}")
-
-
-def review_accounting_from_context(context: Any) -> Optional[Dict[str, Any]]:
-    """Return exact schema-3 review accounting, or reject the context."""
-    if not isinstance(context, dict):
-        raise ValueError("reconciliation context must be an object")
-    if (
-        type(context.get("schema")) is not int
-        or context["schema"] != RECONCILIATION_CONTEXT_SCHEMA
-    ):
-        raise ValueError("reconciliation context schema must be 3")
-    if "review_accounting" not in context:
-        raise ValueError("reconciliation context is missing review_accounting")
-    accounting = context["review_accounting"]
-    if accounting is None:
-        return None
-    if not isinstance(accounting, dict):
-        raise ValueError(
-            "reconciliation review_accounting must be an object or null"
-        )
-    if set(accounting) != _REVIEW_ACCOUNTING_FIELDS:
-        raise ValueError("reconciliation review_accounting fields are invalid")
-    count = accounting["scope_reporting_agent_count"]
-    if type(count) is not int or count < 0:
-        raise ValueError(
-            "reconciliation review_accounting scope count must be non-negative"
-        )
-    _validate_string_list(
-        accounting["unscoped_files"],
-        "reconciliation review_accounting unscoped_files",
-        allow_none=True,
-    )
-    for field in _REVIEW_ACCOUNTING_POPULATIONS:
-        population = accounting[field]
-        if not isinstance(population, dict):
-            raise ValueError(
-                f"reconciliation review_accounting {field} is malformed"
-            )
-        for path, agents in population.items():
-            if not isinstance(path, str) or not path:
-                raise ValueError(
-                    f"reconciliation review_accounting {field} has "
-                    "an invalid path"
-                )
-            _validate_string_list(
-                agents,
-                f"reconciliation review_accounting {field}[{path!r}]",
-            )
-            if not agents:
-                raise ValueError(
-                    f"reconciliation review_accounting {field}[{path!r}] "
-                    "must name at least one agent"
-                )
-    return accounting
 
 
 def resolve_structured_severity_floor(finding: Dict[str, Any]) -> Optional[str]:
@@ -277,28 +194,21 @@ def _load_review_payload(output_dir: str, agent: str) -> Optional[Dict[str, Any]
 
 def _load_agent_review_accounting(
     output_dir: str, agent: str
-) -> Optional[Any]:
-    """Derive one finalized review's canonical file accounting."""
+) -> Optional[Tuple[List[str], List[str]]]:
+    """Return (claimed, unclaimed) from one finalized review, or None.
+
+    Finalization already proved these two lists a coherent partition of the
+    reviewer's claimable set (`validate_review_document`), so the document
+    is read, not re-derived: a second derivation from the accounting-input
+    sidecar could only ever disagree with the artifact it describes.
+    """
     data = _load_review_payload(output_dir, agent)
-    if data is None or "reviewed_file_claims" not in data:
+    if data is None:
         return None
-    reviewer = derive_reviewer_name(agent)
-    path = review_paths(output_dir, reviewer).accounting_input
-    try:
-        with open(path, "r", encoding="utf-8") as file_handle:
-            accounting_input = json.load(file_handle)
-    except (OSError, json.JSONDecodeError):
-        return None
-    try:
-        accounting = derive_review_accounting(
-            accounting_input, data["reviewed_file_claims"]
-        )
-    except (ReviewAccountingError, TypeError):
-        try:
-            accounting = derive_review_accounting(accounting_input, [])
-        except ReviewAccountingError:
-            return None
-    return accounting if accounting.agent_name == agent else None
+    return (
+        list(data["reviewed_file_claims"]),
+        list(data["unclaimed_review_files"]),
+    )
 
 
 # Every file-carrying list a scope summary sidecar can hold
@@ -366,12 +276,12 @@ def aggregate_review_accounting(
     """Aggregate per-agent scope summaries into run-level review accounting.
 
     Reads schema-2 ``*-scope-summary*.json`` sidecars, carries inline-diff
-    receipt by file, and validates finalized reviewed-file claims through
-    the shared accounting authority. Review-claimable paths without a
-    validated claim remain visible per agent. When ``changed_files`` is
-    supplied, ``unscoped_files`` is its complement against every path any
-    scope summary mentions; it stays None when that population was not
-    measured.
+    receipt by file, and takes each reviewer's claimed and unclaimed files
+    from its finalized review document. An agent that never finalized one
+    keeps every review-claimable path its summary reported visible as
+    unclaimed. When ``changed_files`` is supplied, ``unscoped_files`` is its
+    complement against every path any scope summary mentions; it stays None
+    when that population was not measured.
 
     Returns None when no summaries exist (pre-sidecar runs) so callers can
     distinguish "no data" from "no gaps".
@@ -443,9 +353,10 @@ def aggregate_review_accounting(
             for f_path in claimable_by_agent.get(agent, set()):
                 unclaimed.setdefault(f_path, set()).add(agent)
             continue
-        for f_path in accounting.reviewed_file_claims:
+        claimed_paths, unclaimed_paths = accounting
+        for f_path in claimed_paths:
             claimed.setdefault(f_path, set()).add(agent)
-        for f_path in accounting.unclaimed_review_files:
+        for f_path in unclaimed_paths:
             unclaimed.setdefault(f_path, set()).add(agent)
 
     return {
@@ -1272,15 +1183,6 @@ def main() -> int:
             "output_builder_path": output_builder_path,
             # Host context banner — surfaced for reviewer agents to calibrate findings.
             "host_context_banner": extract_host_banner(output_dir),
-            # Run-level file accounting from per-agent scope summaries —
-            # None on pre-sidecar runs.
-            #
-            # An empty `changed_files` reaches `_unscoped_files` as the
-            # unmeasured case it is — see its docstring; nothing needs
-            # translating here.
-            "review_accounting": aggregate_review_accounting(
-                output_dir, changed_files=changed_files
-            ),
             # Dispatched but silent — measured here, not left as arithmetic
             # for the reconciliator. `None` when dispatch is unknown, which
             # is a different fact from a measured empty list.

@@ -24,6 +24,7 @@ from review import (
     reviewer_lifecycle,
 )
 from review.agent.coverage import derive_review_accounting
+from review.reconciliation_context import aggregate_review_accounting
 from review.atomic_io import atomic_write_json
 from review.critic_adjustments import write_findings
 from review.telemetry import ReviewTelemetry
@@ -260,9 +261,6 @@ class TestReviewerDraftFinalizationLifecycle:
         telemetry.finalize(step=11, phase="OUTPUT", title="Finalize")
         manifest = json.loads(Path(telemetry.manifest_path).read_text())
         canonical = json.loads(canonical_bytes)
-        context = json.loads(
-            (output_dir / "reconciliation-context.json").read_text()
-        )
         accounting = derive_review_accounting(
             accounting_input, ["claimable/read.py"]
         )
@@ -291,10 +289,16 @@ class TestReviewerDraftFinalizationLifecycle:
         assert canonical["review_accounted_file_count"] == (
             accounting.review_accounted_file_count
         )
-        assert context["review_accounting"]["agents_claiming_review_by_file"] == {
+        run_accounting = aggregate_review_accounting(
+            str(output_dir),
+            changed_files=[
+                "second.txt", "claimable/read.py", "claimable/unread.py",
+            ],
+        )
+        assert run_accounting["agents_claiming_review_by_file"] == {
             "claimable/read.py": ["code-reviewer"],
         }
-        assert context["review_accounting"]["agents_with_unclaimed_review_by_file"] == {
+        assert run_accounting["agents_with_unclaimed_review_by_file"] == {
             "claimable/unread.py": ["code-reviewer"],
         }
         assert (output_dir / "code-review.md").read_text() == (
@@ -2392,67 +2396,85 @@ class TestStep8Orchestration:
         assert repr(None) in message
 
 
-class TestStep9CoverageStateLoading:
-    """Step 9's orchestration loads the three inline-coverage populations
-    out of `reconciliation-context.json` and into pipeline state.
+class TestStep9CoverageMeasurement:
+    """Step 9 measures the three inline-coverage populations and puts them
+    in pipeline state: claimed files, unclaimed files, and changed files no
+    reviewer's scope contained.
 
-    That block is live, unchanged code — the record assembler and step 11's
-    coverage instruction both read what it puts in state. The pins used to
-    ride on the step-9 briefing's paste block; when the paste block went,
-    they went with it and left the loading itself unasserted. These pin the
-    loading directly, which is where the behavior actually lives.
+    It measures them from the run's own durable artifacts — the per-agent
+    scope sidecars, each reviewer's finalized review, and the changed-file
+    CSV the same context handed step 8 — rather than reading them back out
+    of the reconciliation context, which never carried them for the
+    reconciliator's sake. The record assembler and step 11's coverage
+    instruction both read what this puts in state.
     """
 
     @staticmethod
-    def _load(mod, tmp_path, payload=None, state=None):
-        if payload is not None:
-            (tmp_path / "reconciliation-context.json").write_text(
-                json.dumps(payload)
+    def _summary(tmp_path, agent, *, inline=(), claimable=()):
+        (tmp_path / f"{agent}-scope-summary.json").write_text(json.dumps({
+            "schema": 2,
+            "domain": "x",
+            "status": "OK",
+            "inline_diff_files": list(inline),
+            "review_claimable_files": list(claimable),
+            "list_only_files": [],
+            "in_scope_review_files": sorted({*inline, *claimable}),
+        }))
+
+    @staticmethod
+    def _finalized(tmp_path, reviewer, *, claims=(), claimable=()):
+        (tmp_path / f"{reviewer}-review.json").write_text(json.dumps(
+            canonical_review_document(
+                reviewer,
+                reviewed_file_claims=list(claims),
+                review_claimable_files=list(claimable),
             )
+        ))
+
+    @staticmethod
+    def _run_step(mod, tmp_path, changed_csv=None, state=None):
+        context = (
+            {} if changed_csv is None
+            else {"git": {"changed_files_csv": changed_csv}}
+        )
         state = {} if state is None else state
-        mod._orchestrate_step(9, "full", {}, state, {}, str(tmp_path))
+        mod._orchestrate_step(9, "full", {}, state, context, str(tmp_path))
         return state
 
-    def test_review_accounting_reaches_state_intact(self, mod, tmp_path):
-        gaps = {"src/starved.php": ["code-reviewer"]}
-        claims = {"src/big_module.py": ["security-reviewer"]}
-        accounting = {
-            "scope_reporting_agent_count": 2,
-            "agents_receiving_inline_diff_by_file": {
-                "src/a.py": ["code-reviewer"]
-            },
-            "agents_claiming_review_by_file": claims,
-            "agents_with_unclaimed_review_by_file": gaps,
-            "unscoped_files": ["package-lock.json"],
-        }
-        state = self._load(
-            mod, tmp_path, {"schema": 3, "review_accounting": accounting}
+    def test_measured_populations_reach_state_intact(self, mod, tmp_path):
+        self._summary(
+            tmp_path, "security-reviewer",
+            inline=["src/a.py"], claimable=["src/big_module.py"],
+        )
+        self._summary(
+            tmp_path, "code-reviewer", claimable=["src/starved.php"],
+        )
+        self._finalized(
+            tmp_path, "security",
+            claims=["src/big_module.py"], claimable=["src/big_module.py"],
         )
 
-        assert state["review_accounting"] == accounting
+        state = self._run_step(
+            mod, tmp_path,
+            "src/a.py,src/big_module.py,src/starved.php,package-lock.json",
+        )
 
-    @pytest.mark.parametrize(
-        "payload",
-        [
-            pytest.param(None, id="missing-context"),
-            pytest.param(
-                {"schema": 3, "review_accounting": ["malformed"]},
-                id="malformed-accounting",
-            ),
-            pytest.param(
-                {"schema": 3, "not_accounting": 1},
-                id="missing-accounting",
-            ),
-            pytest.param(
-                {"schema": 3, "review_accounting": {"issues": []}},
-                id="retired-accounting-shape",
-            ),
-        ],
-    )
-    def test_stale_populations_are_cleared_not_carried(
-        self, mod, tmp_path, payload
-    ):
-        """A re-entered step 9 whose context is gone or malformed must not
+        assert state["review_accounting"] == {
+            "scope_reporting_agent_count": 2,
+            "unscoped_files": ["package-lock.json"],
+            "agents_receiving_inline_diff_by_file": {
+                "src/a.py": ["security-reviewer"]
+            },
+            "agents_claiming_review_by_file": {
+                "src/big_module.py": ["security-reviewer"]
+            },
+            "agents_with_unclaimed_review_by_file": {
+                "src/starved.php": ["code-reviewer"]
+            },
+        }
+
+    def test_stale_populations_are_cleared_not_carried(self, mod, tmp_path):
+        """A re-entered step 9 in a run with nothing to measure must not
         keep the previous run's gaps standing — the record would then
         report a coverage problem this run never measured."""
         stale = {"review_accounting": {
@@ -2460,78 +2482,51 @@ class TestStep9CoverageStateLoading:
                 "src/stale.php": ["code-reviewer"]
             }
         }}
-        state = self._load(mod, tmp_path, payload, state=stale)
 
-        assert state["review_accounting"] is None
-
-    @pytest.mark.parametrize(
-        "schema",
-        [
-            pytest.param(None, id="missing-schema"),
-            pytest.param(2, id="retired-schema"),
-            pytest.param("3", id="wrong-schema-type"),
-        ],
-    )
-    def test_noncanonical_context_schema_cannot_supply_accounting(
-        self, mod, tmp_path, schema
-    ):
-        accounting = {
-            "scope_reporting_agent_count": 1,
-            "agents_receiving_inline_diff_by_file": {},
-            "agents_claiming_review_by_file": {},
-            "agents_with_unclaimed_review_by_file": {},
-            "unscoped_files": [],
-        }
-        payload = {"review_accounting": accounting}
-        if schema is not None:
-            payload["schema"] = schema
-
-        state = self._load(mod, tmp_path, payload)
+        state = self._run_step(mod, tmp_path, "src/a.py", state=stale)
 
         assert state["review_accounting"] is None
 
     def test_unmeasured_unscoped_is_none_not_empty(self, mod, tmp_path):
         """`unscoped_files: null` is "not measured", not "none found" —
-        only the second may ever render as a clean coverage result."""
-        state = self._load(
-            mod, tmp_path,
-            {"schema": 3, "review_accounting": {
-                "scope_reporting_agent_count": 1,
-                "agents_receiving_inline_diff_by_file": {},
-                "agents_claiming_review_by_file": {},
-                "agents_with_unclaimed_review_by_file": {},
-                "unscoped_files": None,
-            }},
+        only the second may ever render as a clean coverage result, and a
+        context with no changed-file CSV measured nothing."""
+        self._summary(tmp_path, "security-reviewer", inline=["src/a.py"])
+
+        state = self._run_step(
+            mod, tmp_path, "",
             state={"review_accounting": {"unscoped_files": ["stale.py"]}},
         )
+
         assert state["review_accounting"]["unscoped_files"] is None
 
     def test_measured_empty_unscoped_is_a_list(self, mod, tmp_path):
-        state = self._load(mod, tmp_path, {"schema": 3, "review_accounting": {
-            "scope_reporting_agent_count": 1,
-            "agents_receiving_inline_diff_by_file": {},
-            "agents_claiming_review_by_file": {},
-            "agents_with_unclaimed_review_by_file": {},
-            "unscoped_files": [],
-        }})
+        self._summary(tmp_path, "security-reviewer", inline=["src/a.py"])
+
+        state = self._run_step(mod, tmp_path, "src/a.py")
+
         assert state["review_accounting"]["unscoped_files"] == []
 
-    def test_the_loaded_populations_reach_the_record(self, mod, tmp_path):
-        """The whole point of loading them: the assembler renders them."""
+    def test_the_measured_populations_reach_the_record(self, mod, tmp_path):
+        """The whole point of measuring them: the assembler renders them."""
         (tmp_path / "review-findings.json").write_text(
             json.dumps(_review_json("review-reconciliator"))
         )
-        self._load(mod, tmp_path, {"schema": 3, "review_accounting": {
-            "scope_reporting_agent_count": 1,
-            "agents_receiving_inline_diff_by_file": {},
-            "agents_with_unclaimed_review_by_file": {
-                "src/starved.php": ["code-reviewer"]
-            },
-            "agents_claiming_review_by_file": {
-                "src/big.py": ["security-reviewer"]
-            },
-            "unscoped_files": ["package-lock.json"],
-        }})
+        self._summary(
+            tmp_path, "security-reviewer", claimable=["src/big.py"],
+        )
+        self._summary(
+            tmp_path, "code-reviewer", claimable=["src/starved.php"],
+        )
+        self._finalized(
+            tmp_path, "security",
+            claims=["src/big.py"], claimable=["src/big.py"],
+        )
+
+        self._run_step(
+            mod, tmp_path,
+            "src/big.py,src/starved.php,package-lock.json",
+        )
 
         record = (tmp_path / "review-record.md").read_text()
         assert "`src/starved.php` (skipped by: `code-reviewer`)" in record
@@ -2540,24 +2535,27 @@ class TestStep9CoverageStateLoading:
 
 
 class TestStep9Orchestration:
-    """Step 9 carries review accounting from reconciliation context."""
+    """Step 9 measures review accounting through the real CLI."""
 
-    def test_step_9_loads_review_accounting(self, tmp_path):
+    def test_step_9_measures_review_accounting(self, tmp_path):
         run_pipeline("--step", "1", "--mode", "full",
                    "--output-dir", str(tmp_path), cwd=tmp_path)
-        accounting = {
-                "scope_reporting_agent_count": 2,
-                "agents_receiving_inline_diff_by_file": {
-                    "src/a.php": ["code-reviewer"]
-                },
-                "agents_claiming_review_by_file": {},
-                "agents_with_unclaimed_review_by_file": {
-                    "src/starved.php": ["code-reviewer", "security-reviewer"],
-                },
-                "unscoped_files": [],
-        }
-        recon = {"schema": 3, "review_accounting": accounting}
-        (tmp_path / "reconciliation-context.json").write_text(json.dumps(recon))
+        for agent in ("code-reviewer", "security-reviewer"):
+            (tmp_path / f"{agent}-scope-summary.json").write_text(json.dumps({
+                "schema": 2,
+                "domain": "x",
+                "status": "OK",
+                "inline_diff_files": ["src/a.php"],
+                "review_claimable_files": ["src/starved.php"],
+                "list_only_files": [],
+                "in_scope_review_files": ["src/a.php", "src/starved.php"],
+            }))
+        # The CSV step 8 hands the reconciliation-context builder is the
+        # same one step 9 measures `unscoped_files` against.
+        (tmp_path / "review-context.json").write_text(json.dumps({
+            "output": {"directory": str(tmp_path)},
+            "git": {"changed_files_csv": "src/a.php,src/starved.php"},
+        }))
         (tmp_path / "review-findings.json").write_text(
             json.dumps(_review_json("review-reconciliator"))
         )
@@ -2565,14 +2563,24 @@ class TestStep9Orchestration:
                        "--output-dir", str(tmp_path), cwd=tmp_path)
         assert r.returncode == 0
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
-        assert state.get("review_accounting") == accounting
+        assert state.get("review_accounting") == {
+            "scope_reporting_agent_count": 2,
+            "unscoped_files": [],
+            "agents_receiving_inline_diff_by_file": {
+                "src/a.php": ["code-reviewer", "security-reviewer"]
+            },
+            "agents_claiming_review_by_file": {},
+            "agents_with_unclaimed_review_by_file": {
+                "src/starved.php": ["code-reviewer", "security-reviewer"],
+            },
+        }
         # The record the step assembles carries the measurement. The
         # briefing no longer re-renders it — a second copy is a second
         # thing to paraphrase.
         assert state.get("review_record", {}).get("status") == "complete"
         assert "src/starved.php" in (tmp_path / "review-record.md").read_text()
 
-    def test_step_9_tolerates_missing_reconciliation_context(self, tmp_path):
+    def test_step_9_tolerates_a_run_with_nothing_to_measure(self, tmp_path):
         run_pipeline("--step", "1", "--mode", "full",
                    "--output-dir", str(tmp_path), cwd=tmp_path)
         r = run_pipeline("--step", "9", "--mode", "full",

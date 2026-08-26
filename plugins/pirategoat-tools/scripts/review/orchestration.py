@@ -34,7 +34,7 @@ try:
     from .reviewer_names import derive_reviewer_name
     from .briefings import _render_review_accounting_section
     from .reconciliation_context import (
-        review_accounting_from_context,
+        aggregate_review_accounting,
         strip_severity_floor_markers,
     )
     from . import critic_adjustments
@@ -68,7 +68,7 @@ except ImportError:
     from review.reviewer_names import derive_reviewer_name
     from review.briefings import _render_review_accounting_section
     from review.reconciliation_context import (
-        review_accounting_from_context,
+        aggregate_review_accounting,
         strip_severity_floor_markers,
     )
     from review import critic_adjustments
@@ -1499,22 +1499,21 @@ def _orchestrate_step_9(mode, config, state, context, output_dir):
         )
     _record_findings_markdown(state, findings_markdown)
 
-    # Load the three inline-coverage populations computed at reconciliation
-    # so the report briefing can render them into one paste-ready section:
+    # Measure the three inline-coverage populations the record carries:
     # proof gaps, unverified claims, and files no reviewer's scope ever
     # contained. The third is why a file matching no domain (lockfile,
     # binary, dotfile) stops being invisible — it appears in none of the
-    # per-agent buckets by construction.
-    recon_json_path = os.path.join(output_dir, "reconciliation-context.json")
-    review_accounting = None
-    if os.path.isfile(recon_json_path):
-        try:
-            with open(recon_json_path) as f:
-                recon = json.load(f)
-            review_accounting = review_accounting_from_context(recon)
-        except (json.JSONDecodeError, OSError, ValueError):
-            review_accounting = None
-    state["review_accounting"] = review_accounting
+    # per-agent buckets by construction. Measured here, from the run's own
+    # durable artifacts, rather than read back out of the reconciliation
+    # context: the reconciliator never used this measurement, so carrying
+    # it through the context only gave a re-entered step a stale copy to
+    # find. An absent CSV reaches the aggregator as the unmeasured case it
+    # is — `unscoped_files` stays None rather than reading as a clean bill.
+    changed_csv = context.get("git", {}).get("changed_files_csv", "")
+    changed_files = [f.strip() for f in changed_csv.split(",") if f.strip()]
+    state["review_accounting"] = aggregate_review_accounting(
+        output_dir, changed_files=changed_files
+    )
 
     # Assemble the record LAST, once the coverage populations are in state:
     # the record carries them, and assembling before they were loaded would
