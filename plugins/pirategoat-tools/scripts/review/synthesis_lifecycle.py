@@ -196,7 +196,9 @@ def _artifact_verdict(path):
     answer for an absent, unreadable, malformed, or unbound artifact.
     """
     if os.path.basename(path) == critic_adjustments.CRITIC_VERDICT_FILENAME:
-        return critic_adjustments.read_verdict_file(path)
+        return critic_adjustments.read_critic_verdict(
+            os.path.dirname(path) or "."
+        )
     try:
         with open(path) as handle:
             data = json.load(handle)

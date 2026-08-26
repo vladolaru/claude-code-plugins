@@ -1686,42 +1686,41 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         "only individually confirmed IDs in `\"verified\"` and only "
         "individually disproved IDs in `\"refuted\"`, each refutation with "
         "its non-empty reason. Every committed ID omitted from both lists is "
-        "derived as `not_checked`. Do not enumerate `not_checked`, counts, "
-        "timestamps, serialized `spot_check` values, rejection flags, or "
-        "application state. The orchestrator never edits the committed "
+        "derived as `not_checked`. The orchestrator never edits the committed "
         "proposal. `revised_assessment` is optional: omit it when no "
         "replacement assessment should be installed."
     )
     actions.append(
         "3) Save the request as `$TMPDIR/critic-adjudication.json`, then run "
-        "the validating settle channel exactly once:"
+        "the validating adjudication channel exactly once:"
     )
     actions.append("```bash")
     actions.append(
-        f'python3 {SCRIPTS_DIR}/critic_adjustments.py settle '
+        f'python3 {SCRIPTS_DIR}/critic_adjustments.py adjudicate '
         f'--output-dir "{od}" < "$TMPDIR/critic-adjudication.json"'
     )
     actions.append("```")
     actions.append(
         "A successful handoff reports `RECORDED ADJUDICATION`, the derived "
         "`VERIFIED | REFUTED | NOT_CHECKED` counts, `REVISED ASSESSMENT: "
-        "present|absent`, the `PROPOSAL DIGEST`, and the `APPLY` result. On any "
-        "`REJECTED:` line, correct only the temp request and resubmit it; "
-        "never edit the output artifact or bypass `settle`."
+        "present|absent`, `APPLIED | REJECTED`, and the `LEDGER VERDICT`. On "
+        "any `REJECTED:` line, correct only the temp request and resubmit it; "
+        "never edit the output artifact or bypass `adjudicate`."
     )
     actions.append(
-        f"The settle channel verifies `{od}/decision-critic-verdict.json` "
-        f"against the committed proposal digest, records the complete "
-        f"adjudication checkpoint, and then applies the settled decisions "
-        f"to `{od}/review-findings.json` through the ledger's sole writer."
+        f"The adjudication channel verifies "
+        f"`{od}/decision-critic-verdict.json` "
+        f"against the committed proposal digest and then records your "
+        f"adjudication in `{od}/review-findings.json` in a single write "
+        f"through the ledger's sole writer."
     )
     actions.append(
-        "Never hand-edit `review-findings.json` either: the application "
-        "phase carries provenance, invalidates the reconciler's prior "
-        "assessment only when an accepted operation really changes the ledger, "
-        "installs a supplied revised assessment, recounts findings, and derives "
-        "the final ledger verdict. Refuted and rejected-before-apply operations "
-        "do not invalidate or replace the assessment."
+        "Never hand-edit `review-findings.json` either: that one write "
+        "carries provenance, invalidates the reconciler's prior assessment "
+        "only when an accepted operation really changes the ledger, installs "
+        "a supplied revised assessment, recounts findings, and derives the "
+        "final ledger verdict. Refuted operations do not invalidate or "
+        "replace the assessment."
     )
     actions.append(
         f"4) Nothing else to edit. The pipeline re-assembles "
@@ -1731,7 +1730,7 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         f"JSON, which is exactly why authoring waits until after you."
     )
     actions.append(
-        "   The script-derived per-entry settlement reaches the record on "
+        "   The script-derived per-entry outcome reaches the record on "
         "its own. Never report the batch in aggregate anywhere — \"all N "
         "spot-checked\" over a batch where one entry went unprobed publishes "
         "that entry as verified, which is the exact false claim per-entry "

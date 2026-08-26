@@ -384,17 +384,8 @@ def _seed_step_11(out):
     # the unstamped ledger finalize now reports as an out-of-channel
     # rewrite.
     write_findings(str(out), canonical_findings_ledger())
-    proposal = critic_adjustments.prepare_proposal({
-        "schema": 2, "adjustments": [],
-    })
-    critic_adjustments.write_adjustments(str(out), proposal)
-    atomic_write_json(
-        str(out / critic_adjustments.CRITIC_VERDICT_FILENAME),
-        {
-            "schema": 2,
-            "verdict": "STAND",
-            "proposal_digest": critic_adjustments.proposal_digest(proposal),
-        },
+    critic_adjustments.write_critic_verdict(
+        str(out), "STAND", critic_adjustments.empty_proposal()
     )
 
 

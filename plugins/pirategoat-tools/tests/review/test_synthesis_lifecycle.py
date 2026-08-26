@@ -61,18 +61,10 @@ def _entry(payload, name):
 
 def _critic_snapshot(out, verdict):
     """Publish the live digest-bound critic snapshot used by readers."""
-    proposal = critic_adjustments.prepare_proposal({
-        "schema": 2,
-        "adjustments": [],
-    })
-    critic_adjustments.write_adjustments(str(out), proposal)
-    path = out / critic_adjustments.CRITIC_VERDICT_FILENAME
-    atomic_write_json(str(path), {
-        "schema": 2,
-        "verdict": verdict,
-        "proposal_digest": critic_adjustments.proposal_digest(proposal),
-    })
-    return path
+    critic_adjustments.write_critic_verdict(
+        str(out), verdict, critic_adjustments.empty_proposal()
+    )
+    return out / critic_adjustments.CRITIC_VERDICT_FILENAME
 
 
 @pytest.fixture
@@ -346,10 +338,8 @@ class TestVerdictCapture:
 
     def test_malformed_versioned_marker_completes_but_is_not_usable(self, out):
         lifecycle.mark_dispatched(str(out), lifecycle.DECISION_CRITIC, now=T0)
-        proposal = critic_adjustments.prepare_proposal({
-            "schema": 2, "adjustments": [],
-        })
-        critic_adjustments.write_adjustments(str(out), proposal)
+        proposal = critic_adjustments.empty_proposal()
+        critic_adjustments.write_critic_verdict(str(out), "STAND", proposal)
         marker = out / critic_adjustments.CRITIC_VERDICT_FILENAME
         atomic_write_json(str(marker), {
             "schema": 2,

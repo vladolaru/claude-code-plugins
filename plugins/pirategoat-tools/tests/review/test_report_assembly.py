@@ -479,7 +479,7 @@ class TestRecordAssembly:
 
 
 class TestRecordIsAProjection:
-    """Re-assembly after `apply_adjustments` shows the post-critic ledger."""
+    """Re-assembly after `adjudicate` shows the post-critic ledger."""
 
     @staticmethod
     def _revise(
@@ -489,25 +489,14 @@ class TestRecordIsAProjection:
         verified=(),
         refuted=(),
         assessment="Post-critic assessment.",
-        settle=True,
     ):
         proposal = critic_adjustments.prepare_proposal({
             "schema": 2,
             "adjustments": adjustments,
         })
-        critic_adjustments.write_adjustments(str(out_dir), proposal)
-        atomic_write_json(
-            str(out_dir / critic_adjustments.CRITIC_VERDICT_FILENAME),
-            {
-                "schema": 2,
-                "verdict": "REVISE",
-                "proposal_digest": critic_adjustments.proposal_digest(
-                    proposal
-                ),
-            },
+        critic_adjustments.write_critic_verdict(
+            str(out_dir), "REVISE", proposal
         )
-        if not settle:
-            return proposal, critic_adjustments.apply_adjustments(str(out_dir))
         ids = [entry["adjustment_id"] for entry in proposal["adjustments"]]
         request = {
             "schema": 2,
@@ -521,7 +510,7 @@ class TestRecordIsAProjection:
             ],
             "revised_assessment": assessment,
         }
-        return proposal, critic_adjustments.settle(str(out_dir), request)
+        return proposal, critic_adjustments.adjudicate(str(out_dir), request)
 
     def test_reassembly_reflects_adjusted_severity_and_verdict(self, out_dir):
         _write_ledger(out_dir)
@@ -546,7 +535,7 @@ class TestRecordIsAProjection:
         assert "Only one real problem after the probe." in after
         assert "Two real problems, both fixable in one pass." not in after
 
-    def test_reassembly_lists_each_adjustment_with_its_spot_check(
+    def test_reassembly_lists_each_adjustment_with_its_outcome(
         self, out_dir
     ):
         _write_ledger(out_dir)
@@ -564,7 +553,7 @@ class TestRecordIsAProjection:
                 "rationale": "clearer title",
             },
         ], verified=(0,))
-        assert result["apply"].get("status") != "refused", result
+        assert result["applied"] == 2, result
 
         assemble_review_record(str(out_dir), {})
         text = (out_dir / REVIEW_RECORD_MD).read_text()
@@ -637,7 +626,7 @@ class TestRecordIsAProjection:
             "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "low"},
             "rationale": "escaped one frame up",
-        }], settle=False)
+        }], verified=(0,), assessment=None)
 
         assemble_review_record(str(out_dir), {})
         text = (out_dir / REVIEW_RECORD_MD).read_text()
@@ -735,7 +724,7 @@ class TestRecordSanitization:
             },
         }]
         findings["applied_critic_adjustments"] = [{
-            "adjustment_id": "remove-f3", "spot_check": "verified",
+            "adjustment_id": "remove-f3", "outcome": "verified",
         }]
         findings["meta"]["next_finding_number"] = 4
         _write_ledger(out_dir, findings)

@@ -47,19 +47,9 @@ def _publish_step_11(output_dir, cwd, mode="pr"):
 def _write_critic_snapshot(output_dir, verdict):
     """Publish one live digest-bound critic snapshot for pipeline tests."""
     from review import critic_adjustments
-    from review.atomic_io import atomic_write_json
 
-    proposal = critic_adjustments.prepare_proposal({
-        "schema": 2, "adjustments": [],
-    })
-    critic_adjustments.write_adjustments(str(output_dir), proposal)
-    atomic_write_json(
-        str(Path(output_dir) / critic_adjustments.CRITIC_VERDICT_FILENAME),
-        {
-            "schema": 2,
-            "verdict": verdict,
-            "proposal_digest": critic_adjustments.proposal_digest(proposal),
-        },
+    critic_adjustments.write_critic_verdict(
+        str(output_dir), verdict, critic_adjustments.empty_proposal()
     )
 
 
@@ -1801,7 +1791,7 @@ class TestStep10DecisionCritic:
         text = "\n".join(g["actions"])
         assert "decision-reviewer" in text
 
-    def test_spot_check_accounting_is_per_entry_never_aggregate(
+    def test_outcome_accounting_is_per_entry_never_aggregate(
         self, mod, tmp_path
     ):
         """The field failure: a report said "all four spot-checked" about a
@@ -1817,10 +1807,9 @@ class TestStep10DecisionCritic:
         assert '"verified"' in revise
         assert '"refuted"' in revise
         assert "omitted" in revise and "not_checked" in revise
-        assert "Do not enumerate `not_checked`" in revise
         assert "Never report the batch in aggregate anywhere" in revise
 
-    def test_spot_check_instruction_carries_no_aggregate_phrasing(self, mod):
+    def test_outcome_instruction_carries_no_aggregate_phrasing(self, mod):
         """An "all N spot-checked" phrase may appear in exactly one place:
         the sentence that forbids it.
 
@@ -1924,13 +1913,13 @@ class TestStep10DecisionCritic:
             "REVISE must invoke the module that carries adjustments into "
             "review-findings.json"
         )
-        assert "settle" in revise_text and "--output-dir" in revise_text
+        assert "adjudicate" in revise_text and "--output-dir" in revise_text
         assert '"verified"' in revise_text
         assert '"refuted"' in revise_text
         assert '"revised_assessment"' in revise_text
         assert '"adjustment_id"' in revise_text
         assert "RECORDED ADJUDICATION" in revise_text
-        assert "PROPOSAL DIGEST" in revise_text
+        assert "LEDGER VERDICT" in revise_text
 
     def test_revise_briefing_uses_assessment_language(self, mod, tmp_path):
         guidance = mod.get_step_guidance(
@@ -1951,7 +1940,7 @@ class TestStep10DecisionCritic:
         )
         revise_text = self._revise_section(guidance)
 
-        assert 'give every entry a `"spot_check"` field' not in revise_text
+        assert 'give every entry an `"outcome"` field' not in revise_text
         assert 'mark any adjustment' not in revise_text
         assert 'top-level `"revised_assessment"`' not in revise_text
         assert (
@@ -1967,12 +1956,12 @@ class TestStep10DecisionCritic:
         revise_text = self._revise_section(g)
 
         read_adjustments = revise_text.index("decision-critic-adjustments.json")
-        apply_adjustments = revise_text.index("critic_adjustments.py")
+        adjudicate = revise_text.index("critic_adjustments.py")
         edit_report = revise_text.index("review-report.md")
 
-        assert read_adjustments < apply_adjustments < edit_report, (
-            "REVISE must read the adjustments, apply them to the findings "
-            "JSON before step 11 authors the report"
+        assert read_adjustments < adjudicate < edit_report, (
+            "REVISE must read the adjustments and adjudicate them into the "
+            "findings JSON before step 11 authors the report"
         )
 
     def test_critic_dispatch_prompt_requires_the_adjustments_file(

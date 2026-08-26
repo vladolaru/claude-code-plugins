@@ -2828,12 +2828,12 @@ class TestMaterializeFindingsMarkdown:
 
         assert critic_adjustments.read_findings_file(
             findings_path
-        ).status == critic_adjustments.FINDINGS_READ_IO_ERROR
+        ).status == critic_adjustments.FINDINGS_READ_INVALID
         assert materialize_markdown(
             str(tmp_path), suffix="review-findings.json"
         ) == []
         assert not (tmp_path / "review-findings.md").exists()
-        assert "io_error" in capsys.readouterr().err
+        assert "invalid" in capsys.readouterr().err
 
     def test_materialize_cli_accepts_the_suffix(self):
         """The on-demand recovery path step 11 prints has to be able to
@@ -2941,7 +2941,7 @@ class TestAssessmentProvenance:
         data = self._findings(
             assessment=None,
             applied_critic_adjustments=[{
-                "adjustment_id": "a1b2c3", "spot_check": "not_checked",
+                "adjustment_id": "a1b2c3", "outcome": "not_checked",
             }],
             invalidated_assessments=[
                 {
@@ -2986,7 +2986,7 @@ class TestAssessmentProvenance:
         data = self._findings(
             assessment="Standing prose.",
             applied_critic_adjustments=[{
-                "adjustment_id": "a1b2c3", "spot_check": "not_checked",
+                "adjustment_id": "a1b2c3", "outcome": "not_checked",
             }],
         )
         rendered = render_markdown(data)
@@ -2996,13 +2996,13 @@ class TestAssessmentProvenance:
     def test_mixed_applied_and_refuted_decisions_render_completely(self):
         rendered = render_markdown(self._findings(
             applied_critic_adjustments=[
-                {"adjustment_id": "applied-one", "spot_check": "verified"},
+                {"adjustment_id": "applied-one", "outcome": "verified"},
             ],
             rejected_critic_adjustments=[
                 {
                     "adjustment_id": "refuted-one", "action": "remove",
                     "target": {"kind": "finding", "id": "f1"},
-                    "spot_check": "refuted", "rejection_reason": "no",
+                    "outcome": "refuted", "rejection_reason": "no",
                 },
             ],
         ))
@@ -3016,12 +3016,12 @@ class TestAssessmentProvenance:
                 {
                     "adjustment_id": "refuted-one", "action": "remove",
                     "target": {"kind": "finding", "id": "f1"},
-                    "spot_check": "refuted", "rejection_reason": "refuted",
+                    "outcome": "refuted", "rejection_reason": "refuted",
                 },
                 {
                     "adjustment_id": "refuted-two", "action": "correct",
                     "target": {"kind": "check", "id": "c1"},
-                    "spot_check": "refuted", "rejection_reason": "no",
+                    "outcome": "refuted", "rejection_reason": "no",
                 },
             ],
         ))

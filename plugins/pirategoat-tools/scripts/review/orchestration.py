@@ -1559,8 +1559,8 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
     # OSError)` guard and an unconditional `.get()` behind it — so a
     # valid-JSON, non-object ledger (`[1, 2]`, `"hello"`, `5`) escaped the
     # guard and raised AttributeError out of step 10. Exactly the hole
-    # `read_verdict_file()` closed for the verdict files, one artifact
-    # over. Any state but OK means no usable verdict to read.
+    # `read_committed_proposal()` closed for the verdict files, one
+    # artifact over. Any state but OK means no usable verdict to read.
     read = critic_adjustments.read_findings_file(
         os.path.join(output_dir, critic_adjustments.FINDINGS_FILENAME)
     )
@@ -1608,19 +1608,6 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
             "critic_skipped": True,
             "reason": reason,
         }
-        # The PIPELINE records its own skip. This used to be an instruction
-        # in the step-10 briefing — the orchestrator was told to transcribe
-        # a verdict for a decision the pipeline had already made — so a run
-        # whose orchestrator stopped short left no verdict artifact at all,
-        # indistinguishable at finalize from a critic that ran and crashed.
-        # A fact the pipeline knows is a fact the pipeline writes, and that
-        # separation is what lets finalize read a missing artifact beside a
-        # dispatch marker as the real degradation it is.
-        proposal = critic_adjustments.prepare_proposal({
-            "schema": critic_adjustments.ADJUSTMENTS_SCHEMA,
-            "adjustments": [],
-        })
-        digest = critic_adjustments.proposal_digest(proposal)
 
     # A step-10 re-entry starts a new critic decision, including the
     # pipeline-owned quick skip. Retire the whole prior attempt under the
@@ -1640,14 +1627,20 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
             pass
 
         if should_skip:
-            critic_adjustments.write_adjustments(output_dir, proposal)
-            atomic_write_json(os.path.join(
-                output_dir, critic_adjustments.CRITIC_VERDICT_FILENAME
-            ), {
-                "schema": critic_adjustments.VERDICT_MARKER_SCHEMA,
-                "verdict": "SKIPPED",
-                "proposal_digest": digest,
-            })
+            # The PIPELINE records its own skip. This used to be an
+            # instruction in the step-10 briefing — the orchestrator was
+            # told to transcribe a verdict for a decision the pipeline had
+            # already made — so a run whose orchestrator stopped short left
+            # no verdict artifact at all, indistinguishable at finalize
+            # from a critic that ran and crashed. A fact the pipeline knows
+            # is a fact the pipeline writes, and that separation is what
+            # lets finalize read a missing artifact beside a dispatch
+            # marker as the real degradation it is.
+            critic_adjustments.write_critic_verdict(
+                output_dir,
+                critic_adjustments.CRITIC_VERDICT_SKIPPED,
+                critic_adjustments.empty_proposal(),
+            )
         else:
             synthesis_lifecycle.mark_dispatched(
                 output_dir, synthesis_lifecycle.DECISION_CRITIC
@@ -1659,10 +1652,7 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
 _STEP_11_DEGRADATION_CODES = frozenset({
     "critic_adjudication_missing",
     "critic_unavailable_after_dispatch",
-    "critic_adjustment_apply_failed",
-    "critic_adjustment_apply_refused",
     "critic_adjustment_inspection_failed",
-    "critic_adjustment_pending_non_revise",
     "findings_markdown_render_failed",
     "review_record_assembly_failed",
     "probe_residue_swept",
@@ -1933,7 +1923,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # when the critic ran, by the pipeline itself on the quick skip), through
     # critic_adjustments.py's own presentation wrapper — one parser and
     # one SKIPPED/missing → "unavailable" mapping, shared with (and kept
-    # in sync with) the raw reader apply_adjustments()'s gate uses.
+    # in sync with) the raw reader `adjudicate()`'s gate uses.
     state["critic_verdict"] = critic_adjustments.critic_verdict_for_state(
         output_dir
     )
@@ -1974,84 +1964,33 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
             "critic was dispatched but produced no verdict"
         )
 
-    # Carry any pending finding/check critic adjustments into the ledger
-    # before the verdict is derived from it — but only under REVISE, the one
-    # that sanctions them. The step-10 REVISE briefing has the orchestrator
-    # spot-check each entry and submit only positive verified/refuted claims
-    # through settle, so here it is the defensive re-run: any
-    # orchestrator — bot or interactive — can stop short of the step-10
-    # briefing's instructions (a crash, an early return, a main
-    # orchestrator that skips ahead), and this re-run is what still
-    # converges those runs on a findings JSON the critic actually reached.
-    # Idempotence makes the re-run free for a run that already applied.
-    # The verdict gate is what keeps that re-run from becoming a bypass:
-    # adjustments are a REVISE-only channel, so a critic that writes them
-    # alongside STAND, ESCALATE, or a skipped verdict would otherwise get
-    # them applied with no orchestrator spot-check at all. Under any other
-    # verdict a still-pending file is surfaced as a degradation and never
-    # applied. Pending is counted, not assumed: a file whose entries have
-    # all landed is the ordinary post-apply state of a REVISE run whose
-    # step 11 is re-entered, and says nothing.
-    # Ordering note: nothing re-runs the reconciliator after this point —
-    # compute_next_step only routes forward (candidates are `s >
-    # current_step`), so a completed step 8 is never re-entered — and the
-    # applied_critic_adjustments record in the findings file survives to
-    # the final artifact.
-    if os.path.isfile(findings_path):
-        if critic_verdict == "REVISE":
-            try:
-                apply_result = critic_adjustments.apply_adjustments(output_dir)
-            except (ValueError, OSError, json.JSONDecodeError) as err:
-                _record_step_11_degradation(
-                    degradation_records,
-                    "critic_adjustment_apply_failed",
-                    f"critic adjustment apply attempt failed: {err}"
-                )
-            else:
-                # Belt-and-braces: `critic_verdict` above came from
-                # critic_verdict_for_state()'s presentation mapping, and
-                # this branch only runs when that read already says
-                # REVISE, so apply_adjustments()'s own gate — reading the
-                # same file through read_critic_verdict() — should never
-                # refuse here. It would if a future edit changed one
-                # mapping (e.g. what "SKIPPED" or a new alias verdict
-                # means) without changing the other, so this branch exists
-                # to catch exactly that divergence and degrade loudly
-                # instead of silently doing nothing.
-                if apply_result.get("status") == "refused":
-                    _record_step_11_degradation(
-                        degradation_records,
-                        "critic_adjustment_apply_refused",
-                        f"critic adjustment apply attempt refused: "
-                        f"({apply_result.get('reason')})"
-                    )
-                elif apply_result.get("adjudication_source") == (
-                    critic_adjustments.ADJUDICATION_SOURCE_DEFENSIVE
-                ):
-                    _record_step_11_degradation(
-                        degradation_records,
-                        "critic_adjudication_missing",
-                        "critic adjustments were applied without "
-                        "orchestrator adjudication",
-                    )
+    # Report whether the critic's REVISE proposal was ever adjudicated. Step
+    # 10's REVISE briefing has the orchestrator probe each entry and submit
+    # its verified/refuted claims through `adjudicate`, which is the one and
+    # only writer that carries them into the ledger. Any orchestrator — bot
+    # or interactive — can stop short of that (a crash, an early return, a
+    # main orchestrator that skips ahead), and a ledger published without
+    # the adjustments the critic asked for is a real degradation the run
+    # must say out loud. Step 11 does not adjudicate on the orchestrator's
+    # behalf: an unprobed batch applied here would publish "not_checked"
+    # decisions nobody chose.
+    if os.path.isfile(findings_path) and critic_verdict == "REVISE":
+        try:
+            proposal_state = critic_adjustments.adjudication_state(output_dir)
+        except (ValueError, OSError, json.JSONDecodeError) as err:
+            _record_step_11_degradation(
+                degradation_records,
+                "critic_adjustment_inspection_failed",
+                f"critic adjustment inspection failed: {err}",
+            )
         else:
-            try:
-                pending = critic_adjustments.pending_count(output_dir)
-            except (ValueError, OSError, json.JSONDecodeError) as err:
+            if proposal_state == "pending":
                 _record_step_11_degradation(
                     degradation_records,
-                    "critic_adjustment_inspection_failed",
-                    f"critic adjustment inspection failed: {err}"
+                    "critic_adjudication_missing",
+                    "critic REVISE proposal was never adjudicated; the ledger "
+                    "is published without its adjustments",
                 )
-            else:
-                if pending:
-                    _record_step_11_degradation(
-                        degradation_records,
-                        "critic_adjustment_pending_non_revise",
-                        f"critic adjustment apply skipped on this settlement "
-                        f"pass: critic verdict was {critic_verdict} "
-                        f"(adjustments are a REVISE-only channel)"
-                    )
 
     # Re-render the derived artifacts from the FINAL ledger — immediately
     # after the adjustments landed and before anything else reads them, so
@@ -2166,9 +2105,9 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # with the transcription rather than the other way round. Deriving
     # removes the transcription step entirely: the ledger is the only
     # artifact whose verdict any reviewer, reconciliator, or critic batch
-    # actually computed, and `critic_adjustments.apply_adjustments()`
-    # recomputes it after every applying batch, so it is current by the
-    # time finalize reads it. `_LEDGER_TO_REVIEW_VERDICT` (module scope) is
+    # actually computed, and `critic_adjustments.adjudicate()` recomputes
+    # it as part of its one ledger write, so it is current by the time
+    # finalize reads it. `_LEDGER_TO_REVIEW_VERDICT` (module scope) is
     # the one place the two verdict layers meet.
     ledger_verdict = None
     findings_read = critic_adjustments.read_findings_file(findings_path)

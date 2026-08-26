@@ -304,13 +304,12 @@ class TestCriticSave:
             "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "critical"}, "rationale": "replacement",
         }])
-        real_write_adjustments = critic_adjustments_module.write_adjustments
-
-        def fail_adjustment_write(_output_dir, _payload):
+        def fail_adjustment_write(_output_dir, _verdict, _proposal):
             raise OSError("injected adjustment write failure")
 
         monkeypatch.setattr(
-            critic_adjustments_module, "write_adjustments", fail_adjustment_write
+            critic_adjustments_module, "write_critic_verdict",
+            fail_adjustment_write,
         )
 
         with pytest.raises(OSError, match="injected adjustment write failure"):
@@ -651,7 +650,7 @@ class TestSourceBoundCriticSave:
         "forbidden,value",
         [
             ("adjustment_id", "critic-chosen"),
-            ("spot_check", "verified"),
+            ("outcome", "verified"),
             ("rejected", True),
             ("rejection_reason", "caller-authored"),
             ("applied", True),
@@ -697,6 +696,7 @@ class TestSourceBoundCriticSave:
         [
             {"revised_narrative": "critic-authored"},
             {"adjudication": {"source": "critic"}},
+            {"outcome": "verified"},
         ],
     )
     def test_save_rejects_caller_authored_settlement_document_fields(
@@ -738,18 +738,18 @@ class TestSourceBoundCriticSave:
         })
         old_marker = tmp_path / "decision-critic-verdict.json"
         old_marker.write_text('{"old": "marker"}')
-        real_write = critic_adjustments_module.write_adjustments
+        real_write = critic_adjustments_module.write_critic_verdict
         calls = 0
 
-        def fail_once(output_dir, document):
+        def fail_once(output_dir, verdict, proposal):
             nonlocal calls
             calls += 1
             if calls == 1:
                 raise OSError("injected proposal publication failure")
-            return real_write(output_dir, document)
+            return real_write(output_dir, verdict, proposal)
 
         monkeypatch.setattr(
-            critic_adjustments_module, "write_adjustments", fail_once
+            critic_adjustments_module, "write_critic_verdict", fail_once
         )
         args = SimpleNamespace(
             output_dir=str(tmp_path),

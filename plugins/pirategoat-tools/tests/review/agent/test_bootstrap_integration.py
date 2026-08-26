@@ -1217,15 +1217,13 @@ class TestDecisionReviewerContract:
         assert "schema 2" in critic
         assert '"kind": "finding"' in critic
         assert '"kind": "check"' in critic
-        assert "The orchestrator owns settlement" in critic
-        assert "Do not supply target ids for `add`" in critic
-        for pipeline_owned in (
-            "`source_reviewers`",
-            "`adjustment_id`",
-            "`applied`",
-            "`revised_assessment`",
-        ):
-            assert pipeline_owned in critic
+        assert "the orchestrator's adjudication is recorded in the ledger" in (
+            critic
+        )
+        assert "Author only `action`, `target`, `fields`, and `rationale`" in (
+            critic
+        )
+        assert "`adjustment_id`" in critic
 
 
 class TestRepoReviewerAdapterContract:

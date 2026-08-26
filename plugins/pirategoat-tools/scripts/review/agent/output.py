@@ -368,11 +368,11 @@ def render_markdown(data: Dict) -> str:
 def _applied_critic_decision(record):
     """Project one complete schema-2 applied-decision record."""
     if not isinstance(record, dict) or set(record) != {
-        'adjustment_id', 'spot_check'
+        'adjustment_id', 'outcome'
     }:
         return None
     adjustment_id = record.get('adjustment_id')
-    outcome = record.get('spot_check')
+    outcome = record.get('outcome')
     if (
         not isinstance(adjustment_id, str) or not adjustment_id
         or outcome not in ('verified', 'refuted', 'not_checked')
@@ -384,11 +384,11 @@ def _applied_critic_decision(record):
 def _rejected_critic_decision(record):
     """Project one complete schema-2 rejected-decision record."""
     if not isinstance(record, dict) or set(record) != {
-        'adjustment_id', 'action', 'target', 'spot_check', 'rejection_reason'
+        'adjustment_id', 'action', 'target', 'outcome', 'rejection_reason'
     }:
         return None
     adjustment_id = record.get('adjustment_id')
-    outcome = record.get('spot_check')
+    outcome = record.get('outcome')
     if (
         not isinstance(adjustment_id, str) or not adjustment_id
         or outcome != 'refuted'

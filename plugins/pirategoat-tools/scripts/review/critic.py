@@ -26,29 +26,18 @@ except ImportError:
         sys.path.insert(0, _scripts_parent)
     from review import atomic_io, critic_adjustments
 
-atomic_write_json = atomic_io.atomic_write_json
 atomic_write_text = atomic_io.atomic_write_text
 
 
 TOTAL_STEPS = 4
 
-# Canonical critic verdict vocabulary. The Step 4 rubric below and the
-# briefings.py critic guidance presents exactly these verdicts, the
-# review_metrics consumer (analysis/review_metrics/contracts.py) classifies
-# manifest critic verdicts against this constant, and
-# critic_adjustments.REVISE_VERDICT is the same literal spelled out
-# separately (deliberately not imported — see that constant's own
-# comment) as the one verdict apply_adjustments()'s gate accepts — keep
-# all four aligned.
-CRITIC_VERDICTS = ("STAND", "REVISE", "ESCALATE")
-# Deliberately NOT a member of CRITIC_VERDICTS above: it is not a critique
-# outcome, it is the record that no critique happened — the step-10
-# pipeline writes it when quick mode skips the critic. A crashed, timed-out,
-# or unusable critic leaves no committed verdict and is reported honestly.
-# Consumers that measure critique quality must exclude it; consumers that
-# measure whether a critic ran must not. critic_adjustments.py spells the
-# same literal separately for its own presentation mapping.
-CRITIC_VERDICT_SKIPPED = "SKIPPED"
+# Canonical critic verdict vocabulary, owned by critic_adjustments.py — the
+# module that commits the verdict marker and gates adjudication on REVISE.
+# Re-exported here because the Step 4 rubric below presents exactly these
+# verdicts and the review_metrics consumer
+# (analysis/review_metrics/contracts.py) reads them off this module.
+CRITIC_VERDICTS = critic_adjustments.CRITIC_VERDICTS
+CRITIC_VERDICT_SKIPPED = critic_adjustments.CRITIC_VERDICT_SKIPPED
 
 
 def get_step_guidance(
@@ -368,12 +357,12 @@ def run_save(args):
 
     Every problem is collected before anything is decided, the same
     all-or-nothing style `critic_adjustments.prepare_proposal()` and
-    `settle()` use: a bad verdict, a missing findings file, an
+    `adjudicate()` use: a bad verdict, a missing findings file, an
     invalid adjustments batch, and a REVISE/STAND contradiction are all
     independent facts, and reporting only the first would make a caller
     fix one problem at a time instead of seeing the whole rejection at
     once. Proposal normalization assigns the stable adjustment IDs before
-    publication; settlement fields are not accepted from the critic. On ANY
+    publication; adjudication fields are not accepted from the critic. On ANY
     validation problem, the previous complete snapshot stays
     untouched and every problem is echoed as its own ``REJECTED: <problem>``
     line. Once validation succeeds, the old verdict commit marker is removed
@@ -422,29 +411,19 @@ def run_save(args):
         return 1
 
     if verdict != "REVISE":
-        adjustment_snapshot = critic_adjustments.prepare_proposal({
-            "schema": critic_adjustments.ADJUSTMENTS_SCHEMA,
-            "adjustments": [],
-        })
-    digest = critic_adjustments.proposal_digest(adjustment_snapshot)
+        adjustment_snapshot = critic_adjustments.empty_proposal()
     od = args.output_dir
     with atomic_io.output_dir_lock(od):
         # Invalidate any previous commit before replacing either payload. Only
         # an absent marker is tolerable; permission and other I/O failures
         # propagate before the snapshot can be mixed. The shared lock keeps a
-        # concurrent settle from observing this incomplete publication.
+        # concurrent adjudication from observing this incomplete publication.
         _invalidate_verdict_commit_marker(od)
         atomic_write_text(
             os.path.join(od, "decision-critic-findings.md"), findings_text
         )
-        critic_adjustments.write_adjustments(od, adjustment_snapshot)
-        atomic_write_json(
-            os.path.join(od, critic_adjustments.CRITIC_VERDICT_FILENAME),
-            {
-                "schema": critic_adjustments.VERDICT_MARKER_SCHEMA,
-                "verdict": verdict,
-                "proposal_digest": digest,
-            },
+        digest = critic_adjustments.write_critic_verdict(
+            od, verdict, adjustment_snapshot
         )
     print(f"RECORDED VERDICT: {verdict}")
     recorded_entries = adjustment_snapshot["adjustments"]

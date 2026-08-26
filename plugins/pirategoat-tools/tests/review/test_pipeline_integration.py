@@ -59,29 +59,15 @@ _output_spec.loader.exec_module(_output_mod)
 _render_markdown = _output_mod.render_markdown
 
 
-def _write_critic_snapshot(output_dir, adjustments, *, validate=True):
-    """Publish one digest-bound REVISE snapshot for integration tests."""
-    payload = {"schema": 2, "adjustments": adjustments}
-    if validate:
-        document = critic_adjustments.prepare_proposal(payload)
-        critic_adjustments.write_adjustments(str(output_dir), document)
-    else:
-        document = json.loads(json.dumps(payload))
-        for index, entry in enumerate(document["adjustments"]):
-            if isinstance(entry, dict):
-                entry.setdefault("adjustment_id", f"invalid-{index}")
-        (Path(output_dir) / critic_adjustments.ADJUSTMENTS_FILENAME).write_text(
-            json.dumps(document)
-        )
-    atomic_write_json(
-        str(Path(output_dir) / critic_adjustments.CRITIC_VERDICT_FILENAME),
-        {
-            "schema": 2,
-            "verdict": "REVISE",
-            "proposal_digest": critic_adjustments.proposal_digest(document),
-        },
+def _write_critic_snapshot(output_dir, adjustments):
+    """Publish one digest-bound REVISE snapshot and return its ids."""
+    proposal = critic_adjustments.prepare_proposal({
+        "schema": 2, "adjustments": adjustments,
+    })
+    critic_adjustments.write_critic_verdict(
+        str(output_dir), "REVISE", proposal
     )
-    return document
+    return [entry["adjustment_id"] for entry in proposal["adjustments"]]
 
 
 def _write_required_accounting_input(output_dir, reviewer, agent_name=None):
@@ -418,7 +404,7 @@ class TestCriticAdjudicationLifecycle:
             "proposal_digest": critic_adjustments.proposal_digest(proposal),
         }
 
-        settlement = critic_adjustments.settle(str(output_dir), {
+        adjudication = critic_adjustments.adjudicate(str(output_dir), {
             "schema": 2,
             "verified": [proposal_ids[0]],
             "refuted": [{
@@ -434,21 +420,17 @@ class TestCriticAdjudicationLifecycle:
             output_dir / "decision-critic-adjustments.json"
         )
         settled_proposal = json.loads(settled_proposal_path.read_text())
-        checkpoint = settled_proposal["adjudication"]
-        assert settlement["counts"] == {
+        assert adjudication["counts"] == {
             "verified": 1,
             "refuted": 1,
             "not_checked": 1,
         }
-        assert checkpoint["source"] == "orchestrator"
-        assert checkpoint["proposal_digest"] == marker["proposal_digest"]
+        assert settled_proposal == proposal, (
+            "the proposal is never rewritten by adjudication"
+        )
         assert critic_adjustments.proposal_digest(settled_proposal) == (
             marker["proposal_digest"]
         )
-        assert [
-            entry["spot_check"]
-            for entry in settled_proposal["adjustments"]
-        ] == ["verified", "refuted", "not_checked"]
 
         settled_ledger_path = output_dir / "review-findings.json"
         settled_ledger = json.loads(settled_ledger_path.read_text())
@@ -2941,11 +2923,11 @@ class TestStep11Orchestration:
         assert "HANDOFF" not in published.stdout
         assert "PIPELINE COMPLETE" in published.stdout
 
-    def test_repaired_adjustment_invalidates_report_until_rewritten(
+    def test_late_adjudication_invalidates_the_report_until_rewritten(
         self, tmp_path
     ):
-        """A report authored from a failed apply cannot publish after the
-        adjustment later changes the ledger and derived verdict."""
+        """A report authored before the orchestrator adjudicated cannot
+        publish once the adjudication changes the ledger and its verdict."""
         run_pipeline(
             "--step", "1", "--mode", "pr", "--pr-number", "42",
             "--output-dir", str(tmp_path), cwd=tmp_path,
@@ -2967,12 +2949,12 @@ class TestStep11Orchestration:
         finding["summary"]["by_severity"]["high"] = 1
         finding["meta"]["next_finding_number"] = 2
         write_findings(str(tmp_path), finding)
-        _write_critic_snapshot(tmp_path, [{
-            "action": "obliterate",
+        proposal_ids = _write_critic_snapshot(tmp_path, [{
+            "action": "demote",
             "target": {"kind": "finding", "id": "f1"},
-            "fields": {},
-            "rationale": "invalid first attempt",
-        }], validate=False)
+            "fields": {"severity": "low"},
+            "rationale": "guarded upstream",
+        }])
 
         prepared = run_pipeline(
             "--step", "11", "--mode", "pr",
@@ -2983,19 +2965,19 @@ class TestStep11Orchestration:
         assert state["publication_pending"] is True
         assert state["prepared_report_source_fingerprint"]
         assert any(
-            "critic adjustment inspection failed" in note
+            "never adjudicated" in note
             for note in state["degradation_notes"]
         )
 
         report = tmp_path / "review-report.md"
         stale_report = "# Review\nREQUEST_CHANGES: high finding."
         report.write_text(stale_report)
-        _write_critic_snapshot(tmp_path, [{
-            "action": "demote",
-            "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "low"},
-            "rationale": "guarded upstream",
-        }])
+        critic_adjustments.adjudicate(str(tmp_path), {
+            "schema": 2,
+            "verified": proposal_ids,
+            "refuted": [],
+            "revised_assessment": "The finding is guarded upstream.",
+        })
         # Even a leftover marker from an interrupted/manual re-entry must
         # not coexist with a report this pass rejects as stale.
         (tmp_path / "pipeline-result.json").write_text('{"stale": true}')
@@ -3037,13 +3019,9 @@ class TestStep11Orchestration:
         assert result["verdict"] == "APPROVE"
         assert result["status"] == "degraded"
         assert any(
-            "critic adjustment inspection failed" in note
+            "never adjudicated" in note
             for note in result["degradation_notes"]
-        )
-        assert any(
-            "without orchestrator adjudication" in note
-            for note in result["degradation_notes"]
-        )
+        ), "the prepare pass's honest record survives the handoff"
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         assert state["publication_pending"] is False
         assert "stale_report_digest" not in state

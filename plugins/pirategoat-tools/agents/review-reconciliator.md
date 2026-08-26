@@ -283,8 +283,8 @@ CHECKS: 12 | ASSESSMENT: present
 
 and writes `review-findings.json` atomically through
 `critic_adjustments.write_findings()` — the same sanctioned path
-`apply_adjustments()` uses. This is one of two writers across a run that
-both go through it; the other is `apply_adjustments()` carrying the
+`adjudicate()` uses. This is one of two writers across a run that
+both go through it; the other is `adjudicate()` carrying the
 decision critic's adjustments.
 
 **3c. On REJECTED, fix and re-save.** Correct the named problem in your
