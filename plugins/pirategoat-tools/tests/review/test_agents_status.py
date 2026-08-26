@@ -64,13 +64,14 @@ def _finish_agent(tmp_path, name, findings=None, verdict=None):
 
 def _write_accounting_input(tmp_path, reviewer, agent_name, claimable_files):
     (tmp_path / f"{reviewer}-review-accounting-input.json").write_text(json.dumps({
-        "schema": 3,
+        "schema": 4,
         "agent_name": agent_name,
         "reviewer": reviewer,
         "review_claimable_files": claimable_files,
         "review_budget": 15,
         "inline_diff_file_count": 1,
         "in_scope_review_file_count": 1 + len(claimable_files),
+        "channels": ["blocking"],
     }))
 
 

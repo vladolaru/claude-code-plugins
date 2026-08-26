@@ -179,13 +179,11 @@ class TestCategoryRepresentatives:
         # Identity chain: sidecar name matches what the builder derives
         # from PIRATEGOAT_REVIEWER_NAME.
         assert "PIRATEGOAT_REVIEWER_NAME=repo-renewals" in result.stdout
-        assert (
-            tmp_path / "repo-renewals-review-accounting-input.json"
-        ).is_file()
-        entitlement = json.loads(
-            (tmp_path / "repo-renewals-advisory-entitlement.json").read_text()
+        accounting_input = json.loads(
+            (tmp_path / "repo-renewals-review-accounting-input.json").read_text()
         )
-        assert entitlement == {"schema": 1, "advisory_entitled": True}
+        assert accounting_input["channels"] == ["advisory"]
+        assert not (tmp_path / "repo-renewals-advisory-entitlement.json").exists()
 
         monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
         monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "repo-renewals")
@@ -331,8 +329,9 @@ class TestCategoryRepresentatives:
         )
         assert accounting_input.is_file()
         data = json.loads(accounting_input.read_text())
-        assert data["schema"] == 3
+        assert data["schema"] == 4
         assert data["review_budget"] == 45
+        assert data["channels"] == ["blocking"]
         assert "budget_capped" not in data
 
         diffed = extract_scope_files(result.stdout)
@@ -703,7 +702,7 @@ class TestCanonicalExecutableBuilderSource:
 
         (tmp_path / "security-review-accounting-input.json").write_text(
             json.dumps({
-                "schema": 3,
+                "schema": 4,
                 "agent_name": "security-reviewer",
                 "reviewer": "security",
                 "review_claimable_files": [
@@ -712,6 +711,7 @@ class TestCanonicalExecutableBuilderSource:
                 "review_budget": 15,
                 "inline_diff_file_count": 1,
                 "in_scope_review_file_count": 3,
+                "channels": ["blocking"],
             })
         )
         builder = ReviewOutputBuilder.open(tmp_path, "42", "security")
@@ -994,13 +994,14 @@ class TestNotApplicableCompletionContract:
             output_dir.mkdir(parents=True, exist_ok=True)
             (output_dir / f"{reviewer_name}-review-accounting-input.json").write_text(
                 json.dumps({
-                    "schema": 3,
+                    "schema": 4,
                     "agent_name": agent_name,
                     "reviewer": reviewer_name,
                     "review_claimable_files": [],
                     "review_budget": 15,
                     "inline_diff_file_count": 2,
                     "in_scope_review_file_count": 2,
+                    "channels": ["blocking"],
                 })
             )
             prompt = build_output(
@@ -1070,13 +1071,14 @@ class TestNotApplicableCompletionContract:
         output_dir = tmp_path / "reviewer's output folder"
         output_dir.mkdir(parents=True)
         (output_dir / "security-review-accounting-input.json").write_text(json.dumps({
-            "schema": 3,
+            "schema": 4,
             "agent_name": "security-reviewer",
             "reviewer": "security",
             "review_claimable_files": [],
             "review_budget": 15,
             "inline_diff_file_count": 3,
             "in_scope_review_file_count": 3,
+            "channels": ["blocking"],
         }))
         prompt = build_output(
             agent_name="security-reviewer",
@@ -1992,10 +1994,11 @@ class TestRepoRuleAndRefModeSelection:
         assert result.returncode == 0
         assert 'add_finding(..., channel="advisory")' in result.stdout
 
-        entitlement = json.loads(
-            (tmp_path / "performance-advisory-entitlement.json").read_text()
+        accounting_input = json.loads(
+            (tmp_path / "performance-review-accounting-input.json").read_text()
         )
-        assert entitlement == {"schema": 1, "advisory_entitled": True}
+        assert accounting_input["channels"] == ["blocking", "advisory"]
+        assert not (tmp_path / "performance-advisory-entitlement.json").exists()
 
         monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
         monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "performance")
@@ -2006,6 +2009,26 @@ class TestRepoRuleAndRefModeSelection:
             channel="advisory",
         )
         assert builder.to_dict()["verdict"] == "approve"
+
+    def test_accounting_input_carries_channels_and_no_sidecar(self, tmp_path):
+        """The accounting input is now the sole carrier of channel
+        entitlement — bootstrap no longer writes a separate advisory
+        entitlement sidecar."""
+        self._write_review_context(tmp_path, rules=[self._rule(
+            tmp_path, "adv-rule", "ADVISORY BODY", channel="advisory",
+        )])
+        result = run_bootstrap(
+            "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
+        )
+        assert result.returncode == 0
+
+        data = json.loads(
+            (tmp_path / "performance-review-accounting-input.json").read_text()
+        )
+        assert data["schema"] == 4
+        assert data["channels"] == ["blocking", "advisory"]
+        assert isinstance(data["review_budget"], int)
+        assert not (tmp_path / "performance-advisory-entitlement.json").exists()
 
     def test_blocking_only_rules_omit_the_channel_contract(
         self, tmp_path, monkeypatch
@@ -2020,20 +2043,11 @@ class TestRepoRuleAndRefModeSelection:
         assert "BLOCKING BODY" in result.stdout
         assert "CHANNEL CONTRACT" not in result.stdout
 
-        entitlement = json.loads(
-            (tmp_path / "performance-advisory-entitlement.json").read_text()
+        accounting_input = json.loads(
+            (tmp_path / "performance-review-accounting-input.json").read_text()
         )
-        assert entitlement == {"schema": 1, "advisory_entitled": False}
-
-        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
-        monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "performance")
-        builder = ReviewOutputBuilder(pr_id="1", reviewer="performance")
-        with pytest.raises(ValueError, match="advisory.*not entitled"):
-            builder.add_finding(
-                severity="high", title="Advisory", file="src/app.py",
-                description="d", recommendation="r", line=1,
-                channel="advisory",
-            )
+        assert accounting_input["channels"] == ["blocking"]
+        assert not (tmp_path / "performance-advisory-entitlement.json").exists()
 
     def test_isolated_execution_is_refused(self, tmp_path):
         """An explicit isolation request must never silently widen into
@@ -2124,13 +2138,14 @@ class TestOutputFilenameConsistency:
         from review.agent.output import ReviewOutputBuilder, finalize_review
 
         (tmp_path / "dead-code-review-accounting-input.json").write_text(json.dumps({
-            "schema": 3,
+            "schema": 4,
             "agent_name": "dead-code-reviewer",
             "reviewer": "dead-code",
             "review_claimable_files": [],
             "review_budget": 15,
             "inline_diff_file_count": 1,
             "in_scope_review_file_count": 1,
+            "channels": ["blocking"],
         }))
         builder = ReviewOutputBuilder.open(str(tmp_path), "42", "dead-code")
         result = builder.save_draft()

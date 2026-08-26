@@ -67,50 +67,6 @@ class TestSelectRepoRules:
         assert mod.select_repo_rules(None, "security-reviewer", [], []) == []
 
 
-class TestPersistAdvisoryEntitlementSidecar:
-    @pytest.mark.parametrize("entitled", [True, False])
-    def test_writes_schema_for_effective_instance_identity(
-        self, mod, tmp_path, entitled
-    ):
-        mod.persist_advisory_entitlement_sidecar(
-            str(tmp_path), "repo-renewals-reviewer", entitled
-        )
-
-        payload = json.loads(
-            (tmp_path / "repo-renewals-advisory-entitlement.json").read_text()
-        )
-        assert payload == {"schema": 1, "advisory_entitled": entitled}
-
-    def test_write_error_fails_open(self, mod, tmp_path, monkeypatch):
-        def _raise(*args, **kwargs):
-            raise OSError("disk unavailable")
-
-        monkeypatch.setattr(mod, "open", _raise, raising=False)
-
-        mod.persist_advisory_entitlement_sidecar(
-            str(tmp_path), "security-reviewer", True
-        )
-
-    def test_write_error_removes_stale_entitlement(
-        self, mod, tmp_path, monkeypatch
-    ):
-        sidecar = tmp_path / "security-advisory-entitlement.json"
-        sidecar.write_text(json.dumps({
-            "schema": 1, "advisory_entitled": False,
-        }))
-
-        def _raise(*args, **kwargs):
-            raise OSError("disk unavailable")
-
-        monkeypatch.setattr(mod, "open", _raise, raising=False)
-
-        mod.persist_advisory_entitlement_sidecar(
-            str(tmp_path), "security-reviewer", True
-        )
-
-        assert not sidecar.exists()
-
-
 class TestRenderRepoReviewRules:
     def test_empty_returns_empty(self, mod):
         assert mod.render_repo_review_rules_section([]) == ""

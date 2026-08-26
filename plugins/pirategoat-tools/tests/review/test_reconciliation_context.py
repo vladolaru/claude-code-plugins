@@ -137,13 +137,14 @@ def _write_review(output_dir, stem, claims):
 
 def _write_accounting_input(output_dir, reviewer, claimable, *, inline_count=0):
     payload = {
-        "schema": 3,
+        "schema": 4,
         "agent_name": f"{reviewer}-reviewer",
         "reviewer": reviewer,
         "review_claimable_files": claimable,
         "review_budget": 15,
         "inline_diff_file_count": inline_count,
         "in_scope_review_file_count": inline_count + len(claimable),
+        "channels": ["blocking"],
     }
     with open(
         os.path.join(output_dir, f"{reviewer}-review-accounting-input.json"),
@@ -2011,13 +2012,14 @@ class TestAggregateReviewAccounting:
         review["in_scope_review_file_count"] = 2
         Path(paths.final).write_text(json.dumps(review))
         Path(paths.accounting_input).write_text(json.dumps({
-            "schema": 3,
+            "schema": 4,
             "agent_name": "security-reviewer",
             "reviewer": "security",
             "review_claimable_files": ["src/read.php", "src/unread.php"],
             "review_budget": 15,
             "inline_diff_file_count": 0,
             "in_scope_review_file_count": 2,
+            "channels": ["blocking"],
         }))
         monkeypatch.setattr(mod, "review_paths", lambda *_args: paths)
 

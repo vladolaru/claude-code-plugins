@@ -43,7 +43,7 @@ if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
 from review.reviewer_names import derive_reviewer_name
-from review.agent.coverage import derive_review_accounting
+from review.agent.coverage import ACCOUNTING_INPUT_SCHEMA, derive_review_accounting
 from review.agent.output import _validate_review_bytes, render_draft_index
 from review.atomic_io import atomic_write_json
 from review.reviewer_lifecycle import review_paths
@@ -1420,49 +1420,25 @@ def persist_review_accounting_input(
     effective_agent_name,
     review_claimable_files,
     *,
-    review_budget=None,
-    in_scope_review_file_count=None,
-    inline_diff_file_count=None,
+    review_budget,
+    in_scope_review_file_count,
+    inline_diff_file_count,
+    channels,
 ):
-    """Write the schema-3 accounting authority consumed by the builder."""
-    review_claimable_files = list(dict.fromkeys(review_claimable_files))
+    """Write the schema-4 accounting authority consumed by the builder."""
     reviewer = derive_reviewer_name(effective_agent_name)
     payload = {
-        "schema": 3,
+        "schema": ACCOUNTING_INPUT_SCHEMA,
         "agent_name": effective_agent_name,
         "reviewer": reviewer,
-        "review_claimable_files": review_claimable_files,
-        "review_budget": review_budget,
-        "in_scope_review_file_count": in_scope_review_file_count,
+        "review_claimable_files": list(dict.fromkeys(review_claimable_files)),
         "inline_diff_file_count": inline_diff_file_count,
+        "in_scope_review_file_count": in_scope_review_file_count,
+        "review_budget": review_budget,
+        "channels": list(channels),
     }
     derive_review_accounting(payload, [])
-    accounting_input = review_paths(output_dir, reviewer).accounting_input
-    atomic_write_json(accounting_input, payload)
-
-
-def persist_advisory_entitlement_sidecar(
-    output_dir, effective_agent_name, advisory_entitled
-):
-    """Write the authoritative advisory entitlement for this reviewer.
-
-    Written for every bootstrap, including explicit false. Fail-open on write
-    errors so the builder falls back to vocabulary-only channel validation.
-    """
-    entitlement_sidecar = os.path.join(
-        output_dir,
-        f"{derive_reviewer_name(effective_agent_name)}-advisory-entitlement.json",
-    )
-    try:
-        with open(entitlement_sidecar, "w", encoding="utf-8") as f:
-            json.dump(
-                {"schema": 1, "advisory_entitled": advisory_entitled}, f
-            )
-    except OSError:
-        try:
-            os.unlink(entitlement_sidecar)
-        except OSError:
-            pass
+    atomic_write_json(review_paths(output_dir, reviewer).accounting_input, payload)
 
 
 def main():
@@ -1874,9 +1850,42 @@ def main():
         review_budget = budget_override
         budget_capped = False
 
-    # Written after the override is applied: the sidecar's review_budget is
-    # the effective (post-override) number save_draft() echoes back, never a
-    # scope-only figure a downstream reader would have to recompute.
+    # Load repo-contributed review rules and select the ones applicable to this
+    # agent (by agent name, domain, or a changed file in its scope). Selection
+    # keys on the EFFECTIVE identity: in adapter ref-mode args.agent is always
+    # "repo-reviewer-adapter" with a null registry domain, so rules targeting
+    # the synthetic instance name or its declared scope domains would never
+    # match. Path rules match against the COMPLETE in-scope set (inline +
+    # review-claimable NOT DIFFED + list-only) — a rule about a claimable file
+    # applies precisely when the reviewer must inspect that file.
+    review_config = load_repo_review_config(output_dir)
+    agent_domains = [
+        d for d in [config.get("domain"), *config.get("secondary_domains", [])] if d
+    ]
+    selected_repo_rules = select_repo_rules(
+        review_config,
+        effective_agent_name,
+        ref_domains if ref_mode else agent_domains,
+        telemetry_scope_paths,
+    )
+    repo_review_rules = render_repo_review_rules_section(selected_repo_rules)
+
+    # The channels this reviewer's findings may carry. A ref-mode adapter
+    # instance explicitly dispatched on the advisory channel may emit *only*
+    # advisory findings — agents/repo-reviewer-adapter.md already instructs
+    # this. A native reviewer earns advisory alongside blocking only via a
+    # selected advisory repo rule; otherwise it is blocking-only.
+    if ref_mode and args.channel == "advisory":
+        channels = ["advisory"]
+    elif any(rule.get("channel") == "advisory" for rule in selected_repo_rules):
+        channels = ["blocking", "advisory"]
+    else:
+        channels = ["blocking"]
+
+    # Written after the override is applied: the accounting input's
+    # review_budget is the effective (post-override) number save_draft()
+    # echoes back, never a scope-only figure a downstream reader would have
+    # to recompute.
     try:
         persist_review_accounting_input(
             output_dir,
@@ -1885,6 +1894,7 @@ def main():
             review_budget=review_budget,
             in_scope_review_file_count=len(progress_scope_paths),
             inline_diff_file_count=len(scope_files_for_budget),
+            channels=channels,
         )
     except (OSError, ValueError) as exc:
         print(build_error_output(
@@ -1958,32 +1968,6 @@ def main():
     # Load host_context from review-context.json (populated in Phase 1 of
     # upstream host context). Absent / missing / invalid → None.
     host_context = load_host_context(output_dir)
-
-    # Load repo-contributed review rules and select the ones applicable to this
-    # agent (by agent name, domain, or a changed file in its scope). Selection
-    # keys on the EFFECTIVE identity: in adapter ref-mode args.agent is always
-    # "repo-reviewer-adapter" with a null registry domain, so rules targeting
-    # the synthetic instance name or its declared scope domains would never
-    # match. Path rules match against the COMPLETE in-scope set (inline +
-    # review-claimable NOT DIFFED + list-only) — a rule about a claimable file
-    # applies precisely when the reviewer must inspect that file.
-    review_config = load_repo_review_config(output_dir)
-    agent_domains = [
-        d for d in [config.get("domain"), *config.get("secondary_domains", [])] if d
-    ]
-    selected_repo_rules = select_repo_rules(
-        review_config,
-        effective_agent_name,
-        ref_domains if ref_mode else agent_domains,
-        telemetry_scope_paths,
-    )
-    repo_review_rules = render_repo_review_rules_section(selected_repo_rules)
-    advisory_entitled = any(
-        rule.get("channel") == "advisory" for rule in selected_repo_rules
-    ) or (ref_mode and args.channel == "advisory")
-    persist_advisory_entitlement_sidecar(
-        output_dir, effective_agent_name, advisory_entitled
-    )
 
     # Determine overall status. When the primary domain matched nothing but
     # secondary-domain files exist, flip to a scoped OK and attach a coverage

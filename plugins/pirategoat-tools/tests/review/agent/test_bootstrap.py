@@ -153,6 +153,7 @@ class TestPersistReviewAccountingInput:
             review_budget=40,
             in_scope_review_file_count=1,
             inline_diff_file_count=1,
+            channels=["blocking"],
         )
 
         assert json.loads(accounting_input.read_text())["reviewer"] == "security"
@@ -166,19 +167,21 @@ class TestPersistReviewAccountingInput:
             review_budget=80,
             in_scope_review_file_count=12,
             inline_diff_file_count=11,
+            channels=["blocking"],
         )
 
         payload = json.loads(
             (tmp_path / "repo-renewals-review-accounting-input.json").read_text()
         )
         assert payload == {
-            "schema": 3,
+            "schema": 4,
             "agent_name": "repo-renewals-reviewer",
             "reviewer": "repo-renewals",
             "review_claimable_files": ["src/claimable.php"],
             "review_budget": 80,
             "in_scope_review_file_count": 12,
             "inline_diff_file_count": 11,
+            "channels": ["blocking"],
         }
 
     def test_writes_empty_authoritative_set(self, tmp_path):
@@ -186,19 +189,21 @@ class TestPersistReviewAccountingInput:
             str(tmp_path), "security-reviewer", [],
             review_budget=40,
             in_scope_review_file_count=5, inline_diff_file_count=5,
+            channels=["blocking"],
         )
 
         payload = json.loads(
             (tmp_path / "security-review-accounting-input.json").read_text()
         )
         assert payload == {
-            "schema": 3,
+            "schema": 4,
             "agent_name": "security-reviewer",
             "reviewer": "security",
             "review_claimable_files": [],
             "review_budget": 40,
             "in_scope_review_file_count": 5,
             "inline_diff_file_count": 5,
+            "channels": ["blocking"],
         }
 
     def test_write_errors_are_not_silenced(self, tmp_path):
@@ -210,6 +215,7 @@ class TestPersistReviewAccountingInput:
                 str(output_file), "security-reviewer", ["src/claimable.php"],
                 review_budget=80,
                 in_scope_review_file_count=1, inline_diff_file_count=0,
+                channels=["blocking"],
             )
 
     def test_dedupes_claimable_files_order_preserving(self, tmp_path):
@@ -226,27 +232,38 @@ class TestPersistReviewAccountingInput:
             ["src/a.php", "src/b.php", "src/a.php"],
             review_budget=80,
             in_scope_review_file_count=4, inline_diff_file_count=2,
+            channels=["blocking"],
         )
 
         payload = json.loads(
             (tmp_path / "security-review-accounting-input.json").read_text()
         )
         assert payload == {
-            "schema": 3,
+            "schema": 4,
             "agent_name": "security-reviewer",
             "reviewer": "security",
             "review_claimable_files": ["src/a.php", "src/b.php"],
             "review_budget": 80,
             "in_scope_review_file_count": 4,
             "inline_diff_file_count": 2,
+            "channels": ["blocking"],
         }
 
     @pytest.mark.parametrize(
         "kwargs",
         [
-            {"review_budget": 40, "in_scope_review_file_count": None, "inline_diff_file_count": 0},
-            {"review_budget": 40, "in_scope_review_file_count": 1, "inline_diff_file_count": None},
-            {"review_budget": 40, "in_scope_review_file_count": 1, "inline_diff_file_count": 1},
+            {
+                "review_budget": 40, "in_scope_review_file_count": None,
+                "inline_diff_file_count": 0, "channels": ["blocking"],
+            },
+            {
+                "review_budget": 40, "in_scope_review_file_count": 1,
+                "inline_diff_file_count": None, "channels": ["blocking"],
+            },
+            {
+                "review_budget": 40, "in_scope_review_file_count": 1,
+                "inline_diff_file_count": 1, "channels": ["blocking"],
+            },
         ],
     )
     def test_rejects_incomplete_or_incoherent_payloads(self, tmp_path, kwargs):

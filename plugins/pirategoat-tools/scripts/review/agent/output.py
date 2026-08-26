@@ -37,14 +37,24 @@ from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 
 try:
-    from .coverage import ReviewAccountingError, derive_review_accounting, normalize_review_path
+    from .coverage import (
+        ACCOUNTING_INPUT_SCHEMA,
+        ReviewAccountingError,
+        derive_review_accounting,
+        normalize_review_path,
+    )
 except ImportError:
     _SCRIPTS_DIR = os.path.dirname(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     )
     if _SCRIPTS_DIR not in sys.path:
         sys.path.insert(0, _SCRIPTS_DIR)
-    from review.agent.coverage import ReviewAccountingError, derive_review_accounting, normalize_review_path
+    from review.agent.coverage import (
+        ACCOUNTING_INPUT_SCHEMA,
+        ReviewAccountingError,
+        derive_review_accounting,
+        normalize_review_path,
+    )
 
 try:
     from ..atomic_io import output_dir_lock
@@ -1289,10 +1299,10 @@ class ReviewOutputBuilder:
     ) -> Optional[int]:
         """The run's tool-call target, or None when there isn't an honest one.
 
-        Read from the same schema-3 input that owns the accounting facts.
+        Read from the same schema-4 input that owns the accounting facts.
         """
         data = ReviewOutputBuilder._read_review_accounting_input(output_dir, reviewer)
-        if data.get("schema") != 3:
+        if data.get("schema") != ACCOUNTING_INPUT_SCHEMA:
             return None
         value = data.get("review_budget")
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:

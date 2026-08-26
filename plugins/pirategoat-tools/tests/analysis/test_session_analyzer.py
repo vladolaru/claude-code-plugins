@@ -44,13 +44,14 @@ _bootstrap_spec.loader.exec_module(_bootstrap_mod)
 def _write_accounting_input(output_dir, reviewer="security", claimable=()):
     Path(output_dir, f"{reviewer}-review-accounting-input.json").write_text(
         json.dumps({
-            "schema": 3,
+            "schema": 4,
             "agent_name": f"{reviewer}-reviewer",
             "reviewer": reviewer,
             "review_claimable_files": list(claimable),
             "inline_diff_file_count": 0,
             "in_scope_review_file_count": len(claimable),
             "review_budget": 15,
+            "channels": ["blocking"],
         })
     )
 

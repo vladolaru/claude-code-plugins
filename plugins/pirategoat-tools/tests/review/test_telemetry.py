@@ -1528,13 +1528,14 @@ class TestRunManifest:
             agents=[{"name": "security-reviewer", "status": "DISPATCH"}],
         )
         (output_dir / "security-review-accounting-input.json").write_text(json.dumps({
-            "schema": 3,
+            "schema": 4,
             "agent_name": "security-reviewer",
             "reviewer": "security",
             "review_claimable_files": ["a.py", "b.py", "c.py"],
             "review_budget": 15,
             "in_scope_review_file_count": 3,
             "inline_diff_file_count": 0,
+            "channels": ["blocking"],
         }))
         telemetry.start(run_id="run-1")
         telemetry.log_agent_start(
@@ -1575,13 +1576,14 @@ class TestRunManifest:
             review_claimable_files=["a.py", "b.py"],
         )))
         Path(paths.accounting_input).write_text(json.dumps({
-            "schema": 3,
+            "schema": 4,
             "agent_name": "security-reviewer",
             "reviewer": "security",
             "review_claimable_files": ["a.py", "b.py"],
             "review_budget": 15,
             "in_scope_review_file_count": 2,
             "inline_diff_file_count": 0,
+            "channels": ["blocking"],
         }))
         monkeypatch.setattr(
             mod.manifest_sections, "review_paths", lambda *_args: paths
@@ -1621,13 +1623,14 @@ class TestRunManifest:
             "reviewed_file_claims": [],
         }))
         Path(paths.accounting_input).write_text(json.dumps({
-            "schema": 3,
+            "schema": 4,
             "agent_name": "security-reviewer",
             "reviewer": "security",
             "review_claimable_files": [],
             "review_budget": 15,
             "in_scope_review_file_count": 0,
             "inline_diff_file_count": 0,
+            "channels": ["blocking"],
         }))
 
         assert mod.manifest_sections._load_review_claim_accounting(
@@ -1646,13 +1649,14 @@ class TestRunManifest:
             agents=[{"name": "security-reviewer", "status": "DISPATCH"}],
         )
         (output_dir / "security-review-accounting-input.json").write_text(json.dumps({
-            "schema": 3,
+            "schema": 4,
             "agent_name": "security-reviewer",
             "reviewer": "security",
             "review_claimable_files": ["a.py"],
             "review_budget": 15,
             "in_scope_review_file_count": 1,
             "inline_diff_file_count": 0,
+            "channels": ["blocking"],
         }))
         telemetry.start(run_id="run-1")
         telemetry.log_agent_start("security-reviewer", scope_paths=["a.py"])

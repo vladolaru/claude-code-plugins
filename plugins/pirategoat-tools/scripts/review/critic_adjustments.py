@@ -41,7 +41,11 @@ try:
         validate_review_document,
         validate_review_domain,
     )
-    from .agent.coverage import ReviewAccountingError, derive_review_accounting
+    from .agent.coverage import (
+        ACCOUNTING_INPUT_SCHEMA,
+        ReviewAccountingError,
+        derive_review_accounting,
+    )
     from .verdict_rules import VALID_SEVERITIES, derive_review_state
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -53,7 +57,11 @@ except ImportError:
         validate_review_document,
         validate_review_domain,
     )
-    from review.agent.coverage import ReviewAccountingError, derive_review_accounting
+    from review.agent.coverage import (
+        ACCOUNTING_INPUT_SCHEMA,
+        ReviewAccountingError,
+        derive_review_accounting,
+    )
     from review.verdict_rules import VALID_SEVERITIES, derive_review_state
 
 atomic_write_json = atomic_io.atomic_write_json
@@ -1029,13 +1037,14 @@ def _validate_invalidated_assessments(value, applied_ids):
 
 def _validate_ledger_accounting(document):
     accounting_input = {
-        "schema": 3,
+        "schema": ACCOUNTING_INPUT_SCHEMA,
         "agent_name": "reconciliator-reviewer",
         "reviewer": "reconciliator",
         "review_claimable_files": document["review_claimable_files"],
         "review_budget": 0,
         "inline_diff_file_count": document["inline_diff_file_count"],
         "in_scope_review_file_count": document["in_scope_review_file_count"],
+        "channels": ["blocking", "advisory"],
     }
     try:
         accounting = derive_review_accounting(

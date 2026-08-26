@@ -177,7 +177,7 @@ Not every JSON file in a run directory carries one, and this rule does not ask y
 | `dependency-refresh.json` | 1 | `REPORT_SCHEMA` — `scripts/review/dependency_refresh.py` |
 | `observed_reads` payload in transcript enrichment | 2 | `_OBSERVED_READS_SCHEMA` — `scripts/analysis/review_transcript.py`. The same-named constant in `review_metrics/contracts.py` is the *consumer's* expected value, and must be bumped in lockstep |
 | `review_run_metrics.py --format json` report | 3 | `_REPORT_SCHEMA` — `scripts/analysis/review_metrics/contracts.py` |
-| `<reviewer>-review-accounting-input.json` | 3 | `persist_review_accounting_input()` — `scripts/review/agent/bootstrap.py` |
+| `<reviewer>-review-accounting-input.json` | 4 | `persist_review_accounting_input()` — `scripts/review/agent/bootstrap.py` |
 | `reconciliation-context.json` | 3 | `main()` — `scripts/review/reconciliation_context.py` |
 | `decision-critic-adjustments.json` (including nested adjudication), `decision-critic-verdict.json` | 2 | `ADJUSTMENTS_SCHEMA`, `ADJUDICATION_SCHEMA`, `VERDICT_MARKER_SCHEMA` — `scripts/review/critic_adjustments.py` |
 | Per-agent sidecars: advisory entitlement, worktree baseline / hygiene | 1 | Literal at the write site |
@@ -348,15 +348,17 @@ carries the normalized result into `review-context.json` under `review_config`
 - **Advisory channel:** `add_finding()` accepts only `"blocking"` or `"advisory"`; blocking is
   the default and is normalized to an absent field. Native agents set advisory only for a
   finding caused by a selected advisory repo rule—their own-domain findings omit `channel`.
-  Bootstrap writes an entitlement sidecar for every effective reviewer identity: entitlement
-  is true when that reviewer selected any advisory rule OR when ref-mode dispatched it with
-  `--channel advisory`. An explicit false rejects advisory findings at add time and canonical
-  serialization; the reconciliator independently declares entitlement from upstream advisory
-  findings and is checked during final serialization. Missing, malformed, or unwritable
-  sidecars deliberately fail open to vocabulary-only validation for manual builders, older
-  bootstraps, and failed writes. Entitled advisory findings remain listed but never gate the
-  verdict; the summary records how many were suppressed and, only when stricter, the verdict
-  over all findings.
+  The accounting input's `channels` field (schema 4) is the authoritative record of which
+  channels an effective reviewer identity may use: `["blocking"]` normally, `["blocking",
+  "advisory"]` when that reviewer selected any advisory rule, or `["advisory"]` only when
+  ref-mode dispatched the instance with `--channel advisory`. `ReviewOutputBuilder`'s own
+  entitlement enforcement (`add_finding()` denial, canonical serialization) still reads a
+  separate advisory-entitlement sidecar bootstrap no longer writes, so it currently fails
+  open to vocabulary-only validation for every reviewer identity — wiring enforcement to
+  `channels` is pending. The reconciliator independently declares entitlement from upstream
+  advisory findings and is checked during final serialization. Entitled advisory findings
+  remain listed but never gate the verdict; the summary records how many were suppressed
+  and, only when stricter, the verdict over all findings.
 - **Provenance gate (security boundary):** the adapter EXECUTES repo prompt text with real
   tools, so `load_review_config` excludes any rule/reviewer whose defining file — or
   `.pirategoat/config.json` itself — is added or modified within the reviewed range

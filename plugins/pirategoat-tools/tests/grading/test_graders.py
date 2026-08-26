@@ -65,13 +65,14 @@ def _make_valid_json(tmp_dir: str, reviewer: str = "security") -> str:
     )
     with open(accounting_input, "w") as f:
         json.dump({
-            "schema": 3,
+            "schema": 4,
             "agent_name": f"{reviewer}-reviewer",
             "reviewer": reviewer,
             "review_claimable_files": [],
             "review_budget": 15,
             "inline_diff_file_count": 3,
             "in_scope_review_file_count": 3,
+            "channels": ["blocking"],
         }, f)
     saved = builder.save_draft()
     finalize_review(tmp_dir, reviewer, saved["review_digest"])

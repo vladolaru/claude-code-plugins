@@ -46,13 +46,14 @@ from helpers.review_fixtures import canonical_review_document
 def _write_required_accounting_input(output_dir, reviewer):
     Path(output_dir, f"{reviewer}-review-accounting-input.json").write_text(
         json.dumps({
-            "schema": 3,
+            "schema": 4,
             "agent_name": f"{reviewer}-reviewer",
             "reviewer": reviewer,
             "review_claimable_files": [],
             "inline_diff_file_count": 0,
             "in_scope_review_file_count": 0,
             "review_budget": 15,
+            "channels": ["blocking"],
         })
     )
 
@@ -105,13 +106,14 @@ def test_accounting_reads_follow_the_bound_review_paths(
         accounting_input=str(authority_dir / "accounting.json"),
     )
     Path(paths.accounting_input).write_text(json.dumps({
-        "schema": 3,
+        "schema": 4,
         "agent_name": "code-reviewer",
         "reviewer": "code",
         "review_claimable_files": ["src/unread.py"],
         "review_budget": 80,
         "inline_diff_file_count": 0,
         "in_scope_review_file_count": 1,
+        "channels": ["blocking"],
     }))
     monkeypatch.setattr(review_output, "review_paths", lambda *_args: paths)
 
@@ -1463,7 +1465,7 @@ class TestReviewedFileClaims:
         monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
         monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "sec")
         (tmp_path / "sec-review-accounting-input.json").write_text(
-            json.dumps({"schema": 3, "agent_name": "sec-reviewer", "reviewer": "sec", "review_claimable_files": claimable, "inline_diff_file_count": 0, "in_scope_review_file_count": len(claimable), "review_budget": 15})
+            json.dumps({"schema": 4, "agent_name": "sec-reviewer", "reviewer": "sec", "review_claimable_files": claimable, "inline_diff_file_count": 0, "in_scope_review_file_count": len(claimable), "review_budget": 15, "channels": ["blocking"]})
         )
 
     @pytest.mark.parametrize("bad", ["", "   ", None, 42, ["src/a.py"]])
@@ -2044,13 +2046,14 @@ class TestDerivedReviewAccounting:
     @staticmethod
     def _write_accounting_input(tmp_path, claimable, *, inline_diff_file_count=0, reviewer="code"):
         (tmp_path / f"{reviewer}-review-accounting-input.json").write_text(json.dumps({
-            "schema": 3,
+            "schema": 4,
             "agent_name": f"{reviewer}-reviewer",
             "reviewer": reviewer,
             "review_claimable_files": claimable,
             "inline_diff_file_count": inline_diff_file_count,
             "in_scope_review_file_count": inline_diff_file_count + len(claimable),
             "review_budget": 15,
+            "channels": ["blocking"],
         }))
 
     def test_draft_derives_gaps_and_counts_from_claims(self, tmp_path):
@@ -2144,7 +2147,7 @@ class TestBudgetTargetEcho:
         monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
 
     @staticmethod
-    def _write_accounting_input(tmp_path, reviewer="code", schema=3, review_claimable_files=None,
+    def _write_accounting_input(tmp_path, reviewer="code", schema=4, review_claimable_files=None,
                         **fields):
         review_claimable_files = review_claimable_files or []
         payload = {
@@ -2155,6 +2158,7 @@ class TestBudgetTargetEcho:
             "inline_diff_file_count": 0,
             "in_scope_review_file_count": len(review_claimable_files),
             "review_budget": 15,
+            "channels": ["blocking"],
         }
         payload.update(fields)
         (tmp_path / f"{reviewer}-review-accounting-input.json").write_text(
@@ -2203,7 +2207,7 @@ class TestBudgetTargetEcho:
         self._write_accounting_input(
             tmp_path, schema=1, review_claimable_files=["some/file.go"]
         )
-        with pytest.raises(ValueError, match="schema must be 3"):
+        with pytest.raises(ValueError, match="schema must be 4"):
             self._save_with_unreviewed(tmp_path, monkeypatch, capsys)
 
     @pytest.mark.parametrize(
@@ -2257,7 +2261,7 @@ class TestDraftFileGapReceipt:
         monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
 
     @staticmethod
-    def _write_accounting_input(tmp_path, reviewer="code", schema=3, review_claimable_files=None,
+    def _write_accounting_input(tmp_path, reviewer="code", schema=4, review_claimable_files=None,
                         **fields):
         review_claimable_files = review_claimable_files or []
         payload = {
@@ -2268,6 +2272,7 @@ class TestDraftFileGapReceipt:
             "inline_diff_file_count": 0,
             "in_scope_review_file_count": len(review_claimable_files),
             "review_budget": 15,
+            "channels": ["blocking"],
         }
         payload.update(fields)
         (tmp_path / f"{reviewer}-review-accounting-input.json").write_text(
@@ -2336,7 +2341,7 @@ class TestDraftFileGapReceipt:
             tmp_path, schema=1, review_claimable_files=["some/file.go"],
         )
         builder = ReviewOutputBuilder("123", "code")
-        with pytest.raises(ValueError, match="schema must be 3"):
+        with pytest.raises(ValueError, match="schema must be 4"):
             _save_draft(builder, tmp_path)
 
     def test_next_unread_omitted_only_when_every_claimable_file_is_claimed(

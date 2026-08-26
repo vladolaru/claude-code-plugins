@@ -17,13 +17,14 @@ from review.agent.coverage import (
 
 def _accounting_input(**overrides):
     payload = {
-        "schema": 3,
+        "schema": 4,
         "agent_name": "code-reviewer",
         "reviewer": "code",
         "review_claimable_files": ["src/b.py", "src/c.py", "src/d.py"],
         "inline_diff_file_count": 2,
         "in_scope_review_file_count": 5,
         "review_budget": 15,
+        "channels": ["blocking"],
     }
     payload.update(overrides)
     return payload
@@ -153,3 +154,38 @@ def test_rejects_non_object_input_and_non_iterable_claims():
         derive_review_accounting([], [])
     with pytest.raises(ReviewAccountingError, match="claims must be iterable"):
         derive_review_accounting(_accounting_input(), None)
+
+
+def _input(**overrides):
+    payload = {
+        "schema": 4,
+        "agent_name": "security-reviewer",
+        "reviewer": "security",
+        "review_claimable_files": ["src/a.py"],
+        "inline_diff_file_count": 1,
+        "in_scope_review_file_count": 2,
+        "review_budget": 15,
+        "channels": ["blocking"],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_accounting_carries_budget_and_channels():
+    accounting = derive_review_accounting(_input(channels=["blocking", "advisory"]), [])
+    assert accounting.review_budget == 15
+    assert accounting.channels == ("blocking", "advisory")
+
+
+@pytest.mark.parametrize("overrides", [
+    {"schema": 3},
+    {"channels": "blocking"},
+    {"channels": []},
+    {"channels": ["blocking", "blocking"]},
+    {"channels": ["gating"]},
+    {"review_budget": -1},
+    {"review_budget": True},
+])
+def test_schema_four_rejects_retired_or_malformed_input(overrides):
+    with pytest.raises(ReviewAccountingError):
+        derive_review_accounting(_input(**overrides), [])

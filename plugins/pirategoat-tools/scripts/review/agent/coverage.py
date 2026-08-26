@@ -24,6 +24,12 @@ class ReviewAccounting:
     inline_diff_file_count: int
     review_accounted_file_count: int
     in_scope_review_file_count: int
+    review_budget: int
+    channels: tuple[str, ...]
+
+
+ACCOUNTING_INPUT_SCHEMA = 4
+REVIEW_CHANNELS = ("blocking", "advisory")
 
 
 def normalize_review_path(path: object, api_name: str) -> str:
@@ -56,9 +62,11 @@ def _validated_count(accounting_input: Mapping[str, object], key: str) -> int:
 
 def _validated_accounting_input(
     accounting_input: Mapping[str, object],
-) -> tuple[str, str, tuple[str, ...], int, int]:
-    if accounting_input.get("schema") != 3:
-        raise ReviewAccountingError("accounting input schema must be 3")
+) -> tuple[str, str, tuple[str, ...], int, int, int, tuple[str, ...]]:
+    if accounting_input.get("schema") != ACCOUNTING_INPUT_SCHEMA:
+        raise ReviewAccountingError(
+            f"accounting input schema must be {ACCOUNTING_INPUT_SCHEMA}"
+        )
 
     agent_name = accounting_input.get("agent_name")
     if not isinstance(agent_name, str) or not agent_name.strip():
@@ -91,10 +99,22 @@ def _validated_accounting_input(
     in_scope_count = _validated_count(
         accounting_input, "in_scope_review_file_count"
     )
-    _validated_count(accounting_input, "review_budget")
+    review_budget = _validated_count(accounting_input, "review_budget")
+    channels = accounting_input.get("channels")
+    if (
+        not isinstance(channels, list)
+        or not channels
+        or len(channels) != len(set(channels))
+        or any(channel not in REVIEW_CHANNELS for channel in channels)
+    ):
+        raise ReviewAccountingError(
+            "accounting input channels must be a non-empty list of unique values "
+            f"from {REVIEW_CHANNELS}"
+        )
+    channels = tuple(channels)
     if inline_count + len(paths) != in_scope_count:
         raise ReviewAccountingError("incoherent inline and review-claimable scope counts")
-    return agent_name, reviewer, paths, inline_count, in_scope_count
+    return agent_name, reviewer, paths, inline_count, in_scope_count, review_budget, channels
 
 
 def _validated_claim_set(
@@ -131,6 +151,8 @@ def derive_review_accounting(
         review_claimable_files,
         inline_diff_file_count,
         in_scope_review_file_count,
+        review_budget,
+        channels,
     ) = _validated_accounting_input(accounting_input)
     claimed = _validated_claim_set(reviewed_file_claims, review_claimable_files)
     reviewed = tuple(path for path in review_claimable_files if path in claimed)
@@ -144,4 +166,6 @@ def derive_review_accounting(
         inline_diff_file_count=inline_diff_file_count,
         review_accounted_file_count=inline_diff_file_count + len(reviewed),
         in_scope_review_file_count=in_scope_review_file_count,
+        review_budget=review_budget,
+        channels=channels,
     )

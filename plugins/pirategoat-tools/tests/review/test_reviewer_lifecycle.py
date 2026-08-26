@@ -30,13 +30,14 @@ def _write_accounting_input(
     claimable = ["src/claimable.py"] if claimable is None else claimable
     Path(output_dir, f"{reviewer}-review-accounting-input.json").write_text(
         json.dumps({
-            "schema": 3,
+            "schema": 4,
             "agent_name": agent_name or f"{reviewer}-reviewer",
             "reviewer": reviewer,
             "review_claimable_files": claimable,
             "review_budget": 15,
             "inline_diff_file_count": len(claimable),
             "in_scope_review_file_count": len(claimable) + 1,
+            "channels": ["blocking"],
         })
     )
 

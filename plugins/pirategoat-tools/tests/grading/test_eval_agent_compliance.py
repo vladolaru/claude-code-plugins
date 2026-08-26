@@ -59,13 +59,14 @@ def _write_review_pair(output_dir: Path, reviewer: str = "security") -> None:
         "No caller escapes the value before it reaches the sink.",
     )
     (output_dir / f"{reviewer}-review-accounting-input.json").write_text(json.dumps({
-        "schema": 3,
+        "schema": 4,
         "agent_name": f"{reviewer}-reviewer",
         "reviewer": reviewer,
         "review_claimable_files": [],
         "review_budget": 15,
         "inline_diff_file_count": 1,
         "in_scope_review_file_count": 1,
+        "channels": ["blocking"],
     }))
     saved = builder.save_draft()
     finalize_review(

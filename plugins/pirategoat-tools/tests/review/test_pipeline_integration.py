@@ -84,13 +84,14 @@ def _write_required_accounting_input(output_dir, reviewer, agent_name=None):
     Path(
         output_dir, f"{reviewer}-review-accounting-input.json"
     ).write_text(json.dumps({
-        "schema": 3,
+        "schema": 4,
         "agent_name": agent_name or f"{reviewer}-reviewer",
         "reviewer": reviewer,
         "review_claimable_files": [],
         "review_budget": 15,
         "inline_diff_file_count": 1,
         "in_scope_review_file_count": 1,
+        "channels": ["blocking"],
     }))
 
 
@@ -176,7 +177,7 @@ class TestReviewerDraftFinalizationLifecycle:
             datetime.now(timezone.utc).isoformat()
         )
         accounting_input = {
-            "schema": 3,
+            "schema": 4,
             "agent_name": "code-reviewer",
             "reviewer": "code",
             "review_claimable_files": [
@@ -186,6 +187,7 @@ class TestReviewerDraftFinalizationLifecycle:
             "review_budget": 15,
             "inline_diff_file_count": 1,
             "in_scope_review_file_count": 3,
+            "channels": ["blocking"],
         }
         (output_dir / "code-review-accounting-input.json").write_text(
             json.dumps(accounting_input)
