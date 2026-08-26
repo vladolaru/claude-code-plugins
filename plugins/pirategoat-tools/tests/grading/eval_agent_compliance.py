@@ -949,8 +949,8 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
         # Grade the reviewer's JSON only. Reviewers publish JSON — Markdown is
         # a derived artifact the HARNESS materializes below for human
         # inspection; grading the pair would count 5 markdown checks that
-        # ReviewOutputBuilder.to_markdown() structurally guarantees, inflating
-        # every compliance score with tautological credit.
+        # render_markdown() structurally guarantees, inflating every
+        # compliance score with tautological credit.
         if scenario["grader"] == "output_pair":
             _materialize_missing_markdown(output_dir)
             reviewer_name = _mod.derive_reviewer_name(agent_name)

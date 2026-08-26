@@ -35,7 +35,7 @@ from helpers.graders import (
     aggregate_detection_trials,
 )
 
-from review.agent.output import ReviewOutputBuilder, finalize_review
+from review.agent.output import ReviewOutputBuilder, finalize_review, render_markdown
 
 
 @pytest.fixture
@@ -94,7 +94,7 @@ def _make_valid_markdown(tmp_dir: str, reviewer: str = "security") -> str:
 
     path = os.path.join(tmp_dir, f"{reviewer}-review.md")
     with open(path, "w") as f:
-        f.write(builder.to_markdown())
+        f.write(render_markdown(builder.to_dict()))
     return path
 
 

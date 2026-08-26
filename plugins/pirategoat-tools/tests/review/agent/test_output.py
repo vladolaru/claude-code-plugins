@@ -30,8 +30,10 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 from review.agent import output as review_output
 from review.agent.output import (
+    REVIEW_CONTENT_FIELDS,
     REVIEWER_FIELDS,
     ReviewOutputBuilder,
+    accounting_fields,
     finalize_review,
     materialize_markdown,
     render_draft_index,
@@ -191,7 +193,13 @@ def test_draft_index_carries_locations_and_every_reviewed_file_claim():
     )
     builder.reviewed_file_claims = ["src/service.py", "tests/test_service.py"]
 
-    index = render_draft_index(builder.to_dict())
+    # render_draft_index is always called on a persisted draft file, whose
+    # accounting fields to_dict() no longer carries — stitch the claims on
+    # to match what save_draft() would have written.
+    index = render_draft_index({
+        **builder.to_dict(),
+        "reviewed_file_claims": builder.reviewed_file_claims,
+    })
 
     assert 'finding f1: high "Missing authorization" @ src/auth.py:42' in index
     assert (
@@ -511,7 +519,7 @@ class TestAddFinding:
             severity_floor="medium",
         )
 
-        assert "**Severity floor:** medium" in b.to_markdown()
+        assert "**Severity floor:** medium" in render_markdown(b.to_dict())
 
     def test_confidence_boundaries_valid(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
@@ -594,7 +602,7 @@ class TestRecordCheck:
             method="grep 'th label' admin.scss",
             result="No dependencies found.",
         )
-        md = b.to_markdown()
+        md = render_markdown(b.to_dict())
         assert "## Checks Performed" in md
         assert "Does CSS depend on the label?" in md
         assert "grep 'th label' admin.scss" in md
@@ -792,16 +800,16 @@ class TestToDict:
         b = ReviewOutputBuilder(pr_id="99", reviewer="arch")
         b.add_finding("medium", "Title", "f.py", "desc", "rec", line=1)
         d = b.to_dict()
-        expected_keys = {
-            "pr_id", "reviewer", "timestamp", "plugin_version", "schema",
-            "verdict",
-            "summary", "findings", "unclaimed_review_files", "reviewed_file_claims",
-            "review_claimable_files", "inline_diff_file_count",
-            "review_accounted_file_count", "in_scope_review_file_count",
-            "observations", "recommendations", "positive_observations",
-            "checks", "assessment", "meta",
-        }
-        assert expected_keys == set(d.keys())
+        assert set(d.keys()) == REVIEW_CONTENT_FIELDS | {"reviewer"}
+
+    def test_to_dict_has_no_accounting_fields(self):
+        """to_dict carries content plus reviewer only — save_draft stitches
+        the six accounting fields on separately via accounting_fields()."""
+        builder = ReviewOutputBuilder(pr_id="1", reviewer="security")
+        data = builder.to_dict()
+        assert set(data) == REVIEW_CONTENT_FIELDS | {"reviewer"}
+        with pytest.raises(TypeError):
+            builder.to_dict(output_dir="x")
 
     def test_severity_counts_correct(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
@@ -912,7 +920,6 @@ class TestToDict:
         b.set_confidence(0.8)
         d = b.to_dict()
         meta = d["meta"]
-        assert d["review_accounted_file_count"] is None
         assert meta["confidence_score"] == 0.8
         assert "tool_results_used" not in meta
         assert meta["next_finding_number"] == 1
@@ -937,48 +944,6 @@ class TestToDict:
 
 
 # =============================================================================
-# TestToMarkdown
-# =============================================================================
-
-
-class TestToMarkdown:
-    """to_markdown produces human-readable output."""
-
-    def test_header_format(self):
-        b = ReviewOutputBuilder(pr_id="42", reviewer="security")
-        md = b.to_markdown()
-        assert "# Security Review - PR #42" in md
-
-    def test_findings_grouped_by_severity(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        b.add_finding("low", "Low Issue", "a.py", "desc", "rec", line=1)
-        b.add_finding("critical", "Critical Issue", "b.py", "desc", "rec", line=2)
-        b.add_finding("high", "High Issue", "c.py", "desc", "rec", line=3)
-        md = b.to_markdown()
-        # Critical section should appear before High, High before Low
-        crit_pos = md.index("## Critical Findings")
-        high_pos = md.index("## High Findings")
-        low_pos = md.index("## Low Findings")
-        assert crit_pos < high_pos < low_pos
-
-    def test_positive_observations_section(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        b.add_positive_observation("Well-structured code")
-        md = b.to_markdown()
-        assert "## Positive Observations" in md
-        assert "Well-structured code" in md
-
-    def test_info_findings_render_in_markdown(self):
-        """Info findings count toward total_findings, so Markdown must show them —
-        omitting them reports `Total Findings: 1` with no visible finding."""
-        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        b.add_finding("info", "Anchored info finding", "a.py", "desc", "rec", line=3)
-        md = b.to_markdown()
-        assert "## Info Findings" in md
-        assert "Anchored info finding" in md
-
-
-# =============================================================================
 # TestRenderMarkdown
 # =============================================================================
 
@@ -998,15 +963,11 @@ class TestRenderMarkdown:
         )
         return b
 
-    def test_matches_builder_to_markdown(self):
-        b = self._rich_builder()
-        assert render_markdown(b.to_dict()) == b.to_markdown()
-
     def test_round_trips_through_serialized_json(self):
         """Rendering from the FILE representation — what materialization
         does — must equal rendering from the live builder."""
         b = self._rich_builder()
-        assert render_markdown(json.loads(b.to_json())) == b.to_markdown()
+        assert render_markdown(json.loads(b.to_json())) == render_markdown(b.to_dict())
 
     def test_file_location_without_scope_renders_plainly(self):
         data = self._rich_builder().to_dict()
@@ -1264,23 +1225,18 @@ class TestSaveDraft:
             # review_duration_ms is recomputed from the clock on every
             # to_dict() call, so it differs whenever save() and this
             # assertion straddle a millisecond. Assert it independently
-            # and compare the rest exactly.
+            # and compare the rest exactly. The saved draft additionally
+            # carries the six accounting fields save_draft() stitches on
+            # via accounting_fields() — to_dict() carries content plus
+            # reviewer only.
             assert isinstance(saved["meta"]["review_duration_ms"], int)
             assert saved["review_accounted_file_count"] == 0
-            assert live["review_accounted_file_count"] is None
             saved["meta"].pop("review_duration_ms")
             live["meta"].pop("review_duration_ms")
-            for field in (
-                "review_claimable_files",
-                "reviewed_file_claims",
-                "unclaimed_review_files",
-                "inline_diff_file_count",
-                "review_accounted_file_count",
-                "in_scope_review_file_count",
-            ):
-                saved.pop(field)
-                live.pop(field)
-            assert saved == live
+            saved_content = {
+                key: saved[key] for key in REVIEW_CONTENT_FIELDS | {"reviewer"}
+            }
+            assert saved_content == live
 
     def test_return_value_has_correct_paths(self):
         with tempfile.TemporaryDirectory() as d:
@@ -1366,6 +1322,19 @@ class TestSaveDraft:
             )
             assert not list(Path(d).glob("*.tmp"))
 
+    def test_saved_draft_embeds_the_derived_partition(self, tmp_path):
+        """save_draft stitches accounting_fields() onto to_dict()'s content —
+        the saved document is content plus the six derived envelope keys."""
+        _write_accounting(tmp_path, claimable=("src/a.py", "src/b.py"))
+        builder = ReviewOutputBuilder.open(tmp_path, "42", "security")
+        builder.claim_files_reviewed("src/b.py")
+        saved = builder.save_draft()
+        draft = json.loads(Path(saved["draft"]).read_text())
+        assert draft["reviewed_file_claims"] == ["src/b.py"]
+        assert draft["unclaimed_review_files"] == ["src/a.py"]
+        assert draft["review_accounted_file_count"] == 1
+        validate_review_document(draft, "security")
+
 
 # =============================================================================
 # TestFileScopedFindings
@@ -1432,7 +1401,7 @@ class TestFileScopedFindings:
             "high", "whole-file has no test", "src/foo.ts", "desc", "rec",
             category="missing-coverage",
         )
-        md = b.to_markdown()
+        md = render_markdown(b.to_dict())
         assert "## High Findings" in md
         assert "whole-file has no test" in md
         assert "`src/foo.ts` (file-scoped)" in md
@@ -1499,7 +1468,7 @@ class TestAddObservation:
     def test_observations_in_markdown(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         b.add_observation("f.py", "File lacks CSRF protection")
-        md = b.to_markdown()
+        md = render_markdown(b.to_dict())
         assert "Observations" in md
         assert "File lacks CSRF protection" in md
 
@@ -2206,8 +2175,6 @@ class TestDraftFileGapReceipt:
         builder = ReviewOutputBuilder("123", "code")
         builder.claim_files_reviewed("b.go")
 
-        assert builder.to_dict()["review_accounted_file_count"] is None
-
         _save_draft(builder, tmp_path)
         saved = json.loads((tmp_path / "code-review.draft.json").read_text())
         assert saved["reviewed_file_claims"] == ["b.go"]
@@ -2374,11 +2341,6 @@ class TestMetaIsNeverFakeZero:
     @staticmethod
     def _stamp(path, moment=None):
         path.write_text((moment or datetime.now(timezone.utc)).isoformat())
-
-    def test_review_accounted_file_count_is_null_until_reported(self, monkeypatch):
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        d = ReviewOutputBuilder(pr_id="1", reviewer="security").to_dict()
-        assert d["review_accounted_file_count"] is None
 
     def test_duration_is_null_without_a_marker(self, tmp_path, monkeypatch):
         """No marker, no clock. The builder is constructed inside the final
@@ -3224,6 +3186,11 @@ class TestReviewerAccountingPartition:
         {"unclaimed_review_files": ["src/b.py", "src/a.py"]},
         {"review_accounted_file_count": 999},
         {"reviewed_file_claims": ["src/a.py", "src/a.py"]},
+        {
+            "reviewed_file_claims": ["src/b.py", "src/a.py"],
+            "unclaimed_review_files": [],
+            "review_accounted_file_count": 2,
+        },
     ])
     def test_incoherent_partition_is_rejected(self, overrides):
         with pytest.raises(ValueError, match="accounting"):
@@ -3236,3 +3203,29 @@ def test_validate_review_content_rejects_reviewer_fields():
         validate_review_content(doc, schema=2)
     content = {k: v for k, v in doc.items() if k not in REVIEWER_FIELDS}
     assert validate_review_content(content, schema=2) is content
+
+
+def test_accounting_fields_projects_the_six_envelope_keys():
+    """The one place the six-key shape is assembled from a derived accounting."""
+    from review.agent.coverage import ReviewAccounting
+
+    accounting = ReviewAccounting(
+        agent_name="security-reviewer",
+        reviewer="security",
+        review_claimable_files=("src/a.py", "src/b.py"),
+        reviewed_file_claims=("src/a.py",),
+        unclaimed_review_files=("src/b.py",),
+        inline_diff_file_count=1,
+        review_accounted_file_count=2,
+        in_scope_review_file_count=2,
+        review_budget=12,
+        channels=("blocking",),
+    )
+    assert accounting_fields(accounting) == {
+        "review_claimable_files": ["src/a.py", "src/b.py"],
+        "reviewed_file_claims": ["src/a.py"],
+        "unclaimed_review_files": ["src/b.py"],
+        "inline_diff_file_count": 1,
+        "review_accounted_file_count": 2,
+        "in_scope_review_file_count": 2,
+    }

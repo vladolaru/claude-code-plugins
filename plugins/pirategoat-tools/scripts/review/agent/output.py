@@ -1460,12 +1460,12 @@ class ReviewOutputBuilder:
             return 'not_applicable'
         return derive_review_state(self.findings)['verdict']
 
-    def to_dict(self, *, review_accounting=None) -> Dict:
-        """Build as dictionary from this builder's own state.
+    def to_dict(self) -> Dict:
+        """Build the review content as a dictionary from this builder's own state.
 
-        Draft publication passes authoritative ``review_accounting``.
-        Direct serialization has no authority for machine-derived fields and
-        reports those as absent.
+        Carries content plus ``reviewer``. It has no authority over the six
+        accounting fields — ``save_draft`` stitches those on separately via
+        ``accounting_fields()``, from the one authoritative derivation.
         """
         review_duration = self._review_duration_ms(self._output_dir)
 
@@ -1491,30 +1491,6 @@ class ReviewOutputBuilder:
             'verdict': verdict,
             'summary': summary,
             'findings': self.findings,
-            'review_claimable_files': (
-                list(review_accounting.review_claimable_files)
-                if review_accounting else None
-            ),
-            'reviewed_file_claims': (
-                list(review_accounting.reviewed_file_claims)
-                if review_accounting else list(self.reviewed_file_claims)
-            ),
-            'unclaimed_review_files': (
-                list(review_accounting.unclaimed_review_files)
-                if review_accounting else None
-            ),
-            'inline_diff_file_count': (
-                review_accounting.inline_diff_file_count
-                if review_accounting else None
-            ),
-            'review_accounted_file_count': (
-                review_accounting.review_accounted_file_count
-                if review_accounting else None
-            ),
-            'in_scope_review_file_count': (
-                review_accounting.in_scope_review_file_count
-                if review_accounting else None
-            ),
             'observations': self.observations if self.observations else None,
             'recommendations': self.recommendations if any(self.recommendations.values()) else None,
             'positive_observations': self.positive_observations if self.positive_observations else None,
@@ -1549,17 +1525,9 @@ class ReviewOutputBuilder:
             return None
         return int(elapsed * 1000)
 
-    def to_json(self, indent: int = 2, *, review_accounting=None) -> str:
+    def to_json(self, indent: int = 2) -> str:
         """Generate JSON from this builder's own state."""
-        return json.dumps(
-            self.to_dict(review_accounting=review_accounting),
-            indent=indent,
-            ensure_ascii=False,
-        )
-
-    def to_markdown(self) -> str:
-        """Generate human-readable markdown."""
-        return render_markdown(self.to_dict())
+        return json.dumps(self.to_dict(), indent=indent, ensure_ascii=False)
 
     def save_draft(self) -> dict[str, str]:
         """Validate and replace this builder's complete bound draft."""
@@ -1576,12 +1544,12 @@ class ReviewOutputBuilder:
                 f"findings use channel(s) {off_channel} not among this reviewer's "
                 f"channels {list(review_accounting.channels)}"
             )
-        draft_bytes = self.to_json(
-            review_accounting=review_accounting,
+        document = {**self.to_dict(), **accounting_fields(review_accounting)}
+        draft_bytes = json.dumps(
+            document, indent=2, ensure_ascii=False
         ).encode("utf-8")
-        review, agent_name = _validate_review(
-            self._output_dir, self.reviewer, self._paths, draft_bytes
-        )
+        review = validate_review_document(document, self.reviewer)
+        agent_name = review_accounting.agent_name
         review_digest = hashlib.sha256(draft_bytes).hexdigest()
 
         with output_dir_lock(self._output_dir):
@@ -1693,6 +1661,24 @@ REVIEWER_FIELDS = frozenset({
     "review_accounted_file_count",
     "in_scope_review_file_count",
 })
+
+
+def accounting_fields(accounting) -> Dict:
+    """The six reviewer-envelope accounting fields, from one derived accounting.
+
+    ``save_draft`` stitches these onto ``to_dict()``'s content to build the
+    complete draft document; nothing else may assemble them piecemeal.
+    """
+    return {
+        "review_claimable_files": list(accounting.review_claimable_files),
+        "reviewed_file_claims": list(accounting.reviewed_file_claims),
+        "unclaimed_review_files": list(accounting.unclaimed_review_files),
+        "inline_diff_file_count": accounting.inline_diff_file_count,
+        "review_accounted_file_count": accounting.review_accounted_file_count,
+        "in_scope_review_file_count": accounting.in_scope_review_file_count,
+    }
+
+
 _OPTIONAL_REVIEW_FIELDS = frozenset({"skip_reason"})
 _REQUIRED_FINDING_FIELDS = frozenset({
     "id",
@@ -1935,7 +1921,7 @@ def _validate_content_shape(document, *, schema):
     missing = sorted(REVIEW_CONTENT_FIELDS - set(document))
     if missing:
         raise ValueError(
-            "review is missing required fields: " + ", ".join(missing)
+            "review is missing content fields: " + ", ".join(missing)
         )
     unexpected = sorted(
         set(document) - REVIEW_CONTENT_FIELDS - _OPTIONAL_REVIEW_FIELDS
@@ -2054,7 +2040,7 @@ def _validate_reviewer_envelope(review, reviewer):
     missing = sorted(REVIEWER_FIELDS - set(review))
     if missing:
         raise ValueError(
-            "review is missing required fields: " + ", ".join(missing)
+            "review is missing accounting fields: " + ", ".join(missing)
         )
     if not isinstance(review["reviewer"], str) or review["reviewer"] != reviewer:
         raise ValueError("review reviewer does not match finalization request")
@@ -2137,29 +2123,16 @@ def _validate_review(output_dir, reviewer, paths, review_bytes):
     accounting_input = _read_json_object(
         paths.accounting_input, "review-accounting input"
     )
-    claims = review.get("reviewed_file_claims")
-    if not isinstance(claims, list):
-        raise ValueError("review reviewed_file_claims must be a list")
     try:
-        review_accounting = derive_review_accounting(accounting_input, claims)
+        review_accounting = derive_review_accounting(
+            accounting_input, review["reviewed_file_claims"]
+        )
     except ReviewAccountingError as exc:
         raise ValueError(
             f"review accounting is malformed: {exc}"
         ) from exc
-    if (
-        review.get("review_claimable_files")
-        != list(review_accounting.review_claimable_files)
-        or review.get("reviewed_file_claims")
-        != list(review_accounting.reviewed_file_claims)
-        or review.get("unclaimed_review_files")
-        != list(review_accounting.unclaimed_review_files)
-        or review.get("inline_diff_file_count")
-        != review_accounting.inline_diff_file_count
-        or review.get("review_accounted_file_count")
-        != review_accounting.review_accounted_file_count
-        or review.get("in_scope_review_file_count")
-        != review_accounting.in_scope_review_file_count
-    ):
+    derived = accounting_fields(review_accounting)
+    if {key: review[key] for key in derived} != derived:
         raise ValueError(
             "review derived accounting fields do not match input"
         )
