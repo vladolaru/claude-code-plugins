@@ -201,9 +201,9 @@ def test_accounting_vocabulary_is_retired():
         for needle in (
             "review" + "_accounting",
             "Review" + "Accounting",
-            "reviewed_files" + "_input",
+            "accounting" + "_input",
             "review" + "_accounted_file_count",
-            "reviewed_files" + "-input",
+            "accounting" + "-input",
         ):
             if needle in text:
                 offenders.append(f"{path.relative_to(PLUGIN_ROOT)}: {needle}")
@@ -213,4 +213,4 @@ def test_accounting_vocabulary_is_retired():
 def test_assignment_sidecar_path():
     paths = review_paths("/out", "security")
     assert paths.assignment == "/out/security-assignment.json"
-    assert not hasattr(paths, "reviewed_files" + "_input")
+    assert not hasattr(paths, "accounting" + "_input")

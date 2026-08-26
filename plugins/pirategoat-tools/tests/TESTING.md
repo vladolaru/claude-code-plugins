@@ -231,7 +231,7 @@ Direct tests for the mutable-draft/immutable-final state machine and schema-2 re
 
 | Class | What it verifies |
 |---|---|
-| `TestReviewPaths` | One safe reviewer identity maps to exactly one draft, final, and schema-3 assignment path |
+| `TestReviewPaths` | One safe reviewer identity maps to exactly one draft, final, and schema-4 assignment path |
 | `TestDraftOpenAndReplacement` | `open()` creates or completely rehydrates a draft; optimistic saves reject stale writers and preserve the prior bytes |
 | `TestFinalization` | Only the exact digest printed by `save_draft()` can atomically publish immutable final JSON, and finalization is idempotent only for that same content |
 | `TestReviewIntakeClose` | Synthesis closes schema-2 `review-intake.json`, records finalized and discarded-draft reviewers, and blocks every later save/finalize transition |

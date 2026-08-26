@@ -213,7 +213,8 @@ _RECONCILIATION_FIELDS = frozenset(
 # reviewed-files projection in every coverage section.
 _SUPPORTED_MANIFEST_SCHEMA = 3
 _OBSERVED_READS_SCHEMA = 2
-# Schema 3 adds the cohort's canonical `reviewed_files` aggregate.
+# `reviewed_files` is the cohort's canonical aggregate of the per-agent
+# reviewed-file counts.
 _REPORT_SCHEMA = 3
 _SUPPORTED_MANIFEST_STATUSES = {"running", "complete"}
 _DISPATCHED_STATUSES = _DISPATCH_STATUS_CONTRACT.DISPATCHED_STATUSES
