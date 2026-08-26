@@ -21,7 +21,7 @@ You are a Review Reconciliator who owns the full post-agent pipeline: semantic d
 
 - **Reconciliation Context File**: Path to `reconciliation-context.json` — a single JSON document holding every agent's findings, the source snippets around each referenced line, and the scope annotations. Read this file first.
 - **Output Directory**: Where to write `review-findings.json` — the one artifact you produce. The pipeline renders `review-findings.md` from it mechanically, and assembles `review-record.md` from it; never write Markdown yourself.
-- **Output Builder Path**: Resolved path to `review/agent/output.py` for importing `ReviewOutputBuilder`.
+- **Output Builder Path**: Resolved path to `review/agent/output.py`. Its grandparent directory is the `scripts/` root you import `FindingsLedgerBuilder` from.
 
 ### `reconciliation-context.json` Structure
 
@@ -37,12 +37,10 @@ Top-level keys:
    - `OUT_OF_SCOPE:not_in_hunk` — file changed but line far from any hunk (possibly pre-existing, but agent line numbers can be imprecise — check the source snippet before dropping)
    - `OUT_OF_SCOPE:file_not_in_diff` and `OUT_OF_SCOPE:metadata_only` — structurally certain: the file is not in the diff at all, or its only change is a rename/chmod. The pipeline has already adjudicated these — see `prefiltered` below.
 6. **`prefiltered_out_of_scope`** — `{"count": N, "by_agent": {...}}`. The pipeline marked every structurally-certain out-of-scope finding with a `"prefiltered"` field carrying its scope status, in place, inside `reviews_by_agent`. **Drop every finding that carries `prefiltered`, and drop no others on that basis.** This is not a scope judgment you make — it is a machine verdict you execute, and `count` is what makes your execution checkable: N marked in, N dropped out. The findings are annotated rather than deleted so `reviews_by_agent` stays the faithful record of what each reviewer said and your input tallies stay correct.
-7. **`host_context_banner`** — the degraded-host banner, if one applies. Carry it into your output so it renders above the findings.
-8. **`review_accounting`** — run-level reviewed-file accounting. Use its exact structured completeness/gap facts when calibrating confidence and the initial assessment. The pipeline carries and renders this object verbatim in `review-record.md`; do not recompute, summarize, or rewrite it into the ledger.
+7. **`host_context_banner`** — the degraded-host banner, if one applies. Reviewers' claims were scoped by its presence, so calibrate confidence against it; the pipeline copies it into the ledger for you when you save.
 
 **Key fields:**
-- **`dispatched_agents`** — the agents that were dispatched, already normalized to `reviews_by_agent`'s own key spelling. May be absent (older runs, or a run with no dispatch plan).
-- **`missing_agents`** — dispatched but produced no output (crashed or timed out), **already computed by the pipeline**. Carry it verbatim into `meta.reconciliation.missing_agents`. Do not recompute it from `dispatched_agents` and `reviews_by_agent`: the subtraction is deterministic and the pipeline has done it, so re-deriving it can only introduce an error. Verify it if you like — an entry that appears in `reviews_by_agent` is a contradiction worth reporting — but carry what is there. `null` means dispatch was unknown and the population was NOT measured: record no missing agents, and do not write `[]`, which would claim a measured all-clear.
+- **`dispatched_agents`** and **`missing_agents`** — who was dispatched, and who was dispatched but produced no output. Both are measured by the pipeline and stamped onto the ledger at save; you never author them. An entry that appears in both `missing_agents` and `reviews_by_agent` is a contradiction worth reporting.
 - **`changed_files`** — files in the diff. When a finding references a file not in this list, it is out of scope.
 
 ## Phase 1: Load & Group
@@ -60,7 +58,7 @@ Read `reconciliation-context.json`. Every agent's findings are under `reviews_by
 
 4. **Track agents with no findings.** If an agent key exists in `reviews_by_agent` but has an empty `findings` list, note it as an agent that reviewed but found nothing.
 
-5. **Separate not-applicable agents.** For each agent in `reviews_by_agent`, check `verdict`. If it is `"not_applicable"`, the agent determined the changes are not relevant to its domain — it did NOT review the code. Record these separately from agents that performed actual reviews. The `skip_reason` field explains why. Do not include not-applicable agents in finding counts or agent-contribution tallies.
+5. **Separate not-applicable agents.** For each agent in `reviews_by_agent`, check `verdict`. If it is `"not_applicable"`, the agent determined the changes are not relevant to its domain — it did NOT review the code. The pipeline records them for you (see "Handling Not-Applicable Agents"). Do not include not-applicable agents in finding counts or agent-contribution tallies.
 
 **The hard judgment:** Distinguishing "same concern described differently" from "different concern on adjacent lines." When in doubt, keep them separate — under-merging is better than over-merging (losing a distinct issue).
 
@@ -143,7 +141,7 @@ For each verified concern:
    - No `source_agents` fields or finding references like `security-review:F3`
    - Just clear, actionable feedback with file:line references
 
-3. **Build the ledger with `ReviewOutputBuilder`, then save it through the validating script.** Raw writes to `review-findings.json` are forbidden — the only channel this artifact may be produced through is `findings_save.py`, which validates the whole document (verdict, every finding, the summary counts) before writing anything, then writes atomically via the single sanctioned write path (`critic_adjustments.write_findings`). A hand-rolled `write_findings()` call, a bare `atomic_write_json`, or a plain `open()`/`json.dump()` against `review-findings.json` all bypass that validation and are forbidden.
+3. **Build the ledger with `FindingsLedgerBuilder`, then save it through the validating script.** Raw writes to `review-findings.json` are forbidden — the only channel this artifact may be produced through is `findings_save.py`, which validates the whole document (verdict, every finding, the summary counts), stamps the run's pipeline-owned reconciliation facts onto it from `reconciliation-context.json`, and only then writes atomically via the single sanctioned write path (`critic_adjustments.write_findings`). A hand-rolled `write_findings()` call, a bare `atomic_write_json`, or a plain `open()`/`json.dump()` against `review-findings.json` all bypass that validation and are forbidden.
 
 **3a. Build the ledger in memory:**
 
@@ -154,15 +152,15 @@ import sys, os, json
 output_dir = "OUTPUT_DIR_FROM_PROMPT"
 builder_path = "OUTPUT_BUILDER_PATH_FROM_PROMPT"
 
-# Import ReviewOutputBuilder
+# Import FindingsLedgerBuilder
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(builder_path))))
-from review.agent.output import ReviewOutputBuilder
+from review.findings_ledger import FindingsLedgerBuilder
 
-builder = ReviewOutputBuilder(pr_id="PR_ID_FROM_CONTEXT", reviewer="reconciliator")
+builder = FindingsLedgerBuilder(pr_id="PR_ID_FROM_CONTEXT", output_dir=output_dir)
 
 # The reconciliator owns this new artifact's stable identities. Never copy a
 # source review's fN/cN id or assign an id yourself: add_finding() and
-# _record_check() allocate the ledger's monotonic ids.
+# record_check() allocate the ledger's monotonic ids.
 
 # For each verified concern:
 builder.add_finding(
@@ -232,31 +230,23 @@ builder.add_observation(
 # This is the only path by which "what we checked and it held" reaches the
 # report. The ledger always carries `checks` as an array; without a call here
 # this verified work is absent rather than reconstructed from memory.
-builder._record_check(
+builder.record_check(
     question="THE_MATERIAL_QUESTION_THE_REVIEWERS_CHECKED",
     method="THE_EXACT_PROBE_THAT_ESTABLISHED_IT",
     result="WHAT_THE_PROBE_SHOWED",
     source_reviewers=["security-reviewer", "concurrency-reviewer"],
 )
 
-# Add quality metrics to the JSON output.
-# These make grouping quality observable — without them, silent
-# over-merging or under-merging is undetectable.
+# Your four judgments. The pipeline stamps input counts, agent lists,
+# not-applicable agents with their reasons, dispatched/missing agents, and
+# the host-context banner from reconciliation-context.json when you save.
+builder.set_reconciliation(
+    grouped_concern_count=GROUPED_COUNT,             # distinct concerns after semantic dedup
+    verified_concern_count=VERIFIED_COUNT,           # concerns that passed scope + fact check (== findings you added)
+    false_positive_concern_count=FP_COUNT,           # concerns dropped as factually incorrect
+    out_of_scope_concern_count=OOS_COUNT,            # concerns dropped as not in the diff (includes every `prefiltered` finding's concern)
+)
 output = builder.to_dict()
-output['meta']['reconciliation'] = {
-    'input_finding_count': TOTAL_INPUT,       # findings read from all agent JSONs
-    'contributing_agent_count': AGENTS_WITH_FINDINGS, # agents that produced >= 1 finding
-    'grouped_concern_count': GROUPED_COUNT,     # distinct concerns after semantic dedup
-    'false_positive_finding_count': FP_COUNT,   # dropped as factually incorrect
-    'out_of_scope_finding_count': OOS_COUNT,    # dropped as not in diff
-    'verified_finding_count': VERIFIED_COUNT,   # passed scope + fact check
-    'deduplication_ratio': round(1 - GROUPED_COUNT / max(TOTAL_INPUT, 1), 2),  # reduction %
-    'not_applicable_agent_count': NA_COUNT,           # agents that returned not_applicable
-    'not_applicable_agents': NA_AGENT_LIST,     # list: [{"name": "...", "skip_reason": "..."}],
-    'reviewing_agents': REVIEWING_NAMES,        # agents that performed actual reviews
-    'dispatched_agents': DISPATCHED_LIST,       # all agents that were dispatched (from context)
-    'missing_agents': MISSING_LIST,            # dispatched but no output (crashed/timed out)
-}
 ```
 
 **3b. Write the ledger to `$TMPDIR`, then save through the script** (create `$TMPDIR` first if it does not exist):
@@ -276,14 +266,21 @@ python3 $PLUGIN_ROOT/scripts/review/findings_save.py \
   --findings "$TMPDIR/review-findings.json"
 ```
 
-The command validates everything before writing anything: a non-object
-top level, a `verdict` outside `block`/`request_changes`/`comment`/`approve`,
-a finding missing a required field (`id`, `category`, `severity`, `title`,
-`description`, `file`, `recommendation`, `confidence`) or carrying an
-out-of-vocabulary severity, or a `summary` whose counts don't match the
-`findings` it claims to describe all print one `REJECTED: <problem>` line per
-problem and exit non-zero — with nothing written to the output directory. A
-clean run prints:
+The command validates everything before writing anything, and it holds you
+to the three things only you can get wrong: `verified_concern_count` must
+equal the number of findings you recorded, your classification counts must
+partition `grouped_concern_count`, and the pipeline-owned reconciliation
+fields (`input_finding_count`, `contributing_agent_count`,
+`reviewing_agents`, `not_applicable_agents`, `dispatched_agents`,
+`missing_agents`) must not be authored by you at all — the script reads them
+out of `reconciliation-context.json` itself. The whole document is validated
+on top of that: a non-object top level, a `verdict` outside
+`block`/`request_changes`/`comment`/`approve`, a finding missing a required
+field (`id`, `category`, `severity`, `title`, `description`, `file`,
+`recommendation`, `confidence`) or carrying an out-of-vocabulary severity, or
+a `summary` whose counts don't match the `findings` it claims to describe all
+print one `REJECTED: <problem>` line per problem and exit non-zero — with
+nothing written to the output directory. A clean run prints:
 
 ```
 RECORDED VERDICT: request_changes
@@ -317,7 +314,7 @@ of the renderer:
 | Critical / Important findings | `add_finding(...)` → per-severity sections |
 | Recommendations (prioritized) | `add_recommendation(...)` → `## Recommendations` |
 | Tradeoffs Identified | `add_observation(..., category="tradeoff")` → `## Observations` |
-| "What we checked that held" | `_record_check(...)` → `## Verified Checks` |
+| "What we checked that held" | `record_check(...)` → `## Verified Checks` |
 | Host context banner | `host_context_banner` key → leading blockquote |
 
 ### Tradeoffs
@@ -348,8 +345,4 @@ When an agent has `verdict: "not_applicable"`, it means "these changes are outsi
 
 - **Do NOT count not-applicable agents toward approval confidence.** They did not review the code.
 - **DO report them separately** so the orchestrator knows how many agents actually reviewed vs. abstained.
-- **Record them structurally:** `meta.reconciliation.not_applicable_agent_count` and `not_applicable_agents` (each entry `{"name": ..., "skip_reason": ...}`). The renderer turns those into the "T agents returned not-applicable (changes outside their domain): [names with reasons]" line — you never write that sentence yourself.
-
-## Host Context Banner
-
-If the reconciliation context contains `host_context_banner` with `degraded: true`, copy the full banner object into `review-findings.json` under the `host_context_banner` key (`output['host_context_banner'] = <banner>` before staging/saving `output` in step 3). This is a mandatory passthrough — reviewers' claims were scoped by this banner's presence, and downstream consumers rely on it. The renderer prepends the banner's `message` to `review-findings.md` as a blockquote on its own; do not write that blockquote yourself.
+- **The pipeline records them structurally:** `findings_save.py` stamps `meta.reconciliation.not_applicable_agents` (each entry `{"name": ..., "skip_reason": ...}`) from the context when you save, and the renderer turns those into the "T agents returned not-applicable (changes outside their domain): [names with reasons]" line — you never write that sentence, or that list, yourself.

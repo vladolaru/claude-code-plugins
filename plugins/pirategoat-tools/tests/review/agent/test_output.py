@@ -2461,19 +2461,17 @@ class TestMetaIsNeverFakeZero:
         added to fix.
         """
         import review.synthesis_lifecycle as _lifecycle
+        import review.findings_ledger as _ledger
         import review.agent.output as _output
 
         alias = _output._MARKER_AGENT_BY_REVIEWER
         # Marker end: the name synthesis_lifecycle stamps the marker with.
         assert alias["reconciliator"] == _lifecycle.RECONCILIATOR
-        # Builder end: the reviewer name the reconciliator is taught to
-        # construct itself with.
-        agent_md = (
-            PLUGIN_ROOT / "agents" / "review-reconciliator.md"
-        ).read_text()
-        assert 'reviewer="reconciliator"' in agent_md, (
-            "the taught builder name moved — update the alias key in "
-            "output.py's _MARKER_AGENT_BY_REVIEWER with it"
+        # Builder end: the actor name FindingsLedgerBuilder constructs
+        # itself with, on the agent's behalf.
+        assert _ledger.LEDGER_ACTOR == "reconciliator", (
+            "the ledger builder's actor name moved — update the alias key "
+            "in output.py's _MARKER_AGENT_BY_REVIEWER with it"
         )
 
 
@@ -2680,13 +2678,13 @@ class TestReconciliationSectionsRender:
             ("high",),
             reconciliation={
                 "not_applicable_agents": [
-                    {"name": "a11y-reviewer", "skip_reason": "no UI changed"},
+                    {"name": "a11y-review", "skip_reason": "no UI changed"},
                 ],
-                "dispatched_agents": ["security-reviewer", "a11y-reviewer"],
+                "dispatched_agents": ["security-review", "a11y-review"],
             },
         ))
         assert "1 agent returned not-applicable" in rendered
-        assert "a11y-reviewer (no UI changed)" in rendered
+        assert "a11y-review (no UI changed)" in rendered
 
     def test_missing_reconciliation_metrics_render_nothing(self):
         assert "**Pipeline:**" not in render_markdown(self._findings())

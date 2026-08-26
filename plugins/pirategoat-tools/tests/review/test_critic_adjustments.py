@@ -2803,22 +2803,22 @@ class TestReconciliatorCheckPin:
 
     def test_the_template_teaches_structural_check_recording(self):
         text = self._text()
-        assert "builder._record_check(" in text
+        assert "builder.record_check(" in text
         for kwarg in (
             "question=", "method=", "result=", "source_reviewers="
         ):
-            assert kwarg in text.split("builder._record_check(", 1)[1][:500]
+            assert kwarg in text.split("builder.record_check(", 1)[1][:500]
 
     def test_the_template_excludes_void_and_correlated_checks(self):
         text = self._text()
-        taught = text.split("builder._record_check(", 1)[0]
+        taught = text.split("builder.record_check(", 1)[0]
         assert "Do NOT record" in taught
         assert "VOID" in taught
         assert "method-correlated duplicates" in taught
 
     def test_the_structured_home_table_lists_checks(self):
         assert (
-            "| `_record_check(...)` → `## Verified Checks` |"
+            "| `record_check(...)` → `## Verified Checks` |"
             in self._text()
         )
 
@@ -2873,7 +2873,7 @@ class TestReconciliatorCheckPin:
     def test_the_template_agrees_that_uncontested_checks_are_recorded(
         self,
     ):
-        taught = self._text().split("builder._record_check(", 1)[0]
+        taught = self._text().split("builder.record_check(", 1)[0]
         assert "not only to the ones some finding argued with" in taught
         assert "nothing contradicted is the ordinary case" in taught
 
@@ -2920,6 +2920,30 @@ class TestReconciliatorWritePathPin:
             "write_findings(output_dir, output)",
         ):
             assert forbidden not in text, forbidden
+
+    def test_the_snippet_builds_the_ledger_with_the_ledger_builder(self):
+        """`ReviewOutputBuilder` produces a reviewer document — it carries a
+        `reviewer` field and a reviewed-file lifecycle the ledger does not
+        have. Only `FindingsLedgerBuilder` produces the artifact this agent
+        is asked for."""
+        text = self._text()
+        assert 'FindingsLedgerBuilder(pr_id="PR_ID_FROM_CONTEXT", output_dir=' in text
+        assert "from review.findings_ledger import FindingsLedgerBuilder" in text
+        assert "ReviewOutputBuilder(" not in text
+
+    def test_the_snippet_authors_the_four_judgments_and_nothing_else(self):
+        """The pipeline-owned facts are stamped by findings_save.py from
+        reconciliation-context.json. A snippet that teaches the agent to
+        author them produces a ledger the save channel rejects."""
+        text = self._text()
+        call = text.split("builder.set_reconciliation(", 1)[1].split("\n)", 1)[0]
+        for judgment in (
+            "grouped_concern_count", "verified_concern_count",
+            "false_positive_concern_count", "out_of_scope_concern_count",
+        ):
+            assert f"{judgment}=" in call, judgment
+        assert "output['meta']['reconciliation']" not in text
+        assert 'output["meta"]["reconciliation"]' not in text
 
 
 

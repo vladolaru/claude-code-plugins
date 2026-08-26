@@ -9,6 +9,14 @@ review-reconciliator agent is allowed to write review-findings.json through
 gap this module exists to close, because nothing downstream validates a
 hand-written ledger after the fact.
 
+The agent authors the review content and its four reconciliation judgments;
+it authors nothing about the run it read. This module reads
+``reconciliation-context.json`` — the very file the agent was briefed from —
+and stamps the six pipeline-owned reconciliation facts and the degraded-host
+banner onto the ledger itself. A measurement the pipeline already made is
+never retyped by an agent, so it cannot be mistyped, and the ledger's
+accounting agrees with its own inputs by construction.
+
 Actor-ownership violations are collected before the canonical document
 validator runs. On ANY problem, nothing is written, and every problem is
 echoed as its own ``REJECTED: <problem>`` line — this module's failure mode is
@@ -28,25 +36,21 @@ import sys
 
 try:
     from . import critic_adjustments
+    from .findings_ledger import RECONCILIATION_PIPELINE_FIELDS
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
     from review import critic_adjustments
+    from review.findings_ledger import RECONCILIATION_PIPELINE_FIELDS
 
 
-# The reconciled ledger's verdict vocabulary. Matches EXACTLY the range
-# `derive_review_state()` (scripts/review/verdict_rules.py) can return — the
-# function every ReviewOutputBuilder.to_dict() call computes the verdict
-# through, including the reconciliator's own build in
-# agents/review-reconciliator.md. Deliberately EXCLUDES 'not_applicable'
-# from schemas/review-output.ts's broader `Verdict` type: that value is a
-# per-reviewer abstention (`mark_not_applicable()`, which refuses to run
-# if any finding was already recorded) that the reconciliator never emits —
-# it always produces a reconciled ledger for the whole PR, never abstains
-# from it. Literal, not imported: the shared derivation's verdict range is a
-# small closed set, so this module keeps the reconciler-specific subset here.
-RECONCILER_VERDICTS = ("block", "request_changes", "comment", "approve")
+# The pipeline's own briefing for this run, written by
+# reconciliation_context.py into the same output directory the ledger lands
+# in. It is this module's source for every pipeline-owned reconciliation
+# fact, and it is required: without it there is nothing to stamp, and a
+# ledger missing those facts is rejected by the canonical validator anyway.
+CONTEXT_FILENAME = "reconciliation-context.json"
 
 # Severities the breakdown echo reports, in the order the brief's format
 # specifies. Deliberately excludes 'info' from VALID_SEVERITIES: the echo
@@ -92,24 +96,62 @@ def _read_findings_json(path, problems):
         return None
 
 
-def validate_findings(payload):
-    """Validate a producer-authored canonical findings ledger.
+def _read_context(output_dir, problems):
+    """Read the run's reconciliation context, or record why it could not be."""
+    path = os.path.join(output_dir, CONTEXT_FILENAME)
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            context = json.load(handle)
+    except (OSError, json.JSONDecodeError) as err:
+        problems.append(f"{CONTEXT_FILENAME} is unreadable: {err}")
+        return None
+    if not isinstance(context, dict) or not isinstance(
+        context.get("reviews_by_agent"), dict
+    ):
+        problems.append(f"{CONTEXT_FILENAME} has no reviews_by_agent object")
+        return None
+    return context
 
-    The lifecycle module owns the complete post-critic ledger contract. This
-    producer gate adds only the actor boundary: the reconciliator cannot
-    pre-author fields or per-entry provenance owned by the critic applier.
+
+def stamp_pipeline_facts(document, context):
+    """Fill the pipeline-owned reconciliation fields from the context."""
+    reviews = context["reviews_by_agent"]
+    recon = document["meta"]["reconciliation"]
+    not_applicable = []
+    reviewing = []
+    for stem in sorted(reviews):
+        review = reviews[stem]
+        if review.get("verdict") == "not_applicable":
+            not_applicable.append({
+                "name": stem,
+                "skip_reason": review.get("skip_reason") or "(no reason recorded)",
+            })
+        else:
+            reviewing.append(stem)
+    recon["input_finding_count"] = sum(
+        len(r.get("findings") or []) for r in reviews.values()
+    )
+    recon["contributing_agent_count"] = sum(
+        1 for r in reviews.values()
+        if r.get("verdict") != "not_applicable" and r.get("findings")
+    )
+    recon["reviewing_agents"] = reviewing
+    recon["not_applicable_agents"] = not_applicable
+    recon["dispatched_agents"] = context.get("dispatched_agents")
+    recon["missing_agents"] = context.get("missing_agents")
+    banner = context.get("host_context_banner")
+    if isinstance(banner, dict) and banner.get("degraded"):
+        document["host_context_banner"] = banner
+
+
+def _producer_problems(payload, context):
+    """Actor-boundary and producer-only invariants.
+
+    The canonical validator owns the ledger's shape; these are the rules
+    only the producing actor can break — authoring another actor's fields,
+    or claiming judgments its own findings and its own inputs contradict.
     """
-    if not isinstance(payload, dict):
-        return [f"{FINDINGS_FILENAME} must be a JSON object"]
-
     problems = []
-    verdict = payload.get("verdict")
-    if verdict not in RECONCILER_VERDICTS:
-        problems.append(
-            f"'verdict' must be one of {sorted(RECONCILER_VERDICTS)}, "
-            f"got {verdict!r}"
-        )
-
     actor_supplied = sorted(
         key for key in CRITIC_OWNED_LEDGER_FIELDS if key in payload
     )
@@ -117,40 +159,80 @@ def validate_findings(payload):
         problems.append(
             "critic-owned lifecycle field(s): " + ", ".join(actor_supplied)
         )
-
+    for collection in ("findings", "checks"):
+        entries = payload.get(collection)
+        if not isinstance(entries, list):
+            # A non-list collection is a shape error the canonical
+            # validator names; this gate only reads well-shaped ones.
+            continue
+        for idx, item in enumerate(entries):
+            if isinstance(item, dict) and "critic_adjustment" in item:
+                problems.append(
+                    f"{collection}[{idx}]: critic_adjustment is script-owned "
+                    "provenance"
+                )
+    meta = payload.get("meta")
+    recon = meta.get("reconciliation") if isinstance(meta, dict) else None
+    if not isinstance(recon, dict):
+        problems.append("meta.reconciliation must be an object")
+        return problems
+    pipeline_supplied = sorted(
+        key for key in RECONCILIATION_PIPELINE_FIELDS if key in recon
+    )
+    if pipeline_supplied:
+        problems.append(
+            "pipeline-owned reconciliation field(s): "
+            + ", ".join(pipeline_supplied)
+        )
     findings = payload.get("findings")
-    if isinstance(findings, list):
-        for idx, finding in enumerate(findings):
-            if not isinstance(finding, dict):
-                continue
-            severity = finding.get("severity")
-            if (
-                "severity" in finding
-                and severity not in critic_adjustments.VALID_SEVERITIES
-            ):
-                problems.append(
-                    f"findings[{idx}]: invalid severity {severity!r}"
-                )
-            if "critic_adjustment" in finding:
-                problems.append(
-                    f"findings[{idx}]: critic_adjustment is script-owned "
-                    "provenance"
-                )
-    checks = payload.get("checks")
-    if isinstance(checks, list):
-        for idx, check in enumerate(checks):
-            if isinstance(check, dict) and "critic_adjustment" in check:
-                problems.append(
-                    f"checks[{idx}]: critic_adjustment is script-owned "
-                    "provenance"
-                )
+    findings = findings if isinstance(findings, list) else None
+    verified = recon.get("verified_concern_count")
+    if (
+        findings is not None
+        and isinstance(verified, int)
+        and verified != len(findings)
+    ):
+        problems.append(
+            f"verified_concern_count {verified} does not equal the "
+            f"{len(findings)} findings recorded"
+        )
+    advisory_sources = any(
+        isinstance(f, dict) and f.get("channel") == "advisory"
+        for r in context["reviews_by_agent"].values()
+        for f in (r.get("findings") or [])
+    )
+    if not advisory_sources and any(
+        isinstance(f, dict) and f.get("channel") == "advisory"
+        for f in (findings or [])
+    ):
+        problems.append(
+            "advisory findings recorded but no source review carried the "
+            "advisory channel"
+        )
+    return problems
+
+
+def validate_findings(payload, context):
+    """Gate one producer-authored ledger, stamping the run's own facts on it.
+
+    Stamping happens between the two validations on purpose: the producer
+    invariants are about what the agent wrote, and the canonical validator
+    needs the complete document — the one it will be read back as.
+    """
+    if not isinstance(payload, dict):
+        return [f"{FINDINGS_FILENAME} must be a JSON object"]
+    problems = _producer_problems(payload, context)
+    if problems:
+        return problems
+    stamp_pipeline_facts(payload, context)
+    recon = payload["meta"]["reconciliation"]
+    grouped = recon.get("grouped_concern_count")
+    if isinstance(grouped, int) and grouped > recon["input_finding_count"]:
+        problems.append("grouped_concern_count exceeds the input finding count")
     try:
         critic_adjustments.validate_findings_document(payload)
     except ValueError as err:
-        canonical_problem = str(err)
-        if canonical_problem not in problems:
-            problems.append(canonical_problem)
-
+        problems.append(str(err))
     return problems
 
 
@@ -185,9 +267,10 @@ def run_save(args):
     shape ``critic.py``'s ``run_save()`` uses.
     """
     problems = []
+    context = _read_context(args.output_dir, problems)
     findings = _read_findings_json(args.findings, problems)
-    if findings is not None:
-        problems.extend(validate_findings(findings))
+    if findings is not None and context is not None:
+        problems.extend(validate_findings(findings, context))
 
     if problems:
         for p in problems:

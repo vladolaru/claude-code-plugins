@@ -1267,14 +1267,13 @@ class TestReconcilerReviewDomainOwnership:
         for token in (
             "reviews_by_agent",
             "positive_observations",
-            "review_accounting",
             "builder.set_assessment(",
-            "builder._record_check(",
+            "builder.record_check(",
             "source_reviewers=",
         ):
             assert token in reconciler
-        assert "ReviewOutputBuilder(pr_id=" in reconciler
-        assert "ReviewOutputBuilder.open(" not in reconciler
+        assert "FindingsLedgerBuilder(pr_id=" in reconciler
+        assert "FindingsLedgerBuilder.open(" not in reconciler
         assert "builder.add_positive_observation(" in reconciler
 
 

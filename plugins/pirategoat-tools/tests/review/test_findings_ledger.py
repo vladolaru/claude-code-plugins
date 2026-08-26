@@ -1,4 +1,5 @@
 """The reconciliator's builder: content plus reconciliation, no reviewer."""
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -152,3 +153,20 @@ def test_ledger_renders_without_a_reviewer_title(tmp_path):
     rendered = render_markdown(_ledger(tmp_path).to_dict())
     assert rendered.startswith("# Review Findings - PR #42\n\n")
     assert "## Verified Checks" in rendered
+
+
+def test_the_taught_snippet_calls_only_methods_the_builder_has():
+    """The reconciliator builds the ledger by following a Markdown snippet,
+    so a renamed or deleted builder method breaks a live run and nothing
+    else — no Python caller changes. This is the lockstep."""
+    snippet = (
+        Path(__file__).resolve().parents[2]
+        / "agents" / "review-reconciliator.md"
+    ).read_text(encoding="utf-8")
+    called = set(re.findall(r"\bbuilder\.([A-Za-z_][A-Za-z0-9_]*)\(", snippet))
+
+    assert called, "the snippet no longer calls the builder at all"
+    for method in sorted(called):
+        assert callable(
+            getattr(FindingsLedgerBuilder, method, None)
+        ), f"builder.{method}() is taught but FindingsLedgerBuilder has no such method"

@@ -6,12 +6,15 @@ channel the review-reconciliator agent is allowed to write
 review-findings.json through (agents/review-reconciliator.md). It validates
 the whole ledger document and writes it atomically via
 critic_adjustments.write_findings() — the single sanctioned write path — or
-writes nothing at all.
+writes nothing at all. It also stamps the run's pipeline-owned reconciliation
+facts onto the ledger from reconciliation-context.json, so the agent authors
+review content and its four judgment counts and nothing else.
 """
 
 import json
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -21,15 +24,47 @@ PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 SCRIPT = SCRIPTS_DIR / "review" / "findings_save.py"
 sys.path.insert(0, str(TESTS_DIR))
+sys.path.insert(0, str(SCRIPTS_DIR))
 
 from helpers.review_fixtures import canonical_findings_ledger
+from review.findings_save import run_save
+
+CONTEXT_FILENAME = "reconciliation-context.json"
+
+# The class below is about the ledger's own validity, not about the run it
+# reconciled, so every test in it saves against one default context: a single
+# reviewing agent whose input findings exceed every grouped-concern count
+# those ledgers claim. The tests that ARE about the stamped facts write their
+# own context instead.
+_DEFAULT_CONTEXT_INPUT_FINDINGS = 12
+
+
+def _write_context(
+    output_dir, reviews_by_agent, *, dispatched=None, missing=None, banner=None
+):
+    """Write the reconciliation context findings_save.py stamps from."""
+    context = {
+        "schema": 3,
+        "reviews_by_agent": reviews_by_agent,
+        "missing_agents": missing,
+        "host_context_banner": banner,
+        "prefiltered_out_of_scope": {"count": 0, "by_agent": {}},
+    }
+    if dispatched is not None:
+        context["dispatched_agents"] = dispatched
+    path = Path(output_dir) / CONTEXT_FILENAME
+    path.write_text(json.dumps(context))
+    return path
+
+
+def _args(output_dir, findings_path):
+    return types.SimpleNamespace(
+        output_dir=str(output_dir), findings=str(findings_path)
+    )
 
 
 def _valid_findings(**overrides):
-    doc = canonical_findings_ledger(reconciliation={
-        "reviewing_agents": ["security-reviewer"],
-        "dispatched_agents": ["security-reviewer"],
-    })
+    doc = canonical_findings_ledger()
     doc.update({
         "timestamp": "2026-08-26T10:00:00+00:00",
         "plugin_version": "1.114.0",
@@ -75,18 +110,32 @@ def _valid_findings(**overrides):
         "next_finding_number": finding_count + 1,
         "next_check_number": check_count + 1,
     })
-    doc["meta"]["reconciliation"].update({
-        "input_finding_count": finding_count,
-        "contributing_agent_count": 1 if finding_count else 0,
+    # The reconciliator authors its four judgments and nothing else:
+    # findings_save.py stamps every pipeline-owned field from the context.
+    doc["meta"]["reconciliation"] = {
         "grouped_concern_count": finding_count,
         "verified_concern_count": finding_count,
-    })
+        "false_positive_concern_count": 0,
+        "out_of_scope_concern_count": 0,
+    }
     if meta_override is not None:
         doc["meta"].update(meta_override)
     return doc
 
 
 class TestFindingsSave:
+    @pytest.fixture(autouse=True)
+    def _default_context(self, tmp_path):
+        _write_context(tmp_path, {
+            "security-review": {
+                "verdict": "request_changes",
+                "findings": [
+                    {"severity": "high"}
+                ] * _DEFAULT_CONTEXT_INPUT_FINDINGS,
+                "checks": [],
+            },
+        }, dispatched=["security-review"], missing=[])
+
     def _run_save(self, output_dir, findings_path):
         cmd = [
             sys.executable, str(SCRIPT),
@@ -271,7 +320,9 @@ class TestFindingsSave:
         assert result.returncode != 0
         assert "REJECTED" in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
-        assert [p.name for p in tmp_path.iterdir()] == [findings.name]
+        assert sorted(p.name for p in tmp_path.iterdir()) == sorted(
+            [findings.name, CONTEXT_FILENAME]
+        )
 
     def test_rejects_bad_verdict(self, tmp_path):
         findings = self._write_findings(
@@ -374,7 +425,7 @@ class TestFindingsSave:
 
         assert result.returncode != 0
         assert "REJECTED" in result.stdout
-        assert "catastrophic" in result.stdout
+        assert "severity is invalid" in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
 
     def test_rejects_issue_not_an_object(self, tmp_path):
@@ -472,8 +523,14 @@ class TestFindingsSave:
         assert not (tmp_path / "review-findings.json").exists()
 
     def test_collects_multiple_problems(self, tmp_path):
-        doc = _valid_findings(verdict="MAYBE")
-        doc["findings"][0]["severity"] = "catastrophic"
+        """Producer problems are collected, not reported one at a time —
+        the canonical validator raises on the first shape error it meets,
+        so this gate is the only place a caller learns everything it got
+        wrong about actor ownership in a single run."""
+        doc = _valid_findings(applied_critic_adjustments=[])
+        doc["findings"][0]["critic_adjustment"] = {
+            "action": "correct", "rationale": "Caller invented provenance.",
+        }
         findings = self._write_findings(tmp_path, doc)
 
         result = self._run_save(tmp_path, findings)
@@ -606,3 +663,184 @@ class TestFindingsSave:
         assert "RECORDED FINDINGS: 0 (critical 0, high 0, medium 0, low 0)" in (
             result.stdout
         )
+
+
+# =============================================================================
+# Pipeline-owned facts are stamped from reconciliation-context.json
+# =============================================================================
+
+
+def test_save_stamps_pipeline_facts_from_context(tmp_path):
+    _write_context(tmp_path, {
+        "security-review": {
+            "verdict": "request_changes",
+            "findings": [{"severity": "high"}],
+            "checks": [],
+        },
+        "a11y-review": {
+            "verdict": "not_applicable",
+            "skip_reason": "No UI.",
+            "findings": [],
+            "checks": [],
+        },
+        "code-review": {"verdict": "approve", "findings": [], "checks": []},
+    }, dispatched=[
+        "a11y-review", "code-review", "security-review", "perf-review",
+    ], missing=["perf-review"])
+    staged = tmp_path / "staged.json"
+    staged.write_text(json.dumps(_valid_findings()))
+
+    assert run_save(_args(tmp_path, staged)) == 0
+
+    recorded = json.loads(
+        (tmp_path / "review-findings.json").read_text()
+    )["meta"]["reconciliation"]
+    assert recorded["input_finding_count"] == 1
+    assert recorded["contributing_agent_count"] == 1
+    assert recorded["reviewing_agents"] == ["code-review", "security-review"]
+    assert recorded["not_applicable_agents"] == [
+        {"name": "a11y-review", "skip_reason": "No UI."},
+    ]
+    assert recorded["dispatched_agents"] == [
+        "a11y-review", "code-review", "security-review", "perf-review",
+    ]
+    assert recorded["missing_agents"] == ["perf-review"]
+
+
+def test_save_rejects_verified_count_that_disagrees_with_findings(
+    tmp_path, capsys
+):
+    _write_context(tmp_path, {
+        "security-review": {"verdict": "approve", "findings": [], "checks": []},
+    })
+    doc = _valid_findings()
+    doc["meta"]["reconciliation"]["verified_concern_count"] = 2
+    doc["meta"]["reconciliation"]["grouped_concern_count"] = 2
+    staged = tmp_path / "staged.json"
+    staged.write_text(json.dumps(doc))
+
+    assert run_save(_args(tmp_path, staged)) == 1
+    assert "verified_concern_count" in capsys.readouterr().out
+    assert not (tmp_path / "review-findings.json").exists()
+
+
+def test_save_rejects_pipeline_fields_authored_by_the_agent(tmp_path, capsys):
+    _write_context(tmp_path, {
+        "security-review": {"verdict": "approve", "findings": [], "checks": []},
+    })
+    doc = _valid_findings()
+    doc["meta"]["reconciliation"]["missing_agents"] = []
+    staged = tmp_path / "staged.json"
+    staged.write_text(json.dumps(doc))
+
+    assert run_save(_args(tmp_path, staged)) == 1
+    assert "pipeline-owned" in capsys.readouterr().out
+
+
+def test_save_rejects_grouped_count_above_the_input_population(
+    tmp_path, capsys
+):
+    """The judgment the agent authors has to fit the inputs the pipeline
+    measured — more concerns than findings read is arithmetic nothing in
+    the run can support."""
+    _write_context(tmp_path, {
+        "security-review": {"verdict": "approve", "findings": [], "checks": []},
+    })
+    staged = tmp_path / "staged.json"
+    staged.write_text(json.dumps(_valid_findings()))
+
+    assert run_save(_args(tmp_path, staged)) == 1
+    assert "grouped_concern_count exceeds" in capsys.readouterr().out
+    assert not (tmp_path / "review-findings.json").exists()
+
+
+def test_save_copies_degraded_host_banner(tmp_path):
+    banner = {
+        "degraded": True,
+        "reason": "partial_unresolved",
+        "message": "m",
+        "unresolved": [],
+    }
+    _write_context(tmp_path, {
+        "security-review": {
+            "verdict": "request_changes",
+            "findings": [{"severity": "high"}],
+            "checks": [],
+        },
+    }, banner=banner)
+    staged = tmp_path / "staged.json"
+    staged.write_text(json.dumps(_valid_findings()))
+
+    assert run_save(_args(tmp_path, staged)) == 0
+    saved = json.loads((tmp_path / "review-findings.json").read_text())
+    assert saved["host_context_banner"] == banner
+
+
+def test_save_leaves_an_undegraded_host_banner_off_the_ledger(tmp_path):
+    _write_context(tmp_path, {
+        "security-review": {
+            "verdict": "request_changes",
+            "findings": [{"severity": "high"}],
+            "checks": [],
+        },
+    }, banner=None)
+    staged = tmp_path / "staged.json"
+    staged.write_text(json.dumps(_valid_findings()))
+
+    assert run_save(_args(tmp_path, staged)) == 0
+    saved = json.loads((tmp_path / "review-findings.json").read_text())
+    assert "host_context_banner" not in saved
+
+
+def test_save_rejects_advisory_finding_without_advisory_source(
+    tmp_path, capsys
+):
+    _write_context(tmp_path, {
+        "security-review": {"verdict": "approve", "findings": [], "checks": []},
+    })
+    doc = _valid_findings()
+    doc["findings"][0]["channel"] = "advisory"
+    staged = tmp_path / "staged.json"
+    staged.write_text(json.dumps(doc))
+
+    assert run_save(_args(tmp_path, staged)) == 1
+    assert "advisory" in capsys.readouterr().out
+
+
+def test_save_accepts_an_advisory_finding_a_source_review_carried(tmp_path):
+    _write_context(tmp_path, {
+        "security-review": {
+            "verdict": "comment",
+            "findings": [{"severity": "high", "channel": "advisory"}],
+            "checks": [],
+        },
+    })
+    doc = _valid_findings(
+        verdict="approve",
+        summary={
+            "total_findings": 1,
+            "by_severity": {
+                "critical": 0, "high": 1, "medium": 0, "low": 0, "info": 0,
+            },
+            "suppressed_advisory_finding_count": 1,
+            "verdict_without_advisory": "request_changes",
+        },
+    )
+    doc["findings"][0]["channel"] = "advisory"
+    staged = tmp_path / "staged.json"
+    staged.write_text(json.dumps(doc))
+
+    assert run_save(_args(tmp_path, staged)) == 0
+    saved = json.loads((tmp_path / "review-findings.json").read_text())
+    assert saved["findings"][0]["channel"] == "advisory"
+
+
+def test_save_rejects_a_run_with_no_reconciliation_context(tmp_path, capsys):
+    """The context is the only source for the stamped facts, so its absence
+    is a rejection rather than a ledger missing half its accounting."""
+    staged = tmp_path / "staged.json"
+    staged.write_text(json.dumps(_valid_findings()))
+
+    assert run_save(_args(tmp_path, staged)) == 1
+    assert CONTEXT_FILENAME in capsys.readouterr().out
+    assert not (tmp_path / "review-findings.json").exists()
