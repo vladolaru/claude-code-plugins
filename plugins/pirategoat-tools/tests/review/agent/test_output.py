@@ -803,13 +803,11 @@ class TestToDict:
         assert set(d.keys()) == REVIEW_CONTENT_FIELDS | {"reviewer"}
 
     def test_to_dict_has_no_accounting_fields(self):
-        """to_dict carries content plus reviewer only — save_draft stitches
-        the six accounting fields on separately via accounting_fields()."""
+        """to_dict takes no parameters — save_draft stitches the six
+        accounting fields on separately via accounting_fields()."""
         builder = ReviewOutputBuilder(pr_id="1", reviewer="security")
-        data = builder.to_dict()
-        assert set(data) == REVIEW_CONTENT_FIELDS | {"reviewer"}
         with pytest.raises(TypeError):
-            builder.to_dict(output_dir="x")
+            builder.to_dict(review_accounting="x")
 
     def test_severity_counts_correct(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
@@ -962,6 +960,27 @@ class TestRenderMarkdown:
             question="Does X remain?", method="grep -rn X", result="0 hits"
         )
         return b
+
+    def test_findings_grouped_by_severity(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
+        b.add_finding("low", "Low Issue", "a.py", "desc", "rec", line=1)
+        b.add_finding("critical", "Critical Issue", "b.py", "desc", "rec", line=2)
+        b.add_finding("high", "High Issue", "c.py", "desc", "rec", line=3)
+        md = render_markdown(b.to_dict())
+        # Critical section should appear before High, High before Low
+        crit_pos = md.index("## Critical Findings")
+        high_pos = md.index("## High Findings")
+        low_pos = md.index("## Low Findings")
+        assert crit_pos < high_pos < low_pos
+
+    def test_info_findings_render_in_markdown(self):
+        """Info findings count toward total_findings, so Markdown must show them —
+        omitting them reports `Total Findings: 1` with no visible finding."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
+        b.add_finding("info", "Anchored info finding", "a.py", "desc", "rec", line=3)
+        md = render_markdown(b.to_dict())
+        assert "## Info Findings" in md
+        assert "Anchored info finding" in md
 
     def test_round_trips_through_serialized_json(self):
         """Rendering from the FILE representation — what materialization
@@ -3221,11 +3240,18 @@ def test_accounting_fields_projects_the_six_envelope_keys():
         review_budget=12,
         channels=("blocking",),
     )
-    assert accounting_fields(accounting) == {
-        "review_claimable_files": ["src/a.py", "src/b.py"],
-        "reviewed_file_claims": ["src/a.py"],
-        "unclaimed_review_files": ["src/b.py"],
-        "inline_diff_file_count": 1,
-        "review_accounted_file_count": 2,
-        "in_scope_review_file_count": 2,
-    }
+    assert set(accounting_fields(accounting)) == REVIEWER_FIELDS - {"reviewer"}
+
+
+def test_missing_content_field_names_the_content_gate():
+    doc = canonical_review_document("security", ())
+    del doc["schema"]
+    with pytest.raises(ValueError, match="missing content fields"):
+        validate_review_document(doc, "security")
+
+
+def test_missing_accounting_field_names_the_accounting_gate():
+    doc = canonical_review_document("security", ())
+    del doc["review_claimable_files"]
+    with pytest.raises(ValueError, match="missing accounting fields"):
+        validate_review_document(doc, "security")
