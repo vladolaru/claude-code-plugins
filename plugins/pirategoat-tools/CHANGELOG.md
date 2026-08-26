@@ -5,15 +5,15 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.114.0] - 2026-08-20
+## [1.114.0] - Unreleased
 
 Adds trust-gated dependency refresh and a durable measurement layer (worktree hygiene, token usage, skipped steps, synthesis-agent duration), and closes the drift between the reconciliator's hand-written Markdown and its own JSON ledger.
 
 ### Added
 
 - **`--refresh-deps`** — interactive refresh remains opt-in and orchestrator-adaptive after a clean tracked-worktree safety check, then publishes a schema-validated report through one atomic save command that records final tracked state; defaults off and stays disabled for bots. Historical skipped-only measurements remain reader-only without fabricated current-report fields, malformed measurements sanitize defensively, and missing request files remain I/O failures rather than invalid reports.
-- **Reviewer drafts are complete, resumable, and assignment-aware until immutable finalization** — explicit reviewed-file claims keep gaps visible, optimistic whole-state saves reject stale writers, and only the exact digest-bound receipt command publishes a final review. Cold continuations receive a compact index with every finding location and reviewed-file claim.
-- **Reviews use one structured findings-and-checks contract end to end** — stable findings, material checks, assessments, critic decisions, lifecycle telemetry, and schema-3 run reports retain the same meaning through reconciliation, rendering, and offline analysis; live readers reject retired or malformed review and reconciliation artifacts — including a reviewer document whose reviewed-file counts do not add up — instead of interpreting them as empty.
+- **Reviewer drafts are resumable and finalize with one digest-bound command**; the finalized review embeds its reviewed-file accounting, which downstream readers use as-is.
+- **One findings/checks/assessment vocabulary end to end**; readers reject retired shapes instead of reading them as empty.
 - **Detection benchmark** — the compliance eval grades reviewer findings against per-scenario answer keys (`--trials N`, `--report-out`).
 - **Worktree hygiene measurement** — step-3 snapshot plus a finalize sweep of the pipeline's own probe residue, recorded in the manifest and `pipeline-result.json`.
 - **Skipped-step ledger** — `pipeline-state.json` records every step the router passed over and the gating condition.
@@ -40,10 +40,10 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 - **The final review verdict is derived from the findings ledger** — the orchestrator no longer transcribes one, and `review-verdict.json` is gone; `pipeline-result.json` records which branch produced the verdict under `verdict_source`. A critic ESCALATE still overrides the published verdict to COMMENT.
 - **The pipeline prints what it published** — status, verdict, verdict source, and every degradation — and the completion footer reads DEGRADED instead of showing a checkmark when the run degraded, in interactive runs as well as bot runs.
 - **Decision critic saves every verdict through a validating script channel** — the critic authors findings under `$TMPDIR`, then `critic.py --save` validates the full batch, invalidates any prior verdict commit marker, and records findings, a digest-bound adjustment proposal, and the new STAND, REVISE, or ESCALATE verdict; an interrupted publication or replacement dispatch stays visibly incomplete, and STAND/ESCALATE use a canonical empty proposal.
-- **The critic's proposal is never rewritten, and the orchestrator's adjudication is recorded by applying it once to the ledger** — `critic_adjustments.py adjudicate` takes the output lock once and makes a single ledger write carrying each decision's `verified`, `refuted`, or `not_checked` outcome. A REVISE proposal the orchestrator never adjudicated is reported as a degradation at step 11 rather than applied unprobed.
+- **The decision critic publishes a proposal that is never rewritten**, and the orchestrator's adjudication is recorded by applying it to the ledger once.
 - **Agents are handed JSON** — the reconciliator reads `reconciliation-context.json` and the decision critic reads `review-record.md` beside `review-findings.json`; the two Markdown projections written for agent eyes only (`reconciliation-context.md`, `critic-context.md`) are gone, along with the per-run context-building step that produced the second one.
 - **Missing agents and structurally out-of-scope findings stay machine-computed** — `reconciliation-context.json` carries a `missing_agents` list (`null` when dispatch was unknown) and marks each structurally out-of-scope finding with `prefiltered` beside a checkable count, so the reconciliator carries and obeys those measurements instead of re-deriving them.
-- **Reconciliator saves the ledger through a validating script channel** — `findings_save.py` stamps the run's own reconciliation facts (input counts, agent rosters, not-applicable reasons, dispatched and missing agents, the degraded-host banner) onto the ledger from `reconciliation-context.json`, so the agent authors review content and its four judgment counts and nothing else. It and every live reader share one exact schema-3 authority for `review-findings.json`, rejecting malformed findings, checks, reconciliation counts and agent rosters, critic provenance, summary counts, or verdicts before any consumer can publish them.
+- **The reconciliator authors its four concern counts and the pipeline stamps the rest** (input counts, agent lists, host banner) at ledger save; the ledger no longer carries reviewer accounting.
 
 ### Fixed
 
@@ -65,7 +65,7 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 - **Detection benchmark hardened** — per-entry status is stamped by the producing code path, and reviewer-path matching canonicalizes against the eval root.
 - **Doc-drift guards** pin the AGENTS.md registry reference and README model tiers to `agent_registry.json` in both directions.
 - **Test estate** — 273 redundant pins removed with coverage increased (11 previously-unpinned guards now pinned); every cut mutation-verified.
-- **`schemas/review-output.ts` reconciled** — critic-adjustment provenance added; interfaces the pipeline never produced were dropped.
+- **`schemas/review-output.ts` reconciled** — critic-adjustment provenance added, interfaces the pipeline never produced were dropped, `ReviewDocument` and `FindingsLedger` split into their own interfaces since only the ledger carries reconciliation, and the adjudicated-decision field is renamed `spot_check` to `outcome`.
 - **Step handoffs pin a no-truncation rule** — every next-step and blocks-progress footer now tells the orchestrator to run the printed command unfiltered, since piping it through `head`/`tail`/`grep` was eating load-bearing briefing lines.
 - **`wp-architecture-reviewer` requires an actual PHP file** — keyword matches like "hook" or "filter" in commit messages no longer dispatch it into a pure-TS/JS diff.
 
