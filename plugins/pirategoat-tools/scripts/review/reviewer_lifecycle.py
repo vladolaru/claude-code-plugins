@@ -39,7 +39,7 @@ def finalize_review_command(
 class ReviewPaths:
     draft: str
     final: str
-    accounting_input: str
+    assignment: str
 
 
 def review_paths(output_dir: str, reviewer: str) -> ReviewPaths:
@@ -57,9 +57,7 @@ def review_paths(output_dir: str, reviewer: str) -> ReviewPaths:
     return ReviewPaths(
         draft=f"{stem}.draft.json",
         final=f"{stem}.json",
-        accounting_input=os.path.join(
-            output_dir, f"{reviewer}-review-accounting-input.json"
-        ),
+        assignment=os.path.join(output_dir, f"{reviewer}-assignment.json"),
     )
 
 

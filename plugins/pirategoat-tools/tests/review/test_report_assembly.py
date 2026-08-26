@@ -3,7 +3,7 @@
 `review-record.md` is assembled by the pipeline, never written or edited by
 an agent. It composes the SAME renderers the other derived Markdown uses
 (`render_review_body` for the findings/checks body,
-`_render_review_accounting_section` for coverage) plus three thin additions
+`_render_file_review_section` for coverage) plus three thin additions
 the record alone needs: its own header, the run notes, and a closing
 verdict line.
 
@@ -185,7 +185,7 @@ class TestRecordAssembly:
     def test_sections_appear_in_the_documented_order(self, out_dir):
         _write_ledger(out_dir)
         state = {
-            "review_accounting": {
+            "file_review": {
                 "agents_with_unclaimed_review_by_file": {
                     "src/starved.php": ["code-reviewer"]
                 },
@@ -240,7 +240,7 @@ class TestRecordAssembly:
         claims = {"src/big.py": ["security-reviewer"]}
         unscoped = ["package-lock.json"]
         state = {
-            "review_accounting": {
+            "file_review": {
                 "agents_with_unclaimed_review_by_file": gaps,
                 "agents_claiming_review_by_file": claims,
                 "unscoped_files": unscoped,
@@ -250,8 +250,8 @@ class TestRecordAssembly:
         assemble_review_record(str(out_dir), state)
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
-        assert briefings_mod._render_review_accounting_section(
-            state["review_accounting"]
+        assert briefings_mod._render_file_review_section(
+            state["file_review"]
         ) in text
 
     @pytest.mark.parametrize("covered_by", ["inline", "claim"])
@@ -259,7 +259,7 @@ class TestRecordAssembly:
         self, out_dir, covered_by
     ):
         _write_ledger(out_dir)
-        state = {"review_accounting": {
+        state = {"file_review": {
             "agents_receiving_inline_diff_by_file": (
                 {"src/shared.php": ["code-reviewer"]}
                 if covered_by == "inline" else {}
@@ -278,8 +278,8 @@ class TestRecordAssembly:
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert "skipped by every matching agent's diff budget" not in text
-        assert not briefings_mod._has_review_accounting_gap(
-            state["review_accounting"]
+        assert not briefings_mod._has_file_review_gap(
+            state["file_review"]
         )
 
     def test_unscoped_line_says_why_it_can_exceed_the_metrics_figure(
@@ -293,7 +293,7 @@ class TestRecordAssembly:
         in one of them.
         """
         _write_ledger(out_dir)
-        state = {"review_accounting": {
+        state = {"file_review": {
             "agents_with_unclaimed_review_by_file": {},
             "agents_claiming_review_by_file": {},
             "unscoped_files": ["assets/logo.png"],
@@ -825,7 +825,7 @@ class TestBriefingsAreConstantSize:
     def _coverage_state(count):
         return {
             "completed_steps": [],
-            "review_accounting": {
+            "file_review": {
                 "agents_with_unclaimed_review_by_file": {},
                 "agents_claiming_review_by_file": {},
                 "unscoped_files": [

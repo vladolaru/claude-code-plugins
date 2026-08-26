@@ -150,14 +150,14 @@ class TestCategoryRepresentatives:
         assert expected_scope
         assert agent_start["scope"]["paths"] == expected_scope
 
-    def test_ref_mode_instance_writes_scope_summaries_and_accounting_input(
+    def test_ref_mode_instance_writes_scope_summaries_and_assignment(
         self, tmp_path
     ):
         """Adapter ref-mode instances must leave the same per-agent scope
         evidence as native reviewers — instance-named scope summaries (so
         run-level coverage reconciliation sees adapter scopes) and an
-        instance-named accounting input (so a builder bound to this output
-        directory finds the instance's own accounting facts)."""
+        instance-named assignment (so a builder bound to this output
+        directory finds the instance's own assignment facts)."""
         ref = tmp_path / "renewals.md"
         ref.write_text("Review renewals logic end to end.")
 
@@ -176,13 +176,13 @@ class TestCategoryRepresentatives:
         data = json.loads(summary.read_text())
         assert data["domain"] == "code"
         assert isinstance(data["in_scope_stat_lines"], int)
-        # Identity chain: the accounting input is named for the reviewer
+        # Identity chain: the assignment is named for the reviewer
         # the instance is taught to construct its builder with.
         assert "PIRATEGOAT_REVIEWER_NAME=repo-renewals" in result.stdout
-        accounting_input = json.loads(
-            (tmp_path / "repo-renewals-review-accounting-input.json").read_text()
+        assignment = json.loads(
+            (tmp_path / "repo-renewals-assignment.json").read_text()
         )
-        assert accounting_input["channels"] == ["advisory"]
+        assert assignment["channels"] == ["advisory"]
 
         builder = ReviewOutputBuilder.open(tmp_path, "1", "repo-renewals")
         builder.add_finding(
@@ -282,18 +282,18 @@ class TestCategoryRepresentatives:
         )
         assert agent_start["model_tier"] == "sonnet"
 
-    def test_accounting_input_backs_claim_validation(self, tmp_path):
+    def test_assignment_backs_claim_validation(self, tmp_path):
         """Bootstrap persists the authoritative NOT DIFFED set so the
         builder can reject claims that match no claimable file."""
         result = run_bootstrap(
             "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
         )
         assert result.returncode == 0
-        accounting_input = (
-            tmp_path / "performance-review-accounting-input.json"
+        assignment = (
+            tmp_path / "performance-assignment.json"
         )
-        assert accounting_input.is_file()
-        data = json.loads(accounting_input.read_text())
+        assert assignment.is_file()
+        data = json.loads(assignment.read_text())
         assert sorted(data["review_claimable_files"]) == sorted(
             extract_not_diffed_files(result.stdout)
         )
@@ -305,7 +305,7 @@ class TestCategoryRepresentatives:
             data["review_claimable_files"]
         )
 
-    def test_accounting_input_carries_budget_and_scope_counts(self, tmp_path):
+    def test_assignment_carries_budget_and_scope_counts(self, tmp_path):
         """Schema 3 carries the effective (override-applied)
         budget and scope counts save()'s PROGRESS line reads — the retired
         env-var budget transport silently died for any agent that rebuilt
@@ -321,11 +321,11 @@ class TestCategoryRepresentatives:
         assert result.returncode == 0
         assert "Target: ~45 tool calls" in result.stdout
 
-        accounting_input = (
-            tmp_path / "history-insights-review-accounting-input.json"
+        assignment = (
+            tmp_path / "history-insights-assignment.json"
         )
-        assert accounting_input.is_file()
-        data = json.loads(accounting_input.read_text())
+        assert assignment.is_file()
+        data = json.loads(assignment.read_text())
         assert data["schema"] == 4
         assert data["review_budget"] == 45
         assert data["channels"] == ["blocking"]
@@ -697,7 +697,7 @@ class TestCanonicalExecutableBuilderSource:
     ):
         from review.agent.output import ReviewOutputBuilder
 
-        (tmp_path / "security-review-accounting-input.json").write_text(
+        (tmp_path / "security-assignment.json").write_text(
             json.dumps({
                 "schema": 4,
                 "agent_name": "security-reviewer",
@@ -852,7 +852,7 @@ class TestCanonicalExecutableBuilderSource:
     def test_envelope_never_carries_a_budget_assignment(
         self, tmp_path, review_budget
     ):
-        """The budget travels in the accounting input, never the
+        """The budget travels in the assignment, never the
         builder envelope — the retired env-var budget transport silently
         died for any agent that rebuilt its save command (run12's worst
         under-spender, 15% of target, never saw the TARGET echo). The
@@ -989,7 +989,7 @@ class TestNotApplicableCompletionContract:
         for agent_name in ("security-reviewer", "performance-reviewer"):
             reviewer_name = derive_reviewer_name(agent_name)
             output_dir.mkdir(parents=True, exist_ok=True)
-            (output_dir / f"{reviewer_name}-review-accounting-input.json").write_text(
+            (output_dir / f"{reviewer_name}-assignment.json").write_text(
                 json.dumps({
                     "schema": 4,
                     "agent_name": agent_name,
@@ -1059,7 +1059,7 @@ class TestNotApplicableCompletionContract:
             )
             assert saved["reviewer"] == reviewer_name
             assert saved["pr_id"] == "42"
-            assert saved["review_accounted_file_count"] == 2
+            assert saved["reviewed_file_count"] == 2
 
     def test_bootstrap_heredoc_executes_with_shell_sensitive_paths(self, tmp_path):
         """Bootstrap must hand paths to stdin Python without literal interpolation."""
@@ -1067,7 +1067,7 @@ class TestNotApplicableCompletionContract:
         shutil.copytree(PLUGIN_ROOT / "scripts", plugin_root / "scripts")
         output_dir = tmp_path / "reviewer's output folder"
         output_dir.mkdir(parents=True)
-        (output_dir / "security-review-accounting-input.json").write_text(json.dumps({
+        (output_dir / "security-assignment.json").write_text(json.dumps({
             "schema": 4,
             "agent_name": "security-reviewer",
             "reviewer": "security",
@@ -1119,7 +1119,7 @@ class TestNotApplicableCompletionContract:
         assert final.returncode == 0, final.stderr
         assert "REVIEW FINALIZED" in final.stdout
         saved = json.loads((output_dir / "security-review.json").read_text())
-        assert saved["review_accounted_file_count"] == 3
+        assert saved["reviewed_file_count"] == 3
         assert set(tmp_path.rglob("*.py")) == python_files_before
 
     def test_agent_definitions_do_not_duplicate_abstention_calls(self):
@@ -1986,13 +1986,13 @@ class TestRepoRuleAndRefModeSelection:
         assert result.returncode == 0
         assert 'add_finding(..., channel="advisory")' in result.stdout
 
-        # The accounting input is the sole carrier of the reviewer's channels.
-        accounting_input = json.loads(
-            (tmp_path / "performance-review-accounting-input.json").read_text()
+        # The assignment is the sole carrier of the reviewer's channels.
+        assignment = json.loads(
+            (tmp_path / "performance-assignment.json").read_text()
         )
-        assert accounting_input["schema"] == 4
-        assert accounting_input["channels"] == ["blocking", "advisory"]
-        assert isinstance(accounting_input["review_budget"], int)
+        assert assignment["schema"] == 4
+        assert assignment["channels"] == ["blocking", "advisory"]
+        assert isinstance(assignment["review_budget"], int)
 
         builder = ReviewOutputBuilder.open(tmp_path, "1", "performance")
         builder.add_finding(
@@ -2013,10 +2013,10 @@ class TestRepoRuleAndRefModeSelection:
         assert "BLOCKING BODY" in result.stdout
         assert "CHANNEL CONTRACT" not in result.stdout
 
-        accounting_input = json.loads(
-            (tmp_path / "performance-review-accounting-input.json").read_text()
+        assignment = json.loads(
+            (tmp_path / "performance-assignment.json").read_text()
         )
-        assert accounting_input["channels"] == ["blocking"]
+        assert assignment["channels"] == ["blocking"]
 
         builder = ReviewOutputBuilder.open(tmp_path, "1", "performance")
         with pytest.raises(
@@ -2116,7 +2116,7 @@ class TestOutputFilenameConsistency:
         """save_draft() stages a draft; finalization publishes the review."""
         from review.agent.output import ReviewOutputBuilder, finalize_review
 
-        (tmp_path / "dead-code-review-accounting-input.json").write_text(json.dumps({
+        (tmp_path / "dead-code-assignment.json").write_text(json.dumps({
             "schema": 4,
             "agent_name": "dead-code-reviewer",
             "reviewer": "dead-code",
@@ -2301,7 +2301,7 @@ class TestNotDiffedContractIsDelivered:
         "phrase",
         [
             'builder.claim_files_reviewed("<path>")',
-            "authoritative review-accounting input",
+            "authoritative review assignment",
             "derives every unclaimed review file",
             "Never count an unclaimed review file toward your verdict",
         ],
@@ -2362,7 +2362,7 @@ class TestNotDiffedContractIsDelivered:
         """No NOT DIFFED files means no positive-claim contract to deliver."""
         clean_scope = "=== REVIEW SCOPE ===\n=== FILES ===\nsrc/a.py  (+5 -1)\n"
         output = self._build(tmp_path, clean_scope, review_claimable_count=0)
-        assert "authoritative review-accounting input" not in output
+        assert "authoritative review assignment" not in output
 
     def test_contract_is_not_sourced_from_stripped_protocol(self):
         """The stripped protocol must not be the contract's only home.
@@ -2374,7 +2374,7 @@ class TestNotDiffedContractIsDelivered:
         delivered = _mod.extract_protocol_sections(
             protocol, _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
         )
-        assert "authoritative review-accounting input" not in delivered, (
+        assert "authoritative review assignment" not in delivered, (
             "Contract text placed in a stripped protocol section never reaches "
             "a reviewer — keep it in build_output()'s REVIEW BUDGET block."
         )
@@ -2398,7 +2398,7 @@ class TestNotDiffedContractIsDelivered:
         )
         assert "NOT DIFFED" not in renamed_header_scope  # the old regex's anchor is gone
         output = self._build(tmp_path, renamed_header_scope, review_claimable_count=1)
-        assert "authoritative review-accounting input" in output
+        assert "authoritative review assignment" in output
         assert "derives every unclaimed review file" in output
 
     def test_original_header_text_alone_no_longer_drives_the_contract(self, tmp_path):
@@ -2410,7 +2410,7 @@ class TestNotDiffedContractIsDelivered:
         decision, the contract would incorrectly appear. It must not.
         """
         output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, review_claimable_count=0)
-        assert "authoritative review-accounting input" not in output
+        assert "authoritative review assignment" not in output
 
     def test_briefing_never_commands_bulk_unclaimed_enumeration(self, tmp_path):
         """run12: performance-reviewer burned ~1/3 of its calls hand-assembling
@@ -2422,7 +2422,7 @@ class TestNotDiffedContractIsDelivered:
 
 
 class TestReviewClaimableOrderingEndToEnd:
-    """The accounting input's claimable list is largest-first end to end.
+    """The assignment's claimable list is largest-first end to end.
 
     load_scope_facts() reads budget_exceeded_files straight off the
     scope-summary sidecar in PRIORITY-TIER order (production files before
@@ -2483,7 +2483,7 @@ class TestReviewClaimableOrderingEndToEnd:
             ["git", "commit", "-m", "changes"], cwd=repo_dir, capture_output=True, check=True
         )
 
-    def test_accounting_claimable_files_are_largest_first_despite_priority_tiering(
+    def test_assignment_claimable_files_are_largest_first_despite_priority_tiering(
         self, tmp_path
     ):
         repo_dir = tmp_path / "repo"
@@ -2503,20 +2503,20 @@ class TestReviewClaimableOrderingEndToEnd:
         )
         assert result.returncode == 0
 
-        accounting_input = json.loads(
+        assignment = json.loads(
             (
                 output_dir
-                / "history-insights-review-accounting-input.json"
+                / "history-insights-assignment.json"
             ).read_text()
         )
         # Both claimable (the regression this guards): a same-tier-only
         # re-sort would still fail to fix the divergence, since these two
         # files are in DIFFERENT priority tiers.
-        assert set(accounting_input["review_claimable_files"]) == {
+        assert set(assignment["review_claimable_files"]) == {
             "src/small_prod.py", "tests/huge_test.py",
         }
         # Largest first, size overriding the priority tier that put the
         # smaller production file first in scope.py's own raw ordering.
-        assert accounting_input["review_claimable_files"] == [
+        assert assignment["review_claimable_files"] == [
             "tests/huge_test.py", "src/small_prod.py",
         ]

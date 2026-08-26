@@ -33,7 +33,7 @@ from review.agent.output import (
     REVIEW_CONTENT_FIELDS,
     REVIEWER_FIELDS,
     ReviewOutputBuilder,
-    accounting_fields,
+    reviewed_files_fields,
     finalize_review,
     materialize_markdown,
     render_draft_index,
@@ -51,8 +51,8 @@ from helpers.review_fixtures import (
 )
 
 
-def _write_required_accounting_input(output_dir, reviewer):
-    Path(output_dir, f"{reviewer}-review-accounting-input.json").write_text(
+def _write_required_assignment(output_dir, reviewer):
+    Path(output_dir, f"{reviewer}-assignment.json").write_text(
         json.dumps({
             "schema": 4,
             "agent_name": f"{reviewer}-reviewer",
@@ -82,7 +82,7 @@ def _save_draft(builder, output_dir):
     return builder.save_draft()
 
 
-def test_accounting_reads_follow_the_bound_review_paths(
+def test_assignment_reads_follow_the_bound_review_paths(
     tmp_path, monkeypatch, capsys
 ):
     authority_dir = tmp_path / "authority"
@@ -90,9 +90,9 @@ def test_accounting_reads_follow_the_bound_review_paths(
     paths = ReviewPaths(
         draft=str(authority_dir / "draft.json"),
         final=str(authority_dir / "final.json"),
-        accounting_input=str(authority_dir / "accounting.json"),
+        assignment=str(authority_dir / "authority.json"),
     )
-    Path(paths.accounting_input).write_text(json.dumps({
+    Path(paths.assignment).write_text(json.dumps({
         "schema": 4,
         "agent_name": "code-reviewer",
         "reviewer": "code",
@@ -111,11 +111,11 @@ def test_accounting_reads_follow_the_bound_review_paths(
     assert "target ~80 tool calls" in capsys.readouterr().out
 
 
-def _write_accounting(paths_or_dir, reviewer="security", claimable=("src/a.py",), *, channels=("blocking",), budget=12):
+def _write_assignment(paths_or_dir, reviewer="security", claimable=("src/a.py",), *, channels=("blocking",), budget=12):
     path = (
-        paths_or_dir.accounting_input
-        if hasattr(paths_or_dir, "accounting_input")
-        else review_paths(str(paths_or_dir), reviewer).accounting_input
+        paths_or_dir.assignment
+        if hasattr(paths_or_dir, "assignment")
+        else review_paths(str(paths_or_dir), reviewer).assignment
     )
     Path(path).write_text(json.dumps({
         "schema": 4,
@@ -132,10 +132,10 @@ def _write_accounting(paths_or_dir, reviewer="security", claimable=("src/a.py",)
 def test_builder_ignores_env_envelope_and_uses_bound_input(tmp_path, monkeypatch):
     other = tmp_path / "other"
     other.mkdir()
-    _write_accounting(other, claimable=("src/only-in-env.py",))
+    _write_assignment(other, claimable=("src/only-in-env.py",))
     monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(other))
     monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "security")
-    _write_accounting(tmp_path, claimable=("src/bound.py",))
+    _write_assignment(tmp_path, claimable=("src/bound.py",))
     builder = ReviewOutputBuilder.open(tmp_path, "42", "security")
     builder.claim_files_reviewed("src/bound.py")
     with pytest.raises(ValueError, match="src/only-in-env.py"):
@@ -144,22 +144,22 @@ def test_builder_ignores_env_envelope_and_uses_bound_input(tmp_path, monkeypatch
 
 def test_finding_channel_must_be_among_the_reviewer_channels(tmp_path, monkeypatch):
     monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-    _write_accounting(tmp_path, channels=("blocking",))
+    _write_assignment(tmp_path, channels=("blocking",))
     builder = ReviewOutputBuilder.open(tmp_path, "42", "security")
     with pytest.raises(ValueError, match="channel 'advisory' is not among"):
         builder.add_finding("low", "t", "src/a.py", "d", "r", line=1, channel="advisory")
-    _write_accounting(tmp_path, channels=("blocking", "advisory"))
+    _write_assignment(tmp_path, channels=("blocking", "advisory"))
     both = ReviewOutputBuilder.open(tmp_path, "42", "security")
     both.add_finding("low", "t", "src/a.py", "d", "r", line=1, channel="advisory")
     assert both.findings[0]["channel"] == "advisory"
-    _write_accounting(tmp_path, channels=("advisory",))
+    _write_assignment(tmp_path, channels=("advisory",))
     advisory_only = ReviewOutputBuilder.open(tmp_path, "42", "security")
     with pytest.raises(ValueError, match="channel 'blocking' is not among"):
         advisory_only.add_finding("low", "t", "src/a.py", "d", "r", line=1)
 
 
 def test_receipt_budget_line_reads_bound_input(tmp_path, capsys):
-    _write_accounting(tmp_path, claimable=("src/a.py", "src/b.py"), budget=33)
+    _write_assignment(tmp_path, claimable=("src/a.py", "src/b.py"), budget=33)
     ReviewOutputBuilder.open(tmp_path, "42", "security").save_draft()
     assert "target ~33 tool calls" in capsys.readouterr().out
 
@@ -176,7 +176,7 @@ def test_draft_index_carries_locations_and_every_reviewed_file_claim():
     builder.reviewed_file_claims = ["src/service.py", "tests/test_service.py"]
 
     # render_draft_index is always called on a persisted draft file, whose
-    # accounting fields to_dict() no longer carries — stitch the claims on
+    # reviewed-file fields to_dict() no longer carries — stitch the claims on
     # to match what save_draft() would have written.
     index = render_draft_index({
         **builder.to_dict(),
@@ -211,7 +211,7 @@ class TestFindingAndCheckDomainModel:
     """Schema-2 drafts expose only the canonical review-domain contract."""
 
     def test_ids_are_monotonic_and_removed_ids_are_not_reused(self, tmp_path):
-        _write_required_accounting_input(tmp_path, "security")
+        _write_required_assignment(tmp_path, "security")
         builder = ReviewOutputBuilder.open(tmp_path, "42", "security")
 
         assert builder.add_finding(
@@ -799,12 +799,12 @@ class TestToDict:
         d = b.to_dict()
         assert set(d.keys()) == REVIEW_CONTENT_FIELDS | {"reviewer"}
 
-    def test_to_dict_has_no_accounting_fields(self):
+    def test_to_dict_has_no_reviewed_files_fields(self):
         """to_dict takes no parameters — save_draft stitches the six
-        accounting fields on separately via accounting_fields()."""
+        reviewed-file fields on separately via reviewed_files_fields()."""
         builder = ReviewOutputBuilder(pr_id="1", reviewer="security")
         with pytest.raises(TypeError):
-            builder.to_dict(review_accounting="x")
+            builder.to_dict(file_review="x")
 
     def test_severity_counts_correct(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
@@ -890,7 +890,7 @@ class TestToDict:
     def test_saved_artifact_carries_the_version(self, monkeypatch, tmp_path):
         monkeypatch.setenv("PIRATEGOAT_PLUGIN_VERSION", "1.114.0")
         b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        _write_required_accounting_input(tmp_path, "pr")
+        _write_required_assignment(tmp_path, "pr")
         _save_draft(b, tmp_path)
         saved = json.loads((tmp_path / "pr-review.draft.json").read_text())
         assert saved["plugin_version"] == "1.114.0"
@@ -1046,7 +1046,7 @@ class TestMaterializeMarkdown:
             for reviewer in ("security", "performance"):
                 b = ReviewOutputBuilder(pr_id="1", reviewer=reviewer)
                 b.add_finding("high", "T", "f.py", "d", "r", line=1)
-                _write_required_accounting_input(d, reviewer)
+                _write_required_assignment(d, reviewer)
                 _save_and_finalize(b, d)
             written = materialize_markdown(d)
             assert sorted(os.path.basename(p) for p in written) == [
@@ -1060,7 +1060,7 @@ class TestMaterializeMarkdown:
     def test_is_idempotent(self):
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
-            _write_required_accounting_input(d, "security")
+            _write_required_assignment(d, "security")
             _save_and_finalize(b, d)
             first = materialize_markdown(d)
             second = materialize_markdown(d)
@@ -1070,7 +1070,7 @@ class TestMaterializeMarkdown:
     def test_skips_malformed_json_without_raising(self):
         with tempfile.TemporaryDirectory() as d:
             Path(d, "broken-review.json").write_text("{ not json")
-            _write_required_accounting_input(d, "security")
+            _write_required_assignment(d, "security")
             _save_and_finalize(
                 ReviewOutputBuilder(pr_id="1", reviewer="security"), d
             )
@@ -1089,7 +1089,7 @@ class TestMaterializeMarkdown:
     def test_skips_complete_review_with_retired_schema(self, capsys):
         with tempfile.TemporaryDirectory() as d:
             builder = ReviewOutputBuilder(pr_id="1", reviewer="security")
-            _write_required_accounting_input(d, "security")
+            _write_required_assignment(d, "security")
             _save_and_finalize(builder, d)
             path = Path(d, "security-review.json")
             review = json.loads(path.read_text())
@@ -1105,7 +1105,7 @@ class TestMaterializeMarkdown:
     def test_custom_suffix_cannot_bypass_final_review_validation(self, capsys):
         with tempfile.TemporaryDirectory() as d:
             builder = ReviewOutputBuilder(pr_id="1", reviewer="security")
-            _write_required_accounting_input(d, "security")
+            _write_required_assignment(d, "security")
             _save_and_finalize(builder, d)
             path = Path(d, "security-review.json")
             review = json.loads(path.read_text())
@@ -1141,7 +1141,7 @@ class TestMaterializeMarkdown:
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
             b.add_finding("high", "CLI Title", "f.py", "d", "r", line=1)
-            _write_required_accounting_input(d, "security")
+            _write_required_assignment(d, "security")
             _save_and_finalize(b, d)
             result = subprocess.run(
                 [sys.executable, str(output_py), "render",
@@ -1157,7 +1157,7 @@ class TestMaterializeMarkdown:
         assert output_py.is_file(), output_py
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
-            _write_required_accounting_input(d, "security")
+            _write_required_assignment(d, "security")
             _save_and_finalize(b, d)
             md_path = Path(d, "security-review.md")
             assert not md_path.exists()  # finalization publishes canonical JSON only
@@ -1176,7 +1176,7 @@ class TestMaterializeMarkdown:
         )
         with tempfile.TemporaryDirectory() as d:
             builder = ReviewOutputBuilder(pr_id="1", reviewer="security")
-            _write_required_accounting_input(d, "security")
+            _write_required_assignment(d, "security")
             _save_and_finalize(builder, d)
             path = Path(d, "security-review.json")
             review = json.loads(path.read_text())
@@ -1214,7 +1214,7 @@ class TestSaveDraft:
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
             b.add_finding("high", "Title", "f.py", "desc", "rec", line=1)
-            _write_required_accounting_input(d, "security")
+            _write_required_assignment(d, "security")
             _save_draft(b, d)
             assert os.path.isfile(
                 os.path.join(d, "security-review.draft.json")
@@ -1232,7 +1232,7 @@ class TestSaveDraft:
                 f.write(datetime.now(timezone.utc).isoformat())
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
             b.add_finding("high", "Title", "f.py", "desc", "rec", line=1)
-            _write_required_accounting_input(d, "security")
+            _write_required_assignment(d, "security")
             _save_draft(b, d)
             with open(os.path.join(d, "security-review.draft.json")) as f:
                 saved = json.load(f)
@@ -1242,11 +1242,11 @@ class TestSaveDraft:
             # to_dict() call, so it differs whenever save() and this
             # assertion straddle a millisecond. Assert it independently
             # and compare the rest exactly. The saved draft additionally
-            # carries the six accounting fields save_draft() stitches on
-            # via accounting_fields() — to_dict() carries content plus
+            # carries the six reviewed-file fields save_draft() stitches on
+            # via reviewed_files_fields() — to_dict() carries content plus
             # reviewer only.
             assert isinstance(saved["meta"]["review_duration_ms"], int)
-            assert saved["review_accounted_file_count"] == 0
+            assert saved["reviewed_file_count"] == 0
             saved["meta"].pop("review_duration_ms")
             live["meta"].pop("review_duration_ms")
             saved_content = {
@@ -1257,7 +1257,7 @@ class TestSaveDraft:
     def test_return_value_has_correct_paths(self):
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="arch")
-            _write_required_accounting_input(d, "arch")
+            _write_required_assignment(d, "arch")
             result = _save_draft(b, d)
             assert result["draft"] == os.path.join(
                 d, "arch-review.draft.json"
@@ -1270,7 +1270,7 @@ class TestSaveDraft:
             b.add_finding("high", "A", "a.py", "d", "r", line=1)
             b.add_finding("medium", "B", "b.py", "d", "r", line=2)
             b.add_observation("c.py", "FYI note")
-            _write_required_accounting_input(d, "security")
+            _write_required_assignment(d, "security")
             _save_draft(b, d)
             out = capsys.readouterr().out
             assert "DRAFT SAVED: verdict request_changes" in out
@@ -1284,7 +1284,7 @@ class TestSaveDraft:
         """An empty save is echoed too — '0 findings recorded' must be visible."""
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
-            _write_required_accounting_input(d, "security")
+            _write_required_assignment(d, "security")
             _save_draft(b, d)
             out = capsys.readouterr().out
             assert "DRAFT TOTALS: findings 0" in out
@@ -1293,7 +1293,7 @@ class TestSaveDraft:
     def test_reopened_draft_reports_only_assessment_and_positive_changes(
         self, tmp_path, capsys
     ):
-        _write_required_accounting_input(tmp_path, "reconciliator")
+        _write_required_assignment(tmp_path, "reconciliator")
         builder = ReviewOutputBuilder.open(
             tmp_path, "42", "reconciliator"
         )
@@ -1327,7 +1327,7 @@ class TestSaveDraft:
 
         monkeypatch.setattr(output_mod.os, "replace", _boom)
         with tempfile.TemporaryDirectory() as d:
-            _write_required_accounting_input(d, "security")
+            _write_required_assignment(d, "security")
             with pytest.raises(OSError):
                 _save_draft(
                     ReviewOutputBuilder(pr_id="1", reviewer="security"), d
@@ -1339,16 +1339,16 @@ class TestSaveDraft:
             assert not list(Path(d).glob("*.tmp"))
 
     def test_saved_draft_embeds_the_derived_partition(self, tmp_path):
-        """save_draft stitches accounting_fields() onto to_dict()'s content —
+        """save_draft stitches reviewed_files_fields() onto to_dict()'s content —
         the saved document is content plus the six derived envelope keys."""
-        _write_accounting(tmp_path, claimable=("src/a.py", "src/b.py"))
+        _write_assignment(tmp_path, claimable=("src/a.py", "src/b.py"))
         builder = ReviewOutputBuilder.open(tmp_path, "42", "security")
         builder.claim_files_reviewed("src/b.py")
         saved = builder.save_draft()
         draft = json.loads(Path(saved["draft"]).read_text())
         assert draft["reviewed_file_claims"] == ["src/b.py"]
         assert draft["unclaimed_review_files"] == ["src/a.py"]
-        assert draft["review_accounted_file_count"] == 1
+        assert draft["reviewed_file_count"] == 1
         validate_review_document(draft, "security")
 
 
@@ -1498,13 +1498,13 @@ class TestReviewedFileClaims:
     """claim_files_reviewed claims NOT DIFFED files as actually reviewed.
 
     The positive-claim API validates one complete batch against the bound
-    directory's authoritative accounting input. Coverage gaps and reviewed
+    directory's authoritative assignment. Coverage gaps and reviewed
     counts are derived later; reviewers never state either population
     directly."""
 
     def _armed_builder(self, tmp_path, claimable):
         """One builder bound to a bootstrap-written authoritative claimable set."""
-        _write_accounting(tmp_path, "sec", claimable)
+        _write_assignment(tmp_path, "sec", claimable)
         return ReviewOutputBuilder.open(tmp_path, "1", "sec")
 
     @pytest.mark.parametrize("bad", ["", "   ", None, 42, ["src/a.py"]])
@@ -1609,7 +1609,7 @@ class TestReviewedFileClaims:
 
     def test_failed_batch_leaves_no_trace_in_saved_artifact(self, tmp_path):
         """The consequence that matters: after a rejected batch, save_draft()'s
-        accounting is exactly as if the call never happened — the
+        derivation is exactly as if the call never happened — the
         unclaimed file lands in the derived gap record, never as a claim."""
         b = self._armed_builder(tmp_path, ["src/a.py", "src/c.py"])
         with pytest.raises(ValueError):
@@ -1741,7 +1741,7 @@ class TestAdvisoryChannel:
     def test_advisory_channel_reviewer_records_advisory_without_gating(
         self, tmp_path
     ):
-        _write_accounting(
+        _write_assignment(
             tmp_path,
             "repo-reuse",
             claimable=(),
@@ -1753,7 +1753,7 @@ class TestAdvisoryChannel:
         assert b._calculate_verdict() == "approve"
 
     def test_unbound_builder_fails_open_after_vocabulary_validation(self):
-        """A hand-rolled builder has no accounting input to consult."""
+        """A hand-rolled builder has no assignment to consult."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
 
         b.add_finding(
@@ -1763,7 +1763,7 @@ class TestAdvisoryChannel:
 
         assert b._calculate_verdict() == "approve"
 
-    def test_absent_accounting_input_fails_open_after_vocabulary_validation(
+    def test_absent_assignment_fails_open_after_vocabulary_validation(
         self, tmp_path
     ):
         b = ReviewOutputBuilder.open(tmp_path, "1", "repo-reuse")
@@ -1786,12 +1786,12 @@ class TestAdvisoryChannel:
             ),
         ],
     )
-    def test_malformed_accounting_input_fails_open_at_add_time(
+    def test_malformed_assignment_fails_open_at_add_time(
         self, tmp_path, payload
     ):
         b = ReviewOutputBuilder.open(tmp_path, "1", "repo-reuse")
         Path(
-            review_paths(str(tmp_path), "repo-reuse").accounting_input
+            review_paths(str(tmp_path), "repo-reuse").assignment
         ).write_text(payload)
 
         b.add_finding(
@@ -1801,12 +1801,12 @@ class TestAdvisoryChannel:
 
         assert b._calculate_verdict() == "approve"
 
-    def test_invalid_utf8_accounting_input_fails_open_at_add_time(
+    def test_invalid_utf8_assignment_fails_open_at_add_time(
         self, tmp_path
     ):
         b = ReviewOutputBuilder.open(tmp_path, "1", "repo-reuse")
         Path(
-            review_paths(str(tmp_path), "repo-reuse").accounting_input
+            review_paths(str(tmp_path), "repo-reuse").assignment
         ).write_bytes(b"\xff")
 
         b.add_finding(
@@ -1820,14 +1820,14 @@ class TestAdvisoryChannel:
         """Add-time fail-open is not a way past publication.
 
         The finding is recorded while the builder is unbound; the bound
-        directory's accounting is what decides whether it may be published.
+        directory's assignment is what decides whether it may be published.
         """
         b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
         b.add_finding(
             severity="high", title="Duplication", file="a.php",
             description="d", recommendation="r", line=5, channel="advisory",
         )
-        _write_required_accounting_input(tmp_path, "reconciliator")
+        _write_required_assignment(tmp_path, "reconciliator")
 
         with pytest.raises(
             ValueError, match=r"channel\(s\) \['advisory'\] not among"
@@ -1939,12 +1939,12 @@ class TestAdvisoryChannel:
 # =============================================================================
 
 
-class TestDerivedReviewAccounting:
+class TestDerivedReviewedFiles:
     """Draft and final coverage are sidecar-derived from positive claims."""
 
     @staticmethod
-    def _write_accounting_input(tmp_path, claimable, *, inline_diff_file_count=0, reviewer="code"):
-        (tmp_path / f"{reviewer}-review-accounting-input.json").write_text(json.dumps({
+    def _write_assignment(tmp_path, claimable, *, inline_diff_file_count=0, reviewer="code"):
+        (tmp_path / f"{reviewer}-assignment.json").write_text(json.dumps({
             "schema": 4,
             "agent_name": f"{reviewer}-reviewer",
             "reviewer": reviewer,
@@ -1956,7 +1956,7 @@ class TestDerivedReviewAccounting:
         }))
 
     def test_draft_derives_gaps_and_counts_from_claims(self, tmp_path):
-        self._write_accounting_input(
+        self._write_assignment(
             tmp_path, ["src/read.ts", "src/unread.ts"], inline_diff_file_count=3
         )
         builder = ReviewOutputBuilder("123", "code")
@@ -1969,11 +1969,11 @@ class TestDerivedReviewAccounting:
         )
         assert saved["reviewed_file_claims"] == ["src/read.ts"]
         assert saved["unclaimed_review_files"] == ["src/unread.ts"]
-        assert saved["review_accounted_file_count"] == 4
+        assert saved["reviewed_file_count"] == 4
         assert "unreviewed_" + "autofilled" not in saved["meta"]
 
     def test_draft_resave_recomputes_complement_from_scratch(self, tmp_path):
-        self._write_accounting_input(tmp_path, ["src/a.ts", "src/b.ts"])
+        self._write_assignment(tmp_path, ["src/a.ts", "src/b.ts"])
         builder = ReviewOutputBuilder("123", "code")
         builder.claim_files_reviewed("src/a.ts")
         _save_draft(builder, tmp_path)
@@ -1990,10 +1990,10 @@ class TestDerivedReviewAccounting:
         )
         assert second["reviewed_file_claims"] == ["src/a.ts", "src/b.ts"]
         assert second["unclaimed_review_files"] == []
-        assert second["review_accounted_file_count"] == 2
+        assert second["reviewed_file_count"] == 2
 
     def test_finalized_json_preserves_derived_coverage(self, tmp_path):
-        self._write_accounting_input(
+        self._write_assignment(
             tmp_path, ["src/read.ts", "src/unread.ts"], inline_diff_file_count=2
         )
         builder = ReviewOutputBuilder("123", "code")
@@ -2005,10 +2005,10 @@ class TestDerivedReviewAccounting:
         final = json.loads((tmp_path / "code-review.json").read_text())
         assert final["reviewed_file_claims"] == ["src/read.ts"]
         assert final["unclaimed_review_files"] == ["src/unread.ts"]
-        assert final["review_accounted_file_count"] == 3
+        assert final["reviewed_file_count"] == 3
 
     def test_finalization_rejects_a_raw_claim_list(self, tmp_path):
-        self._write_accounting_input(tmp_path, ["src/read.ts"])
+        self._write_assignment(tmp_path, ["src/read.ts"])
         builder = ReviewOutputBuilder("123", "code")
         saved = _save_draft(builder, tmp_path)
         draft_path = tmp_path / "code-review.draft.json"
@@ -2046,7 +2046,7 @@ class TestBudgetTargetEcho:
         monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
 
     @staticmethod
-    def _write_accounting_input(tmp_path, reviewer="code", schema=4, review_claimable_files=None,
+    def _write_assignment(tmp_path, reviewer="code", schema=4, review_claimable_files=None,
                         **fields):
         review_claimable_files = review_claimable_files or []
         payload = {
@@ -2060,7 +2060,7 @@ class TestBudgetTargetEcho:
             "channels": ["blocking"],
         }
         payload.update(fields)
-        (tmp_path / f"{reviewer}-review-accounting-input.json").write_text(
+        (tmp_path / f"{reviewer}-assignment.json").write_text(
             json.dumps(payload)
         )
 
@@ -2073,7 +2073,7 @@ class TestBudgetTargetEcho:
         self, tmp_path, monkeypatch, capsys
     ):
         self._clean_env(monkeypatch)
-        self._write_accounting_input(
+        self._write_assignment(
             tmp_path, review_claimable_files=["some/file.go"], review_budget=80
         )
         out = self._save_with_unreviewed(tmp_path, monkeypatch, capsys)
@@ -2087,23 +2087,23 @@ class TestBudgetTargetEcho:
     ):
         """Nothing left unread means nothing to act on — silence is right."""
         self._clean_env(monkeypatch)
-        self._write_accounting_input(tmp_path, review_budget=80)
+        self._write_assignment(tmp_path, review_budget=80)
         builder = ReviewOutputBuilder("123", "code")
         _save_draft(builder, tmp_path)
         assert "FILES NOT YET CLAIMED" not in capsys.readouterr().out
 
-    def test_missing_accounting_input_rejects_publication(
+    def test_missing_assignment_rejects_publication(
         self, tmp_path, monkeypatch, capsys
     ):
         self._clean_env(monkeypatch)
-        with pytest.raises(ValueError, match="missing authoritative review-accounting input"):
+        with pytest.raises(ValueError, match="missing authoritative review assignment"):
             self._save_with_unreviewed(tmp_path, monkeypatch, capsys)
 
     def test_schema_1_sidecar_rejects_publication(
         self, tmp_path, monkeypatch, capsys
     ):
         self._clean_env(monkeypatch)
-        self._write_accounting_input(
+        self._write_assignment(
             tmp_path, schema=1, review_claimable_files=["some/file.go"]
         )
         with pytest.raises(ValueError, match="schema must be 4"):
@@ -2118,7 +2118,7 @@ class TestBudgetTargetEcho:
         """A target of 0, a string, or a bool is worse than no target —
         never repair it. Absent key (None) is the same absence."""
         self._clean_env(monkeypatch)
-        self._write_accounting_input(
+        self._write_assignment(
             tmp_path, review_claimable_files=["some/file.go"], review_budget=raw
         )
         with pytest.raises(ValueError, match="review_budget"):
@@ -2128,7 +2128,7 @@ class TestBudgetTargetEcho:
         self, tmp_path, monkeypatch, capsys
     ):
         self._clean_env(monkeypatch)
-        self._write_accounting_input(
+        self._write_assignment(
             tmp_path, review_claimable_files=["some/file.go"], review_budget=0
         )
         out = self._save_with_unreviewed(tmp_path, monkeypatch, capsys)
@@ -2139,7 +2139,7 @@ class TestBudgetTargetEcho:
     ):
         """Derived gaps are exactly the case the nudge exists for."""
         self._clean_env(monkeypatch)
-        self._write_accounting_input(tmp_path, review_claimable_files=["a.go"], review_budget=40)
+        self._write_assignment(tmp_path, review_claimable_files=["a.go"], review_budget=40)
         builder = ReviewOutputBuilder("123", "code")
         _save_draft(builder, tmp_path)
         out = capsys.readouterr().out
@@ -2160,7 +2160,7 @@ class TestDraftFileGapReceipt:
         monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
 
     @staticmethod
-    def _write_accounting_input(tmp_path, reviewer="code", schema=4, review_claimable_files=None,
+    def _write_assignment(tmp_path, reviewer="code", schema=4, review_claimable_files=None,
                         **fields):
         review_claimable_files = review_claimable_files or []
         payload = {
@@ -2174,7 +2174,7 @@ class TestDraftFileGapReceipt:
             "channels": ["blocking"],
         }
         payload.update(fields)
-        (tmp_path / f"{reviewer}-review-accounting-input.json").write_text(
+        (tmp_path / f"{reviewer}-assignment.json").write_text(
             json.dumps(payload)
         )
 
@@ -2182,7 +2182,7 @@ class TestDraftFileGapReceipt:
         self, tmp_path, monkeypatch
     ):
         self._clean_env(monkeypatch)
-        self._write_accounting_input(
+        self._write_assignment(
             tmp_path,
             review_claimable_files=["a.go", "b.go"],
             in_scope_review_file_count=4,
@@ -2195,14 +2195,14 @@ class TestDraftFileGapReceipt:
         saved = json.loads((tmp_path / "code-review.draft.json").read_text())
         assert saved["reviewed_file_claims"] == ["b.go"]
         assert saved["unclaimed_review_files"] == ["a.go"]
-        assert saved["review_accounted_file_count"] == 3
+        assert saved["reviewed_file_count"] == 3
 
     def test_progress_and_next_unread_appear_with_claims(
         self, tmp_path, monkeypatch, capsys
     ):
         self._clean_env(monkeypatch)
         claimable = [f"claimable/{i:02d}.go" for i in range(20)]  # largest first
-        self._write_accounting_input(
+        self._write_assignment(
             tmp_path, review_claimable_files=claimable, review_budget=80,
             in_scope_review_file_count=30, inline_diff_file_count=10,
         )
@@ -2222,7 +2222,7 @@ class TestDraftFileGapReceipt:
     ):
         """An empty derived complement keeps the TARGET gate closed."""
         self._clean_env(monkeypatch)
-        self._write_accounting_input(
+        self._write_assignment(
             tmp_path, review_budget=80, in_scope_review_file_count=30, inline_diff_file_count=30,
         )
         builder = ReviewOutputBuilder("123", "code")
@@ -2234,7 +2234,7 @@ class TestDraftFileGapReceipt:
         self, tmp_path, monkeypatch, capsys
     ):
         self._clean_env(monkeypatch)
-        self._write_accounting_input(
+        self._write_assignment(
             tmp_path, schema=1, review_claimable_files=["some/file.go"],
         )
         builder = ReviewOutputBuilder("123", "code")
@@ -2248,7 +2248,7 @@ class TestDraftFileGapReceipt:
         claimable file claimed there is no derived gap, so the whole
         TARGET/PROGRESS/NEXT UNREAD block never runs."""
         self._clean_env(monkeypatch)
-        self._write_accounting_input(
+        self._write_assignment(
             tmp_path, review_claimable_files=["a.go", "b.go"], review_budget=40,
             in_scope_review_file_count=5, inline_diff_file_count=3,
         )
@@ -2262,7 +2262,7 @@ class TestDraftFileGapReceipt:
         self, tmp_path, monkeypatch, capsys
     ):
         self._clean_env(monkeypatch)
-        self._write_accounting_input(
+        self._write_assignment(
             tmp_path, review_claimable_files=["a.go", "b.go"], review_budget=40,
             in_scope_review_file_count=None,
         )
@@ -2290,7 +2290,7 @@ class TestDraftFileGapReceipt:
         review_claimable_files,
     ):
         self._clean_env(monkeypatch)
-        self._write_accounting_input(
+        self._write_assignment(
             tmp_path,
             review_claimable_files=review_claimable_files,
             review_budget=40,
@@ -2298,14 +2298,14 @@ class TestDraftFileGapReceipt:
             inline_diff_file_count=inline_diff_file_count,
         )
         builder = ReviewOutputBuilder("123", "code")
-        with pytest.raises(ValueError, match="malformed authoritative review-accounting input"):
+        with pytest.raises(ValueError, match="malformed authoritative review assignment"):
             _save_draft(builder, tmp_path)
 
     def test_incoherent_claim_partition_rejects_publication(
         self, tmp_path, monkeypatch, capsys
     ):
         self._clean_env(monkeypatch)
-        self._write_accounting_input(
+        self._write_assignment(
             tmp_path,
             review_claimable_files=["a.go", "b.go", "c.go"],
             review_budget=40,
@@ -2321,7 +2321,7 @@ class TestDraftFileGapReceipt:
         self, tmp_path, monkeypatch, capsys
     ):
         self._clean_env(monkeypatch)
-        self._write_accounting_input(
+        self._write_assignment(
             tmp_path,
             review_claimable_files=["a.go", "b.go"],
             review_budget=40,
@@ -2349,7 +2349,7 @@ class TestDraftFileGapReceipt:
 class TestMetaIsNeverFakeZero:
     """meta must report facts or absence — never a default dressed as one.
 
-    A field run's review-findings.json carried review_accounted_file_count: 0 and
+    A field run's review-findings.json carried reviewed_file_count: 0 and
     review_duration_ms: 0 for an actor that ran 211 seconds. Both numbers
     were builder defaults, indistinguishable downstream from measurements.
     """
@@ -2539,9 +2539,13 @@ class TestTypeScriptContractLockstep:
         assert match.group(1).strip() == "string | null"
 
     def test_schema_two_rejected_outcome_is_required(self):
+        """Both adjustment outcomes are derived from AdjudicationOutcome, so
+        a fourth outcome cannot be added on one side only — and neither is
+        optional."""
         schema = (PLUGIN_ROOT / "schemas" / "review-output.ts").read_text()
-        assert "outcome: 'refuted';" in schema
-        assert "outcome?: 'refuted';" not in schema
+        assert "outcome: Extract<AdjudicationOutcome, 'refuted'>;" in schema
+        assert "outcome: Exclude<AdjudicationOutcome, 'refuted'>;" in schema
+        assert "outcome?:" not in schema
 
     def test_ts_schema_field_sets_match_python_validators(self):
         """schemas/review-output.ts declares exactly the field sets the two
@@ -2577,14 +2581,22 @@ class TestTypeScriptContractLockstep:
         assert top_level_fields(document_body) == REVIEWER_FIELDS | {"schema"}
 
         ledger_body = self._interface_body("FindingsLedger", extends="ReviewContent")
+        ledger_fields = top_level_fields(ledger_body)
         ledger_optional_fields = {
-            field for field in top_level_fields(ledger_body)
-            if f"{field}?:" in ledger_body
+            field for field in ledger_fields if f"{field}?:" in ledger_body
         }
         assert ledger_optional_fields == critic_adjustments._LEDGER_EXTENSION_FIELDS
+        # The three ReviewContent fields the ledger narrows, and the only
+        # keys it requires on top of what it inherits.
+        assert ledger_fields - ledger_optional_fields == {
+            "schema", "verdict", "meta",
+        }
 
         reconciliation_body = self._interface_body("Reconciliation")
         assert top_level_fields(reconciliation_body) == findings_ledger.RECONCILIATION_FIELDS
+
+        meta_body = self._interface_body("ReviewMeta")
+        assert top_level_fields(meta_body) == review_output._REQUIRED_META_FIELDS
 
 
 # =============================================================================
@@ -2675,7 +2687,7 @@ class TestReconciliationSectionsRender:
     def test_pipeline_line_points_at_the_full_metrics_block(self):
         """The narrative template ended its Pipeline line with a pointer to
         the metrics block. Dropping it in the substitution would lose the
-        one hint a reader has that more accounting exists."""
+        one hint a reader has that more metrics exist."""
         rendered = render_markdown(canonical_findings_ledger(("high",)))
         assert (
             "Full metrics in `review-findings.json` \u2192 "
@@ -2765,7 +2777,7 @@ class TestMaterializeFindingsMarkdown:
 
     def test_default_suffix_ignores_unfinalized_reviewer_drafts(self):
         with tempfile.TemporaryDirectory() as d:
-            _write_required_accounting_input(d, "security")
+            _write_required_assignment(d, "security")
             _save_draft(
                 ReviewOutputBuilder(pr_id="1", reviewer="security"), d
             )
@@ -2790,7 +2802,7 @@ class TestMaterializeFindingsMarkdown:
 
     def test_default_suffix_ignores_the_findings_artifact(self):
         with tempfile.TemporaryDirectory() as d:
-            _write_required_accounting_input(d, "security")
+            _write_required_assignment(d, "security")
             _save_and_finalize(
                 ReviewOutputBuilder(pr_id="1", reviewer="security"), d
             )
@@ -2896,7 +2908,7 @@ class TestMaterializeFindingsMarkdown:
             / "output.py"
         )
         with tempfile.TemporaryDirectory() as d:
-            _write_required_accounting_input(d, "security")
+            _write_required_assignment(d, "security")
             _save_and_finalize(
                 ReviewOutputBuilder(pr_id="1", reviewer="security"), d
             )
@@ -3165,7 +3177,7 @@ class TestRendererFaithfulness:
         assert "## Recommendations" not in render_markdown(data)
 
 
-class TestReviewerAccountingPartition:
+class TestReviewerFilePartition:
     def _doc(self, **overrides):
         doc = canonical_review_document(
             "security", ("high",),
@@ -3182,16 +3194,16 @@ class TestReviewerAccountingPartition:
         {"reviewed_file_claims": ["src/zzz.py"]},
         {"unclaimed_review_files": []},
         {"unclaimed_review_files": ["src/b.py", "src/a.py"]},
-        {"review_accounted_file_count": 999},
+        {"reviewed_file_count": 999},
         {"reviewed_file_claims": ["src/a.py", "src/a.py"]},
         {
             "reviewed_file_claims": ["src/b.py", "src/a.py"],
             "unclaimed_review_files": [],
-            "review_accounted_file_count": 2,
+            "reviewed_file_count": 2,
         },
     ])
     def test_incoherent_partition_is_rejected(self, overrides):
-        with pytest.raises(ValueError, match="accounting"):
+        with pytest.raises(ValueError, match="reviewed-file"):
             validate_review_document(self._doc(**overrides), "security")
 
 
@@ -3203,23 +3215,23 @@ def test_validate_review_content_rejects_reviewer_fields():
     assert validate_review_content(content, schema=2) is content
 
 
-def test_accounting_fields_projects_the_six_envelope_keys():
-    """The one place the six-key shape is assembled from a derived accounting."""
-    from review.agent.coverage import ReviewAccounting
+def test_reviewed_files_fields_projects_the_six_envelope_keys():
+    """The one place the six-key shape is assembled from one derivation."""
+    from review.agent.review_assignment import ReviewedFiles
 
-    accounting = ReviewAccounting(
+    reviewed_files = ReviewedFiles(
         agent_name="security-reviewer",
         reviewer="security",
         review_claimable_files=("src/a.py", "src/b.py"),
         reviewed_file_claims=("src/a.py",),
         unclaimed_review_files=("src/b.py",),
         inline_diff_file_count=1,
-        review_accounted_file_count=2,
+        reviewed_file_count=2,
         in_scope_review_file_count=2,
         review_budget=12,
         channels=("blocking",),
     )
-    assert set(accounting_fields(accounting)) == REVIEWER_FIELDS - {"reviewer"}
+    assert set(reviewed_files_fields(reviewed_files)) == REVIEWER_FIELDS - {"reviewer"}
 
 
 def test_missing_content_field_names_the_content_gate():
@@ -3229,8 +3241,8 @@ def test_missing_content_field_names_the_content_gate():
         validate_review_document(doc, "security")
 
 
-def test_missing_accounting_field_names_the_accounting_gate():
+def test_missing_reviewed_file_field_names_the_envelope_gate():
     doc = canonical_review_document("security", ())
     del doc["review_claimable_files"]
-    with pytest.raises(ValueError, match="missing accounting fields"):
+    with pytest.raises(ValueError, match="missing reviewed-file fields"):
         validate_review_document(doc, "security")

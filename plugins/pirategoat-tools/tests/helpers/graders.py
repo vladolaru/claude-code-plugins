@@ -54,7 +54,7 @@ REQUIRED_JSON_TOP_FIELDS = {
     "reviewed_file_claims",
     "unclaimed_review_files",
     "inline_diff_file_count",
-    "review_accounted_file_count",
+    "reviewed_file_count",
     "in_scope_review_file_count",
     "meta",
 }
@@ -103,7 +103,7 @@ def grade_review_json(path: str, expected_reviewer: str = None) -> GradeResult:
     """Grade a reviewer JSON output file.
 
     Checks: file exists, valid JSON, required fields, valid severities,
-    valid verdict, finding/check schemas, accounting, summary structure. When expected_reviewer
+    valid verdict, finding/check schemas, reviewed-file coherence, summary structure. When expected_reviewer
     is given, the JSON's reviewer field must match it — a valid artifact at
     the expected path but labeled as ANOTHER reviewer must not pass
     compliance and proceed to detection scoring under the wrong identity.
@@ -271,7 +271,7 @@ def grade_review_json(path: str, expected_reviewer: str = None) -> GradeResult:
 
     count_fields = (
         "inline_diff_file_count",
-        "review_accounted_file_count",
+        "reviewed_file_count",
         "in_scope_review_file_count",
     )
     for field_name in count_fields:
@@ -281,10 +281,10 @@ def grade_review_json(path: str, expected_reviewer: str = None) -> GradeResult:
             f"{field_name} must be a non-negative integer",
         ))
     inline_count = data.get("inline_diff_file_count")
-    accounted_count = data.get("review_accounted_file_count")
+    reviewed_count = data.get("reviewed_file_count")
     in_scope_count = data.get("in_scope_review_file_count")
     if (
-        all(type(value) is int for value in (inline_count, accounted_count, in_scope_count))
+        all(type(value) is int for value in (inline_count, reviewed_count, in_scope_count))
         and isinstance(claimable, list)
         and isinstance(claimed, list)
     ):
@@ -293,8 +293,8 @@ def grade_review_json(path: str, expected_reviewer: str = None) -> GradeResult:
             "in-scope count does not match inline and review-claimable files",
         ))
         checks.append((
-            inline_count + len(claimed) == accounted_count,
-            "accounted count does not match inline and reviewed-file claims",
+            inline_count + len(claimed) == reviewed_count,
+            "reviewed-file count does not match inline and reviewed-file claims",
         ))
 
     for retired_key in ("issues", "clearances", "narrative_summary"):
@@ -689,7 +689,7 @@ def grade_detection(review: dict, key: dict, repo_root=None) -> GradeResult:
       max_severity:          highest allowed severity for ANY finding
       max_unexpected:        cap on findings no spec claimed
       min_check_count:       minimum number of structured check outcomes
-      max_unclaimed_review_file_count: maximum serialized accounting gaps
+      max_unclaimed_review_file_count: maximum serialized unclaimed-file gaps
       expect_not_applicable: the correct answer is abstention
 
     When repo_root is known, absolute finding paths are canonicalized against it

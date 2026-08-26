@@ -1494,9 +1494,9 @@ class TestReviewCoverageSection:
     def _render(mod, gaps=None, claims=None, unscoped=None, inline=None):
         # Straight at briefings.py: the renderer is shared by the record
         # assembler and step 11, so the facade is not the seam under test.
-        from review.briefings import _render_review_accounting_section
+        from review.briefings import _render_file_review_section
 
-        return _render_review_accounting_section({
+        return _render_file_review_section({
             "agents_receiving_inline_diff_by_file": inline,
             "agents_with_unclaimed_review_by_file": gaps,
             "agents_claiming_review_by_file": claims,
@@ -1662,7 +1662,7 @@ class TestStep9ReviewRecord:
         re-render it into a briefing the orchestrator would paste from."""
         state = {
             "completed_steps": [],
-            "review_accounting": {
+            "file_review": {
                 "agents_with_unclaimed_review_by_file": {
                     "src/starved.php": ["code-reviewer"]
                 },
@@ -2396,7 +2396,7 @@ class TestStep11ReportAuthoring:
         briefing would give the orchestrator a second copy to paraphrase
         — a field run turned the hedged sentence into "read by nobody"."""
         state = {
-            "review_accounting": {
+            "file_review": {
                 "agents_with_unclaimed_review_by_file": {
                     "src/starved.php": ["code-reviewer"]
                 },
@@ -2417,7 +2417,7 @@ class TestStep11ReportAuthoring:
         """Claims are hedged as "not proof of read". Demanding the verdict
         acknowledge a gap on a claims-only run manufactures one."""
         state = {
-            "review_accounting": {
+            "file_review": {
                 "agents_with_unclaimed_review_by_file": {},
                 "agents_claiming_review_by_file": {
                     "src/big.py": ["security-reviewer"]
@@ -2433,7 +2433,7 @@ class TestStep11ReportAuthoring:
         self, mod
     ):
         state = {
-            "review_accounting": {
+            "file_review": {
                 "agents_receiving_inline_diff_by_file": {
                     "src/shared.php": ["code-reviewer"]
                 },
@@ -2459,7 +2459,7 @@ class TestStep11ReportAuthoring:
             if population == "agents_with_unclaimed_review_by_file"
             else ["package-lock.json"]
         )
-        state = {"review_accounting": {
+        state = {"file_review": {
             "agents_with_unclaimed_review_by_file": {},
             "agents_claiming_review_by_file": {},
             "unscoped_files": [],

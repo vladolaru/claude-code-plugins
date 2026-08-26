@@ -41,8 +41,8 @@ _bootstrap_mod = importlib.util.module_from_spec(_bootstrap_spec)
 _bootstrap_spec.loader.exec_module(_bootstrap_mod)
 
 
-def _write_accounting_input(output_dir, reviewer="security", claimable=()):
-    Path(output_dir, f"{reviewer}-review-accounting-input.json").write_text(
+def _write_assignment(output_dir, reviewer="security", claimable=()):
+    Path(output_dir, f"{reviewer}-assignment.json").write_text(
         json.dumps({
             "schema": 4,
             "agent_name": f"{reviewer}-reviewer",
@@ -58,7 +58,7 @@ def _write_accounting_input(output_dir, reviewer="security", claimable=()):
 
 def _real_saved_review(output_dir, reviewer="security"):
     """Return one production-validated persisted snapshot with f1 and c1."""
-    _write_accounting_input(
+    _write_assignment(
         output_dir,
         reviewer=reviewer,
         claimable=("src/large-a.php",),
@@ -662,7 +662,7 @@ class TestBashBuilderRecognition:
 
     def test_budget_carrying_envelope_is_still_recognized_historically(self):
         """1.114.0 briefly carried the call-budget target on this envelope
-        before a later fix moved it to the accounting input; the live
+        before a later fix moved it to the assignment; the live
         envelope never emits this name again (see
         test_envelope_never_carries_a_budget_assignment in
         test_bootstrap_integration.py). But run12's own recorded transcripts
@@ -959,7 +959,7 @@ class TestBashBuilderRecognition:
         self, tmp_path
     ):
         """Known prior bytes must survive an add-only continuation."""
-        _write_accounting_input(
+        _write_assignment(
             tmp_path,
             claimable=("src/large-a.php", "src/large-b.php"),
         )
@@ -1062,7 +1062,7 @@ class TestBashBuilderRecognition:
             "duplicate-check-id",
             "wrong-reviewer",
             "wrong-schema",
-            "missing-accounting-field",
+            "missing-reviewed-file-field",
         ],
     )
     def test_noncanonical_prior_snapshot_fails_closed(

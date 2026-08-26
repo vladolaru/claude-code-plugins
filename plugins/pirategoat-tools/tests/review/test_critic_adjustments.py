@@ -205,7 +205,7 @@ class TestCanonicalFindingsReader:
         path.write_text(json.dumps(payload))
         return path
 
-    def test_schema_three_ledger_without_accounting_is_canonical(self):
+    def test_schema_three_ledger_without_reviewed_files_is_canonical(self):
         validate_findings_document(canonical_findings_ledger(("high",)))
 
     @pytest.mark.parametrize("extra", [
@@ -2568,7 +2568,7 @@ class TestWithdrawnAssessmentRender:
             "findings": [], "assessment": None,
             "review_claimable_files": [], "reviewed_file_claims": [],
             "unclaimed_review_files": [], "inline_diff_file_count": 1,
-            "review_accounted_file_count": 1,
+            "reviewed_file_count": 1,
             "in_scope_review_file_count": 1, "observations": None,
             "recommendations": None, "positive_observations": None,
             "checks": None,

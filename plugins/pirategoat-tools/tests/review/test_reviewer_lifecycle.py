@@ -24,11 +24,11 @@ from review.reviewer_lifecycle import close_review_intake, review_paths
 from review.telemetry import ReviewTelemetry
 
 
-def _write_accounting_input(
+def _write_assignment(
     output_dir, reviewer="code", agent_name=None, claimable=None
 ):
     claimable = ["src/claimable.py"] if claimable is None else claimable
-    Path(output_dir, f"{reviewer}-review-accounting-input.json").write_text(
+    Path(output_dir, f"{reviewer}-assignment.json").write_text(
         json.dumps({
             "schema": 4,
             "agent_name": agent_name or f"{reviewer}-reviewer",
@@ -65,13 +65,13 @@ def _add_finding(builder, title="Finding"):
 
 
 class TestReviewPaths:
-    def test_names_exactly_one_draft_final_and_accounting_input(self, tmp_path):
+    def test_names_exactly_one_draft_final_and_assignment(self, tmp_path):
         paths = review_paths(str(tmp_path), "code")
 
         assert Path(paths.draft).name == "code-review.draft.json"
         assert Path(paths.final).name == "code-review.json"
-        assert Path(paths.accounting_input).name == (
-            "code-review-accounting-input.json"
+        assert Path(paths.assignment).name == (
+            "code-assignment.json"
         )
 
 
@@ -79,7 +79,7 @@ class TestDraftOpenAndReplacement:
     def test_first_open_binds_pathless_save_and_prints_compact_receipt(
         self, tmp_path, capsys
     ):
-        _write_accounting_input(tmp_path)
+        _write_assignment(tmp_path)
         builder = _open_builder(tmp_path)
 
         saved = builder.save_draft()
@@ -98,7 +98,7 @@ class TestDraftOpenAndReplacement:
     def test_rehydrates_every_builder_owned_field_and_preserves_finding_id(
         self, tmp_path
     ):
-        _write_accounting_input(tmp_path)
+        _write_assignment(tmp_path)
         builder = _open_builder(tmp_path)
         finding_id = _add_finding(builder)
         builder.add_observation("src/code.py", "Observed", "behavior")
@@ -133,7 +133,7 @@ class TestDraftOpenAndReplacement:
     def test_rejects_draft_bound_to_other_identity_or_schema(
         self, tmp_path, field, value, message
     ):
-        _write_accounting_input(tmp_path)
+        _write_assignment(tmp_path)
         saved = _open_builder(tmp_path).save_draft()
         path = Path(saved["draft"])
         review = json.loads(path.read_text())
@@ -144,21 +144,21 @@ class TestDraftOpenAndReplacement:
             _open_builder(tmp_path)
 
     def test_rejects_malformed_draft(self, tmp_path):
-        _write_accounting_input(tmp_path)
+        _write_assignment(tmp_path)
         Path(tmp_path, "code-review.draft.json").write_text("{not json")
 
         with pytest.raises(ValueError, match="malformed review draft"):
             _open_builder(tmp_path)
 
     def test_rejects_open_after_intake_close(self, tmp_path):
-        _write_accounting_input(tmp_path)
+        _write_assignment(tmp_path)
         close_review_intake(str(tmp_path), ["code-reviewer"])
 
         with pytest.raises(ValueError, match="intake"):
             _open_builder(tmp_path)
 
     def test_rejects_open_after_finalization(self, tmp_path):
-        _write_accounting_input(tmp_path)
+        _write_assignment(tmp_path)
         saved = _open_builder(tmp_path).save_draft()
         finalize_review(str(tmp_path), "code", saved["review_digest"])
 
@@ -166,7 +166,7 @@ class TestDraftOpenAndReplacement:
             _open_builder(tmp_path)
 
     def test_absent_and_present_open_share_one_entrypoint(self, tmp_path):
-        _write_accounting_input(tmp_path)
+        _write_assignment(tmp_path)
         first = _open_builder(tmp_path)
         finding_id = _add_finding(first)
         first.save_draft()
@@ -177,7 +177,7 @@ class TestDraftOpenAndReplacement:
         assert present.findings[0]["id"] == finding_id
 
     def test_stale_builder_cannot_replace_newer_draft(self, tmp_path):
-        _write_accounting_input(tmp_path)
+        _write_assignment(tmp_path)
         first = _open_builder(tmp_path)
         second = _open_builder(tmp_path)
         _add_finding(first, "First")
@@ -192,7 +192,7 @@ class TestDraftOpenAndReplacement:
         )["findings"][0]["title"] == "First"
 
     def test_winning_builder_can_save_repeated_replacements(self, tmp_path):
-        _write_accounting_input(tmp_path)
+        _write_assignment(tmp_path)
         builder = _open_builder(tmp_path)
         first = builder.save_draft()
         _add_finding(builder)
@@ -206,7 +206,7 @@ class TestDraftOpenAndReplacement:
     def test_atomic_replace_failure_leaves_no_draft_or_staging_file(
         self, tmp_path, monkeypatch
     ):
-        _write_accounting_input(tmp_path)
+        _write_assignment(tmp_path)
         builder = _open_builder(tmp_path)
 
         def _fail_replace(_source, _target):
@@ -222,7 +222,7 @@ class TestDraftOpenAndReplacement:
 
 class TestFinalization:
     def test_digest_bound_finalization_is_idempotent(self, tmp_path):
-        _write_accounting_input(tmp_path)
+        _write_assignment(tmp_path)
         saved = _open_builder(tmp_path).save_draft()
 
         first = finalize_review(str(tmp_path), "code", saved["review_digest"])
@@ -234,7 +234,7 @@ class TestFinalization:
         assert not Path(saved["draft"]).exists()
 
     def test_old_digest_cannot_finalize_replacement(self, tmp_path):
-        _write_accounting_input(tmp_path)
+        _write_assignment(tmp_path)
         builder = _open_builder(tmp_path)
         old = builder.save_draft()
         _add_finding(builder)
@@ -247,7 +247,7 @@ class TestFinalization:
         assert not Path(tmp_path, "code-review.json").exists()
 
     def test_cli_first_and_retry_print_the_same_one_line(self, tmp_path):
-        _write_accounting_input(tmp_path)
+        _write_assignment(tmp_path)
         saved = _open_builder(tmp_path).save_draft()
         command = [
             sys.executable,
@@ -287,7 +287,7 @@ class TestReviewIntakeClose:
         assert "invalid_final_reviews" not in persisted
 
     def test_close_discards_only_recognized_dispatched_drafts(self, tmp_path):
-        _write_accounting_input(tmp_path)
+        _write_assignment(tmp_path)
         saved = _open_builder(tmp_path).save_draft()
         unrelated = Path(tmp_path, "foreign-review.draft.json")
         unrelated.write_text("{}")
@@ -308,7 +308,7 @@ class TestReviewIntakeClose:
         self, tmp_path, monkeypatch
     ):
         assert output_mod.output_dir_lock is lifecycle_mod.output_dir_lock
-        _write_accounting_input(tmp_path)
+        _write_assignment(tmp_path)
         builder = _open_builder(tmp_path)
         mutex = threading.Lock()
         close_holds_lock = threading.Event()
@@ -354,7 +354,7 @@ class TestFinalizationTelemetry:
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         telemetry = _start_telemetry(tmp_path, output_dir)
-        _write_accounting_input(output_dir)
+        _write_assignment(output_dir)
         builder = _open_builder(output_dir)
         builder.save_draft()
         _add_finding(builder)

@@ -3,7 +3,7 @@
 
 The ledger is review content — findings, checks, assessment, observations,
 recommendations, positives, id counters — plus reconciliation metrics. It has
-no reviewer identity and no reviewed-file accounting: those belong to one
+no reviewer identity and no reviewed files: those belong to one
 reviewer's draft/final lifecycle, which a synthesized cross-review artifact
 does not have. This is the one deliberate subclass of ReviewOutputBuilder;
 do not grow a hierarchy under it.

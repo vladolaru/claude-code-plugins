@@ -60,10 +60,10 @@ def _make_valid_json(tmp_dir: str, reviewer: str = "security") -> str:
         "Trace the request handler into the database call",
         "Yes; the value reaches the query without parameterization.",
     )
-    accounting_input = os.path.join(
-        tmp_dir, f"{reviewer}-review-accounting-input.json"
+    assignment = os.path.join(
+        tmp_dir, f"{reviewer}-assignment.json"
     )
-    with open(accounting_input, "w") as f:
+    with open(assignment, "w") as f:
         json.dump({
             "schema": 4,
             "agent_name": f"{reviewer}-reviewer",
@@ -127,7 +127,7 @@ class TestGradeReviewJson:
             ("non-object-finding", "review finding 0 must be an object"),
             ("non-list-checks", "review checks must be a list"),
             (
-                "non-list-accounting",
+                "non-list-reviewed-files",
                 "review reviewed_file_claims must be a list of strings",
             ),
             (
@@ -148,7 +148,7 @@ class TestGradeReviewJson:
             data["findings"] = [7]
         elif malformation == "non-list-checks":
             data["checks"] = 7
-        elif malformation == "non-list-accounting":
+        elif malformation == "non-list-reviewed-files":
             data["reviewed_file_claims"] = 7
         else:
             data["schema"] = 1
@@ -172,11 +172,11 @@ class TestGradeReviewJson:
             "reviewed_file_claims",
             "unclaimed_review_files",
             "inline_diff_file_count",
-            "review_accounted_file_count",
+            "reviewed_file_count",
             "in_scope_review_file_count",
         ],
     )
-    def test_missing_review_domain_or_accounting_field_fails(
+    def test_missing_review_domain_or_reviewed_file_field_fails(
         self, tmp_dir, field_name
     ):
         path = _make_valid_json(tmp_dir)
@@ -318,7 +318,7 @@ class TestGradeReviewJson:
 
     def test_missing_envelope_field_fails(self, tmp_dir):
         path = os.path.join(tmp_dir, "missing.json")
-        data = {"pr_id": "1", "reviewer": "test"}  # the accounting envelope is absent
+        data = {"pr_id": "1", "reviewer": "test"}  # the reviewed-file envelope is absent
         with open(path, "w") as f:
             json.dump(data, f)
         result = grade_review_json(path)
@@ -864,7 +864,7 @@ class TestGradeDetection:
         }])
         assert grade_detection(recorded, key).passed
 
-    def test_review_accounting_gate_uses_serialized_unclaimed_files(self):
+    def test_reviewed_files_gate_uses_serialized_unclaimed_files(self):
         key = {
             "verdict_in": ["approve"],
             "max_unclaimed_review_file_count": 0,

@@ -37,9 +37,9 @@ from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 
 try:
-    from .coverage import (
-        ReviewAccountingError,
-        derive_review_accounting,
+    from .review_assignment import (
+        ReviewAssignmentError,
+        derive_reviewed_files,
         normalize_review_path,
     )
 except ImportError:
@@ -48,9 +48,9 @@ except ImportError:
     )
     if _SCRIPTS_DIR not in sys.path:
         sys.path.insert(0, _SCRIPTS_DIR)
-    from review.agent.coverage import (
-        ReviewAccountingError,
-        derive_review_accounting,
+    from review.agent.review_assignment import (
+        ReviewAssignmentError,
+        derive_reviewed_files,
         normalize_review_path,
     )
 
@@ -464,7 +464,7 @@ def render_review_body(data: Dict) -> str:
         md.append(f"- High: {counts['high']}\n")
         md.append(f"- Medium: {counts['medium']}\n\n")
 
-    # Unclaimed review work derived by the accounting authority.
+    # Unclaimed review work derived from the reviewer's assignment.
     if data.get('unclaimed_review_files'):
         files = ", ".join(f"`{f}`" for f in data['unclaimed_review_files'])
         md.append(f"**Not reviewed (budget):** {files}\n\n")
@@ -942,11 +942,11 @@ class ReviewOutputBuilder:
         ):
             candidate["severity"] = floor
         candidate_channel = candidate.get("channel") or "blocking"
-        accounting = self._bound_accounting()
-        if accounting is not None and candidate_channel not in accounting.channels:
+        reviewed_files = self._bound_reviewed_files()
+        if reviewed_files is not None and candidate_channel not in reviewed_files.channels:
             raise ValueError(
                 f"channel {candidate_channel!r} is not among this reviewer's "
-                f"channels {list(accounting.channels)}"
+                f"channels {list(reviewed_files.channels)}"
             )
         _validate_finding_shape(candidate, index)
         self.findings[index] = candidate
@@ -1109,11 +1109,11 @@ class ReviewOutputBuilder:
                 )
 
         effective_channel = channel or "blocking"
-        accounting = self._bound_accounting()
-        if accounting is not None and effective_channel not in accounting.channels:
+        reviewed_files = self._bound_reviewed_files()
+        if reviewed_files is not None and effective_channel not in reviewed_files.channels:
             raise ValueError(
                 f"channel {effective_channel!r} is not among this reviewer's "
-                f"channels {list(accounting.channels)}"
+                f"channels {list(reviewed_files.channels)}"
             )
 
         # Validate line — None records a first-class file-scoped finding (loud),
@@ -1255,8 +1255,8 @@ class ReviewOutputBuilder:
             return stamped.strip()
         return None
 
-    def _bound_accounting(self):
-        """Accounting derived from the bound input, or None when not bound.
+    def _bound_reviewed_files(self):
+        """Reviewed files derived from the bound assignment, or None.
 
         Add-time feedback only: save_draft() derives again, with the real
         claims, and fails closed. The facts this serves — ``channels`` and
@@ -1267,10 +1267,10 @@ class ReviewOutputBuilder:
         if self._paths is None:
             return None
         try:
-            with open(self._paths.accounting_input, "r", encoding="utf-8") as handle:
+            with open(self._paths.assignment, "r", encoding="utf-8") as handle:
                 data = json.load(handle)
-            return derive_review_accounting(data, [])
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ReviewAccountingError):
+            return derive_reviewed_files(data, [])
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ReviewAssignmentError):
             return None
 
     @staticmethod
@@ -1280,8 +1280,8 @@ class ReviewOutputBuilder:
         Normalizes "./src/x.php", "src\\x.php", and "src//x.php" to one
         form, and rejects forms no scope path can ever take (absolute,
         traversal, drive-prefixed, dot-only) — an unmatched path is not a
-        near miss, it is an accounting statement about a file that does not
-        exist in this review.
+        near miss, it is a claim about a file that does not exist in this
+        review.
         """
         if not isinstance(file, str) or not file.strip():
             raise ValueError(
@@ -1289,7 +1289,7 @@ class ReviewOutputBuilder:
             )
         try:
             return normalize_review_path(file, "claim_files_reviewed")
-        except ReviewAccountingError as exc:
+        except ReviewAssignmentError as exc:
             raise ValueError(str(exc)) from exc
 
     @staticmethod
@@ -1325,10 +1325,10 @@ class ReviewOutputBuilder:
                 "claim_files_reviewed requires at least one file path — "
                 "a call naming nothing is a no-op, not a claim."
             )
-        accounting = self._bound_accounting()
+        reviewed_files = self._bound_reviewed_files()
         known = (
-            frozenset(accounting.review_claimable_files)
-            if accounting is not None else None
+            frozenset(reviewed_files.review_claimable_files)
+            if reviewed_files is not None else None
         )
         normalized: List[str] = []
         unknown: List[str] = []
@@ -1352,35 +1352,35 @@ class ReviewOutputBuilder:
             raise ValueError("; ".join(parts))
         return normalized
 
-    def _derive_review_accounting(self, output_dir: str):
-        """Return the required authoritative accounting for publication.
+    def _derive_reviewed_files(self, output_dir: str):
+        """Return the reviewed files this publication must carry.
 
         Every draft save uses this path; the bound output directory makes the
         check independent of the optional environment envelope. A caller
         serializing manually via to_dict/to_json knowingly opts out of
-        accounting validation — publication is the enforcing seam.
+        that validation — publication is the enforcing seam.
         """
-        accounting_input_path = review_paths(output_dir, self.reviewer).accounting_input
+        assignment_path = review_paths(output_dir, self.reviewer).assignment
         try:
-            with open(accounting_input_path, "r", encoding="utf-8") as handle:
-                accounting_input = json.load(handle)
+            with open(assignment_path, "r", encoding="utf-8") as handle:
+                assignment = json.load(handle)
         except FileNotFoundError as exc:
             raise ValueError(
-                "missing authoritative review-accounting input: "
-                f"{accounting_input_path}"
+                "missing authoritative review assignment: "
+                f"{assignment_path}"
             ) from exc
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError(
-                "malformed authoritative review-accounting input: "
-                f"{accounting_input_path}"
+                "malformed authoritative review assignment: "
+                f"{assignment_path}"
             ) from exc
         try:
-            return derive_review_accounting(
-                accounting_input, self.reviewed_file_claims
+            return derive_reviewed_files(
+                assignment, self.reviewed_file_claims
             )
-        except ReviewAccountingError as exc:
+        except ReviewAssignmentError as exc:
             raise ValueError(
-                "malformed authoritative review-accounting input: "
+                "malformed authoritative review assignment: "
                 f"{exc}"
             ) from exc
 
@@ -1462,8 +1462,8 @@ class ReviewOutputBuilder:
         """Build the review content as a dictionary from this builder's own state.
 
         Carries content plus ``reviewer``. It has no authority over the six
-        accounting fields — ``save_draft`` stitches those on separately via
-        ``accounting_fields()``, from the one authoritative derivation.
+        reviewed-file fields — ``save_draft`` stitches those on separately via
+        ``reviewed_files_fields()``, from the one authoritative derivation.
         """
         review_duration = self._review_duration_ms(self._output_dir)
 
@@ -1533,21 +1533,21 @@ class ReviewOutputBuilder:
             raise ValueError(
                 "save_draft requires ReviewOutputBuilder.open(...)"
             )
-        review_accounting = self._derive_review_accounting(self._output_dir)
+        reviewed_files = self._derive_reviewed_files(self._output_dir)
         off_channel = sorted({
             finding.get("channel") or "blocking" for finding in self.findings
-        } - set(review_accounting.channels))
+        } - set(reviewed_files.channels))
         if off_channel:
             raise ValueError(
                 f"findings use channel(s) {off_channel} not among this reviewer's "
-                f"channels {list(review_accounting.channels)}"
+                f"channels {list(reviewed_files.channels)}"
             )
-        document = {**self.to_dict(), **accounting_fields(review_accounting)}
+        document = {**self.to_dict(), **reviewed_files_fields(reviewed_files)}
         draft_bytes = json.dumps(
             document, indent=2, ensure_ascii=False
         ).encode("utf-8")
         review = validate_review_document(document, self.reviewer)
-        agent_name = review_accounting.agent_name
+        agent_name = reviewed_files.agent_name
         review_digest = hashlib.sha256(draft_bytes).hexdigest()
 
         with output_dir_lock(self._output_dir):
@@ -1570,10 +1570,10 @@ class ReviewOutputBuilder:
 
         self._base_digest = review_digest
         self._last_saved_review = review
-        return self._draft_receipt(review_digest, review_accounting)
+        return self._draft_receipt(review_digest, reviewed_files)
 
     def _draft_receipt(
-        self, review_digest: str, review_accounting
+        self, review_digest: str, reviewed_files
     ) -> dict[str, str]:
         """Print and return the compact next-action surface for one save."""
         review = self._last_saved_review
@@ -1606,7 +1606,7 @@ class ReviewOutputBuilder:
             if len(unclaimed) > 3:
                 shown += f" (+{len(unclaimed) - 3} more)"
             # A target of ~0 calls is not a target worth repeating.
-            budget = review_accounting.review_budget
+            budget = reviewed_files.review_budget
             if budget:
                 shown += f" | target ~{budget} tool calls"
             print(
@@ -1656,24 +1656,24 @@ REVIEWER_FIELDS = frozenset({
     "reviewed_file_claims",
     "unclaimed_review_files",
     "inline_diff_file_count",
-    "review_accounted_file_count",
+    "reviewed_file_count",
     "in_scope_review_file_count",
 })
 
 
-def accounting_fields(accounting) -> Dict:
-    """The six reviewer-envelope accounting fields, from one derived accounting.
+def reviewed_files_fields(reviewed_files) -> Dict:
+    """The six reviewer-envelope reviewed-file fields, from one derivation.
 
     ``save_draft`` stitches these onto ``to_dict()``'s content to build the
     complete draft document; nothing else may assemble them piecemeal.
     """
     return {
-        "review_claimable_files": list(accounting.review_claimable_files),
-        "reviewed_file_claims": list(accounting.reviewed_file_claims),
-        "unclaimed_review_files": list(accounting.unclaimed_review_files),
-        "inline_diff_file_count": accounting.inline_diff_file_count,
-        "review_accounted_file_count": accounting.review_accounted_file_count,
-        "in_scope_review_file_count": accounting.in_scope_review_file_count,
+        "review_claimable_files": list(reviewed_files.review_claimable_files),
+        "reviewed_file_claims": list(reviewed_files.reviewed_file_claims),
+        "unclaimed_review_files": list(reviewed_files.unclaimed_review_files),
+        "inline_diff_file_count": reviewed_files.inline_diff_file_count,
+        "reviewed_file_count": reviewed_files.reviewed_file_count,
+        "in_scope_review_file_count": reviewed_files.in_scope_review_file_count,
     }
 
 
@@ -2034,11 +2034,11 @@ def validate_review_content(document, *, schema):
 
 
 def _validate_reviewer_envelope(review, reviewer):
-    """Validate the reviewer envelope as a self-checking accounting partition."""
+    """Validate the reviewer envelope as a self-checking file partition."""
     missing = sorted(REVIEWER_FIELDS - set(review))
     if missing:
         raise ValueError(
-            "review is missing accounting fields: " + ", ".join(missing)
+            "review is missing reviewed-file fields: " + ", ".join(missing)
         )
     if not isinstance(review["reviewer"], str) or review["reviewer"] != reviewer:
         raise ValueError("review reviewer does not match finalization request")
@@ -2051,7 +2051,7 @@ def _validate_reviewer_envelope(review, reviewer):
             raise ValueError(f"review {field} must be a list of strings")
     for field in (
         "inline_diff_file_count",
-        "review_accounted_file_count",
+        "reviewed_file_count",
         "in_scope_review_file_count",
     ):
         if type(review[field]) is not int or review[field] < 0:
@@ -2062,24 +2062,24 @@ def _validate_reviewer_envelope(review, reviewer):
     claims = review["reviewed_file_claims"]
     claimed = set(claims)
     if len(claimable) != len(set(claimable)) or len(claimed) != len(claims):
-        raise ValueError("review accounting lists must not repeat paths")
+        raise ValueError("reviewed-file lists must not repeat paths")
     if not claimed <= set(claimable):
         raise ValueError(
-            "review accounting claims a file that is not review-claimable"
+            "reviewed-file claim names a file that is not review-claimable"
         )
     if claims != [path for path in claimable if path in claimed]:
-        raise ValueError("review accounting claims are not in claimable order")
+        raise ValueError("reviewed-file claims are not in claimable order")
     if review["unclaimed_review_files"] != [
         path for path in claimable if path not in claimed
     ]:
         raise ValueError(
-            "review accounting unclaimed files are not the complement of the claims"
+            "reviewed-file unclaimed files are not the complement of the claims"
         )
-    if review["review_accounted_file_count"] != (
+    if review["reviewed_file_count"] != (
         review["inline_diff_file_count"] + len(claimed)
     ):
         raise ValueError(
-            "review accounting accounted count does not equal inline plus claims"
+            "reviewed-file count does not equal inline plus claims"
         )
 
 
@@ -2088,7 +2088,7 @@ def validate_review_document(review, reviewer):
 
     This is the shared trust boundary for draft rehydration, finalization,
     and finalized-review readers. Validation that depends on an adjacent
-    accounting-input artifact remains in ``_validate_review``.
+    assignment artifact remains in ``_validate_review``.
     """
     if not isinstance(review, dict):
         raise ValueError("malformed review: expected an object")
@@ -2118,23 +2118,23 @@ def _validate_review(output_dir, reviewer, paths, review_bytes):
         raise ValueError("malformed review JSON") from exc
     validate_review_document(review, reviewer)
 
-    accounting_input = _read_json_object(
-        paths.accounting_input, "review-accounting input"
+    assignment = _read_json_object(
+        paths.assignment, "review assignment"
     )
     try:
-        review_accounting = derive_review_accounting(
-            accounting_input, review["reviewed_file_claims"]
+        reviewed_files = derive_reviewed_files(
+            assignment, review["reviewed_file_claims"]
         )
-    except ReviewAccountingError as exc:
+    except ReviewAssignmentError as exc:
         raise ValueError(
-            f"review accounting is malformed: {exc}"
+            f"reviewed-file derivation is malformed: {exc}"
         ) from exc
-    derived = accounting_fields(review_accounting)
+    derived = reviewed_files_fields(reviewed_files)
     if {key: review[key] for key in derived} != derived:
         raise ValueError(
-            "review derived accounting fields do not match input"
+            "review derived reviewed-file fields do not match the assignment"
         )
-    return review, review_accounting.agent_name
+    return review, reviewed_files.agent_name
 
 
 def finalize_review(output_dir: str, reviewer: str, review_digest: str):

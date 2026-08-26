@@ -23,8 +23,8 @@ from review import (
     dependency_refresh,
     reviewer_lifecycle,
 )
-from review.agent.coverage import derive_review_accounting
-from review.reconciliation_context import aggregate_review_accounting
+from review.agent.review_assignment import derive_reviewed_files
+from review.reconciliation_context import aggregate_file_review
 from review.critic_adjustments import write_findings
 from review.telemetry import ReviewTelemetry
 from review.verdict_rules import verdict_for_counts
@@ -69,9 +69,9 @@ def _write_critic_snapshot(output_dir, adjustments):
     return [entry["adjustment_id"] for entry in proposal["adjustments"]]
 
 
-def _write_required_accounting_input(output_dir, reviewer, agent_name=None):
+def _write_required_assignment(output_dir, reviewer, agent_name=None):
     Path(
-        output_dir, f"{reviewer}-review-accounting-input.json"
+        output_dir, f"{reviewer}-assignment.json"
     ).write_text(json.dumps({
         "schema": 4,
         "agent_name": agent_name or f"{reviewer}-reviewer",
@@ -85,7 +85,7 @@ def _write_required_accounting_input(output_dir, reviewer, agent_name=None):
 
 
 def _save_and_finalize(output_dir, reviewer, agent_name=None):
-    _write_required_accounting_input(output_dir, reviewer, agent_name)
+    _write_required_assignment(output_dir, reviewer, agent_name)
     saved = _output_mod.ReviewOutputBuilder.open(
         output_dir, "42", reviewer
     ).save_draft()
@@ -146,7 +146,7 @@ class TestReviewerDraftFinalizationLifecycle:
         (output_dir / "code-reviewer.started").write_text(
             datetime.now(timezone.utc).isoformat()
         )
-        accounting_input = {
+        assignment = {
             "schema": 4,
             "agent_name": "code-reviewer",
             "reviewer": "code",
@@ -159,8 +159,8 @@ class TestReviewerDraftFinalizationLifecycle:
             "in_scope_review_file_count": 3,
             "channels": ["blocking"],
         }
-        (output_dir / "code-review-accounting-input.json").write_text(
-            json.dumps(accounting_input)
+        (output_dir / "code-assignment.json").write_text(
+            json.dumps(assignment)
         )
         (output_dir / "code-reviewer-scope-summary.json").write_text(
             json.dumps({
@@ -246,8 +246,8 @@ class TestReviewerDraftFinalizationLifecycle:
         telemetry.finalize(step=11, phase="OUTPUT", title="Finalize")
         manifest = json.loads(Path(telemetry.manifest_path).read_text())
         canonical = json.loads(canonical_bytes)
-        accounting = derive_review_accounting(
-            accounting_input, ["claimable/read.py"]
+        reviewed_files = derive_reviewed_files(
+            assignment, ["claimable/read.py"]
         )
         events = [
             json.loads(line)
@@ -266,24 +266,24 @@ class TestReviewerDraftFinalizationLifecycle:
         assert len(completions) == 1
         assert completions[0] > saves[-1]
         assert canonical["reviewed_file_claims"] == list(
-            accounting.reviewed_file_claims
+            reviewed_files.reviewed_file_claims
         )
         assert canonical["unclaimed_review_files"] == list(
-            accounting.unclaimed_review_files
+            reviewed_files.unclaimed_review_files
         )
-        assert canonical["review_accounted_file_count"] == (
-            accounting.review_accounted_file_count
+        assert canonical["reviewed_file_count"] == (
+            reviewed_files.reviewed_file_count
         )
-        run_accounting = aggregate_review_accounting(
+        run_file_review = aggregate_file_review(
             str(output_dir),
             changed_files=[
                 "second.txt", "claimable/read.py", "claimable/unread.py",
             ],
         )
-        assert run_accounting["agents_claiming_review_by_file"] == {
+        assert run_file_review["agents_claiming_review_by_file"] == {
             "claimable/read.py": ["code-reviewer"],
         }
-        assert run_accounting["agents_with_unclaimed_review_by_file"] == {
+        assert run_file_review["agents_with_unclaimed_review_by_file"] == {
             "claimable/unread.py": ["code-reviewer"],
         }
         assert (output_dir / "code-review.md").read_text() == (
@@ -1737,7 +1737,7 @@ class TestStep8Orchestration:
             lambda *_args: reviewer_lifecycle.ReviewPaths(
                 draft=str(authority_dir / "draft.json"),
                 final=str(final_path),
-                accounting_input=str(authority_dir / "accounting.json"),
+                assignment=str(authority_dir / "authority.json"),
             ),
         )
         monkeypatch.setitem(
@@ -2440,7 +2440,7 @@ class TestStep9CoverageMeasurement:
             "src/a.py,src/big_module.py,src/starved.php,package-lock.json",
         )
 
-        assert state["review_accounting"] == {
+        assert state["file_review"] == {
             "scope_reporting_agent_count": 2,
             "unscoped_files": ["package-lock.json"],
             "agents_receiving_inline_diff_by_file": {
@@ -2458,7 +2458,7 @@ class TestStep9CoverageMeasurement:
         """A re-entered step 9 in a run with nothing to measure must not
         keep the previous run's gaps standing — the record would then
         report a coverage problem this run never measured."""
-        stale = {"review_accounting": {
+        stale = {"file_review": {
             "agents_with_unclaimed_review_by_file": {
                 "src/stale.php": ["code-reviewer"]
             }
@@ -2466,7 +2466,7 @@ class TestStep9CoverageMeasurement:
 
         state = self._run_step(mod, tmp_path, "src/a.py", state=stale)
 
-        assert state["review_accounting"] is None
+        assert state["file_review"] is None
 
     def test_unmeasured_unscoped_is_none_not_empty(self, mod, tmp_path):
         """`unscoped_files: null` is "not measured", not "none found" —
@@ -2476,17 +2476,17 @@ class TestStep9CoverageMeasurement:
 
         state = self._run_step(
             mod, tmp_path, "",
-            state={"review_accounting": {"unscoped_files": ["stale.py"]}},
+            state={"file_review": {"unscoped_files": ["stale.py"]}},
         )
 
-        assert state["review_accounting"]["unscoped_files"] is None
+        assert state["file_review"]["unscoped_files"] is None
 
     def test_measured_empty_unscoped_is_a_list(self, mod, tmp_path):
         self._summary(tmp_path, "security-reviewer", inline=["src/a.py"])
 
         state = self._run_step(mod, tmp_path, "src/a.py")
 
-        assert state["review_accounting"]["unscoped_files"] == []
+        assert state["file_review"]["unscoped_files"] == []
 
     def test_the_measured_populations_reach_the_record(self, mod, tmp_path):
         """The whole point of measuring them: the assembler renders them."""
@@ -2516,9 +2516,9 @@ class TestStep9CoverageMeasurement:
 
 
 class TestStep9Orchestration:
-    """Step 9 measures review accounting through the real CLI."""
+    """Step 9 measures the run-level file review through the real CLI."""
 
-    def test_step_9_measures_review_accounting(self, tmp_path):
+    def test_step_9_measures_the_file_review(self, tmp_path):
         run_pipeline("--step", "1", "--mode", "full",
                    "--output-dir", str(tmp_path), cwd=tmp_path)
         for agent in ("code-reviewer", "security-reviewer"):
@@ -2544,7 +2544,7 @@ class TestStep9Orchestration:
                        "--output-dir", str(tmp_path), cwd=tmp_path)
         assert r.returncode == 0
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
-        assert state.get("review_accounting") == {
+        assert state.get("file_review") == {
             "scope_reporting_agent_count": 2,
             "unscoped_files": [],
             "agents_receiving_inline_diff_by_file": {
@@ -2568,7 +2568,7 @@ class TestStep9Orchestration:
                        "--output-dir", str(tmp_path), cwd=tmp_path)
         assert r.returncode == 0
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
-        assert state.get("review_accounting") is None
+        assert state.get("file_review") is None
 
 
 class TestStep9FindingsMarkdown:

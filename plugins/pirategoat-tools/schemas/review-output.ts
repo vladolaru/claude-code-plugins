@@ -167,13 +167,13 @@ export type AdjudicationOutcome = 'verified' | 'refuted' | 'not_checked';
 
 export type CriticRejectedAdjustment = CriticActionTarget<CriticProposalAdjustment> & {
     adjustment_id: string;
-    outcome: 'refuted';
+    outcome: Extract<AdjudicationOutcome, 'refuted'>;
     rejection_reason: string;
 };
 
 export interface CriticAppliedAdjustment {
     adjustment_id: string;
-    outcome: 'verified' | 'not_checked';
+    outcome: Exclude<AdjudicationOutcome, 'refuted'>;
 }
 
 /**
@@ -269,9 +269,9 @@ export interface ReviewContent {
 /**
  * One reviewer's immutable final artifact — <reviewer>-review.json — schema
  * 2. ReviewContent plus the reviewer identity and the six canonical
- * reviewed-file accounting fields (REVIEWER_FIELDS in
+ * reviewed-file fields (REVIEWER_FIELDS in
  * scripts/review/agent/output.py), derived from the system-authored
- * accounting input and the reviewer's validated positive claims.
+ * assignment and the reviewer's validated positive claims.
  */
 export interface ReviewDocument extends ReviewContent {
     schema: 2;
@@ -280,7 +280,7 @@ export interface ReviewDocument extends ReviewContent {
     reviewed_file_claims: string[];
     unclaimed_review_files: string[];
     inline_diff_file_count: number;
-    review_accounted_file_count: number;
+    reviewed_file_count: number;
     in_scope_review_file_count: number;
 }
 

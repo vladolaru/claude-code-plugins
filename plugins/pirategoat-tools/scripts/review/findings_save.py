@@ -14,8 +14,8 @@ it authors nothing about the run it read. This module reads
 ``reconciliation-context.json`` — the very file the agent was briefed from —
 and stamps the six pipeline-owned reconciliation facts and the degraded-host
 banner onto the ledger itself. A measurement the pipeline already made is
-never retyped by an agent, so it cannot be mistyped, and the ledger's
-accounting agrees with its own inputs by construction.
+never retyped by an agent, so it cannot be mistyped, and the ledger
+agrees with its own inputs by construction.
 
 Actor-ownership violations are collected before the canonical document
 validator runs. On ANY problem, nothing is written, and every problem is

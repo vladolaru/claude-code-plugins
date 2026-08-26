@@ -278,25 +278,25 @@ def _aggregate_coverage(
     }
 
 
-_REVIEW_CLAIM_ACCOUNTING_FIELDS = (
+_REVIEWED_FILES_FIELDS = (
     "reviewed_file_claim_count",
     "unclaimed_review_file_count",
 )
 
 
-def _aggregate_review_claim_accounting(
+def _aggregate_reviewed_files(
     runs: list[dict[str, Any]], availability: dict[str, dict[str, int]]
 ) -> dict[str, Any]:
-    """Sum reviewed-file claim accounting across measured runs.
+    """Sum reviewed-file claim counts across measured runs.
 
-    A run whose `review_claim_accounting_by_agent` is empty has
+    A run whose `reviewed_files_by_agent` is empty has
     no finalized reviewer row to measure. `measured_runs` only counts when
     at least one agent contributed real counts, so missing evidence never
     reads as "measured, zero". `measured_agents`/`unmeasured_agents` make
     that same distinction visible at agent granularity: unmeasured
     agents are those in `review_claimable_file_count_by_agent` (the system saw an
-    accounting input for them) but absent from
-    `review_claim_accounting_by_agent` (their own review JSON never claimed
+    assignment for them) but absent from
+    `reviewed_files_by_agent` (their own review JSON never claimed
     anything) — derived as a set difference, counted whether or not the
     run as a whole clears the measured_runs bar.
     """
@@ -310,7 +310,7 @@ def _aggregate_review_claim_accounting(
         coverage = run.get("coverage")
         if not isinstance(coverage, dict):
             continue
-        by_agent = coverage.get("review_claim_accounting_by_agent")
+        by_agent = coverage.get("reviewed_files_by_agent")
         if not isinstance(by_agent, dict):
             continue
         claimable_counts = coverage.get("review_claimable_file_count_by_agent")
@@ -325,14 +325,14 @@ def _aggregate_review_claim_accounting(
         for agent_counts in by_agent.values():
             if not isinstance(agent_counts, dict):
                 continue
-            for name in _REVIEW_CLAIM_ACCOUNTING_FIELDS:
+            for name in _REVIEWED_FILES_FIELDS:
                 value = agent_counts.get(name)
                 if isinstance(value, int) and not isinstance(value, bool):
                     counts[name] += value
     return {
         **{
             name: counts[name] if measured_runs else None
-            for name in _REVIEW_CLAIM_ACCOUNTING_FIELDS
+            for name in _REVIEWED_FILES_FIELDS
         },
         "measured_runs": measured_runs,
         "measured_agents": measured_agents,
@@ -733,7 +733,7 @@ def aggregate_cohort(runs: Iterable[dict[str, Any]]) -> dict[str, Any]:
 
     dispatch = _aggregate_dispatch(run_list, availability)
     coverage = _aggregate_coverage(run_list, availability)
-    review_claim_accounting = _aggregate_review_claim_accounting(
+    reviewed_files = _aggregate_reviewed_files(
         run_list, availability
     )
     outcomes, critic, wall_time = _aggregate_outcomes(run_list, availability)
@@ -748,7 +748,7 @@ def aggregate_cohort(runs: Iterable[dict[str, Any]]) -> dict[str, Any]:
         "availability": availability,
         "dispatch": dispatch,
         "coverage": coverage,
-        "review_claim_accounting": review_claim_accounting,
+        "reviewed_files": reviewed_files,
         "lifecycle": {
             **_lifecycle_block(lifecycle_complete),
             "partial_observed_runs": (

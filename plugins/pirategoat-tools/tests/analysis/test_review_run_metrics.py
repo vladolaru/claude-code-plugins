@@ -259,7 +259,7 @@ def _manifest(
                 {"path": "vendor/generated.js", "reason": "noise_filtered"}
             ],
             "unassigned_reviewable_files": [],
-            "review_claim_accounting_by_agent": {},
+            "reviewed_files_by_agent": {},
             "review_claimable_file_count_by_agent": {},
             "semantics": "generated_scope_not_proof_of_model_read",
         },
@@ -389,7 +389,7 @@ def _task_5_manifest(run_id: str = "task-5-run") -> dict:
             {"path": "vendor/generated.js", "reason": "noise_filtered"},
         ],
         "unassigned_reviewable_files": [],
-        "review_claim_accounting_by_agent": {},
+        "reviewed_files_by_agent": {},
         "review_claimable_file_count_by_agent": {},
         "semantics": "generated_scope_not_proof_of_model_read",
     }
@@ -459,7 +459,7 @@ class TestReviewVocabularyLifecycleMigration:
             "assigned": ["src/a.py"],
             "excluded": [],
             "uncovered": [],
-            "review_claim_accounting_by_agent": {},
+            "reviewed_files_by_agent": {},
             "review_claimable_file_count_by_agent": {},
             "semantics": "generated_scope_not_proof_of_model_read",
         }
@@ -3960,7 +3960,7 @@ class TestMeasureRun:
             "assigned_files": [],
             "file_exclusions": [],
             "unassigned_reviewable_files": [],
-            "review_claim_accounting_by_agent": {},
+            "reviewed_files_by_agent": {},
             "review_claimable_file_count_by_agent": {},
             "semantics": "generated_scope_not_proof_of_model_read",
         }
@@ -3986,7 +3986,7 @@ class TestMeasureRun:
             "assigned_files": [],
             "file_exclusions": [],
             "unassigned_reviewable_files": [],
-            "review_claim_accounting_by_agent": {},
+            "reviewed_files_by_agent": {},
             "review_claimable_file_count_by_agent": {},
             "semantics": "generated_scope_not_proof_of_model_read",
         }
@@ -4010,7 +4010,7 @@ class TestMeasureRun:
                 {"path": "vendor/generated.js", "reason": "noise_filtered"}
             ],
             "unassigned_reviewable_files": ["src/b.py"],
-            "review_claim_accounting_by_agent": {},
+            "reviewed_files_by_agent": {},
             "review_claimable_file_count_by_agent": {},
             "semantics": "generated_scope_not_proof_of_model_read",
         }
@@ -4387,26 +4387,26 @@ class TestMeasureRun:
             assert name not in measured["outcome"]["summary"]
 
 
-class TestReviewClaimAccounting:
+class TestReviewedFilesRows:
     """Review-claim metrics carry the two conserved derived populations."""
 
     def test_measured_populations_and_denominator_pass_through(self, tmp_path):
         manifest = _manifest()
-        manifest["coverage"]["review_claim_accounting_by_agent"] = {
+        manifest["coverage"]["reviewed_files_by_agent"] = {
             "code-reviewer": {"reviewed_file_claim_count": 2, "unclaimed_review_file_count": 1},
         }
         manifest["coverage"]["review_claimable_file_count_by_agent"] = {"code-reviewer": 3}
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
-        assert measured["coverage"]["review_claim_accounting_by_agent"] == {
+        assert measured["coverage"]["reviewed_files_by_agent"] == {
             "code-reviewer": {"reviewed_file_claim_count": 2, "unclaimed_review_file_count": 1},
         }
         assert measured["metric_availability"]["coverage"] == "complete"
 
     def test_count_conservation_mismatch_fails_coverage_closed(self, tmp_path):
         manifest = _manifest()
-        manifest["coverage"]["review_claim_accounting_by_agent"] = {
+        manifest["coverage"]["reviewed_files_by_agent"] = {
             "code-reviewer": {"reviewed_file_claim_count": 1, "unclaimed_review_file_count": 1},
         }
         manifest["coverage"]["review_claimable_file_count_by_agent"] = {"code-reviewer": 3}
@@ -4418,7 +4418,7 @@ class TestReviewClaimAccounting:
 
     def test_missing_denominator_fails_coverage_closed(self, tmp_path):
         manifest = _manifest()
-        manifest["coverage"]["review_claim_accounting_by_agent"] = {
+        manifest["coverage"]["reviewed_files_by_agent"] = {
             "code-reviewer": {"reviewed_file_claim_count": 1, "unclaimed_review_file_count": 1},
         }
 
@@ -4429,7 +4429,7 @@ class TestReviewClaimAccounting:
 
     def test_retired_three_way_shape_is_rejected(self, tmp_path):
         manifest = _manifest()
-        manifest["coverage"]["review_claim_accounting_by_agent"] = {
+        manifest["coverage"]["reviewed_files_by_agent"] = {
             "code-reviewer": {
                 "reviewed_file_claim_count": 1,
                 "declared_" + "unclaimed_review_file_count": 1,
@@ -4452,7 +4452,7 @@ class TestReviewClaimAccounting:
     )
     def test_malformed_population_row_fails_closed(self, tmp_path, counts):
         manifest = _manifest()
-        manifest["coverage"]["review_claim_accounting_by_agent"] = {
+        manifest["coverage"]["reviewed_files_by_agent"] = {
             "code-reviewer": counts
         }
         manifest["coverage"]["review_claimable_file_count_by_agent"] = {"code-reviewer": 2}
@@ -4462,10 +4462,10 @@ class TestReviewClaimAccounting:
         assert measured["coverage"] is None
 
     def test_cohort_aggregates_both_populations(self):
-        measured_a = _measured_manifest_with_review_accounting({
+        measured_a = _measured_manifest_with_reviewed_files({
             "code-reviewer": {"reviewed_file_claim_count": 2, "unclaimed_review_file_count": 1},
         }, review_claimable_file_count_by_agent={"code-reviewer": 3})
-        measured_b = _measured_manifest_with_review_accounting(
+        measured_b = _measured_manifest_with_reviewed_files(
             {"code-reviewer": {"reviewed_file_claim_count": 1, "unclaimed_review_file_count": 2}},
             run_id="run-2",
             review_claimable_file_count_by_agent={"code-reviewer": 3},
@@ -4473,9 +4473,9 @@ class TestReviewClaimAccounting:
 
         cohort = aggregate_cohort([measured_a, measured_b])
 
-        assert cohort["review_claim_accounting"]["reviewed_file_claim_count"] == 3
-        assert cohort["review_claim_accounting"]["unclaimed_review_file_count"] == 3
-        assert cohort["review_claim_accounting"]["measured_runs"] == 2
+        assert cohort["reviewed_files"]["reviewed_file_claim_count"] == 3
+        assert cohort["reviewed_files"]["unclaimed_review_file_count"] == 3
+        assert cohort["reviewed_files"]["measured_runs"] == 2
 
     def test_cohort_reports_none_when_no_run_is_measured(self):
         unmeasured = measure_run(
@@ -4484,18 +4484,18 @@ class TestReviewClaimAccounting:
 
         cohort = aggregate_cohort([unmeasured])
 
-        assert cohort["review_claim_accounting"]["reviewed_file_claim_count"] is None
-        assert cohort["review_claim_accounting"]["unclaimed_review_file_count"] is None
-        assert cohort["review_claim_accounting"]["measured_runs"] == 0
-def _measured_manifest_with_review_accounting(
-    review_claim_accounting_by_agent: dict,
+        assert cohort["reviewed_files"]["reviewed_file_claim_count"] is None
+        assert cohort["reviewed_files"]["unclaimed_review_file_count"] is None
+        assert cohort["reviewed_files"]["measured_runs"] == 0
+def _measured_manifest_with_reviewed_files(
+    reviewed_files_by_agent: dict,
     *,
     run_id: str = "run-1",
     review_claimable_file_count_by_agent: dict | None = None,
 ) -> dict:
     manifest = _manifest(run_id)
-    manifest["coverage"]["review_claim_accounting_by_agent"] = (
-        review_claim_accounting_by_agent
+    manifest["coverage"]["reviewed_files_by_agent"] = (
+        reviewed_files_by_agent
     )
     if review_claimable_file_count_by_agent is not None:
         manifest["coverage"]["review_claimable_file_count_by_agent"] = (

@@ -923,10 +923,10 @@ def _sanitize_dispatch(value: object) -> dict[str, Any] | None:
     return result
 
 
-# The per-agent claim-accounting row shape `_sanitize_coverage` requires.
-# Both populations are derived from the authoritative accounting input and
+# The per-agent reviewed-files row shape `_sanitize_coverage` requires.
+# Both populations are derived from the authoritative assignment and
 # validated positive claims.
-_REVIEW_CLAIM_ACCOUNTING_FIELDS = frozenset({
+_REVIEWED_FILES_FIELDS = frozenset({
     "reviewed_file_claim_count", "unclaimed_review_file_count",
 })
 
@@ -936,7 +936,7 @@ def _sanitize_coverage(value: object) -> dict[str, Any] | None:
         return None
     required = {
         *_ASSIGNMENT_FIELDS,
-        "review_claim_accounting_by_agent",
+        "reviewed_files_by_agent",
         "review_claimable_file_count_by_agent",
         "semantics",
     }
@@ -1013,26 +1013,26 @@ def _sanitize_coverage(value: object) -> dict[str, Any] | None:
         "semantics": "generated_scope_not_proof_of_model_read",
     }
 
-    raw_accounting = value.get("review_claim_accounting_by_agent")
-    if not isinstance(raw_accounting, dict):
+    raw_reviewed_files = value.get("reviewed_files_by_agent")
+    if not isinstance(raw_reviewed_files, dict):
         return None
-    safe_accounting: dict[str, dict[str, int]] = {}
-    for name, counts in raw_accounting.items():
+    safe_reviewed_files: dict[str, dict[str, int]] = {}
+    for name, counts in raw_reviewed_files.items():
         if (
             type(name) is not str
             or _PRODUCER_AGENT_NAME_RE.fullmatch(name) is None
             or not isinstance(counts, dict)
-            or set(counts) != _REVIEW_CLAIM_ACCOUNTING_FIELDS
+            or set(counts) != _REVIEWED_FILES_FIELDS
         ):
             return None
         safe_counts = {
             field: _nonnegative_int(counts.get(field))
-            for field in _REVIEW_CLAIM_ACCOUNTING_FIELDS
+            for field in _REVIEWED_FILES_FIELDS
         }
         if any(count is None for count in safe_counts.values()):
             return None
-        safe_accounting[name] = safe_counts
-    result["review_claim_accounting_by_agent"] = safe_accounting
+        safe_reviewed_files[name] = safe_counts
+    result["reviewed_files_by_agent"] = safe_reviewed_files
 
     raw_claimable_counts = value.get("review_claimable_file_count_by_agent")
     if not isinstance(raw_claimable_counts, dict):
@@ -1050,14 +1050,14 @@ def _sanitize_coverage(value: object) -> dict[str, Any] | None:
     result["review_claimable_file_count_by_agent"] = safe_claimable_counts
 
     # Reconciliation: every measured agent row requires its independently
-    # sourced review-claimable count, and its derived accounting must sum exactly
-    # to that denominator. A row without its denominator is missing evidence,
-    # never a measured zero.
+    # sourced review-claimable count, and its reviewed-file counts must sum
+    # exactly to that denominator. A row without its denominator is missing
+    # evidence, never a measured zero.
     #
-    # The agent's own derived accounting must sum exactly to the system's
+    # The agent's own reviewed-file counts must sum exactly to the system's
     # independently sourced review-claimable count — the identity
     # `ReviewOutputBuilder.save()` itself enforces against the very same
-    # accounting input this count is read from. A mismatch means the two
+    # assignment this count is read from. A mismatch means the two
     # sources disagree about a fact
     # `save()` guarantees, so the section fails closed rather than
     # publish self-contradictory numbers.
@@ -1065,17 +1065,17 @@ def _sanitize_coverage(value: object) -> dict[str, Any] | None:
     # This is a COUNT checksum, not a set identity: it proves the two
     # populations add up to the right total, not that any individual file
     # landed in the right population.
-    accounting_by_agent = result.get("review_claim_accounting_by_agent")
+    reviewed_files_by_agent = result.get("reviewed_files_by_agent")
     claimable_count_by_agent = result.get(
         "review_claimable_file_count_by_agent"
     )
-    if isinstance(accounting_by_agent, dict) and accounting_by_agent:
+    if isinstance(reviewed_files_by_agent, dict) and reviewed_files_by_agent:
         if not isinstance(claimable_count_by_agent, dict):
             return None
-        if not set(accounting_by_agent) <= set(claimable_count_by_agent):
+        if not set(reviewed_files_by_agent) <= set(claimable_count_by_agent):
             return None
-        for name in accounting_by_agent:
-            counts = accounting_by_agent[name]
+        for name in reviewed_files_by_agent:
+            counts = reviewed_files_by_agent[name]
             accounted = (
                 counts["reviewed_file_claim_count"]
                 + counts["unclaimed_review_file_count"]

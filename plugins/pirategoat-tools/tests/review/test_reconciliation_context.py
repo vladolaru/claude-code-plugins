@@ -118,7 +118,7 @@ def _write_review(output_dir, stem, claims, claimable=None):
     the stem-derivation rule itself, so deriving it here would hide the
     thing under test.
 
-    The document is the canonical finalized one, so the accounting
+    The document is the canonical finalized one, so the reviewed-file
     partition consumers read is embedded in it: `claimable` defaults to the
     claims (nothing left unclaimed) and widens when a test needs unclaimed
     review files.
@@ -132,7 +132,7 @@ def _write_review(output_dir, stem, claims, claimable=None):
         json.dump(payload, f)
 
 
-def _write_accounting_input(output_dir, reviewer, claimable, *, inline_count=0):
+def _write_assignment(output_dir, reviewer, claimable, *, inline_count=0):
     payload = {
         "schema": 4,
         "agent_name": f"{reviewer}-reviewer",
@@ -144,7 +144,7 @@ def _write_accounting_input(output_dir, reviewer, claimable, *, inline_count=0):
         "channels": ["blocking"],
     }
     with open(
-        os.path.join(output_dir, f"{reviewer}-review-accounting-input.json"),
+        os.path.join(output_dir, f"{reviewer}-assignment.json"),
         "w",
     ) as f:
         json.dump(payload, f)
@@ -229,7 +229,7 @@ def _make_review_json(
         "reviewed_file_claims": [],
         "unclaimed_review_files": [],
         "inline_diff_file_count": 3,
-        "review_accounted_file_count": 3,
+        "reviewed_file_count": 3,
         "in_scope_review_file_count": 3,
         "observations": None,
         "recommendations": None,
@@ -1855,8 +1855,8 @@ class TestPrefilterAnnotation:
         assert summary == {"count": 1, "by_agent": {"c-review": 1}}
 
 
-class TestAggregateReviewAccounting:
-    """aggregate_review_accounting() reads *-scope-summary*.json sidecars."""
+class TestAggregateReviewedFiles:
+    """aggregate_file_review() reads *-scope-summary*.json sidecars."""
 
     def test_direct_review_reads_follow_review_paths_authority(
         self, mod, tmp_path, monkeypatch
@@ -1866,7 +1866,7 @@ class TestAggregateReviewAccounting:
         paths = ReviewPaths(
             draft=str(authority_dir / "draft.json"),
             final=str(authority_dir / "final.json"),
-            accounting_input=str(authority_dir / "accounting.json"),
+            assignment=str(authority_dir / "authority.json"),
         )
         Path(paths.final).write_text(json.dumps(canonical_review_document(
             "security",
@@ -1875,24 +1875,24 @@ class TestAggregateReviewAccounting:
         )))
         monkeypatch.setattr(mod, "review_paths", lambda *_args: paths)
 
-        claimed, unclaimed = mod._load_agent_review_accounting(
+        claimed, unclaimed = mod._load_agent_reviewed_files(
             str(tmp_path), "security-reviewer"
         )
 
         assert claimed == ["src/read.php"]
         assert unclaimed == ["src/unread.php"]
 
-    def test_context_carries_no_review_accounting(self, mod):
+    def test_context_carries_no_file_review(self, mod):
         """The reconciliator does not read this measurement, so the context
         does not carry it (TestFullScript pins the exact key set) and no
         reader for it survives. Step 9 aggregates it for the record."""
-        assert not hasattr(mod, "review_accounting_from_context")
+        assert not hasattr(mod, "file_review_from_context")
 
     def test_returns_none_without_summaries(self, mod, tmp_path):
-        assert mod.aggregate_review_accounting(str(tmp_path)) is None
+        assert mod.aggregate_file_review(str(tmp_path)) is None
 
     def test_returns_none_for_missing_dir(self, mod, tmp_path):
-        assert mod.aggregate_review_accounting(str(tmp_path / "nope")) is None
+        assert mod.aggregate_file_review(str(tmp_path / "nope")) is None
 
     def test_reports_inline_receipt_and_each_agents_unclaimed_work(
         self, mod, tmp_path
@@ -1905,7 +1905,7 @@ class TestAggregateReviewAccounting:
             str(tmp_path), "code-reviewer",
             ["src/b.php"], ["src/starved.php"],
         )
-        cov = mod.aggregate_review_accounting(str(tmp_path))
+        cov = mod.aggregate_file_review(str(tmp_path))
         assert cov["scope_reporting_agent_count"] == 2
         assert cov["agents_receiving_inline_diff_by_file"] == {
             "src/a.php": ["security-reviewer"],
@@ -1930,16 +1930,16 @@ class TestAggregateReviewAccounting:
             str(tmp_path), "code-reviewer", ["src/shared.php"], [],
         )
 
-        accounting = mod.aggregate_review_accounting(str(tmp_path))
+        file_review = mod.aggregate_file_review(str(tmp_path))
 
-        assert accounting["agents_receiving_inline_diff_by_file"] == {
+        assert file_review["agents_receiving_inline_diff_by_file"] == {
             "src/shared.php": ["code-reviewer"]
         }
-        assert accounting["agents_with_unclaimed_review_by_file"] == {
+        assert file_review["agents_with_unclaimed_review_by_file"] == {
             "src/shared.php": ["security-reviewer"]
         }
-        from review.briefings import _has_review_accounting_gap
-        assert not _has_review_accounting_gap(accounting)
+        from review.briefings import _has_file_review_gap
+        assert not _has_file_review_gap(file_review)
 
     def test_malformed_summary_skipped(self, mod, tmp_path):
         (tmp_path / "broken-scope-summary.json").write_text("{not json")
@@ -1947,7 +1947,7 @@ class TestAggregateReviewAccounting:
             str(tmp_path), "security-reviewer",
             ["src/a.php"], [],
         )
-        cov = mod.aggregate_review_accounting(str(tmp_path))
+        cov = mod.aggregate_file_review(str(tmp_path))
         assert cov["scope_reporting_agent_count"] == 1
 
     def test_secondary_summaries_attribute_to_agent(self, mod, tmp_path):
@@ -1955,7 +1955,7 @@ class TestAggregateReviewAccounting:
             str(tmp_path), "security-reviewer", [], ["ci.yml"],
             domain="config-ops",
         )
-        cov = mod.aggregate_review_accounting(str(tmp_path))
+        cov = mod.aggregate_file_review(str(tmp_path))
         assert cov["agents_with_unclaimed_review_by_file"]["ci.yml"] == ["security-reviewer"]
 
     def test_claims_come_from_the_final_document_not_the_sidecar(
@@ -1970,9 +1970,9 @@ class TestAggregateReviewAccounting:
             claims=["src/a.py"], claimable=claimable,
         )
         # A sidecar that disagrees must not be consulted after finalization.
-        _write_accounting_input(str(tmp_path), "security", ["src/zzz.py"])
+        _write_assignment(str(tmp_path), "security", ["src/zzz.py"])
 
-        cov = mod.aggregate_review_accounting(str(tmp_path))
+        cov = mod.aggregate_file_review(str(tmp_path))
 
         assert cov["agents_claiming_review_by_file"] == {
             "src/a.py": ["security-reviewer"]
@@ -1999,7 +1999,7 @@ class TestAggregateReviewAccounting:
         review["reviewed_file_claims"] = claims
         (tmp_path / "security-review.json").write_text(json.dumps(review))
 
-        cov = mod.aggregate_review_accounting(str(tmp_path))
+        cov = mod.aggregate_file_review(str(tmp_path))
 
         assert cov["agents_claiming_review_by_file"] == {}
         assert cov["agents_with_unclaimed_review_by_file"] == {
@@ -2016,7 +2016,7 @@ class TestAggregateReviewAccounting:
             str(tmp_path), "security-review", claims=["src/shared.php"]
         )
 
-        cov = mod.aggregate_review_accounting(str(tmp_path))
+        cov = mod.aggregate_file_review(str(tmp_path))
 
         assert cov["agents_claiming_review_by_file"] == {
             "src/shared.php": ["security-reviewer"]
@@ -2039,7 +2039,7 @@ class TestUnscopedFiles:
         _write_summary(
             str(tmp_path), "security-reviewer", ["src/a.php"], [],
         )
-        cov = mod.aggregate_review_accounting(
+        cov = mod.aggregate_file_review(
             str(tmp_path),
             changed_files=[
                 "src/a.php", "package-lock.json", ".editorconfig",
@@ -2055,7 +2055,7 @@ class TestUnscopedFiles:
             ["src/inline.php"], ["src/claimable.php"],
             list_only=["src/listed.php"],
         )
-        cov = mod.aggregate_review_accounting(
+        cov = mod.aggregate_file_review(
             str(tmp_path),
             changed_files=[
                 "src/inline.php", "src/claimable.php", "src/listed.php",
@@ -2080,7 +2080,7 @@ class TestUnscopedFiles:
         _write_summary(
             str(tmp_path), "security-reviewer", ["src/café.php"], [],
         )
-        cov = mod.aggregate_review_accounting(
+        cov = mod.aggregate_file_review(
             str(tmp_path), changed_files=[r'"src/caf\303\251.php"'],
         )
         assert cov["unscoped_files"] == []
@@ -2093,7 +2093,7 @@ class TestUnscopedFiles:
         _write_summary(
             str(tmp_path), "security-reviewer", ["src/a.php"], [],
         )
-        cov = mod.aggregate_review_accounting(
+        cov = mod.aggregate_file_review(
             str(tmp_path),
             changed_files=["src/a.php", r'"src/broken\3"'],
         )
@@ -2105,7 +2105,7 @@ class TestUnscopedFiles:
         _write_summary(
             str(tmp_path), "security-reviewer", ["./src//a.php"], [],
         )
-        cov = mod.aggregate_review_accounting(
+        cov = mod.aggregate_file_review(
             str(tmp_path), changed_files=["src/a.php"],
         )
         assert cov["unscoped_files"] == []
@@ -2125,7 +2125,7 @@ class TestUnscopedFiles:
             str(tmp_path), "patterns-reviewer", [], [],
             in_scope=["src/a.php", "src/b.php"],
         )
-        cov = mod.aggregate_review_accounting(
+        cov = mod.aggregate_file_review(
             str(tmp_path),
             changed_files=["src/a.php", "src/b.php", "yarn.lock"],
         )
@@ -2143,7 +2143,7 @@ class TestUnscopedFiles:
             "budget_exceeded_files": [],
             "list_only_files": [],
         }))
-        assert mod.aggregate_review_accounting(
+        assert mod.aggregate_file_review(
             str(tmp_path), changed_files=["src/a.php", "src/b.php"],
         ) is None
 
@@ -2151,7 +2151,7 @@ class TestUnscopedFiles:
         _write_summary(
             str(tmp_path), "security-reviewer", ["src/a.php"], [],
         )
-        cov = mod.aggregate_review_accounting(
+        cov = mod.aggregate_file_review(
             str(tmp_path), changed_files=["src/a.php"],
         )
         assert cov["unscoped_files"] == []
@@ -2161,7 +2161,7 @@ class TestUnscopedFiles:
         _write_summary(
             str(tmp_path), "security-reviewer", ["src/a.php"], [],
         )
-        cov = mod.aggregate_review_accounting(str(tmp_path))
+        cov = mod.aggregate_file_review(str(tmp_path))
         assert cov["unscoped_files"] is None
 
     @pytest.mark.parametrize(
@@ -2180,7 +2180,7 @@ class TestUnscopedFiles:
         _write_summary(
             str(tmp_path), "security-reviewer", ["src/a.php"], [],
         )
-        cov = mod.aggregate_review_accounting(
+        cov = mod.aggregate_file_review(
             str(tmp_path), changed_files=changed_files,
         )
         assert cov["unscoped_files"] is None
@@ -2192,7 +2192,7 @@ class TestUnscopedFiles:
         _write_summary(
             str(tmp_path), "security-reviewer", ["src/a.php"], [],
         )
-        cov = mod.aggregate_review_accounting(
+        cov = mod.aggregate_file_review(
             str(tmp_path), changed_files=["src/a.php"],
         )
         assert cov["unscoped_files"] == []
@@ -2207,7 +2207,7 @@ class TestUnscopedFiles:
             str(tmp_path), "security-reviewer", ["ci.yml"], [],
             domain="config-ops",
         )
-        cov = mod.aggregate_review_accounting(
+        cov = mod.aggregate_file_review(
             str(tmp_path), changed_files=["src/a.php", "ci.yml"],
         )
         assert cov["unscoped_files"] == []
@@ -2230,7 +2230,7 @@ class TestAgentsReportingCountsAgents:
                 str(tmp_path), agent, ["ci.yml"], [], domain="config-ops",
             )
 
-        cov = mod.aggregate_review_accounting(str(tmp_path))
+        cov = mod.aggregate_file_review(str(tmp_path))
 
         assert len(list(tmp_path.glob("*-scope-summary*.json"))) == 6
         assert cov["scope_reporting_agent_count"] == 3
@@ -2239,7 +2239,7 @@ class TestAgentsReportingCountsAgents:
         self, mod, tmp_path
     ):
         (tmp_path / "broken-scope-summary.json").write_text("{not json")
-        assert mod.aggregate_review_accounting(str(tmp_path)) is None
+        assert mod.aggregate_file_review(str(tmp_path)) is None
 
 
 class TestReviewStem:

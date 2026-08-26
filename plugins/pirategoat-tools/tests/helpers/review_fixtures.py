@@ -54,7 +54,7 @@ def canonical_review_document(
         "reviewed_file_claims": claimed,
         "unclaimed_review_files": unclaimed,
         "inline_diff_file_count": 0,
-        "review_accounted_file_count": len(claimed),
+        "reviewed_file_count": len(claimed),
         "in_scope_review_file_count": len(claimable),
         "observations": None,
         "recommendations": None,
@@ -76,7 +76,7 @@ def canonical_findings_ledger(severities=(), *, checks=(), reconciliation=None):
     for field in (
         "reviewer", "review_claimable_files", "reviewed_file_claims",
         "unclaimed_review_files", "inline_diff_file_count",
-        "review_accounted_file_count", "in_scope_review_file_count",
+        "reviewed_file_count", "in_scope_review_file_count",
     ):
         document.pop(field)
     document["schema"] = 3

@@ -62,8 +62,8 @@ def _finish_agent(tmp_path, name, findings=None, verdict=None):
     (tmp_path / _reviewer_filename(name)).write_text(json.dumps(review))
 
 
-def _write_accounting_input(tmp_path, reviewer, agent_name, claimable_files):
-    (tmp_path / f"{reviewer}-review-accounting-input.json").write_text(json.dumps({
+def _write_assignment(tmp_path, reviewer, agent_name, claimable_files):
+    (tmp_path / f"{reviewer}-assignment.json").write_text(json.dumps({
         "schema": 4,
         "agent_name": agent_name,
         "reviewer": reviewer,
@@ -129,7 +129,7 @@ class TestCheckStatus:
             lambda *_args: ReviewPaths(
                 draft=str(authority_dir / "draft.json"),
                 final=str(final_path),
-                accounting_input=str(authority_dir / "accounting.json"),
+                assignment=str(authority_dir / "authority.json"),
             ),
         )
 
@@ -144,7 +144,7 @@ class TestCheckStatus:
         _write_plan(tmp_path, [
             {"name": "security-reviewer", "status": "DISPATCH"},
         ])
-        _write_accounting_input(
+        _write_assignment(
             tmp_path, "security", "security-reviewer", []
         )
         _start_agent(tmp_path, "security-reviewer", minutes_ago=60)
@@ -245,7 +245,7 @@ class TestCheckStatus:
             {"name": "a11y-reviewer", "status": "DISPATCH"},
         ])
         _start_agent(tmp_path, "a11y-reviewer")
-        _write_accounting_input(
+        _write_assignment(
             tmp_path, "a11y", "a11y-reviewer", ["src/late.ts"]
         )
         builder = ReviewOutputBuilder.open(str(tmp_path), "13", "a11y")

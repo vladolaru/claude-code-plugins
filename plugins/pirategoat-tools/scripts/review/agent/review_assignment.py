@@ -1,4 +1,4 @@
-"""Authoritative reviewed-file accounting for reviewer artifacts."""
+"""The reviewer assignment and the reviewed files derived from it."""
 
 from dataclasses import dataclass
 import posixpath
@@ -10,32 +10,32 @@ except ImportError:
     from review.reviewer_names import derive_reviewer_name
 
 
-class ReviewAccountingError(ValueError):
-    """A review-accounting input or reviewed-file claim is invalid."""
+class ReviewAssignmentError(ValueError):
+    """A review assignment or reviewed-file claim is invalid."""
 
 
 @dataclass(frozen=True)
-class ReviewAccounting:
+class ReviewedFiles:
     agent_name: str
     reviewer: str
     review_claimable_files: tuple[str, ...]
     reviewed_file_claims: tuple[str, ...]
     unclaimed_review_files: tuple[str, ...]
     inline_diff_file_count: int
-    review_accounted_file_count: int
+    reviewed_file_count: int
     in_scope_review_file_count: int
     review_budget: int
     channels: tuple[str, ...]
 
 
-ACCOUNTING_INPUT_SCHEMA = 4
+ASSIGNMENT_SCHEMA = 4
 REVIEW_CHANNELS = ("blocking", "advisory")
 
 
 def normalize_review_path(path: object, api_name: str) -> str:
-    """Normalize one repository-relative path in the accounting grammar."""
+    """Normalize one repository-relative path in the review-path grammar."""
     if not isinstance(path, str) or not path.strip():
-        raise ReviewAccountingError(f"{api_name} requires a non-empty file path")
+        raise ReviewAssignmentError(f"{api_name} requires a non-empty file path")
     raw = path.strip().replace("\\", "/")
     segments = raw.split("/")
     normalized = posixpath.normpath(raw)
@@ -47,73 +47,73 @@ def normalize_review_path(path: object, api_name: str) -> str:
         or (len(normalized) >= 2 and normalized[1] == ":" and normalized[0].isalpha())
         or any(ord(character) < 32 for character in normalized)
     ):
-        raise ReviewAccountingError(
+        raise ReviewAssignmentError(
             f"{api_name} requires a repository-relative path, got {path!r}"
         )
     return normalized
 
 
-def _validated_count(accounting_input: Mapping[str, object], key: str) -> int:
-    value = accounting_input.get(key)
+def _validated_count(assignment: Mapping[str, object], key: str) -> int:
+    value = assignment.get(key)
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise ReviewAccountingError(f"accounting input {key} must be a non-negative integer")
+        raise ReviewAssignmentError(f"assignment {key} must be a non-negative integer")
     return value
 
 
-def _validated_accounting_input(
-    accounting_input: Mapping[str, object],
+def _validated_assignment(
+    assignment: Mapping[str, object],
 ) -> tuple[str, str, tuple[str, ...], int, int, int, tuple[str, ...]]:
-    if accounting_input.get("schema") != ACCOUNTING_INPUT_SCHEMA:
-        raise ReviewAccountingError(
-            f"accounting input schema must be {ACCOUNTING_INPUT_SCHEMA}"
+    if assignment.get("schema") != ASSIGNMENT_SCHEMA:
+        raise ReviewAssignmentError(
+            f"assignment schema must be {ASSIGNMENT_SCHEMA}"
         )
 
-    agent_name = accounting_input.get("agent_name")
+    agent_name = assignment.get("agent_name")
     if not isinstance(agent_name, str) or not agent_name.strip():
-        raise ReviewAccountingError("accounting input agent_name must be a non-empty string")
-    reviewer = accounting_input.get("reviewer")
+        raise ReviewAssignmentError("assignment agent_name must be a non-empty string")
+    reviewer = assignment.get("reviewer")
     if (
         not isinstance(reviewer, str)
         or not reviewer.strip()
         or derive_reviewer_name(agent_name) != reviewer
     ):
-        raise ReviewAccountingError("accounting input reviewer identity does not match agent_name")
+        raise ReviewAssignmentError("assignment reviewer identity does not match agent_name")
 
-    raw_paths = accounting_input.get("review_claimable_files")
+    raw_paths = assignment.get("review_claimable_files")
     if not isinstance(raw_paths, list) or not all(
         isinstance(path, str) for path in raw_paths
     ):
-        raise ReviewAccountingError(
-            "accounting input review_claimable_files must be a string-only list"
+        raise ReviewAssignmentError(
+            "assignment review_claimable_files must be a string-only list"
         )
     paths = tuple(
-        normalize_review_path(path, "accounting input review_claimable_files")
+        normalize_review_path(path, "assignment review_claimable_files")
         for path in raw_paths
     )
     if len(set(paths)) != len(paths):
-        raise ReviewAccountingError(
-            "accounting input review_claimable_files must not contain duplicates"
+        raise ReviewAssignmentError(
+            "assignment review_claimable_files must not contain duplicates"
         )
 
-    inline_count = _validated_count(accounting_input, "inline_diff_file_count")
+    inline_count = _validated_count(assignment, "inline_diff_file_count")
     in_scope_count = _validated_count(
-        accounting_input, "in_scope_review_file_count"
+        assignment, "in_scope_review_file_count"
     )
-    review_budget = _validated_count(accounting_input, "review_budget")
-    channels = accounting_input.get("channels")
+    review_budget = _validated_count(assignment, "review_budget")
+    channels = assignment.get("channels")
     if (
         not isinstance(channels, list)
         or not channels
         or len(channels) != len(set(channels))
         or any(channel not in REVIEW_CHANNELS for channel in channels)
     ):
-        raise ReviewAccountingError(
-            "accounting input channels must be a non-empty list of unique values "
+        raise ReviewAssignmentError(
+            "assignment channels must be a non-empty list of unique values "
             f"from {REVIEW_CHANNELS}"
         )
     channels = tuple(channels)
     if inline_count + len(paths) != in_scope_count:
-        raise ReviewAccountingError("incoherent inline and review-claimable scope counts")
+        raise ReviewAssignmentError("incoherent inline and review-claimable scope counts")
     return agent_name, reviewer, paths, inline_count, in_scope_count, review_budget, channels
 
 
@@ -121,30 +121,30 @@ def _validated_claim_set(
     reviewed_file_claims: Iterable[str], review_claimable_files: tuple[str, ...]
 ) -> frozenset[str]:
     if isinstance(reviewed_file_claims, (str, bytes)):
-        raise ReviewAccountingError("reviewed-file claims must be iterable paths")
+        raise ReviewAssignmentError("reviewed-file claims must be iterable paths")
     try:
         claimed = frozenset(
             normalize_review_path(path, "reviewed-file claim")
             for path in reviewed_file_claims
         )
     except TypeError as exc:
-        raise ReviewAccountingError("reviewed-file claims must be iterable") from exc
+        raise ReviewAssignmentError("reviewed-file claims must be iterable") from exc
     unknown = sorted(claimed - set(review_claimable_files))
     if unknown:
-        raise ReviewAccountingError(
+        raise ReviewAssignmentError(
             "reviewed-file claims include paths that are not review-claimable: "
             + ", ".join(unknown)
         )
     return claimed
 
 
-def derive_review_accounting(
-    accounting_input: Mapping[str, object],
+def derive_reviewed_files(
+    assignment: Mapping[str, object],
     reviewed_file_claims: Iterable[str],
-) -> ReviewAccounting:
-    """Derive the complete reviewed-file accounting partition."""
-    if not isinstance(accounting_input, Mapping):
-        raise ReviewAccountingError("accounting input must be an object")
+) -> ReviewedFiles:
+    """Derive the complete reviewed-file partition from one assignment."""
+    if not isinstance(assignment, Mapping):
+        raise ReviewAssignmentError("assignment must be an object")
     (
         agent_name,
         reviewer,
@@ -153,18 +153,18 @@ def derive_review_accounting(
         in_scope_review_file_count,
         review_budget,
         channels,
-    ) = _validated_accounting_input(accounting_input)
+    ) = _validated_assignment(assignment)
     claimed = _validated_claim_set(reviewed_file_claims, review_claimable_files)
     reviewed = tuple(path for path in review_claimable_files if path in claimed)
     unclaimed = tuple(path for path in review_claimable_files if path not in claimed)
-    return ReviewAccounting(
+    return ReviewedFiles(
         agent_name=agent_name,
         reviewer=reviewer,
         review_claimable_files=review_claimable_files,
         reviewed_file_claims=reviewed,
         unclaimed_review_files=unclaimed,
         inline_diff_file_count=inline_diff_file_count,
-        review_accounted_file_count=inline_diff_file_count + len(reviewed),
+        reviewed_file_count=inline_diff_file_count + len(reviewed),
         in_scope_review_file_count=in_scope_review_file_count,
         review_budget=review_budget,
         channels=channels,

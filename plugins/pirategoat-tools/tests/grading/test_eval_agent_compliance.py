@@ -58,7 +58,7 @@ def _write_review_pair(output_dir: Path, reviewer: str = "security") -> None:
         "Enumerate every caller and trace each path to the rendering sink",
         "No caller escapes the value before it reaches the sink.",
     )
-    (output_dir / f"{reviewer}-review-accounting-input.json").write_text(json.dumps({
+    (output_dir / f"{reviewer}-assignment.json").write_text(json.dumps({
         "schema": 4,
         "agent_name": f"{reviewer}-reviewer",
         "reviewer": reviewer,
@@ -109,7 +109,7 @@ class TestGradeOnlyMode:
         assert len(review["checks"]) == 1
         assert review["checks"][0]["source_reviewers"] == ["security"]
         assert review["unclaimed_review_files"] == []
-        assert review["review_accounted_file_count"] == 1
+        assert review["reviewed_file_count"] == 1
 
         result = _run_eval("--grade-only", str(tmp_path), cwd=tmp_path)
 

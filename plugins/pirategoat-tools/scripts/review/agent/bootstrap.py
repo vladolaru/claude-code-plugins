@@ -43,7 +43,7 @@ if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
 from review.reviewer_names import derive_reviewer_name
-from review.agent.coverage import ACCOUNTING_INPUT_SCHEMA, derive_review_accounting
+from review.agent.review_assignment import ASSIGNMENT_SCHEMA, derive_reviewed_files
 from review.agent.output import _validate_review_bytes, render_draft_index
 from review.atomic_io import atomic_write_json
 from review.reviewer_lifecycle import review_paths
@@ -422,7 +422,7 @@ def extract_file_diffstat(scope_output: str) -> Dict[str, int]:
     Parsed from every "path  (+N -M)" stat-shaped line scope.py renders,
     regardless of section (FILES, NOT DIFFED, CHANGED (no diff)) — the one
     per-file size bootstrap has, used only to ORDER already-known file sets
-    (the accounting input's largest-first contract). A file matching
+    (the assignment's largest-first contract). A file matching
     no stat line here sorts as 0, never excluded from whatever set it is
     ordering.
     """
@@ -442,7 +442,7 @@ def order_by_diffstat_largest_first(
 ) -> List[str]:
     """Order ``paths`` by descending total changed lines, largest first.
 
-    The ordering rule the accounting input's ``review_claimable_files``
+    The ordering rule the assignment's ``review_claimable_files``
     list is pinned to — the save echo's NEXT UNREAD list (output.py)
     replays that order verbatim, and the briefing already promises
     "largest first" for this queue. A path with no entry in
@@ -1038,7 +1038,7 @@ def build_output(
     unavailable (load_scope_facts() itself returns None in that case, not
     a text-derived value). Neither parameter has a default, so an omitted
     caller fails loudly (TypeError) instead of silently dropping the NOT
-    DIFFED accounting contract or handing dead-code-reviewer a wrong
+    DIFFED contract or handing dead-code-reviewer a wrong
     DYNAMIC_DISPATCH_RISK.
     See TestNotDiffedContractIsDelivered and TestDynamicDispatchRisk in
     tests/review/agent/test_bootstrap_integration.py for the executable
@@ -1143,7 +1143,7 @@ def build_output(
                 "Claim each NOT DIFFED file you actually "
                 'read with builder.claim_files_reviewed("<path>"). '
                 "The builder validates those positive claims against the "
-                "authoritative review-accounting input, derives every unclaimed "
+                "authoritative review assignment, derives every unclaimed "
                 "review file, and counts inline files automatically. Never count "
                 "an unclaimed review file toward your verdict."
             )
@@ -1280,8 +1280,8 @@ def build_output(
     # The call-budget target no longer rides this envelope: it silently died
     # for any agent that rebuilt its save command (run12's worst under-spender,
     # 15% of target, never saw it). save_draft() reads the effective number from
-    # the review-accounting input bootstrap writes below — the one per-agent
-    # file the builder already locates for derived accounting.
+    # the review assignment bootstrap writes below — the one per-agent
+    # file the builder already locates for its derived reviewed files.
     lines.append(
         f"PIRATEGOAT_PLUGIN_ROOT={shlex.quote(plugin_root)} "
         f"PIRATEGOAT_OUTPUT_DIR={shlex.quote(output_dir)} "
@@ -1415,7 +1415,7 @@ def resolve_reviewer_identity(args):
     return agent_name, effective_agent_name, adapter_label, repo_agent_ref, None
 
 
-def persist_review_accounting_input(
+def persist_review_assignment(
     output_dir,
     effective_agent_name,
     review_claimable_files,
@@ -1425,10 +1425,10 @@ def persist_review_accounting_input(
     inline_diff_file_count,
     channels,
 ):
-    """Write the schema-4 accounting authority consumed by the builder."""
+    """Write the schema-4 assignment the builder derives from."""
     reviewer = derive_reviewer_name(effective_agent_name)
     payload = {
-        "schema": ACCOUNTING_INPUT_SCHEMA,
+        "schema": ASSIGNMENT_SCHEMA,
         "agent_name": effective_agent_name,
         "reviewer": reviewer,
         "review_claimable_files": list(dict.fromkeys(review_claimable_files)),
@@ -1437,8 +1437,8 @@ def persist_review_accounting_input(
         "review_budget": review_budget,
         "channels": list(channels),
     }
-    derive_review_accounting(payload, [])
-    atomic_write_json(review_paths(output_dir, reviewer).accounting_input, payload)
+    derive_reviewed_files(payload, [])
+    atomic_write_json(review_paths(output_dir, reviewer).assignment, payload)
 
 
 def main():
@@ -1798,8 +1798,8 @@ def main():
         }
     scope_lines_for_budget = scope_facts["stat_lines"]
     # Review-claimable NOT DIFFED files and list-only CHANGED (no diff) files
-    # are in-scope work too: telemetry must carry them or accounting marks them
-    # unscoped and reads of them count as out-of-scope. Both are kept out
+    # are in-scope work too: telemetry must carry them or the assignment marks
+    # them unscoped and reads of them count as out-of-scope. Both are kept out
     # of scope_files_for_budget so inline-diff consumers (file history) keep
     # their meaning, and list-only lines never enter budget sizing.
     (
@@ -1882,12 +1882,12 @@ def main():
     else:
         channels = ["blocking"]
 
-    # Written after the override is applied: the accounting input's
+    # Written after the override is applied: the assignment's
     # review_budget is the effective (post-override) number save_draft()
     # echoes back, never a scope-only figure a downstream reader would have
     # to recompute.
     try:
-        persist_review_accounting_input(
+        persist_review_assignment(
             output_dir,
             effective_agent_name,
             review_claimable_paths,
@@ -1899,7 +1899,7 @@ def main():
     except (OSError, ValueError) as exc:
         print(build_error_output(
             effective_agent_name,
-            f"Could not publish authoritative review accounting: {exc}",
+            f"Could not publish authoritative review assignment: {exc}",
             plugin_root,
         ))
         sys.exit(1)

@@ -190,7 +190,7 @@ Deterministic pytest suite that validates structural properties of command files
 
 ### ReviewOutputBuilder Unit Tests (`review/agent/test_output.py`)
 
-Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/output.py`. Tests cover the schema-2 findings/checks/assessment domain, mutable whole-state drafts, the six canonical reviewed-file accounting fields, verdict derivation, and the shared JSON-to-Markdown projection.
+Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/output.py`. Tests cover the schema-2 findings/checks/assessment domain, mutable whole-state drafts, the six canonical reviewed-file fields, verdict derivation, and the shared JSON-to-Markdown projection.
 
 | Class | What it verifies |
 |---|---|
@@ -202,7 +202,7 @@ Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/
 | `TestSetConfidence` | Valid range works, invalid raises ValueError |
 | `TestRemovedToolMetadata` | Reviewer artifacts expose no tool-result metadata API or field |
 | `TestCalculateVerdict` | All 9 verdict boundaries (approve/comment/request_changes/block) |
-| `TestToDict` | Exact schema-2 top-level shape, summary, counters, accounting placeholders before publication, and plugin-version resolution |
+| `TestToDict` | Exact schema-2 top-level shape, summary, counters, reviewed-file placeholders before publication, and plugin-version resolution |
 | `TestToMarkdown` | Header format, findings grouped by severity, checks, assessment, and positive observations |
 | `TestRenderMarkdown` | Markdown is a pure function of the canonical JSON dict — same dict in, same Markdown out |
 | `TestMaterializeMarkdown` | The on-demand `materialize` CLI/function reads finalized canonical JSON and writes its derived Markdown |
@@ -210,13 +210,13 @@ Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/
 | `TestFileScopedFindings` | `line=None` records a first-class file-scoped finding (`scope: "file"`) that still counts toward the verdict |
 | `TestLineRequired` | Invalid line values still raise for point defects — the file-scoped path never becomes a way to skip validation |
 | `TestAddObservation` | `add_observation()` stores file-level notes outside the finding pipeline, in insertion order |
-| `TestReviewedFileClaims` | Explicit positive claims of review-claimable files actually read: canonical path grammar, add-time membership validation against the authoritative accounting input, no verdict effect, all-or-nothing claim/retraction batches, and duplicate/already-recorded dedup semantics |
+| `TestReviewedFileClaims` | Explicit positive claims of review-claimable files actually read: canonical path grammar, add-time membership validation against the authoritative assignment, no verdict effect, all-or-nothing claim/retraction batches, and duplicate/already-recorded dedup semantics |
 | `TestNotApplicable` | `mark_not_applicable()` produces a `not_applicable` verdict with `skip_reason`, zero findings |
-| `TestAdvisoryChannel` | A finding's channel must be one the bound accounting input grants the reviewer — enforced at add time, again at publication, and fails open only when there is no readable input to consult; advisory findings are listed but never gate the verdict |
-| `TestDerivedReviewAccounting` | Every draft save derives the six canonical top-level accounting fields from schema-4 input and reviewed-file claims; re-saving recomputes from scratch and finalized JSON preserves the derived values |
-| `TestBudgetTargetEcho` | `save_draft()` echoes the call-budget target exactly when canonical accounting still has unclaimed work |
-| `TestDraftFileGapReceipt` | The receipt reports the complete unclaimed population compactly without turning filenames into mutable agent-authored accounting |
-| `TestMetaIsNeverFakeZero` | `review_accounted_file_count` stays top-level and unmeasured until authoritative accounting is supplied, while `meta.review_duration_ms` derives from the actor's dispatch marker — the `<agent>.started` and `<agent>.synthesis-started` families both — with null for a missing, unparsable, or future-stamped marker |
+| `TestAdvisoryChannel` | A finding's channel must be one the bound assignment grants the reviewer — enforced at add time, again at publication, and fails open only when there is no readable input to consult; advisory findings are listed but never gate the verdict |
+| `TestDerivedReviewedFiles` | Every draft save derives the six canonical top-level reviewed-file fields from the schema-4 assignment and reviewed-file claims; re-saving recomputes from scratch and finalized JSON preserves the derived values |
+| `TestBudgetTargetEcho` | `save_draft()` echoes the call-budget target exactly when the canonical derivation still has unclaimed work |
+| `TestDraftFileGapReceipt` | The receipt reports the complete unclaimed population compactly without turning filenames into mutable agent-authored state |
+| `TestMetaIsNeverFakeZero` | `reviewed_file_count` stays top-level and unmeasured until an authoritative assignment is supplied, while `meta.review_duration_ms` derives from the actor's dispatch marker — the `<agent>.started` and `<agent>.synthesis-started` families both — with null for a missing, unparsable, or future-stamped marker |
 | `TestTypeScriptContractLockstep` | `schemas/review-output.ts` and the serialized artifact describe one shape: the identity block (`pr_id`/`reviewer`/`timestamp`/`plugin_version`/`schema`) is declared and emitted, the retired `version` field is gone from both, `schema` is typed `number`, and `plugin_version` is typed nullable |
 | `TestAssessment` | The reconciliator-owned nullable assessment serializes and renders, while raw reviewer use is blocked by protocol and bootstrap contracts |
 | `TestReconciliationSectionsRender` | Every section the reconciliator's old hand-written narrative template carried (recommendations, observations, host context banner, `meta.reconciliation`) now has a rendered home |
@@ -231,7 +231,7 @@ Direct tests for the mutable-draft/immutable-final state machine and schema-2 re
 
 | Class | What it verifies |
 |---|---|
-| `TestReviewPaths` | One safe reviewer identity maps to exactly one draft, final, and schema-3 accounting-input path |
+| `TestReviewPaths` | One safe reviewer identity maps to exactly one draft, final, and schema-3 assignment path |
 | `TestDraftOpenAndReplacement` | `open()` creates or completely rehydrates a draft; optimistic saves reject stale writers and preserve the prior bytes |
 | `TestFinalization` | Only the exact digest printed by `save_draft()` can atomically publish immutable final JSON, and finalization is idempotent only for that same content |
 | `TestReviewIntakeClose` | Synthesis closes schema-2 `review-intake.json`, records finalized and discarded-draft reviewers, and blocks every later save/finalize transition |
@@ -239,7 +239,7 @@ Direct tests for the mutable-draft/immutable-final state machine and schema-2 re
 
 ### Reconciliation Context Tests (`review/test_reconciliation_context.py`)
 
-Direct unit tests on `scripts/review/reconciliation_context.py` — finalized-review loading, scope and hunk checking, source-snippet extraction, severity normalization, and run-level reviewed-file accounting for pipeline step 9. The module builds schema-3 `reconciliation-context.json` and nothing else now: its two Markdown renderers (`to_markdown` for the reconciliator, `build_critic_context` for the decision critic) were projections whose only readers were agents, and both are gone — the agents read the JSON, and the decision critic reads `review-record.md` beside it.
+Direct unit tests on `scripts/review/reconciliation_context.py` — finalized-review loading, scope and hunk checking, source-snippet extraction, severity normalization, and the run-level file review for pipeline step 9. The module builds schema-3 `reconciliation-context.json` and nothing else now: its two Markdown renderers (`to_markdown` for the reconciliator, `build_critic_context` for the decision critic) were projections whose only readers were agents, and both are gone — the agents read the JSON, and the decision critic reads `review-record.md` beside it.
 
 | Class | What it verifies |
 |---|---|
@@ -255,8 +255,8 @@ Direct unit tests on `scripts/review/reconciliation_context.py` — finalized-re
 | `TestLineNearHunk` | The bounded line-proximity predicate handles absent and malformed line evidence |
 | `TestFindFileHunks` | File lookup distinguishes matching, missing, and metadata-only diff entries |
 | `TestResolveOutputBuilderPath` | The reconciler uses the installed plugin's output authority rather than a reviewed-repo lookalike |
-| `TestFullScript` | The CLI writes exact schema-3 reconciliation context from finalized schema-2 reviews and canonical accounting inputs |
-| `TestAggregateReviewAccounting` | `aggregate_review_accounting()` carries inline-diff receipt per agent from the scope sidecars and each reviewer's claimed/unclaimed files from its finalized review, never re-derived from the accounting-input sidecar; a malformed document receives no credit, and one reviewer's claim cannot conceal another reviewer's unclaimed work |
+| `TestFullScript` | The CLI writes exact schema-3 reconciliation context from finalized schema-2 reviews and canonical assignments |
+| `TestAggregateReviewedFiles` | `aggregate_file_review()` carries inline-diff receipt per agent from the scope sidecars and each reviewer's claimed/unclaimed files from its finalized review, never re-derived from the assignment sidecar; a malformed document receives no credit, and one reviewer's claim cannot conceal another reviewer's unclaimed work |
 | `TestUnscopedFiles` | `unscoped_files` — the changed files no reviewer's scope contained in any form, with the measured-empty case distinct from `None` when no changed-file list was supplied |
 | `TestAgentsReportingCountsAgents` | `scope_reporting_agent_count` counts distinct agent names, not scope-summary files — reviewers with a secondary `-config-ops` summary still count once |
 | `TestMissingAgentDetection` | `compute_missing_agents()` keeps dispatched-minus-reporting a MEASUREMENT rather than the reconciliator's arithmetic — sorted for stable diffs, `None` (never `[]`) when dispatch is unknown, measured-empty for an explicitly empty dispatch, and no negative population from an undispatched reporter. Crossed through the CLI to the JSON both ways |
@@ -269,8 +269,8 @@ Direct unit tests on `orchestration.assemble_review_record()` — the machine pr
 
 | Class | What it verifies |
 |---|---|
-| `TestRecordAssembly` | Section order, the header's verdict and severity counts, and the two byte-identity contracts that keep the record from disagreeing with anything else: its findings body IS `render_review_body()` and its accounting section IS `_render_review_accounting_section()`. Also the record's own new prose — the run notes (dependency refresh, dispatch) and the closing verdict line, which names the ledger layer the verdict was computed at and the published layer it maps onto |
-| `TestRecordIsAProjection` | Re-assembly after `apply_adjustments()` shows the post-critic ledger: adjusted severities, the recomputed verdict, the checkpointed adjudication narrative, one accounting line for every applied or refuted critic decision, and — when no replacement narrative was written — the explicit withdrawal notice rather than the retracted text presented as current |
+| `TestRecordAssembly` | Section order, the header's verdict and severity counts, and the two byte-identity contracts that keep the record from disagreeing with anything else: its findings body IS `render_review_body()` and its file-review section IS `_render_file_review_section()`. Also the record's own new prose — the run notes (dependency refresh, dispatch) and the closing verdict line, which names the ledger layer the verdict was computed at and the published layer it maps onto |
+| `TestRecordIsAProjection` | Re-assembly after `apply_adjustments()` shows the post-critic ledger: adjusted severities, the recomputed verdict, the checkpointed adjudication narrative, one adjudication line for every applied or refuted critic decision, and — when no replacement narrative was written — the explicit withdrawal notice rather than the retracted text presented as current |
 | `TestRecordSanitization` | Prose `Severity-floor:` markers are stripped before the record renders them (they read to the critic as an instruction not to demote), the STRUCTURED floor still renders, `review-findings.json` on disk keeps the reviewer's own words, and a non-string finding field costs a rendering nicety rather than the artifact |
 | `TestBriefingsAreConstantSize` | Briefings are O(1) in changed-file count while the record is O(n): a 500-file coverage state renders a step-9 briefing under 8KB with all 500 lines in the record, and the briefing is byte-identical at 1 file and at 500. Pins the class of guarantee the record artifact buys, not a single fact about step 9 |
 | `TestRecordFailureModes` | A run with no ledger reports a measured zero, not a failure (that is the degraded path step 9 routes to manual synthesis); an unreadable or shape-invalid ledger reports `failed` with the reason and writes nothing |
@@ -317,7 +317,7 @@ Direct contract tests for the three-owner lifecycle: `critic proposal -> critic.
 
 ### Orchestration Hygiene Tests (`review/test_orchestration_hygiene.py`)
 
-Direct unit tests on the finalize-side accounting in `scripts/review/orchestration.py` — the step-3 hygiene baseline snapshot, the step-11 compare-and-sweep, the degradation notes step 11 derives from the result, and the step-11 token-usage capture. Each test runs against a throwaway git repo as CWD, because the hygiene code under test resolves and mutates the repository it is standing in.
+Direct unit tests on the finalize-side hygiene in `scripts/review/orchestration.py` — the step-3 hygiene baseline snapshot, the step-11 compare-and-sweep, the degradation notes step 11 derives from the result, and the step-11 token-usage capture. Each test runs against a throwaway git repo as CWD, because the hygiene code under test resolves and mutates the repository it is standing in.
 
 | Class | What it verifies |
 |---|---|
@@ -395,7 +395,7 @@ class GradeResult:
 
 | Function | Input | Checks |
 |---|---|---|
-| `grade_review_json(path)` | Path to `{reviewer}-review.json` | File exists, valid JSON, required fields (`pr_id`, `reviewer`, `schema`, `verdict`, `summary`, `findings`, `checks`, `assessment`, review accounting, `meta`), valid severities, exact schema 2, finding/check schemas, accounting, summary structure |
+| `grade_review_json(path)` | Path to `{reviewer}-review.json` | File exists, valid JSON, required fields (`pr_id`, `reviewer`, `schema`, `verdict`, `summary`, `findings`, `checks`, `assessment`, the reviewed-file fields, `meta`), valid severities, exact schema 2, finding/check schemas, reviewed-file coherence, summary structure |
 | `grade_review_markdown(path)` | Path to `{reviewer}-review.md` | File exists, `# ... Review` header, `## Executive Summary`, `**Verdict:**` — rendered from the JSON when absent |
 | `grade_signal_format(text)` | Return signal text | `STATUS: FINISHED`, `OUTPUT_FILES:`, `COUNTS:`, `VERDICT:`, `SUMMARY:` |
 | `grade_no_domain_files(text)` | Agent output for no-code scenario | APPROVE verdict, zero findings |
@@ -880,7 +880,7 @@ These are the canonical valid values used by graders. If the review output schem
 |---|---|---|
 | `VALID_SEVERITIES` | `critical`, `high`, `medium`, `low`, `info` | `ReviewOutputBuilder.add_finding()` |
 | `VALID_VERDICTS` | `approve`, `block`, `request_changes`, `comment`, `not_applicable` | `ReviewOutputBuilder._calculate_verdict()` |
-| `REQUIRED_JSON_TOP_FIELDS` | Identity, schema, verdict/summary, `findings`, `checks`, `assessment`, six accounting fields, and `meta` | `ReviewOutputBuilder.to_dict()` |
+| `REQUIRED_JSON_TOP_FIELDS` | Identity, schema, verdict/summary, `findings`, `checks`, `assessment`, six reviewed-file fields, and `meta` | `ReviewOutputBuilder.to_dict()` |
 | `REQUIRED_FINDING_FIELDS` | `id`, `category`, `severity`, `title`, `description`, `file`, `line`, `recommendation`, `confidence` | `ReviewOutputBuilder.add_finding()` |
 | `REQUIRED_CHECK_FIELDS` | `id`, `question`, `method`, `result`, `source_reviewers` | `ReviewOutputBuilder.record_check()` |
 | `REQUIRED_STATE_FIELDS` | `last_reviewed_sha`, `last_reviewed_at`, `review_count`, `base_ref`, `git_range_used` | `code-review.md` Step 5 |

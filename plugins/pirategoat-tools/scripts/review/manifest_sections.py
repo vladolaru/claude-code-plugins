@@ -21,7 +21,7 @@ try:
         REVIEWABLE_FILES,
         UNASSIGNED_REVIEWABLE_FILES,
     )
-    from .agent.coverage import ReviewAccountingError, derive_review_accounting
+    from .agent.review_assignment import ReviewAssignmentError, derive_reviewed_files
     from .agent.output import load_review_document
     from .reviewer_names import derive_reviewer_name
     from .reviewer_lifecycle import review_paths
@@ -56,7 +56,7 @@ except ImportError:
         REVIEWABLE_FILES,
         UNASSIGNED_REVIEWABLE_FILES,
     )
-    from review.agent.coverage import ReviewAccountingError, derive_review_accounting
+    from review.agent.review_assignment import ReviewAssignmentError, derive_reviewed_files
     from review.agent.output import load_review_document
     from review.reviewer_names import derive_reviewer_name
     from review.reviewer_lifecycle import review_paths
@@ -398,7 +398,7 @@ def build_dispatch_manifest(output_dir: str, final_info: dict) -> dict:
     return result
 
 
-def _load_review_claim_accounting(
+def _load_reviewed_files(
     output_dir: str, agent: str
 ) -> Optional[Dict[str, int]]:
     """Count one finalized review's claimed and unclaimed files.
@@ -423,16 +423,16 @@ def _load_review_claimable_file_count(
 ) -> Optional[int]:
     """Read the authoritative review-claimable file count."""
     reviewer = derive_reviewer_name(agent)
-    data = _read_json_path(review_paths(output_dir, reviewer).accounting_input)
+    data = _read_json_path(review_paths(output_dir, reviewer).assignment)
     if data is None:
         return None
     try:
-        accounting = derive_review_accounting(data, [])
-    except ReviewAccountingError:
+        reviewed_files = derive_reviewed_files(data, [])
+    except ReviewAssignmentError:
         return None
-    if accounting.agent_name != agent:
+    if reviewed_files.agent_name != agent:
         return None
-    return len(accounting.review_claimable_files)
+    return len(reviewed_files.review_claimable_files)
 
 
 def build_coverage_manifest(
@@ -516,22 +516,22 @@ def build_coverage_manifest(
 
         # Positive-claim/gap populations for NOT DIFFED files: the claim
         # counts come off each finalized review document, the claimable
-        # count off the durable accounting input that also serves agents
+        # count off the durable assignment that also serves agents
         # that never finalized — never derived from the events already
         # folded into by_agent above, which only carry generated SCOPE
-        # (assigned files), not the reviewed-file accounting. Both dicts
+        # (assigned files), not the reviewed files. Both dicts
         # default to {} (measured, zero reviewers), never omitted, once
         # this builder runs at all; only a run whose manifest predates this
         # feature lacks the keys entirely (see
-        # `_load_review_claim_accounting`'s contract).
-        review_claim_accounting_by_agent: Dict[str, Dict[str, int]] = {}
+        # `_load_reviewed_files`'s contract).
+        reviewed_files_by_agent: Dict[str, Dict[str, int]] = {}
         review_claimable_file_count_by_agent: Dict[str, int] = {}
         for name in sorted(final_agents):
             if not is_dispatched(final_agents[name].get("status")):
                 continue
-            accounting = _load_review_claim_accounting(output_dir, name)
-            if accounting is not None:
-                review_claim_accounting_by_agent[name] = accounting
+            reviewed_files = _load_reviewed_files(output_dir, name)
+            if reviewed_files is not None:
+                reviewed_files_by_agent[name] = reviewed_files
             claimable_count = _load_review_claimable_file_count(output_dir, name)
             if claimable_count is not None:
                 review_claimable_file_count_by_agent[name] = claimable_count
@@ -545,12 +545,13 @@ def build_coverage_manifest(
                 {"path": path, "reason": "noise_filtered"}
                 for path in sorted(changed_set - reviewable_set)
             ],
-            # DIVERGENCE NOTE — this is NOT the same measurement as
-            # reconciliation_context.py's `review_accounting.unscoped_files`,
-            # and the two legitimately disagree (a field run read 2 here
-            # and 5 there). Both answer "which changed files did no agent's
-            # scope contain", from different evidence over different
-            # populations:
+            # DIVERGENCE NOTE — this is NOT the same measurement as the
+            # `unscoped_files` that reconciliation_context.py's
+            # `aggregate_file_review()` publishes into the run's
+            # `file_review`, and the two legitimately disagree (a field
+            # run read 2 here and 5 there). Both answer "which changed
+            # files did no agent's scope contain", from different evidence
+            # over different populations:
             #   * here — population `reviewable_files` (`changed_files` MINUS
             #     noise-filtered), evidence the dispatch-time `agent_start`
             #     SCOPE events of agents whose final status is dispatched.
@@ -564,13 +565,13 @@ def build_coverage_manifest(
             #     domain-unmatched files DO appear there, and an agent that
             #     was dispatched but died before writing a sidecar leaves
             #     its files unscoped there while they stay assigned here.
-            # Keep both. This one is the plan-vs-changed accounting the
+            # Keep both. This one is the plan-vs-changed measurement the
             # metrics partition depends on; that one is the did-anyone-
-            # actually-see-it accounting the review report must confess.
+            # actually-see-it measurement the review report must confess.
             UNASSIGNED_REVIEWABLE_FILES: sorted(
                 reviewable_set - assigned_set
             ),
-            "review_claim_accounting_by_agent": review_claim_accounting_by_agent,
+            "reviewed_files_by_agent": reviewed_files_by_agent,
             "review_claimable_file_count_by_agent": (
                 review_claimable_file_count_by_agent
             ),

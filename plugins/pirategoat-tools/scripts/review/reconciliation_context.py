@@ -176,39 +176,26 @@ def _review_stem(agent: str) -> str:
     return f"{derive_reviewer_name(agent)}-review"
 
 
-def _load_review_payload(output_dir: str, agent: str) -> Optional[Dict[str, Any]]:
-    """Read one agent's review JSON, or None when it is unreadable.
-
-    ``load_agent_reviews`` reads the same files for the findings payload
-    through its own path and failure policy — it reports malformed output on
-    stderr and skips it, which is not what run-level file accounting wants.
-    """
-    reviewer = derive_reviewer_name(agent)
-    path = review_paths(output_dir, reviewer).final
-    try:
-        data = load_review_document(path, reviewer)
-    except ValueError:
-        return None
-    return data
-
-
-def _load_agent_review_accounting(
+def _load_agent_reviewed_files(
     output_dir: str, agent: str
 ) -> Optional[Tuple[List[str], List[str]]]:
     """Return (claimed, unclaimed) from one finalized review, or None.
 
     Finalization already proved these two lists a coherent partition of the
     reviewer's claimable set (`validate_review_document`), so the document
-    is read, not re-derived: a second derivation from the accounting-input
+    is read, not re-derived: a second derivation from the assignment
     sidecar could only ever disagree with the artifact it describes.
+
+    ``load_agent_reviews`` reads the same files for the findings payload
+    through its own path and failure policy — it reports malformed output on
+    stderr and skips it, which is not what run-level file review wants.
     """
-    data = _load_review_payload(output_dir, agent)
-    if data is None:
+    reviewer = derive_reviewer_name(agent)
+    try:
+        data = load_review_document(review_paths(output_dir, reviewer).final, reviewer)
+    except ValueError:
         return None
-    return (
-        list(data["reviewed_file_claims"]),
-        list(data["unclaimed_review_files"]),
-    )
+    return data["reviewed_file_claims"], data["unclaimed_review_files"]
 
 
 # Every file-carrying list a scope summary sidecar can hold
@@ -269,11 +256,11 @@ def _unscoped_files(
     return sorted(set(normalized) - scoped_anywhere)
 
 
-def aggregate_review_accounting(
+def aggregate_file_review(
     output_dir: str,
     changed_files: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Aggregate per-agent scope summaries into run-level review accounting.
+    """Aggregate per-agent scope summaries into the run-level file review.
 
     Reads schema-2 ``*-scope-summary*.json`` sidecars, carries inline-diff
     receipt by file, and takes each reviewer's claimed and unclaimed files
@@ -348,12 +335,12 @@ def aggregate_review_accounting(
     claimed: Dict[str, set] = {}
     unclaimed: Dict[str, set] = {}
     for agent in reporting_agents:
-        accounting = _load_agent_review_accounting(output_dir, agent)
-        if accounting is None:
+        reviewed_files = _load_agent_reviewed_files(output_dir, agent)
+        if reviewed_files is None:
             for f_path in claimable_by_agent.get(agent, set()):
                 unclaimed.setdefault(f_path, set()).add(agent)
             continue
-        claimed_paths, unclaimed_paths = accounting
+        claimed_paths, unclaimed_paths = reviewed_files
         for f_path in claimed_paths:
             claimed.setdefault(f_path, set()).add(agent)
         for f_path in unclaimed_paths:

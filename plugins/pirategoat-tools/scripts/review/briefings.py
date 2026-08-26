@@ -1209,16 +1209,16 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
 # Review coverage rendering (shared by the record assembler and step 11)
 # ---------------------------------------------------------------------------
 
-def _run_wide_review_gaps(accounting):
+def _run_wide_review_gaps(file_review):
     """Return unclaimed files that no reviewer received inline or claimed.
 
     `agents_with_unclaimed_review_by_file` is deliberately per-agent: one
     reviewer can leave a file unclaimed while another received it inline or
     claimed it from their queue. Only the set difference is a run-wide gap.
     """
-    if not isinstance(accounting, dict):
+    if not isinstance(file_review, dict):
         return {}
-    unclaimed = accounting.get("agents_with_unclaimed_review_by_file")
+    unclaimed = file_review.get("agents_with_unclaimed_review_by_file")
     if not isinstance(unclaimed, dict):
         return {}
     covered_elsewhere = set()
@@ -1226,7 +1226,7 @@ def _run_wide_review_gaps(accounting):
         "agents_receiving_inline_diff_by_file",
         "agents_claiming_review_by_file",
     ):
-        population = accounting.get(field)
+        population = file_review.get(field)
         if isinstance(population, dict):
             covered_elsewhere.update(population)
     return {
@@ -1236,7 +1236,7 @@ def _run_wide_review_gaps(accounting):
     }
 
 
-def _has_review_accounting_gap(accounting):
+def _has_file_review_gap(file_review):
     """True when something is PROVEN uncovered, claims aside.
 
     Files starved for every reviewer and domain-unmatched files are gaps.
@@ -1245,15 +1245,15 @@ def _has_review_accounting_gap(accounting):
     the verdict acknowledge "this gap" on a claims-only run converts that
     hedge into the certainty it was written to avoid.
     """
-    if not isinstance(accounting, dict):
+    if not isinstance(file_review, dict):
         return False
     return bool(
-        _run_wide_review_gaps(accounting) or
-        accounting.get("unscoped_files")
+        _run_wide_review_gaps(file_review) or
+        file_review.get("unscoped_files")
     )
 
 
-def _render_review_accounting_section(accounting):
+def _render_file_review_section(file_review):
     """Render the report's complete `## Review coverage` section, or "".
 
     One paste, three populations, each with its own honest sentence:
@@ -1271,11 +1271,11 @@ def _render_review_accounting_section(accounting):
     whole point — the orchestrator's job here is to paste, not to
     summarize.
     """
-    if not isinstance(accounting, dict):
+    if not isinstance(file_review, dict):
         return ""
-    gaps = _run_wide_review_gaps(accounting)
-    claims = accounting.get("agents_claiming_review_by_file")
-    unscoped = accounting.get("unscoped_files")
+    gaps = _run_wide_review_gaps(file_review)
+    claims = file_review.get("agents_claiming_review_by_file")
+    unscoped = file_review.get("unscoped_files")
     gaps = gaps if isinstance(gaps, dict) else {}
     claims = claims if isinstance(claims, dict) else {}
     unscoped = unscoped if isinstance(unscoped, list) else []
@@ -2092,12 +2092,12 @@ def _report_authoring_actions(mode, state, context, config, output_dir):
     # re-deriving it. A field run once paraphrased "skipped by every
     # matching agent's diff budget and no reviewer reported reviewing
     # them" into "read by nobody", false for 8 of 41 files.
-    if record_usable and _render_review_accounting_section(
-        state.get("review_accounting")
+    if record_usable and _render_file_review_section(
+        state.get("file_review")
     ):
         gap_clause = (
             " The verdict must acknowledge this gap."
-            if _has_review_accounting_gap(state.get("review_accounting"))
+            if _has_file_review_gap(state.get("file_review"))
             else ""
         )
         actions.append("")

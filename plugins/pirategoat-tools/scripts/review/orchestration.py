@@ -32,9 +32,9 @@ try:
     from .atomic_io import atomic_write_json, atomic_write_text
     from .reviewer_lifecycle import close_review_intake, review_paths
     from .reviewer_names import derive_reviewer_name
-    from .briefings import _render_review_accounting_section
+    from .briefings import _render_file_review_section
     from .reconciliation_context import (
-        aggregate_review_accounting,
+        aggregate_file_review,
         strip_severity_floor_markers,
     )
     from . import critic_adjustments
@@ -66,9 +66,9 @@ except ImportError:
     from review.atomic_io import atomic_write_json, atomic_write_text
     from review.reviewer_lifecycle import close_review_intake, review_paths
     from review.reviewer_names import derive_reviewer_name
-    from review.briefings import _render_review_accounting_section
+    from review.briefings import _render_file_review_section
     from review.reconciliation_context import (
-        aggregate_review_accounting,
+        aggregate_file_review,
         strip_severity_floor_markers,
     )
     from review import critic_adjustments
@@ -274,7 +274,7 @@ def _render_findings_markdown(output_dir: str) -> tuple:
 
     Returns ``(outcome, error)``: ``outcome`` mirrors the reviewer-Markdown
     vocabulary (``complete`` / ``failed``) with the same written/expected
-    accounting, and ``error`` is the exception text when the render failed.
+    counts, and ``error`` is the exception text when the render failed.
     Never raises — a derived artifact that could not be rendered is a
     degradation to report, never a reason to abort a step.
 
@@ -540,7 +540,7 @@ def assemble_review_record(output_dir: str, state: dict) -> tuple:
 
     Everything here is composed from renderers that already exist:
     ``render_review_body`` for the findings/checks body and
-    ``_render_review_accounting_section`` for accounting, both byte-identical
+    ``_render_file_review_section`` for the file review, both byte-identical
     to what their own callers produce. The record's own new prose is three
     things — its header, the run notes, and the closing verdict line.
 
@@ -587,11 +587,11 @@ def assemble_review_record(output_dir: str, state: dict) -> tuple:
             "",
             _render_run_notes(state),
         ]
-        accounting = _render_review_accounting_section(
-            state.get("review_accounting")
+        file_review = _render_file_review_section(
+            state.get("file_review")
         )
-        if accounting:
-            sections.extend(["", accounting])
+        if file_review:
+            sections.extend(["", file_review])
         sections.extend([
             "",
             "---",
@@ -1511,7 +1511,7 @@ def _orchestrate_step_9(mode, config, state, context, output_dir):
     # is — `unscoped_files` stays None rather than reading as a clean bill.
     changed_csv = context.get("git", {}).get("changed_files_csv", "")
     changed_files = [f.strip() for f in changed_csv.split(",") if f.strip()]
-    state["review_accounting"] = aggregate_review_accounting(
+    state["file_review"] = aggregate_file_review(
         output_dir, changed_files=changed_files
     )
 

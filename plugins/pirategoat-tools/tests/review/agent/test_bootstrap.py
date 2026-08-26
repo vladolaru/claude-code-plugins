@@ -127,26 +127,26 @@ class TestResolveReviewerIdentity:
         assert "STATUS: ERROR" in error
 
 
-class TestPersistReviewAccountingInput:
-    """The writer publishes the exact schema-3 accounting authority."""
+class TestPersistReviewedFilesInput:
+    """The writer publishes the exact schema-4 assignment."""
 
-    def test_writes_to_the_review_paths_accounting_authority(
+    def test_writes_to_the_review_paths_assignment(
         self, tmp_path, monkeypatch
     ):
         authority_dir = tmp_path / "authority"
         authority_dir.mkdir()
-        accounting_input = authority_dir / "accounting.json"
+        assignment = authority_dir / "authority.json"
         monkeypatch.setattr(
             _mod,
             "review_paths",
             lambda *_args: SimpleNamespace(
                 draft=str(authority_dir / "draft.json"),
                 final=str(authority_dir / "final.json"),
-                accounting_input=str(accounting_input),
+                assignment=str(assignment),
             ),
         )
 
-        _mod.persist_review_accounting_input(
+        _mod.persist_review_assignment(
             str(tmp_path),
             "security-reviewer",
             [],
@@ -156,11 +156,11 @@ class TestPersistReviewAccountingInput:
             channels=["blocking"],
         )
 
-        assert json.loads(accounting_input.read_text())["reviewer"] == "security"
-        assert not (tmp_path / "security-review-accounting-input.json").exists()
+        assert json.loads(assignment.read_text())["reviewer"] == "security"
+        assert not (tmp_path / "security-assignment.json").exists()
 
     def test_writes_only_authoritative_claimable_files(self, tmp_path):
-        _mod.persist_review_accounting_input(
+        _mod.persist_review_assignment(
             str(tmp_path),
             "repo-renewals-reviewer",
             ["src/claimable.php"],
@@ -171,7 +171,7 @@ class TestPersistReviewAccountingInput:
         )
 
         payload = json.loads(
-            (tmp_path / "repo-renewals-review-accounting-input.json").read_text()
+            (tmp_path / "repo-renewals-assignment.json").read_text()
         )
         assert payload == {
             "schema": 4,
@@ -185,7 +185,7 @@ class TestPersistReviewAccountingInput:
         }
 
     def test_writes_empty_authoritative_set(self, tmp_path):
-        _mod.persist_review_accounting_input(
+        _mod.persist_review_assignment(
             str(tmp_path), "security-reviewer", [],
             review_budget=40,
             in_scope_review_file_count=5, inline_diff_file_count=5,
@@ -193,7 +193,7 @@ class TestPersistReviewAccountingInput:
         )
 
         payload = json.loads(
-            (tmp_path / "security-review-accounting-input.json").read_text()
+            (tmp_path / "security-assignment.json").read_text()
         )
         assert payload == {
             "schema": 4,
@@ -211,7 +211,7 @@ class TestPersistReviewAccountingInput:
         output_file.write_text("occupied")
 
         with pytest.raises(OSError):
-            _mod.persist_review_accounting_input(
+            _mod.persist_review_assignment(
                 str(output_file), "security-reviewer", ["src/claimable.php"],
                 review_budget=80,
                 in_scope_review_file_count=1, inline_diff_file_count=0,
@@ -222,11 +222,11 @@ class TestPersistReviewAccountingInput:
         """A multi-domain agent's secondary-domain scope render can repeat
         a file already budget-exceeded in the primary domain's sidecar —
         load_scope_facts() concatenates every summary's
-        budget_exceeded_files without deduping. persist_review_accounting_input
+        budget_exceeded_files without deduping. persist_review_assignment
         must not publish that duplicate: it inflates len(review_claimable_files),
         the total manifest_sections.build_coverage_manifest reconciles
         the agent's derived positive-claim/gap populations against."""
-        _mod.persist_review_accounting_input(
+        _mod.persist_review_assignment(
             str(tmp_path),
             "security-reviewer",
             ["src/a.php", "src/b.php", "src/a.php"],
@@ -236,7 +236,7 @@ class TestPersistReviewAccountingInput:
         )
 
         payload = json.loads(
-            (tmp_path / "security-review-accounting-input.json").read_text()
+            (tmp_path / "security-assignment.json").read_text()
         )
         assert payload == {
             "schema": 4,
@@ -268,7 +268,7 @@ class TestPersistReviewAccountingInput:
     )
     def test_rejects_incomplete_or_incoherent_payloads(self, tmp_path, kwargs):
         with pytest.raises(ValueError):
-            _mod.persist_review_accounting_input(
+            _mod.persist_review_assignment(
                 str(tmp_path), "security-reviewer", ["src/a.php"], **kwargs
             )
 
@@ -384,7 +384,7 @@ class TestPartitionScopePaths:
         builder.save_draft()
 
         payload = json.loads(
-            (tmp_path / "security-review-accounting-input.json").read_text()
+            (tmp_path / "security-assignment.json").read_text()
         )
         covered = payload["inline_diff_file_count"] + len(builder.reviewed_file_claims)
         assert telemetry_starts[0]["scope_paths"] == [
@@ -418,7 +418,7 @@ class TestPartitionScopePaths:
         )
         monkeypatch.setattr(
             _mod,
-            "persist_review_accounting_input",
+            "persist_review_assignment",
             lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")),
         )
         monkeypatch.setattr(
@@ -432,7 +432,7 @@ class TestPartitionScopePaths:
 
         output = capsys.readouterr().out
         assert "STATUS: ERROR" in output
-        assert "Could not publish authoritative review accounting: disk full" in output
+        assert "Could not publish authoritative review assignment: disk full" in output
 
 
 class TestExtractFileDiffstat:
@@ -687,7 +687,7 @@ class TestOutputLifecyclePaths:
         paths = SimpleNamespace(
             draft=str(authority_dir / "draft.json"),
             final=str(authority_dir / "final.json"),
-            accounting_input=str(authority_dir / "accounting.json"),
+            assignment=str(authority_dir / "authority.json"),
         )
         monkeypatch.setattr(_mod, "review_paths", lambda *_args: paths)
 

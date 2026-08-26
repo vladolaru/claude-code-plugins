@@ -27,7 +27,7 @@ from helpers.review_fixtures import (
 )
 from review import dependency_refresh
 from review import synthesis_lifecycle as lifecycle_contract
-from review.reconciliation_context import aggregate_review_accounting
+from review.reconciliation_context import aggregate_file_review
 from review.reviewer_lifecycle import ReviewPaths
 
 
@@ -996,7 +996,7 @@ class TestRunManifest:
                 {"path": "vendor/generated.js", "reason": "noise_filtered"},
             ],
             "unassigned_reviewable_files": [],
-            "review_claim_accounting_by_agent": {},
+            "reviewed_files_by_agent": {},
             "review_claimable_file_count_by_agent": {},
             "semantics": "generated_scope_not_proof_of_model_read",
         }
@@ -1051,7 +1051,7 @@ class TestRunManifest:
         manifest_uncovered = _read_manifest(telemetry)["coverage"][
             "unassigned_reviewable_files"
         ]
-        recon_unscoped = aggregate_review_accounting(
+        recon_unscoped = aggregate_file_review(
             str(output_dir), changed_files=changed
         )["unscoped_files"]
 
@@ -1471,7 +1471,7 @@ class TestRunManifest:
             "assigned_files": [],
             "file_exclusions": [],
             "unassigned_reviewable_files": [],
-            "review_claim_accounting_by_agent": {},
+            "reviewed_files_by_agent": {},
             "review_claimable_file_count_by_agent": {},
             "semantics": "generated_scope_not_proof_of_model_read",
         }
@@ -1498,7 +1498,7 @@ class TestRunManifest:
         assert manifest["availability"]["coverage"] is False
         assert manifest["coverage"] is None
 
-    def test_coverage_carries_canonical_review_claim_accounting_per_reviewer(
+    def test_coverage_carries_canonical_reviewed_files_per_reviewer(
         self, telemetry, output_dir
     ):
         from review.agent.output import ReviewOutputBuilder, finalize_review
@@ -1509,7 +1509,7 @@ class TestRunManifest:
             reviewable=["a.py", "b.py", "c.py"],
             agents=[{"name": "security-reviewer", "status": "DISPATCH"}],
         )
-        (output_dir / "security-review-accounting-input.json").write_text(json.dumps({
+        (output_dir / "security-assignment.json").write_text(json.dumps({
             "schema": 4,
             "agent_name": "security-reviewer",
             "reviewer": "security",
@@ -1532,7 +1532,7 @@ class TestRunManifest:
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
         coverage = _read_manifest(telemetry)["coverage"]
-        assert coverage["review_claim_accounting_by_agent"] == {
+        assert coverage["reviewed_files_by_agent"] == {
             "security-reviewer": {
                 "reviewed_file_claim_count": 1,
                 "unclaimed_review_file_count": 2,
@@ -1550,14 +1550,14 @@ class TestRunManifest:
         paths = ReviewPaths(
             draft=str(authority_dir / "draft.json"),
             final=str(authority_dir / "final.json"),
-            accounting_input=str(authority_dir / "accounting.json"),
+            assignment=str(authority_dir / "authority.json"),
         )
         Path(paths.final).write_text(json.dumps(canonical_review_document(
             "security",
             reviewed_file_claims=["a.py"],
             review_claimable_files=["a.py", "b.py"],
         )))
-        Path(paths.accounting_input).write_text(json.dumps({
+        Path(paths.assignment).write_text(json.dumps({
             "schema": 4,
             "agent_name": "security-reviewer",
             "reviewer": "security",
@@ -1571,8 +1571,8 @@ class TestRunManifest:
             mod.manifest_sections, "review_paths", lambda *_args: paths
         )
 
-        claim_accounting = (
-            mod.manifest_sections._load_review_claim_accounting(
+        reviewed_files = (
+            mod.manifest_sections._load_reviewed_files(
                 str(output_dir), "security-reviewer"
             )
         )
@@ -1582,20 +1582,20 @@ class TestRunManifest:
             )
         )
 
-        assert claim_accounting == {
+        assert reviewed_files == {
             "reviewed_file_claim_count": 1,
             "unclaimed_review_file_count": 1,
         }
         assert claimable_count == 2
 
-    def test_claim_accounting_rejects_retired_final_review(
+    def test_reviewed_files_rejects_retired_final_review(
         self, mod, output_dir
     ):
         paths = ReviewPaths(
             draft=str(output_dir / "security-review.draft.json"),
             final=str(output_dir / "security-review.json"),
-            accounting_input=str(
-                output_dir / "security-review-accounting-input.json"
+            assignment=str(
+                output_dir / "security-assignment.json"
             ),
         )
         Path(paths.final).write_text(json.dumps({
@@ -1604,7 +1604,7 @@ class TestRunManifest:
             "issues": [],
             "reviewed_file_claims": [],
         }))
-        Path(paths.accounting_input).write_text(json.dumps({
+        Path(paths.assignment).write_text(json.dumps({
             "schema": 4,
             "agent_name": "security-reviewer",
             "reviewer": "security",
@@ -1615,7 +1615,7 @@ class TestRunManifest:
             "channels": ["blocking"],
         }))
 
-        assert mod.manifest_sections._load_review_claim_accounting(
+        assert mod.manifest_sections._load_reviewed_files(
             str(output_dir), "security-reviewer"
         ) is None
 
@@ -1630,7 +1630,7 @@ class TestRunManifest:
             reviewable=["a.py"],
             agents=[{"name": "security-reviewer", "status": "DISPATCH"}],
         )
-        (output_dir / "security-review-accounting-input.json").write_text(json.dumps({
+        (output_dir / "security-assignment.json").write_text(json.dumps({
             "schema": 4,
             "agent_name": "security-reviewer",
             "reviewer": "security",
@@ -1648,7 +1648,7 @@ class TestRunManifest:
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
         coverage = _read_manifest(telemetry)["coverage"]
-        assert coverage["review_claim_accounting_by_agent"] == {}
+        assert coverage["reviewed_files_by_agent"] == {}
         assert coverage["review_claimable_file_count_by_agent"] == {
             "security-reviewer": 1
         }
@@ -3174,7 +3174,7 @@ class TestReviewVocabularyManifestProjection:
     ):
         monkeypatch.setattr(
             mod.manifest_sections,
-            "_load_review_claim_accounting",
+            "_load_reviewed_files",
             lambda output_dir, agent: {
                 "reviewed_file_claim_count": 1,
                 "unclaimed_review_file_count": 0,
@@ -3215,7 +3215,7 @@ class TestReviewVocabularyManifestProjection:
             "assigned_files": ["a.php", "b.php"],
             "file_exclusions": [],
             "unassigned_reviewable_files": [],
-            "review_claim_accounting_by_agent": {
+            "reviewed_files_by_agent": {
                 "security-reviewer": {
                     "reviewed_file_claim_count": 1,
                     "unclaimed_review_file_count": 0,

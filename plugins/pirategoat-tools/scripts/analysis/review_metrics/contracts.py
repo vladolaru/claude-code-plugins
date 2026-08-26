@@ -210,10 +210,10 @@ _RECONCILIATION_FIELDS = frozenset(
     _FINDINGS_LEDGER_CONTRACT.RECONCILIATION_FIELDS
 )
 # Lockstep with review/telemetry.py's EVENT_SCHEMA. Schema 3 requires the
-# reviewed-file accounting projection in every coverage section.
+# reviewed-files projection in every coverage section.
 _SUPPORTED_MANIFEST_SCHEMA = 3
 _OBSERVED_READS_SCHEMA = 2
-# Schema 3 adds the cohort's canonical `review_claim_accounting` aggregate.
+# Schema 3 adds the cohort's canonical `reviewed_files` aggregate.
 _REPORT_SCHEMA = 3
 _SUPPORTED_MANIFEST_STATUSES = {"running", "complete"}
 _DISPATCHED_STATUSES = _DISPATCH_STATUS_CONTRACT.DISPATCHED_STATUSES

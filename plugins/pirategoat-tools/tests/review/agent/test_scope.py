@@ -1299,7 +1299,7 @@ class TestScopeSummaryJson:
         assert data["review_claimable_files"] == []
         assert data["list_only_files"] == []
         assert data["in_scope_review_files"] == ["src/a.php", "src/b.php"]
-        # Scoping visibility is broader than the accounting denominator:
+        # Scoping visibility is broader than the reviewed-file denominator:
         # these modes fetched no diff, so they contribute no budget lines.
         assert data["in_scope_stat_lines"] == 0
 

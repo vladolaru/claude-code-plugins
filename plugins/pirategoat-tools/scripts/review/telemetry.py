@@ -57,7 +57,7 @@ from git_paths import normalize_repo_paths
 
 LOG_DIR = os.path.expanduser("~/.pirategoat-tools/logs/reviews")
 MARKER_FILE = ".telemetry-log-path"
-# Schema 3 makes the reviewed-file accounting projection mandatory and is
+# Schema 3 makes the reviewed-files projection mandatory and is
 # consumed in lockstep by review_metrics/contracts.py.
 EVENT_SCHEMA = 3
 # Optional manifest sections whose `availability["<name>"]` boolean shares

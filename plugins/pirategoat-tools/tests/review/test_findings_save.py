@@ -837,7 +837,7 @@ def test_save_accepts_an_advisory_finding_a_source_review_carried(tmp_path):
 
 def test_save_rejects_a_run_with_no_reconciliation_context(tmp_path, capsys):
     """The context is the only source for the stamped facts, so its absence
-    is a rejection rather than a ledger missing half its accounting."""
+    is a rejection rather than a ledger missing half its stamped facts."""
     staged = tmp_path / "staged.json"
     staged.write_text(json.dumps(_valid_findings()))
 
