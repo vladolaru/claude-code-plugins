@@ -13,6 +13,7 @@ from review.findings_ledger import (  # noqa: E402
     LEDGER_SCHEMA,
     RECONCILIATION_JUDGMENT_FIELDS,
     FindingsLedgerBuilder,
+    _no_lifecycle,
 )
 from review.agent.output import (  # noqa: E402
     REVIEW_CONTENT_FIELDS,
@@ -166,7 +167,18 @@ def test_the_taught_snippet_calls_only_methods_the_builder_has():
     called = set(re.findall(r"\bbuilder\.([A-Za-z_][A-Za-z0-9_]*)\(", snippet))
 
     assert called, "the snippet no longer calls the builder at all"
+    # `open()` and the draft-lifecycle names still resolve as attributes —
+    # they are bound to the refusal that gives the ledger no reviewer
+    # lifecycle. Teaching one would fail at runtime, so mere existence is
+    # not the bar: the attribute has to be a method that does something.
+    assert "open" not in called
     for method in sorted(called):
-        assert callable(
-            getattr(FindingsLedgerBuilder, method, None)
-        ), f"builder.{method}() is taught but FindingsLedgerBuilder has no such method"
+        attribute = getattr(FindingsLedgerBuilder, method, None)
+        assert callable(attribute), (
+            f"builder.{method}() is taught but FindingsLedgerBuilder has no "
+            "such method"
+        )
+        assert attribute is not _no_lifecycle, (
+            f"builder.{method}() is taught but raises: the findings ledger "
+            "has no reviewer lifecycle"
+        )

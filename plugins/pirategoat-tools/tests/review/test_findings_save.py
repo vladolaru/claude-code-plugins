@@ -844,3 +844,32 @@ def test_save_rejects_a_run_with_no_reconciliation_context(tmp_path, capsys):
     assert run_save(_args(tmp_path, staged)) == 1
     assert CONTEXT_FILENAME in capsys.readouterr().out
     assert not (tmp_path / "review-findings.json").exists()
+
+
+def test_save_rejects_a_host_context_banner_authored_by_the_agent(
+    tmp_path, capsys
+):
+    """The banner is a pipeline fact like the six reconciliation rosters:
+    an agent-authored one is a claim about the run's host that nothing
+    measured, so it is refused rather than quietly replaced."""
+    _write_context(tmp_path, {
+        "security-review": {
+            "verdict": "request_changes",
+            "findings": [{"severity": "high"}],
+            "checks": [],
+        },
+    }, banner=None)
+    doc = _valid_findings()
+    doc["host_context_banner"] = {
+        "degraded": True,
+        "reason": "fully_unavailable",
+        "message": "invented",
+        "unresolved": [],
+    }
+    staged = tmp_path / "staged.json"
+    staged.write_text(json.dumps(doc))
+
+    assert run_save(_args(tmp_path, staged)) == 1
+    out = capsys.readouterr().out
+    assert "pipeline-owned field: host_context_banner" in out
+    assert not (tmp_path / "review-findings.json").exists()

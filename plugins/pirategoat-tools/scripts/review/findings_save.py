@@ -139,6 +139,9 @@ def stamp_pipeline_facts(document, context):
     recon["not_applicable_agents"] = not_applicable
     recon["dispatched_agents"] = context.get("dispatched_agents")
     recon["missing_agents"] = context.get("missing_agents")
+    # The banner reaches the ledger from here or not at all — the producer
+    # gate refuses one the agent wrote, so this assignment is the only
+    # source of the field and cannot be silently overriding a claim.
     banner = context.get("host_context_banner")
     if isinstance(banner, dict) and banner.get("degraded"):
         document["host_context_banner"] = banner
@@ -158,6 +161,11 @@ def _producer_problems(payload, context):
     if actor_supplied:
         problems.append(
             "critic-owned lifecycle field(s): " + ", ".join(actor_supplied)
+        )
+    if "host_context_banner" in payload:
+        problems.append(
+            "pipeline-owned field: host_context_banner — the save stamps it "
+            "from the reconciliation context"
         )
     for collection in ("findings", "checks"):
         entries = payload.get(collection)
