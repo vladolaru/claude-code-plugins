@@ -45,7 +45,10 @@ from review import critic_adjustments
 from review.reviewer_lifecycle import ReviewPaths, review_paths
 
 sys.path.insert(0, str(TESTS_DIR))
-from helpers.review_fixtures import canonical_review_document
+from helpers.review_fixtures import (
+    canonical_findings_ledger,
+    canonical_review_document,
+)
 
 
 def _write_required_accounting_input(output_dir, reviewer):
@@ -77,27 +80,6 @@ def _save_draft(builder, output_dir):
     if builder._output_dir is None:
         builder._bind(str(output_dir), base_digest=None)
     return builder.save_draft()
-
-
-def _canonical_findings_document(severities=("high",)):
-    """Return one exact reconciler ledger for materialization probes."""
-    document = canonical_review_document("reconciliator", severities)
-    finding_count = len(document["findings"])
-    document["meta"]["reconciliation"] = {
-        "input_finding_count": finding_count,
-        "contributing_agent_count": 1 if finding_count else 0,
-        "grouped_concern_count": finding_count,
-        "false_positive_finding_count": 0,
-        "out_of_scope_finding_count": 0,
-        "verified_finding_count": finding_count,
-        "deduplication_ratio": 0.0 if finding_count else 1.0,
-        "not_applicable_agent_count": 0,
-        "not_applicable_agents": [],
-        "reviewing_agents": ["security-reviewer"] if finding_count else [],
-        "dispatched_agents": ["security-reviewer"] if finding_count else [],
-        "missing_agents": [],
-    }
-    return document
 
 
 def test_accounting_reads_follow_the_bound_review_paths(
@@ -2663,24 +2645,23 @@ class TestReconciliationSectionsRender:
         return data
 
     def test_pipeline_metrics_line_renders_from_meta_reconciliation(self):
-        data = self._findings()
-        data["meta"]["reconciliation"] = {
+        """Every number on the line comes from one canonical ledger, so a
+        renderer reading a retired key would print a zero the ledger's own
+        reconciliation block contradicts."""
+        counts = {
             "input_finding_count": 12,
             "contributing_agent_count": 4,
-            "grouped_concern_count": 5,
-            "false_positive_finding_count": 3,
-            "out_of_scope_finding_count": 1,
-            "verified_finding_count": 4,
-            "deduplication_ratio": 0.58,
-            "not_applicable_agent_count": 0,
-            "not_applicable_agents": [],
-            "reviewing_agents": ["code-reviewer"],
-            "dispatched_agents": ["code-reviewer"],
-            "missing_agents": [],
+            "grouped_concern_count": 8,
+            "false_positive_concern_count": 3,
+            "out_of_scope_concern_count": 1,
+            "verified_concern_count": 4,
         }
-        rendered = render_markdown(data)
+        rendered = render_markdown(
+            canonical_findings_ledger(("high",) * 4, reconciliation=counts)
+        )
         assert "**Pipeline:** 12 findings from 4 reviewing agents" in rendered
-        assert "5 concerns after grouping" in rendered
+        assert "\u2192 4 verified findings" in rendered
+        assert "8 concerns after grouping" in rendered
         assert "3 false positives dropped" in rendered
         assert "1 out-of-scope dropped" in rendered
 
@@ -2688,46 +2669,22 @@ class TestReconciliationSectionsRender:
         """The narrative template ended its Pipeline line with a pointer to
         the metrics block. Dropping it in the substitution would lose the
         one hint a reader has that more accounting exists."""
-        data = self._findings()
-        data["meta"]["reconciliation"] = {
-            "input_finding_count": 12,
-            "contributing_agent_count": 4,
-            "grouped_concern_count": 5,
-            "false_positive_finding_count": 3,
-            "out_of_scope_finding_count": 1,
-            "verified_finding_count": 4,
-            "deduplication_ratio": 0.58,
-            "not_applicable_agent_count": 0,
-            "not_applicable_agents": [],
-            "reviewing_agents": [],
-            "dispatched_agents": [],
-            "missing_agents": [],
-        }
-        rendered = render_markdown(data)
+        rendered = render_markdown(canonical_findings_ledger(("high",)))
         assert (
             "Full metrics in `review-findings.json` \u2192 "
             "`meta.reconciliation`." in rendered
         )
 
     def test_not_applicable_agents_are_reported_with_reasons(self):
-        data = self._findings()
-        data["meta"]["reconciliation"] = {
-            "input_finding_count": 1,
-            "contributing_agent_count": 1,
-            "grouped_concern_count": 1,
-            "false_positive_finding_count": 0,
-            "out_of_scope_finding_count": 0,
-            "verified_finding_count": 1,
-            "deduplication_ratio": 0.0,
-            "not_applicable_agent_count": 1,
-            "not_applicable_agents": [
-                {"name": "a11y-reviewer", "skip_reason": "no UI changed"},
-            ],
-            "reviewing_agents": ["code-reviewer"],
-            "dispatched_agents": ["code-reviewer", "a11y-reviewer"],
-            "missing_agents": [],
-        }
-        rendered = render_markdown(data)
+        rendered = render_markdown(canonical_findings_ledger(
+            ("high",),
+            reconciliation={
+                "not_applicable_agents": [
+                    {"name": "a11y-reviewer", "skip_reason": "no UI changed"},
+                ],
+                "dispatched_agents": ["security-review", "a11y-reviewer"],
+            },
+        ))
         assert "1 agent returned not-applicable" in rendered
         assert "a11y-reviewer (no UI changed)" in rendered
 
@@ -2811,7 +2768,7 @@ class TestMaterializeFindingsMarkdown:
 
     def test_suffix_selects_the_findings_artifact(self):
         with tempfile.TemporaryDirectory() as d:
-            data = _canonical_findings_document()
+            data = canonical_findings_ledger(("high",))
             Path(d, "review-findings.json").write_text(json.dumps(data))
             assert critic_adjustments.read_findings_file(
                 Path(d, "review-findings.json")
@@ -2850,7 +2807,7 @@ class TestMaterializeFindingsMarkdown:
     def test_canonical_reader_rejection_writes_no_findings_markdown(
         self, tmp_path, capsys
     ):
-        data = _canonical_findings_document()
+        data = canonical_findings_ledger(("high",))
         data["verdict"] = "APPROVE"
         findings_path = tmp_path / "review-findings.json"
         findings_path.write_text(json.dumps(data))
@@ -2889,7 +2846,7 @@ class TestMaterializeFindingsMarkdown:
         )
         with tempfile.TemporaryDirectory() as d:
             Path(d, "review-findings.json").write_text(json.dumps(
-                _canonical_findings_document()
+                canonical_findings_ledger(("high",))
             ))
             result = subprocess.run(
                 [sys.executable, str(output_py), "materialize", d,
@@ -2907,7 +2864,7 @@ class TestMaterializeFindingsMarkdown:
             Path(__file__).parents[3] / "scripts" / "review" / "agent"
             / "output.py"
         )
-        data = _canonical_findings_document()
+        data = canonical_findings_ledger(("high",))
         data["verdict"] = "APPROVE"
         findings_path = tmp_path / "review-findings.json"
         findings_path.write_text(json.dumps(data))

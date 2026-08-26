@@ -21,7 +21,10 @@ SCRIPT_PATH = PLUGIN_ROOT / "scripts" / "review" / "telemetry.py"
 
 sys.path.insert(0, str(TESTS_DIR))
 from helpers.context_fixtures import COMPLETE_CONTEXT
-from helpers.review_fixtures import canonical_review_document
+from helpers.review_fixtures import (
+    canonical_findings_ledger,
+    canonical_review_document,
+)
 from review import dependency_refresh
 from review import synthesis_lifecycle as lifecycle_contract
 from review.reconciliation_context import aggregate_review_accounting
@@ -80,27 +83,6 @@ def _write_coverage_inputs(output_dir, changed, reviewable, agents):
         "changed_files": reviewable,
         "agents": agents,
     }))
-
-
-def _canonical_findings_ledger(severities=()):
-    """Return one complete reconciler ledger for telemetry consumers."""
-    ledger = canonical_review_document("reconciliator", severities)
-    count = len(severities)
-    ledger["meta"]["reconciliation"] = {
-        "input_finding_count": count,
-        "contributing_agent_count": 1 if count else 0,
-        "grouped_concern_count": count,
-        "false_positive_finding_count": 0,
-        "out_of_scope_finding_count": 0,
-        "verified_finding_count": count,
-        "deduplication_ratio": 0.0 if count else 1.0,
-        "not_applicable_agent_count": 0,
-        "not_applicable_agents": [],
-        "reviewing_agents": ["security-reviewer"],
-        "dispatched_agents": ["security-reviewer"],
-        "missing_agents": [],
-    }
-    return ledger
 
 
 # ── start() ─────────────────────────────────────────────────────────
@@ -2705,7 +2687,7 @@ class TestSnapshot:
         """review-findings.json is reconciled output, not an agent result."""
         log_dir = tmp_path / "logs"
         (output_dir / "review-findings.json").write_text(json.dumps(
-            _canonical_findings_ledger(["medium"])
+            canonical_findings_ledger(["medium"])
         ))
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
         t.start(pr_number="42")
@@ -2717,7 +2699,7 @@ class TestSnapshot:
 
     def test_extracts_findings(self, mod, output_dir, tmp_path):
         log_dir = tmp_path / "logs"
-        findings = _canonical_findings_ledger(["high", "medium", "low"])
+        findings = canonical_findings_ledger(["high", "medium", "low"])
         (output_dir / "review-findings.json").write_text(json.dumps(findings))
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
         t.start(pr_number="42")
@@ -2731,7 +2713,7 @@ class TestSnapshot:
     def test_findings_measurement_reaches_summary_and_manifest(
         self, mod, output_dir, tmp_path
     ):
-        findings = _canonical_findings_ledger(["critical"])
+        findings = canonical_findings_ledger(["critical"])
         findings["findings"][0]["channel"] = "advisory"
         findings["verdict"] = "approve"
         findings["summary"].update({
@@ -3260,20 +3242,17 @@ class TestReviewVocabularyManifestProjection:
             "input_finding_count": 3,
             "contributing_agent_count": 2,
             "grouped_concern_count": 2,
-            "false_positive_finding_count": 1,
-            "out_of_scope_finding_count": 0,
-            "verified_finding_count": 1,
-            "deduplication_ratio": 0.33,
-            "not_applicable_agent_count": 0,
-        }
-        ledger = _canonical_findings_ledger(["medium"])
-        ledger["meta"]["reconciliation"] = {
-            **reconciliation,
+            "false_positive_concern_count": 1,
+            "out_of_scope_concern_count": 0,
+            "verified_concern_count": 1,
             "not_applicable_agents": [],
             "reviewing_agents": ["security-reviewer"],
             "dispatched_agents": ["security-reviewer"],
             "missing_agents": [],
         }
+        ledger = canonical_findings_ledger(
+            ["medium"], reconciliation=reconciliation
+        )
         (output_dir / "review-findings.json").write_text(json.dumps(ledger))
         telemetry = mod.ReviewTelemetry(
             str(output_dir), log_dir=str(tmp_path / "logs")
@@ -3293,7 +3272,9 @@ class TestReviewVocabularyManifestProjection:
             "input_findings_count", "agents_contributing",
             "concerns_after_grouping", "false_positives_dropped",
             "out_of_scope_dropped", "verified_concerns", "merge_ratio",
-            "not_applicable_count",
+            "not_applicable_count", "false_positive_finding_count",
+            "out_of_scope_finding_count", "verified_finding_count",
+            "deduplication_ratio", "not_applicable_agent_count",
         ):
             assert retired not in serialized
 

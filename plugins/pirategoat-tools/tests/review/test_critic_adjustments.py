@@ -20,7 +20,9 @@ PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 SCRIPT_PATH = SCRIPTS_DIR / "review" / "critic_adjustments.py"
 sys.path.insert(0, str(SCRIPTS_DIR))
+sys.path.insert(0, str(TESTS_DIR))
 
+from helpers.review_fixtures import canonical_findings_ledger
 from review.atomic_io import atomic_write_json
 from review.critic_adjustments import (
     APPLIED_IDS_KEY,
@@ -32,6 +34,7 @@ from review.critic_adjustments import (
     apply_adjustments,
     pending_count,
     read_critic_verdict,
+    validate_findings_document,
     validate_proposal_input,
     write_findings,
 )
@@ -55,7 +58,6 @@ def _write_findings(output_dir, findings, **extra):
     ledger's first IN-CHANNEL write. A raw `json.dumps` here would route
     around the one sanctioned write path the real producer uses.
     """
-    derived = derive_review_state(findings)
     checks = extra.get("checks", [])
     finding_numbers = [
         int(item["id"][1:])
@@ -67,55 +69,28 @@ def _write_findings(output_dir, findings, **extra):
         for item in checks
         if re.fullmatch(r"c[1-9][0-9]*", item.get("id", ""))
     ]
-    data = {
-        "pr_id": "42",
-        "reviewer": "reconciliator",
-        "timestamp": "2026-08-13T10:00:00",
-        "plugin_version": None,
-        "schema": 2,
-        # Lowercase: this is the per-review ledger vocabulary
-        # (schemas/review-output.ts), not the outer-pipeline
-        # APPROVE/COMMENT/REQUEST_CHANGES values pipeline-result.json
-        # publishes. Step 11 maps between the two layers.
-        "verdict": derived["verdict"],
-        "summary": {
-            "total_findings": len(findings),
-            "by_severity": derived["counts"],
-            **derived["advisory"],
-        },
-        "findings": findings,
-        "review_claimable_files": [],
-        "reviewed_file_claims": [],
-        "unclaimed_review_files": [],
-        "inline_diff_file_count": 1,
-        "review_accounted_file_count": 1,
-        "in_scope_review_file_count": 1,
-        "observations": None,
-        "recommendations": None,
-        "positive_observations": None,
-        "checks": checks,
-        "assessment": None,
-        "meta": {
-            "review_duration_ms": 10,
-            "confidence_score": 0.9,
-            "next_finding_number": max(finding_numbers, default=0) + 1,
-            "next_check_number": max(check_numbers, default=0) + 1,
-            "reconciliation": {
-                "input_finding_count": len(findings),
-                "contributing_agent_count": 1 if findings else 0,
-                "grouped_concern_count": len(findings),
-                "false_positive_finding_count": 0,
-                "out_of_scope_finding_count": 0,
-                "verified_finding_count": len(findings),
-                "deduplication_ratio": 0.0 if findings else 1.0,
-                "not_applicable_agent_count": 0,
-                "not_applicable_agents": [],
-                "reviewing_agents": ["security-reviewer"],
-                "dispatched_agents": ["security-reviewer"],
-                "missing_agents": [],
-            },
-        },
+    derived = derive_review_state(findings)
+    data = canonical_findings_ledger(checks=checks, reconciliation={
+        "grouped_concern_count": len(findings),
+        "verified_concern_count": len(findings),
+        "input_finding_count": len(findings),
+        "contributing_agent_count": 1 if findings else 0,
+        "reviewing_agents": ["security-reviewer"],
+        "dispatched_agents": ["security-reviewer"],
+    })
+    data["findings"] = findings
+    # Lowercase: this is the per-review ledger vocabulary
+    # (schemas/review-output.ts), not the outer-pipeline
+    # APPROVE/COMMENT/REQUEST_CHANGES values pipeline-result.json
+    # publishes. Step 11 maps between the two layers.
+    data["verdict"] = derived["verdict"]
+    data["summary"] = {
+        "total_findings": len(findings),
+        "by_severity": derived["counts"],
+        **derived["advisory"],
     }
+    data["meta"]["next_finding_number"] = max(finding_numbers, default=0) + 1
+    data["meta"]["next_check_number"] = max(check_numbers, default=0) + 1
     if "meta" in extra:
         data["meta"].update(extra.pop("meta"))
     data.update(extra)
@@ -278,6 +253,29 @@ class TestCanonicalFindingsReader:
         path = tmp_path / "review-findings.json"
         path.write_text(json.dumps(payload))
         return path
+
+    def test_schema_three_ledger_without_accounting_is_canonical(self):
+        validate_findings_document(canonical_findings_ledger(("high",)))
+
+    @pytest.mark.parametrize("extra", [
+        {"reviewer": "reconciliator"},
+        {"review_claimable_files": []},
+        {"schema": 2},
+    ])
+    def test_reviewer_envelope_fields_are_rejected_on_the_ledger(self, extra):
+        with pytest.raises(ValueError):
+            validate_findings_document(
+                {**canonical_findings_ledger(("high",)), **extra}
+            )
+
+    def test_reconciliation_counts_must_partition_grouped(self):
+        ledger = canonical_findings_ledger(("high",), reconciliation={
+            "grouped_concern_count": 5, "verified_concern_count": 1,
+            "false_positive_concern_count": 3, "out_of_scope_concern_count": 0,
+            "input_finding_count": 6,
+        })
+        with pytest.raises(ValueError, match="grouped_concern_count"):
+            validate_findings_document(ledger)
 
     @pytest.mark.parametrize(
         "payload",

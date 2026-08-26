@@ -26,6 +26,7 @@ from .contracts import (
     _MAX_WALL_TIME_MS,
     _OPTIONAL_SECTION_AVAILABILITY_KEYS,
     _PRODUCER_AGENT_NAME_RE,
+    _RECONCILIATION_AGENT_FIELDS,
     _RECONCILIATION_COUNT_FIELDS,
     _RECONCILIATION_FIELDS,
     _RETAINED_CRITIC_VALUES,
@@ -1526,15 +1527,35 @@ def _sanitize_reconciliation(value: object) -> dict[str, Any] | None:
         if count is None:
             return None
         result[name] = count
-    ratio = value.get("deduplication_ratio")
-    if (
-        not isinstance(ratio, (int, float))
-        or isinstance(ratio, bool)
-        or not math.isfinite(ratio)
-        or not 0 <= ratio <= 1
-    ):
+    for name in _RECONCILIATION_AGENT_FIELDS:
+        agents = value.get(name)
+        if agents is None:
+            result[name] = None
+            continue
+        if not isinstance(agents, list) or any(
+            type(agent) is not str
+            or _PRODUCER_AGENT_NAME_RE.fullmatch(agent) is None
+            for agent in agents
+        ):
+            return None
+        result[name] = list(agents)
+    not_applicable = value.get("not_applicable_agents")
+    if not isinstance(not_applicable, list):
         return None
-    result["deduplication_ratio"] = ratio
+    skipped: list[dict[str, str]] = []
+    for agent in not_applicable:
+        if not isinstance(agent, dict) or set(agent) != {"name", "skip_reason"}:
+            return None
+        safe = _safe_scalar_map(agent, ("name", "skip_reason"))
+        name = safe.get("name")
+        if (
+            type(name) is not str
+            or _PRODUCER_AGENT_NAME_RE.fullmatch(name) is None
+            or type(safe.get("skip_reason")) is not str
+        ):
+            return None
+        skipped.append(safe)
+    result["not_applicable_agents"] = skipped
     return result
 
 

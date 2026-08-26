@@ -402,11 +402,17 @@ def _task_5_manifest(run_id: str = "task-5-run") -> dict:
         "input_finding_count": 3,
         "contributing_agent_count": 2,
         "grouped_concern_count": 2,
-        "false_positive_finding_count": 1,
-        "out_of_scope_finding_count": 0,
-        "verified_finding_count": 1,
-        "deduplication_ratio": 1 / 3,
-        "not_applicable_agent_count": 0,
+        "false_positive_concern_count": 1,
+        "out_of_scope_concern_count": 0,
+        "verified_concern_count": 1,
+        "reviewing_agents": ["code-reviewer", "security-reviewer"],
+        "not_applicable_agents": [
+            {"name": "a11y-reviewer", "skip_reason": "no UI changed"},
+        ],
+        "dispatched_agents": [
+            "code-reviewer", "security-reviewer", "a11y-reviewer",
+        ],
+        "missing_agents": [],
     }
     return manifest
 

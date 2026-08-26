@@ -20,15 +20,19 @@ TESTS_DIR = Path(__file__).resolve().parent.parent  # review/ -> tests/
 PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 SCRIPT = SCRIPTS_DIR / "review" / "findings_save.py"
+sys.path.insert(0, str(TESTS_DIR))
+
+from helpers.review_fixtures import canonical_findings_ledger
 
 
 def _valid_findings(**overrides):
-    doc = {
-        "pr_id": "42",
-        "reviewer": "reconciliator",
+    doc = canonical_findings_ledger(reconciliation={
+        "reviewing_agents": ["security-reviewer"],
+        "dispatched_agents": ["security-reviewer"],
+    })
+    doc.update({
         "timestamp": "2026-08-26T10:00:00+00:00",
         "plugin_version": "1.114.0",
-        "schema": 2,
         "verdict": "request_changes",
         "findings": [
             {
@@ -51,15 +55,6 @@ def _valid_findings(**overrides):
             "suppressed_advisory_finding_count": 0,
         },
         "assessment": "One high-severity finding found.",
-        "review_claimable_files": ["src/foo.php"],
-        "reviewed_file_claims": ["src/foo.php"],
-        "unclaimed_review_files": [],
-        "inline_diff_file_count": 0,
-        "review_accounted_file_count": 1,
-        "in_scope_review_file_count": 1,
-        "observations": None,
-        "recommendations": None,
-        "positive_observations": None,
         "checks": [
             {
                 "id": "c1",
@@ -69,13 +64,7 @@ def _valid_findings(**overrides):
                 "source_reviewers": ["security"],
             },
         ],
-        "meta": {
-            "review_duration_ms": 10,
-            "confidence_score": 0.9,
-            "next_finding_number": 2,
-            "next_check_number": 2,
-        },
-    }
+    })
     meta_override = overrides.pop("meta", None)
     doc.update(overrides)
     findings = doc.get("findings")
@@ -85,28 +74,16 @@ def _valid_findings(**overrides):
     doc["meta"].update({
         "next_finding_number": finding_count + 1,
         "next_check_number": check_count + 1,
-        "reconciliation": {
-            "input_finding_count": finding_count,
-            "contributing_agent_count": 1 if finding_count else 0,
-            "grouped_concern_count": finding_count,
-            "false_positive_finding_count": 0,
-            "out_of_scope_finding_count": 0,
-            "verified_finding_count": finding_count,
-            "deduplication_ratio": 0.0 if finding_count else 1.0,
-            "not_applicable_agent_count": 0,
-            "not_applicable_agents": [],
-            "reviewing_agents": ["security-reviewer"],
-            "dispatched_agents": ["security-reviewer"],
-            "missing_agents": [],
-        },
+    })
+    doc["meta"]["reconciliation"].update({
+        "input_finding_count": finding_count,
+        "contributing_agent_count": 1 if finding_count else 0,
+        "grouped_concern_count": finding_count,
+        "verified_concern_count": finding_count,
     })
     if meta_override is not None:
         doc["meta"].update(meta_override)
     return doc
-
-
-def _valid_schema2_findings(**overrides):
-    return _valid_findings(**overrides)
 
 
 class TestFindingsSave:
@@ -124,7 +101,7 @@ class TestFindingsSave:
         return path
 
     def test_accepts_canonical_findings_checks_and_assessment(self, tmp_path):
-        findings = self._write_findings(tmp_path, _valid_schema2_findings())
+        findings = self._write_findings(tmp_path, _valid_findings())
 
         result = self._run_save(tmp_path, findings)
 
@@ -133,13 +110,13 @@ class TestFindingsSave:
         assert saved["findings"][0]["id"] == "f1"
         assert saved["checks"][0]["source_reviewers"] == ["security"]
         assert saved["assessment"] == "One high-severity finding found."
-        assert saved["schema"] == 2
+        assert saved["schema"] == 3
         assert "issues" not in saved
         assert "clearances" not in saved
         assert "narrative_summary" not in saved
 
     def test_rejects_missing_schema(self, tmp_path):
-        doc = _valid_schema2_findings()
+        doc = _valid_findings()
         del doc["schema"]
         findings = self._write_findings(tmp_path, doc)
 
@@ -149,12 +126,12 @@ class TestFindingsSave:
         assert "schema" in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
 
-    @pytest.mark.parametrize("schema", [1, 3, "2", True, None])
-    def test_rejects_schema_other_than_exact_integer_two(
+    @pytest.mark.parametrize("schema", [1, 2, "3", True, None])
+    def test_rejects_schema_other_than_the_exact_ledger_integer(
         self, tmp_path, schema
     ):
         findings = self._write_findings(
-            tmp_path, _valid_schema2_findings(schema=schema)
+            tmp_path, _valid_findings(schema=schema)
         )
 
         result = self._run_save(tmp_path, findings)
@@ -175,7 +152,7 @@ class TestFindingsSave:
         self, tmp_path, field, value
     ):
         findings = self._write_findings(
-            tmp_path, _valid_schema2_findings(**{field: value})
+            tmp_path, _valid_findings(**{field: value})
         )
 
         result = self._run_save(tmp_path, findings)
@@ -185,10 +162,10 @@ class TestFindingsSave:
         assert not (tmp_path / "review-findings.json").exists()
 
     def test_rejects_mutable_or_malformed_check_identity(self, tmp_path):
-        checks = _valid_schema2_findings()["checks"]
+        checks = _valid_findings()["checks"]
         checks[0]["source_reviewers"] = ["security", "", 7]
         findings = self._write_findings(
-            tmp_path, _valid_schema2_findings(checks=checks)
+            tmp_path, _valid_findings(checks=checks)
         )
 
         result = self._run_save(tmp_path, findings)
@@ -198,7 +175,7 @@ class TestFindingsSave:
         assert not (tmp_path / "review-findings.json").exists()
 
     def test_rejects_retired_tool_metadata(self, tmp_path):
-        doc = _valid_schema2_findings()
+        doc = _valid_findings()
         doc["meta"]["tool_results_used"] = ["rg"]
         findings = self._write_findings(tmp_path, doc)
 
@@ -209,7 +186,7 @@ class TestFindingsSave:
         assert not (tmp_path / "review-findings.json").exists()
 
     def test_rejects_summary_without_advisory_finding_count(self, tmp_path):
-        doc = _valid_schema2_findings()
+        doc = _valid_findings()
         del doc["summary"]["suppressed_advisory_finding_count"]
         findings = self._write_findings(tmp_path, doc)
 
@@ -583,7 +560,7 @@ class TestFindingsSave:
         self, tmp_path, field
     ):
         findings = self._write_findings(
-            tmp_path, _valid_schema2_findings(**{field: []})
+            tmp_path, _valid_findings(**{field: []})
         )
 
         result = self._run_save(tmp_path, findings)
@@ -596,7 +573,7 @@ class TestFindingsSave:
     def test_rejects_actor_supplied_critic_provenance(
         self, tmp_path, collection
     ):
-        doc = _valid_schema2_findings()
+        doc = _valid_findings()
         doc[collection][0]["critic_adjustment"] = {
             "action": "correct",
             "rationale": "Caller invented provenance.",

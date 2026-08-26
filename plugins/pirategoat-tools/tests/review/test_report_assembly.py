@@ -29,12 +29,14 @@ TESTS_DIR = Path(__file__).resolve().parent.parent
 PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
+sys.path.insert(0, str(TESTS_DIR))
 
 from review import briefings as briefings_mod
 from review import critic_adjustments
 from review import orchestration as orchestration_mod
 from review.atomic_io import atomic_write_json
 from review.agent.output import render_review_body
+from helpers.review_fixtures import canonical_findings_ledger
 from review.orchestration import (
     REVIEW_RECORD_MD,
     _report_source_fingerprint,
@@ -44,20 +46,24 @@ from review.orchestration import (
 
 def _ledger(**overrides):
     """A minimal, valid `review-findings.json` document."""
-    findings = {
-        "schema": 2,
-        "reviewer": "reconciliator",
-        "pr_id": "42",
-        "timestamp": "2026-08-26T10:00:00+00:00",
-        "plugin_version": "1.114.0",
-        "verdict": "request_changes",
-        "summary": {
-            "total_findings": 2,
-            "by_severity": {
-                "critical": 0, "high": 1, "medium": 1, "low": 0, "info": 0,
+    findings = canonical_findings_ledger(
+        ("high", "medium"),
+        checks=[
+            {
+                "id": "c1",
+                "question": "Does anything else call the removed helper?",
+                "method": "git grep across the repo",
+                "result": "0 hits outside the deleted file",
+                "source_reviewers": ["code-reviewer"],
             },
-            "suppressed_advisory_finding_count": 0,
+        ],
+        reconciliation={
+            "reviewing_agents": ["code-reviewer"],
+            "dispatched_agents": ["code-reviewer"],
         },
+    )
+    findings.update({
+        "plugin_version": "1.114.0",
         "findings": [
             {
                 "id": "f1",
@@ -83,49 +89,13 @@ def _ledger(**overrides):
             },
         ],
         "positive_observations": [],
-        "observations": None,
-        "review_claimable_files": [],
-        "reviewed_file_claims": [],
-        "unclaimed_review_files": [],
-        "inline_diff_file_count": 1,
-        "review_accounted_file_count": 1,
-        "in_scope_review_file_count": 1,
         "assessment": "Two real problems, both fixable in one pass.",
-        "checks": [
-            {
-                "id": "c1",
-                "question": "Does anything else call the removed helper?",
-                "method": "git grep across the repo",
-                "result": "0 hits outside the deleted file",
-                "source_reviewers": ["code-reviewer"],
-            },
-        ],
-        "meta": {
-            "review_duration_ms": 10,
-            "confidence_score": 0.9,
-            "next_finding_number": 3,
-            "next_check_number": 2,
-            "reconciliation": {
-                "input_finding_count": 2,
-                "contributing_agent_count": 1,
-                "grouped_concern_count": 2,
-                "false_positive_finding_count": 0,
-                "out_of_scope_finding_count": 0,
-                "verified_finding_count": 2,
-                "deduplication_ratio": 0.0,
-                "not_applicable_agent_count": 0,
-                "not_applicable_agents": [],
-                "reviewing_agents": ["code-reviewer"],
-                "dispatched_agents": ["code-reviewer"],
-                "missing_agents": [],
-            },
-        },
         "recommendations": {
             "immediate": ["Escape the admin notice."],
             "important": [],
             "suggestions": [],
         },
-    }
+    })
     findings.update(overrides)
     return findings
 

@@ -38,13 +38,13 @@ try:
     from . import atomic_io
     from .agent.output import (
         validate_finding_content_field,
-        validate_review_document,
+        validate_review_content,
         validate_review_domain,
     )
-    from .agent.coverage import (
-        ACCOUNTING_INPUT_SCHEMA,
-        ReviewAccountingError,
-        derive_review_accounting,
+    from .findings_ledger import (
+        LEDGER_SCHEMA,
+        RECONCILIATION_FIELDS,
+        RECONCILIATION_JUDGMENT_FIELDS,
     )
     from .verdict_rules import VALID_SEVERITIES, derive_review_state
 except ImportError:
@@ -54,13 +54,13 @@ except ImportError:
     from review import atomic_io
     from review.agent.output import (
         validate_finding_content_field,
-        validate_review_document,
+        validate_review_content,
         validate_review_domain,
     )
-    from review.agent.coverage import (
-        ACCOUNTING_INPUT_SCHEMA,
-        ReviewAccountingError,
-        derive_review_accounting,
+    from review.findings_ledger import (
+        LEDGER_SCHEMA,
+        RECONCILIATION_FIELDS,
+        RECONCILIATION_JUDGMENT_FIELDS,
     )
     from review.verdict_rules import VALID_SEVERITIES, derive_review_state
 
@@ -785,20 +785,6 @@ _LEDGER_EXTENSION_FIELDS = frozenset({
     REJECTED_ADJUSTMENTS_KEY,
     INVALIDATED_ASSESSMENTS_KEY,
 })
-_RECONCILIATION_FIELDS = frozenset({
-    "input_finding_count",
-    "contributing_agent_count",
-    "grouped_concern_count",
-    "false_positive_finding_count",
-    "out_of_scope_finding_count",
-    "verified_finding_count",
-    "deduplication_ratio",
-    "not_applicable_agent_count",
-    "not_applicable_agents",
-    "reviewing_agents",
-    "dispatched_agents",
-    "missing_agents",
-})
 _BASE_FINDING_FIELDS = frozenset({
     "id", "category", "severity", "title", "description", "file", "line",
     "recommendation", "confidence",
@@ -834,34 +820,31 @@ def _validate_unique_strings(value, label, *, nullable=False):
 
 def _validate_reconciliation(value):
     label = f"{FINDINGS_FILENAME}: meta.reconciliation"
-    if not isinstance(value, dict) or set(value) != _RECONCILIATION_FIELDS:
+    if not isinstance(value, dict) or set(value) != RECONCILIATION_FIELDS:
         raise ValueError(f"{label} must have the exact canonical fields")
-    count_fields = (
-        "input_finding_count",
-        "contributing_agent_count",
-        "grouped_concern_count",
-        "false_positive_finding_count",
-        "out_of_scope_finding_count",
-        "verified_finding_count",
-        "not_applicable_agent_count",
-    )
-    for field in count_fields:
-        _require_nonnegative_integer(value[field], f"{label}.{field}")
-    if value["grouped_concern_count"] > value["input_finding_count"]:
-        raise ValueError(f"{label}.grouped_concern_count exceeds its input")
-    ratio = value["deduplication_ratio"]
-    expected_ratio = round(
-        1
-        - value["grouped_concern_count"]
-        / max(value["input_finding_count"], 1),
-        2,
-    )
-    if (
-        type(ratio) not in (int, float)
-        or not 0 <= ratio <= 1
-        or ratio != expected_ratio
+    for field in RECONCILIATION_JUDGMENT_FIELDS + (
+        "input_finding_count", "contributing_agent_count",
     ):
-        raise ValueError(f"{label}.deduplication_ratio is incoherent")
+        _require_nonnegative_integer(value[field], f"{label}.{field}")
+    judged = (
+        value["verified_concern_count"]
+        + value["false_positive_concern_count"]
+        + value["out_of_scope_concern_count"]
+    )
+    if judged != value["grouped_concern_count"]:
+        raise ValueError(
+            f"{label}: classification counts do not partition "
+            "grouped_concern_count"
+        )
+    _validate_unique_strings(
+        value["reviewing_agents"], f"{label}.reviewing_agents"
+    )
+    _validate_unique_strings(
+        value["dispatched_agents"], f"{label}.dispatched_agents", nullable=True
+    )
+    _validate_unique_strings(
+        value["missing_agents"], f"{label}.missing_agents", nullable=True
+    )
     not_applicable = value["not_applicable_agents"]
     if not isinstance(not_applicable, list):
         raise ValueError(f"{label}.not_applicable_agents must be a list")
@@ -881,13 +864,6 @@ def _validate_reconciliation(value):
         names.append(agent["name"])
     if len(names) != len(set(names)):
         raise ValueError(f"{label}.not_applicable_agents contains duplicates")
-    if value["not_applicable_agent_count"] != len(not_applicable):
-        raise ValueError(f"{label}.not_applicable_agent_count is incoherent")
-    for field in ("reviewing_agents", "dispatched_agents"):
-        _validate_unique_strings(value[field], f"{label}.{field}")
-    _validate_unique_strings(
-        value["missing_agents"], f"{label}.missing_agents", nullable=True
-    )
 
 
 def _validate_host_context_banner(value):
@@ -917,42 +893,29 @@ def _validate_host_context_banner(value):
             raise ValueError(f"{label}.unresolved[{index}] is malformed")
 
 
-def _validate_finding_provenance(value, label, *, removed):
-    if not isinstance(value, dict):
-        raise ValueError(f"{label}.critic_adjustment must be an object")
-    action = value.get("action")
-    if action not in ACTIONS or (action == "remove") != removed:
-        raise ValueError(f"{label}.critic_adjustment action is incoherent")
-    if (
-        not isinstance(value.get("rationale"), str)
-        or not value["rationale"].strip()
+def _validate_critic_provenance(value, label, *, removed):
+    """Validate one ledger entry's critic_adjustment provenance, if any.
+
+    The applier is the only writer of this block and it writes one shape;
+    this boundary checks that shape, not a per-action grammar the applier
+    cannot emit. The one asymmetry worth keeping is that an entry parked in
+    a `*_removed_by_critic` list must say a removal put it there.
+    """
+    if removed and (
+        not isinstance(value, dict) or value.get("action") != "remove"
     ):
-        raise ValueError(f"{label}.critic_adjustment rationale is malformed")
-    expected_fields = {"action", "rationale"}
-    prior_fields = ()
-    if action in ("promote", "demote"):
-        expected_fields.add("prior")
-        prior_fields = ("severity",)
-    elif action == "rescope":
-        expected_fields.add("prior")
-        prior_fields = ("file", "line")
-    elif action == "correct":
-        expected_fields.add("prior")
-        prior_fields = FINDING_PATCH_FIELDS
-    if set(value) != expected_fields:
-        raise ValueError(f"{label}.critic_adjustment has invalid fields")
-    if not prior_fields:
+        raise ValueError(f"{label}: a removed entry needs a remove adjustment")
+    if value is None:
         return
-    prior = value["prior"]
     if (
-        not isinstance(prior, dict)
-        or not prior
-        or not set(prior) <= set(prior_fields)
-        or (action == "rescope" and set(prior) != {"file", "line"})
+        not isinstance(value, dict)
+        or value.get("action") not in ACTIONS
+        or not isinstance(value.get("rationale"), str)
+        or not value["rationale"].strip()
+        or ("prior" in value and not isinstance(value["prior"], dict))
+        or set(value) - {"action", "rationale", "prior"}
     ):
-        raise ValueError(f"{label}.critic_adjustment prior is malformed")
-    for field, field_value in prior.items():
-        validate_finding_content_field(field, field_value, f"{label}.prior")
+        raise ValueError(f"{label}: critic_adjustment provenance is malformed")
 
 
 def _validate_ledger_finding(finding, index, *, removed=False):
@@ -970,37 +933,9 @@ def _validate_ledger_finding(finding, index, *, removed=False):
         raise ValueError(f"{label} line scope is not canonical")
     if finding.get("channel") == "blocking":
         raise ValueError(f"{label}.channel must omit the blocking default")
-    provenance = finding.get("critic_adjustment")
-    if removed or provenance is not None:
-        _validate_finding_provenance(provenance, label, removed=removed)
-
-
-def _validate_check_provenance(value, label, *, removed):
-    if not isinstance(value, dict):
-        raise ValueError(f"{label}.critic_adjustment must be an object")
-    action = value.get("action")
-    if action == "remove" and removed:
-        expected_fields = {"action", "rationale"}
-    elif action == "correct" and not removed:
-        expected_fields = {"action", "rationale", "prior"}
-    else:
-        raise ValueError(f"{label}.critic_adjustment action is incoherent")
-    if set(value) != expected_fields or not isinstance(
-        value.get("rationale"), str
-    ) or not value["rationale"].strip():
-        raise ValueError(f"{label}.critic_adjustment is malformed")
-    if action == "correct":
-        prior = value["prior"]
-        if (
-            not isinstance(prior, dict)
-            or not prior
-            or not set(prior) <= {"question", "method", "result"}
-            or any(
-                not isinstance(item, str) or not item.strip()
-                for item in prior.values()
-            )
-        ):
-            raise ValueError(f"{label}.critic_adjustment prior is malformed")
+    _validate_critic_provenance(
+        finding.get("critic_adjustment"), label, removed=removed
+    )
 
 
 def _validate_ledger_check(check, index, *, removed=False):
@@ -1010,9 +945,9 @@ def _validate_ledger_check(check, index, *, removed=False):
     )
     if not isinstance(check, dict) or not set(check) <= _CHECK_FIELDS:
         raise ValueError(f"{label} has unexpected fields")
-    provenance = check.get("critic_adjustment")
-    if removed or provenance is not None:
-        _validate_check_provenance(provenance, label, removed=removed)
+    _validate_critic_provenance(
+        check.get("critic_adjustment"), label, removed=removed
+    )
 
 
 def _validate_invalidated_assessments(value, applied_ids):
@@ -1035,44 +970,14 @@ def _validate_invalidated_assessments(value, applied_ids):
             raise ValueError(f"{label}[{index}] cites unknown adjustments")
 
 
-def _validate_ledger_accounting(document):
-    accounting_input = {
-        "schema": ACCOUNTING_INPUT_SCHEMA,
-        "agent_name": "reconciliator-reviewer",
-        "reviewer": "reconciliator",
-        "review_claimable_files": document["review_claimable_files"],
-        "review_budget": 0,
-        "inline_diff_file_count": document["inline_diff_file_count"],
-        "in_scope_review_file_count": document["in_scope_review_file_count"],
-        "channels": ["blocking", "advisory"],
-    }
-    try:
-        accounting = derive_review_accounting(
-            accounting_input, document["reviewed_file_claims"]
-        )
-    except ReviewAccountingError as error:
-        raise ValueError(
-            f"{FINDINGS_FILENAME}: accounting is malformed: {error}"
-        ) from error
-    expected = {
-        "review_claimable_files": list(accounting.review_claimable_files),
-        "reviewed_file_claims": list(accounting.reviewed_file_claims),
-        "unclaimed_review_files": list(accounting.unclaimed_review_files),
-        "inline_diff_file_count": accounting.inline_diff_file_count,
-        "review_accounted_file_count": accounting.review_accounted_file_count,
-        "in_scope_review_file_count": accounting.in_scope_review_file_count,
-    }
-    if any(document[field] != value for field, value in expected.items()):
-        raise ValueError(f"{FINDINGS_FILENAME}: accounting fields are incoherent")
-
-
 def validate_findings_document(document):
     """Validate one exact canonical post-critic findings ledger.
 
     This is the single reader-boundary authority for ``review-findings.json``.
-    It delegates the builder-owned base document and review domain to
-    :func:`validate_review_document`, then validates only the reconciler and
-    critic extensions that distinguish this ledger from an agent review.
+    The ledger is review content plus two things a reviewer document does not
+    have: the reconciliation block and the critic applier's provenance. The
+    content half is delegated to :func:`validate_review_content`; only those
+    two extensions are checked here.
     """
     if not isinstance(document, dict):
         raise ValueError(f"{FINDINGS_FILENAME} must be a JSON object")
@@ -1083,11 +988,11 @@ def validate_findings_document(document):
         if field in base
     }
     meta = base.get("meta")
-    reconciliation = None
-    if isinstance(meta, dict):
-        reconciliation = meta.pop("reconciliation", None)
+    reconciliation = (
+        meta.pop("reconciliation", None) if isinstance(meta, dict) else None
+    )
     try:
-        validate_review_document(base, "reconciliator")
+        validate_review_content(base, schema=LEDGER_SCHEMA)
     except ValueError as error:
         raise ValueError(f"{FINDINGS_FILENAME}: {error}") from error
     if document["verdict"] not in _RECONCILER_VERDICTS:
@@ -1097,7 +1002,10 @@ def validate_findings_document(document):
         and not document["assessment"].strip()
     ):
         raise ValueError(f"{FINDINGS_FILENAME}: assessment must not be blank")
-    _validate_ledger_accounting(document)
+    if reconciliation is None:
+        raise ValueError(
+            f"{FINDINGS_FILENAME}: meta.reconciliation is required"
+        )
     _validate_reconciliation(reconciliation)
     if "host_context_banner" in extensions:
         _validate_host_context_banner(extensions["host_context_banner"])

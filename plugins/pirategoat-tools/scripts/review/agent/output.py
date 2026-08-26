@@ -479,10 +479,10 @@ def render_review_body(data: Dict) -> str:
         md.append(
             f"**Pipeline:** {recon.get('input_finding_count', 0)} findings "
             f"from {recon.get('contributing_agent_count', 0)} reviewing agents "
-            f"\u2192 {recon.get('verified_finding_count', 0)} verified findings "
+            f"\u2192 {recon.get('verified_concern_count', 0)} verified findings "
             f"({recon.get('grouped_concern_count', 0)} concerns after "
-            f"grouping, {recon.get('false_positive_finding_count', 0)} false "
-            f"positives dropped, {recon.get('out_of_scope_finding_count', 0)} "
+            f"grouping, {recon.get('false_positive_concern_count', 0)} false "
+            f"positives dropped, {recon.get('out_of_scope_concern_count', 0)} "
             "out-of-scope dropped). Full metrics in "
             "`review-findings.json` \u2192 `meta.reconciliation`.\n\n"
         )

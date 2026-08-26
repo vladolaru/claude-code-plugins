@@ -36,7 +36,10 @@ from helpers.pipeline_process import (
     init_repo as _init_git_repo,
     run_pipeline,
 )
-from helpers.review_fixtures import canonical_review_document
+from helpers.review_fixtures import (
+    canonical_findings_ledger,
+    canonical_review_document,
+)
 _dispatch_spec = importlib.util.spec_from_file_location(
     "plan_review_dispatch", str(_SCRIPTS_DIR / "review" / "plan_dispatch.py")
 )
@@ -128,29 +131,10 @@ def _publish_step_11(output_dir, cwd, mode="pr"):
 
 
 def _review_json(reviewer):
-    """Return one complete schema-2 final review."""
-    reviewer = (
-        "reconciliator"
-        if reviewer in ("review-reconciliator", "reconciliator")
-        else reviewer
-    )
-    review = canonical_review_document(reviewer)
-    if reviewer == "reconciliator":
-        review["meta"]["reconciliation"] = {
-            "input_finding_count": 0,
-            "contributing_agent_count": 0,
-            "grouped_concern_count": 0,
-            "false_positive_finding_count": 0,
-            "out_of_scope_finding_count": 0,
-            "verified_finding_count": 0,
-            "deduplication_ratio": 1.0,
-            "not_applicable_agent_count": 0,
-            "not_applicable_agents": [],
-            "reviewing_agents": [],
-            "dispatched_agents": [],
-            "missing_agents": None,
-        }
-    return review
+    """Return the reviewer's schema-2 final review, or the schema-3 ledger."""
+    if reviewer in ("review-reconciliator", "reconciliator"):
+        return canonical_findings_ledger()
+    return canonical_review_document(reviewer)
 
 
 class TestReviewerDraftFinalizationLifecycle:
@@ -2627,8 +2611,7 @@ class TestStep9FindingsMarkdown:
             "input_finding_count": 1,
             "contributing_agent_count": 1,
             "grouped_concern_count": 1,
-            "verified_finding_count": 1,
-            "deduplication_ratio": 0.0,
+            "verified_concern_count": 1,
             "reviewing_agents": ["security-reviewer"],
             "dispatched_agents": ["security-reviewer"],
         })

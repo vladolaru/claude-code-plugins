@@ -12,7 +12,6 @@ Zero external dependencies (stdlib only).
 import glob as glob_mod
 import hashlib
 import json
-import math
 import os
 import re
 import sys
@@ -35,6 +34,10 @@ try:
     )
     from .atomic_io import atomic_write_json
     from .critic_adjustments import FINDINGS_READ_OK, read_findings_file
+    from .findings_ledger import (
+        RECONCILIATION_FIELDS,
+        RECONCILIATION_JUDGMENT_FIELDS,
+    )
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
@@ -52,6 +55,10 @@ except ImportError:
     )
     from review.atomic_io import atomic_write_json
     from review.critic_adjustments import FINDINGS_READ_OK, read_findings_file
+    from review.findings_ledger import (
+        RECONCILIATION_FIELDS,
+        RECONCILIATION_JUDGMENT_FIELDS,
+    )
 
 from git_paths import normalize_repo_paths
 
@@ -122,19 +129,20 @@ _AGENT_COMPLETE_MANIFEST_FIELDS = (
     "review_digest",
 )
 _SEVERITY_FIELDS = _VALID_SEVERITIES
-_RECONCILIATION_COUNT_FIELDS = (
+# The ledger's producer owns the reconciliation block, and its reader
+# boundary validates it. Telemetry projects it verbatim; these names are
+# published for the analysis layer, which re-validates a manifest it did not
+# write (analysis/review_metrics/contracts.py reads them from here).
+_RECONCILIATION_COUNT_FIELDS = RECONCILIATION_JUDGMENT_FIELDS + (
     "input_finding_count",
     "contributing_agent_count",
-    "grouped_concern_count",
-    "false_positive_finding_count",
-    "out_of_scope_finding_count",
-    "verified_finding_count",
-    "not_applicable_agent_count",
 )
-_RECONCILIATION_FIELDS = frozenset((
-    *_RECONCILIATION_COUNT_FIELDS,
-    "deduplication_ratio",
-))
+_RECONCILIATION_AGENT_FIELDS = (
+    "reviewing_agents",
+    "dispatched_agents",
+    "missing_agents",
+)
+_RECONCILIATION_FIELDS = RECONCILIATION_FIELDS
 
 
 def _advisory_measurement(data: Any) -> Dict[str, Any]:
@@ -1181,29 +1189,20 @@ class ReviewTelemetry:
 
     @staticmethod
     def _extract_reconciliation(data: dict) -> Optional[dict]:
-        """Project exact structured reconciliation measurements."""
+        """Project the ledger's reconciliation block verbatim.
+
+        The data reaching here already passed the ledger's reader boundary
+        (``read_findings_file``), which is the one authority on this block's
+        shape. Re-checking it here only created a second, drifting copy of
+        that contract.
+        """
         meta = data.get("meta")
         reconciliation = (
             meta.get("reconciliation") if isinstance(meta, dict) else None
         )
         if not isinstance(reconciliation, dict):
             return None
-        result = {}
-        for name in _RECONCILIATION_COUNT_FIELDS:
-            value = reconciliation.get(name)
-            if type(value) is not int or value < 0:
-                return None
-            result[name] = value
-        ratio = reconciliation.get("deduplication_ratio")
-        if (
-            not isinstance(ratio, (int, float))
-            or isinstance(ratio, bool)
-            or not math.isfinite(ratio)
-            or not 0 <= ratio <= 1
-        ):
-            return None
-        result["deduplication_ratio"] = ratio
-        return result
+        return dict(reconciliation)
 
     def _build_summary(
         self,

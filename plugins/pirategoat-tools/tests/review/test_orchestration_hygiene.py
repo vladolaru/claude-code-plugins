@@ -20,6 +20,9 @@ TESTS_DIR = Path(__file__).resolve().parent.parent
 PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
+sys.path.insert(0, str(TESTS_DIR))
+
+from helpers.review_fixtures import canonical_findings_ledger
 
 from review import critic_adjustments
 from review import orchestration as orchestration_mod
@@ -380,53 +383,7 @@ def _seed_step_11(out):
     # the reconciliator's own in-channel write, and a raw one would seed
     # the unstamped ledger finalize now reports as an out-of-channel
     # rewrite.
-    write_findings(str(out), {
-        "pr_id": "42",
-        "reviewer": "reconciliator",
-        "timestamp": "2026-08-13T10:00:00",
-        "plugin_version": None,
-        "schema": 2,
-        "verdict": "approve",
-        "summary": {
-            "total_findings": 0,
-            "by_severity": {
-                "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0,
-            },
-            "suppressed_advisory_finding_count": 0,
-        },
-        "findings": [],
-        "review_claimable_files": [],
-        "reviewed_file_claims": [],
-        "unclaimed_review_files": [],
-        "inline_diff_file_count": 1,
-        "review_accounted_file_count": 1,
-        "in_scope_review_file_count": 1,
-        "observations": None,
-        "recommendations": None,
-        "positive_observations": None,
-        "checks": [],
-        "assessment": None,
-        "meta": {
-            "review_duration_ms": 10,
-            "confidence_score": 0.9,
-            "next_finding_number": 1,
-            "next_check_number": 1,
-            "reconciliation": {
-                "input_finding_count": 0,
-                "contributing_agent_count": 0,
-                "grouped_concern_count": 0,
-                "false_positive_finding_count": 0,
-                "out_of_scope_finding_count": 0,
-                "verified_finding_count": 0,
-                "deduplication_ratio": 1.0,
-                "not_applicable_agent_count": 0,
-                "not_applicable_agents": [],
-                "reviewing_agents": [],
-                "dispatched_agents": [],
-                "missing_agents": None,
-            },
-        },
-    })
+    write_findings(str(out), canonical_findings_ledger())
     proposal = critic_adjustments.prepare_proposal({
         "schema": 2, "adjustments": [],
     })
