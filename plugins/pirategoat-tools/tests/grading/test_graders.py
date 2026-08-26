@@ -305,14 +305,25 @@ class TestGradeReviewJson:
         assert not result.passed
         assert any("Invalid JSON" in f for f in result.failures)
 
-    def test_missing_required_field_fails(self, tmp_dir):
-        path = os.path.join(tmp_dir, "missing.json")
-        data = {"pr_id": "1", "reviewer": "test"}  # missing verdict, summary, findings, meta
+    def test_missing_content_field_fails(self, tmp_dir):
+        path = _make_valid_json(tmp_dir)
+        with open(path) as source:
+            data = json.load(source)
+        del data["verdict"]
         with open(path, "w") as f:
             json.dump(data, f)
         result = grade_review_json(path)
         assert not result.passed
         assert any("verdict" in f for f in result.failures)
+
+    def test_missing_envelope_field_fails(self, tmp_dir):
+        path = os.path.join(tmp_dir, "missing.json")
+        data = {"pr_id": "1", "reviewer": "test"}  # the accounting envelope is absent
+        with open(path, "w") as f:
+            json.dump(data, f)
+        result = grade_review_json(path)
+        assert not result.passed
+        assert any("reviewed_file_claims" in f for f in result.failures)
 
     def test_invalid_verdict_fails(self, tmp_dir):
         path = _make_valid_json(tmp_dir)

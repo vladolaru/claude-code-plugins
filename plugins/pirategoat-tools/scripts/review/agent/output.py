@@ -1669,21 +1669,14 @@ def _read_json_object(path, label):
     return value
 
 
-_REQUIRED_REVIEW_FIELDS = frozenset({
+REVIEW_CONTENT_FIELDS = frozenset({
     "pr_id",
-    "reviewer",
     "timestamp",
     "plugin_version",
     "schema",
     "verdict",
     "summary",
     "findings",
-    "review_claimable_files",
-    "reviewed_file_claims",
-    "unclaimed_review_files",
-    "inline_diff_file_count",
-    "review_accounted_file_count",
-    "in_scope_review_file_count",
     "observations",
     "recommendations",
     "positive_observations",
@@ -1691,8 +1684,16 @@ _REQUIRED_REVIEW_FIELDS = frozenset({
     "assessment",
     "meta",
 })
+REVIEWER_FIELDS = frozenset({
+    "reviewer",
+    "review_claimable_files",
+    "reviewed_file_claims",
+    "unclaimed_review_files",
+    "inline_diff_file_count",
+    "review_accounted_file_count",
+    "in_scope_review_file_count",
+})
 _OPTIONAL_REVIEW_FIELDS = frozenset({"skip_reason"})
-_ALLOWED_REVIEW_FIELDS = _REQUIRED_REVIEW_FIELDS | _OPTIONAL_REVIEW_FIELDS
 _REQUIRED_FINDING_FIELDS = frozenset({
     "id",
     "category",
@@ -1928,52 +1929,37 @@ def _validate_optional_review_fields(review):
         if value is not None and not _is_string_list(value):
             raise ValueError(f"review {field} must be strings or null")
 
-def _validate_review_shape(review, reviewer):
-    """Validate the complete builder-owned review shape before derivation."""
-    missing = sorted(_REQUIRED_REVIEW_FIELDS - set(review))
+
+def _validate_content_shape(document, *, schema):
+    """Validate the review content shape before verdict derivation."""
+    missing = sorted(REVIEW_CONTENT_FIELDS - set(document))
     if missing:
         raise ValueError(
             "review is missing required fields: " + ", ".join(missing)
         )
-    unexpected = sorted(set(review) - _ALLOWED_REVIEW_FIELDS)
+    unexpected = sorted(
+        set(document) - REVIEW_CONTENT_FIELDS - _OPTIONAL_REVIEW_FIELDS
+    )
     if unexpected:
         raise ValueError(
             "review has unexpected fields: " + ", ".join(unexpected)
         )
-    if type(review["schema"]) is not int or review["schema"] != REVIEW_OUTPUT_SCHEMA:
+    if type(document["schema"]) is not int or document["schema"] != schema:
         raise ValueError("review schema does not match the live contract")
-    if not isinstance(review["reviewer"], str) or review["reviewer"] != reviewer:
-        raise ValueError("review reviewer does not match finalization request")
-    if not isinstance(review["pr_id"], str):
+    if not isinstance(document["pr_id"], str):
         raise ValueError("review pr_id must be a string")
-    if not isinstance(review["timestamp"], str):
+    if not isinstance(document["timestamp"], str):
         raise ValueError("review timestamp must be an ISO string")
     try:
-        datetime.fromisoformat(review["timestamp"])
+        datetime.fromisoformat(document["timestamp"])
     except ValueError as exc:
         raise ValueError("review timestamp must be an ISO string") from exc
-    if review["plugin_version"] is not None and not isinstance(
-        review["plugin_version"], str
+    if document["plugin_version"] is not None and not isinstance(
+        document["plugin_version"], str
     ):
         raise ValueError("review plugin_version must be a string or null")
-    for field in (
-        "review_claimable_files",
-        "reviewed_file_claims",
-        "unclaimed_review_files",
-    ):
-        if not _is_string_list(review[field]):
-            raise ValueError(f"review {field} must be a list of strings")
-    for field in (
-        "inline_diff_file_count",
-        "review_accounted_file_count",
-        "in_scope_review_file_count",
-    ):
-        if type(review[field]) is not int or review[field] < 0:
-            raise ValueError(
-                f"review {field} must be a non-negative integer"
-            )
 
-    meta = review["meta"]
+    meta = document["meta"]
     if not isinstance(meta, dict):
         raise ValueError("review meta must be an object")
     missing_meta = sorted(_REQUIRED_META_FIELDS - set(meta))
@@ -1998,27 +1984,22 @@ def _validate_review_shape(review, reviewer):
             "review meta.confidence_score must be 0.0-1.0"
         )
     validate_review_domain(
-        review["findings"],
-        review["checks"],
-        review["assessment"],
+        document["findings"],
+        document["checks"],
+        document["assessment"],
         meta,
     )
-    _validate_optional_review_fields(review)
+    _validate_optional_review_fields(document)
 
 
-def validate_review_document(review, reviewer):
-    """Validate one complete canonical review document.
-
-    This is the shared trust boundary for draft rehydration, finalization,
-    and finalized-review readers. Validation that depends on an adjacent
-    accounting-input artifact remains in ``_validate_review``.
-    """
-    if not isinstance(review, dict):
+def validate_review_content(document, *, schema):
+    """Validate the review content shared by reviewer documents and the ledger."""
+    if not isinstance(document, dict):
         raise ValueError("malformed review: expected an object")
-    _validate_review_shape(review, reviewer)
+    _validate_content_shape(document, schema=schema)
 
-    findings = review["findings"]
-    summary = review["summary"]
+    findings = document["findings"]
+    summary = document["summary"]
     if not isinstance(summary, dict):
         raise ValueError("review summary is malformed")
     try:
@@ -2026,8 +2007,8 @@ def validate_review_document(review, reviewer):
     except ValueError as exc:
         raise ValueError(f"review findings are malformed: {exc}") from exc
     expected_verdict = derived["verdict"]
-    if review.get("verdict") == "not_applicable":
-        skip_reason = review.get("skip_reason")
+    if document.get("verdict") == "not_applicable":
+        skip_reason = document.get("skip_reason")
         if (
             findings
             or not isinstance(skip_reason, str)
@@ -2035,11 +2016,11 @@ def validate_review_document(review, reviewer):
         ):
             raise ValueError("review not_applicable verdict is malformed")
         expected_verdict = "not_applicable"
-    elif "skip_reason" in review:
+    elif "skip_reason" in document:
         raise ValueError(
             "review skip_reason requires a not_applicable verdict"
         )
-    if review.get("verdict") != expected_verdict:
+    if document.get("verdict") != expected_verdict:
         raise ValueError("review verdict does not match its findings")
     expected_summary = {
         "total_findings": len(findings),
@@ -2065,6 +2046,73 @@ def validate_review_document(review, reviewer):
         or summary != expected_summary
     ):
         raise ValueError("review summary does not match its findings")
+    return document
+
+
+def _validate_reviewer_envelope(review, reviewer):
+    """Validate the reviewer envelope as a self-checking accounting partition."""
+    missing = sorted(REVIEWER_FIELDS - set(review))
+    if missing:
+        raise ValueError(
+            "review is missing required fields: " + ", ".join(missing)
+        )
+    if not isinstance(review["reviewer"], str) or review["reviewer"] != reviewer:
+        raise ValueError("review reviewer does not match finalization request")
+    for field in (
+        "review_claimable_files",
+        "reviewed_file_claims",
+        "unclaimed_review_files",
+    ):
+        if not _is_string_list(review[field]):
+            raise ValueError(f"review {field} must be a list of strings")
+    for field in (
+        "inline_diff_file_count",
+        "review_accounted_file_count",
+        "in_scope_review_file_count",
+    ):
+        if type(review[field]) is not int or review[field] < 0:
+            raise ValueError(
+                f"review {field} must be a non-negative integer"
+            )
+    claimable = review["review_claimable_files"]
+    claims = review["reviewed_file_claims"]
+    claimed = set(claims)
+    if len(claimable) != len(set(claimable)) or len(claimed) != len(claims):
+        raise ValueError("review accounting lists must not repeat paths")
+    if not claimed <= set(claimable):
+        raise ValueError(
+            "review accounting claims a file that is not review-claimable"
+        )
+    if claims != [path for path in claimable if path in claimed]:
+        raise ValueError("review accounting claims are not in claimable order")
+    if review["unclaimed_review_files"] != [
+        path for path in claimable if path not in claimed
+    ]:
+        raise ValueError(
+            "review accounting unclaimed files are not the complement of the claims"
+        )
+    if review["review_accounted_file_count"] != (
+        review["inline_diff_file_count"] + len(claimed)
+    ):
+        raise ValueError(
+            "review accounting accounted count does not equal inline plus claims"
+        )
+
+
+def validate_review_document(review, reviewer):
+    """Validate one complete reviewer document: content plus envelope.
+
+    This is the shared trust boundary for draft rehydration, finalization,
+    and finalized-review readers. Validation that depends on an adjacent
+    accounting-input artifact remains in ``_validate_review``.
+    """
+    if not isinstance(review, dict):
+        raise ValueError("malformed review: expected an object")
+    _validate_reviewer_envelope(review, reviewer)
+    content = {
+        key: value for key, value in review.items() if key not in REVIEWER_FIELDS
+    }
+    validate_review_content(content, schema=REVIEW_OUTPUT_SCHEMA)
     return review
 
 

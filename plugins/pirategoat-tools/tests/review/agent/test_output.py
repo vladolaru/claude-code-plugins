@@ -30,11 +30,14 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 from review.agent import output as review_output
 from review.agent.output import (
+    REVIEWER_FIELDS,
     ReviewOutputBuilder,
     finalize_review,
     materialize_markdown,
     render_draft_index,
     render_markdown,
+    validate_review_content,
+    validate_review_document,
 )
 from review import critic_adjustments
 from review.reviewer_lifecycle import ReviewPaths, review_paths
@@ -3200,3 +3203,36 @@ class TestRendererFaithfulness:
         data = self._base()
         data["recommendations"] = {"immediate": [], "urgent": []}
         assert "## Recommendations" not in render_markdown(data)
+
+
+class TestReviewerAccountingPartition:
+    def _doc(self, **overrides):
+        doc = canonical_review_document(
+            "security", ("high",),
+            review_claimable_files=("src/a.py", "src/b.py"),
+            reviewed_file_claims=("src/a.py",),
+        )
+        doc.update(overrides)
+        return doc
+
+    def test_canonical_partition_passes(self):
+        validate_review_document(self._doc(), "security")
+
+    @pytest.mark.parametrize("overrides", [
+        {"reviewed_file_claims": ["src/zzz.py"]},
+        {"unclaimed_review_files": []},
+        {"unclaimed_review_files": ["src/b.py", "src/a.py"]},
+        {"review_accounted_file_count": 999},
+        {"reviewed_file_claims": ["src/a.py", "src/a.py"]},
+    ])
+    def test_incoherent_partition_is_rejected(self, overrides):
+        with pytest.raises(ValueError, match="accounting"):
+            validate_review_document(self._doc(**overrides), "security")
+
+
+def test_validate_review_content_rejects_reviewer_fields():
+    doc = canonical_review_document("security", ())
+    with pytest.raises(ValueError, match="unexpected fields"):
+        validate_review_content(doc, schema=2)
+    content = {k: v for k, v in doc.items() if k not in REVIEWER_FIELDS}
+    assert validate_review_content(content, schema=2) is content
