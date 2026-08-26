@@ -1,5 +1,6 @@
 """The reconciliator's builder: content plus reconciliation, no reviewer."""
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -64,16 +65,24 @@ def test_ledger_requires_reconciliation_before_serializing(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "method", ["save_draft", "claim_files_reviewed", "mark_not_applicable"]
+    "method",
+    [
+        "save_draft",
+        "claim_files_reviewed",
+        "retract_reviewed_file_claims",
+        "mark_not_applicable",
+    ],
 )
 def test_ledger_has_no_reviewer_lifecycle(tmp_path, method):
+    """Matched on the message: an inherited signature can raise TypeError
+    of its own, which would pass this test without any override at all."""
     builder = FindingsLedgerBuilder(pr_id="42", output_dir=str(tmp_path))
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match="no reviewer lifecycle"):
         getattr(builder, method)("x")
 
 
 def test_ledger_has_no_open_classmethod(tmp_path):
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match="no reviewer lifecycle"):
         FindingsLedgerBuilder.open(str(tmp_path), "42", "reconciliator")
 
 
@@ -97,12 +106,8 @@ def test_ledger_reads_plugin_version_from_the_bound_run(tmp_path, monkeypatch):
     assert builder.to_dict()["plugin_version"] == "1.114.0"
 
 
-def test_ledger_duration_spans_the_reconciliator_dispatch(
-    tmp_path, monkeypatch
-):
+def test_ledger_duration_spans_the_reconciliator_dispatch(tmp_path):
     """The marker is keyed on the dispatched agent name, not the actor."""
-    from datetime import datetime, timedelta, timezone
-
     started = datetime.now(timezone.utc) - timedelta(seconds=5)
     (tmp_path / "review-reconciliator.synthesis-started").write_text(
         started.isoformat()

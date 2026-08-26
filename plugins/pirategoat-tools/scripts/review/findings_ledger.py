@@ -59,7 +59,10 @@ class FindingsLedgerBuilder(ReviewOutputBuilder):
         self._output_dir = str(output_dir)
         self._reconciliation = None
 
-    open = classmethod(lambda cls, *a, **k: _no_lifecycle())
+    @classmethod
+    def open(cls, *_args, **_kwargs):
+        _no_lifecycle()
+
     save_draft = _no_lifecycle
     claim_files_reviewed = _no_lifecycle
     retract_reviewed_file_claims = _no_lifecycle
@@ -70,12 +73,15 @@ class FindingsLedgerBuilder(ReviewOutputBuilder):
         false_positive_concern_count: int, out_of_scope_concern_count: int,
     ) -> None:
         """Record the four judgment counts, which must partition the concerns."""
-        counts = {
-            "grouped_concern_count": grouped_concern_count,
-            "verified_concern_count": verified_concern_count,
-            "false_positive_concern_count": false_positive_concern_count,
-            "out_of_scope_concern_count": out_of_scope_concern_count,
-        }
+        counts = dict(zip(
+            RECONCILIATION_JUDGMENT_FIELDS,
+            (
+                grouped_concern_count,
+                verified_concern_count,
+                false_positive_concern_count,
+                out_of_scope_concern_count,
+            ),
+        ))
         for name, value in counts.items():
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"{name} must be a non-negative integer")
