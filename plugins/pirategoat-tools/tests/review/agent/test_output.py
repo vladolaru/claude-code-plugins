@@ -37,7 +37,7 @@ from review.agent.output import (
     render_markdown,
 )
 from review import critic_adjustments
-from review.reviewer_lifecycle import ReviewPaths
+from review.reviewer_lifecycle import ReviewPaths, review_paths
 
 sys.path.insert(0, str(TESTS_DIR))
 from helpers.review_fixtures import canonical_review_document
@@ -122,6 +122,59 @@ def test_accounting_reads_follow_the_bound_review_paths(
     assert saved["draft"] == paths.draft
     assert Path(paths.draft).is_file()
     assert "target ~80 tool calls" in capsys.readouterr().out
+
+
+def _write_accounting(paths_or_dir, reviewer="security", claimable=("src/a.py",), *, channels=("blocking",), budget=12):
+    path = (
+        paths_or_dir.accounting_input
+        if hasattr(paths_or_dir, "accounting_input")
+        else review_paths(str(paths_or_dir), reviewer).accounting_input
+    )
+    Path(path).write_text(json.dumps({
+        "schema": 4,
+        "agent_name": f"{reviewer}-reviewer",
+        "reviewer": reviewer,
+        "review_claimable_files": list(claimable),
+        "inline_diff_file_count": 0,
+        "in_scope_review_file_count": len(claimable),
+        "review_budget": budget,
+        "channels": list(channels),
+    }))
+
+
+def test_builder_ignores_env_envelope_and_uses_bound_input(tmp_path, monkeypatch):
+    other = tmp_path / "other"
+    other.mkdir()
+    _write_accounting(other, claimable=("src/only-in-env.py",))
+    monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(other))
+    monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "security")
+    _write_accounting(tmp_path, claimable=("src/bound.py",))
+    builder = ReviewOutputBuilder.open(tmp_path, "42", "security")
+    builder.claim_files_reviewed("src/bound.py")
+    with pytest.raises(ValueError, match="src/only-in-env.py"):
+        builder.claim_files_reviewed("src/only-in-env.py")
+
+
+def test_finding_channel_must_be_among_the_reviewer_channels(tmp_path, monkeypatch):
+    monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+    _write_accounting(tmp_path, channels=("blocking",))
+    builder = ReviewOutputBuilder.open(tmp_path, "42", "security")
+    with pytest.raises(ValueError, match="channel 'advisory' is not among"):
+        builder.add_finding("low", "t", "src/a.py", "d", "r", line=1, channel="advisory")
+    _write_accounting(tmp_path, channels=("blocking", "advisory"))
+    both = ReviewOutputBuilder.open(tmp_path, "42", "security")
+    both.add_finding("low", "t", "src/a.py", "d", "r", line=1, channel="advisory")
+    assert both.findings[0]["channel"] == "advisory"
+    _write_accounting(tmp_path, channels=("advisory",))
+    advisory_only = ReviewOutputBuilder.open(tmp_path, "42", "security")
+    with pytest.raises(ValueError, match="channel 'blocking' is not among"):
+        advisory_only.add_finding("low", "t", "src/a.py", "d", "r", line=1)
+
+
+def test_receipt_budget_line_reads_bound_input(tmp_path, capsys):
+    _write_accounting(tmp_path, claimable=("src/a.py", "src/b.py"), budget=33)
+    ReviewOutputBuilder.open(tmp_path, "42", "security").save_draft()
+    assert "target ~33 tool calls" in capsys.readouterr().out
 
 
 def test_draft_index_carries_locations_and_every_reviewed_file_claim():
@@ -800,16 +853,16 @@ class TestToDict:
         """review-reconciliator imports the builder without the envelope.
 
         It is dispatched by the orchestrator rather than bootstrap, so no
-        PIRATEGOAT_* variables reach it — but it always serializes with an
-        explicit output directory, where step 1's run-config.json already
-        records the same stamp.
+        PIRATEGOAT_* variables reach it — but it is bound to the run's output
+        directory, where step 1's run-config.json already records the same
+        stamp.
         """
         monkeypatch.delenv("PIRATEGOAT_PLUGIN_VERSION", raising=False)
         (tmp_path / "run-config.json").write_text(
             json.dumps({"mode": "pr", "plugin_version": "1.114.0"})
         )
-        b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
-        assert b.to_dict(output_dir=str(tmp_path))["plugin_version"] == "1.114.0"
+        b = ReviewOutputBuilder.open(tmp_path, "1", "reconciliator")
+        assert b.to_dict()["plugin_version"] == "1.114.0"
 
     def test_envelope_wins_over_run_config(self, monkeypatch, tmp_path):
         """The envelope is the dispatching plugin's own statement."""
@@ -817,16 +870,16 @@ class TestToDict:
         (tmp_path / "run-config.json").write_text(
             json.dumps({"plugin_version": "1.114.0"})
         )
-        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        assert b.to_dict(output_dir=str(tmp_path))["plugin_version"] == "2.0.0"
+        b = ReviewOutputBuilder.open(tmp_path, "1", "pr")
+        assert b.to_dict()["plugin_version"] == "2.0.0"
 
     def test_unreadable_run_config_leaves_the_version_unknown(
         self, monkeypatch, tmp_path
     ):
         monkeypatch.delenv("PIRATEGOAT_PLUGIN_VERSION", raising=False)
         (tmp_path / "run-config.json").write_text("{not json")
-        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        assert b.to_dict(output_dir=str(tmp_path))["plugin_version"] is None
+        b = ReviewOutputBuilder.open(tmp_path, "1", "pr")
+        assert b.to_dict()["plugin_version"] is None
 
     def test_saved_artifact_carries_the_version(self, monkeypatch, tmp_path):
         monkeypatch.setenv("PIRATEGOAT_PLUGIN_VERSION", "1.114.0")
@@ -1456,17 +1509,15 @@ class TestAddObservation:
 class TestReviewedFileClaims:
     """claim_files_reviewed claims NOT DIFFED files as actually reviewed.
 
-    The positive-claim API validates one complete batch against the
-    authoritative sidecar. Coverage gaps and reviewed counts are derived
-    later; reviewers never state either population directly."""
+    The positive-claim API validates one complete batch against the bound
+    directory's authoritative accounting input. Coverage gaps and reviewed
+    counts are derived later; reviewers never state either population
+    directly."""
 
-    def _arm_accounting_input(self, tmp_path, monkeypatch, claimable):
-        """Simulate the bootstrap-written authoritative claimable set."""
-        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
-        monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "sec")
-        (tmp_path / "sec-review-accounting-input.json").write_text(
-            json.dumps({"schema": 4, "agent_name": "sec-reviewer", "reviewer": "sec", "review_claimable_files": claimable, "inline_diff_file_count": 0, "in_scope_review_file_count": len(claimable), "review_budget": 15, "channels": ["blocking"]})
-        )
+    def _armed_builder(self, tmp_path, claimable):
+        """One builder bound to a bootstrap-written authoritative claimable set."""
+        _write_accounting(tmp_path, "sec", claimable)
+        return ReviewOutputBuilder.open(tmp_path, "1", "sec")
 
     @pytest.mark.parametrize("bad", ["", "   ", None, 42, ["src/a.py"]])
     def test_rejects_non_path_values(self, bad):
@@ -1499,43 +1550,33 @@ class TestReviewedFileClaims:
         with pytest.raises(ValueError, match="at least one file path"):
             b.claim_files_reviewed()
 
-    def test_claim_in_claimable_set_accepted(self, tmp_path, monkeypatch):
-        self._arm_accounting_input(tmp_path, monkeypatch, ["src/claimable.py"])
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+    def test_claim_in_claimable_set_accepted(self, tmp_path):
+        b = self._armed_builder(tmp_path, ["src/claimable.py"])
         b.claim_files_reviewed("./src/claimable.py")  # normalized first
         assert b.reviewed_file_claims == ["src/claimable.py"]
 
-    def test_claim_outside_claimable_set_rejected_at_add(
-        self, tmp_path, monkeypatch
-    ):
+    def test_claim_outside_claimable_set_rejected_at_add(self, tmp_path):
         """A claim on a file this review never claimable is rejected."""
-        self._arm_accounting_input(tmp_path, monkeypatch, ["src/email.py"])
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b = self._armed_builder(tmp_path, ["src/email.py"])
         with pytest.raises(ValueError, match="src/email.py"):
             b.claim_files_reviewed("src/emails.py")
         with pytest.raises(ValueError, match="claim"):
             b.claim_files_reviewed("src/emails.py")
 
-    def test_empty_claimable_set_rejects_every_claim(
-        self, tmp_path, monkeypatch
-    ):
+    def test_empty_claimable_set_rejects_every_claim(self, tmp_path):
         """The empty-set branch explains that no claim can be made."""
-        self._arm_accounting_input(tmp_path, monkeypatch, [])
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b = self._armed_builder(tmp_path, [])
         with pytest.raises(ValueError, match=r"1 claim\(s\)") as excinfo:
             b.claim_files_reviewed("src/a.py")
         assert "no claim may be made" in str(excinfo.value)
 
-    def test_all_or_nothing_on_mid_batch_error(self, tmp_path, monkeypatch):
+    def test_all_or_nothing_on_mid_batch_error(self, tmp_path):
         """A batch either fully lands or nothing does — the same doctrine
         critic_adjustments.py enforces for its own batches. A mid-batch
         rejection must not leave the leading valid paths recorded: a retry
         would then double-record them, and a caller who gives up is left
         with a half-claim no one asked for."""
-        self._arm_accounting_input(
-            tmp_path, monkeypatch, ["src/a.py", "src/c.py"]
-        )
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b = self._armed_builder(tmp_path, ["src/a.py", "src/c.py"])
         with pytest.raises(ValueError, match="src/b.py"):
             b.claim_files_reviewed("src/a.py", "src/b.py", "src/c.py")
         assert b.reviewed_file_claims == []
@@ -1543,14 +1584,11 @@ class TestReviewedFileClaims:
         b.claim_files_reviewed("src/a.py", "src/c.py")
         assert b.reviewed_file_claims == ["src/a.py", "src/c.py"]
 
-    def test_multi_error_batch_names_every_offender(
-        self, tmp_path, monkeypatch
-    ):
+    def test_multi_error_batch_names_every_offender(self, tmp_path):
         """The existing batch-reporting rejection helper already names
         every offender in one raise at save() time; add-time claims must
         get the same treatment instead of stopping at the first bad path."""
-        self._arm_accounting_input(tmp_path, monkeypatch, ["src/a.py"])
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b = self._armed_builder(tmp_path, ["src/a.py"])
         with pytest.raises(ValueError) as excinfo:
             b.claim_files_reviewed(
                 "src/a.py", "src/bogus1.py", "src/bogus2.py"
@@ -1560,26 +1598,20 @@ class TestReviewedFileClaims:
         assert "src/bogus2.py" in message
         assert b.reviewed_file_claims == []
 
-    def test_grammar_error_mid_batch_records_nothing(
-        self, tmp_path, monkeypatch
-    ):
+    def test_grammar_error_mid_batch_records_nothing(self, tmp_path):
         """The all-or-nothing guarantee covers grammar failures too: a
         malformed path anywhere in the batch leaves zero paths recorded,
         not the leading valid ones."""
-        self._arm_accounting_input(tmp_path, monkeypatch, ["src/a.py"])
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b = self._armed_builder(tmp_path, ["src/a.py"])
         with pytest.raises(ValueError, match="/abs/path.py"):
             b.claim_files_reviewed("src/a.py", "/abs/path.py")
         assert b.reviewed_file_claims == []
 
-    def test_mixed_grammar_and_membership_batch_names_both(
-        self, tmp_path, monkeypatch
-    ):
+    def test_mixed_grammar_and_membership_batch_names_both(self, tmp_path):
         """A batch carrying both error classes reports both in one raise:
         fixing the malformed path must not surface the membership problem
         as a fresh surprise on the retry."""
-        self._arm_accounting_input(tmp_path, monkeypatch, ["src/a.py"])
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b = self._armed_builder(tmp_path, ["src/a.py"])
         with pytest.raises(ValueError) as excinfo:
             b.claim_files_reviewed("src/typo.py", "/abs/path.py")
         message = str(excinfo.value)
@@ -1587,16 +1619,11 @@ class TestReviewedFileClaims:
         assert "src/typo.py" in message
         assert b.reviewed_file_claims == []
 
-    def test_failed_batch_leaves_no_trace_in_saved_artifact(
-        self, tmp_path, monkeypatch
-    ):
+    def test_failed_batch_leaves_no_trace_in_saved_artifact(self, tmp_path):
         """The consequence that matters: after a rejected batch, save_draft()'s
         accounting is exactly as if the call never happened — the
         unclaimed file lands in the derived gap record, never as a claim."""
-        self._arm_accounting_input(
-            tmp_path, monkeypatch, ["src/a.py", "src/c.py"]
-        )
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b = self._armed_builder(tmp_path, ["src/a.py", "src/c.py"])
         with pytest.raises(ValueError):
             b.claim_files_reviewed("src/a.py", "src/bogus.py")
         b.claim_files_reviewed("src/c.py")
@@ -1608,46 +1635,32 @@ class TestReviewedFileClaims:
         assert data["reviewed_file_claims"] == ["src/c.py"]
         assert data["unclaimed_review_files"] == ["src/a.py"]
 
-    def test_duplicate_within_batch_dedupes(self, tmp_path, monkeypatch):
+    def test_duplicate_within_batch_dedupes(self, tmp_path):
         """Pinning current semantics: a batch repeating one path collapses
         it to a single entry, order preserved."""
-        self._arm_accounting_input(
-            tmp_path, monkeypatch, ["src/a.py", "src/b.py"]
-        )
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b = self._armed_builder(tmp_path, ["src/a.py", "src/b.py"])
         b.claim_files_reviewed("src/a.py", "./src/a.py", "src/b.py")
         assert b.reviewed_file_claims == ["src/a.py", "src/b.py"]
 
-    def test_already_recorded_across_calls_dedupes(
-        self, tmp_path, monkeypatch
-    ):
+    def test_already_recorded_across_calls_dedupes(self, tmp_path):
         """Pinning current semantics: claiming a path already recorded by
         a previous call is a silent no-op, not an error or a duplicate
         entry."""
-        self._arm_accounting_input(tmp_path, monkeypatch, ["src/a.py"])
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b = self._armed_builder(tmp_path, ["src/a.py"])
         b.claim_files_reviewed("src/a.py")
         b.claim_files_reviewed("src/a.py")
         assert b.reviewed_file_claims == ["src/a.py"]
 
-    def test_retracts_claims_atomically_and_preserves_remaining_order(
-        self, tmp_path, monkeypatch
-    ):
-        self._arm_accounting_input(
-            tmp_path, monkeypatch, ["src/a.py", "src/b.py", "src/c.py"]
-        )
-        builder = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+    def test_retracts_claims_atomically_and_preserves_remaining_order(self, tmp_path):
+        builder = self._armed_builder(tmp_path, ["src/a.py", "src/b.py", "src/c.py"])
         builder.claim_files_reviewed("src/a.py", "src/b.py", "src/c.py")
 
         builder.retract_reviewed_file_claims("./src/b.py", "src/a.py")
 
         assert builder.reviewed_file_claims == ["src/c.py"]
 
-    def test_retraction_rejects_unknown_batch_without_mutation(
-        self, tmp_path, monkeypatch
-    ):
-        self._arm_accounting_input(tmp_path, monkeypatch, ["src/a.py", "src/b.py"])
-        builder = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+    def test_retraction_rejects_unknown_batch_without_mutation(self, tmp_path):
+        builder = self._armed_builder(tmp_path, ["src/a.py", "src/b.py"])
         builder.claim_files_reviewed("src/a.py", "src/b.py")
 
         with pytest.raises(ValueError, match="not currently claimed"):
@@ -1729,14 +1742,6 @@ class TestNotApplicable:
 class TestAdvisoryChannel:
     """Advisory-channel findings are listed but never gate the verdict."""
 
-    @staticmethod
-    def _arm_entitlement(tmp_path, monkeypatch, reviewer, payload):
-        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
-        monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", reviewer)
-        (tmp_path / f"{reviewer}-advisory-entitlement.json").write_text(
-            json.dumps(payload)
-        )
-
     def test_invalid_channel_raises_and_names_value(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
 
@@ -1745,45 +1750,22 @@ class TestAdvisoryChannel:
                         description="d", recommendation="r", line=5,
                         channel="Advisory")
 
-    def test_explicit_entitlement_accepts_advisory_without_gating(
-        self, tmp_path, monkeypatch
+    def test_advisory_channel_reviewer_records_advisory_without_gating(
+        self, tmp_path
     ):
-        self._arm_entitlement(
+        _write_accounting(
             tmp_path,
-            monkeypatch,
             "repo-reuse",
-            {"schema": 1, "advisory_entitled": True},
+            claimable=(),
+            channels=("blocking", "advisory"),
         )
-        b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
+        b = ReviewOutputBuilder.open(tmp_path, "1", "repo-reuse")
         b.add_finding(severity="high", title="Duplication", file="a.php",
                     description="d", recommendation="r", line=5, channel="advisory")
         assert b._calculate_verdict() == "approve"
 
-    def test_explicit_false_rejects_advisory(self, tmp_path, monkeypatch):
-        self._arm_entitlement(
-            tmp_path,
-            monkeypatch,
-            "repo-reuse",
-            {"schema": 1, "advisory_entitled": False},
-        )
-        b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
-
-        with pytest.raises(ValueError, match="advisory.*not entitled"):
-            b.add_finding(
-                severity="high",
-                title="Duplication",
-                file="a.php",
-                description="d",
-                recommendation="r",
-                line=5,
-                channel="advisory",
-            )
-
-    def test_absent_envelope_fails_open_after_vocabulary_validation(
-        self, monkeypatch
-    ):
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+    def test_unbound_builder_fails_open_after_vocabulary_validation(self):
+        """A hand-rolled builder has no accounting input to consult."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
 
         b.add_finding(
@@ -1793,44 +1775,10 @@ class TestAdvisoryChannel:
 
         assert b._calculate_verdict() == "approve"
 
-    def test_absent_sidecar_fails_open_after_vocabulary_validation(
-        self, tmp_path, monkeypatch
+    def test_absent_accounting_input_fails_open_after_vocabulary_validation(
+        self, tmp_path
     ):
-        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
-        monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "repo-reuse")
-        b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
-
-        b.add_finding(
-            severity="high", title="Duplication", file="a.php",
-            description="d", recommendation="r", line=5, channel="advisory",
-        )
-
-        assert b._calculate_verdict() == "approve"
-
-    def test_malformed_sidecar_fails_open_after_vocabulary_validation(
-        self, tmp_path, monkeypatch
-    ):
-        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
-        monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "repo-reuse")
-        (tmp_path / "repo-reuse-advisory-entitlement.json").write_text(
-            "{not json"
-        )
-        b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
-
-        b.add_finding(
-            severity="high", title="Duplication", file="a.php",
-            description="d", recommendation="r", line=5, channel="advisory",
-        )
-
-        assert b._calculate_verdict() == "approve"
-
-    def test_invalid_utf8_sidecar_fails_open_at_add_time(
-        self, tmp_path, monkeypatch
-    ):
-        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
-        monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "repo-reuse")
-        (tmp_path / "repo-reuse-advisory-entitlement.json").write_bytes(b"\xff")
-        b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
+        b = ReviewOutputBuilder.open(tmp_path, "1", "repo-reuse")
 
         b.add_finding(
             severity="high", title="Duplication", file="a.php",
@@ -1842,19 +1790,21 @@ class TestAdvisoryChannel:
     @pytest.mark.parametrize(
         "payload",
         [
-            pytest.param([], id="top-level-not-object"),
+            pytest.param("{not json", id="unparsable"),
+            pytest.param("[]", id="top-level-not-object"),
             pytest.param(
-                {"schema": 1, "advisory_entitled": "true"},
-                id="entitlement-not-boolean",
+                json.dumps({"schema": 4, "channels": ["advisory"]}),
+                id="incomplete-input",
             ),
-            pytest.param({"schema": 1}, id="entitlement-missing"),
         ],
     )
-    def test_wrong_shape_sidecar_fails_open_after_vocabulary_validation(
-        self, tmp_path, monkeypatch, payload
+    def test_malformed_accounting_input_fails_open_at_add_time(
+        self, tmp_path, payload
     ):
-        self._arm_entitlement(tmp_path, monkeypatch, "repo-reuse", payload)
-        b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
+        b = ReviewOutputBuilder.open(tmp_path, "1", "repo-reuse")
+        Path(
+            review_paths(str(tmp_path), "repo-reuse").accounting_input
+        ).write_text(payload)
 
         b.add_finding(
             severity="high", title="Duplication", file="a.php",
@@ -1863,78 +1813,39 @@ class TestAdvisoryChannel:
 
         assert b._calculate_verdict() == "approve"
 
-    def test_explicit_output_dir_revalidates_after_add_time_fail_open(
-        self, tmp_path, monkeypatch
+    def test_invalid_utf8_accounting_input_fails_open_at_add_time(
+        self, tmp_path
     ):
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        b = ReviewOutputBuilder.open(tmp_path, "1", "repo-reuse")
+        Path(
+            review_paths(str(tmp_path), "repo-reuse").accounting_input
+        ).write_bytes(b"\xff")
+
+        b.add_finding(
+            severity="high", title="Duplication", file="a.php",
+            description="d", recommendation="r", line=5, channel="advisory",
+        )
+
+        assert b._calculate_verdict() == "approve"
+
+    def test_save_rejects_findings_off_this_reviewer_channels(self, tmp_path):
+        """Add-time fail-open is not a way past publication.
+
+        The finding is recorded while the builder is unbound; the bound
+        directory's accounting is what decides whether it may be published.
+        """
         b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
         b.add_finding(
             severity="high", title="Duplication", file="a.php",
             description="d", recommendation="r", line=5, channel="advisory",
         )
-        (tmp_path / "reconciliator-advisory-entitlement.json").write_text(
-            json.dumps({"schema": 1, "advisory_entitled": False})
-        )
         _write_required_accounting_input(tmp_path, "reconciliator")
 
-        with pytest.raises(ValueError, match="advisory.*not entitled"):
-            b.to_dict(output_dir=str(tmp_path))
-
-    def test_invalid_utf8_sidecar_fails_open_at_explicit_finalization(
-        self, tmp_path, monkeypatch
-    ):
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
-        b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
-        b.add_finding(
-            severity="critical", title="Duplication", file="a.php",
-            description="d", recommendation="r", line=5, channel="advisory",
-        )
-        (tmp_path / "reconciliator-advisory-entitlement.json").write_bytes(
-            b"\xff"
-        )
-
-        output = b.to_dict(output_dir=str(tmp_path))
-
-        assert output["verdict"] == "approve"
-
-    def test_to_json_supports_explicit_entitled_output_dir(
-        self, tmp_path, monkeypatch
-    ):
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
-        b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
-        b.add_finding(
-            severity="critical", title="Duplication", file="a.php",
-            description="d", recommendation="r", line=5, channel="advisory",
-        )
-        (tmp_path / "reconciliator-advisory-entitlement.json").write_text(
-            json.dumps({"schema": 1, "advisory_entitled": True})
-        )
-
-        output = json.loads(b.to_json(output_dir=str(tmp_path)))
-
-        assert output["verdict"] == "approve"
-
-    def test_save_revalidates_against_its_output_dir(
-        self, tmp_path, monkeypatch
-    ):
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
-        b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
-        b.add_finding(
-            severity="high", title="Duplication", file="a.php",
-            description="d", recommendation="r", line=5, channel="advisory",
-        )
-        (tmp_path / "reconciliator-advisory-entitlement.json").write_text(
-            json.dumps({"schema": 1, "advisory_entitled": False})
-        )
-        _write_required_accounting_input(tmp_path, "reconciliator")
-
-        with pytest.raises(ValueError, match="advisory.*not entitled"):
+        with pytest.raises(
+            ValueError, match=r"channel\(s\) \['advisory'\] not among"
+        ):
             _save_draft(b, tmp_path)
-        assert not (tmp_path / "reconciliator-review.json").exists()
+        assert not (tmp_path / "reconciliator-review.draft.json").exists()
 
     def test_advisory_critical_does_not_gate(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
@@ -2470,8 +2381,8 @@ class TestMetaIsNeverFakeZero:
         """No marker, no clock. The builder is constructed inside the final
         heredoc, so its own __init__ times the write, not the review."""
         monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        b = ReviewOutputBuilder(pr_id="1", reviewer="security")
-        assert b.to_dict(output_dir=str(tmp_path))["meta"][
+        b = ReviewOutputBuilder.open(tmp_path, "1", "security")
+        assert b.to_dict()["meta"][
             "review_duration_ms"
         ] is None
 
@@ -2481,8 +2392,8 @@ class TestMetaIsNeverFakeZero:
             tmp_path / "security-reviewer.started",
             datetime.now(timezone.utc) - timedelta(seconds=30),
         )
-        b = ReviewOutputBuilder(pr_id="1", reviewer="security")
-        duration = b.to_dict(output_dir=str(tmp_path))["meta"][
+        b = ReviewOutputBuilder.open(tmp_path, "1", "security")
+        duration = b.to_dict()["meta"][
             "review_duration_ms"
         ]
         assert 29_000 <= duration <= 40_000
@@ -2499,8 +2410,8 @@ class TestMetaIsNeverFakeZero:
             tmp_path / "review-reconciliator.synthesis-started",
             datetime.now(timezone.utc) - timedelta(seconds=211),
         )
-        b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
-        duration = b.to_dict(output_dir=str(tmp_path))["meta"][
+        b = ReviewOutputBuilder.open(tmp_path, "1", "reconciliator")
+        duration = b.to_dict()["meta"][
             "review_duration_ms"
         ]
         assert 211_000 <= duration <= 225_000
@@ -2508,8 +2419,9 @@ class TestMetaIsNeverFakeZero:
     def test_marker_is_found_through_the_env_envelope(
         self, tmp_path, monkeypatch
     ):
-        """to_dict() with no explicit directory is the reviewer's own path
-        into the manifest; the envelope is what tells it where to look."""
+        """An unbound, hand-rolled builder still finds its own marker: with
+        no directory to read from, the envelope is what tells it where to
+        look."""
         monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
         self._stamp(tmp_path / "security-reviewer.started")
         b = ReviewOutputBuilder(pr_id="1", reviewer="security")
@@ -2521,8 +2433,8 @@ class TestMetaIsNeverFakeZero:
     ):
         monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
         (tmp_path / "security-reviewer.started").write_text(stamp)
-        b = ReviewOutputBuilder(pr_id="1", reviewer="security")
-        assert b.to_dict(output_dir=str(tmp_path))["meta"][
+        b = ReviewOutputBuilder.open(tmp_path, "1", "security")
+        assert b.to_dict()["meta"][
             "review_duration_ms"
         ] is None
 
@@ -2536,8 +2448,8 @@ class TestMetaIsNeverFakeZero:
             tmp_path / "security-reviewer.started",
             datetime.now(timezone.utc) + timedelta(minutes=5),
         )
-        b = ReviewOutputBuilder(pr_id="1", reviewer="security")
-        assert b.to_dict(output_dir=str(tmp_path))["meta"][
+        b = ReviewOutputBuilder.open(tmp_path, "1", "security")
+        assert b.to_dict()["meta"][
             "review_duration_ms"
         ] is None
 

@@ -180,7 +180,7 @@ Not every JSON file in a run directory carries one, and this rule does not ask y
 | `<reviewer>-review-accounting-input.json` | 4 | `persist_review_accounting_input()` — `scripts/review/agent/bootstrap.py` |
 | `reconciliation-context.json` | 3 | `main()` — `scripts/review/reconciliation_context.py` |
 | `decision-critic-adjustments.json` (including nested adjudication), `decision-critic-verdict.json` | 2 | `ADJUSTMENTS_SCHEMA`, `ADJUDICATION_SCHEMA`, `VERDICT_MARKER_SCHEMA` — `scripts/review/critic_adjustments.py` |
-| Per-agent sidecars: advisory entitlement, worktree baseline / hygiene | 1 | Literal at the write site |
+| Per-agent sidecars: worktree baseline / hygiene | 1 | Literal at the write site |
 | Per-agent scope summaries | 2 | `write_scope_summary()` — `scripts/review/agent/scope.py` |
 
 **Exception — `review-context.json` and `issue-context.json` carry `version: 1`, and that key is not ours.** pirategoat-bot writes both files and asserts on that field (`src/orchestrator-review.test.js`, `src/orchestrator-linear.test.js`). Renaming it to `schema` would break the bot. Leave it alone.
@@ -351,14 +351,13 @@ carries the normalized result into `review-context.json` under `review_config`
   The accounting input's `channels` field (schema 4) is the authoritative record of which
   channels an effective reviewer identity may use: `["blocking"]` normally, `["blocking",
   "advisory"]` when that reviewer selected any advisory rule, or `["advisory"]` only when
-  ref-mode dispatched the instance with `--channel advisory`. `ReviewOutputBuilder`'s own
-  entitlement enforcement (`add_finding()` denial, canonical serialization) still reads a
-  separate advisory-entitlement sidecar bootstrap no longer writes, so it currently fails
-  open to vocabulary-only validation for every reviewer identity — wiring enforcement to
-  `channels` is pending. The reconciliator independently declares entitlement from upstream
-  advisory findings and is checked during final serialization. Entitled advisory findings
-  remain listed but never gate the verdict; the summary records how many were suppressed
-  and, only when stricter, the verdict over all findings.
+  ref-mode dispatched the instance with `--channel advisory`. `ReviewOutputBuilder` enforces
+  it from the accounting input in the output directory it is bound to: `add_finding()` and
+  `update_finding()` reject a channel outside `channels`, and `save_draft()` rejects the
+  whole draft when any finding carries one — an unbound or unreadable input fails open at
+  add time to vocabulary-only validation, never at publication. Advisory findings remain
+  listed but never gate the verdict; the summary records how many were suppressed and, only
+  when stricter, the verdict over all findings.
 - **Provenance gate (security boundary):** the adapter EXECUTES repo prompt text with real
   tools, so `load_review_config` excludes any rule/reviewer whose defining file — or
   `.pirategoat/config.json` itself — is added or modified within the reviewed range

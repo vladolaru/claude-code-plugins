@@ -642,43 +642,6 @@ def load_agent_reviews(
     return reviews
 
 
-def persist_reconciler_advisory_entitlement(
-    output_dir: str, reviews_by_agent: Dict[str, Any]
-) -> None:
-    """Persist whether loaded upstream findings entitle advisory reconciliation.
-
-    Only the exact ``channel == "advisory"`` marker on an upstream finding
-    grants entitlement. The sidecar is written even when false and write
-    failures are deliberately fail-open for compatibility with manual and
-    older runs.
-    """
-    advisory_entitled = False
-    for review in reviews_by_agent.values():
-        findings = review.get("findings", []) if isinstance(review, dict) else []
-        if not isinstance(findings, list):
-            continue
-        if any(
-            isinstance(finding, dict) and finding.get("channel") == "advisory"
-            for finding in findings
-        ):
-            advisory_entitled = True
-            break
-
-    sidecar = os.path.join(
-        output_dir, "reconciliator-advisory-entitlement.json"
-    )
-    try:
-        with open(sidecar, "w", encoding="utf-8") as f:
-            json.dump(
-                {"schema": 1, "advisory_entitled": advisory_entitled}, f
-            )
-    except OSError:
-        try:
-            os.unlink(sidecar)
-        except OSError:
-            pass
-
-
 def extract_references(reviews_by_agent: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Extract unique file:line references from all agent findings.
 
@@ -1338,7 +1301,6 @@ def main() -> int:
         # Write to output directory
         output_path = os.path.join(output_dir, "reconciliation-context.json")
         os.makedirs(output_dir, exist_ok=True)
-        persist_reconciler_advisory_entitlement(output_dir, reviews_by_agent)
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(context, f, indent=2, ensure_ascii=False)
 

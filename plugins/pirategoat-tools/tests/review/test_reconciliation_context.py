@@ -23,7 +23,6 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 SCRIPT_PATH = SCRIPTS_DIR / "review" / "reconciliation_context.py"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from review.agent.output import ReviewOutputBuilder
 from review.agent.coverage import derive_review_accounting
 from review.reviewer_lifecycle import ReviewPaths
 
@@ -411,24 +410,6 @@ class TestLoadAgentReviews:
 
         result = mod.load_agent_reviews(str(tmp_path), dispatched_agents=[])
         assert len(result) == 0
-
-
-def test_reconciler_entitlement_write_error_removes_stale_target(
-    mod, tmp_path, monkeypatch
-):
-    sidecar = tmp_path / "reconciliator-advisory-entitlement.json"
-    sidecar.write_text(json.dumps({
-        "schema": 1, "advisory_entitled": True,
-    }))
-
-    def _raise(*args, **kwargs):
-        raise OSError("disk unavailable")
-
-    monkeypatch.setattr(mod, "open", _raise, raising=False)
-
-    mod.persist_reconciler_advisory_entitlement(str(tmp_path), {})
-
-    assert not sidecar.exists()
 
 
 class TestSeverityFloorNormalization:
@@ -1570,75 +1551,6 @@ class TestFullScript:
         assert "security-review" in ctx["reviews_by_agent"]
         assert "performance-review" in ctx["reviews_by_agent"]
         assert "patterns-review" in ctx["reviews_by_agent"]
-
-    def test_upstream_advisory_entitles_reconciler_serialization(
-        self, tmp_path, monkeypatch
-    ):
-        finding = _make_finding(severity="critical")
-        finding["channel"] = "advisory"
-        (tmp_path / "repo-reuse-review.json").write_text(json.dumps(
-            _make_review_json(reviewer="repo-reuse", findings=[finding])
-        ))
-
-        result = self._run(
-            "--output-dir", str(tmp_path),
-            "--git-range", "abc..HEAD",
-            cwd=tmp_path,
-        )
-
-        assert result.returncode == 0, result.stderr
-        entitlement = json.loads(
-            (tmp_path / "reconciliator-advisory-entitlement.json").read_text()
-        )
-        assert entitlement == {"schema": 1, "advisory_entitled": True}
-
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
-        builder = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
-        builder.add_finding(
-            severity="critical", title="Advisory", file="src/app.py",
-            description="d", recommendation="r", line=1,
-            channel="advisory",
-        )
-        output = builder.to_dict(output_dir=str(tmp_path))
-        assert output["verdict"] == "approve"
-
-    def test_no_upstream_advisory_rejects_reconciler_advisory_serialization(
-        self, tmp_path, monkeypatch
-    ):
-        (tmp_path / "security-review.json").write_text(json.dumps(
-            _make_review_json(reviewer="security")
-        ))
-
-        result = self._run(
-            "--output-dir", str(tmp_path),
-            "--git-range", "abc..HEAD",
-            cwd=tmp_path,
-        )
-
-        assert result.returncode == 0, result.stderr
-        entitlement = json.loads(
-            (tmp_path / "reconciliator-advisory-entitlement.json").read_text()
-        )
-        assert entitlement == {"schema": 1, "advisory_entitled": False}
-
-        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
-        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
-        builder = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
-        builder.add_finding(
-            severity="high", title="Advisory", file="src/app.py",
-            description="d", recommendation="r", line=1,
-            channel="advisory",
-        )
-        with pytest.raises(ValueError, match="advisory.*not entitled"):
-            builder.to_dict(output_dir=str(tmp_path))
-
-    def test_reconciler_snippet_finalizes_with_explicit_output_dir(self):
-        definition = (
-            PLUGIN_ROOT / "agents" / "review-reconciliator.md"
-        ).read_text()
-
-        assert "output = builder.to_dict(output_dir=output_dir)" in definition
 
     def test_dispatched_agents_empty_string_produces_empty_list(self, tmp_path):
         """--dispatched-agents '' means 0 agents dispatched, not unknown."""

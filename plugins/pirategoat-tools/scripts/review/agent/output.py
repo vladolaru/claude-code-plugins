@@ -38,7 +38,6 @@ from typing import List, Optional, Dict, Any
 
 try:
     from .coverage import (
-        ACCOUNTING_INPUT_SCHEMA,
         ReviewAccountingError,
         derive_review_accounting,
         normalize_review_path,
@@ -50,7 +49,6 @@ except ImportError:
     if _SCRIPTS_DIR not in sys.path:
         sys.path.insert(0, _SCRIPTS_DIR)
     from review.agent.coverage import (
-        ACCOUNTING_INPUT_SCHEMA,
         ReviewAccountingError,
         derive_review_accounting,
         normalize_review_path,
@@ -809,14 +807,11 @@ class ReviewOutputBuilder:
         self.overall_confidence = 0.95
         self._not_applicable = False
         self._skip_reason = None
-        self._review_claimable_files_loaded = False
-        self._review_claimable_files = None
-        self._advisory_entitlement_loaded = False
-        self._advisory_entitlement = None
         self._output_dir = None
         self._paths = None
         self._base_digest = None
         self._last_saved_review = None
+        self._last_accounting = None
         self._invocation_delta = []
 
     @classmethod
@@ -947,13 +942,12 @@ class ReviewOutputBuilder:
             and _SEVERITY_RANK[severity] < _SEVERITY_RANK[floor]
         ):
             candidate["severity"] = floor
-        if (
-            candidate.get("channel") == "advisory"
-            and self._known_advisory_entitlement() is False
-        ):
+        candidate_channel = candidate.get("channel") or "blocking"
+        accounting = self._bound_accounting()
+        if accounting is not None and candidate_channel not in accounting.channels:
             raise ValueError(
-                "Cannot record advisory finding: this reviewer is not "
-                "entitled to the advisory channel."
+                f"channel {candidate_channel!r} is not among this reviewer's "
+                f"channels {list(accounting.channels)}"
             )
         _validate_finding_shape(candidate, index)
         self.findings[index] = candidate
@@ -1116,14 +1110,14 @@ class ReviewOutputBuilder:
                     f"Invalid channel: {channel!r}. "
                     f"Must be one of {_VALID_CHANNELS}."
                 )
-            if (
-                channel == "advisory"
-                and self._known_advisory_entitlement() is False
-            ):
-                raise ValueError(
-                    "Cannot record advisory finding: this reviewer is not "
-                    "entitled to the advisory channel."
-                )
+
+        effective_channel = channel or "blocking"
+        accounting = self._bound_accounting()
+        if accounting is not None and effective_channel not in accounting.channels:
+            raise ValueError(
+                f"channel {effective_channel!r} is not among this reviewer's "
+                f"channels {list(accounting.channels)}"
+            )
 
         # Validate line — None records a first-class file-scoped finding (loud),
         # hard enforcement for invalid values (0, negative, non-int).
@@ -1266,64 +1260,19 @@ class ReviewOutputBuilder:
             return stamped.strip()
         return None
 
-    @staticmethod
-    def _read_review_accounting_input(
-        output_dir: Optional[str], reviewer: Optional[str]
-    ) -> Dict:
-        """Parse the bootstrap-written review-accounting input, or ``{}``."""
-        if not output_dir or not reviewer:
-            return {}
-        accounting_input = review_paths(output_dir, reviewer).accounting_input
-        try:
-            with open(accounting_input, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            return {}
-        return data if isinstance(data, dict) else {}
+    def _bound_accounting(self):
+        """Accounting derived from the bound input, or None when not bound.
 
-    @staticmethod
-    def _load_review_claimable_files(
-        output_dir: Optional[str], reviewer: Optional[str]
-    ) -> Optional[frozenset]:
-        """Load the authoritative claimable set for add-time feedback."""
-        data = ReviewOutputBuilder._read_review_accounting_input(output_dir, reviewer)
-        try:
-            accounting = derive_review_accounting(data, [])
-        except ReviewAccountingError:
-            return None
-        return frozenset(accounting.review_claimable_files)
-
-    @staticmethod
-    def _review_budget_target(
-        output_dir: Optional[str], reviewer: Optional[str]
-    ) -> Optional[int]:
-        """The run's tool-call target, or None when there isn't an honest one.
-
-        Read from the same schema-4 input that owns the accounting facts.
+        Add-time feedback only: save_draft() derives again and fails closed.
         """
-        data = ReviewOutputBuilder._read_review_accounting_input(output_dir, reviewer)
-        if data.get("schema") != ACCOUNTING_INPUT_SCHEMA:
+        if self._paths is None:
             return None
-        value = data.get("review_budget")
-        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        try:
+            with open(self._paths.accounting_input, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            return derive_review_accounting(data, self.reviewed_file_claims)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ReviewAccountingError):
             return None
-        return value
-
-    def _known_review_claimable_files(self) -> Optional[frozenset]:
-        """The claimable set via the env envelope — add-time fast feedback.
-
-        Authoritative enforcement happens at save_draft() with the bound
-        output directory; this lookup only makes positive claims fail
-        earlier on the recommended path.
-        """
-        if self._review_claimable_files_loaded:
-            return self._review_claimable_files
-        self._review_claimable_files_loaded = True
-        self._review_claimable_files = self._load_review_claimable_files(
-            os.environ.get("PIRATEGOAT_OUTPUT_DIR"),
-            os.environ.get("PIRATEGOAT_REVIEWER_NAME"),
-        )
-        return self._review_claimable_files
 
     @staticmethod
     def _normalize_reviewed_file_claim(file: str) -> str:
@@ -1377,7 +1326,11 @@ class ReviewOutputBuilder:
                 "claim_files_reviewed requires at least one file path — "
                 "a call naming nothing is a no-op, not a claim."
             )
-        known = self._known_review_claimable_files()
+        accounting = self._bound_accounting()
+        known = (
+            frozenset(accounting.review_claimable_files)
+            if accounting is not None else None
+        )
         normalized: List[str] = []
         unknown: List[str] = []
         grammar_errors: List[str] = []
@@ -1404,12 +1357,9 @@ class ReviewOutputBuilder:
         """Return the required authoritative accounting for publication.
 
         Every draft save uses this path; the bound output directory makes the
-        check independent of the optional environment envelope.
-
-        The seam differs from its advisory sibling on purpose: advisory
-        entitlement revalidates at to_dict(output_dir=...) (serialization),
-        this at save_draft() (publication), so a caller serializing manually via
-        to_dict/to_json knowingly opts out of accounting validation.
+        check independent of the optional environment envelope. A caller
+        serializing manually via to_dict/to_json knowingly opts out of
+        accounting validation — publication is the enforcing seam.
         """
         accounting_input_path = review_paths(output_dir, self.reviewer).accounting_input
         try:
@@ -1434,68 +1384,6 @@ class ReviewOutputBuilder:
                 "malformed authoritative review-accounting input: "
                 f"{exc}"
             ) from exc
-
-    @staticmethod
-    def _load_advisory_entitlement(
-        output_dir: Optional[str], reviewer: Optional[str]
-    ) -> Optional[bool]:
-        """Load a bootstrap-declared advisory entitlement when authoritative.
-
-        ``None`` is deliberate fail-open behavior: absent paths, absent files,
-        write failures upstream, malformed JSON, wrong top-level shapes, and
-        non-boolean declarations leave only the already-enforced channel
-        vocabulary validation. Only an explicit boolean false denies advisory
-        findings.
-        """
-        if not output_dir or not reviewer:
-            return None
-        sidecar = os.path.join(
-            output_dir, f"{reviewer}-advisory-entitlement.json"
-        )
-        try:
-            with open(sidecar, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            return None
-        entitled = data.get("advisory_entitled") if isinstance(data, dict) else None
-        return entitled if isinstance(entitled, bool) else None
-
-    def _known_advisory_entitlement(self) -> Optional[bool]:
-        """Return the cached entitlement from the canonical env envelope.
-
-        This add-time lookup intentionally fails open to vocabulary-only
-        validation when the envelope or a valid boolean sidecar is unavailable.
-        Canonical serialization can independently revalidate against an
-        explicit output directory.
-        """
-        if self._advisory_entitlement_loaded:
-            return self._advisory_entitlement
-        self._advisory_entitlement_loaded = True
-        self._advisory_entitlement = self._load_advisory_entitlement(
-            os.environ.get("PIRATEGOAT_OUTPUT_DIR"),
-            os.environ.get("PIRATEGOAT_REVIEWER_NAME"),
-        )
-        return self._advisory_entitlement
-
-    def _validate_advisory_serialization(
-        self, output_dir: Optional[str]
-    ) -> None:
-        """Reject explicitly unentitled advisory findings at finalization.
-
-        Missing or malformed sidecars remain deliberately fail-open after the
-        channel vocabulary has been validated. An explicit false is the only
-        authoritative denial.
-        """
-        if not any(
-            finding.get("channel") == "advisory"
-            for finding in self.findings
-        ):
-            return
-        if self._load_advisory_entitlement(output_dir, self.reviewer) is False:
-            raise ValueError(
-                "Cannot serialize advisory finding: this reviewer is not "
-                "entitled to the advisory channel."
-            )
 
     def claim_files_reviewed(self, *files: str):
         """Claim review-claimable files as reviewed, atomically."""
@@ -1571,21 +1459,14 @@ class ReviewOutputBuilder:
             return 'not_applicable'
         return derive_review_state(self.findings)['verdict']
 
-    def to_dict(
-        self, *, output_dir: Optional[str] = None, review_accounting=None
-    ) -> Dict:
-        """Build as dictionary, revalidating advisory findings when directed.
-
-        Without an explicit directory, manual and legacy callers retain the
-        deliberate fail-open, vocabulary-only advisory behavior.
+    def to_dict(self, *, review_accounting=None) -> Dict:
+        """Build as dictionary from this builder's own state.
 
         Draft publication passes authoritative ``review_accounting``.
         Direct serialization has no authority for machine-derived fields and
         reports those as absent.
         """
-        if output_dir is not None:
-            self._validate_advisory_serialization(output_dir)
-        review_duration = self._review_duration_ms(output_dir)
+        review_duration = self._review_duration_ms(self._output_dir)
 
         derived = derive_review_state(self.findings)
         verdict = 'not_applicable' if self._not_applicable else derived['verdict']
@@ -1604,7 +1485,7 @@ class ReviewOutputBuilder:
             'pr_id': self.pr_id,
             'reviewer': self.reviewer,
             'timestamp': self.timestamp,
-            'plugin_version': self._resolve_plugin_version(output_dir),
+            'plugin_version': self._resolve_plugin_version(self._output_dir),
             'schema': REVIEW_OUTPUT_SCHEMA,
             'verdict': verdict,
             'summary': summary,
@@ -1667,18 +1548,10 @@ class ReviewOutputBuilder:
             return None
         return int(elapsed * 1000)
 
-    def to_json(
-        self,
-        indent: int = 2,
-        *,
-        output_dir: Optional[str] = None,
-        review_accounting=None,
-    ) -> str:
-        """Generate JSON, optionally revalidating advisory entitlement."""
+    def to_json(self, indent: int = 2, *, review_accounting=None) -> str:
+        """Generate JSON from this builder's own state."""
         return json.dumps(
-            self.to_dict(
-                output_dir=output_dir, review_accounting=review_accounting
-            ),
+            self.to_dict(review_accounting=review_accounting),
             indent=indent,
             ensure_ascii=False,
         )
@@ -1694,8 +1567,16 @@ class ReviewOutputBuilder:
                 "save_draft requires ReviewOutputBuilder.open(...)"
             )
         review_accounting = self._derive_review_accounting(self._output_dir)
+        off_channel = sorted({
+            finding.get("channel") or "blocking" for finding in self.findings
+        } - set(review_accounting.channels))
+        if off_channel:
+            raise ValueError(
+                f"findings use channel(s) {off_channel} not among this reviewer's "
+                f"channels {list(review_accounting.channels)}"
+            )
+        self._last_accounting = review_accounting
         draft_bytes = self.to_json(
-            output_dir=self._output_dir,
             review_accounting=review_accounting,
         ).encode("utf-8")
         review, agent_name = _validate_review(
@@ -1756,10 +1637,12 @@ class ReviewOutputBuilder:
             shown = ", ".join(unclaimed[:3])
             if len(unclaimed) > 3:
                 shown += f" (+{len(unclaimed) - 3} more)"
-            budget = self._review_budget_target(
-                self._output_dir, self.reviewer
+            # A target of ~0 calls is not a target worth repeating.
+            budget = (
+                self._last_accounting.review_budget
+                if self._last_accounting else None
             )
-            if budget is not None:
+            if budget:
                 shown += f" | target ~{budget} tool calls"
             print(
                 "FILES NOT YET CLAIMED AS REVIEWED "

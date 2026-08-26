@@ -242,7 +242,7 @@ builder._record_check(
 # Add quality metrics to the JSON output.
 # These make grouping quality observable — without them, silent
 # over-merging or under-merging is undetectable.
-output = builder.to_dict(output_dir=output_dir)
+output = builder.to_dict()
 output['meta']['reconciliation'] = {
     'input_finding_count': TOTAL_INPUT,       # findings read from all agent JSONs
     'contributing_agent_count': AGENTS_WITH_FINDINGS, # agents that produced >= 1 finding

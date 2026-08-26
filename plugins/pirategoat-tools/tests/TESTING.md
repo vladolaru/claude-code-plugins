@@ -212,8 +212,8 @@ Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/
 | `TestAddObservation` | `add_observation()` stores file-level notes outside the finding pipeline, in insertion order |
 | `TestReviewedFileClaims` | Explicit positive claims of review-claimable files actually read: canonical path grammar, add-time membership validation against the authoritative accounting input, no verdict effect, all-or-nothing claim/retraction batches, and duplicate/already-recorded dedup semantics |
 | `TestNotApplicable` | `mark_not_applicable()` produces a `not_applicable` verdict with `skip_reason`, zero findings |
-| `TestAdvisoryChannel` | Advisory-channel findings are listed but never gate the verdict; entitlement and suppression accounting |
-| `TestDerivedReviewAccounting` | Every draft save derives the six canonical top-level accounting fields from schema-3 input and reviewed-file claims; re-saving recomputes from scratch and finalized JSON preserves the derived values |
+| `TestAdvisoryChannel` | A finding's channel must be one the bound accounting input grants the reviewer — enforced at add time, again at publication, and fails open only when there is no readable input to consult; advisory findings are listed but never gate the verdict |
+| `TestDerivedReviewAccounting` | Every draft save derives the six canonical top-level accounting fields from schema-4 input and reviewed-file claims; re-saving recomputes from scratch and finalized JSON preserves the derived values |
 | `TestBudgetTargetEcho` | `save_draft()` echoes the call-budget target exactly when canonical accounting still has unclaimed work |
 | `TestDraftFileGapReceipt` | The receipt reports the complete unclaimed population compactly without turning filenames into mutable agent-authored accounting |
 | `TestMetaIsNeverFakeZero` | `review_accounted_file_count` stays top-level and unmeasured until authoritative accounting is supplied, while `meta.review_duration_ms` derives from the actor's dispatch marker — the `<agent>.started` and `<agent>.synthesis-started` families both — with null for a missing, unparsable, or future-stamped marker |

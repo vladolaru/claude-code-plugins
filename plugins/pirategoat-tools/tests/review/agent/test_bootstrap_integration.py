@@ -150,14 +150,14 @@ class TestCategoryRepresentatives:
         assert expected_scope
         assert agent_start["scope"]["paths"] == expected_scope
 
-    def test_ref_mode_instance_writes_scope_summaries_and_sidecars(
-        self, tmp_path, monkeypatch
+    def test_ref_mode_instance_writes_scope_summaries_and_accounting_input(
+        self, tmp_path
     ):
         """Adapter ref-mode instances must leave the same per-agent scope
         evidence as native reviewers — instance-named scope summaries (so
         run-level coverage reconciliation sees adapter scopes) and an
-        instance-named accounting input (so the builder's claim
-        verification finds it via PIRATEGOAT_REVIEWER_NAME)."""
+        instance-named accounting input (so a builder bound to this output
+        directory finds the instance's own accounting facts)."""
         ref = tmp_path / "renewals.md"
         ref.write_text("Review renewals logic end to end.")
 
@@ -176,8 +176,8 @@ class TestCategoryRepresentatives:
         data = json.loads(summary.read_text())
         assert data["domain"] == "code"
         assert isinstance(data["in_scope_stat_lines"], int)
-        # Identity chain: sidecar name matches what the builder derives
-        # from PIRATEGOAT_REVIEWER_NAME.
+        # Identity chain: the accounting input is named for the reviewer
+        # the instance is taught to construct its builder with.
         assert "PIRATEGOAT_REVIEWER_NAME=repo-renewals" in result.stdout
         accounting_input = json.loads(
             (tmp_path / "repo-renewals-review-accounting-input.json").read_text()
@@ -185,9 +185,7 @@ class TestCategoryRepresentatives:
         assert accounting_input["channels"] == ["advisory"]
         assert not (tmp_path / "repo-renewals-advisory-entitlement.json").exists()
 
-        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
-        monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "repo-renewals")
-        builder = ReviewOutputBuilder(pr_id="1", reviewer="repo-renewals")
+        builder = ReviewOutputBuilder.open(tmp_path, "1", "repo-renewals")
         builder.add_finding(
             severity="critical", title="Advisory", file="src/app.py",
             description="d", recommendation="r", line=1,
@@ -1979,9 +1977,7 @@ class TestRepoRuleAndRefModeSelection:
         assert result.returncode == 0
         assert "DECLARED DOMAIN RULE MARKER" in result.stdout
 
-    def test_advisory_rule_injects_the_channel_contract(
-        self, tmp_path, monkeypatch
-    ):
+    def test_advisory_rule_injects_the_channel_contract(self, tmp_path):
         """The channel exists only as rendered prose unless the reviewer is
         told to propagate it — an untagged advisory-rule finding counts as
         blocking in the verdict, letting an advisory rule gate the review."""
@@ -1994,15 +1990,17 @@ class TestRepoRuleAndRefModeSelection:
         assert result.returncode == 0
         assert 'add_finding(..., channel="advisory")' in result.stdout
 
+        # The accounting input is the sole carrier of the reviewer's
+        # channels — no separate entitlement sidecar exists.
         accounting_input = json.loads(
             (tmp_path / "performance-review-accounting-input.json").read_text()
         )
+        assert accounting_input["schema"] == 4
         assert accounting_input["channels"] == ["blocking", "advisory"]
+        assert isinstance(accounting_input["review_budget"], int)
         assert not (tmp_path / "performance-advisory-entitlement.json").exists()
 
-        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
-        monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "performance")
-        builder = ReviewOutputBuilder(pr_id="1", reviewer="performance")
+        builder = ReviewOutputBuilder.open(tmp_path, "1", "performance")
         builder.add_finding(
             severity="high", title="Advisory", file="src/app.py",
             description="d", recommendation="r", line=1,
@@ -2010,29 +2008,7 @@ class TestRepoRuleAndRefModeSelection:
         )
         assert builder.to_dict()["verdict"] == "approve"
 
-    def test_accounting_input_carries_channels_and_no_sidecar(self, tmp_path):
-        """The accounting input is now the sole carrier of channel
-        entitlement — bootstrap no longer writes a separate advisory
-        entitlement sidecar."""
-        self._write_review_context(tmp_path, rules=[self._rule(
-            tmp_path, "adv-rule", "ADVISORY BODY", channel="advisory",
-        )])
-        result = run_bootstrap(
-            "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
-        )
-        assert result.returncode == 0
-
-        data = json.loads(
-            (tmp_path / "performance-review-accounting-input.json").read_text()
-        )
-        assert data["schema"] == 4
-        assert data["channels"] == ["blocking", "advisory"]
-        assert isinstance(data["review_budget"], int)
-        assert not (tmp_path / "performance-advisory-entitlement.json").exists()
-
-    def test_blocking_only_rules_omit_the_channel_contract(
-        self, tmp_path, monkeypatch
-    ):
+    def test_blocking_only_rules_omit_the_channel_contract(self, tmp_path):
         self._write_review_context(tmp_path, rules=[self._rule(
             tmp_path, "blk-rule", "BLOCKING BODY", channel="blocking",
         )])
@@ -2048,6 +2024,16 @@ class TestRepoRuleAndRefModeSelection:
         )
         assert accounting_input["channels"] == ["blocking"]
         assert not (tmp_path / "performance-advisory-entitlement.json").exists()
+
+        builder = ReviewOutputBuilder.open(tmp_path, "1", "performance")
+        with pytest.raises(
+            ValueError, match="channel 'advisory' is not among"
+        ):
+            builder.add_finding(
+                severity="high", title="Advisory", file="src/app.py",
+                description="d", recommendation="r", line=1,
+                channel="advisory",
+            )
 
     def test_isolated_execution_is_refused(self, tmp_path):
         """An explicit isolation request must never silently widen into
