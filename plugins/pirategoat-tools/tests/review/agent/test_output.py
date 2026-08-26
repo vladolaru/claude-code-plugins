@@ -36,7 +36,11 @@ from review.agent.output import (
     render_draft_index,
     render_markdown,
 )
+from review import critic_adjustments
 from review.reviewer_lifecycle import ReviewPaths
+
+sys.path.insert(0, str(TESTS_DIR))
+from helpers.review_fixtures import canonical_review_document
 
 
 def _write_required_accounting_input(output_dir, reviewer):
@@ -67,6 +71,27 @@ def _save_draft(builder, output_dir):
     if builder._output_dir is None:
         builder._bind(str(output_dir), base_digest=None)
     return builder.save_draft()
+
+
+def _canonical_findings_document(severities=("high",)):
+    """Return one exact reconciler ledger for materialization probes."""
+    document = canonical_review_document("reconciliator", severities)
+    finding_count = len(document["findings"])
+    document["meta"]["reconciliation"] = {
+        "input_finding_count": finding_count,
+        "contributing_agent_count": 1 if finding_count else 0,
+        "grouped_concern_count": finding_count,
+        "false_positive_finding_count": 0,
+        "out_of_scope_finding_count": 0,
+        "verified_finding_count": finding_count,
+        "deduplication_ratio": 0.0 if finding_count else 1.0,
+        "not_applicable_agent_count": 0,
+        "not_applicable_agents": [],
+        "reviewing_agents": ["security-reviewer"] if finding_count else [],
+        "dispatched_agents": ["security-reviewer"] if finding_count else [],
+        "missing_agents": [],
+    }
+    return document
 
 
 def test_accounting_reads_follow_the_bound_review_paths(
@@ -2870,11 +2895,11 @@ class TestMaterializeFindingsMarkdown:
 
     def test_suffix_selects_the_findings_artifact(self):
         with tempfile.TemporaryDirectory() as d:
-            b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
-            b.add_finding("high", "T", "f.py", "d", "r", line=1)
-            b.set_assessment("Overall: needs work.")
-            data = b.to_dict()
+            data = _canonical_findings_document()
             Path(d, "review-findings.json").write_text(json.dumps(data))
+            assert critic_adjustments.read_findings_file(
+                Path(d, "review-findings.json")
+            ).status == critic_adjustments.FINDINGS_READ_OK
             written = materialize_markdown(d, suffix="review-findings.json")
             assert [os.path.basename(p) for p in written] == [
                 "review-findings.md",
@@ -2906,6 +2931,39 @@ class TestMaterializeFindingsMarkdown:
         with tempfile.TemporaryDirectory() as d:
             assert materialize_markdown(d, suffix="review-findings.json") == []
 
+    def test_canonical_reader_rejection_writes_no_findings_markdown(
+        self, tmp_path, capsys
+    ):
+        data = _canonical_findings_document()
+        data["verdict"] = "APPROVE"
+        findings_path = tmp_path / "review-findings.json"
+        findings_path.write_text(json.dumps(data))
+
+        assert critic_adjustments.read_findings_file(
+            findings_path
+        ).status == critic_adjustments.FINDINGS_READ_INVALID
+
+        assert materialize_markdown(
+            str(tmp_path), suffix="review-findings.json"
+        ) == []
+        assert not (tmp_path / "review-findings.md").exists()
+        assert "skipped review-findings.json" in capsys.readouterr().err
+
+    def test_unreadable_findings_ledger_writes_no_markdown(
+        self, tmp_path, capsys
+    ):
+        findings_path = tmp_path / "review-findings.json"
+        findings_path.mkdir()
+
+        assert critic_adjustments.read_findings_file(
+            findings_path
+        ).status == critic_adjustments.FINDINGS_READ_IO_ERROR
+        assert materialize_markdown(
+            str(tmp_path), suffix="review-findings.json"
+        ) == []
+        assert not (tmp_path / "review-findings.md").exists()
+        assert "io_error" in capsys.readouterr().err
+
     def test_materialize_cli_accepts_the_suffix(self):
         """The on-demand recovery path step 11 prints has to be able to
         render the findings ledger, not only the per-reviewer family."""
@@ -2914,9 +2972,9 @@ class TestMaterializeFindingsMarkdown:
             / "output.py"
         )
         with tempfile.TemporaryDirectory() as d:
-            b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
-            b.add_finding("high", "T", "f.py", "d", "r", line=1)
-            Path(d, "review-findings.json").write_text(json.dumps(b.to_dict()))
+            Path(d, "review-findings.json").write_text(json.dumps(
+                _canonical_findings_document()
+            ))
             result = subprocess.run(
                 [sys.executable, str(output_py), "materialize", d,
                  "--suffix", "review-findings.json"],
@@ -2925,6 +2983,32 @@ class TestMaterializeFindingsMarkdown:
             assert result.returncode == 0, result.stderr
             assert "review-findings.md" in result.stdout
             assert Path(d, "review-findings.md").is_file()
+
+    def test_materialize_cli_skips_a_canonically_invalid_ledger(
+        self, tmp_path
+    ):
+        output_py = (
+            Path(__file__).parents[3] / "scripts" / "review" / "agent"
+            / "output.py"
+        )
+        data = _canonical_findings_document()
+        data["verdict"] = "APPROVE"
+        findings_path = tmp_path / "review-findings.json"
+        findings_path.write_text(json.dumps(data))
+
+        result = subprocess.run(
+            [
+                sys.executable, str(output_py), "materialize", str(tmp_path),
+                "--suffix", "review-findings.json",
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0
+        assert result.stdout == ""
+        assert "skipped review-findings.json" in result.stderr
+        assert not (tmp_path / "review-findings.md").exists()
 
     def test_materialize_cli_default_suffix_is_unchanged(self):
         output_py = (

@@ -715,7 +715,21 @@ def _load_renderable_review_artifact(path):
     """Classify and load one supported artifact by its actual filename."""
     name = os.path.basename(path)
     if name == _RECONCILIATION_LEDGER_NAME:
-        return _read_json_object(path, "reconciliation findings ledger")
+        # Imported only at the ledger boundary: critic_adjustments owns the
+        # exact post-critic schema, but imports this module for the shared
+        # review builder/renderers. A top-level import would make that
+        # ownership relationship cyclic.
+        try:
+            from .. import critic_adjustments
+        except ImportError:
+            from review import critic_adjustments
+        read = critic_adjustments.read_findings_file(path)
+        if read.status != critic_adjustments.FINDINGS_READ_OK:
+            raise ValueError(
+                "reconciliation findings ledger unreadable "
+                f"({read.status})"
+            )
+        return read.findings
     if name.endswith("-review.json"):
         reviewer = name[: -len("-review.json")]
         return load_review_document(path, reviewer)
@@ -737,9 +751,9 @@ def materialize_markdown(
     chooses its validation boundary. Every `<reviewer>-review.json` uses
     the canonical final-review loader, including when a caller supplies an
     exact filename as the suffix. Only exact `review-findings.json` uses
-    the reconciliation ledger's separate object/rendering boundary. A
-    second copy of this loop is how the two would eventually disagree
-    about what a rendering means.
+    the canonical reconciliation-ledger reader and validator. A second
+    copy of this loop is how the two would eventually disagree about what
+    a rendering means.
     """
     written: List[str] = []
     for name in sorted(os.listdir(output_dir)):

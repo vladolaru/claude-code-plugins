@@ -2173,6 +2173,10 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # the one place the two verdict layers meet.
     ledger_verdict = None
     findings_read = critic_adjustments.read_findings_file(findings_path)
+    # The pure report briefing must never reopen or independently classify
+    # the ledger. Carry this exact reader result across the boundary so it
+    # can name the ledger as source context only when this pass accepted it.
+    state["findings_read_status"] = findings_read.status
     raw = (findings_read.findings or {}).get("verdict") if (
         findings_read.status == critic_adjustments.FINDINGS_READ_OK
     ) else None

@@ -2728,7 +2728,7 @@ class TestCheckPassthrough:
 
     def test_rendered_markdown_carries_the_checks_section(self, tmp_path):
         """End of the chain: the renderer the report is told to quote."""
-        _write_findings(tmp_path, [_finding("F1")], checks=self.CHECKS)
+        _write_findings(tmp_path, [_finding("f1")], checks=self.CHECKS)
         script = PLUGIN_ROOT / "scripts" / "review" / "agent" / "output.py"
         result = subprocess.run(
             [sys.executable, str(script), "render",

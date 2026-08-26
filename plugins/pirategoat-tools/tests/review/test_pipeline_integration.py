@@ -2619,6 +2619,17 @@ class TestStep9FindingsMarkdown:
         }]
         data["summary"]["total_findings"] = 1
         data["summary"]["by_severity"]["high"] = 1
+        data["verdict"] = "request_changes"
+        data["meta"]["next_finding_number"] = 2
+        data["meta"]["reconciliation"].update({
+            "input_finding_count": 1,
+            "contributing_agent_count": 1,
+            "grouped_concern_count": 1,
+            "verified_finding_count": 1,
+            "deduplication_ratio": 0.0,
+            "reviewing_agents": ["security-reviewer"],
+            "dispatched_agents": ["security-reviewer"],
+        })
         data.update(extra)
         return data
 
@@ -2845,6 +2856,37 @@ class TestStep10Orchestration:
 
 class TestStep11Orchestration:
     """Step 11 settles state, then publishes after the report handoff."""
+
+    def test_invalid_ledger_is_neither_materialized_nor_report_source(
+        self, tmp_path
+    ):
+        run_pipeline(
+            "--step", "1", "--mode", "pr", "--pr-number", "42",
+            "--output-dir", str(tmp_path), cwd=tmp_path,
+        )
+        findings = _review_json("reconciliator")
+        findings["verdict"] = "APPROVE"
+        findings_path = tmp_path / "review-findings.json"
+        findings_path.write_text(json.dumps(findings))
+
+        assert critic_adjustments.read_findings_file(
+            findings_path
+        ).status == critic_adjustments.FINDINGS_READ_INVALID
+
+        prepared = run_pipeline(
+            "--step", "11", "--mode", "pr", "--output-dir", str(tmp_path),
+            cwd=tmp_path,
+        )
+
+        assert prepared.returncode == 0, prepared.stderr
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        assert state["findings_read_status"] == "invalid"
+        assert not (tmp_path / "review-findings.md").exists()
+        assert (
+            f"Source:** `{tmp_path}/review-findings.json"
+            not in prepared.stdout
+        )
+        assert f"`{tmp_path}/<agent>-review.md`" in prepared.stdout
 
     def test_step_11_prepares_then_publishes_after_report_handoff(
         self, tmp_path

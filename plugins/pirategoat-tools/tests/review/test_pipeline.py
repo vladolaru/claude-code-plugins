@@ -2304,7 +2304,11 @@ class TestStep11ReportAuthoring:
 
     def _guidance(self, mod, mode="pr", state=None, ctx=None, config=None,
                   output_dir=None):
-        base = {"completed_steps": [], "review_record": self._COMPLETE_RECORD}
+        base = {
+            "completed_steps": [],
+            "findings_read_status": "ok",
+            "review_record": self._COMPLETE_RECORD,
+        }
         base.update(state or {})
         return mod.get_step_guidance(
             11, mode, base, ctx or {}, config=config, output_dir=output_dir,
@@ -2495,11 +2499,53 @@ class TestStep11ReportAuthoring:
         assert "review-record.md" not in text
 
     def test_failed_record_assembly_routes_to_the_ledger(self, mod):
-        text = "\n".join(self._guidance(mod, state={"review_record": {
-            "ran": True, "written": 0, "expected": 1, "status": "failed",
-        }})["actions"])
+        text = "\n".join(self._guidance(mod, state={
+            "findings_read_status": "ok",
+            "review_record": {
+                "ran": True, "written": 0, "expected": 1,
+                "status": "failed",
+            },
+        })["actions"])
         assert "could not assemble" in text
         assert "review-findings.json" in text
+
+    @pytest.mark.parametrize(
+        "read_status", ["invalid", "io_error", "unparsable", "not_object"]
+    )
+    def test_rejected_ledger_is_not_report_authoring_source(
+        self, mod, read_status
+    ):
+        text = "\n".join(self._guidance(mod, state={
+            "findings_read_status": read_status,
+            "review_record": {
+                "ran": True, "written": 0, "expected": 1,
+                "status": "failed",
+            },
+        })["actions"])
+
+        assert "Source:** `<OUTPUT_DIR>/review-findings.json" not in text
+        assert "<OUTPUT_DIR>/<agent>-review.md" in text
+        assert "rejected" in text.lower()
+
+    def test_absent_ledger_keeps_the_no_ledger_fallback(self, mod):
+        text = "\n".join(self._guidance(mod, state={
+            "findings_read_status": "absent",
+            "review_record": None,
+        })["actions"])
+
+        assert "canonical ledger is absent" in text
+        assert "<OUTPUT_DIR>/<agent>-review.md" in text
+        assert "Source:** `<OUTPUT_DIR>/review-findings.json" not in text
+
+    def test_missing_read_status_fails_closed(self, mod):
+        text = "\n".join(self._guidance(mod, state={
+            "findings_read_status": None,
+            "review_record": self._COMPLETE_RECORD,
+        })["actions"])
+
+        assert "status: `unavailable`" in text
+        assert "<OUTPUT_DIR>/<agent>-review.md" in text
+        assert "Source:** `<OUTPUT_DIR>/review-findings.json" not in text
 
 
 class TestStep11PresentResults:
@@ -2699,6 +2745,7 @@ class TestStep11PresentResults:
         artifact three degraded paths depend on."""
         state = {
             "completed_steps": [],
+            "findings_read_status": "ok",
             "findings_markdown": {
                 "ran": True, "written": 1, "expected": 1,
                 "status": "complete",
@@ -2721,6 +2768,7 @@ class TestStep11PresentResults:
     ):
         state = {
             "completed_steps": [],
+            "findings_read_status": "ok",
             "findings_markdown": {
                 "ran": True, "written": 0, "expected": 1, "status": "failed",
             },
@@ -2748,7 +2796,9 @@ class TestStep11PresentResults:
         self, mod, tmp_path
     ):
         guidance = mod.get_step_guidance(
-            11, "pr", {"completed_steps": []}, {},
+            11, "pr", {
+                "completed_steps": [], "findings_read_status": "ok",
+            }, {},
             config={"mode": "pr", "interactive": True},
             output_dir=str(tmp_path),
         )
@@ -2772,6 +2822,9 @@ class TestStep11PresentResults:
         would send the reader after work that cannot exist."""
         state = {
             "completed_steps": [],
+            "findings_read_status": (
+                "absent" if key == "findings_markdown" else "ok"
+            ),
             key: {
                 "ran": True, "written": 0, "expected": 0,
                 "status": "complete",
@@ -2799,7 +2852,7 @@ class TestStep11PresentResults:
     def test_interactive_has_focused_reconciliator_followup(self, mod, tmp_path):
         """Interactive mode should offer focused reconciliator for drill-down."""
         config = {"mode": "pr", "interactive": True}
-        state = {"completed_steps": []}
+        state = {"completed_steps": [], "publication_pending": False}
         ctx = {}
         g = mod.get_step_guidance(11, "pr", state, ctx, config=config)
         text = "\n".join(g["actions"])

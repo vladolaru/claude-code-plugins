@@ -1924,32 +1924,41 @@ def _report_authoring_actions(mode, state, context, config, output_dir):
     actions = []
 
     reconciliation_failed = bool(degradation.get("reconciliation_failed"))
+    findings_read_status = state.get("findings_read_status")
+    ledger_usable = findings_read_status == "ok"
+    ledger_absent = findings_read_status == "absent"
     record_outcome = state.get("review_record")
     record_usable = (
         not reconciliation_failed
+        and ledger_usable
         and isinstance(record_outcome, dict)
         and record_outcome.get("status") == "complete"
+    )
+    settled_source_label = (
+        "newly settled record and ledger below"
+        if ledger_usable
+        else "available finalized reviewer sources below"
     )
 
     if handoff_status == "source_changed":
         actions.append(
             "⚠️ **The prepared report source changed during re-settlement.** "
             "The existing report is stale and cannot be published. "
-            "Regenerate it from the newly settled record and ledger below."
+            f"Regenerate it from the {settled_source_label}."
         )
         actions.append("")
     elif handoff_status == "stale_report_unchanged":
         actions.append(
             "⚠️ **The rejected stale report has not changed.** Regenerate "
-            "it from the currently prepared record and ledger below before "
+            f"it from the {settled_source_label} before "
             "re-running step 11."
         )
         actions.append("")
     elif handoff_status == "unbound_report":
         actions.append(
             "⚠️ **The existing report predates a prepared source binding.** "
-            "It is not deliverable as-is. Regenerate it from the settled "
-            "record and ledger below, then re-run step 11."
+            "It is not deliverable as-is. Regenerate it from the "
+            f"{settled_source_label}, then re-run step 11."
         )
         actions.append("")
 
@@ -1974,6 +1983,21 @@ def _report_authoring_actions(mode, state, context, config, output_dir):
             f"`{od}/<agent>-review.md` files — this is the sanctioned "
             "degraded path. Say plainly in the report that reconciliation "
             "failed and the findings are unreconciled."
+        )
+    elif ledger_absent:
+        actions.append(
+            "⚠️ The canonical ledger is absent, so there is no usable review "
+            f"record. Synthesize the report manually from the finalized "
+            f"`{od}/<agent>-review.md` files and say plainly that the "
+            "findings are unreconciled."
+        )
+    elif not ledger_usable:
+        actions.append(
+            "⚠️ The canonical ledger was rejected at the pipeline boundary "
+            f"(status: `{findings_read_status or 'unavailable'}`), so it is "
+            "not valid report source context. Synthesize the report manually "
+            f"from the finalized `{od}/<agent>-review.md` files and say "
+            "plainly that the findings are unreconciled."
         )
     elif record_usable:
         actions.append(
@@ -2018,14 +2042,21 @@ def _report_authoring_actions(mode, state, context, config, output_dir):
         actions.append(_DEFAULT_OUTPUT_INSTRUCTIONS_BRANCH)
 
     actions.append("")
+    verdict_source_clause = (
+        f"it came from `{od}/review-findings.json`, and the report is a "
+        "presentation of that decision, not a second one."
+        if ledger_usable
+        else "the rejected or absent ledger is not a source for this report, "
+             "so present the pipeline's fallback or override, not a second "
+             "decision."
+    )
     actions.append(
         "Include a verdict (APPROVE, REQUEST_CHANGES, or COMMENT) matching "
-        f"the one the pipeline derived and printed below — it came from "
-        f"`{od}/review-findings.json`, and the report is a presentation of "
-        "that decision, not a second one."
+        "the one the pipeline derived and printed below — "
+        f"{verdict_source_clause}"
     )
 
-    if not reconciliation_failed:
+    if ledger_usable:
         actions.append(
             f"**What held comes from the ledger, never from memory.** Any "
             f"\"what we checked and it held\" / \"verified absences\" "
@@ -2044,10 +2075,15 @@ def _report_authoring_actions(mode, state, context, config, output_dir):
     banner = (context.get("host_context") or {}).get("banner") or {}
     if banner.get("degraded"):
         actions.append("")
+        record_projection = (
+            " (the pipeline renders the same blockquote onto the record "
+            "from the findings JSON)"
+            if ledger_usable
+            else ""
+        )
         actions.append(
             f"**Host context banner:** prepend this blockquote to the top of "
-            f"`review-report.md` (the pipeline renders the same blockquote "
-            f"onto the record from the findings JSON):"
+            f"`review-report.md`{record_projection}:"
         )
         actions.append("")
         actions.append(f"> **⚠ Host Context Banner:** {banner.get('message', '')}")
@@ -2100,9 +2136,14 @@ def _step_11_present_results(mode, state, context, config, output_dir):
         )
         if is_interactive and critic_verdict == "unavailable":
             actions.append("")
+            critic_source = (
+                "the settled record as-is"
+                if state.get("findings_read_status") == "ok"
+                else "the available finalized sources as directed above"
+            )
             actions.append(
                 "⚠️ Critic verdict unavailable — author the report from "
-                "the settled record as-is."
+                f"{critic_source}."
             )
         actions.append("")
         actions.append(
@@ -2163,10 +2204,17 @@ def _step_11_present_results(mode, state, context, config, output_dir):
     actions.append(_derived_markdown_status_line(
         state, od, key="reviewer_markdown", label="Reviewer Markdown",
     ))
-    actions.append(_derived_markdown_status_line(
-        state, od, key="findings_markdown", label="Findings Markdown",
-        suffix="review-findings.json",
-    ))
+    findings_read_status = state.get("findings_read_status")
+    if findings_read_status in ("ok", "absent"):
+        actions.append(_derived_markdown_status_line(
+            state, od, key="findings_markdown", label="Findings Markdown",
+            suffix="review-findings.json",
+        ))
+    else:
+        actions.append(
+            "⚠️ Findings Markdown: not materialized because the canonical "
+            f"ledger status is `{findings_read_status or 'unavailable'}`."
+        )
 
     # The first pass reports prepared state without implying publication;
     # the second reports the terminal projection that now exists.
