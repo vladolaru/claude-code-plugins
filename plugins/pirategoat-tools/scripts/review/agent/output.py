@@ -347,16 +347,22 @@ def render_markdown(data: Dict) -> str:
     caller's problem); later schema additions are read with .get() and
     render only when present.
 
+    The title names the reviewer that produced the document. The findings
+    ledger has no reviewer — it is a synthesis of many — so it is titled
+    "Review Findings"; a title is never invented for a document that does
+    not claim one.
+
     Title plus ``render_review_body()``, which is everything below it. The
     split exists because `review-record.md` — the pipeline's machine
     projection of the reconciliation ledger — needs that body under its own
     header, and a second copy of these sections is how the record and
     `review-findings.md` would eventually disagree about a finding.
     """
-    return (
-        f"# {data['reviewer'].title()} Review - PR #{data['pr_id']}\n\n"
-        + render_review_body(data)
+    title = (
+        f"{data['reviewer'].title()} Review" if 'reviewer' in data
+        else "Review Findings"
     )
+    return f"# {title} - PR #{data['pr_id']}\n\n" + render_review_body(data)
 
 
 def _applied_critic_decision(record):
@@ -638,13 +644,7 @@ def render_review_body(data: Dict) -> str:
     checks = data.get('checks')
     if checks:
         heading = (
-            "Verified Checks"
-            if (
-                isinstance(recon, dict)
-                or data.get('reviewer') in {
-                    'reconciliator', 'review-reconciliator'
-                }
-            )
+            "Verified Checks" if isinstance(recon, dict)
             else "Checks Performed"
         )
         md.append(f"## {heading}\n\n")
@@ -958,24 +958,22 @@ class ReviewOutputBuilder:
         self.findings.pop(index)
         self._invocation_delta.append(f"removed finding {finding_id}")
 
-    def record_check(self, question: str, method: str, result: str) -> str:
-        """Record one reviewer-performed check with builder-owned metadata."""
-        return self._record_check(
-            question,
-            method,
-            result,
-            source_reviewers=[self.reviewer],
-        )
-
-    def _record_check(
+    def record_check(
         self,
         question: str,
         method: str,
         result: str,
         *,
-        source_reviewers: List[str],
+        source_reviewers: Optional[List[str]] = None,
     ) -> str:
-        """Internal synthesis path for structurally merged check sources."""
+        """Record one check; ``source_reviewers`` defaults to this reviewer.
+
+        One entry point for both producers: a reviewer recording its own
+        verification work, and the reconciliator recording a check merged
+        from several reviewers' — which names them all.
+        """
+        if source_reviewers is None:
+            source_reviewers = [self.reviewer]
         values = [
             _coerce_text(value).strip()
             for value in (question, method, result)

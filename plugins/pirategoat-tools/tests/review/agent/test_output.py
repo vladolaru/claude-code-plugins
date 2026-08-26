@@ -581,6 +581,21 @@ class TestRecordCheck:
             "source_reviewers": ["a11y"],
         }]
 
+    def test_record_check_is_public_with_source_reviewers(self):
+        """One public entry point: the reviewer path defaults its own name,
+        the synthesis path names the reviewers a merged check came from."""
+        builder = ReviewOutputBuilder(pr_id="1", reviewer="security")
+        builder.record_check("q", "m", "r")
+        builder.record_check("q2", "m", "r", source_reviewers=["a", "b", "a"])
+        assert builder.checks[0]["source_reviewers"] == ["security"]
+        assert builder.checks[1]["source_reviewers"] == ["a", "b"]
+        assert not hasattr(builder, "_record_check")
+
+    def test_empty_source_reviewers_raises(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="a11y")
+        with pytest.raises(ValueError, match="source_reviewers"):
+            b.record_check("q", "m", "r", source_reviewers=[])
+
     def test_no_checks_serializes_empty_array(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="a11y")
         assert b.to_dict()["checks"] == []
