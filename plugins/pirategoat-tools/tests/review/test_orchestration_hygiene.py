@@ -26,7 +26,6 @@ from helpers.review_fixtures import canonical_findings_ledger
 
 from review import critic_adjustments
 from review import orchestration as orchestration_mod
-from review.atomic_io import atomic_write_json
 from review.critic_adjustments import write_findings
 from review.orchestration import (
     PROBE_MARKER,

@@ -175,7 +175,8 @@ FINDINGS_READ_INVALID = "invalid"
 
 # What `read_findings_file()` hands back: the state above, the parsed object
 # (only on FINDINGS_READ_OK), and the exception that produced a failure state
-# (None for OK, and for the non-object shape fact, which raises nothing).
+# (None only for OK). Carrying the exception is what lets a caller report the
+# defect — a stale verdict, a malformed record — and not just "unreadable".
 FindingsRead = collections.namedtuple(
     "FindingsRead", ("status", "findings", "error")
 )
@@ -985,7 +986,8 @@ def read_findings_file(path):
     Returns a `FindingsRead`. Only the absent/unusable split is preserved,
     because that is the only distinction a caller acts on; every way of
     being unusable means the same thing to all of them — nothing may read
-    this ledger. The originating error travels along for the diagnostic.
+    this ledger. The originating error travels along so a caller can name
+    the defect rather than only the state.
     """
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -996,13 +998,24 @@ def read_findings_file(path):
         OSError, UnicodeDecodeError, json.JSONDecodeError, RecursionError
     ) as err:
         return FindingsRead(FINDINGS_READ_INVALID, None, err)
-    if not isinstance(findings, dict):
-        return FindingsRead(FINDINGS_READ_INVALID, None, None)
     try:
         validate_findings_document(findings)
     except (ValueError, RecursionError) as err:
         return FindingsRead(FINDINGS_READ_INVALID, None, err)
     return FindingsRead(FINDINGS_READ_OK, findings, None)
+
+
+def _unreadable_ledger(read):
+    """Name the defect that made the ledger unusable, not just the state.
+
+    Every non-OK read carries the exception that produced it, so the caller
+    reports what is actually wrong with the file — the alternative, a bare
+    status, sent a reader looking for a defect the module already knew.
+    """
+    return (
+        f"{FINDINGS_FILENAME} is not a readable ledger "
+        f"({read.status}): {read.error}"
+    )
 
 
 def write_findings(output_dir, findings):
@@ -1348,11 +1361,6 @@ def _apply_proposal(proposal, decisions, revised_assessment, ledger):
             fields = dict(entry.get("fields") or {})
             meta = ledger["meta"]
             finding_id = f"f{meta['next_finding_number']}"
-            if finding_id in indexes[TARGET_FINDING]:
-                raise ValueError(
-                    f"{FINDINGS_FILENAME}: meta.next_finding_number would "
-                    f"reuse {finding_id!r}"
-                )
             new_finding = {
                 "id": finding_id,
                 "category": fields.get("category", "general"),
@@ -1443,9 +1451,7 @@ def adjudicate(output_dir, request):
             raise AdjustmentValidationError(problems)
         read = read_findings_file(os.path.join(output_dir, FINDINGS_FILENAME))
         if read.status != FINDINGS_READ_OK:
-            raise ValueError(
-                f"{FINDINGS_FILENAME} is not a readable ledger ({read.status})"
-            )
+            raise ValueError(_unreadable_ledger(read))
         ledger = read.findings
         if known_ids & _recorded_ids(ledger):
             raise ValueError("critic proposal is already adjudicated")
@@ -1478,9 +1484,7 @@ def adjudication_state(output_dir):
         return "empty"
     read = read_findings_file(os.path.join(output_dir, FINDINGS_FILENAME))
     if read.status != FINDINGS_READ_OK:
-        raise ValueError(
-            f"{FINDINGS_FILENAME} is not a readable ledger ({read.status})"
-        )
+        raise ValueError(_unreadable_ledger(read))
     return "adjudicated" if ids <= _recorded_ids(read.findings) else "pending"
 
 

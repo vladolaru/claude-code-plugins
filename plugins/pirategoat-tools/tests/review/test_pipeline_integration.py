@@ -25,7 +25,6 @@ from review import (
 )
 from review.agent.coverage import derive_review_accounting
 from review.reconciliation_context import aggregate_review_accounting
-from review.atomic_io import atomic_write_json
 from review.critic_adjustments import write_findings
 from review.telemetry import ReviewTelemetry
 from review.verdict_rules import verdict_for_counts

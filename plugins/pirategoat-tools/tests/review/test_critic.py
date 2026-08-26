@@ -304,6 +304,7 @@ class TestCriticSave:
             "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "critical"}, "rationale": "replacement",
         }])
+
         def fail_adjustment_write(_output_dir, _verdict, _proposal):
             raise OSError("injected adjustment write failure")
 

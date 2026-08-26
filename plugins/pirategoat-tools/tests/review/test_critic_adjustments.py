@@ -1,15 +1,12 @@
 """Tests for critic_adjustments — the sole writer that carries decision-critic
 finding-level decisions into review-findings.json."""
 
-import builtins
 import json
-import os
 import re
 import subprocess
 import sys
 import threading
 import time
-import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -33,7 +30,6 @@ from review.critic_adjustments import (
     OUTCOME_VERIFIED,
     adjudicate,
     adjudication_state,
-    read_committed_proposal,
     read_critic_verdict,
     validate_findings_document,
     validate_proposal_input,
@@ -792,7 +788,9 @@ class TestBatchCoherence:
             "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "high"}, "rationale": "r",
         }])
-        with pytest.raises(ValueError, match="not a readable ledger"):
+        with pytest.raises(
+            ValueError, match="missing required fields: id"
+        ):
             _adjudicate(tmp_path, ids)
 
     def test_add_rejects_a_critic_supplied_id_in_both_spellings(
@@ -823,7 +821,7 @@ class TestBatchCoherence:
             "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "medium"}, "rationale": "r",
         }])
-        with pytest.raises(ValueError, match="not a readable ledger"):
+        with pytest.raises(ValueError, match="finding 1.severity is invalid"):
             _adjudicate(tmp_path, ids)
         assert _ledger(tmp_path)["findings"][0]["severity"] == "low"
 
@@ -839,7 +837,7 @@ class TestBatchCoherence:
             "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "medium"}, "rationale": "r",
         }])
-        with pytest.raises(ValueError, match="not a readable ledger"):
+        with pytest.raises(ValueError, match="must be a JSON object"):
             _adjudicate(tmp_path, ids)
         assert json.loads(
             (tmp_path / "review-findings.json").read_text()
@@ -2477,7 +2475,9 @@ class TestOutcomeRecordedInTheLedger:
             "action": "demote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "low"}, "rationale": "already landed",
         }])
-        with pytest.raises(ValueError, match="not a readable ledger"):
+        with pytest.raises(
+            ValueError, match="'applied_critic_adjustments' must be a list"
+        ):
             _adjudicate(tmp_path, ids)
 
 
@@ -2757,7 +2757,7 @@ class TestLedgerVerdictRecompute:
         }])
         before = (tmp_path / "review-findings.json").read_bytes()
 
-        with pytest.raises(ValueError, match="not a readable ledger"):
+        with pytest.raises(ValueError, match="verdict does not match"):
             _adjudicate(tmp_path, ids, verified=(0,))
 
         assert (tmp_path / "review-findings.json").read_bytes() == before
@@ -3646,7 +3646,9 @@ class TestAdjudicationRequest:
         findings_path = tmp_path / "review-findings.json"
         before = (adj_path.read_bytes(), findings_path.read_bytes())
 
-        with pytest.raises(ValueError, match="not a readable ledger"):
+        with pytest.raises(
+            ValueError, match="'applied_critic_adjustments' must be a list"
+        ):
             _adjudicate(tmp_path, ids, verified=(0,))
 
         assert (adj_path.read_bytes(), findings_path.read_bytes()) == before

@@ -1543,14 +1543,14 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
     #    replacement dispatch then becomes the only current attempt.
     #
     # 2. It closes the REVISE window on the RECONCILIATOR. The
-    #    orchestrator settles critic adjustments, whose internal applier
-    #    updates review-findings.json between step 10 and step 11, so on a
-    #    run whose step 9 never
-    #    observed, finalize alone would read the apply's mtime and fold
-    #    the critic's phase into the reconciliator's duration. Reading
-    #    here — before the critic is even dispatched, and on BOTH the
-    #    dispatch and skip branches — captures the ledger while its mtime
-    #    is still the reconciliator's own completion.
+    #    orchestrator's adjudication is the one write that carries critic
+    #    adjustments into review-findings.json, and it lands between step
+    #    10 and step 11, so on a run whose step 9 never observed, finalize
+    #    alone would read that write's mtime and fold the critic's phase
+    #    into the reconciliator's duration. Reading here — before the
+    #    critic is even dispatched, and on BOTH the dispatch and skip
+    #    branches — captures the ledger while its mtime is still the
+    #    reconciliator's own completion.
     synthesis_lifecycle.observe(output_dir)
 
     # Read reconciliation verdict for quick-mode critic skip decision,
