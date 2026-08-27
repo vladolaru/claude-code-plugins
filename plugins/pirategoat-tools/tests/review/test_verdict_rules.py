@@ -85,8 +85,8 @@ class TestDeriveReviewState:
 
 
 class TestOutputBuilderUsesTheSharedLadder:
-    """The extraction is a pure refactor: output.py must not keep a second
-    copy of the thresholds it can drift from."""
+    """The extraction is a pure refactor: no module may keep a second copy
+    of the thresholds it can drift from."""
 
     @pytest.mark.parametrize("severities,expected", [
         (["critical"], "block"),
@@ -105,13 +105,26 @@ class TestOutputBuilderUsesTheSharedLadder:
             )
         assert builder.to_dict()["verdict"] == expected
 
-    def test_output_module_delegates_rather_than_reimplementing(self):
-        """Guards the drift this extraction exists to prevent: a future edit
-        that re-inlines the ladder in output.py passes every behavioral test
-        above on the day it lands and silently diverges later."""
-        source = (SCRIPTS_DIR / "review" / "agent" / "output.py").read_text()
-        assert "derive_review_state" in source
-        assert "return 'block'" not in source and 'return "block"' not in source
+    def test_no_module_reimplements_the_ladder(self):
+        """Guards the drift this extraction exists to prevent: an edit that
+        re-inlines the thresholds anywhere passes every behavioural test
+        above on the day it lands and silently diverges later. Scanning one
+        file stopped being enough once the validators and the builder lived
+        in different ones."""
+        owner = SCRIPTS_DIR / "review" / "verdict_rules.py"
+        offenders = []
+        for path in sorted((SCRIPTS_DIR / "review").rglob("*.py")):
+            if path == owner:
+                continue
+            source = path.read_text(encoding="utf-8")
+            for verdict in ("block", "request_changes", "comment", "approve"):
+                if (
+                    f"return '{verdict}'" in source
+                    or f'return "{verdict}"' in source
+                ):
+                    offenders.append((path.name, verdict))
+
+        assert offenders == []
 
 
 class TestSeverityRank:
@@ -222,8 +235,9 @@ def _module_level_assignments(path):
 
 class TestOneVocabularyOwner:
     """Six modules used to spell a verdict or severity vocabulary of their
-    own. Behavioural tests pass on the day a seventh appears; this one does
-    not, which is the whole point of consolidating them."""
+    own. This is a tripwire on those six retired names: it does not notice
+    a seventh copy under a name nobody has used yet, but it does fail the
+    moment one of the consolidated spellings comes back."""
 
     def test_no_module_respells_a_verdict_or_severity_vocabulary(self):
         offenders = {}

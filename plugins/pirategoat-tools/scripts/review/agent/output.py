@@ -19,17 +19,14 @@ Usage:
     saved = builder.save_draft()
     finalize_review(output_dir, "security", saved["review_digest"])
 
-    Markdown is derived from the final JSON: render one dict with
-    render_markdown(data), or from the shell via the CLI —
-    `python3 output.py render <path>-review.json` prints one review's
-    Markdown, `python3 output.py materialize <output_dir>` writes
-    <reviewer>-review.md beside every *-review.json.
+    Markdown is derived from the final JSON by review_markdown.py; the
+    document contract every reader validates through lives in
+    review_document.py.
 """
 
 import hashlib
 import json
 import os
-import re
 import sys
 import uuid
 from pathlib import Path
@@ -63,6 +60,13 @@ try:
         review_paths,
     )
     from ..reviewer_names import derive_reviewer_name
+    from ..review_document import (
+        REVIEW_OUTPUT_SCHEMA,
+        VALID_CHANNELS,
+        validate_check_shape,
+        validate_finding_shape,
+        validate_review_document,
+    )
 except ImportError:
     from review.atomic_io import output_dir_lock
     from review.reviewer_lifecycle import (
@@ -72,12 +76,18 @@ except ImportError:
         review_paths,
     )
     from review.reviewer_names import derive_reviewer_name
+    from review.review_document import (
+        REVIEW_OUTPUT_SCHEMA,
+        VALID_CHANNELS,
+        validate_check_shape,
+        validate_finding_shape,
+        validate_review_document,
+    )
 
 try:
     from ..verdict_rules import (
         SEVERITY_RANK,
         VALID_SEVERITIES,
-        VERDICT_RANK,
         derive_review_state,
         summary_for,
     )
@@ -96,31 +106,12 @@ except ImportError:
     from review.verdict_rules import (
         SEVERITY_RANK,
         VALID_SEVERITIES,
-        VERDICT_RANK,
         derive_review_state,
         summary_for,
     )
 
 
-# The shape schemas/review-output.ts documents. Bump in the SAME commit as
-# any key added, removed, or re-typed in the serialized artifact, update the
-# TypeScript contract, and note the bump in the changelog. It replaced a
-# `version: "1.0.0"` string that survived six format changes unbumped —
-# an unmaintained compatibility claim is worse than none.
-#
-# One carve-out, matching the rule in the plugin's AGENTS.md: a shape change
-# made within the same UNRELEASED version that introduced the current number
-# updates the TypeScript contract in the same commit but does NOT bump. The
-# number states a compatibility guarantee only once released, so bumping
-# here would publish a shape no artifact ever had. This migration deliberately
-# establishes schema 2 as the one review-artifact contract shipped by 1.114.0.
-REVIEW_OUTPUT_SCHEMA = 2
-
-_VALID_SEVERITIES = VALID_SEVERITIES
-_VALID_CHANNELS = ('blocking', 'advisory')
-
-
-def _coerce_text(value: Any, single_line: bool = False) -> str:
+def coerce_text(value: Any, single_line: bool = False) -> str:
     """Coerce a free-form finding field to a string at write time.
 
     These fields are model-authored, so a value the schema expects to be a
@@ -142,7 +133,7 @@ def _coerce_text(value: Any, single_line: bool = False) -> str:
     elif value is None:
         result = ""
     elif isinstance(value, (list, tuple)):
-        result = "\n".join(_coerce_text(item) for item in value)
+        result = "\n".join(coerce_text(item) for item in value)
     else:
         result = str(value)
     if single_line:
@@ -216,19 +207,24 @@ def _actor_start_time(
 
 
 def _telemetry_for_output(output_dir):
-    """Load telemetry lazily so output.py remains a standalone CLI."""
-    import importlib.util
+    """Reach telemetry from inside the call, not from the module body.
 
-    spec = importlib.util.spec_from_file_location(
-        "review_telemetry",
-        os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "telemetry.py",
-        ),
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.ReviewTelemetry(output_dir)
+    `telemetry.py` imports `critic_adjustments`, which imports
+    `findings_ledger`, which imports this module for the builder — so a
+    module-level import here closes a real cycle. It also keeps the
+    import out of the reviewer's one-shot heredoc, which wants
+    ReviewOutputBuilder and nothing behind it.
+
+    Both spellings, like every import block above: the `finalize-review`
+    CLI runs this file as `__main__`, where a relative import has no
+    package to resolve against.
+    """
+    try:
+        from ..telemetry import ReviewTelemetry
+    except ImportError:
+        from review.telemetry import ReviewTelemetry
+
+    return ReviewTelemetry(output_dir)
 
 
 def _log_agent_review_draft_saved_telemetry(
@@ -328,451 +324,6 @@ def render_draft_index(review: dict) -> str:
     for path in reviewed_file_claims:
         lines.append(f"  reviewed-file claim: {path}")
     return "\n".join(lines)
-
-
-def render_markdown(data: Dict) -> str:
-    """Human-readable Markdown rendered from a review's canonical dict.
-
-    A pure function of the JSON representation — the dict save_draft()
-    writes and the *-review.json file holds (or a findings ledger) — so a
-    rendering can never disagree with the artifact it came from.
-
-    Keys present in schema 2 are required (missing means KeyError — the
-    caller's problem); later schema additions are read with .get() and
-    render only when present.
-
-    The title names the reviewer that produced the document. The findings
-    ledger has no reviewer — it is a synthesis of many — so it is titled
-    "Review Findings"; a title is never invented for a document that does
-    not claim one.
-
-    Title plus ``render_review_body()``, which is everything below it. The
-    split exists because `review-record.md` — the pipeline's machine
-    projection of the reconciliation ledger — needs that body under its own
-    header, and a second copy of these sections is how the record and
-    `review-findings.md` would eventually disagree about a finding.
-    """
-    title = (
-        f"{data['reviewer'].title()} Review" if 'reviewer' in data
-        else "Review Findings"
-    )
-    return f"# {title} - PR #{data['pr_id']}\n\n" + render_review_body(data)
-
-
-def _applied_critic_decision(record):
-    """Project one complete schema-2 applied-decision record."""
-    if not isinstance(record, dict) or set(record) != {
-        'adjustment_id', 'outcome'
-    }:
-        return None
-    adjustment_id = record.get('adjustment_id')
-    outcome = record.get('outcome')
-    if (
-        not isinstance(adjustment_id, str) or not adjustment_id
-        or outcome not in ('verified', 'refuted', 'not_checked')
-    ):
-        return None
-    return adjustment_id, outcome
-
-
-def _rejected_critic_decision(record):
-    """Project one complete schema-2 rejected-decision record."""
-    if not isinstance(record, dict) or set(record) != {
-        'adjustment_id', 'action', 'target', 'outcome', 'rejection_reason'
-    }:
-        return None
-    adjustment_id = record.get('adjustment_id')
-    outcome = record.get('outcome')
-    if (
-        not isinstance(adjustment_id, str) or not adjustment_id
-        or outcome != 'refuted'
-    ):
-        return None
-    return adjustment_id, 'refuted'
-
-
-def render_review_body(data: Dict) -> str:
-    """Everything a rendered review says beneath its title.
-
-    Banner, executive summary, assessment, critic decisions, findings,
-    recommendations, checks, critic removals, positives, observations —
-    the whole document minus the H1. Shared verbatim by
-    ``render_markdown()`` (which supplies the per-reviewer title) and by
-    the review-record assembler in ``orchestration.py`` (which supplies its
-    own). Same contract as ``render_markdown()``: a pure function of the
-    canonical dict, schema-2 keys required, later additions read with
-    ``.get()``.
-    """
-    md = []
-
-    # Degraded host context, first thing in the body: reviewers' claims
-    # were scoped by this banner's presence, so a reader must meet it
-    # before any finding. It sits below the caller's H1 rather than above
-    # it because every document built from this body is graded on starting
-    # with "# " (tests/helpers/graders.py) — one rule for both callers, and
-    # the first thing after the title is prominent enough.
-    #
-    # Every line carries the quote marker, not just the first: the banner
-    # message is hand-copied through an agent, and a reformat that
-    # introduces a newline would otherwise drop the remainder out of the
-    # blockquote entirely.
-    banner = data.get('host_context_banner')
-    if isinstance(banner, dict) and banner.get('degraded'):
-        message = _coerce_text(banner.get('message', ''))
-        lines = message.split("\n") or [""]
-        md.append(f"> **\u26a0 Host Context Banner:** {lines[0]}\n")
-        for line in lines[1:]:
-            md.append(f"> {line}\n")
-        md.append("\n")
-    md.append("## Executive Summary\n\n")
-    md.append(f"**Verdict:** {data['verdict'].upper()}\n")
-    md.append(
-        f"**Total Findings:** {data['summary']['total_findings']}\n\n"
-    )
-
-    suppressed_advisory_findings = data['summary'].get(
-        'suppressed_advisory_finding_count', 0
-    )
-    if suppressed_advisory_findings:
-        finding_word = (
-            "finding" if suppressed_advisory_findings == 1 else "findings"
-        )
-        md.append(
-            f"**Advisory suppression:** {suppressed_advisory_findings} "
-            f"{finding_word} "
-            "excluded from the verdict"
-        )
-        verdict_without_advisory = data['summary'].get(
-            'verdict_without_advisory'
-        )
-        if verdict_without_advisory:
-            md.append(
-                " (verdict without suppression: "
-                f"{verdict_without_advisory.upper()})"
-            )
-        md.append("\n\n")
-
-    if data['summary']['total_findings'] > 0:
-        counts = data['summary']['by_severity']
-        md.append(f"- Critical: {counts['critical']}\n")
-        md.append(f"- High: {counts['high']}\n")
-        md.append(f"- Medium: {counts['medium']}\n\n")
-
-    # Unclaimed review work derived from the reviewer's assignment.
-    if data.get('unclaimed_review_files'):
-        files = ", ".join(f"`{f}`" for f in data['unclaimed_review_files'])
-        md.append(f"**Not reviewed (budget):** {files}\n\n")
-
-    # Reconciliation block — the narrative's "Pipeline:" line, now
-    # rendered from the metrics the producer already records under
-    # meta.reconciliation. Absent for ordinary reviewers, whose meta
-    # carries no such block.
-    meta = data.get('meta')
-    recon = meta.get('reconciliation') if isinstance(meta, dict) else None
-    if isinstance(recon, dict):
-        md.append(
-            f"**Pipeline:** {recon.get('input_finding_count', 0)} findings "
-            f"from {recon.get('contributing_agent_count', 0)} reviewing agents "
-            f"\u2192 {recon.get('verified_concern_count', 0)} verified findings "
-            f"({recon.get('grouped_concern_count', 0)} concerns after "
-            f"grouping, {recon.get('false_positive_concern_count', 0)} false "
-            f"positives dropped, {recon.get('out_of_scope_concern_count', 0)} "
-            "out-of-scope dropped). Full metrics in "
-            "`review-findings.json` \u2192 `meta.reconciliation`.\n\n"
-        )
-        # Not-applicable agents are reported separately and never counted
-        # toward approval confidence: they abstained, they did not review.
-        na_agents = recon.get('not_applicable_agents')
-        if isinstance(na_agents, list) and na_agents:
-            word = "agent" if len(na_agents) == 1 else "agents"
-            named = ", ".join(
-                f"{a.get('name')} ({a.get('skip_reason')})"
-                if isinstance(a, dict) else str(a)
-                for a in na_agents
-            )
-            md.append(
-                f"**Coverage:** {len(na_agents)} {word} returned "
-                f"not-applicable (changes outside their domain): "
-                f"{named}\n\n"
-            )
-
-    # The producer's own reading of the change as a whole. Nothing else in
-    # this artifact carries it, so without this section a mechanical render
-    # would drop the one judgment a list of findings cannot express.
-    #
-    # It is also the one part of this document the decision critic cannot
-    # correct: its adjustment vocabulary addresses findings, and this is
-    # ledger-level prose. So an applying batch INVALIDATES it
-    # (critic_adjustments.py) rather than leaving a stale claim rendered
-    # above the list that contradicts it, and this renders the invalidation
-    # instead of silently dropping the section — an absent Assessment and a
-    # retracted one are different facts. Prose that survived a critic round
-    # untouched still renders as prose: that is the STAND case, and the
-    # marker below says exactly whose words they are.
-    invalidated = data.get('invalidated_assessments')
-    if data.get('assessment'):
-        md.append("## Assessment\n\n")
-        md.append(f"{data['assessment']}\n\n")
-        # Whose words these are depends on whether a batch already invalidated
-        # the reconciler's. After invalidation the standing text is the
-        # orchestrator's `revised_assessment`, carried in through the
-        # adjustments channel — attributing it to the reconciler would
-        # credit prose that was retracted a step earlier.
-        md.append(
-            "*Post-critic assessment, written after the critic "
-            "adjustments applied.*\n\n"
-            if invalidated else
-            "*Reconciler-authored assessment, not adjusted by the decision "
-            "critic.*\n\n"
-        )
-    elif invalidated:
-        # Keyed on the invalidation record itself, not on
-        # applied_critic_adjustments: a ledger that never carried a summary
-        # records no withdrawal, and rendering a retraction notice for it
-        # would claim an act that never happened.
-        #
-        # An explicit absence, not a pointer: the previous wording sent the
-        # reader to "the report for the current assessment", which on a bot
-        # run is a file nobody opens and on any run may carry no post-critic
-        # assessment at all. The retracted text is deliberately NOT shown
-        # here — it is the one thing this section must not present as
-        # current.
-        md.append("## Assessment\n\n")
-        md.append(
-            # "the standing assessment", not "the reconciler's": on a second
-            # reconciliation-plus-critic round the invalidated text may be the
-            # orchestrator's own `revised_assessment` from the first round,
-            # and naming an author this section cannot know would be a
-            # claim rather than a description.
-            "No current assessment: the standing assessment was invalidated "
-            "by critic revision and not replaced; see the findings.\n\n"
-        )
-
-    # What the orchestrator did with every critic decision, from the ledger's
-    # own applied and rejected records rather than from prose in a report. A
-    # batch nobody probed renders as N lines of `not_checked`; a rejected
-    # decision renders as `refuted`, including legacy rejection records from
-    # before that outcome was explicit on each record.
-    applied_adjustments = data.get('applied_critic_adjustments')
-    rejected_adjustments = data.get('rejected_critic_adjustments')
-    decisions = []
-    if isinstance(applied_adjustments, list):
-        decisions.extend(
-            decision for decision in (
-                _applied_critic_decision(record)
-                for record in applied_adjustments
-            ) if decision is not None
-        )
-    if isinstance(rejected_adjustments, list):
-        decisions.extend(
-            decision for decision in (
-                _rejected_critic_decision(record)
-                for record in rejected_adjustments
-            ) if decision is not None
-        )
-    if decisions:
-        md.append("## Critic Adjustment Decisions\n\n")
-        for adjustment_id, outcome in decisions:
-            md.append(f"- `{adjustment_id}` — {outcome}\n")
-        md.append("\n")
-
-    # Findings — every severity that counts toward total_findings must render,
-    # or the Markdown claims findings it doesn't show.
-    for sev in ['critical', 'high', 'medium', 'low', 'info']:
-        severity_findings = [
-            finding
-            for finding in data['findings']
-            if finding['severity'] == sev
-        ]
-
-        if severity_findings:
-            md.append(f"## {sev.title()} Findings\n\n")
-
-            for finding in severity_findings:
-                md.append(f"### {finding['title']}\n\n")
-                if finding['line']:
-                    location = (
-                        f"**File:** `{finding['file']}` line {finding['line']}"
-                    )
-                elif finding.get('scope') == 'file':
-                    location = f"**File:** `{finding['file']}` (file-scoped)"
-                else:
-                    location = f"**File:** `{finding['file']}`"
-                md.append(location + "\n\n")
-                md.append(f"{finding['description']}\n\n")
-                if finding.get('severity_floor'):
-                    md.append(
-                        f"**Severity floor:** {finding['severity_floor']}\n\n"
-                    )
-                md.append(f"**Fix:** {finding['recommendation']}\n\n")
-
-    # Recommendations — prioritized, and rendered because the producer
-    # recorded them. They were silently dropped from every derived
-    # Markdown before this: add_recommendation() wrote them to the JSON
-    # and nothing ever read them back out.
-    recommendations = data.get('recommendations')
-    if isinstance(recommendations, dict):
-        # The three known priorities render first and in their meaningful
-        # order; anything else the producer wrote renders after, labelled
-        # by its own key. Rendering only the known three would let an
-        # unexpected priority print a heading with its content dropped
-        # underneath — a document that shows a section it did not show.
-        known = ('immediate', 'important', 'suggestions')
-        ordered = list(known) + [
-            key for key in recommendations if key not in known
-        ]
-        groups = []
-        for priority in ordered:
-            entries = recommendations.get(priority) or []
-            if not entries:
-                continue
-            groups.append(f"**{priority.title()}:**\n\n")
-            groups.extend(f"- {entry}\n" for entry in entries)
-            groups.append("\n")
-        # The header is emitted only once something will actually appear
-        # beneath it.
-        if groups:
-            md.append("## Recommendations\n\n")
-            md.extend(groups)
-
-    checks = data.get('checks')
-    if checks:
-        heading = (
-            "Verified Checks" if isinstance(recon, dict)
-            else "Checks Performed"
-        )
-        md.append(f"## {heading}\n\n")
-        for check in checks:
-            md.append(f"- **{check['question']}**\n")
-            md.append(f"  - Method: {check['method']}\n")
-            md.append(f"  - Result: {check['result']}\n")
-            md.append(
-                "  - Source reviewers: "
-                + ", ".join(check['source_reviewers'])
-                + "\n"
-            )
-        md.append("\n")
-
-    removed_checks = data.get('checks_removed_by_critic')
-    if isinstance(removed_checks, list) and removed_checks:
-        md.append("## Checks Removed by the Decision Critic\n\n")
-        for check in removed_checks:
-            if not isinstance(check, dict):
-                continue
-            adjustment = check.get('critic_adjustment')
-            rationale = (
-                adjustment.get('rationale')
-                if isinstance(adjustment, dict) else None
-            )
-            md.append(
-                f"- **{check.get('question')}** — "
-                f"{rationale or 'no rationale recorded'}\n"
-            )
-        md.append("\n")
-
-    # What the critic took out. The ledger deliberately moves a removed
-    # finding into `findings_removed_by_critic` rather than deleting it, so the
-    # decision stays auditable; a reading copy that dropped the section
-    # would hide exactly the record the JSON went out of its way to keep.
-    removed = data.get('findings_removed_by_critic')
-    if isinstance(removed, list) and removed:
-        md.append("## Removed by the Decision Critic\n\n")
-        for entry in removed:
-            if not isinstance(entry, dict):
-                continue
-            adjustment = entry.get('critic_adjustment')
-            rationale = (
-                adjustment.get('rationale')
-                if isinstance(adjustment, dict) else None
-            )
-            location = f"`{entry.get('file')}`"
-            if entry.get('line'):
-                location += f" line {entry['line']}"
-            md.append(
-                f"- **{entry.get('title')}** ({entry.get('severity')}) — "
-                f"{location} — "
-                f"{rationale or 'no rationale recorded'}\n"
-            )
-        md.append("\n")
-
-    # Positive
-    if data['positive_observations']:
-        md.append("## Positive Observations\n\n")
-        for obs in data['positive_observations']:
-            md.append(f"- {obs}\n")
-
-    # Observations
-    if data.get('observations'):
-        md.append("\n## Observations\n\n")
-        for obs in data['observations']:
-            md.append(f"- **`{obs['file']}`** — {obs['note']}\n")
-
-    return ''.join(md)
-
-
-_RECONCILIATION_LEDGER_NAME = "review-findings.json"
-
-
-def _load_renderable_review_artifact(path):
-    """Classify and load one supported artifact by its actual filename."""
-    name = os.path.basename(path)
-    if name == _RECONCILIATION_LEDGER_NAME:
-        # Imported only at the ledger boundary: critic_adjustments owns the
-        # exact post-critic schema, but imports this module for the shared
-        # review builder/renderers. A top-level import would make that
-        # ownership relationship cyclic.
-        try:
-            from .. import critic_adjustments
-        except ImportError:
-            from review import critic_adjustments
-        read = critic_adjustments.read_findings_file(path)
-        if read.status != critic_adjustments.FINDINGS_READ_OK:
-            raise ValueError(
-                "reconciliation findings ledger unreadable "
-                f"({read.status})"
-            )
-        return read.findings
-    if name.endswith("-review.json"):
-        reviewer = name[: -len("-review.json")]
-        return load_review_document(path, reviewer)
-    raise ValueError(f"unsupported review artifact: {name}")
-
-
-def materialize_markdown(
-    output_dir: str, *, suffix: str = "-review.json"
-) -> List[str]:
-    """Render <name>.md beside every <name>.json matching `suffix`.
-
-    Derived artifacts for humans browsing the output directory: idempotent,
-    regenerated from the settled canonical JSON, read by no pipeline
-    consumer for control flow (readiness, reconciliation, and the bot all
-    key on the JSON). Malformed JSONs are skipped with a note on stderr —
-    grading and reconciliation report those failures on their own channels.
-
-    `suffix` selects filenames only; the matched filename independently
-    chooses its validation boundary. Every `<reviewer>-review.json` uses
-    the canonical final-review loader, including when a caller supplies an
-    exact filename as the suffix. Only exact `review-findings.json` uses
-    the canonical reconciliation-ledger reader and validator. A second
-    copy of this loop is how the two would eventually disagree about what
-    a rendering means.
-    """
-    written: List[str] = []
-    for name in sorted(os.listdir(output_dir)):
-        if not name.endswith(suffix):
-            continue
-        json_path = os.path.join(output_dir, name)
-        try:
-            data = _load_renderable_review_artifact(json_path)
-            md_text = render_markdown(data)
-        except (OSError, ValueError, KeyError, TypeError, AttributeError) as err:
-            print(f"skipped {name}: {err}", file=sys.stderr)
-            continue
-        md_path = json_path[: -len(".json")] + ".md"
-        with open(md_path, "w", encoding="utf-8") as handle:
-            handle.write(md_text)
-        written.append(md_path)
-    return written
 
 
 class ReviewOutputBuilder:
@@ -920,7 +471,7 @@ class ReviewOutputBuilder:
             candidate["severity_floor"] = candidate["severity_floor"].lower()
         for field in ("title", "description", "recommendation"):
             if field in fields:
-                candidate[field] = _coerce_text(
+                candidate[field] = coerce_text(
                     fields[field], single_line=field == "title"
                 )
         if candidate.get("line") is None:
@@ -942,7 +493,7 @@ class ReviewOutputBuilder:
                 f"channel {candidate_channel!r} is not among this reviewer's "
                 f"channels {list(reviewed_files.channels)}"
             )
-        _validate_finding_shape(candidate, index)
+        validate_finding_shape(candidate, index)
         self.findings[index] = candidate
         self._invocation_delta.append(f"updated finding {finding_id}")
 
@@ -969,7 +520,7 @@ class ReviewOutputBuilder:
         if source_reviewers is None:
             source_reviewers = [self.reviewer]
         values = [
-            _coerce_text(value).strip()
+            coerce_text(value).strip()
             for value in (question, method, result)
         ]
         if not all(values):
@@ -1018,10 +569,10 @@ class ReviewOutputBuilder:
         index = self._entry_index(self.checks, check_id, "check")
         candidate = dict(self.checks[index])
         candidate.update(
-            (field, _coerce_text(value).strip())
+            (field, coerce_text(value).strip())
             for field, value in fields.items()
         )
-        _validate_check_shape(candidate, index)
+        validate_check_shape(candidate, index)
         self.checks[index] = candidate
         self._invocation_delta.append(f"updated check {check_id}")
 
@@ -1063,10 +614,10 @@ class ReviewOutputBuilder:
         """
         # Validate severity and enforce an optional minimum.
         severity_value = severity.lower()
-        if severity_value not in _VALID_SEVERITIES:
+        if severity_value not in VALID_SEVERITIES:
             raise ValueError(
                 f"Invalid severity: {severity}. "
-                f"Must be one of {list(_VALID_SEVERITIES)}"
+                f"Must be one of {list(VALID_SEVERITIES)}"
             )
 
         floor_value = None
@@ -1074,10 +625,10 @@ class ReviewOutputBuilder:
             if not isinstance(severity_floor, str):
                 raise ValueError("severity_floor must be a severity name")
             floor_value = severity_floor.lower()
-            if floor_value not in _VALID_SEVERITIES:
+            if floor_value not in VALID_SEVERITIES:
                 raise ValueError(
                     f"Invalid severity_floor: {severity_floor}. "
-                    f"Must be one of {list(_VALID_SEVERITIES)}"
+                    f"Must be one of {list(VALID_SEVERITIES)}"
                 )
             if SEVERITY_RANK[severity_value] < SEVERITY_RANK[floor_value]:
                 severity_value = floor_value
@@ -1096,10 +647,10 @@ class ReviewOutputBuilder:
                 )
 
         if channel is not None:
-            if not isinstance(channel, str) or channel not in _VALID_CHANNELS:
+            if not isinstance(channel, str) or channel not in VALID_CHANNELS:
                 raise ValueError(
                     f"Invalid channel: {channel!r}. "
-                    f"Must be one of {_VALID_CHANNELS}."
+                    f"Must be one of {VALID_CHANNELS}."
                 )
 
         effective_channel = channel or "blocking"
@@ -1148,11 +699,11 @@ class ReviewOutputBuilder:
             'id': finding_id,
             'category': category,
             'severity': severity_value,
-            'title': _coerce_text(title, single_line=True),
-            'description': _coerce_text(description),
+            'title': coerce_text(title, single_line=True),
+            'description': coerce_text(description),
             'file': file,
             'line': line,
-            'recommendation': _coerce_text(recommendation),
+            'recommendation': coerce_text(recommendation),
             'confidence': confidence,
             **extra_fields
         }
@@ -1197,18 +748,18 @@ class ReviewOutputBuilder:
         absence rather than an empty string, so a consumer never has to
         distinguish "said nothing" from "said ''".
         """
-        coerced = _coerce_text(text).strip()
+        coerced = coerce_text(text).strip()
         self.assessment = coerced or None
         self._invocation_delta.append("updated assessment")
 
     def add_recommendation(self, priority: str, text: str):
         """Add recommendation (priority: immediate, important, suggestions)."""
         if priority in self.recommendations:
-            self.recommendations[priority].append(_coerce_text(text))
+            self.recommendations[priority].append(coerce_text(text))
 
     def add_positive_observation(self, observation: str):
         """Add positive observation."""
-        value = _coerce_text(observation)
+        value = coerce_text(observation)
         self.positive_observations.append(value)
         self._invocation_delta.append(
             "added positive observation "
@@ -1573,7 +1124,7 @@ class ReviewOutputBuilder:
         summary = review["summary"]
         severity_parts = [
             f"{severity} {summary['by_severity'][severity]}"
-            for severity in _VALID_SEVERITIES
+            for severity in VALID_SEVERITIES
             if summary["by_severity"][severity]
         ]
         findings = f"findings {summary['total_findings']}"
@@ -1628,32 +1179,6 @@ def _read_json_object(path, label):
     return value
 
 
-REVIEW_CONTENT_FIELDS = frozenset({
-    "pr_id",
-    "timestamp",
-    "plugin_version",
-    "schema",
-    "verdict",
-    "summary",
-    "findings",
-    "observations",
-    "recommendations",
-    "positive_observations",
-    "checks",
-    "assessment",
-    "meta",
-})
-REVIEWER_FIELDS = frozenset({
-    "reviewer",
-    "review_claimable_files",
-    "reviewed_file_claims",
-    "unclaimed_review_files",
-    "inline_diff_file_count",
-    "reviewed_file_count",
-    "in_scope_review_file_count",
-})
-
-
 def reviewed_files_fields(reviewed_files) -> Dict:
     """The six reviewer-envelope reviewed-file fields, from one derivation.
 
@@ -1668,474 +1193,6 @@ def reviewed_files_fields(reviewed_files) -> Dict:
         "reviewed_file_count": reviewed_files.reviewed_file_count,
         "in_scope_review_file_count": reviewed_files.in_scope_review_file_count,
     }
-
-
-def review_summary(document: Dict) -> Dict:
-    """Project one validated review document's own summary.
-
-    Every field here was computed by `derive_review_state()` when the
-    document was built and re-derived and compared field-for-field by
-    `validate_review_content()` when it was loaded, so `summary` is a
-    proven fact about `findings` rather than a claim about them. Three
-    consumers used to recount severities from the raw finding list with
-    `finding.get('severity', 'medium')` — a default for a case the
-    validator rejects — and they published only the severities that
-    happened to be non-zero, so a manifest could not tell "no critical
-    findings" from "critical was never counted". One projection, all five
-    severities, no arithmetic.
-
-    `verdict_without_advisory` is None unless advisory suppression
-    actually softened the gating verdict; that is the same condition the
-    document's own optional key encodes, carried rather than re-decided.
-    """
-    summary = document['summary']
-    return {
-        'verdict': document['verdict'],
-        'finding_count': summary['total_findings'],
-        'severities': dict(summary['by_severity']),
-        'suppressed_advisory_finding_count': summary[
-            'suppressed_advisory_finding_count'
-        ],
-        'verdict_without_advisory': summary.get('verdict_without_advisory'),
-    }
-
-
-_OPTIONAL_REVIEW_FIELDS = frozenset({"skip_reason"})
-REQUIRED_FINDING_FIELDS = frozenset({
-    "id",
-    "category",
-    "severity",
-    "title",
-    "description",
-    "file",
-    "line",
-    "recommendation",
-    "confidence",
-})
-REQUIRED_CHECK_FIELDS = frozenset({
-    "id", "question", "method", "result", "source_reviewers",
-})
-_REQUIRED_META_FIELDS = frozenset({
-    "review_duration_ms",
-    "confidence_score",
-    "next_finding_number",
-    "next_check_number",
-})
-_OPTIONAL_META_FIELDS = frozenset()
-_ALLOWED_META_FIELDS = _REQUIRED_META_FIELDS | _OPTIONAL_META_FIELDS
-
-
-def _is_confidence(value):
-    return type(value) in (int, float) and 0.0 <= value <= 1.0
-
-
-def _is_string_list(value):
-    return isinstance(value, list) and all(
-        isinstance(item, str) for item in value
-    )
-
-
-def _canonical_id_number(value, prefix, label):
-    if not isinstance(value, str) or not re.fullmatch(
-        rf"{prefix}[1-9][0-9]*", value
-    ):
-        raise ValueError(f"{label}.id must be a canonical {prefix}N id")
-    return int(value[1:])
-
-
-def validate_finding_content_field(field, value, label):
-    """Validate one critic-adjustable value against the review domain."""
-    if field in (
-        "category",
-        "title",
-        "description",
-        "file",
-        "recommendation",
-    ):
-        if not isinstance(value, str):
-            raise ValueError(f"{label}.{field} must be a string")
-        return
-    if field == "severity":
-        if value not in _VALID_SEVERITIES:
-            raise ValueError(f"{label}.severity is invalid")
-        return
-    if field == "confidence":
-        if not _is_confidence(value):
-            raise ValueError(f"{label}.confidence must be 0.0-1.0")
-        return
-    if field == "line" and value is not None and (
-        type(value) is not int or value <= 0
-    ):
-        raise ValueError(
-            f"{label}.line must be a positive (1-indexed) integer or null, "
-            f"got {value!r}"
-        )
-
-
-def _validate_finding_shape(finding, index):
-    """Validate fields emitted by ``ReviewOutputBuilder.add_finding``."""
-    if not isinstance(finding, dict):
-        raise ValueError(f"review finding {index} must be an object")
-    missing = sorted(REQUIRED_FINDING_FIELDS - set(finding))
-    if missing:
-        raise ValueError(
-            f"review finding {index} is missing required fields: "
-            + ", ".join(missing)
-        )
-    _canonical_id_number(finding["id"], "f", f"review finding {index}")
-    for field in (
-        "category",
-        "severity",
-        "title",
-        "description",
-        "file",
-        "line",
-        "recommendation",
-        "confidence",
-    ):
-        validate_finding_content_field(
-            field, finding[field], f"review finding {index}"
-        )
-    if "scope" in finding and finding["scope"] != "file":
-        raise ValueError(
-            f"review finding {index}.scope must be 'file'"
-        )
-    if (
-        "severity_floor" in finding
-        and finding["severity_floor"] not in _VALID_SEVERITIES
-    ):
-        raise ValueError(
-            f"review finding {index}.severity_floor is invalid"
-        )
-    if "channel" in finding and finding["channel"] not in _VALID_CHANNELS:
-        raise ValueError(
-            f"review finding {index}.channel is invalid"
-        )
-    if (
-        "behavior_evidence" in finding
-        and finding["behavior_evidence"] not in ("cited", "inferred")
-    ):
-        raise ValueError(
-            f"review finding {index}.behavior_evidence is invalid"
-        )
-    for field in ("code_snippet", "source_cited"):
-        if field in finding and not isinstance(finding[field], str):
-            raise ValueError(
-                f"review finding {index}.{field} must be a string"
-            )
-    if (
-        "references" in finding
-        and not _is_string_list(finding["references"])
-    ):
-        raise ValueError(
-            f"review finding {index}.references must be strings"
-        )
-
-
-def _validate_check_shape(check, index):
-    """Validate one canonical check without inferring materiality."""
-    required = REQUIRED_CHECK_FIELDS
-    allowed = required | {"critic_adjustment"}
-    if not isinstance(check, dict):
-        raise ValueError(f"review check {index} must be an object")
-    if not required <= set(check) or not set(check) <= allowed:
-        missing = sorted(required - set(check))
-        unexpected = sorted(set(check) - allowed)
-        details = []
-        if missing:
-            details.append("missing " + ", ".join(missing))
-        if unexpected:
-            details.append("unexpected " + ", ".join(unexpected))
-        raise ValueError(
-            f"review check {index} has invalid fields: " + "; ".join(details)
-        )
-    _canonical_id_number(check["id"], "c", f"review check {index}")
-    for field in ("question", "method", "result"):
-        if not isinstance(check[field], str) or not check[field].strip():
-            raise ValueError(
-                f"review check {index}.{field} must be a non-empty string"
-            )
-    sources = check["source_reviewers"]
-    if (
-        not isinstance(sources, list)
-        or not sources
-        or any(
-            not isinstance(source, str) or not source.strip()
-            for source in sources
-        )
-        or len(sources) != len(set(sources))
-    ):
-        raise ValueError(
-            f"review check {index}.source_reviewers must be unique "
-            "non-empty strings"
-        )
-
-
-def validate_review_domain(findings, checks, assessment, meta):
-    """Validate the builder-owned finding/check/assessment domain model."""
-    if not isinstance(findings, list):
-        raise ValueError("review findings must be a list")
-    finding_numbers = []
-    for index, finding in enumerate(findings):
-        _validate_finding_shape(finding, index)
-        finding_numbers.append(int(finding["id"][1:]))
-    if len(finding_numbers) != len(set(finding_numbers)):
-        raise ValueError("review finding ids must be unique")
-
-    if not isinstance(checks, list):
-        raise ValueError("review checks must be a list")
-    check_numbers = []
-    for index, check in enumerate(checks):
-        _validate_check_shape(check, index)
-        check_numbers.append(int(check["id"][1:]))
-    if len(check_numbers) != len(set(check_numbers)):
-        raise ValueError("review check ids must be unique")
-
-    if assessment is not None and not isinstance(assessment, str):
-        raise ValueError("review assessment must be a string or null")
-    if not isinstance(meta, dict):
-        raise ValueError("review meta must be an object")
-    for field, numbers in (
-        ("next_finding_number", finding_numbers),
-        ("next_check_number", check_numbers),
-    ):
-        value = meta.get(field)
-        if type(value) is not int or value < 1:
-            raise ValueError(f"review meta.{field} must be a positive integer")
-        if numbers and value <= max(numbers):
-            raise ValueError(
-                f"review meta.{field} must be greater than every live id"
-            )
-
-
-def _validate_optional_review_fields(review):
-    observations = review.get("observations")
-    if observations is not None and (
-        not isinstance(observations, list)
-        or any(
-            not isinstance(item, dict)
-            or any(
-                not isinstance(item.get(field), str)
-                for field in ("file", "note", "category")
-            )
-            for item in observations
-        )
-    ):
-        raise ValueError("review observations are malformed")
-
-    recommendations = review.get("recommendations")
-    if recommendations is not None and (
-        not isinstance(recommendations, dict)
-        or set(recommendations) != {"immediate", "important", "suggestions"}
-        or any(
-            not _is_string_list(recommendations.get(priority))
-            for priority in ("immediate", "important", "suggestions")
-        )
-    ):
-        raise ValueError("review recommendations are malformed")
-
-    for field in ("positive_observations",):
-        value = review.get(field)
-        if value is not None and not _is_string_list(value):
-            raise ValueError(f"review {field} must be strings or null")
-
-
-def _validate_content_shape(document, *, schema):
-    """Validate the review content shape before verdict derivation."""
-    missing = sorted(REVIEW_CONTENT_FIELDS - set(document))
-    if missing:
-        raise ValueError(
-            "review is missing content fields: " + ", ".join(missing)
-        )
-    unexpected = sorted(
-        set(document) - REVIEW_CONTENT_FIELDS - _OPTIONAL_REVIEW_FIELDS
-    )
-    if unexpected:
-        raise ValueError(
-            "review has unexpected fields: " + ", ".join(unexpected)
-        )
-    if type(document["schema"]) is not int or document["schema"] != schema:
-        raise ValueError("review schema does not match the live contract")
-    if not isinstance(document["pr_id"], str):
-        raise ValueError("review pr_id must be a string")
-    if not isinstance(document["timestamp"], str):
-        raise ValueError("review timestamp must be an ISO string")
-    try:
-        datetime.fromisoformat(document["timestamp"])
-    except ValueError as exc:
-        raise ValueError("review timestamp must be an ISO string") from exc
-    if document["plugin_version"] is not None and not isinstance(
-        document["plugin_version"], str
-    ):
-        raise ValueError("review plugin_version must be a string or null")
-
-    meta = document["meta"]
-    if not isinstance(meta, dict):
-        raise ValueError("review meta must be an object")
-    missing_meta = sorted(_REQUIRED_META_FIELDS - set(meta))
-    if missing_meta:
-        raise ValueError(
-            "review meta is missing required fields: "
-            + ", ".join(missing_meta)
-        )
-    unexpected_meta = sorted(set(meta) - _ALLOWED_META_FIELDS)
-    if unexpected_meta:
-        raise ValueError(
-            "review meta has unexpected fields: "
-            + ", ".join(unexpected_meta)
-        )
-    duration = meta["review_duration_ms"]
-    if duration is not None and (type(duration) is not int or duration < 0):
-        raise ValueError(
-            "review meta.review_duration_ms must be non-negative or null"
-        )
-    if not _is_confidence(meta["confidence_score"]):
-        raise ValueError(
-            "review meta.confidence_score must be 0.0-1.0"
-        )
-    validate_review_domain(
-        document["findings"],
-        document["checks"],
-        document["assessment"],
-        meta,
-    )
-    _validate_optional_review_fields(document)
-
-
-def validate_review_content(document, *, schema):
-    """Validate the review content shared by reviewer documents and the ledger."""
-    if not isinstance(document, dict):
-        raise ValueError("malformed review: expected an object")
-    _validate_content_shape(document, schema=schema)
-
-    findings = document["findings"]
-    summary = document["summary"]
-    if not isinstance(summary, dict):
-        raise ValueError("review summary is malformed")
-    try:
-        derived = summary_for(findings)
-    except ValueError as exc:
-        raise ValueError(f"review findings are malformed: {exc}") from exc
-    expected_verdict = derived["verdict"]
-    if document.get("verdict") == "not_applicable":
-        skip_reason = document.get("skip_reason")
-        if (
-            findings
-            or not isinstance(skip_reason, str)
-            or not skip_reason.strip()
-        ):
-            raise ValueError("review not_applicable verdict is malformed")
-        expected_verdict = "not_applicable"
-    elif "skip_reason" in document:
-        raise ValueError(
-            "review skip_reason requires a not_applicable verdict"
-        )
-    if document.get("verdict") != expected_verdict:
-        raise ValueError("review verdict does not match its findings")
-    expected_summary = derived["summary"]
-    severity_counts = summary.get("by_severity")
-    if (
-        type(summary.get("total_findings")) is not int
-        or not isinstance(severity_counts, dict)
-        or set(severity_counts) != set(_VALID_SEVERITIES)
-        or any(
-            type(severity_counts.get(severity)) is not int
-            or severity_counts[severity] < 0
-            for severity in _VALID_SEVERITIES
-        )
-        or type(summary.get("suppressed_advisory_finding_count")) is not int
-        or summary["suppressed_advisory_finding_count"] < 0
-        or (
-            "verdict_without_advisory" in summary
-            and summary["verdict_without_advisory"] not in VERDICT_RANK
-        )
-        or summary != expected_summary
-    ):
-        raise ValueError("review summary does not match its findings")
-    return document
-
-
-def _validate_reviewer_envelope(review, reviewer):
-    """Validate the reviewer envelope as a self-checking file partition."""
-    missing = sorted(REVIEWER_FIELDS - set(review))
-    if missing:
-        raise ValueError(
-            "review is missing reviewed-file fields: " + ", ".join(missing)
-        )
-    if not isinstance(review["reviewer"], str) or review["reviewer"] != reviewer:
-        raise ValueError("review reviewer does not match finalization request")
-    for field in (
-        "review_claimable_files",
-        "reviewed_file_claims",
-        "unclaimed_review_files",
-    ):
-        if not _is_string_list(review[field]):
-            raise ValueError(f"review {field} must be a list of strings")
-    for field in (
-        "inline_diff_file_count",
-        "reviewed_file_count",
-        "in_scope_review_file_count",
-    ):
-        if type(review[field]) is not int or review[field] < 0:
-            raise ValueError(
-                f"review {field} must be a non-negative integer"
-            )
-    claimable = review["review_claimable_files"]
-    claims = review["reviewed_file_claims"]
-    claimed = set(claims)
-    if len(claimable) != len(set(claimable)) or len(claimed) != len(claims):
-        raise ValueError("reviewed-file lists must not repeat paths")
-    if not claimed <= set(claimable):
-        raise ValueError(
-            "reviewed-file claim names a file that is not review-claimable"
-        )
-    if claims != [path for path in claimable if path in claimed]:
-        raise ValueError("reviewed-file claims are not in claimable order")
-    if review["unclaimed_review_files"] != [
-        path for path in claimable if path not in claimed
-    ]:
-        raise ValueError(
-            "reviewed-file unclaimed files are not the complement of the claims"
-        )
-    if review["reviewed_file_count"] != (
-        review["inline_diff_file_count"] + len(claimed)
-    ):
-        raise ValueError(
-            "reviewed-file count does not equal inline plus claims"
-        )
-    if review["in_scope_review_file_count"] != (
-        review["inline_diff_file_count"] + len(claimable)
-    ):
-        raise ValueError(
-            "reviewed-file in-scope count does not equal inline plus claimable"
-        )
-
-
-def validate_review_document(review, reviewer):
-    """Validate one complete reviewer document: content plus envelope.
-
-    This is the shared trust boundary for draft rehydration, finalization,
-    and finalized-review readers. Validation that depends on an adjacent
-    assignment artifact remains in ``_validate_review``.
-    """
-    if not isinstance(review, dict):
-        raise ValueError("malformed review: expected an object")
-    _validate_reviewer_envelope(review, reviewer)
-    content = {
-        key: value for key, value in review.items() if key not in REVIEWER_FIELDS
-    }
-    validate_review_content(content, schema=REVIEW_OUTPUT_SCHEMA)
-    return review
-
-
-def load_review_document(path, reviewer):
-    """Load and validate one canonical final-review document."""
-    try:
-        with open(path, "r", encoding="utf-8") as source:
-            review = json.load(source)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError("malformed final review JSON") from exc
-    return validate_review_document(review, reviewer)
 
 
 def _validate_review(output_dir, reviewer, paths, review_bytes):
@@ -2227,71 +1284,13 @@ def finalize_review(output_dir: str, reviewer: str, review_digest: str):
     }
 
 
-def repair_finalized_completion(output_dir: str, reviewer: str):
-    """Repair telemetry for one canonical review during intake close.
-
-    This is not an alternate finalization channel: it never promotes a
-    draft and does nothing after intake close unless final JSON
-    already exists. The caller holds the shared output-directory lock.
-    """
-    paths = review_paths(output_dir, reviewer)
-    telemetry = _telemetry_for_output(output_dir)
-    if telemetry.log_path is None:
-        load_review_document(paths.final, reviewer)
-        return None
-    try:
-        with open(paths.final, "rb") as final_handle:
-            final_bytes = final_handle.read()
-    except FileNotFoundError:
-        return None
-    except OSError as exc:
-        raise ValueError("finalized review is unreadable") from exc
-
-    review_digest = hashlib.sha256(final_bytes).hexdigest()
-    review, agent_name = _validate_review(
-        output_dir, reviewer, paths, final_bytes
-    )
-    if not _completion_was_logged(output_dir, agent_name, review_digest):
-        _log_agent_complete_telemetry(
-            output_dir,
-            agent_name,
-            review["verdict"],
-            review["summary"]["total_findings"],
-            review["summary"]["by_severity"],
-            review_digest,
-        )
-    return {
-        "final": paths.final,
-        "review_digest": review_digest,
-        "agent_name": agent_name,
-    }
-
 if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Render reviewer Markdown from canonical review JSON.",
+        description="Publish one canonical review from its saved draft.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
-    render_cmd = sub.add_parser(
-        "render", help="Print the Markdown for one *-review.json",
-    )
-    render_cmd.add_argument("json_path")
-    mat_cmd = sub.add_parser(
-        "materialize",
-        help="Write <name>.md beside every matching <name>.json in a directory",
-    )
-    mat_cmd.add_argument("output_dir")
-    mat_cmd.add_argument(
-        "--suffix",
-        default="-review.json",
-        help=(
-            "Which JSON family to render. Default renders every "
-            "<reviewer>-review.json; pass review-findings.json to render "
-            "the reconciliation ledger — the recovery command step 11 "
-            "prints when that render failed."
-        ),
-    )
     finalize_cmd = sub.add_parser(
         "finalize-review", help="Validate and publish one review draft"
     )
@@ -2299,25 +1298,16 @@ if __name__ == '__main__':
     finalize_cmd.add_argument("--reviewer", required=True)
     finalize_cmd.add_argument("--review-digest", required=True)
     cli_args = parser.parse_args()
-    if cli_args.command == "render":
-        cli_data = _load_renderable_review_artifact(cli_args.json_path)
-        print(render_markdown(cli_data))
-    elif cli_args.command == "materialize":
-        for written_path in materialize_markdown(
-            cli_args.output_dir, suffix=cli_args.suffix
-        ):
-            print(written_path)
-    else:
-        try:
-            finalized = finalize_review(
-                cli_args.output_dir,
-                cli_args.reviewer,
-                cli_args.review_digest,
-            )
-        except (OSError, ValueError) as exc:
-            print(f"REJECTED: {exc}", file=sys.stderr)
-            raise SystemExit(1)
-        print(
-            "REVIEW FINALIZED: "
-            f"{os.path.basename(finalized['final'])}"
+    try:
+        finalized = finalize_review(
+            cli_args.output_dir,
+            cli_args.reviewer,
+            cli_args.review_digest,
         )
+    except (OSError, ValueError) as exc:
+        print(f"REJECTED: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    print(
+        "REVIEW FINALIZED: "
+        f"{os.path.basename(finalized['final'])}"
+    )

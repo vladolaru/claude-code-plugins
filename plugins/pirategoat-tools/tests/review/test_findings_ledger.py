@@ -15,11 +15,11 @@ from review.findings_ledger import (  # noqa: E402
     FindingsLedgerBuilder,
     _no_lifecycle,
 )
-from review.agent.output import (  # noqa: E402
+from review.review_document import (  # noqa: E402
     REVIEW_CONTENT_FIELDS,
-    render_markdown,
     validate_review_content,
 )
+from review.review_markdown import render_markdown  # noqa: E402
 
 
 def _ledger(tmp_path):

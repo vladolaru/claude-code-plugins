@@ -48,7 +48,7 @@ try:
         finalize_review_command,
         review_paths,
     )
-    from .agent.output import load_review_document, review_summary
+    from .review_document import load_review_document, review_summary
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
@@ -63,7 +63,7 @@ except ImportError:
         finalize_review_command,
         review_paths,
     )
-    from review.agent.output import load_review_document, review_summary
+    from review.review_document import load_review_document, review_summary
 
 
 DEFAULT_TIMEOUT = 1200  # 20 minutes

@@ -27,7 +27,7 @@ TESTS_DIR = Path(__file__).resolve().parent.parent  # grading/ -> tests/
 PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 BOOTSTRAP_SCRIPT = SCRIPTS_DIR / "review" / "agent" / "bootstrap.py"
-OUTPUT_MODULE = SCRIPTS_DIR / "review" / "agent" / "output.py"
+RENDER_MODULE = SCRIPTS_DIR / "review" / "review_markdown.py"
 FIXTURES_DIR = TESTS_DIR / "fixtures"
 
 sys.path.insert(0, str(TESTS_DIR))
@@ -42,7 +42,7 @@ from helpers.graders import (
     merge_grades,
     aggregate_detection_trials,
 )
-from review.agent.output import load_review_document
+from review.review_document import load_review_document
 
 # Import agent config
 import importlib.util
@@ -491,7 +491,7 @@ SCENARIOS = {
 def _materialize_missing_markdown(output_dir: str) -> None:
     """Render Markdown missing beside finalized canonical review JSON."""
     spec = importlib.util.spec_from_file_location(
-        "_pirategoat_review_output", str(OUTPUT_MODULE),
+        "_pirategoat_review_markdown", str(RENDER_MODULE),
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

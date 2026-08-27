@@ -1770,10 +1770,8 @@ class TestStepElevenRerendersFindingsMarkdown:
         import review.orchestration as orchestration_module
 
         monkeypatch.setattr(
-            orchestration_module, "_load_output_module",
-            failing_findings_renderer(
-                orchestration_module._load_output_module, "boom"
-            ),
+            orchestration_module, "render_markdown",
+            failing_findings_renderer("boom"),
         )
 
         self._step_11(tmp_path)  # must not raise
@@ -1834,11 +1832,11 @@ class TestStepElevenRerendersFindingsMarkdown:
         (tmp_path / "review-report.md").unlink()
         _publish_verdict(tmp_path, "STAND")
         state = {}
-        original_loader = orchestration_mod._load_output_module
+        original_renderer = orchestration_mod.render_markdown
 
         monkeypatch.setattr(
-            orchestration_mod, "_load_output_module",
-            failing_findings_renderer(original_loader, "boom"),
+            orchestration_mod, "render_markdown",
+            failing_findings_renderer("boom"),
         )
         _orchestrate_step_11("pr", {}, state, {}, str(tmp_path))
 
@@ -1849,8 +1847,8 @@ class TestStepElevenRerendersFindingsMarkdown:
 
         if render_recovers:
             monkeypatch.setattr(
-                orchestration_mod, "_load_output_module",
-                original_loader,
+                orchestration_mod, "render_markdown",
+                original_renderer,
             )
         (tmp_path / "review-report.md").write_text("# report")
         _orchestrate_step_11("pr", {}, state, {}, str(tmp_path))
@@ -1867,11 +1865,8 @@ class TestStepElevenRerendersFindingsMarkdown:
         _publish_verdict(tmp_path, "STAND")
         state = {}
         monkeypatch.setattr(
-            orchestration_mod, "_load_output_module",
-            failing_findings_renderer(
-                orchestration_mod._load_output_module,
-                "boom one", "boom two",
-            ),
+            orchestration_mod, "render_markdown",
+            failing_findings_renderer("boom one", "boom two"),
         )
 
         _orchestrate_step_11("pr", {}, state, {}, str(tmp_path))
@@ -2213,7 +2208,7 @@ class TestCheckPassthrough:
     def test_rendered_markdown_carries_the_checks_section(self, tmp_path):
         """End of the chain: the renderer the report is told to quote."""
         _write_findings(tmp_path, [_finding("f1")], checks=self.CHECKS)
-        script = PLUGIN_ROOT / "scripts" / "review" / "agent" / "output.py"
+        script = PLUGIN_ROOT / "scripts" / "review" / "review_markdown.py"
         result = subprocess.run(
             [sys.executable, str(script), "render",
              str(tmp_path / "review-findings.json")],
@@ -2512,7 +2507,7 @@ class TestWithdrawnAssessmentRender:
     """
 
     def _render(self, **overrides):
-        from review.agent.output import render_markdown
+        from review.review_markdown import render_markdown
         data = {
             "pr_id": "42", "reviewer": "reconciliator",
             "timestamp": "2026-08-13T10:00:00", "plugin_version": None,

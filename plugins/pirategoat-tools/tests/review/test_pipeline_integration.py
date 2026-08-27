@@ -56,7 +56,14 @@ _output_spec = importlib.util.spec_from_file_location(
 )
 _output_mod = importlib.util.module_from_spec(_output_spec)
 _output_spec.loader.exec_module(_output_mod)
-_render_markdown = _output_mod.render_markdown
+
+_markdown_spec = importlib.util.spec_from_file_location(
+    "pipeline_integration_review_markdown",
+    str(_SCRIPTS_DIR / "review" / "review_markdown.py"),
+)
+_markdown_mod = importlib.util.module_from_spec(_markdown_spec)
+_markdown_spec.loader.exec_module(_markdown_mod)
+_render_markdown = _markdown_mod.render_markdown
 
 
 def _write_critic_snapshot(output_dir, adjustments):
@@ -224,7 +231,7 @@ class TestReviewerDraftFinalizationLifecycle:
             str(output_dir), ["code-reviewer"]
         )
         assert intake["discarded_drafts"] == []
-        written = _output_mod.materialize_markdown(str(output_dir))
+        written = _markdown_mod.materialize_markdown(str(output_dir))
         assert written == [str(output_dir / "code-review.md")]
 
         reconciliation = subprocess.run(
@@ -1787,7 +1794,7 @@ class TestStep8Orchestration:
         )
         monkeypatch.setitem(
             mod._orchestrate_step_8.__globals__,
-            "_materialize_markdown",
+            "materialize_markdown",
             lambda *_args, **_kwargs: [],
         )
 
@@ -1889,7 +1896,7 @@ class TestStep8Orchestration:
         )
         monkeypatch.setitem(
             mod._orchestrate_step_8.__globals__,
-            "_materialize_markdown",
+            "materialize_markdown",
             lambda *_args, **_kwargs: [],
         )
 
@@ -2119,7 +2126,7 @@ class TestStep8Orchestration:
         )
         monkeypatch.setitem(
             mod._orchestrate_step_8.__globals__,
-            "_materialize_markdown",
+            "materialize_markdown",
             lambda *_args, **_kwargs: events.append(("materialize", [])) or [],
         )
 
@@ -2167,7 +2174,7 @@ class TestStep8Orchestration:
         )
         monkeypatch.setitem(
             mod._orchestrate_step_8.__globals__,
-            "_materialize_markdown",
+            "materialize_markdown",
             lambda *_args, **_kwargs: pytest.fail(
                 "materialization ran before intake froze"
             ),
@@ -2197,7 +2204,7 @@ class TestStep8Orchestration:
         events = []
         monkeypatch.setitem(
             mod._orchestrate_step_8.__globals__,
-            "_materialize_markdown",
+            "materialize_markdown",
             lambda *_args, **_kwargs: events.append("materialize") or [],
         )
         monkeypatch.setitem(
@@ -2235,7 +2242,7 @@ class TestStep8Orchestration:
         )
         monkeypatch.setitem(
             mod._orchestrate_step_8.__globals__,
-            "_materialize_markdown",
+            "materialize_markdown",
             lambda *_args, **_kwargs: events.append("materialize") or [],
         )
         monkeypatch.setitem(
@@ -2274,18 +2281,18 @@ class TestStep8Orchestration:
             ),
         )
         original_materialize = mod._orchestrate_step_8.__globals__[
-            "_materialize_markdown"
+            "materialize_markdown"
         ]
 
-        def publish_then_materialize(output_dir, output_builder_path):
+        def publish_then_materialize(output_dir):
             (tmp_path / "code-review.json").write_text(
                 json.dumps(_review_json("code"))
             )
-            return original_materialize(output_dir, output_builder_path)
+            return original_materialize(output_dir)
 
         monkeypatch.setitem(
             mod._orchestrate_step_8.__globals__,
-            "_materialize_markdown",
+            "materialize_markdown",
             publish_then_materialize,
         )
 
@@ -2334,7 +2341,7 @@ class TestStep8Orchestration:
         unrelated_markdown.write_text("# Different reviewer\n")
         monkeypatch.setitem(
             mod._orchestrate_step_8.__globals__,
-            "_materialize_markdown",
+            "materialize_markdown",
             lambda *_args, **_kwargs: [str(unrelated_markdown)],
         )
 
@@ -2380,7 +2387,7 @@ class TestStep8Orchestration:
         )
         monkeypatch.setitem(
             mod._orchestrate_step_8.__globals__,
-            "_materialize_markdown",
+            "materialize_markdown",
             lambda *_args, **_kwargs: (_ for _ in ()).throw(
                 RuntimeError("renderer crashed")
             ),
@@ -2789,15 +2796,15 @@ class TestStep9FindingsMarkdown:
             json.dumps(self._findings())
         )
         monkey = mod._orchestrate_step_9.__globals__
-        original = monkey["_load_output_module"]
-        monkey["_load_output_module"] = failing_findings_renderer(
-            original, "renderer crashed"
+        original = monkey["render_markdown"]
+        monkey["render_markdown"] = failing_findings_renderer(
+            "renderer crashed"
         )
         state = {"resolved_params": {}}
         try:
             mod._orchestrate_step(9, "full", {}, state, {}, str(tmp_path))
         finally:
-            monkey["_load_output_module"] = original
+            monkey["render_markdown"] = original
 
         assert state["findings_markdown"] == {
             "ran": True, "written": 0, "expected": 1, "status": "failed",
@@ -3775,11 +3782,8 @@ class TestFindingsMarkdownLockstep:
         (tmp_path / "review-report.md").write_text("# report")
         monkeypatch.setitem(
             mod._orchestrate_step_11.__globals__,
-            "_load_output_module",
-            failing_findings_renderer(
-                mod._orchestrate_step_11.__globals__["_load_output_module"],
-                "boom",
-            ),
+            "render_markdown",
+            failing_findings_renderer("boom"),
         )
         state = {}
 

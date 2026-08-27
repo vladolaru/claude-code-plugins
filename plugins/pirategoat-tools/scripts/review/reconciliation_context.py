@@ -31,6 +31,7 @@ try:
     from .reviewer_names import derive_reviewer_name
     from .reviewer_lifecycle import review_paths
     from .verdict_rules import VALID_SEVERITIES
+    from .review_document import load_review_document
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
@@ -38,8 +39,7 @@ except ImportError:
     from review.reviewer_names import derive_reviewer_name
     from review.reviewer_lifecycle import review_paths
     from review.verdict_rules import VALID_SEVERITIES
-
-from review.agent.output import load_review_document
+    from review.review_document import load_review_document
 
 from git_paths import normalize_repo_paths
 

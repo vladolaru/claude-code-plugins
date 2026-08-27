@@ -32,7 +32,7 @@ class GradeResult:
 # local — no single production constant holds exactly those sets (the
 # per-reviewer verdict field also carries `not_applicable`, which the
 # ledger ladder in `verdict_rules.py` deliberately excludes).
-from review.agent.output import (
+from review.review_document import (
     REQUIRED_CHECK_FIELDS,
     REQUIRED_FINDING_FIELDS,
     REVIEW_CONTENT_FIELDS,
@@ -46,21 +46,26 @@ VALID_VERDICTS = {"approve", "block", "request_changes", "comment", "not_applica
 REQUIRED_JSON_TOP_FIELDS = REVIEW_CONTENT_FIELDS | REVIEWER_FIELDS
 
 
-def _validate_review_domain(findings, checks, assessment, meta):
-    """Reuse the production review-domain boundary from the eval harness.
+def _validate_ledger_ids(findings, checks, meta):
+    """Reuse the production finding/check id boundary from the eval harness.
 
     `scripts/` is already on `sys.path` by the time this module has
     finished loading — the module-scope field-set imports above require
     it — so there is nothing left for this function to guard.
     """
-    from review.agent.output import validate_review_domain
+    from review.review_document import validate_ledger_ids
 
-    validate_review_domain(findings, checks, assessment, meta)
+    validate_ledger_ids(
+        findings,
+        checks,
+        meta.get("next_finding_number"),
+        meta.get("next_check_number"),
+    )
 
 
 def _validate_review_document(review, reviewer):
     """Reuse the production finalized-review boundary from the harness."""
-    from review.agent.output import validate_review_document
+    from review.review_document import validate_review_document
 
     validate_review_document(review, reviewer)
 
@@ -306,7 +311,11 @@ def grade_review_json(path: str, expected_reviewer: str = None) -> GradeResult:
         ))
 
     try:
-        _validate_review_domain(findings, review_checks, assessment, meta)
+        # `meta` is graded as an object above; this boundary wants the two
+        # id counters inside it, and a non-object simply carries neither.
+        _validate_ledger_ids(
+            findings, review_checks, meta if isinstance(meta, dict) else {}
+        )
     except ValueError as error:
         checks.append((False, str(error)))
     else:

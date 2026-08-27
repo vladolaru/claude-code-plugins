@@ -1851,7 +1851,7 @@ def _derived_markdown_status_line(state, output_dir, *, key, label, suffix=None)
         detail = f"materialization {outcome.get('status', 'incomplete')} ({written}/{expected} files)"
 
     command = (
-        f"python3 {shlex.quote(str(SCRIPTS_DIR / 'agent' / 'output.py'))} "
+        f"python3 {shlex.quote(str(SCRIPTS_DIR / 'review_markdown.py'))} "
         f"materialize {shlex.quote(str(output_dir))}"
     )
     if suffix:

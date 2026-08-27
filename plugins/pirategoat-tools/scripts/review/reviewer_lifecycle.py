@@ -10,9 +10,11 @@ from datetime import datetime, timezone
 try:
     from .atomic_io import atomic_write_json, output_dir_lock
     from .reviewer_names import derive_reviewer_name
+    from .review_document import load_review_document
 except ImportError:
     from review.atomic_io import atomic_write_json, output_dir_lock
     from review.reviewer_names import derive_reviewer_name
+    from review.review_document import load_review_document
 
 
 REVIEW_INTAKE_NAME = "review-intake.json"
@@ -100,19 +102,10 @@ def _load_closed_intake(path: str):
     return intake
 
 
-def _repair_finalized_completion(output_dir: str, reviewer: str) -> None:
-    """Reach output.py lazily, after its lifecycle imports are settled."""
-    try:
-        from .agent.output import repair_finalized_completion
-    except ImportError:
-        from review.agent.output import repair_finalized_completion
-    repair_finalized_completion(output_dir, reviewer)
-
-
 def close_review_intake(output_dir: str, dispatched_agent_names):
     """Freeze reviewer inputs and discard only dispatched drafts.
 
-    The closed marker is written before completion repair and cleanup. If
+    The closed marker is written before classification and cleanup. If
     cleanup is interrupted, ordinary save/finalize remains rejected and a
     repeated close resumes from the recorded discard set. Invalid finals
     are terminal inputs rather than an interruption: the returned runtime
@@ -157,12 +150,15 @@ def close_review_intake(output_dir: str, dispatched_agent_names):
         }
         atomic_write_json(intake_path, intake)
 
-        # Canonical JSON is the only completion source at close. Repair is
-        # deliberately after the closed marker so an interrupted operation
-        # cannot reopen the ordinary finalization channel. Every final is
-        # opened and validated exactly here; the classification is returned
-        # so step 8 does not open and validate the same files again to
-        # learn what this loop already knows.
+        # Canonical JSON is the only completion source at close, and the
+        # only question left about it is whether it is a valid review.
+        # Reaching the builder to re-log telemetry made this the one place
+        # a frozen intake still wrote, and held the lifecycle -> builder
+        # cycle open to do it; `agent_complete` is logged by
+        # `finalize_review`, and status and manifest read the final file.
+        # Every final is opened and validated exactly here; the
+        # classification is returned so step 8 does not open and validate
+        # the same files again to learn what this loop already knows.
         classified_reviewers = set()
         completed = []
         invalid_final_reviews = []
@@ -173,7 +169,7 @@ def close_review_intake(output_dir: str, dispatched_agent_names):
             ):
                 classified_reviewers.add(reviewer)
                 try:
-                    _repair_finalized_completion(output_dir, reviewer)
+                    load_review_document(paths.final, reviewer)
                 except ValueError as error:
                     invalid_final_reviews.append({
                         "agent_name": agent_name,

@@ -99,33 +99,23 @@ def canonical_findings_ledger(severities=(), *, checks=(), reconciliation=None):
     return document
 
 
-def failing_findings_renderer(real_loader, *messages):
-    """A `_load_output_module` stand-in whose `render_markdown` raises.
+def failing_findings_renderer(*messages):
+    """A `render_markdown` stand-in that raises instead of rendering.
 
-    `_render_findings_markdown` renders the ledger with the output
-    module's `render_markdown`; `assemble_review_record` renders its body
-    with `render_review_body`. A test that wants only the findings render
-    to fail has to break exactly one of those, so this proxies the real
-    module and raises from that one function. Each message is used for one
-    call, and the last one repeats, so a caller can pin either a stable or
-    a varying diagnostic.
+    `_render_findings_markdown` renders the ledger with `render_markdown`;
+    `assemble_review_record` renders its body with `render_review_body`. A
+    test that wants only the findings render to fail replaces exactly the
+    first of those in `orchestration`. Each message is used for one call,
+    and the last one repeats, so a caller can pin either a stable or a
+    varying diagnostic.
     """
     remaining = list(messages) or ["boom"]
 
-    class _Proxy:
-        def __init__(self, module):
-            self._module = module
+    def _raise(*_args, **_kwargs):
+        message = remaining.pop(0) if len(remaining) > 1 else remaining[0]
+        raise RuntimeError(message)
 
-        def __getattr__(self, name):
-            return getattr(self._module, name)
-
-        def render_markdown(self, *_args, **_kwargs):
-            message = (
-                remaining.pop(0) if len(remaining) > 1 else remaining[0]
-            )
-            raise RuntimeError(message)
-
-    return lambda path: _Proxy(real_loader(path))
+    return _raise
 
 
 # The sentinel for "the key is not there at all". A schema gate has to

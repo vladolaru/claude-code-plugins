@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 try:
     from .agent.review_assignment import ReviewAssignmentError, derive_reviewed_files
-    from .agent.output import load_review_document
+    from .review_document import load_review_document
     from .reviewer_names import derive_reviewer_name
     from .reviewer_lifecycle import review_paths
     from .dependency_refresh import (
@@ -39,7 +39,7 @@ except ImportError:
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
     from review.agent.review_assignment import ReviewAssignmentError, derive_reviewed_files
-    from review.agent.output import load_review_document
+    from review.review_document import load_review_document
     from review.reviewer_names import derive_reviewer_name
     from review.reviewer_lifecycle import review_paths
     from review.dependency_refresh import (

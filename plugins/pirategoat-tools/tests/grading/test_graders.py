@@ -35,7 +35,8 @@ from helpers.graders import (
     aggregate_detection_trials,
 )
 
-from review.agent.output import ReviewOutputBuilder, finalize_review, render_markdown
+from review.agent.output import ReviewOutputBuilder, finalize_review
+from review.review_markdown import render_markdown
 
 
 @pytest.fixture

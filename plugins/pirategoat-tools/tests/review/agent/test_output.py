@@ -28,19 +28,24 @@ PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
+from review import review_document
 from review.agent import output as review_output
 from review.agent.output import (
-    REVIEW_CONTENT_FIELDS,
-    REVIEWER_FIELDS,
     ReviewOutputBuilder,
     reviewed_files_fields,
     finalize_review,
-    materialize_markdown,
     render_draft_index,
-    render_markdown,
+)
+from review.review_document import (
+    REVIEW_CONTENT_FIELDS,
+    REVIEWER_FIELDS,
     review_summary,
     validate_review_content,
     validate_review_document,
+)
+from review.review_markdown import (
+    materialize_markdown,
+    render_markdown,
 )
 from review import critic_adjustments
 from review.reviewer_lifecycle import ReviewPaths, review_paths
@@ -1189,15 +1194,19 @@ class TestMaterializeMarkdown:
             assert "unsupported review artifact" in capsys.readouterr().err
 
     def test_render_cli_prints_markdown(self):
-        output_py = Path(__file__).parents[3] / "scripts" / "review" / "agent" / "output.py"
-        assert output_py.is_file(), output_py  # layout guard: tests/review/agent -> plugin root
+        render_py = (
+            Path(__file__).parents[3] / "scripts" / "review"
+            / "review_markdown.py"
+        )
+        # layout guard: tests/review/agent -> plugin root
+        assert render_py.is_file(), render_py
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
             b.add_finding("high", "CLI Title", "f.py", "d", "r", line=1)
             _write_required_assignment(d, "security")
             _save_and_finalize(b, d)
             result = subprocess.run(
-                [sys.executable, str(output_py), "render",
+                [sys.executable, str(render_py), "render",
                  os.path.join(d, "security-review.json")],
                 capture_output=True, text=True,
             )
@@ -1206,8 +1215,11 @@ class TestMaterializeMarkdown:
             assert "## Executive Summary" in result.stdout
 
     def test_materialize_cli_prints_written_paths(self):
-        output_py = Path(__file__).parents[3] / "scripts" / "review" / "agent" / "output.py"
-        assert output_py.is_file(), output_py
+        render_py = (
+            Path(__file__).parents[3] / "scripts" / "review"
+            / "review_markdown.py"
+        )
+        assert render_py.is_file(), render_py
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
             _write_required_assignment(d, "security")
@@ -1215,7 +1227,7 @@ class TestMaterializeMarkdown:
             md_path = Path(d, "security-review.md")
             assert not md_path.exists()  # finalization publishes canonical JSON only
             result = subprocess.run(
-                [sys.executable, str(output_py), "materialize", d],
+                [sys.executable, str(render_py), "materialize", d],
                 capture_output=True, text=True,
             )
             assert result.returncode == 0, result.stderr
@@ -2621,7 +2633,7 @@ class TestTypeScriptContractLockstep:
         assert top_level_fields(reconciliation_body) == findings_ledger.RECONCILIATION_FIELDS
 
         meta_body = self._interface_body("ReviewMeta")
-        assert top_level_fields(meta_body) == review_output._REQUIRED_META_FIELDS
+        assert top_level_fields(meta_body) == review_document._REQUIRED_META_FIELDS
 
 
 # =============================================================================
@@ -2884,16 +2896,16 @@ class TestMaterializeFindingsMarkdown:
     def test_materialize_cli_accepts_the_suffix(self):
         """The on-demand recovery path step 11 prints has to be able to
         render the findings ledger, not only the per-reviewer family."""
-        output_py = (
-            Path(__file__).parents[3] / "scripts" / "review" / "agent"
-            / "output.py"
+        render_py = (
+            Path(__file__).parents[3] / "scripts" / "review"
+            / "review_markdown.py"
         )
         with tempfile.TemporaryDirectory() as d:
             Path(d, "review-findings.json").write_text(json.dumps(
                 canonical_findings_ledger(("high",))
             ))
             result = subprocess.run(
-                [sys.executable, str(output_py), "materialize", d,
+                [sys.executable, str(render_py), "materialize", d,
                  "--suffix", "review-findings.json"],
                 capture_output=True, text=True,
             )
@@ -2904,9 +2916,9 @@ class TestMaterializeFindingsMarkdown:
     def test_materialize_cli_skips_a_canonically_invalid_ledger(
         self, tmp_path
     ):
-        output_py = (
-            Path(__file__).parents[3] / "scripts" / "review" / "agent"
-            / "output.py"
+        render_py = (
+            Path(__file__).parents[3] / "scripts" / "review"
+            / "review_markdown.py"
         )
         data = canonical_findings_ledger(("high",))
         data["verdict"] = "APPROVE"
@@ -2915,7 +2927,7 @@ class TestMaterializeFindingsMarkdown:
 
         result = subprocess.run(
             [
-                sys.executable, str(output_py), "materialize", str(tmp_path),
+                sys.executable, str(render_py), "materialize", str(tmp_path),
                 "--suffix", "review-findings.json",
             ],
             capture_output=True,
@@ -2928,9 +2940,9 @@ class TestMaterializeFindingsMarkdown:
         assert not (tmp_path / "review-findings.md").exists()
 
     def test_materialize_cli_default_suffix_is_unchanged(self):
-        output_py = (
-            Path(__file__).parents[3] / "scripts" / "review" / "agent"
-            / "output.py"
+        render_py = (
+            Path(__file__).parents[3] / "scripts" / "review"
+            / "review_markdown.py"
         )
         with tempfile.TemporaryDirectory() as d:
             _write_required_assignment(d, "security")
@@ -2945,7 +2957,7 @@ class TestMaterializeFindingsMarkdown:
                 )
             )
             result = subprocess.run(
-                [sys.executable, str(output_py), "materialize", d],
+                [sys.executable, str(render_py), "materialize", d],
                 capture_output=True, text=True,
             )
             assert result.returncode == 0, result.stderr

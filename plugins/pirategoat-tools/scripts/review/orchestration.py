@@ -1,7 +1,6 @@
 """Side-effecting step orchestration for the review pipeline."""
 
 import hashlib
-import importlib.util
 import json
 import os
 import subprocess
@@ -40,6 +39,11 @@ try:
     from . import critic_adjustments
     from . import manifest_sections
     from . import synthesis_lifecycle
+    from .review_markdown import (
+        materialize_markdown,
+        render_markdown,
+        render_review_body,
+    )
     from .verdict_rules import publish_verdict
 except ImportError:
     _scripts_parent = str(Path(__file__).resolve().parent.parent)
@@ -75,6 +79,11 @@ except ImportError:
     from review import critic_adjustments
     from review import manifest_sections
     from review import synthesis_lifecycle
+    from review.review_markdown import (
+        materialize_markdown,
+        render_markdown,
+        render_review_body,
+    )
     from review.verdict_rules import publish_verdict
 
 from git_paths import decode_git_c_quoted_path
@@ -166,37 +175,6 @@ def _run_subprocess(cmd, cwd=None, timeout=60):
         return "", False
 
 
-def _load_output_module(output_builder_path: str):
-    """Load agent/output.py by exact adjacent path.
-
-    The same contract the telemetry and dispatch-status loaders use, so a
-    long-lived process can never render with a foreign checkout's
-    semantics. Every user of output.py's renderers goes through this one
-    loader: `_materialize_markdown` (the per-reviewer Markdown family),
-    `_render_findings_markdown` (the ledger's Markdown), and
-    `assemble_review_record` (the record's shared body).
-    """
-    spec = importlib.util.spec_from_file_location(
-        "_pirategoat_review_output", output_builder_path,
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def _materialize_markdown(output_dir: str, output_builder_path: str) -> list:
-    """Render `<reviewer>-review.md` beside every settled reviewer JSON.
-
-    One caller: the step-8 readiness gate. The findings ledger used to
-    come through here too, on a `suffix` argument, which meant the ledger
-    was re-opened and re-validated inside the renderer after the step had
-    already read it. Steps 9 and 11 now render from the object they read;
-    this loop is for the per-reviewer family alone.
-    """
-    module = _load_output_module(output_builder_path)
-    return module.materialize_markdown(output_dir)
-
-
 _FINDINGS_MD = "review-findings.md"
 
 
@@ -284,12 +262,9 @@ def _render_findings_markdown(output_dir: str, read) -> tuple:
         "ran": True, "written": 0, "expected": 1, "status": "complete",
     }
     try:
-        module = _load_output_module(
-            str(SCRIPTS_DIR / "agent" / "output.py")
-        )
         atomic_write_text(
             os.path.join(output_dir, _FINDINGS_MD),
-            module.render_markdown(read.findings),
+            render_markdown(read.findings),
         )
     except Exception as err:  # noqa: BLE001 — best-effort by design
         outcome["status"] = "failed"
@@ -417,8 +392,7 @@ def _render_record_body(findings: dict) -> str:
     A second copy of these sections is how the two documents would
     eventually disagree about a finding.
     """
-    module = _load_output_module(str(SCRIPTS_DIR / "agent" / "output.py"))
-    return module.render_review_body(_sanitized_ledger(findings))
+    return render_review_body(_sanitized_ledger(findings))
 
 
 def _render_run_notes(state: dict) -> str:
@@ -1282,9 +1256,7 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
     materialization_failed = False
     written_markdown = set()
     try:
-        written_paths = _materialize_markdown(
-            output_dir, str(SCRIPTS_DIR / "agent" / "output.py"),
-        )
+        written_paths = materialize_markdown(output_dir)
         written_markdown = {
             os.path.abspath(os.fspath(path)) for path in written_paths
         }

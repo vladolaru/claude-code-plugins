@@ -27,8 +27,8 @@ try:
         SKIPPED_STATUSES,
         validate_dispatch_plan_agents,
     )
-    from .agent.output import (
-        _VALID_SEVERITIES,
+    from .review_document import (
+        VALID_SEVERITIES,
         load_review_document,
         review_summary,
     )
@@ -46,8 +46,8 @@ except ImportError:
         SKIPPED_STATUSES,
         validate_dispatch_plan_agents,
     )
-    from review.agent.output import (
-        _VALID_SEVERITIES,
+    from review.review_document import (
+        VALID_SEVERITIES,
         load_review_document,
         review_summary,
     )
@@ -124,7 +124,7 @@ _AGENT_COMPLETE_MANIFEST_FIELDS = (
     "finding_count",
     "review_digest",
 )
-_SEVERITY_FIELDS = _VALID_SEVERITIES
+_SEVERITY_FIELDS = VALID_SEVERITIES
 
 
 def _advisory_fields(summary: Dict[str, Any]) -> Dict[str, Any]:

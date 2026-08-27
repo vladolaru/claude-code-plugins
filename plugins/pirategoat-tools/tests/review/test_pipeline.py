@@ -2645,7 +2645,7 @@ class TestStep11PresentResults:
         assert len(lines) == 1
         assert f"0/{expected}" in lines[0]
         assert (
-            f"python3 {SCRIPT_PATH.parent}/agent/output.py "
+            f"python3 {SCRIPT_PATH.parent}/review_markdown.py "
             f"materialize {tmp_path}"
         ) in lines[0]
 

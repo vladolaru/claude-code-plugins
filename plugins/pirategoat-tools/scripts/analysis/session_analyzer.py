@@ -51,7 +51,7 @@ from typing import Any
 _ANALYSIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(_ANALYSIS_DIR))
 sys.path.insert(0, _ANALYSIS_DIR)
-from review.agent.output import (  # noqa: E402
+from review.review_document import (  # noqa: E402
     load_review_document,
     validate_review_document,
 )

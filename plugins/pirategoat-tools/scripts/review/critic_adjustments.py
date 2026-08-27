@@ -31,10 +31,10 @@ from typing import Mapping
 
 try:
     from . import atomic_io
-    from .agent.output import (
+    from .review_document import (
         validate_finding_content_field,
+        validate_ledger_ids,
         validate_review_content,
-        validate_review_domain,
     )
     from .dispatch_status import AGENT_NAME_RE
     from .findings_ledger import (
@@ -49,10 +49,10 @@ except ImportError:
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
     from review import atomic_io
-    from review.agent.output import (
+    from review.review_document import (
         validate_finding_content_field,
+        validate_ledger_ids,
         validate_review_content,
-        validate_review_domain,
     )
     from review.dispatch_status import AGENT_NAME_RE
     from review.findings_ledger import (
@@ -912,11 +912,11 @@ def validate_findings_document(document):
     for index, check in enumerate(removed_checks):
         _validate_ledger_check(check, index, removed=True)
     try:
-        validate_review_domain(
+        validate_ledger_ids(
             live_findings + removed_findings,
             live_checks + removed_checks,
-            document["assessment"],
-            base["meta"],
+            base["meta"]["next_finding_number"],
+            base["meta"]["next_check_number"],
         )
     except ValueError as error:
         raise ValueError(f"{FINDINGS_FILENAME}: {error}") from error
