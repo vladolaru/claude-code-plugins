@@ -873,3 +873,43 @@ def test_save_rejects_a_host_context_banner_authored_by_the_agent(
     out = capsys.readouterr().out
     assert "pipeline-owned field: host_context_banner" in out
     assert not (tmp_path / "review-findings.json").exists()
+
+
+@pytest.mark.parametrize("schema", [2, 4, "3", None, True])
+def test_save_rejects_a_context_written_at_another_schema(
+    tmp_path, capsys, schema
+):
+    """The context reader accepts exactly the schema it was written against."""
+    path = _write_context(tmp_path, {
+        "security-review": {"verdict": "approve", "findings": [], "checks": []},
+    })
+    context = json.loads(path.read_text())
+    if schema is None:
+        del context["schema"]
+    else:
+        context["schema"] = schema
+    path.write_text(json.dumps(context))
+    staged = tmp_path / "staged.json"
+    staged.write_text(json.dumps(_valid_findings()))
+    assert run_save(_args(tmp_path, staged)) == 1
+    out = capsys.readouterr().out
+    assert "REJECTED:" in out and "schema" in out
+    assert not (tmp_path / "review-findings.json").exists()
+
+
+@pytest.mark.parametrize("entry", [
+    "not-an-object",
+    {"findings": []},
+    {"verdict": "approve"},
+    {"verdict": "approve", "findings": None},
+])
+def test_save_rejects_a_context_review_entry_of_the_wrong_shape(
+    tmp_path, capsys, entry
+):
+    """Rosters and counts are stamped from entries the context vouches for."""
+    _write_context(tmp_path, {"security-review": entry})
+    staged = tmp_path / "staged.json"
+    staged.write_text(json.dumps(_valid_findings()))
+    assert run_save(_args(tmp_path, staged)) == 1
+    assert "reviews_by_agent['security-review']" in capsys.readouterr().out
+    assert not (tmp_path / "review-findings.json").exists()

@@ -37,12 +37,14 @@ import sys
 try:
     from . import critic_adjustments
     from .findings_ledger import RECONCILIATION_PIPELINE_FIELDS
+    from .reconciliation_context import RECONCILIATION_CONTEXT_SCHEMA
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
     from review import critic_adjustments
     from review.findings_ledger import RECONCILIATION_PIPELINE_FIELDS
+    from review.reconciliation_context import RECONCILIATION_CONTEXT_SCHEMA
 
 
 # The pipeline's own briefing for this run, written by
@@ -105,11 +107,30 @@ def _read_context(output_dir, problems):
     except (OSError, json.JSONDecodeError) as err:
         problems.append(f"{CONTEXT_FILENAME} is unreadable: {err}")
         return None
-    if not isinstance(context, dict) or not isinstance(
-        context.get("reviews_by_agent"), dict
-    ):
+    if not isinstance(context, dict):
+        problems.append(f"{CONTEXT_FILENAME} is not a JSON object")
+        return None
+    if context.get("schema") != RECONCILIATION_CONTEXT_SCHEMA:
+        problems.append(
+            f"{CONTEXT_FILENAME} schema {context.get('schema')!r} is not "
+            f"{RECONCILIATION_CONTEXT_SCHEMA}"
+        )
+        return None
+    reviews = context.get("reviews_by_agent")
+    if not isinstance(reviews, dict):
         problems.append(f"{CONTEXT_FILENAME} has no reviews_by_agent object")
         return None
+    for stem, review in reviews.items():
+        if (
+            not isinstance(review, dict)
+            or not isinstance(review.get("verdict"), str)
+            or not isinstance(review.get("findings"), list)
+        ):
+            problems.append(
+                f"{CONTEXT_FILENAME} reviews_by_agent[{stem!r}] is not a "
+                "review entry with a verdict and a findings list"
+            )
+            return None
     return context
 
 
