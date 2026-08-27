@@ -343,6 +343,32 @@ class TestCheckStatus:
         assert result["all_done"] is True
         assert result["dispatched"] == 1
         assert result["skipped"] == 1
+        assert result["dispatched_names"] == ["code-reviewer"]
+
+    def test_dispatched_names_carry_plan_order(self, mod, tmp_path):
+        """Step 8 freezes intake from these names, so order is the contract."""
+        _write_plan(tmp_path, [
+            {"name": "security-reviewer", "status": "DISPATCH"},
+            {"name": "a11y-reviewer", "status": "SKIPPED_TRIAGE", "reason": "x"},
+            {"name": "code-reviewer", "status": "DISPATCH_OVERRIDE"},
+        ])
+
+        result = mod.check_status(str(tmp_path))
+        assert result["dispatched_names"] == [
+            "security-reviewer", "code-reviewer",
+        ]
+        assert result["dispatched"] == len(result["dispatched_names"])
+
+    def test_dispatched_names_empty_when_plan_selected_nobody(
+        self, mod, tmp_path
+    ):
+        """An empty list is a known-empty set, not unknown dispatch."""
+        _write_plan(tmp_path, [
+            {"name": "a11y-reviewer", "status": "SKIPPED", "reason": "docs"},
+        ])
+
+        result = mod.check_status(str(tmp_path))
+        assert result["dispatched_names"] == []
 
     def test_extracts_severity_counts(self, mod, tmp_path):
         _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])

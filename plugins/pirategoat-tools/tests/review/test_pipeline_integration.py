@@ -1,5 +1,6 @@
 """Tests for review/orchestration.py through the pipeline.py compatibility facade."""
 
+import builtins
 import hashlib
 import importlib.util
 import json
@@ -1760,6 +1761,96 @@ class TestStep8Orchestration:
 
         assert spawned == []
         assert state["agents"]["completed"] == ["code-reviewer"]
+
+    def test_step_8_takes_dispatched_identities_from_the_status_gate(
+        self, mod, tmp_path, monkeypatch
+    ):
+        """One read of the plan, not two.
+
+        The gate already opens and validates `dispatch-plan.json` to
+        decide readiness; step 8 re-opened and re-validated the same file
+        immediately afterwards purely to recover the dispatched names.
+        Both the frozen intake and the reconciliation-context flag now
+        come from the gate's own answer.
+        """
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps({
+            "agents": [
+                {"name": "code-reviewer", "status": "DISPATCH"},
+                {"name": "a11y-reviewer", "status": "SKIPPED_TRIAGE",
+                 "reason": "no frontend files"},
+                {"name": "security-reviewer", "status": "DISPATCH_OVERRIDE"},
+            ],
+        }))
+        _save_and_finalize(tmp_path, "code")
+        opened = []
+
+        def counting_open(path, *args, **kwargs):
+            if os.fspath(path).endswith("dispatch-plan.json"):
+                opened.append(os.fspath(path))
+            return builtins.open(path, *args, **kwargs)
+
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__, "open", counting_open
+        )
+        commands = []
+
+        def reconciliation_succeeds(cmd, *_args, **_kwargs):
+            commands.append(cmd)
+            (tmp_path / "reconciliation-context.json").write_text("{}")
+            return "", True
+
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "_run_subprocess",
+            reconciliation_succeeds,
+        )
+        state = {"resolved_params": {}}
+
+        mod._orchestrate_step(8, "full", {}, state, {}, str(tmp_path))
+
+        assert opened == []
+        assert state["agents"]["dispatched"] == [
+            "code-reviewer", "security-reviewer",
+        ]
+        recon = commands[-1]
+        flag = recon.index("--dispatched-agents")
+        assert recon[flag + 1] == "code-reviewer,security-reviewer"
+
+    def test_step_8_names_an_empty_dispatch_set_rather_than_omitting_it(
+        self, mod, tmp_path, monkeypatch
+    ):
+        """A plan that selected nobody is known-empty, never unknown.
+
+        Omitting the flag would tell reconciliation_context.py to scan
+        for every `*-review.json` in the directory — stale artifacts from
+        an earlier run included.
+        """
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps({
+            "agents": [
+                {"name": "a11y-reviewer", "status": "SKIPPED_TRIAGE",
+                 "reason": "docs-only change"},
+            ],
+        }))
+        commands = []
+
+        def reconciliation_succeeds(cmd, *_args, **_kwargs):
+            commands.append(cmd)
+            (tmp_path / "reconciliation-context.json").write_text("{}")
+            return "", True
+
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "_run_subprocess",
+            reconciliation_succeeds,
+        )
+
+        mod._orchestrate_step(
+            8, "full", {}, {"resolved_params": {}}, {}, str(tmp_path)
+        )
+
+        recon = commands[-1]
+        flag = recon.index("--dispatched-agents")
+        assert recon[flag + 1] == ""
 
     def test_step_8_completed_never_names_an_undispatched_agent(
         self, mod, tmp_path, monkeypatch

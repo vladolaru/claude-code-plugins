@@ -1206,16 +1206,11 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
     # Freeze exactly the dispatched reviewer identities before any consumer
     # renders or loads final JSON. Draft saving/finalization and this close
     # share the output-directory lock, so no draft can cross
-    # this boundary after the status gate decides to proceed.
-    plan_path = os.path.join(output_dir, "dispatch-plan.json")
-    dispatch_plan = None
-    dispatched_names = []
-    if os.path.isfile(plan_path):
-        dispatch_plan = _load_dispatch_plan(plan_path)
-        dispatched_names = [
-            agent["name"] for agent in dispatch_plan["agents"]
-            if agent.get("status") in DISPATCHED_STATUSES
-        ]
+    # this boundary after the status gate decides to proceed. The identities
+    # come from the status gate itself: it already opened and validated the
+    # dispatch plan to get here, and a run without one never reaches this
+    # line.
+    dispatched_names = status["dispatched_names"]
     try:
         intake_close = close_review_intake(output_dir, dispatched_names)
     except Exception as exc:
@@ -1299,22 +1294,21 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
         if log_out:
             state["commit_messages"] = log_out.strip().split("\n")
 
-    if dispatch_plan is not None:
-        # Narrowed to THIS run's dispatched set, and ordered by it. The
-        # intake close classifies a wider population — the dispatched
-        # names plus any draft a previous close discarded — so on a
-        # resumed close an agent could otherwise stand under `completed`
-        # while the `dispatched` list beside it, which the step-8 briefing
-        # renders, never named it.
-        completed_at_close = set(intake_close["completed"])
-        state["agents"] = {
-            "dispatched": dispatched_names,
-            "completed": [
-                name for name in dispatched_names
-                if name in completed_at_close
-            ],
-            "discarded_drafts": discarded_drafts,
-        }
+    # Narrowed to THIS run's dispatched set, and ordered by it. The
+    # intake close classifies a wider population — the dispatched
+    # names plus any draft a previous close discarded — so on a
+    # resumed close an agent could otherwise stand under `completed`
+    # while the `dispatched` list beside it, which the step-8 briefing
+    # renders, never named it.
+    completed_at_close = set(intake_close["completed"])
+    state["agents"] = {
+        "dispatched": dispatched_names,
+        "completed": [
+            name for name in dispatched_names
+            if name in completed_at_close
+        ],
+        "discarded_drafts": discarded_drafts,
+    }
 
     # Build reconciliation context (pre-gather all data for the reconciliator)
     recon_ctx_cmd = [
@@ -1332,21 +1326,12 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
     pr_id = config.get("pr_number", "")
     if pr_id:
         recon_ctx_cmd.extend(["--pr-id", str(pr_id)])
-    # Pass dispatched agents when real dispatch metadata exists.
-    # Distinguish three cases:
-    # 1. dispatched is non-empty → pass agent names (filter to those agents)
-    # 2. dispatched is empty BUT dispatch-plan.json exists → plan ran and
-    #    selected 0 agents (e.g., docs-only change). Pass empty string so
-    #    reconciliation_context.py loads nothing (not stale files).
-    # 3. No dispatch plan file → truly unknown, omit flag so
-    #    reconciliation_context.py falls back to scanning all *-review.json.
-    agents_info = state.get("agents")
-    if agents_info is not None:
-        dispatched = agents_info.get("dispatched", [])
-        if dispatched:
-            recon_ctx_cmd.extend(["--dispatched-agents", ",".join(dispatched)])
-        elif os.path.isfile(plan_path):
-            recon_ctx_cmd.extend(["--dispatched-agents", ""])
+    # Always pass this run's dispatched set — the status gate proved a
+    # dispatch plan exists, so the set is known even when it is empty. An
+    # empty value means the plan ran and selected 0 agents (e.g. a docs-only
+    # change), and tells reconciliation_context.py to load nothing rather
+    # than scan for stale *-review.json files.
+    recon_ctx_cmd.extend(["--dispatched-agents", ",".join(dispatched_names)])
     _, ctx_ok = _run_subprocess(recon_ctx_cmd, timeout=30)
     recon_ctx_path = os.path.join(output_dir, "reconciliation-context.json")
     if not ctx_ok or not os.path.isfile(recon_ctx_path):

@@ -111,7 +111,12 @@ def attach_draft_evidence(output_dir: str, result: dict) -> dict:
 
 
 def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
-    """Check status of all agents in the dispatch plan."""
+    """Check status of all agents in the dispatch plan.
+
+    The result carries `dispatched_names` — this plan's dispatched agent
+    identities in plan order — so a caller that already ran the gate never
+    re-opens and re-validates `dispatch-plan.json` to recover them.
+    """
     plan_path = os.path.join(output_dir, "dispatch-plan.json")
     if not os.path.isfile(plan_path):
         raise FileNotFoundError(f"No dispatch plan at {plan_path}")
@@ -134,6 +139,7 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
 
     now = datetime.now(timezone.utc)
     agents = []
+    dispatched_names = []
     dispatched = 0
     finished = 0
     invalid = 0
@@ -156,6 +162,7 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
 
         if status in DISPATCHED_STATUSES:
             dispatched += 1
+            dispatched_names.append(name)
         reviewer = derive_reviewer_name(name)
         review_path = review_paths(output_dir, reviewer).final
         started_path = os.path.join(output_dir, f"{name}.started")
@@ -213,6 +220,7 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
         "all_done": all_done,
         "timeout_seconds": timeout_seconds,
         "dispatched": dispatched,
+        "dispatched_names": dispatched_names,
         "finished": finished,
         "invalid": invalid,
         "running": running,
