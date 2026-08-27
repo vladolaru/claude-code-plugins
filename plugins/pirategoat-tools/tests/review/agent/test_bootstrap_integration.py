@@ -60,6 +60,8 @@ def _files_in_sections(scope_output, *header_prefixes):
 
 
 def scope_files_in_text(scope_output):
+    # Equals inline_diff_files only outside --base-ref-only / --summary mode,
+    # where FILES lists routed files whose diffs were never fetched.
     return _files_in_sections(scope_output, "=== FILES ===")
 
 
