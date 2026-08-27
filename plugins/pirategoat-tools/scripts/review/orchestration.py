@@ -205,7 +205,6 @@ def _load_final_review(
     return module.load_review_document(review_path, reviewer)
 
 
-_FINDINGS_JSON = "review-findings.json"
 _FINDINGS_MD = "review-findings.md"
 
 
@@ -218,7 +217,7 @@ _FINDINGS_MD = "review-findings.md"
 # run — and listing a file that cannot be there would make the fallback
 # branch fire on every single run. The record is what the critic reads.
 _CRITIC_SOURCE_CANDIDATES = (
-    REVIEW_RECORD_MD, _FINDINGS_MD, _FINDINGS_JSON,
+    REVIEW_RECORD_MD, _FINDINGS_MD, critic_adjustments.FINDINGS_FILENAME,
 )
 
 # The complete output of one critic attempt. Step 10 removes this set before
@@ -1488,6 +1487,7 @@ def _orchestrate_step_9(mode, config, state, context, output_dir):
     read = critic_adjustments.read_findings_file(
         os.path.join(output_dir, critic_adjustments.FINDINGS_FILENAME)
     )
+    state["ledger_status"] = read.status
     findings_markdown, render_error = _render_findings_markdown(
         output_dir, read
     )
@@ -1565,34 +1565,25 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
     read = critic_adjustments.read_findings_file(
         os.path.join(output_dir, critic_adjustments.FINDINGS_FILENAME)
     )
-    structured_findings_available = (
-        read.status == critic_adjustments.FINDINGS_READ_OK
-    )
-    if structured_findings_available:
-        state["reconciliation_verdict"] = read.findings.get("verdict", "")
+    state["ledger_status"] = read.status
+    if read.status == critic_adjustments.FINDINGS_READ_OK:
+        state["reconciliation_verdict"] = read.findings["verdict"]
     elif read.status != critic_adjustments.FINDINGS_READ_ABSENT:
         state["reconciliation_verdict"] = ""
 
-    # Which artifact the decision critic can actually be pointed at.
-    # briefings.py is pure, so the filesystem question is answered here and
-    # travels in state — the same division that already puts
-    # `reconciliation_verdict` above rather than re-reading the ledger in
-    # the briefing. Recording `available` alongside the choice keeps the
-    # briefing from having to re-derive why it got the target it got.
-    available = []
-    if structured_findings_available:
-        available = [
+    # Which artifact the decision critic can actually be pointed at, best
+    # first. briefings.py is pure, so the filesystem question is answered
+    # here and travels in state — as the filename, because the filename is
+    # the whole answer. The dict this replaced carried three more keys the
+    # briefing derived its target from a second time, and one of them
+    # (`render_incomplete`) restated a degradation flag already in state.
+    state["critic_source"] = next(
+        (
             name for name in _CRITIC_SOURCE_CANDIDATES
             if os.path.isfile(os.path.join(output_dir, name))
-        ]
-    state["critic_source"] = {
-        "target": available[0] if available else None,
-        "available": available,
-        "render_incomplete": bool(
-            state.get("degradation", {}).get("findings_markdown_incomplete")
         ),
-        "structured_findings_available": structured_findings_available,
-    }
+        None,
+    ) if read.status == critic_adjustments.FINDINGS_READ_OK else None
 
     # Record critic skip decision for telemetry.
     # Clear any stale decision first (step 10 may be rerun after
@@ -1818,7 +1809,9 @@ def _report_source_fingerprint(
         ),
         "review_findings": {
             **_artifact_source_identity(
-                os.path.join(output_dir, _FINDINGS_JSON)
+                os.path.join(
+                    output_dir, critic_adjustments.FINDINGS_FILENAME
+                )
             ),
             "read_status": findings_status,
         },
@@ -2118,7 +2111,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # The pure report briefing must never reopen or independently classify
     # the ledger. Carry this exact reader result across the boundary so it
     # can name the ledger as source context only when this pass accepted it.
-    state["findings_read_status"] = read.status
+    state["ledger_status"] = read.status
     ledger_verdict = (
         publish_verdict(read.findings["verdict"])
         if read.status == critic_adjustments.FINDINGS_READ_OK
@@ -2197,7 +2190,6 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     result_path = os.path.join(output_dir, "pipeline-result.json")
 
     state["verdict"] = verdict
-    state["review_verdict"] = verdict
     state["pipeline_status"] = status
     # Carried into state so step 11's pure briefing can describe prepared
     # settlement on pass one and terminal publication on pass two without

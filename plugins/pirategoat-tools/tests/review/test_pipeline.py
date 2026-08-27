@@ -2081,11 +2081,7 @@ class TestStep10DecisionCritic:
         """
         state = {
             "completed_steps": [],
-            "critic_source": {
-                "target": "review-findings.md",
-                "available": ["review-findings.md", "review-findings.json"],
-                "render_incomplete": False,
-            },
+            "critic_source": "review-findings.md",
         }
         g = mod.get_step_guidance(10, "pr", state, {}, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
@@ -2176,21 +2172,18 @@ class TestStep10CriticSource:
     facts into state, the way it already records `reconciliation_verdict`.
     """
 
-    def _guidance(self, mod, tmp_path, critic_source=None, **state_extra):
+    def _guidance(self, mod, tmp_path, **state_extra):
         state = {"completed_steps": [], **state_extra}
-        if critic_source is not None:
-            state["critic_source"] = critic_source
         return mod.get_step_guidance(
             10, "pr", state, {}, config={"mode": "pr"},
             output_dir=str(tmp_path),
         )
 
     def test_record_present_is_the_critic_target(self, mod, tmp_path):
-        g = self._guidance(mod, tmp_path, critic_source={
-            "target": "review-record.md",
-            "available": ["review-record.md", "review-findings.json"],
-            "render_incomplete": False,
-        })
+        g = self._guidance(
+            mod, tmp_path, critic_source="review-record.md",
+            ledger_status="ok",
+        )
         text = "\n".join(g["situation"] + g["actions"])
         assert f"{tmp_path}/review-record.md" in text
         assert "review-findings.md" not in text
@@ -2202,11 +2195,9 @@ class TestStep10CriticSource:
         nothing to bring into agreement; what must not appear is a
         dispatch line pointing the critic at it.
         """
-        g = self._guidance(mod, tmp_path, critic_source={
-            "target": "review-record.md",
-            "available": ["review-record.md", "review-findings.json"],
-            "render_incomplete": False,
-        })
+        g = self._guidance(
+            mod, tmp_path, critic_source="review-record.md",
+        )
         text = "\n".join(g["situation"] + g["actions"])
         assert f"{tmp_path}/review-report.md" not in text
         assert "authored there — once" in text
@@ -2214,11 +2205,9 @@ class TestStep10CriticSource:
     def test_missing_report_falls_back_to_the_rendered_markdown(
         self, mod, tmp_path
     ):
-        g = self._guidance(mod, tmp_path, critic_source={
-            "target": "review-findings.md",
-            "available": ["review-findings.md", "review-findings.json"],
-            "render_incomplete": False,
-        })
+        g = self._guidance(
+            mod, tmp_path, critic_source="review-findings.md",
+        )
         text = "\n".join(g["situation"] + g["actions"])
         assert (
             f"Review record to stress-test (for critic.py --report): "
@@ -2229,30 +2218,25 @@ class TestStep10CriticSource:
     def test_missing_markdown_falls_back_to_the_json_ledger(
         self, mod, tmp_path
     ):
-        g = self._guidance(mod, tmp_path, critic_source={
-            "target": "review-findings.json",
-            "available": ["review-findings.json"],
-            "render_incomplete": False,
-        })
+        g = self._guidance(
+            mod, tmp_path, critic_source="review-findings.json",
+        )
         situation = "\n".join(g["situation"])
         assert "review-findings.json" in situation
         assert "review-findings.md" not in situation
 
     def test_an_incomplete_render_is_named_as_the_reason(self, mod, tmp_path):
-        g = self._guidance(mod, tmp_path, critic_source={
-            "target": "review-findings.json",
-            "available": ["review-findings.json"],
-            "render_incomplete": True,
-        })
+        g = self._guidance(
+            mod, tmp_path, critic_source="review-findings.json",
+            degradation={"findings_markdown_incomplete": True},
+        )
         situation = "\n".join(g["situation"])
         assert "render" in situation.lower()
 
     def test_nothing_present_says_so_instead_of_naming_a_missing_file(
         self, mod, tmp_path
     ):
-        g = self._guidance(mod, tmp_path, critic_source={
-            "target": None, "available": [], "render_incomplete": False,
-        })
+        g = self._guidance(mod, tmp_path, critic_source=None)
         situation = "\n".join(g["situation"])
         assert "no review artifact" in situation.lower()
 
@@ -2298,7 +2282,7 @@ class TestStep11ReportAuthoring:
                   output_dir=None):
         base = {
             "completed_steps": [],
-            "findings_read_status": "ok",
+            "ledger_status": "ok",
             "review_record": self._COMPLETE_RECORD,
         }
         base.update(state or {})
@@ -2492,7 +2476,7 @@ class TestStep11ReportAuthoring:
 
     def test_failed_record_assembly_routes_to_the_ledger(self, mod):
         text = "\n".join(self._guidance(mod, state={
-            "findings_read_status": "ok",
+            "ledger_status": "ok",
             "review_record": {
                 "ran": True, "written": 0, "expected": 1,
                 "status": "failed",
@@ -2508,7 +2492,7 @@ class TestStep11ReportAuthoring:
         self, mod, read_status
     ):
         text = "\n".join(self._guidance(mod, state={
-            "findings_read_status": read_status,
+            "ledger_status": read_status,
             "review_record": {
                 "ran": True, "written": 0, "expected": 1,
                 "status": "failed",
@@ -2521,7 +2505,7 @@ class TestStep11ReportAuthoring:
 
     def test_absent_ledger_keeps_the_no_ledger_fallback(self, mod):
         text = "\n".join(self._guidance(mod, state={
-            "findings_read_status": "absent",
+            "ledger_status": "absent",
             "review_record": None,
         })["actions"])
 
@@ -2531,7 +2515,7 @@ class TestStep11ReportAuthoring:
 
     def test_missing_read_status_fails_closed(self, mod):
         text = "\n".join(self._guidance(mod, state={
-            "findings_read_status": None,
+            "ledger_status": None,
             "review_record": self._COMPLETE_RECORD,
         })["actions"])
 
@@ -2737,7 +2721,7 @@ class TestStep11PresentResults:
         artifact three degraded paths depend on."""
         state = {
             "completed_steps": [],
-            "findings_read_status": "ok",
+            "ledger_status": "ok",
             "findings_markdown": {
                 "ran": True, "written": 1, "expected": 1,
                 "status": "complete",
@@ -2760,7 +2744,7 @@ class TestStep11PresentResults:
     ):
         state = {
             "completed_steps": [],
-            "findings_read_status": "ok",
+            "ledger_status": "ok",
             "findings_markdown": {
                 "ran": True, "written": 0, "expected": 1, "status": "failed",
             },
@@ -2789,7 +2773,7 @@ class TestStep11PresentResults:
     ):
         guidance = mod.get_step_guidance(
             11, "pr", {
-                "completed_steps": [], "findings_read_status": "ok",
+                "completed_steps": [], "ledger_status": "ok",
             }, {},
             config={"mode": "pr", "interactive": True},
             output_dir=str(tmp_path),
@@ -2814,7 +2798,7 @@ class TestStep11PresentResults:
         would send the reader after work that cannot exist."""
         state = {
             "completed_steps": [],
-            "findings_read_status": (
+            "ledger_status": (
                 "absent" if key == "findings_markdown" else "ok"
             ),
             key: {
@@ -2966,11 +2950,7 @@ class TestDegradedPaths:
         the writer-less `report_synthesis_failed` flag this once read."""
         state = {
             "completed_steps": [],
-            "critic_source": {
-                "target": "review-findings.md",
-                "available": ["review-findings.md"],
-                "render_incomplete": False,
-            },
+            "critic_source": "review-findings.md",
         }
         g = mod.get_step_guidance(10, "pr", state, {})
         text = "\n".join(g["actions"])
@@ -3021,7 +3001,7 @@ class TestDegradedPaths:
     def test_step_11_briefing_without_a_projection(self, mod, tmp_path):
         """A briefing fetched before finalize ran has no outcome to report.
         It must render without one rather than fabricating a success line."""
-        state = {"completed_steps": [], "review_verdict": None}
+        state = {"completed_steps": []}
         ctx = {}
         config = {"mode": "pr", "interactive": False}
         g = mod.get_step_guidance(11, "pr", state, ctx, config=config)

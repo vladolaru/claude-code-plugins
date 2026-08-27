@@ -123,7 +123,7 @@ def get_step_guidance(step, mode, state, context, config=None, output_dir=None):
     elif step == 8:
         return _step_8_reconcile(mode, state, context, config, output_dir)
     elif step == 9:
-        return _step_9_review_report(mode, state, context, config, output_dir)
+        return _step_9_review_record(mode, state, context, config, output_dir)
     elif step == 10:
         return _step_10_decision_critic(mode, state, context, config, output_dir)
     elif step == 11:
@@ -1337,7 +1337,7 @@ def _render_file_review_section(file_review):
 # Step 9: Review Record
 # ---------------------------------------------------------------------------
 
-def _step_9_review_report(mode, state, context, config, output_dir):
+def _step_9_review_record(mode, state, context, config, output_dir):
     """Step 9: Review Record — read what the pipeline assembled.
 
     This step used to have the orchestrator author `review-report.md` from
@@ -1465,6 +1465,12 @@ def _step_9_review_report(mode, state, context, config, output_dir):
 # Step 10: Decision Critic
 # ---------------------------------------------------------------------------
 
+# Distinguishes "step 10's orchestration never ran" from the measured
+# absence it records as `None`. A briefing that cannot tell them apart
+# reports a filesystem it never looked at.
+_NO_RECORDED_SOURCE = object()
+
+
 def _step_10_decision_critic(mode, state, context, config, output_dir):
     """Step 10: Decision Critic — stress-test conclusions."""
     od = output_dir or "<OUTPUT_DIR>"
@@ -1521,43 +1527,40 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     # list is a worse read than a rendering but an infinitely better one
     # than a missing file. `review-report.md` is not in the list at all:
     # it is authored at step 11, after this critic runs.
-    source = state.get("critic_source")
-    if isinstance(source, dict):
-        target_name = source.get("target")
-        if target_name is None:
-            # Measured absence: step 10 looked and found none of the three.
-            critic_target = f"{od}/{REVIEW_RECORD_MD}"
-            situation.append(
-                f"⚠️ No review artifact was found to stress-test — neither "
-                f"{REVIEW_RECORD_MD}, review-findings.md, nor "
-                "review-findings.json is present. The critic has nothing to "
-                "read; expect its verdict to be unusable."
-            )
-        else:
-            critic_target = f"{od}/{target_name}"
-            if target_name != REVIEW_RECORD_MD:
-                reason = (
-                    " (the findings Markdown render did not complete)"
-                    if target_name == "review-findings.json"
-                    and source.get("render_incomplete")
-                    else ""
-                )
-                situation.append(
-                    f"⚠️ `{REVIEW_RECORD_MD}` is missing — critic will "
-                    f"review `{target_name}` instead{reason}."
-                )
-    else:
-        # No recorded facts at all (older state, or step 10's orchestration
-        # never ran). That is not a measured absence and must not render as
-        # one, so the nominal target stands.
+    critic_source = state.get("critic_source", _NO_RECORDED_SOURCE)
+    if critic_source is _NO_RECORDED_SOURCE:
+        # No recorded facts at all (step 10's orchestration never ran).
+        # That is not a measured absence and must not render as one, so
+        # the nominal target stands.
         critic_target = f"{od}/{REVIEW_RECORD_MD}"
+    elif critic_source is None:
+        # Measured absence: step 10 looked and found none of the three.
+        critic_target = f"{od}/{REVIEW_RECORD_MD}"
+        situation.append(
+            f"⚠️ No review artifact was found to stress-test — neither "
+            f"{REVIEW_RECORD_MD}, review-findings.md, nor "
+            "review-findings.json is present. The critic has nothing to "
+            "read; expect its verdict to be unusable."
+        )
+    else:
+        critic_target = f"{od}/{critic_source}"
+        if critic_source != REVIEW_RECORD_MD:
+            reason = (
+                " (the findings Markdown render did not complete)"
+                if critic_source == "review-findings.json"
+                and degradation.get("findings_markdown_incomplete")
+                else ""
+            )
+            situation.append(
+                f"⚠️ `{REVIEW_RECORD_MD}` is missing — critic will "
+                f"review `{critic_source}` instead{reason}."
+            )
 
-    has_findings = not degradation.get("reconciliation_failed")
-    if (
-        isinstance(source, dict)
-        and type(source.get("structured_findings_available")) is bool
-    ):
-        has_findings = source["structured_findings_available"]
+    ledger_status = state.get("ledger_status")
+    has_findings = (
+        ledger_status == "ok" if ledger_status is not None
+        else not degradation.get("reconciliation_failed")
+    )
     findings_path = f"{od}/review-findings.json"
 
     if _host(config) == HOST_CODEX:
@@ -1923,9 +1926,9 @@ def _report_authoring_actions(mode, state, context, config, output_dir):
     actions = []
 
     reconciliation_failed = bool(degradation.get("reconciliation_failed"))
-    findings_read_status = state.get("findings_read_status")
-    ledger_usable = findings_read_status == "ok"
-    ledger_absent = findings_read_status == "absent"
+    ledger_status = state.get("ledger_status")
+    ledger_usable = ledger_status == "ok"
+    ledger_absent = ledger_status == "absent"
     record_outcome = state.get("review_record")
     record_usable = (
         not reconciliation_failed
@@ -1993,7 +1996,7 @@ def _report_authoring_actions(mode, state, context, config, output_dir):
     elif not ledger_usable:
         actions.append(
             "⚠️ The canonical ledger was rejected at the pipeline boundary "
-            f"(status: `{findings_read_status or 'unavailable'}`), so it is "
+            f"(status: `{ledger_status or 'unavailable'}`), so it is "
             "not valid report source context. Synthesize the report manually "
             f"from the finalized `{od}/<agent>-review.md` files and say "
             "plainly that the findings are unreconciled."
@@ -2137,7 +2140,7 @@ def _step_11_present_results(mode, state, context, config, output_dir):
             actions.append("")
             critic_source = (
                 "the settled record as-is"
-                if state.get("findings_read_status") == "ok"
+                if state.get("ledger_status") == "ok"
                 else "the available finalized sources as directed above"
             )
             actions.append(
@@ -2203,8 +2206,8 @@ def _step_11_present_results(mode, state, context, config, output_dir):
     actions.append(_derived_markdown_status_line(
         state, od, key="reviewer_markdown", label="Reviewer Markdown",
     ))
-    findings_read_status = state.get("findings_read_status")
-    if findings_read_status in ("ok", "absent"):
+    ledger_status = state.get("ledger_status")
+    if ledger_status in ("ok", "absent"):
         actions.append(_derived_markdown_status_line(
             state, od, key="findings_markdown", label="Findings Markdown",
             suffix="review-findings.json",
@@ -2212,7 +2215,7 @@ def _step_11_present_results(mode, state, context, config, output_dir):
     else:
         actions.append(
             "⚠️ Findings Markdown: not materialized because the canonical "
-            f"ledger status is `{findings_read_status or 'unavailable'}`."
+            f"ledger status is `{ledger_status or 'unavailable'}`."
         )
 
     # The first pass reports prepared state without implying publication;

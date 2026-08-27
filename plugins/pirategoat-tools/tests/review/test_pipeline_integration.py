@@ -2807,7 +2807,8 @@ class TestStep10Orchestration:
 
         assert result.returncode == 0, result.stderr
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
-        assert state["critic_source"]["structured_findings_available"] is False
+        assert state["ledger_status"] != "ok"
+        assert state["critic_source"] is None
         assert "Structured findings (for critic.py --context)" not in result.stdout
         assert "without --context" in result.stdout
 
@@ -2856,7 +2857,7 @@ class TestStep11Orchestration:
 
         assert prepared.returncode == 0, prepared.stderr
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
-        assert state["findings_read_status"] == "invalid"
+        assert state["ledger_status"] == "invalid"
         assert not (tmp_path / "review-findings.md").exists()
         assert (
             f"Source:** `{tmp_path}/review-findings.json"
@@ -3489,21 +3490,17 @@ class TestStep10CriticSourceRecording:
         (tmp_path / "review-findings.md").write_text("# findings")
         state = {"resolved_params": {}}
         mod._orchestrate_step(10, "full", {}, state, {}, str(tmp_path))
-        assert state["critic_source"]["target"] == "review-record.md"
-        assert state["critic_source"]["available"] == [
-            "review-record.md", "review-findings.md", "review-findings.json",
-        ]
+        assert state["critic_source"] == "review-record.md"
 
     def test_the_report_is_never_a_candidate(self, mod, tmp_path):
         """`review-report.md` is authored at step 11, after this critic
         runs. Listing a file that cannot exist yet would fire the fallback
         branch on every single run."""
         self._findings(tmp_path)
-        (tmp_path / "review-record.md").write_text("# record")
         (tmp_path / "review-report.md").write_text("# stale report")
         state = {"resolved_params": {}}
         mod._orchestrate_step(10, "full", {}, state, {}, str(tmp_path))
-        assert "review-report.md" not in state["critic_source"]["available"]
+        assert state["critic_source"] == "review-findings.json"
 
     def test_falls_through_to_the_markdown_then_the_ledger(
         self, mod, tmp_path
@@ -3512,30 +3509,90 @@ class TestStep10CriticSourceRecording:
         (tmp_path / "review-findings.md").write_text("# findings")
         state = {"resolved_params": {}}
         mod._orchestrate_step(10, "full", {}, state, {}, str(tmp_path))
-        assert state["critic_source"]["target"] == "review-findings.md"
+        assert state["critic_source"] == "review-findings.md"
 
         (tmp_path / "review-findings.md").unlink()
         state = {"resolved_params": {}}
         mod._orchestrate_step(10, "full", {}, state, {}, str(tmp_path))
-        assert state["critic_source"]["target"] == "review-findings.json"
+        assert state["critic_source"] == "review-findings.json"
 
     def test_records_an_absence_rather_than_a_guess(self, mod, tmp_path):
         state = {"resolved_params": {}}
         mod._orchestrate_step(10, "full", {}, state, {}, str(tmp_path))
-        assert state["critic_source"] == {
-            "target": None, "available": [], "render_incomplete": False,
-            "structured_findings_available": False,
-        }
+        assert state["critic_source"] is None
 
-    def test_carries_the_render_outcome_as_the_reason(self, mod, tmp_path):
+    def test_leaves_the_render_reason_where_it_already_lived(
+        self, mod, tmp_path
+    ):
+        """The briefing names the incomplete render off `degradation`.
+
+        `critic_source` used to carry a `render_incomplete` copy of this
+        flag, derived from the same state dict the briefing already reads.
+        """
         self._findings(tmp_path)
         state = {
             "resolved_params": {},
             "degradation": {"findings_markdown_incomplete": True},
         }
         mod._orchestrate_step(10, "full", {}, state, {}, str(tmp_path))
-        assert state["critic_source"]["target"] == "review-findings.json"
-        assert state["critic_source"]["render_incomplete"] is True
+        assert state["critic_source"] == "review-findings.json"
+        assert state["degradation"]["findings_markdown_incomplete"] is True
+
+
+class TestLedgerStatusIsOneFact:
+    """Steps 9, 10, and 11 record the status of the ledger they read.
+
+    Four state keys carried this one fact between them —
+    `structured_findings_available` and `render_incomplete` nested inside
+    `critic_source`, `findings_read_status` at the top level, and
+    `state["review_verdict"]` duplicating `state["verdict"]` on the very
+    next line. Briefings read `findings_read_status` from three separate
+    local re-reads, and nothing read `review_verdict` at all.
+    """
+
+    @pytest.mark.parametrize("step", [9, 10, 11])
+    def test_each_step_records_the_status_of_the_ledger_it_read(
+        self, mod, tmp_path, step
+    ):
+        TestStep10CriticSourceRecording._findings(tmp_path)
+        state = {"resolved_params": {}}
+
+        mod._orchestrate_step(step, "full", {}, state, {"git": {}}, str(tmp_path))
+
+        assert state["ledger_status"] == "ok"
+
+    @pytest.mark.parametrize("step", [9, 10, 11])
+    def test_an_absent_ledger_is_recorded_as_absent(self, mod, tmp_path, step):
+        state = {"resolved_params": {}}
+
+        mod._orchestrate_step(step, "full", {}, state, {"git": {}}, str(tmp_path))
+
+        assert state["ledger_status"] == "absent"
+
+    def test_the_four_retired_flags_are_gone(self, mod, tmp_path):
+        TestStep10CriticSourceRecording._findings(tmp_path)
+        state = {"resolved_params": {}}
+
+        for step in (9, 10, 11):
+            mod._orchestrate_step(
+                step, "full", {}, state, {"git": {}}, str(tmp_path)
+            )
+
+        assert "findings_read_status" not in state
+        assert "review_verdict" not in state
+        assert state["verdict"]
+        assert isinstance(state["critic_source"], (str, type(None)))
+
+    def test_critic_source_is_the_target_filename(
+        self, mod, orchestration_mod, tmp_path
+    ):
+        TestStep10CriticSourceRecording._findings(tmp_path)
+        state = {"resolved_params": {}}
+
+        mod._orchestrate_step(9, "full", {}, state, {"git": {}}, str(tmp_path))
+        mod._orchestrate_step(10, "full", {}, state, {"git": {}}, str(tmp_path))
+
+        assert state["critic_source"] == orchestration_mod.REVIEW_RECORD_MD
 
 
 class TestFindingsMarkdownLockstep:
