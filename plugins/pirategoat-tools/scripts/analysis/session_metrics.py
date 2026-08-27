@@ -42,6 +42,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+# Sibling module in scripts/review — the one place the severity vocabulary
+# is declared, so a new severity added there reaches this script's counts
+# and rendering without a second hand-spelled list to remember.
+_ANALYSIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(_ANALYSIS_DIR))
+from review.verdict_rules import VALID_SEVERITIES  # noqa: E402
+
 
 # -- Known reviewer agent types --
 KNOWN_REVIEWER_AGENTS = [
@@ -448,13 +455,7 @@ def extract_subagent_metrics(filepath: str) -> dict:
         "start_time": None,
         "end_time": None,
         "verdict": None,
-        "severity_counts": {
-            "critical": 0,
-            "high": 0,
-            "medium": 0,
-            "low": 0,
-            "info": 0,
-        },
+        "severity_counts": {severity: 0 for severity in VALID_SEVERITIES},
         "total_findings": 0,
         "model": None,
         "line_count": 0,
@@ -862,7 +863,7 @@ def generate_markdown_report(results: list) -> str:
             sev_str = ""
             if r["total_findings"] > 0:
                 parts = []
-                for sev_key in ["critical", "high", "medium", "low", "info"]:
+                for sev_key in VALID_SEVERITIES:
                     v = r["severity_counts"].get(sev_key, 0)
                     if v > 0:
                         parts.append(f"{sev_key[0].upper()}:{v}")
