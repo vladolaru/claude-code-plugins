@@ -506,6 +506,89 @@ class TestAddFinding:
         assert finding_id == "f1"
 
 
+class TestFindingNormalizationIsShared:
+    """add_finding and update_finding normalize through one implementation.
+
+    They used to carry five parallel copies — severity casing, floor
+    promotion, text coercion, file-scope derivation, channel membership —
+    which is how update_finding came to skip the severity membership check
+    that add_finding made, and how a patch could store a title the adder
+    would have collapsed to one line.
+    """
+
+    def _builder(self, tmp_path, channels=("blocking",)):
+        _write_assignment(tmp_path, channels=channels)
+        return ReviewOutputBuilder.open(tmp_path, "42", "security")
+
+    @pytest.mark.parametrize("mutate", ["add", "update"])
+    def test_severity_case_and_floor_promotion_match(self, tmp_path, mutate):
+        b = self._builder(tmp_path)
+        if mutate == "add":
+            b.add_finding(
+                "LOW", "t", "src/a.py", "d", "r", line=1, severity_floor="HIGH"
+            )
+        else:
+            b.add_finding("critical", "t", "src/a.py", "d", "r", line=1)
+            b.update_finding("f1", severity="LOW", severity_floor="HIGH")
+        assert b.findings[0]["severity"] == "high"
+        assert b.findings[0]["severity_floor"] == "high"
+
+    @pytest.mark.parametrize("mutate", ["add", "update"])
+    def test_titles_are_collapsed_to_one_line(self, tmp_path, mutate):
+        b = self._builder(tmp_path)
+        if mutate == "add":
+            b.add_finding("low", "a\n# b", "src/a.py", "d", "r", line=1)
+        else:
+            b.add_finding("low", "t", "src/a.py", "d", "r", line=1)
+            b.update_finding("f1", title="a\n# b")
+        assert b.findings[0]["title"] == "a # b"
+
+    @pytest.mark.parametrize("mutate", ["add", "update"])
+    def test_unknown_severity_is_refused_by_both(self, tmp_path, mutate):
+        b = self._builder(tmp_path)
+        with pytest.raises(ValueError, match="Invalid severity"):
+            if mutate == "add":
+                b.add_finding("urgent", "t", "src/a.py", "d", "r", line=1)
+            else:
+                b.add_finding("low", "t", "src/a.py", "d", "r", line=1)
+                b.update_finding("f1", severity="urgent")
+
+    @pytest.mark.parametrize("mutate", ["add", "update"])
+    def test_off_channel_is_refused_by_both(self, tmp_path, mutate):
+        b = self._builder(tmp_path, channels=("blocking",))
+        with pytest.raises(ValueError, match="is not among this reviewer's"):
+            if mutate == "add":
+                b.add_finding(
+                    "low", "t", "src/a.py", "d", "r", line=1, channel="advisory"
+                )
+            else:
+                b.add_finding("low", "t", "src/a.py", "d", "r", line=1)
+                b.update_finding("f1", channel="advisory")
+
+    @pytest.mark.parametrize("mutate", ["add", "update"])
+    def test_file_scope_follows_the_line(self, tmp_path, mutate, capsys):
+        b = self._builder(tmp_path)
+        if mutate == "add":
+            b.add_finding("low", "t", "src/a.py", "d", "r")
+        else:
+            b.add_finding("low", "t", "src/a.py", "d", "r", line=1)
+            b.update_finding("f1", line=None)
+        capsys.readouterr()
+        assert b.findings[0]["scope"] == "file"
+        b.update_finding("f1", line=7)
+        assert "scope" not in b.findings[0]
+
+    def test_a_new_finding_omits_the_keys_it_carries_no_value_in(
+        self, tmp_path
+    ):
+        b = self._builder(tmp_path)
+        b.add_finding("low", "t", "src/a.py", "d", "r", line=1)
+        assert set(b.findings[0]) == {
+            "id", "category", "severity", "title", "description",
+            "file", "line", "recommendation", "confidence",
+        }
+
+
 # =============================================================================
 # TestRecordCheck
 # =============================================================================

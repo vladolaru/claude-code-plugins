@@ -396,6 +396,69 @@ class ReviewOutputBuilder:
                 return index
         raise ValueError(f"unknown {kind} id: {entry_id}")
 
+    def _normalize_finding(self, fields: Dict, *, partial: bool) -> Dict:
+        """Normalize one complete finding candidate — the one implementation.
+
+        ``fields`` is the whole finding: freshly authored by ``add_finding``,
+        or an existing one merged with a patch by ``update_finding``. Every
+        check reads the merged result, so a patch that lowers ``severity``
+        under a stored ``severity_floor`` is promoted exactly as a fresh add
+        would be, and a patched title is collapsed exactly as an added one is.
+
+        ``partial=False`` additionally drops the keys a new finding carries no
+        information in — an absent floor, evidence or citation, and the
+        default channel — so one writer cannot publish a shape the other
+        would not.
+        """
+        candidate = dict(fields)
+        severity = candidate.get("severity")
+        if isinstance(severity, str):
+            severity = candidate["severity"] = severity.lower()
+        if severity not in VALID_SEVERITIES:
+            raise ValueError(
+                f"Invalid severity: {fields.get('severity')}. "
+                f"Must be one of {list(VALID_SEVERITIES)}"
+            )
+        floor = candidate.get("severity_floor")
+        if floor is not None:
+            if not isinstance(floor, str) or floor.lower() not in VALID_SEVERITIES:
+                raise ValueError(
+                    f"Invalid severity_floor: {floor}. "
+                    f"Must be one of {list(VALID_SEVERITIES)}"
+                )
+            floor = candidate["severity_floor"] = floor.lower()
+            if SEVERITY_RANK[severity] < SEVERITY_RANK[floor]:
+                candidate["severity"] = floor
+        for field in ("title", "description", "recommendation"):
+            candidate[field] = coerce_text(
+                candidate.get(field), single_line=field == "title"
+            )
+        if candidate.get("line") is None:
+            candidate["scope"] = "file"
+        else:
+            candidate.pop("scope", None)
+        channel = candidate.get("channel")
+        if channel is None:
+            channel = "blocking"
+        if channel not in VALID_CHANNELS:
+            raise ValueError(
+                f"Invalid channel: {candidate.get('channel')!r}. "
+                f"Must be one of {VALID_CHANNELS}."
+            )
+        reviewed_files = self._bound_reviewed_files()
+        if reviewed_files is not None and channel not in reviewed_files.channels:
+            raise ValueError(
+                f"channel {channel!r} is not among this reviewer's "
+                f"channels {list(reviewed_files.channels)}"
+            )
+        if not partial:
+            for field in ("severity_floor", "behavior_evidence", "source_cited"):
+                if candidate.get(field) is None:
+                    candidate.pop(field, None)
+            if candidate.get("channel") != "advisory":
+                candidate.pop("channel", None)
+        return candidate
+
     def update_finding(self, finding_id: str, **fields) -> None:
         """Strictly patch one finding without changing its identity."""
         allowed = {
@@ -423,38 +486,9 @@ class ReviewOutputBuilder:
         if not fields:
             raise ValueError("update_finding requires at least one field")
         index = self._entry_index(self.findings, finding_id, "finding")
-        candidate = dict(self.findings[index])
-        candidate.update(fields)
-        if "severity" in fields and isinstance(candidate["severity"], str):
-            candidate["severity"] = candidate["severity"].lower()
-        if "severity_floor" in fields and isinstance(
-            candidate["severity_floor"], str
-        ):
-            candidate["severity_floor"] = candidate["severity_floor"].lower()
-        for field in ("title", "description", "recommendation"):
-            if field in fields:
-                candidate[field] = coerce_text(
-                    fields[field], single_line=field == "title"
-                )
-        if candidate.get("line") is None:
-            candidate["scope"] = "file"
-        else:
-            candidate.pop("scope", None)
-        floor = candidate.get("severity_floor")
-        severity = candidate.get("severity")
-        if (
-            floor in SEVERITY_RANK
-            and severity in SEVERITY_RANK
-            and SEVERITY_RANK[severity] < SEVERITY_RANK[floor]
-        ):
-            candidate["severity"] = floor
-        candidate_channel = candidate.get("channel") or "blocking"
-        reviewed_files = self._bound_reviewed_files()
-        if reviewed_files is not None and candidate_channel not in reviewed_files.channels:
-            raise ValueError(
-                f"channel {candidate_channel!r} is not among this reviewer's "
-                f"channels {list(reviewed_files.channels)}"
-            )
+        candidate = self._normalize_finding(
+            {**self.findings[index], **fields}, partial=True
+        )
         validate_finding_shape(candidate, index)
         self.findings[index] = candidate
         self._invocation_delta.append(f"updated finding {finding_id}")
@@ -574,65 +608,40 @@ class ReviewOutputBuilder:
         should NOT count toward the verdict.
         When severity_floor is provided, lower severities are promoted to it.
         """
-        # Validate severity and enforce an optional minimum.
-        severity_value = severity.lower()
-        if severity_value not in VALID_SEVERITIES:
-            raise ValueError(
-                f"Invalid severity: {severity}. "
-                f"Must be one of {list(VALID_SEVERITIES)}"
-            )
-
-        floor_value = None
-        if severity_floor is not None:
-            if not isinstance(severity_floor, str):
-                raise ValueError("severity_floor must be a severity name")
-            floor_value = severity_floor.lower()
-            if floor_value not in VALID_SEVERITIES:
-                raise ValueError(
-                    f"Invalid severity_floor: {severity_floor}. "
-                    f"Must be one of {list(VALID_SEVERITIES)}"
-                )
-            if SEVERITY_RANK[severity_value] < SEVERITY_RANK[floor_value]:
-                severity_value = floor_value
-
-        # Validate confidence
         if not 0.0 <= confidence <= 1.0:
             raise ValueError(f"Confidence must be 0.0-1.0, got {confidence}")
-
-        # Validate behavior_evidence enum
-        if behavior_evidence is not None:
-            valid_evidence = ("cited", "inferred")
-            if behavior_evidence not in valid_evidence:
-                raise ValueError(
-                    f"Invalid behavior_evidence: {behavior_evidence!r}. "
-                    f"Must be one of {valid_evidence}."
-                )
-
-        if channel is not None:
-            if not isinstance(channel, str) or channel not in VALID_CHANNELS:
-                raise ValueError(
-                    f"Invalid channel: {channel!r}. "
-                    f"Must be one of {VALID_CHANNELS}."
-                )
-
-        effective_channel = channel or "blocking"
-        reviewed_files = self._bound_reviewed_files()
-        if reviewed_files is not None and effective_channel not in reviewed_files.channels:
+        if behavior_evidence is not None and behavior_evidence not in (
+            "cited", "inferred",
+        ):
             raise ValueError(
-                f"channel {effective_channel!r} is not among this reviewer's "
-                f"channels {list(reviewed_files.channels)}"
+                f"Invalid behavior_evidence: {behavior_evidence!r}. "
+                "Must be one of ('cited', 'inferred')."
             )
 
-        # Validate line — None records a first-class file-scoped finding (loud),
-        # hard enforcement for invalid values (0, negative, non-int).
-        file_scoped = line is None
-        if file_scoped:
-            # A legitimately line-less finding (missing coverage, precedent,
-            # cross-file architecture) is a real, verdict-counting finding.
-            # Point defects still need line= — hence the stderr NOTE.
+        finding = self._normalize_finding({
+            'category': category,
+            'severity': severity,
+            'title': title,
+            'description': description,
+            'file': file,
+            'line': line,
+            'recommendation': recommendation,
+            'confidence': confidence,
+            'behavior_evidence': behavior_evidence,
+            'source_cited': source_cited,
+            'severity_floor': severity_floor,
+            'channel': channel,
+            **extra_fields
+        }, partial=False)
+
+        # Line is required for point defects — hard enforcement for invalid
+        # values, and a stderr NOTE for the legitimately line-less finding so
+        # an accidental omission stays visible. A file-scoped finding is a
+        # real, verdict-counting finding, not a downgrade.
+        if line is None:
             print(
-                f"NOTE: recording '{title}' ({severity_value}) as a "
-                f"FILE-SCOPED finding for '{file}' because line=None. "
+                f"NOTE: recording '{finding['title']}' ({finding['severity']}) "
+                f"as a FILE-SCOPED finding for '{file}' because line=None. "
                 f"It counts toward the verdict. If this finding points at a "
                 f"specific line, re-add it with line=<source line>.",
                 file=sys.stderr,
@@ -642,12 +651,9 @@ class ReviewOutputBuilder:
                 f"line must be a positive integer, got {line}. "
                 "Lines are 1-indexed."
             )
-
-        # Warn on implausibly large line numbers — likely patch-file line confusion.
-        # When agents read a diff/patch file, the Read tool displays line numbers
-        # within the patch (e.g., "227→+class Foo"). Agents sometimes use these
-        # patch-file positions instead of the actual source file line numbers.
-        if not file_scoped and line > 5000:
+        elif line > 5000:
+            # Agents reading a patch file sometimes cite the patch's own
+            # display line numbers instead of the source file's.
             print(
                 f"WARNING: line={line} for '{file}' is unusually large. "
                 f"Verify this is a source file line number, not a patch file "
@@ -656,31 +662,7 @@ class ReviewOutputBuilder:
             )
 
         finding_id = self._allocate_finding_id()
-
-        finding = {
-            'id': finding_id,
-            'category': category,
-            'severity': severity_value,
-            'title': coerce_text(title, single_line=True),
-            'description': coerce_text(description),
-            'file': file,
-            'line': line,
-            'recommendation': coerce_text(recommendation),
-            'confidence': confidence,
-            **extra_fields
-        }
-        if file_scoped:
-            finding['scope'] = 'file'
-        if behavior_evidence is not None:
-            finding['behavior_evidence'] = behavior_evidence
-        if source_cited is not None:
-            finding['source_cited'] = source_cited
-        if floor_value is not None:
-            finding['severity_floor'] = floor_value
-        if channel == 'advisory':
-            finding['channel'] = channel
-
-        self.findings.append(finding)
+        self.findings.append({'id': finding_id, **finding})
         self._invocation_delta.append(
             f"added finding {finding_id} "
             f"{json.dumps(finding['title'], ensure_ascii=False)}"
