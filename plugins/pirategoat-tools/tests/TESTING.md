@@ -213,14 +213,14 @@ Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/
 | `TestFileScopedFindings` | `line=None` records a first-class file-scoped finding (`scope: "file"`) that still counts toward the verdict |
 | `TestLineRequired` | Invalid line values still raise for point defects — the file-scoped path never becomes a way to skip validation |
 | `TestAddObservation` | `add_observation()` stores file-level notes outside the finding pipeline, in insertion order |
-| `TestReviewedFileClaims` | Explicit positive claims of review-claimable files actually read: canonical path grammar, add-time membership validation against the authoritative assignment, no verdict effect, all-or-nothing claim/retraction batches, and duplicate/already-recorded dedup semantics |
+| `TestReviewedFileClaims` | Only files the bound assignment offers can be claimed, claims and retractions are all-or-nothing, and no claim moves the verdict |
 | `TestNotApplicable` | `mark_not_applicable()` produces a `not_applicable` verdict with `skip_reason`, zero findings |
 | `TestAdvisoryChannel` | A finding's channel must be one the bound assignment grants the reviewer — enforced at add time, again at publication, and fails open only when there is no readable input to consult; advisory findings are listed but never gate the verdict |
 | `TestDerivedReviewedFiles` | Every draft save derives the six canonical top-level reviewed-file fields from the schema-4 assignment and reviewed-file claims; re-saving recomputes from scratch and finalized JSON preserves the derived values |
 | `TestBudgetTargetEcho` | `save_draft()` echoes the call-budget target exactly when the canonical derivation still has unclaimed work |
 | `TestDraftFileGapReceipt` | The receipt reports the complete unclaimed population compactly without turning filenames into mutable agent-authored state |
-| `TestMetaIsNeverFakeZero` | `reviewed_file_count` stays top-level and unmeasured until an authoritative assignment is supplied, while `meta.review_duration_ms` derives from the actor's dispatch marker — the `<agent>.started` and `<agent>.synthesis-started` families both — with null for a missing, unparsable, or future-stamped marker |
-| `TestTypeScriptContractLockstep` | `schemas/review-output.ts` and the serialized artifact describe one shape: the identity block (`pr_id`/`reviewer`/`timestamp`/`plugin_version`/`schema`) is declared and emitted, the retired `version` field is gone from both, `schema` is typed `number`, and `plugin_version` is typed nullable |
+| `TestMetaIsNeverFakeZero` | An unmeasured count stays unmeasured: no reviewed-file count without an authoritative assignment, no duration without a readable dispatch marker |
+| `TestTypeScriptContractLockstep` | `schemas/review-output.ts` and the Python validators describe one field set — a field added on either side without the other fails here |
 | `TestAssessment` | The reconciliator-owned nullable assessment serializes and renders, while raw reviewer use is blocked by protocol and bootstrap contracts |
 | `TestReconciliationSectionsRender` | Every section the reconciliator's old hand-written narrative template carried (recommendations, observations, host context banner, `meta.reconciliation`) now has a rendered home |
 | `TestMaterializeFindingsMarkdown` | One materializer, parameterized — `review-findings.md` and `<reviewer>-review.md` share the same render path, never a second one |
@@ -263,8 +263,8 @@ Direct unit tests on `scripts/review/reconciliation_context.py` — finalized-re
 | `TestAggregateReviewedFiles` | `aggregate_file_review()` carries inline-diff receipt per agent from the scope sidecars and each reviewer's claimed/unclaimed files from its finalized review, never re-derived from the assignment sidecar; a malformed document receives no credit, and one reviewer's claim cannot conceal another reviewer's unclaimed work |
 | `TestUnscopedFiles` | `unscoped_files` — the changed files no reviewer's scope contained in any form, with the measured-empty case distinct from `None` when no changed-file list was supplied |
 | `TestAgentsReportingCountsAgents` | `scope_reporting_agent_count` counts distinct agent names, not scope-summary files — reviewers with a secondary `-config-ops` summary still count once |
-| `TestMissingAgentDetection` | `compute_missing_agents()` keeps dispatched-minus-reporting a MEASUREMENT rather than the reconciliator's arithmetic — sorted for stable diffs, `None` (never `[]`) when dispatch is unknown, measured-empty for an explicitly empty dispatch, and no negative population from an undispatched reporter. Crossed through the CLI to the JSON both ways |
-| `TestPrefilterAnnotation` | The two structurally-certain out-of-scope statuses are adjudicated by the pipeline and annotated in place, never deleted (`reviews_by_agent` is the record of what each reviewer said, and its metrics are counted from it). `not_in_hunk` is deliberately never annotated — it is the one out-of-scope status that IS a judgment call. Owns the key, so a stale marker on in-scope input is cleared rather than silently deleting a real finding; malformed shapes are skipped, not raised |
+| `TestMissingAgentDetection` | Dispatched-minus-reporting is a measurement, with unknown dispatch (`null`) distinct from a measured-empty dispatch (`[]`), through the CLI and back |
+| `TestPrefilterAnnotation` | Structurally-certain out-of-scope findings are annotated in place with a checkable count, never deleted, and `not_in_hunk` is never annotated |
 | `TestReviewStem` | Reviewer artifact stems are derived through the shared trailing-`-reviewer` rule |
 
 ### Review Record Assembly Tests (`review/test_report_assembly.py`)
@@ -902,13 +902,10 @@ Never hardcode absolute paths. Tests run from any working directory.
 
 ## Valid Values Reference
 
-These are the canonical valid values used by graders. If the review output schema changes, update both the source (`review/agent/output.py`) and the grader constants (`helpers/graders.py`).
+These are the canonical valid values used by graders. `REQUIRED_JSON_TOP_FIELDS`, `REQUIRED_FINDING_FIELDS`, and `REQUIRED_CHECK_FIELDS` are imported from production (`review/agent/output.py`), and `VALID_SEVERITIES` is imported from `verdict_rules.VALID_SEVERITIES` (`review/verdict_rules.py`) rather than restated, so a schema or vocabulary change moves them without a second edit. The three below that are not imported have no single production twin.
 
 | Constant | Values | Source |
 |---|---|---|
-| `VALID_SEVERITIES` | `critical`, `high`, `medium`, `low`, `info` | `ReviewOutputBuilder.add_finding()` |
-| `VALID_VERDICTS` | `approve`, `block`, `request_changes`, `comment`, `not_applicable` | `ReviewOutputBuilder._calculate_verdict()` |
-| `REQUIRED_JSON_TOP_FIELDS` | Identity, schema, verdict/summary, `findings`, `checks`, `assessment`, six reviewed-file fields, and `meta` | `ReviewOutputBuilder.to_dict()` |
-| `REQUIRED_FINDING_FIELDS` | `id`, `category`, `severity`, `title`, `description`, `file`, `line`, `recommendation`, `confidence` | `ReviewOutputBuilder.add_finding()` |
-| `REQUIRED_CHECK_FIELDS` | `id`, `question`, `method`, `result`, `source_reviewers` | `ReviewOutputBuilder.record_check()` |
+| `VALID_VERDICTS` | `approve`, `block`, `request_changes`, `comment`, `not_applicable` | The per-reviewer verdict field — broader than `verdict_rules.VERDICT_RANK`, which is the ledger ladder |
+| `SEVERITY_RANK` | `info` < `low` < `medium` < `high` < `critical` | Answer-key severity comparison in `grading/test_answer_keys.py` |
 | `REQUIRED_STATE_FIELDS` | `last_reviewed_sha`, `last_reviewed_at`, `review_count`, `base_ref`, `git_range_used` | `code-review.md` Step 5 |

@@ -640,8 +640,8 @@ class TestCanonicalExecutableBuilderSource:
     def test_registered_reviewer_definitions_do_not_restore_raw_output_paths(self):
         stale = "Use ReviewOutputBuilder per shared protocol. Write to"
         canonical = (
-            "Use the bootstrap-provided ReviewOutputBuilder lifecycle. "
-            "Save the complete draft"
+            "Use ReviewOutputBuilder per the shared protocol's "
+            "Canonical Draft Lifecycle."
         )
 
         raw_reviewers = set(ALL_AGENTS) - {
@@ -659,14 +659,13 @@ class TestCanonicalExecutableBuilderSource:
 
         for phrase in (
             "rehydrates the existing complete draft",
-            "DRAFT TOTALS",
-            "full persisted draft",
-            "CHANGED",
-            "current invocation",
-            "no claimable review files remain unclaimed",
+            "full persisted draft's totals",
+            "mutations from this invocation",
+            "review files still unclaimed",
             "separate tool turn",
             "verbatim",
             "Raw reviewers must not call `set_assessment()`",
+            "Never write review JSON or Markdown directly",
         ):
             assert phrase in protocol
 
@@ -685,12 +684,18 @@ class TestCanonicalExecutableBuilderSource:
         assert positions == sorted(positions)
 
     def test_tests_protocol_requires_structured_evidence_for_material_negatives(self):
-        protocol = (
+        """The rule lives once, in the shared protocol's Absence Claims
+        section — the tests protocol no longer restates it."""
+        shared_protocol = (
+            PLUGIN_ROOT / "agents/shared/reviewer-protocol.md"
+        ).read_text()
+        tests_protocol = (
             PLUGIN_ROOT / "agents/shared/tests-reviewer-protocol.md"
         ).read_text()
 
-        assert "material negative" in protocol
-        assert "builder.record_check(" in protocol
+        assert "material negative" in shared_protocol
+        assert "builder.record_check(" in shared_protocol
+        assert "material negative" not in tests_protocol
 
     def test_continuation_index_precedes_the_executable_builder_snippet(
         self, tmp_path
@@ -1236,8 +1241,7 @@ class TestRepoReviewerAdapterContract:
         )[1].split("\n- ", 1)[0]
 
         assert "`save_draft()`" in empty_branch
-        assert "compact receipt" in empty_branch
-        assert "exact printed `FINALIZE REVIEW` command verbatim" in empty_branch
+        assert "finalize" in empty_branch
         assert "`finalize_review_command`" not in empty_branch
         assert "`save()`" not in empty_branch
         assert "standard pirategoat finding" in adapter
@@ -1246,14 +1250,17 @@ class TestRepoReviewerAdapterContract:
         assert "Tag EVERY issue" not in adapter
 
     def test_example_runs_the_printed_finalization_command_verbatim(self):
+        """The example calls `save_draft()` and then points at the shared
+        protocol's Canonical Draft Lifecycle rather than re-teaching the
+        finalization mechanics inline."""
         adapter = (
             PLUGIN_ROOT / "agents/repo-reviewer-adapter.md"
         ).read_text()
 
         assert "receipt = builder.save_draft()" not in adapter
         assert "builder.save_draft()" in adapter
-        assert "exact printed `FINALIZE REVIEW` command verbatim" in adapter
-        assert "separate tool turn" in adapter
+        assert "Canonical Draft Lifecycle" in adapter
+        assert "exact printed `FINALIZE REVIEW` command verbatim" not in adapter
 
 
 class TestReconcilerReviewDomainOwnership:

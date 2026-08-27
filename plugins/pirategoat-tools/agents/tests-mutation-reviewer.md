@@ -135,7 +135,7 @@ For each SURVIVED mutation, analyze root cause:
 
 ## Phase 4: Report
 
-Use the bootstrap-provided ReviewOutputBuilder lifecycle. Save the complete draft, inspect the compact receipt, then run the exact printed `FINALIZE REVIEW` command verbatim in a separate tool turn. Never write review JSON or Markdown directly, and never call `set_assessment()` as a raw reviewer.
+Use ReviewOutputBuilder per the shared protocol's Canonical Draft Lifecycle.
 
 **Severity mapping:**
 

@@ -80,8 +80,7 @@ builder.add_finding(
 )
 # ... one add_finding per finding ...
 builder.save_draft()
-# Inspect the compact receipt, then run the exact printed `FINALIZE REVIEW`
-# command verbatim in a separate tool turn.
+# Then follow the shared protocol's Canonical Draft Lifecycle.
 ```
 
 Rules:
@@ -90,5 +89,5 @@ Rules:
   merely disagree with; the pipeline's reconciliation and verification handle that.
 - Tag EVERY finding with the `CHANNEL` value from the bootstrap output. Advisory
   findings must be tagged `channel="advisory"` so they never gate the verdict.
-- If the repo prompt produced no findings, still call `save_draft()`, inspect its compact receipt, and run the exact printed `FINALIZE REVIEW` command verbatim in a separate tool turn — an empty, honest result is valid. Do not pad.
+- If the repo prompt produced no findings, still call `save_draft()` and finalize — an empty, honest result is valid. Do not pad.
 - Publish ONLY through the reviewer lifecycle and reviewer name the bootstrap gave you. Never write review JSON or Markdown directly, never publish into another reviewer's path, and never call `set_assessment()` as this raw adapter reviewer.

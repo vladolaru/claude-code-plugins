@@ -226,17 +226,14 @@ Follow this order for every raw domain review. Bootstrap supplies the one execut
 3. Record every material verification result with `builder.record_check(...)`. Use the stable `cN` IDs from the continuation index with `update_check()` or `remove_check()` when correcting prior work.
 4. After actually reading a claimable non-inline file, call `builder.claim_files_reviewed(...)`; use `retract_reviewed_file_claims()` if a prior claim no longer reflects what you read.
 5. Raw reviewers must not call `set_assessment()`. The initial synthesis assessment is pipeline-owned and is authored only by the reconciliator after judging all reviewer evidence.
-6. Call `builder.save_draft()` once the builder holds the complete review you currently intend to finalize. Saving validates and atomically replaces the full persisted draft; it is not a partial merge and it is not completion.
-7. Inspect the compact receipt. `DRAFT TOTALS` describes the full persisted draft after the save, while `CHANGED` describes only mutations from the current invocation. When the receipt omits `FILES NOT YET CLAIMED AS REVIEWED`, no claimable review files remain unclaimed.
-8. If more work is needed, stop and continue in a new invocation with `ReviewOutputBuilder.open(...)`; it rehydrates findings, checks, observations, positives, claims, confidence, and their stable ID counters before applying new mutations.
-9. When the receipt matches your intent, run the exact printed `FINALIZE REVIEW` command verbatim in a separate tool turn. Do not construct, edit, copy out, or interpret its digest argument. Return `STATUS: FINISHED` only after the command prints `REVIEW FINALIZED`.
+6. Call `builder.save_draft()` when the builder holds the review you intend to finalize, then do what its receipt says: it reports the full persisted draft's totals, the mutations from this invocation, any review files still unclaimed, and the exact `FINALIZE REVIEW` command to run verbatim in a separate tool turn — never constructed, edited, or interpreted. If more work is needed, continue in a new invocation with `ReviewOutputBuilder.open(...)`, which rehydrates everything including the stable ID counters; otherwise return `STATUS: FINISHED` only after that command prints `REVIEW FINALIZED`.
+7. Never write review JSON or Markdown directly. The builder plus its printed `FINALIZE REVIEW` command are the only publication path a raw reviewer has.
 
 ## ReviewOutputBuilder API
 
 This is a non-executable API reference. Bootstrap's **OUTPUT INSTRUCTIONS** block is the sole canonical executable builder command; if bootstrap fails, stop and report the failure instead of reconstructing a command from this reference.
 
 **Core methods:**
-- `ReviewOutputBuilder.open(output_dir, pr_id, reviewer)` - Create a new bound draft or validate and rehydrate that reviewer's existing bound draft
 - `builder.add_finding(severity, title, file, description, recommendation, category="general", line=<required for point defects>, confidence=0.9)` - Add diff-anchored finding. Pass `line=None` ONLY for findings that are line-less by nature (missing test coverage, precedent, cross-file architecture) — recorded as a verdict-counting file-scoped finding
 - `builder.update_finding(finding_id, **fields)` / `builder.remove_finding(finding_id)` - Correct or remove a persisted finding without recycling its stable ID
 - `builder.add_observation(file, note, category="general")` - Add informational file-level note (doesn't affect verdict — do NOT use for real findings)
@@ -246,7 +243,6 @@ This is a non-executable API reference. Bootstrap's **OUTPUT INSTRUCTIONS** bloc
 - `builder.retract_reviewed_file_claims(*files)` - Retract reviewed-file claims that no longer reflect what you actually read before saving again.
 - `builder.set_confidence(0.0-1.0)` - Set overall confidence
 - `builder.add_positive_observation("observation")` - Note good patterns
-- `builder.save_draft()` - Atomically replace the bound mutable draft and print its DRAFT TOTALS plus an exact FINALIZE REVIEW command. Inspect the receipt and optionally continue; in a separate tool turn run that exact command, and treat the review as finished only after it prints REVIEW FINALIZED.
 - `builder.set_assessment(text)` - Pipeline-synthesis-only API for the reconciliator's initial overall assessment; raw domain reviewers do not call it
 
 **Valid severities:** `critical`, `high`, `medium`, `low`, `info`

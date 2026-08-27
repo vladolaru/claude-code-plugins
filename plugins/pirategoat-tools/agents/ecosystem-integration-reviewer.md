@@ -147,7 +147,7 @@ Speculative assumption-mismatch findings are not in scope. If you cannot ground 
 
 ## Output
 
-Use the bootstrap-provided ReviewOutputBuilder lifecycle. Save the complete draft, inspect the compact receipt, then run the exact printed `FINALIZE REVIEW` command verbatim in a separate tool turn. Never write review JSON or Markdown directly, and never call `set_assessment()` as a raw reviewer.
+Use ReviewOutputBuilder per the shared protocol's Canonical Draft Lifecycle.
 
 Each finding includes `file`, `line`, `category` (`filter-arity` | `action-signature` | `override-mismatch` | `abstract-missing` | `final-conflict` | `visibility-downgrade` | `rest-schema-mismatch` | `behavior-assumption` | `other`), and a citation to the upstream source when verification relied on it (`source_cited` field: `"<path>:<line>"`).
 

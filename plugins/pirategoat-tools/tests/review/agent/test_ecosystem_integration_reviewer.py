@@ -81,7 +81,8 @@ def test_agent_uses_bounded_upstream_discovery_then_rule_zero_exit():
 
 def test_agent_uses_the_bootstrap_owned_output_lifecycle():
     content = AGENT_PATH.read_text()
-    assert "Use the bootstrap-provided ReviewOutputBuilder lifecycle" in content
-    assert "exact printed `FINALIZE REVIEW` command verbatim" in content
-    assert "Never write review JSON or Markdown directly" in content
+    assert (
+        "Use ReviewOutputBuilder per the shared protocol's "
+        "Canonical Draft Lifecycle."
+    ) in content
     assert "ecosystem-integration-review.{json,md}" not in content

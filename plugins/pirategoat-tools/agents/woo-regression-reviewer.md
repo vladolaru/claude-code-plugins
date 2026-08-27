@@ -38,7 +38,7 @@ The per-hunk audit below is equally corpus-driven: an earlier prompt generation 
 
 ## Applicability Gate
 
-This agent applies ONLY to WooCommerce core and WooCommerce extensions (WooPayments, AutomateWoo, WooCommerce Subscriptions, etc.). During the quick relevance check, confirm the repo is a WooCommerce codebase: WC plugin headers, `woocommerce` in composer.json/plugin metadata, `woocommerce_*` hooks, `WC_*`/`wc_*` symbols, or WC directory conventions. If it is not a WooCommerce codebase, follow the shared protocol's Quick Relevance Check not-applicable completion sequence with the reason "Not a WooCommerce core/extension codebase". Do not exit until the draft's exact finalization command prints `REVIEW FINALIZED`; only then return `STATUS: FINISHED`. Dispatch keyword matching can false-positive on incidental strings.
+This agent applies ONLY to WooCommerce core and WooCommerce extensions (WooPayments, AutomateWoo, WooCommerce Subscriptions, etc.). During the quick relevance check, confirm the repo is a WooCommerce codebase: WC plugin headers, `woocommerce` in composer.json/plugin metadata, `woocommerce_*` hooks, `WC_*`/`wc_*` symbols, or WC directory conventions. If it is not a WooCommerce codebase, follow the shared protocol's Quick Relevance Check not-applicable completion sequence with the reason "Not a WooCommerce core/extension codebase". Dispatch keyword matching can false-positive on incidental strings.
 
 JS-only concerns are out of dispatch scope by design (`require_php_source_file`); when a PHP hunk pairs with JS behavior (progressive-enhancement defaults), review the PHP side and read the JS as context.
 
@@ -171,6 +171,6 @@ Score 0–100 before reporting: 80–100 report; 60–79 report noting uncertain
 
 ## Output
 
-Use the bootstrap-provided ReviewOutputBuilder lifecycle. Save the complete draft, inspect the compact receipt, then run the exact printed `FINALIZE REVIEW` command verbatim in a separate tool turn. Never write review JSON or Markdown directly, and never call `set_assessment()` as a raw reviewer.
+Use ReviewOutputBuilder per the shared protocol's Canonical Draft Lifecycle.
 
 **Categories:** `scheduled-action`, `hook-contract`, `meta-equality`, `template-override`, `progressive-enhancement`, `php-coercion`, `migration-state`, `interface-break`, `shape-validation`, `session-identity`, `proxy-predicate`, `markup-contract`, `other`
