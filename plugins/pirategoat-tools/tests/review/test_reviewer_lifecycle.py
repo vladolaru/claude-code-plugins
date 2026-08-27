@@ -233,8 +233,8 @@ class TestFinalization:
         first = finalize_review(str(tmp_path), "code", saved["review_digest"])
         retry = finalize_review(str(tmp_path), "code", saved["review_digest"])
 
-        assert first["already_finalized"] is False
-        assert retry["already_finalized"] is True
+        assert retry == first
+        assert set(first) == {"final", "review_digest"}
         assert Path(first["final"]).name == "code-review.json"
         assert not Path(saved["draft"]).exists()
 
@@ -369,6 +369,23 @@ class TestReviewIntakeClose:
             Path(tmp_path, "review-intake.json").read_text()
         )
         assert "invalid_final_reviews" not in persisted
+
+    def test_close_logs_no_completion_for_a_valid_final(self, tmp_path):
+        """Intake close freezes state; it never writes telemetry. The final
+        file IS the completion evidence status and the manifest read."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        telemetry = _start_telemetry(tmp_path, output_dir)
+        _write_assignment(output_dir)
+        saved = _open_builder(output_dir).save_draft()
+        finalize_review(str(output_dir), "code", saved["review_digest"])
+        before = len(telemetry._read_events())
+
+        closed = close_review_intake(str(output_dir), ["code-reviewer"])
+
+        assert closed["invalid_final_reviews"] == []
+        assert closed["completed"] == ["code-reviewer"]
+        assert len(telemetry._read_events()) == before
 
     def test_close_discards_only_recognized_dispatched_drafts(self, tmp_path):
         _write_assignment(tmp_path)

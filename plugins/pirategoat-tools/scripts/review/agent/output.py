@@ -236,16 +236,6 @@ def _log_agent_review_draft_saved_telemetry(
     )
 
 
-def _completion_was_logged(output_dir, agent_name, review_digest):
-    telemetry = _telemetry_for_output(output_dir)
-    return any(
-        event.get("event") == "agent_complete"
-        and event.get("agent") == agent_name
-        and event.get("review_digest") == review_digest
-        for event in telemetry._read_events()
-    )
-
-
 def _log_agent_complete_telemetry(
     output_dir, agent_name, verdict, finding_count, severities, review_digest
 ):
@@ -1223,7 +1213,14 @@ def _validate_review(output_dir, reviewer, paths, review_bytes):
 
 
 def finalize_review(output_dir: str, reviewer: str, review_digest: str):
-    """Validate and atomically promote exactly one observed draft."""
+    """Validate and atomically promote exactly one observed draft.
+
+    Publishing is the only event: a retry with the same digest re-validates
+    the final it already published, clears any stray draft, and returns the
+    same result. Completion telemetry is logged by the promotion itself, so
+    a retry cannot double-log it, and status and the manifest read the final
+    file rather than the event.
+    """
     if (
         not isinstance(review_digest, str)
         or len(review_digest) != 64
@@ -1231,33 +1228,25 @@ def finalize_review(output_dir: str, reviewer: str, review_digest: str):
     ):
         raise ValueError("review digest must be a lowercase SHA-256")
     paths = review_paths(output_dir, reviewer)
-    already_finalized = False
     with output_dir_lock(output_dir):
         require_review_intake_open(output_dir)
         if os.path.exists(paths.final):
-            with open(paths.final, "rb") as final_handle:
-                final_bytes = final_handle.read()
-            final_digest = hashlib.sha256(final_bytes).hexdigest()
-            if final_digest != review_digest:
+            final_bytes = Path(paths.final).read_bytes()
+            if hashlib.sha256(final_bytes).hexdigest() != review_digest:
                 raise ValueError(
                     "review digest conflicts with the finalized review"
                 )
-            review, agent_name = _validate_review(
-                output_dir, reviewer, paths, final_bytes
-            )
-            already_finalized = True
+            _validate_review(output_dir, reviewer, paths, final_bytes)
             try:
                 os.unlink(paths.draft)
             except FileNotFoundError:
                 pass
         else:
             try:
-                with open(paths.draft, "rb") as draft_handle:
-                    draft_bytes = draft_handle.read()
+                draft_bytes = Path(paths.draft).read_bytes()
             except OSError as exc:
                 raise ValueError("review draft is absent") from exc
-            actual_digest = hashlib.sha256(draft_bytes).hexdigest()
-            if actual_digest != review_digest:
+            if hashlib.sha256(draft_bytes).hexdigest() != review_digest:
                 raise ValueError(
                     "review digest no longer matches the saved draft"
                 )
@@ -1265,10 +1254,6 @@ def finalize_review(output_dir: str, reviewer: str, review_digest: str):
                 output_dir, reviewer, paths, draft_bytes
             )
             os.replace(paths.draft, paths.final)
-
-        if not _completion_was_logged(
-            output_dir, agent_name, review_digest
-        ):
             _log_agent_complete_telemetry(
                 output_dir,
                 agent_name,
@@ -1277,11 +1262,7 @@ def finalize_review(output_dir: str, reviewer: str, review_digest: str):
                 review["summary"]["by_severity"],
                 review_digest,
             )
-    return {
-        "final": paths.final,
-        "review_digest": review_digest,
-        "already_finalized": already_finalized,
-    }
+    return {"final": paths.final, "review_digest": review_digest}
 
 
 if __name__ == '__main__':
