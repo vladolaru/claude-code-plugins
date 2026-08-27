@@ -58,7 +58,7 @@ optimistic:
   ``status: "complete"`` under the CURRENT schema — never on a still-running
   manifest, which is finalize's territory alone. The manifest keeps ONE
   owning module, telemetry, even with two call sites into it; this CLI
-  has no authority of its own over ``run``/``dispatch``/``coverage``/etc.
+  has no authority of its own over ``run``/``dispatch``/``assignment``/etc.
 
 Manifest reprojection is best-effort, matching every other manifest write
 telemetry performs: the outcome is reported on this CLI's stdout summary

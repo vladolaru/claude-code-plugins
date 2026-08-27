@@ -83,8 +83,8 @@ def _write_dispatch_plan(output_dir, agent_names):
     }))
 
 
-def _write_coverage_inputs(output_dir, changed, reviewable, agents):
-    """Write the two authoritative path sets used by coverage measurement."""
+def _write_assignment_inputs(output_dir, changed, reviewable, agents):
+    """Write the two authoritative path sets assignment measurement reads."""
     (output_dir / "review-context.json").write_text(json.dumps({
         "git": {"changed_files": changed},
     }))
@@ -645,7 +645,7 @@ class TestRunManifest:
         self, telemetry, output_dir
     ):
         telemetry.start(run_id="run-1")
-        _write_coverage_inputs(
+        _write_assignment_inputs(
             output_dir,
             ["src/a.py"],
             ["src/a.py"],
@@ -668,7 +668,7 @@ class TestRunManifest:
         self, mod, telemetry, output_dir, monkeypatch
     ):
         telemetry.start(run_id="run-1")
-        _write_coverage_inputs(
+        _write_assignment_inputs(
             output_dir,
             ["src/a.py"],
             ["src/a.py"],
@@ -700,7 +700,7 @@ class TestRunManifest:
         the sidecar they describe is `<reviewer>-assignment.json`.
         """
         telemetry.start(run_id="run-1")
-        _write_coverage_inputs(
+        _write_assignment_inputs(
             output_dir,
             ["src/a.py"],
             ["src/a.py"],
@@ -1064,10 +1064,10 @@ class TestRunManifest:
         assert "SENSITIVE_" not in serialized
         assert "arbitrary" not in serialized
 
-    def test_builds_canonical_assigned_excluded_and_uncovered_coverage(
+    def test_builds_canonical_assigned_excluded_and_unassigned_sets(
         self, telemetry, output_dir
     ):
-        _write_coverage_inputs(
+        _write_assignment_inputs(
             output_dir,
             changed=[
                 "./src/a.py",
@@ -1148,7 +1148,7 @@ class TestRunManifest:
         changed = [
             r'"src/caf\303\251.py"', "src/orphan.py", "vendor/generated.js",
         ]
-        _write_coverage_inputs(
+        _write_assignment_inputs(
             output_dir,
             changed=changed,
             # vendor/generated.js is noise-filtered out of `reviewable`.
@@ -1195,7 +1195,7 @@ class TestRunManifest:
     ):
         git_quoted = r'"src/\346\270\254\350\251\246.py"'
         unicode_path = "src/測試.py"
-        _write_coverage_inputs(
+        _write_assignment_inputs(
             output_dir,
             changed=[git_quoted],
             reviewable=[git_quoted],
@@ -1223,7 +1223,7 @@ class TestRunManifest:
         git_quoted_backslash = r'"src/literal\\name.py"'
         literal_backslash = r"src/literal\name.py"
         nested_path = "src/literal/name.py"
-        _write_coverage_inputs(
+        _write_assignment_inputs(
             output_dir,
             changed=[git_quoted_backslash, nested_path],
             reviewable=[git_quoted_backslash, nested_path],
@@ -1236,15 +1236,15 @@ class TestRunManifest:
         )
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
-        coverage = _read_manifest(telemetry)["assignment"]
-        assert coverage["changed_files"] == [nested_path, literal_backslash]
-        assert coverage["reviewable_files"] == [nested_path, literal_backslash]
-        assert coverage["assigned_files_by_agent"]["code-reviewer"] == [
+        assignment = _read_manifest(telemetry)["assignment"]
+        assert assignment["changed_files"] == [nested_path, literal_backslash]
+        assert assignment["reviewable_files"] == [nested_path, literal_backslash]
+        assert assignment["assigned_files_by_agent"]["code-reviewer"] == [
             nested_path,
             literal_backslash,
         ]
-        assert coverage["assigned_files"] == [nested_path, literal_backslash]
-        assert len(coverage["assigned_files"]) == 2
+        assert assignment["assigned_files"] == [nested_path, literal_backslash]
+        assert len(assignment["assigned_files"]) == 2
 
     def test_quote_delimited_filename_stays_distinct_from_plain_filename(
         self, telemetry, output_dir
@@ -1252,7 +1252,7 @@ class TestRunManifest:
         plain_path = "name.py"
         literal_quoted_path = '"name.py"'
         git_quoted_representation = r'"\"name.py\""'
-        _write_coverage_inputs(
+        _write_assignment_inputs(
             output_dir,
             changed=[plain_path, literal_quoted_path],
             reviewable=[plain_path, literal_quoted_path],
@@ -1271,14 +1271,14 @@ class TestRunManifest:
         assert manifest["agents"]["started"][0]["scope"]["paths"] == [
             literal_quoted_path,
         ]
-        coverage = manifest["assignment"]
-        assert coverage["changed_files"] == [literal_quoted_path, plain_path]
-        assert coverage["reviewable_files"] == [literal_quoted_path, plain_path]
-        assert coverage["assigned_files_by_agent"] == {
+        assignment = manifest["assignment"]
+        assert assignment["changed_files"] == [literal_quoted_path, plain_path]
+        assert assignment["reviewable_files"] == [literal_quoted_path, plain_path]
+        assert assignment["assigned_files_by_agent"] == {
             "code-reviewer": [literal_quoted_path],
         }
-        assert coverage["assigned_files"] == [literal_quoted_path]
-        assert coverage["unassigned_reviewable_files"] == [plain_path]
+        assert assignment["assigned_files"] == [literal_quoted_path]
+        assert assignment["unassigned_reviewable_files"] == [plain_path]
 
     def test_raw_quote_delimited_scope_path_without_escape_is_not_git_wrapper(
         self, telemetry
@@ -1306,10 +1306,10 @@ class TestRunManifest:
             pytest.param(r'"src/\346.py', id="unterminated-quote"),
         ],
     )
-    def test_malformed_git_quoted_authoritative_path_makes_coverage_unavailable(
+    def test_malformed_git_quoted_authoritative_path_makes_assignment_unavailable(
         self, telemetry, output_dir, git_quoted
     ):
-        _write_coverage_inputs(
+        _write_assignment_inputs(
             output_dir,
             changed=[git_quoted],
             reviewable=[git_quoted],
@@ -1322,10 +1322,10 @@ class TestRunManifest:
         assert manifest["availability"]["assignment"] is False
         assert manifest["assignment"] is None
 
-    def test_mixed_invalid_persisted_scope_paths_make_coverage_unavailable(
+    def test_mixed_invalid_persisted_scope_paths_make_assignment_unavailable(
         self, telemetry, output_dir
     ):
-        _write_coverage_inputs(
+        _write_assignment_inputs(
             output_dir,
             changed=["src/a.py"],
             reviewable=["src/a.py"],
@@ -1356,7 +1356,7 @@ class TestRunManifest:
     def test_finally_skipped_agent_assigns_nothing_despite_start_event(
         self, telemetry, output_dir
     ):
-        _write_coverage_inputs(
+        _write_assignment_inputs(
             output_dir,
             changed=["src/a.py"],
             reviewable=["src/a.py"],
@@ -1370,15 +1370,15 @@ class TestRunManifest:
         )
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
-        coverage = _read_manifest(telemetry)["assignment"]
-        assert coverage["assigned_files_by_agent"] == {}
-        assert coverage["assigned_files"] == []
-        assert coverage["unassigned_reviewable_files"] == ["src/a.py"]
+        assignment = _read_manifest(telemetry)["assignment"]
+        assert assignment["assigned_files_by_agent"] == {}
+        assert assignment["assigned_files"] == []
+        assert assignment["unassigned_reviewable_files"] == ["src/a.py"]
 
     def test_planned_but_never_started_agent_leaves_file_uncovered(
         self, telemetry, output_dir
     ):
-        _write_coverage_inputs(
+        _write_assignment_inputs(
             output_dir,
             changed=["src/a.py"],
             reviewable=["src/a.py"],
@@ -1387,15 +1387,15 @@ class TestRunManifest:
         telemetry.start(run_id="run-1")
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
-        coverage = _read_manifest(telemetry)["assignment"]
-        assert coverage["assigned_files_by_agent"] == {}
-        assert coverage["assigned_files"] == []
-        assert coverage["unassigned_reviewable_files"] == ["src/a.py"]
+        assignment = _read_manifest(telemetry)["assignment"]
+        assert assignment["assigned_files_by_agent"] == {}
+        assert assignment["assigned_files"] == []
+        assert assignment["unassigned_reviewable_files"] == ["src/a.py"]
 
     def test_retries_merge_scope_paths_for_the_same_agent(
         self, telemetry, output_dir
     ):
-        _write_coverage_inputs(
+        _write_assignment_inputs(
             output_dir,
             changed=["src/a.py", "src/b.py"],
             reviewable=["src/a.py", "src/b.py"],
@@ -1417,7 +1417,7 @@ class TestRunManifest:
     def test_dispatch_override_status_assigns_scope(
         self, telemetry, output_dir
     ):
-        _write_coverage_inputs(
+        _write_assignment_inputs(
             output_dir,
             changed=["templates/page.php"],
             reviewable=["templates/page.php"],
@@ -1429,11 +1429,11 @@ class TestRunManifest:
         )
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
-        coverage = _read_manifest(telemetry)["assignment"]
-        assert coverage["assigned_files_by_agent"] == {
+        assignment = _read_manifest(telemetry)["assignment"]
+        assert assignment["assigned_files_by_agent"] == {
             "a11y-reviewer": ["templates/page.php"],
         }
-        assert coverage["assigned_files"] == ["templates/page.php"]
+        assert assignment["assigned_files"] == ["templates/page.php"]
 
     @pytest.mark.parametrize(
         "context_payload,plan_payload",
@@ -1475,7 +1475,7 @@ class TestRunManifest:
             ),
         ],
     )
-    def test_coverage_is_explicitly_unavailable_for_incomplete_inputs(
+    def test_assignment_is_explicitly_unavailable_for_incomplete_inputs(
         self, mod, tmp_path, context_payload, plan_payload, capsys
     ):
         output_dir = tmp_path / "output"
@@ -1504,18 +1504,18 @@ class TestRunManifest:
         # Legitimate absence (malformed/partial/missing inputs) is normal
         # operation and must stay silent — only an unexpected builder bug
         # is diagnostic-worthy. See
-        # test_unexpected_coverage_builder_exception_is_diagnosed_on_stderr.
+        # test_unexpected_assignment_builder_exception_is_diagnosed_on_stderr.
         assert capsys.readouterr().err == ""
 
-    def test_unexpected_coverage_builder_exception_is_diagnosed_on_stderr(
+    def test_unexpected_assignment_builder_exception_is_diagnosed_on_stderr(
         self, mod, telemetry, output_dir, capsys, monkeypatch
     ):
-        """A bug inside the coverage builder must be distinguishable from
-        the legitimate ``return None`` absence paths above: it still
-        yields ``coverage: None`` (fail-open — the run is unaffected) but
+        """A bug inside the assignment builder must be distinguishable
+        from the legitimate ``return None`` absence paths above: it still
+        yields ``assignment: None`` (fail-open — the run is unaffected) but
         it must be diagnosed on stderr, unlike every silent absence path.
         """
-        _write_coverage_inputs(
+        _write_assignment_inputs(
             output_dir,
             changed=["src/a.py"],
             reviewable=["src/a.py"],
@@ -1588,10 +1588,10 @@ class TestRunManifest:
         assert "assignment manifest build failed for /output/dir" in err
         assert "simulated assignment builder bug" in err
 
-    def test_valid_empty_path_sets_are_available_zero_coverage(
+    def test_valid_empty_path_sets_are_available_zero_assignment(
         self, telemetry, output_dir
     ):
-        _write_coverage_inputs(
+        _write_assignment_inputs(
             output_dir, changed=[], reviewable=[], agents=[]
         )
 
@@ -1612,10 +1612,10 @@ class TestRunManifest:
             "semantics": "generated_scope_not_proof_of_model_read",
         }
 
-    def test_duplicate_final_agent_names_make_coverage_unavailable(
+    def test_duplicate_final_agent_names_make_assignment_unavailable(
         self, telemetry, output_dir
     ):
-        _write_coverage_inputs(
+        _write_assignment_inputs(
             output_dir,
             changed=["src/a.py"],
             reviewable=["src/a.py"],
@@ -1634,12 +1634,12 @@ class TestRunManifest:
         assert manifest["availability"]["assignment"] is False
         assert manifest["assignment"] is None
 
-    def test_coverage_carries_canonical_reviewed_files_per_reviewer(
+    def test_assignment_carries_canonical_reviewed_files_per_reviewer(
         self, telemetry, output_dir
     ):
         from review.agent.output import ReviewOutputBuilder, finalize_review
 
-        _write_coverage_inputs(
+        _write_assignment_inputs(
             output_dir,
             changed=["a.py", "b.py", "c.py"],
             reviewable=["a.py", "b.py", "c.py"],
@@ -1667,18 +1667,18 @@ class TestRunManifest:
         )
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
-        coverage = _read_manifest(telemetry)["assignment"]
-        assert coverage["reviewed_files_by_agent"] == {
+        assignment = _read_manifest(telemetry)["assignment"]
+        assert assignment["reviewed_files_by_agent"] == {
             "security-reviewer": {
                 "reviewed_file_claim_count": 1,
                 "unclaimed_review_file_count": 2,
             },
         }
-        assert coverage["review_claimable_file_count_by_agent"] == {
+        assert assignment["review_claimable_file_count_by_agent"] == {
             "security-reviewer": 3
         }
 
-    def test_direct_coverage_reads_follow_review_paths_authority(
+    def test_direct_assignment_reads_follow_review_paths_authority(
         self, mod, output_dir, monkeypatch
     ):
         authority_dir = output_dir / "authority"
@@ -1752,12 +1752,12 @@ class TestRunManifest:
             str(output_dir), "security-reviewer"
         ) is None
 
-    def test_coverage_omits_unfinalized_draft_counts(
+    def test_assignment_omits_unfinalized_draft_counts(
         self, telemetry, output_dir
     ):
         from review.agent.output import ReviewOutputBuilder
 
-        _write_coverage_inputs(
+        _write_assignment_inputs(
             output_dir,
             changed=["a.py"],
             reviewable=["a.py"],
@@ -1780,9 +1780,9 @@ class TestRunManifest:
         ).save_draft()
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
-        coverage = _read_manifest(telemetry)["assignment"]
-        assert coverage["reviewed_files_by_agent"] == {}
-        assert coverage["review_claimable_file_count_by_agent"] == {
+        assignment = _read_manifest(telemetry)["assignment"]
+        assert assignment["reviewed_files_by_agent"] == {}
+        assert assignment["review_claimable_file_count_by_agent"] == {
             "security-reviewer": 1
         }
 
@@ -3296,7 +3296,7 @@ class TestReviewVocabularyManifestProjection:
             },
         )
 
-        coverage = mod.manifest_sections.build_assignment_manifest(
+        assignment = mod.manifest_sections.build_assignment_manifest(
             str(output_dir),
             [{
                 "event": "agent_start",
@@ -3315,7 +3315,7 @@ class TestReviewVocabularyManifestProjection:
             },
         )
 
-        assert coverage == {
+        assert assignment == {
             "changed_files": ["a.php", "b.php"],
             "reviewable_files": ["a.php", "b.php"],
             "assigned_files_by_agent": {
@@ -3339,7 +3339,7 @@ class TestReviewVocabularyManifestProjection:
             "changed", "reviewable", "by_agent", "assigned", "excluded",
             "uncovered", "deferred_honesty_by_agent",
         ):
-            assert retired not in coverage
+            assert retired not in assignment
 
     def test_finalized_summary_and_reconciliation_use_finding_vocabulary(
         self, mod, output_dir, tmp_path
@@ -4902,7 +4902,7 @@ class TestReprojectUsage:
                 "incomplete": [],
             },
             "dispatch": {"fixture": "dispatch-payload"},
-            "assignment": {"fixture": "coverage-payload"},
+            "assignment": {"fixture": "assignment-payload"},
             "outcome": {"summary": {"fixture": "outcome-payload"}},
             "availability": {
                 "pipeline": True,

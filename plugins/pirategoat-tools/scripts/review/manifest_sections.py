@@ -511,7 +511,7 @@ def _unscoped_files(
 
     Both sides of the subtraction go through
     ``git_paths.normalize_repo_paths`` — the one repo-path grammar the run
-    manifest's coverage builder already uses — because the two producers
+    manifest's assignment builder already uses — because the two producers
     quote differently: scope sidecars run ``-c core.quotepath=false`` and
     emit ``src/café.php``, while ``context.py``'s plain
     ``git diff --name-only`` emits ``"src/caf\303\251.php"``. Subtracting

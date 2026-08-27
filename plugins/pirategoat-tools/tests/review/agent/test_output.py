@@ -2549,7 +2549,7 @@ class TestTypeScriptContractLockstep:
     def test_ts_schema_field_sets_match_python_validators(self):
         """schemas/review-output.ts declares exactly the field sets the two
         live Python validators require: REVIEW_CONTENT_FIELDS/REVIEWER_FIELDS
-        in agent/output.py for ReviewContent/ReviewDocument, and
+        in review_document.py for ReviewContent/ReviewDocument, and
         RECONCILIATION_FIELDS plus the ledger's own optional extension keys
         for Reconciliation/FindingsLedger.
         """
