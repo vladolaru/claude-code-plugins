@@ -1133,10 +1133,11 @@ class ReviewTelemetry:
 
         Keyed and located through `review_paths()`, like every other
         consumer of these files. Scanning the directory for `*-review.json`
-        made the filename the identity: a stray artifact from an earlier
-        run in a reused output directory counted as a completed agent, and
-        `review-findings.json` had to be excluded by name because it ends
-        in the same suffix.
+        made the filename the identity, so a stray artifact from an earlier
+        run in a reused output directory counted as a completed agent. That
+        scan also carried a by-name exclusion for `review-findings.json`
+        that never fired — the ledger does not end in `-review.json` — a
+        guard against a collision the suffix rule already prevented.
         """
         final_info = manifest_sections.inspect_dispatch_plan(
             self.output_dir, "dispatch-plan.json"
