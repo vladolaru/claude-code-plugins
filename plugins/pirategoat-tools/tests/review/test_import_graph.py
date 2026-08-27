@@ -80,6 +80,87 @@ def _all_imports(path):
                 yield target
 
 
+def _module_level_imports(path):
+    """The `review`-relative modules one file imports at module level.
+
+    Function-body imports are excluded on purpose: they are what the
+    cycle check is measuring the absence of a need for, and
+    `TestNoFunctionBodyImports` below is the gate on them.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    found = set()
+    stack = list(tree.body)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            found |= _targets(path, node)
+            continue
+        for field in ("body", "orelse", "finalbody", "handlers"):
+            stack.extend(getattr(node, field, []) or [])
+    return found
+
+
+def _module_name(path):
+    return ".".join(path.relative_to(REVIEW_DIR).with_suffix("").parts)
+
+
+def _import_graph():
+    """Every module in `scripts/review/` mapped to what it imports.
+
+    A target is a dotted path that may name a module (`agent.output`) or
+    a name inside one (`agent.output.ReviewOutputBuilder`); both resolve
+    to the module, and a package name resolves to its `__init__`.
+    """
+    modules = {_module_name(path): path for path in _review_modules()}
+
+    def resolve(target):
+        for candidate in (target, f"{target}.__init__"):
+            if candidate in modules:
+                return candidate
+        parent = target.rsplit(".", 1)[0]
+        for candidate in (parent, f"{parent}.__init__"):
+            if candidate in modules:
+                return candidate
+        return None
+
+    graph = {}
+    for name, path in modules.items():
+        edges = set()
+        for target in _module_level_imports(path):
+            resolved = resolve(target)
+            if resolved is not None and resolved != name:
+                edges.add(resolved)
+        graph[name] = edges
+    return graph
+
+
+def _find_cycle(graph):
+    """One cycle as a module list, or None. Depth-first, colour-marked."""
+    WHITE, GREY, BLACK = 0, 1, 2
+    colour = dict.fromkeys(graph, WHITE)
+
+    def visit(node, trail):
+        colour[node] = GREY
+        for target in sorted(graph[node]):
+            if colour[target] == GREY:
+                return trail[trail.index(target):] + [target]
+            if colour[target] == WHITE:
+                found = visit(target, trail + [target])
+                if found:
+                    return found
+        colour[node] = BLACK
+        return None
+
+    for node in sorted(graph):
+        if colour[node] == WHITE:
+            found = visit(node, [node])
+            if found:
+                return found
+    return None
+
+
 def _local_imports(path):
     tree = ast.parse(path.read_text(encoding="utf-8"))
     for node in ast.walk(tree):
@@ -104,26 +185,38 @@ class TestLeafModules:
 
 
 class TestNoCycles:
-    def test_output_and_critic_adjustments_do_not_import_each_other(self):
-        """The pair the lazy render import held apart: critic_adjustments
-        owns the post-critic ledger schema, output.py owns the builder, and
-        each used to want a name from the other."""
-        output_reaches = set(_all_imports(REVIEW_DIR / "agent" / "output.py"))
-        critic_reaches = set(
-            _all_imports(REVIEW_DIR / "critic_adjustments.py")
-        )
+    def test_the_module_level_import_graph_is_acyclic(self):
+        """Every module under `scripts/review/`, not a named few.
 
-        assert "critic_adjustments" not in output_reaches
+        Three cycles were once held open by function-body imports, and
+        each pair that could close one was pinned by name — which pins
+        only the pairs someone thought of. A cycle through a fourth
+        module went unasserted. This walks the whole graph instead, so
+        the next one is rejected without a new test being written for it.
+
+        The one import that would close a cycle today lives in a
+        function body for exactly that reason (`agent/output.py` ->
+        `telemetry`), which is why it is invisible here and gated by
+        `TestNoFunctionBodyImports` instead.
+        """
+        assert _find_cycle(_import_graph()) is None
+
+
+class TestLayering:
+    """Two directions the cycle check cannot see, because taking either
+    one would not (yet) close a loop — but both would put a module on
+    the wrong side of a boundary that exists for a reason."""
+
+    def test_the_post_critic_ledger_does_not_reach_the_builder(self):
+        """`critic_adjustments` owns the post-critic ledger schema,
+        `agent/output.py` owns the builder, and each used to want a name
+        from the other. `findings_ledger` already bridges them in one
+        direction, so the return edge would be acyclic and silent."""
+        reached = set(_all_imports(REVIEW_DIR / "critic_adjustments.py"))
+
         assert not [
-            target for target in critic_reaches
+            target for target in reached
             if target == "agent.output" or target.startswith("agent.output.")
-        ]
-
-    def test_reviewer_lifecycle_does_not_reach_the_builder(self):
-        reached = set(_all_imports(REVIEW_DIR / "reviewer_lifecycle.py"))
-
-        assert not [
-            target for target in reached if target.startswith("agent.output")
         ]
 
     def test_review_markdown_does_not_reach_the_builder(self):
