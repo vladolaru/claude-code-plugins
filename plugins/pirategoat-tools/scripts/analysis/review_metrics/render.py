@@ -148,8 +148,6 @@ def _table_row(run: dict[str, Any]) -> list[str]:
         )
         if coverage is not None else "—"
     )
-    if coverage is not None and metrics.get("coverage") == "partial":
-        coverage_text = f"partial {coverage_text}"
     raw = _format_count(summary.get("total_agent_findings"))
     final = _format_count(summary.get("final_finding_count"))
     critic_state = metrics.get("critic", "missing")

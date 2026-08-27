@@ -2744,7 +2744,15 @@ class TestMeasureRun:
         assert "partial —/—" in table
         assert "partial 0/0" not in table
 
-    def test_running_coverage_snapshot_is_a_partial_observation(self):
+    def test_running_coverage_snapshot_is_not_a_coverage_observation(self):
+        """Only a settled manifest carries coverage the pipeline stands behind.
+
+        `_build_manifest` builds the section at finalize alone, so a
+        running manifest holding one is a pre-change snapshot of a run
+        that never settled. It used to be credited as a partial
+        observation; it is now missing, which is what the run actually
+        measured.
+        """
         manifest = _running_manifest("running-coverage")
 
         measured = measure_run(
@@ -2753,8 +2761,8 @@ class TestMeasureRun:
         cohort = aggregate_cohort([measured])
 
         assert measured["coverage"] == manifest["coverage"]
-        assert measured["metric_availability"]["coverage"] == "partial"
-        assert "partial 1/1/0" in format_table([measured], cohort)
+        assert measured["metric_availability"]["coverage"] == "missing"
+        assert "partial" not in format_table([measured], cohort)
         assert cohort["coverage"] == {
             "changed_files": None,
             "reviewable_files": None,
@@ -2765,10 +2773,10 @@ class TestMeasureRun:
             "available_runs": 0,
             "semantics": "generated_scope_not_proof_of_model_read",
             "availability": {
-                "available": 1,
+                "available": 0,
                 "complete": 0,
-                "partial": 1,
-                "missing": 0,
+                "partial": 0,
+                "missing": 1,
                 "disabled": 0,
             },
         }

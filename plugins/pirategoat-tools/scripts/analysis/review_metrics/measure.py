@@ -619,12 +619,16 @@ def _pipeline_metric_availability(
         isinstance(manifest_availability, dict)
         and manifest_availability.get("coverage") is False
     )
-    if coverage_available and manifest.get("status") == "complete":
-        coverage_state = "complete"
-    elif coverage_available and manifest.get("status") == "running":
-        coverage_state = "partial"
-    else:
-        coverage_state = "missing"
+    # Coverage is measured only from a settled manifest. `_build_manifest`
+    # builds the section at finalize alone, so a running manifest carries
+    # no coverage to classify; a pre-finalize manifest that still holds one
+    # is a snapshot from a run that never settled, and reporting it as a
+    # partial observation credited it as evidence it never was.
+    coverage_state = (
+        "complete"
+        if coverage_available and manifest.get("status") == "complete"
+        else "missing"
+    )
     outcome = manifest.get("outcome")
     summary = outcome.get("summary") if isinstance(outcome, dict) else None
     # Manifest status is the single completeness authority: numeric
