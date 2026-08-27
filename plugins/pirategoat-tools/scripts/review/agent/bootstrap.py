@@ -44,7 +44,6 @@ if _SCRIPTS_DIR not in sys.path:
 
 from review.reviewer_names import derive_reviewer_name
 from review.agent.review_assignment import ASSIGNMENT_SCHEMA, derive_reviewed_files
-from review.agent.output import _validate_review_bytes, render_draft_index
 from review.atomic_io import atomic_write_json
 from review.reviewer_lifecycle import review_paths
 from review.verdict_rules import PIPELINE_VERDICTS
@@ -1269,14 +1268,6 @@ def build_output(
     )
     lines.append("")
     pr_id_str = pr_number if pr_number else "0"
-    if os.path.isfile(paths.draft):
-        draft_review = _validate_review_bytes(
-            Path(paths.draft).read_bytes(),
-            reviewer=reviewer_name,
-            pr_id=str(pr_id_str),
-        )
-        lines.append(render_draft_index(draft_review))
-        lines.append("")
     lines.append("ReviewOutputBuilder — MUST use a one-shot quoted heredoc in this form:")
     # The call-budget target no longer rides this envelope: it silently died
     # for any agent that rebuilt its save command (run12's worst under-spender,
@@ -1330,9 +1321,9 @@ def build_output(
     lines.append(f"NEVER inline `python3 -c \"...\"` — finding prose contains")
     lines.append(f"apostrophes/quotes/em-dashes that break shell quoting.")
     lines.append(f"")
-    lines.append("  DRAFT TOTALS describes the complete saved draft; CHANGED describes only")
-    lines.append("  mutations made during this invocation. An absent file-gap line means no")
-    lines.append("  review-claimable files remain unclaimed.")
+    lines.append("  DRAFT TOTALS describes the complete saved draft; CHANGED describes what")
+    lines.append("  this save changed against the draft you opened. An absent file-gap line")
+    lines.append("  means no review-claimable files remain unclaimed.")
     lines.append("  Do NOT read the output file back to verify — inspect the save_draft() receipt.")
     lines.append("  In a separate tool turn, run the exact FINALIZE REVIEW command printed by")
     lines.append("  save_draft() verbatim. Never construct or edit that command.")

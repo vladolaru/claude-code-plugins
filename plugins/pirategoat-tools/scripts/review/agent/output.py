@@ -258,6 +258,77 @@ def _atomic_replace_bytes(path: str, data: bytes) -> None:
             pass
 
 
+def _entry_delta(before: List[Dict], after: List[Dict], label: str) -> List[str]:
+    """Name the entries added, removed and changed between two id-keyed lists."""
+    old = {entry["id"]: entry for entry in before}
+    new = {entry["id"]: entry for entry in after}
+    return [
+        f"{label} {mark}{','.join(ids)}"
+        for mark, ids in (
+            ("+", [i for i in new if i not in old]),
+            ("-", [i for i in old if i not in new]),
+            ("~", [i for i in new if i in old and new[i] != old[i]]),
+        )
+        if ids
+    ]
+
+
+def _recommendation_count(review: Dict) -> int:
+    recommendations = review.get("recommendations") or {}
+    return sum(
+        len(recommendations.get(priority) or [])
+        for priority in ("immediate", "important", "suggestions")
+    )
+
+
+def _diff_reviews(before: Optional[Dict], after: Dict) -> List[str]:
+    """Describe what changed between the observed draft and the saved one.
+
+    The receipt's CHANGED line, read off the two documents instead of a
+    tally of builder calls. A tally has to be appended to by every mutator,
+    so seven of the thirteen were silently absent from the receipt, and a
+    call that changed nothing still announced itself. Neither is expressible
+    here: the documents either differ or they do not.
+
+    ``before`` is None on a first save, where there is no prior value for
+    confidence to have changed from.
+    """
+    before = before or {}
+    segments: List[str] = []
+    for label in ("findings", "checks"):
+        segments.extend(
+            _entry_delta(before.get(label) or [], after[label], label)
+        )
+    observations = len(after["observations"]) - len(
+        before.get("observations") or []
+    )
+    if observations:
+        segments.append(f"observations {observations:+d}")
+    recommendations = _recommendation_count(after) - _recommendation_count(before)
+    if recommendations:
+        segments.append(f"recommendations {recommendations:+d}")
+    positives = len(after["positive_observations"]) - len(
+        before.get("positive_observations") or []
+    )
+    if positives:
+        segments.append(f"positive observations {positives:+d}")
+    if before.get("assessment") != after["assessment"]:
+        segments.append("assessment changed")
+    was = (before.get("meta") or {}).get("confidence_score")
+    now = after["meta"]["confidence_score"]
+    if was is not None and was != now:
+        segments.append(f"confidence {was}→{now}")
+    claimed = set(after["reviewed_file_claims"]) - set(
+        before.get("reviewed_file_claims") or []
+    )
+    retracted = set(before.get("reviewed_file_claims") or []) - set(
+        after["reviewed_file_claims"]
+    )
+    if claimed or retracted:
+        segments.append(f"claims +{len(claimed)}/-{len(retracted)}")
+    return segments
+
+
 def render_draft_index(review: dict) -> str:
     """Render concise mutable review state for continuation bootstrap."""
     findings = review.get("findings") or []
@@ -317,8 +388,7 @@ class ReviewOutputBuilder:
         self._output_dir = None
         self._paths = None
         self._base_digest = None
-        self._last_saved_review = None
-        self._invocation_delta = []
+        self._opened_review = None
 
     @classmethod
     def open(
@@ -340,9 +410,14 @@ class ReviewOutputBuilder:
                 draft_bytes, reviewer=reviewer, pr_id=pr_id
             )
             digest = hashlib.sha256(draft_bytes).hexdigest()
-        return cls._from_review(review)._bind(
-            output_dir, base_digest=digest
-        )
+        builder = cls._from_review(review)._bind(output_dir, base_digest=digest)
+        # The continuation surface: what this draft already holds, printed
+        # by the one call that rehydrates it. `review` is a fresh parse and
+        # every mutator replaces entries rather than editing them in place,
+        # so it stays the observed baseline the next receipt diffs against.
+        builder._opened_review = review
+        print(render_draft_index(review))
+        return builder
 
     @classmethod
     def _from_review(cls, review: dict) -> "ReviewOutputBuilder":
@@ -488,13 +563,11 @@ class ReviewOutputBuilder:
         )
         validate_finding_shape(candidate, index)
         self.findings[index] = candidate
-        self._invocation_delta.append(f"updated finding {finding_id}")
 
     def remove_finding(self, finding_id: str) -> None:
         """Remove one finding without recycling its stable ID."""
         index = self._entry_index(self.findings, finding_id, "finding")
         self.findings.pop(index)
-        self._invocation_delta.append(f"removed finding {finding_id}")
 
     def record_check(
         self,
@@ -542,10 +615,6 @@ class ReviewOutputBuilder:
             "result": values[2],
             "source_reviewers": normalized_sources,
         })
-        self._invocation_delta.append(
-            f"added check {check_id} "
-            f"{json.dumps(values[0], ensure_ascii=False)}"
-        )
         return check_id
 
     def update_check(self, check_id: str, **fields) -> None:
@@ -567,13 +636,11 @@ class ReviewOutputBuilder:
         )
         validate_check_shape(candidate, index)
         self.checks[index] = candidate
-        self._invocation_delta.append(f"updated check {check_id}")
 
     def remove_check(self, check_id: str) -> None:
         """Remove one check without recycling its stable ID."""
         index = self._entry_index(self.checks, check_id, "check")
         self.checks.pop(index)
-        self._invocation_delta.append(f"removed check {check_id}")
 
     def add_finding(
         self,
@@ -660,10 +727,6 @@ class ReviewOutputBuilder:
 
         finding_id = self._allocate_finding_id()
         self.findings.append({'id': finding_id, **finding})
-        self._invocation_delta.append(
-            f"added finding {finding_id} "
-            f"{json.dumps(finding['title'], ensure_ascii=False)}"
-        )
         return finding_id
 
     def add_observation(self, file: str, note: str, category: str = "general"):
@@ -691,7 +754,6 @@ class ReviewOutputBuilder:
         """
         coerced = coerce_text(text).strip()
         self.assessment = coerced or None
-        self._invocation_delta.append("updated assessment")
 
     def add_recommendation(self, priority: str, text: str):
         """Add recommendation (priority: immediate, important, suggestions)."""
@@ -700,12 +762,7 @@ class ReviewOutputBuilder:
 
     def add_positive_observation(self, observation: str):
         """Add positive observation."""
-        value = coerce_text(observation)
-        self.positive_observations.append(value)
-        self._invocation_delta.append(
-            "added positive observation "
-            + json.dumps(value, ensure_ascii=False)
-        )
+        self.positive_observations.append(coerce_text(observation))
 
     @staticmethod
     def _resolve_plugin_version(output_dir: Optional[str]) -> Optional[str]:
@@ -889,7 +946,6 @@ class ReviewOutputBuilder:
         for path in normalized:
             if path not in self.reviewed_file_claims:
                 self.reviewed_file_claims.append(path)
-                self._invocation_delta.append(f"claimed file {path}")
 
     def retract_reviewed_file_claims(self, *files: str):
         """Retract existing reviewed-file claims, atomically."""
@@ -918,9 +974,6 @@ class ReviewOutputBuilder:
         self.reviewed_file_claims = [
             path for path in self.reviewed_file_claims if path not in retracted
         ]
-        self._invocation_delta.extend(
-            f"retracted file {path}" for path in normalized
-        )
 
     def set_confidence(self, score: float):
         """Set overall confidence score."""
@@ -1070,14 +1123,17 @@ class ReviewOutputBuilder:
                 )
 
         self._base_digest = review_digest
-        self._last_saved_review = review
-        return self._draft_receipt(review_digest, reviewed_files)
+        receipt = self._draft_receipt(review_digest, reviewed_files, review)
+        # The observed baseline advances only after the receipt reports the
+        # delta against it. Re-parsed rather than aliased: `review` shares
+        # its findings and checks lists with this builder.
+        self._opened_review = json.loads(draft_bytes.decode("utf-8"))
+        return receipt
 
     def _draft_receipt(
-        self, review_digest: str, reviewed_files
+        self, review_digest: str, reviewed_files, review: Dict
     ) -> dict[str, str]:
         """Print and return the compact next-action surface for one save."""
-        review = self._last_saved_review
         summary = review["summary"]
         severity_parts = [
             f"{severity} {summary['by_severity'][severity]}"
@@ -1114,10 +1170,10 @@ class ReviewOutputBuilder:
                 "FILES NOT YET CLAIMED AS REVIEWED "
                 f"({len(unclaimed)}): {shown}"
             )
-        if self._invocation_delta:
-            print(f"CHANGED: {' | '.join(self._invocation_delta)}")
+        changed = _diff_reviews(self._opened_review, review)
+        if changed:
+            print(f"CHANGED: {' | '.join(changed)}")
         print(f"FINALIZE REVIEW: {command}")
-        self._invocation_delta = []
         return {
             "draft": self._paths.draft,
             "review_digest": review_digest,

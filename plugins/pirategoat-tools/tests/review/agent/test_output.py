@@ -1183,22 +1183,82 @@ class TestSaveDraft:
             assert "DRAFT TOTALS: findings 0" in out
             assert "DRAFT SAVED: verdict approve" in out
 
-    def test_reopened_draft_reports_only_assessment_and_positive_changes(
-        self, tmp_path, capsys
+    _MUTATORS = {
+        "add_finding": lambda b: b.add_finding(
+            "low", "new", "src/a.py", "d", "r", line=2
+        ),
+        "update_finding": lambda b: b.update_finding("f1", title="renamed"),
+        "remove_finding": lambda b: b.remove_finding("f1"),
+        "record_check": lambda b: b.record_check("q?", "m", "r"),
+        "update_check": lambda b: b.update_check("c1", result="other"),
+        "remove_check": lambda b: b.remove_check("c1"),
+        "add_observation": lambda b: b.add_observation("src/a.py", "note"),
+        "set_assessment": lambda b: b.set_assessment("Bounded risk."),
+        "add_recommendation": lambda b: b.add_recommendation("immediate", "do"),
+        "add_positive_observation": lambda b: b.add_positive_observation("good"),
+        "set_confidence": lambda b: b.set_confidence(0.5),
+        "claim_files_reviewed": lambda b: b.claim_files_reviewed("src/a.py"),
+        "retract_reviewed_file_claims": (
+            lambda b: b.retract_reviewed_file_claims("src/b.py")
+        ),
+    }
+
+    @pytest.mark.parametrize("mutator", sorted(_MUTATORS))
+    def test_every_mutator_reaches_the_changed_line(
+        self, tmp_path, capsys, mutator
     ):
-        _write_required_assignment(tmp_path, "reconciliator")
-        builder = ReviewOutputBuilder.open(
-            tmp_path, "42", "reconciliator"
-        )
-        builder.add_finding("low", "Prior", "a.py", "d", "r", line=1)
+        """The receipt is the agent's only feedback that a call landed. It is
+        derived from the saved documents, so a mutator cannot be missing from
+        it by forgetting to announce itself."""
+        _write_assignment(tmp_path, claimable=("src/a.py", "src/b.py"))
+        builder = ReviewOutputBuilder.open(tmp_path, "42", "security")
+        builder.add_finding("low", "Prior", "src/a.py", "d", "r", line=1)
+        builder.record_check("prior?", "m", "r")
+        builder.claim_files_reviewed("src/b.py")
         builder.save_draft()
         capsys.readouterr()
 
-        reopened = ReviewOutputBuilder.open(
-            tmp_path, "42", "reconciliator"
-        )
+        reopened = ReviewOutputBuilder.open(tmp_path, "42", "security")
+        self._MUTATORS[mutator](reopened)
+        reopened.save_draft()
+
+        changed = [
+            line
+            for line in capsys.readouterr().out.splitlines()
+            if line.startswith("CHANGED:")
+        ]
+        assert len(changed) == 1, f"{mutator} produced {changed}"
+
+    def test_an_unchanged_resave_reports_nothing_changed(self, tmp_path, capsys):
+        """A save that changed nothing says nothing — the old call tally
+        could not tell the difference between a no-op call and a change."""
+        _write_assignment(tmp_path)
+        builder = ReviewOutputBuilder.open(tmp_path, "42", "security")
+        builder.add_finding("low", "Prior", "src/a.py", "d", "r", line=1)
+        builder.save_draft()
+        capsys.readouterr()
+
+        reopened = ReviewOutputBuilder.open(tmp_path, "42", "security")
+        reopened.update_finding("f1", title="Prior")
+        reopened.save_draft()
+
+        assert "CHANGED:" not in capsys.readouterr().out
+
+    def test_the_changed_line_names_entries_by_id(self, tmp_path, capsys):
+        _write_assignment(tmp_path, claimable=("src/a.py", "src/b.py"))
+        builder = ReviewOutputBuilder.open(tmp_path, "42", "security")
+        builder.add_finding("low", "Prior", "src/a.py", "d", "r", line=1)
+        builder.claim_files_reviewed("src/a.py")
+        builder.save_draft()
+        capsys.readouterr()
+
+        reopened = ReviewOutputBuilder.open(tmp_path, "42", "security")
+        reopened.add_finding("high", "New", "src/a.py", "d", "r", line=9)
+        reopened.update_finding("f1", severity="medium")
         reopened.set_assessment("The remaining risk is bounded.")
         reopened.add_positive_observation("The validation path is clear.")
+        reopened.claim_files_reviewed("src/b.py")
+        reopened.retract_reviewed_file_claims("src/a.py")
         reopened.save_draft()
 
         changed = [
@@ -1207,9 +1267,29 @@ class TestSaveDraft:
             if line.startswith("CHANGED:")
         ]
         assert changed == [
-            "CHANGED: updated assessment | added positive observation "
-            '"The validation path is clear."'
+            "CHANGED: findings +f2 | findings ~f1 | positive observations +1 "
+            "| assessment changed | claims +1/-1"
         ]
+
+    def test_reopening_a_draft_prints_its_index(self, tmp_path, capsys):
+        """The continuation index reaches the agent from the builder it must
+        call, not from a second reader of the same file."""
+        _write_assignment(tmp_path)
+        builder = ReviewOutputBuilder.open(tmp_path, "42", "security")
+        builder.add_finding("low", "Prior", "src/a.py", "d", "r", line=1)
+        builder.save_draft()
+        capsys.readouterr()
+
+        ReviewOutputBuilder.open(tmp_path, "42", "security")
+
+        out = capsys.readouterr().out
+        assert "DRAFT INDEX:" in out
+        assert 'finding f1: low "Prior" @ src/a.py:1' in out
+
+    def test_a_first_open_prints_no_index(self, tmp_path, capsys):
+        _write_assignment(tmp_path)
+        ReviewOutputBuilder.open(tmp_path, "42", "security")
+        assert "DRAFT INDEX:" not in capsys.readouterr().out
 
     def test_failed_save_removes_its_staged_file(self, monkeypatch):
         """A failed draft replace removes the nonce staging file."""
