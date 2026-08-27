@@ -1201,8 +1201,12 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
     try:
         status = agents_status.check_status(output_dir)
     except (FileNotFoundError, ValueError, OSError, json.JSONDecodeError) as exc:
+        # Name the defect, not just the gate. A hand-edited dispatch plan
+        # reaches here with the checker working exactly as designed, and a
+        # bare "the checker failed" sent the reader after the wrong file.
         raise RuntimeError(
-            "reviewer status checker failed — review intake remains open"
+            f"reviewer status check failed ({exc}) — review intake "
+            "remains open"
         ) from exc
 
     if not status["all_done"]:

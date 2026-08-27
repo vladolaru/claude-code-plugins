@@ -2208,7 +2208,7 @@ class TestStep8Orchestration:
         )
         state = {"resolved_params": {}}
 
-        with pytest.raises(RuntimeError, match="status checker"):
+        with pytest.raises(RuntimeError, match="status check failed"):
             mod._orchestrate_step(8, "full", {}, state, {}, str(tmp_path))
 
         assert draft.read_bytes() == b'{"draft":true}\n'
@@ -2245,7 +2245,7 @@ class TestStep8Orchestration:
             or ("", True),
         )
 
-        with pytest.raises(RuntimeError, match="status checker"):
+        with pytest.raises(RuntimeError, match="status check failed"):
             mod._orchestrate_step(
                 8, "full", {}, {"resolved_params": {}}, {}, str(tmp_path)
             )
@@ -2506,7 +2506,9 @@ class TestStep8Orchestration:
         }
         (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
 
-        with pytest.raises(RuntimeError, match="status checker") as exc_info:
+        with pytest.raises(
+            RuntimeError, match="status check failed"
+        ) as exc_info:
             mod._orchestrate_step(
                 8,
                 "full",
@@ -2516,9 +2518,10 @@ class TestStep8Orchestration:
                 str(tmp_path),
             )
 
-        message = str(exc_info.value.__cause__)
-        assert "security-reviewer" in message
-        assert repr(None) in message
+        assert "security-reviewer" in str(exc_info.value)
+        cause = str(exc_info.value.__cause__)
+        assert "security-reviewer" in cause
+        assert repr(None) in cause
         assert not (tmp_path / "review-intake.json").exists()
 
 
