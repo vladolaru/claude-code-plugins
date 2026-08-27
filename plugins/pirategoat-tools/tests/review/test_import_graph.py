@@ -128,6 +128,13 @@ class TestNoCycles:
 
 
 class TestNoFunctionBodyImports:
+    """One blind spot, stated rather than papered over: this walks import
+    statements, so a module loaded through
+    `importlib.util.spec_from_file_location` is invisible here. Those
+    loaders are tracked separately — by the tests of the modules that own
+    them — and widening this scan to guess at them would make it assert
+    on string arguments rather than on the import graph."""
+
     def test_only_the_documented_telemetry_import_is_local(self):
         offenders = set()
         for path in _review_modules():

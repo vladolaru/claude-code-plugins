@@ -92,12 +92,13 @@ try:
         summary_for,
     )
 except ImportError:
-    # Stand-alone use — `python3 output.py render <file>` runs with no
-    # `review` package on sys.path, and the CLI is a supported entry point
-    # (see the module docstring). Unlike the telemetry hook below, this one
-    # cannot degrade to a no-op: the verdict IS the artifact's headline, so
-    # the fallback puts `scripts/` on the path and imports the same module
-    # rather than keeping a local copy of the ladder to drift from.
+    # Stand-alone use — every reviewer publishes through
+    # `python3 output.py finalize-review …`, which runs this file as
+    # `__main__`, where a relative import has no package to resolve
+    # against. The fallback puts `scripts/` on the path and imports the
+    # same module rather than keeping a local copy of the ladder to drift
+    # from: the verdict IS the artifact's headline, so a second copy here
+    # would publish a different one.
     _SCRIPTS_DIR = os.path.dirname(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     )
@@ -141,10 +142,9 @@ def coerce_text(value: Any, single_line: bool = False) -> str:
     return result
 
 
-# Dispatch-marker suffixes. Spelled here rather than imported so this module
-# stays importable stand-alone (`python3 output.py render <file>` runs with no
-# `review` package on sys.path — the same constraint that makes telemetry
-# below load by file location). Parity with the bootstrap-written
+# Dispatch-marker suffixes. Spelled here rather than imported from
+# review/synthesis_lifecycle.py so the `finalize-review` CLI needs no import
+# beyond the ones above to time an actor. Parity with the bootstrap-written
 # `<agent>.started` contract and review/synthesis_lifecycle.MARKER_SUFFIX is
 # pinned by tests, so a rename fails loudly instead of silently unmeasuring a
 # whole class of actor.

@@ -385,7 +385,7 @@ def _sanitized_ledger(findings: dict) -> dict:
 
 
 def _render_record_body(findings: dict) -> str:
-    """The record's findings/checks body — output.py's own renderer.
+    """The record's findings/checks body — `review_markdown`'s own renderer.
 
     Byte-identical to what `review-findings.md` shows for the same ledger
     (modulo the prose-marker strip above), because it IS the same function.
