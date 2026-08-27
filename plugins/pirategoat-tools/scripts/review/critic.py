@@ -31,14 +31,6 @@ atomic_write_text = atomic_io.atomic_write_text
 
 TOTAL_STEPS = 4
 
-# Canonical critic verdict vocabulary, owned by critic_adjustments.py — the
-# module that commits the verdict marker and gates adjudication on REVISE.
-# Re-exported here because the Step 4 rubric below presents exactly these
-# verdicts and the review_metrics consumer
-# (analysis/review_metrics/contracts.py) reads them off this module.
-CRITIC_VERDICTS = critic_adjustments.CRITIC_VERDICTS
-CRITIC_VERDICT_SKIPPED = critic_adjustments.CRITIC_VERDICT_SKIPPED
-
 
 def get_step_guidance(
     step: int,
@@ -378,9 +370,10 @@ def run_save(args):
     """
     problems = []
     verdict = (args.verdict or "").strip().upper()
-    if verdict not in CRITIC_VERDICTS:
+    if verdict not in critic_adjustments.CRITIC_VERDICTS:
         problems.append(
-            f"verdict must be one of {sorted(CRITIC_VERDICTS)}, got "
+            f"verdict must be one of "
+            f"{sorted(critic_adjustments.CRITIC_VERDICTS)}, got "
             f"{args.verdict!r}"
         )
     findings_text = _read_required(args.findings, problems, "findings")

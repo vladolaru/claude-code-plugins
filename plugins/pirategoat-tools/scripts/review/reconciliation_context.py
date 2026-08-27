@@ -30,12 +30,14 @@ from typing import Any, Dict, List, Optional, Tuple
 try:
     from .reviewer_names import derive_reviewer_name
     from .reviewer_lifecycle import review_paths
+    from .verdict_rules import VALID_SEVERITIES
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
     from review.reviewer_names import derive_reviewer_name
     from review.reviewer_lifecycle import review_paths
+    from review.verdict_rules import VALID_SEVERITIES
 
 from review.agent.output import load_review_document
 
@@ -59,11 +61,8 @@ _NON_REVIEW_FILES = frozenset([
     "reconciliation-context.json",
 ])
 
-_VALID_SEVERITY_FLOORS = frozenset(
-    {"critical", "high", "medium", "low", "info"}
-)
 _NUMERIC_SEVERITY_FLOOR_PATTERN = "|".join(
-    re.escape(value) for value in sorted(_VALID_SEVERITY_FLOORS)
+    re.escape(value) for value in sorted(VALID_SEVERITIES)
 )
 _LEGACY_SEVERITY_FLOORS = {
     "public-contract change": "medium",
@@ -93,7 +92,7 @@ def resolve_structured_severity_floor(finding: Dict[str, Any]) -> Optional[str]:
     structured = finding.get("severity_floor")
     if (
         isinstance(structured, str)
-        and structured.lower() in _VALID_SEVERITY_FLOORS
+        and structured.lower() in VALID_SEVERITIES
     ):
         return structured.lower()
     return None

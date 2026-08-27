@@ -38,7 +38,7 @@ try:
     from . import critic_adjustments
     from .findings_ledger import RECONCILIATION_PIPELINE_FIELDS
     from .reconciliation_context import RECONCILIATION_CONTEXT_SCHEMA
-    from .verdict_rules import VERDICT_RANK
+    from .verdict_rules import REVIEW_VERDICTS
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
@@ -46,7 +46,7 @@ except ImportError:
     from review import critic_adjustments
     from review.findings_ledger import RECONCILIATION_PIPELINE_FIELDS
     from review.reconciliation_context import RECONCILIATION_CONTEXT_SCHEMA
-    from review.verdict_rules import VERDICT_RANK
+    from review.verdict_rules import REVIEW_VERDICTS
 
 
 # The pipeline's own briefing for this run, written by
@@ -133,11 +133,6 @@ def _read_context(output_dir, problems):
     return context
 
 
-# The entries are finalized reviewer documents (`load_review_document`), so
-# the facts stamped from them are read at exactly that document's shape.
-_REVIEW_ENTRY_VERDICTS = frozenset(VERDICT_RANK) | {"not_applicable"}
-
-
 def _is_review_entry(review):
     if not isinstance(review, dict):
         return False
@@ -147,7 +142,7 @@ def _is_review_entry(review):
     ):
         return False
     verdict = review.get("verdict")
-    if verdict not in _REVIEW_ENTRY_VERDICTS:
+    if verdict not in REVIEW_VERDICTS:
         return False
     if verdict == "not_applicable":
         skip_reason = review.get("skip_reason")

@@ -28,6 +28,82 @@ VERDICT_RANK = {
     "block": 3,
 }
 
+# Severity order, derived from the vocabulary rather than restated beside
+# it. Two hand-copies of this table existed — `agent/output.py` used it to
+# promote a finding to its `severity_floor`, `analysis/session_analyzer.py`
+# to reconstruct what the builder would have saved — and neither was
+# sourced from the other, so a severity added here reached one of them.
+SEVERITY_RANK = {
+    severity: rank
+    for rank, severity in enumerate(reversed(VALID_SEVERITIES))
+}
+
+# The three verdict layers, narrowest first.
+#
+# LEDGER_VERDICTS is what `verdict_for_counts` computes and what a
+# reconciled `review-findings.json` may carry. REVIEW_VERDICTS adds the one
+# verdict no ladder produces: a reviewer with nothing in scope abstains,
+# and abstention is not a threshold outcome. PIPELINE_VERDICTS is the
+# uppercase layer `pipeline-result.json` publishes, pirategoat-bot maps
+# onto GitHub actions, and reviewers echo in their return signal.
+LEDGER_VERDICTS = tuple(VERDICT_RANK)
+REVIEW_VERDICTS = LEDGER_VERDICTS + ("not_applicable",)
+PIPELINE_VERDICTS = ("APPROVE", "COMMENT", "REQUEST_CHANGES", "BLOCK")
+
+_PUBLISHED_BY_LEDGER_VERDICT = {
+    "approve": "APPROVE",
+    "comment": "COMMENT",
+    "request_changes": "REQUEST_CHANGES",
+    "block": "REQUEST_CHANGES",
+}
+
+
+def publish_verdict(ledger_verdict) -> str:
+    """Map one ledger verdict onto the verdict the pipeline publishes.
+
+    The one place the two layers meet. `block` is real — any critical
+    finding, or three highs — and publishes REQUEST_CHANGES because GitHub
+    has no stronger action; dropping it would publish COMMENT over a
+    critical finding, which is the exact failure deriving the published
+    verdict from the ledger exists to kill.
+
+    Total over `LEDGER_VERDICTS` and strict about everything else. Both
+    callers read a ledger that passed `validate_findings_document()`, so the
+    verdict is already lowercase, already stripped, and never
+    `not_applicable` — a value outside the vocabulary is a defect to name,
+    not a case to fall back from.
+    """
+    try:
+        return _PUBLISHED_BY_LEDGER_VERDICT[ledger_verdict]
+    except (KeyError, TypeError):
+        raise ValueError(
+            f"{ledger_verdict!r} is not a ledger verdict "
+            f"(allowed: {', '.join(LEDGER_VERDICTS)})"
+        ) from None
+
+
+def summary_for(findings) -> dict:
+    """The verdict and summary block one finding list justifies.
+
+    Returns ``{"verdict": ..., "summary": {...}}``. The summary block is
+    exactly what ``validate_review_content()`` reconstructs and compares
+    against, so a writer that builds it here cannot publish a summary its
+    own validator rejects. The verdict travels alongside because it cannot
+    be recovered from the block: ``by_severity`` counts advisory findings
+    and the gating verdict excludes them.
+
+    Both writers of a review's summary call this — ``to_dict()`` when a
+    reviewer or the reconciliator publishes, ``_recount_summary()`` when an
+    applying critic batch changes severities under a published ledger.
+    """
+    derived = derive_review_state(findings)
+    summary = {
+        "total_findings": len(findings),
+        "by_severity": derived["counts"],
+    }
+    summary.update(derived["advisory"])
+    return {"verdict": derived["verdict"], "summary": summary}
+
 
 def verdict_for_counts(counts) -> str:
     """Map severity counts onto the findings verdict vocabulary.

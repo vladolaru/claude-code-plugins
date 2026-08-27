@@ -40,6 +40,7 @@ try:
     from . import critic_adjustments
     from . import manifest_sections
     from . import synthesis_lifecycle
+    from .verdict_rules import publish_verdict
 except ImportError:
     _scripts_parent = str(Path(__file__).resolve().parent.parent)
     if _scripts_parent not in sys.path:
@@ -74,6 +75,7 @@ except ImportError:
     from review import critic_adjustments
     from review import manifest_sections
     from review import synthesis_lifecycle
+    from review.verdict_rules import publish_verdict
 
 from git_paths import decode_git_c_quoted_path
 
@@ -206,26 +208,6 @@ def _load_final_review(
 _FINDINGS_JSON = "review-findings.json"
 _FINDINGS_MD = "review-findings.md"
 
-
-# The two verdict layers, and the one place they meet. Reviewers, the
-# reconciliator, and critic batches all speak the per-review vocabulary of
-# `schemas/review-output.ts` (`verdict_rules.verdict_for_counts`); the outer
-# pipeline `pipeline-result.json` publishes — and pirategoat-bot maps onto
-# GitHub actions — speaks APPROVE/COMMENT/REQUEST_CHANGES.
-#
-# All FIVE ledger verdicts are here on purpose. `block` is real (any
-# critical finding, or three highs) and maps to REQUEST_CHANGES; omitting it
-# would publish COMMENT for a critical-finding review — the exact failure
-# deriving the verdict from the ledger exists to kill. `not_applicable` is
-# defensive: it belongs to a single reviewer with nothing in scope, and a
-# reconciled ledger should never carry it.
-_LEDGER_TO_REVIEW_VERDICT = {
-    "block": "REQUEST_CHANGES",
-    "request_changes": "REQUEST_CHANGES",
-    "comment": "COMMENT",
-    "approve": "APPROVE",
-    "not_applicable": "COMMENT",
-}
 
 # What the step-10 briefing may point the decision critic at, best first.
 # Existence decides, not a flag: the branch this replaced read a
@@ -527,20 +509,23 @@ def _tri_state(value) -> str:
 def _render_record_verdict_line(findings: dict) -> str:
     """The record's closing verdict, stated at the layer that computed it.
 
-    The ledger reaching here passed `read_findings_file`, whose validator
-    requires `verdict` to be one of the four reconciler verdicts — so the
-    "none recorded" and "unrecognized at the published layer" branches
-    this replaced could not fire, and every run they described was a run
-    where the assembler had already returned `failed`.
+    The ledger verdict is the only one derived from findings. The published
+    layer is shown beside it through the one shared mapping, with the single
+    override that can still change it named rather than left as a surprise
+    at finalize.
+
+    The caller hands over a ledger that passed `validate_findings_document`,
+    so the verdict is present and in vocabulary. The branches that once
+    rendered "none recorded" and "unrecognized at the published layer" are
+    gone: they described states the reader had already rejected.
     """
     ledger = findings["verdict"]
-    published = _LEDGER_TO_REVIEW_VERDICT[ledger]
     return (
         f"**Verdict — from the findings ledger: `{ledger}` "
-        f"({published} at the published layer).** A critic ESCALATE "
-        "overrides the published verdict to COMMENT at finalize; this "
-        "line reports the ledger, the only verdict actually computed from "
-        "findings."
+        f"({publish_verdict(ledger)} at the published layer).** A critic "
+        "ESCALATE overrides the published verdict to COMMENT at finalize; "
+        "this line reports the ledger, the only verdict actually computed "
+        "from findings."
     )
 
 
@@ -2128,14 +2113,14 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # artifact whose verdict any reviewer, reconciliator, or critic batch
     # actually computed, and `critic_adjustments.adjudicate()` recomputes
     # it as part of its one ledger write, so it is current by the time
-    # finalize reads it. `_LEDGER_TO_REVIEW_VERDICT` (module scope) is
-    # the one place the two verdict layers meet.
+    # finalize reads it. `verdict_rules.publish_verdict()` is the one place
+    # the two verdict layers meet.
     # The pure report briefing must never reopen or independently classify
     # the ledger. Carry this exact reader result across the boundary so it
     # can name the ledger as source context only when this pass accepted it.
     state["findings_read_status"] = read.status
     ledger_verdict = (
-        _LEDGER_TO_REVIEW_VERDICT[read.findings["verdict"]]
+        publish_verdict(read.findings["verdict"])
         if read.status == critic_adjustments.FINDINGS_READ_OK
         else None
     )

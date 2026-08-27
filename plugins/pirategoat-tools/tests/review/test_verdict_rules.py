@@ -7,6 +7,7 @@ a ledger — and step 11 now DERIVES the published pipeline verdict from the
 ledger those two write, so a threshold that drifts here reaches GitHub.
 """
 
+import ast
 import sys
 from pathlib import Path
 
@@ -18,7 +19,17 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from review import verdict_rules
-from review.verdict_rules import verdict_for_counts
+from review.verdict_rules import (
+    LEDGER_VERDICTS,
+    PIPELINE_VERDICTS,
+    REVIEW_VERDICTS,
+    SEVERITY_RANK,
+    VALID_SEVERITIES,
+    VERDICT_RANK,
+    publish_verdict,
+    summary_for,
+    verdict_for_counts,
+)
 from review.agent import output as output_mod
 
 
@@ -101,3 +112,136 @@ class TestOutputBuilderUsesTheSharedLadder:
         source = (SCRIPTS_DIR / "review" / "agent" / "output.py").read_text()
         assert "derive_review_state" in source
         assert "return 'block'" not in source and 'return "block"' not in source
+
+
+class TestSeverityRank:
+    """The rank table two modules used to hand-copy."""
+
+    def test_rank_orders_the_severity_vocabulary(self):
+        assert SEVERITY_RANK == {
+            "info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4,
+        }
+
+    def test_rank_covers_exactly_the_valid_severities(self):
+        assert set(SEVERITY_RANK) == set(VALID_SEVERITIES)
+
+
+class TestPublishVerdict:
+    """The one place the ledger layer and the published layer meet."""
+
+    @pytest.mark.parametrize("ledger,published", [
+        ("approve", "APPROVE"),
+        ("comment", "COMMENT"),
+        ("request_changes", "REQUEST_CHANGES"),
+        ("block", "REQUEST_CHANGES"),
+    ])
+    def test_every_ledger_verdict_publishes(self, ledger, published):
+        assert publish_verdict(ledger) == published
+
+    def test_the_mapping_is_total_over_the_ledger_vocabulary(self):
+        """A ledger verdict with no published answer would publish COMMENT
+        for a critical-finding review — the failure deriving the verdict
+        from the ledger exists to kill."""
+        assert set(LEDGER_VERDICTS) == set(VERDICT_RANK)
+        for ledger in LEDGER_VERDICTS:
+            assert publish_verdict(ledger) in PIPELINE_VERDICTS
+
+    @pytest.mark.parametrize("value", [
+        "not_applicable", "BLOCK", "  approve  ", "Comment", "", None, 3,
+    ])
+    def test_anything_outside_the_ledger_vocabulary_is_refused(self, value):
+        """Callers are handed a validated ledger verdict: already lowercase,
+        already stripped, never `not_applicable`. Everything else is a
+        defect to name, not a value to map."""
+        with pytest.raises(ValueError):
+            publish_verdict(value)
+
+    def test_a_review_may_abstain_where_a_ledger_may_not(self):
+        assert REVIEW_VERDICTS == LEDGER_VERDICTS + ("not_applicable",)
+
+
+class TestSummaryFor:
+    def test_summary_matches_what_the_validator_expects(self):
+        findings = [
+            {"severity": "high", "channel": "advisory"},
+            {"severity": "medium"},
+        ]
+
+        assert summary_for(findings) == {
+            "verdict": "comment",
+            "summary": {
+                "total_findings": 2,
+                "by_severity": {
+                    "critical": 0, "high": 1, "medium": 1, "low": 0, "info": 0,
+                },
+                "suppressed_advisory_finding_count": 1,
+                "verdict_without_advisory": "request_changes",
+            },
+        }
+
+    def test_an_empty_review_summarizes_as_approve(self):
+        assert summary_for([]) == {
+            "verdict": "approve",
+            "summary": {
+                "total_findings": 0,
+                "by_severity": {
+                    "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0,
+                },
+                "suppressed_advisory_finding_count": 0,
+            },
+        }
+
+    def test_a_severity_outside_the_vocabulary_fails_loudly(self):
+        with pytest.raises(ValueError):
+            summary_for([{"id": "f1", "severity": "catastrophic"}])
+
+
+_RESPELLINGS = frozenset({
+    "_LEDGER_TO_REVIEW_VERDICT",
+    "_RECONCILER_VERDICTS",
+    "_REVIEW_ENTRY_VERDICTS",
+    "_SEVERITY_RANK",
+    "_VALID_SEVERITY_FLOORS",
+})
+
+
+def _module_level_assignments(path):
+    names = set()
+    for node in ast.parse(path.read_text(encoding="utf-8")).body:
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        else:
+            continue
+        names.update(
+            target.id for target in targets if isinstance(target, ast.Name)
+        )
+    return names
+
+
+class TestOneVocabularyOwner:
+    """Six modules used to spell a verdict or severity vocabulary of their
+    own. Behavioural tests pass on the day a seventh appears; this one does
+    not, which is the whole point of consolidating them."""
+
+    def test_no_module_respells_a_verdict_or_severity_vocabulary(self):
+        offenders = {}
+        for path in sorted(SCRIPTS_DIR.rglob("*.py")):
+            respelled = _module_level_assignments(path) & _RESPELLINGS
+            if respelled:
+                offenders[str(path.relative_to(SCRIPTS_DIR))] = sorted(
+                    respelled
+                )
+
+        assert offenders == {}
+
+    def test_verdict_rules_owns_every_vocabulary(self):
+        owned = _module_level_assignments(
+            SCRIPTS_DIR / "review" / "verdict_rules.py"
+        )
+
+        assert {
+            "VALID_SEVERITIES", "SEVERITY_RANK", "VERDICT_RANK",
+            "LEDGER_VERDICTS", "REVIEW_VERDICTS", "PIPELINE_VERDICTS",
+        } <= owned

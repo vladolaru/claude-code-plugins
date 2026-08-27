@@ -34,9 +34,9 @@ _DISPATCH_STATUS_CONTRACT = _load_exact_path_module(
     "review dispatch status contract unavailable",
 )
 _CRITIC_CONTRACT = _load_exact_path_module(
-    "review_critic_contract",
-    _REVIEW_DIR / "critic.py",
-    "review critic contract unavailable",
+    "review_critic_adjustments_contract",
+    _REVIEW_DIR / "critic_adjustments.py",
+    "review critic adjustments contract unavailable",
 )
 _SYNTHESIS_CONTRACT = _load_exact_path_module(
     "review_synthesis_lifecycle_contract",

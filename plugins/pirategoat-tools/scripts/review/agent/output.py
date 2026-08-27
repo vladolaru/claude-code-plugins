@@ -75,9 +75,11 @@ except ImportError:
 
 try:
     from ..verdict_rules import (
+        SEVERITY_RANK,
         VALID_SEVERITIES,
         VERDICT_RANK,
         derive_review_state,
+        summary_for,
     )
 except ImportError:
     # Stand-alone use — `python3 output.py render <file>` runs with no
@@ -92,9 +94,11 @@ except ImportError:
     if _SCRIPTS_DIR not in sys.path:
         sys.path.insert(0, _SCRIPTS_DIR)
     from review.verdict_rules import (
+        SEVERITY_RANK,
         VALID_SEVERITIES,
         VERDICT_RANK,
         derive_review_state,
+        summary_for,
     )
 
 
@@ -114,16 +118,6 @@ REVIEW_OUTPUT_SCHEMA = 2
 
 _VALID_SEVERITIES = VALID_SEVERITIES
 _VALID_CHANNELS = ('blocking', 'advisory')
-_SEVERITY_RANK = {
-    'info': 0,
-    'low': 1,
-    'medium': 2,
-    'high': 3,
-    'critical': 4,
-}
-# Backwards-compatible private aliases used by telemetry's artifact
-# validation. Derivation and rank comparison live in verdict_rules.py.
-_VERDICT_RANK = VERDICT_RANK
 
 
 def _coerce_text(value: Any, single_line: bool = False) -> str:
@@ -936,9 +930,9 @@ class ReviewOutputBuilder:
         floor = candidate.get("severity_floor")
         severity = candidate.get("severity")
         if (
-            floor in _SEVERITY_RANK
-            and severity in _SEVERITY_RANK
-            and _SEVERITY_RANK[severity] < _SEVERITY_RANK[floor]
+            floor in SEVERITY_RANK
+            and severity in SEVERITY_RANK
+            and SEVERITY_RANK[severity] < SEVERITY_RANK[floor]
         ):
             candidate["severity"] = floor
         candidate_channel = candidate.get("channel") or "blocking"
@@ -1085,7 +1079,7 @@ class ReviewOutputBuilder:
                     f"Invalid severity_floor: {severity_floor}. "
                     f"Must be one of {list(_VALID_SEVERITIES)}"
                 )
-            if _SEVERITY_RANK[severity_value] < _SEVERITY_RANK[floor_value]:
+            if SEVERITY_RANK[severity_value] < SEVERITY_RANK[floor_value]:
                 severity_value = floor_value
 
         # Validate confidence
@@ -1467,18 +1461,21 @@ class ReviewOutputBuilder:
         """
         review_duration = self._review_duration_ms(self._output_dir)
 
-        derived = derive_review_state(self.findings)
-        verdict = 'not_applicable' if self._not_applicable else derived['verdict']
-        summary = {
-            'total_findings': len(self.findings),
-            'by_severity': derived['counts'],
-        }
+        derived = summary_for(self.findings)
+        verdict = (
+            'not_applicable' if self._not_applicable else derived['verdict']
+        )
+        summary = derived['summary']
         if self._not_applicable:
-            # The abstention short-circuits before channel tags are consulted,
-            # so no finding was excluded from its verdict calculation.
+            # `mark_not_applicable` only refuses to abstain once a finding
+            # is ALREADY recorded; nothing stops a subsequent add_finding
+            # call, so the summary cannot assume an empty finding list here.
+            # An abstaining review makes no advisory-suppression claim
+            # regardless of what was added afterward — the verdict does not
+            # depend on it either way.
+            summary = dict(summary)
             summary['suppressed_advisory_finding_count'] = 0
-        else:
-            summary.update(derived['advisory'])
+            summary.pop('verdict_without_advisory', None)
 
         result = {
             'pr_id': self.pr_id,
@@ -2017,7 +2014,7 @@ def validate_review_content(document, *, schema):
     if not isinstance(summary, dict):
         raise ValueError("review summary is malformed")
     try:
-        derived = derive_review_state(findings)
+        derived = summary_for(findings)
     except ValueError as exc:
         raise ValueError(f"review findings are malformed: {exc}") from exc
     expected_verdict = derived["verdict"]
@@ -2036,11 +2033,7 @@ def validate_review_content(document, *, schema):
         )
     if document.get("verdict") != expected_verdict:
         raise ValueError("review verdict does not match its findings")
-    expected_summary = {
-        "total_findings": len(findings),
-        "by_severity": derived["counts"],
-        **derived["advisory"],
-    }
+    expected_summary = derived["summary"]
     severity_counts = summary.get("by_severity")
     if (
         type(summary.get("total_findings")) is not int

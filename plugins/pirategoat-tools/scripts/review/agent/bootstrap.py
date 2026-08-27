@@ -47,6 +47,7 @@ from review.agent.review_assignment import ASSIGNMENT_SCHEMA, derive_reviewed_fi
 from review.agent.output import _validate_review_bytes, render_draft_index
 from review.atomic_io import atomic_write_json
 from review.reviewer_lifecycle import review_paths
+from review.verdict_rules import PIPELINE_VERDICTS
 
 # Import telemetry (parent directory script, best-effort)
 try:
@@ -1343,7 +1344,7 @@ def build_output(
     lines.append(f"  OUTPUT_FILES:")
     lines.append(f"    - {paths.final}")
     lines.append("  COUNTS: critical: N, high: N, medium: N  (copied from DRAFT TOTALS)")
-    lines.append("  VERDICT: <APPROVE|COMMENT|REQUEST_CHANGES|BLOCK>")
+    lines.append("  VERDICT: <" + "|".join(PIPELINE_VERDICTS) + ">")
     lines.append("  SUMMARY: <one sentence>")
     lines.append("")
     lines.append(f"PLUGIN_ROOT: {plugin_root}")

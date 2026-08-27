@@ -43,7 +43,7 @@ try:
         RECONCILIATION_COUNT_FIELDS,
         RECONCILIATION_FIELDS,
     )
-    from .verdict_rules import VALID_SEVERITIES, derive_review_state
+    from .verdict_rules import LEDGER_VERDICTS, VALID_SEVERITIES, summary_for
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
@@ -61,7 +61,7 @@ except ImportError:
         RECONCILIATION_COUNT_FIELDS,
         RECONCILIATION_FIELDS,
     )
-    from review.verdict_rules import VALID_SEVERITIES, derive_review_state
+    from review.verdict_rules import LEDGER_VERDICTS, VALID_SEVERITIES, summary_for
 
 atomic_write_json = atomic_io.atomic_write_json
 
@@ -643,9 +643,6 @@ _CHECK_FIELDS = frozenset({
     "id", "question", "method", "result", "source_reviewers",
     "critic_adjustment",
 })
-_RECONCILER_VERDICTS = frozenset({
-    "block", "request_changes", "comment", "approve",
-})
 
 
 def _require_nonnegative_integer(value, label):
@@ -873,7 +870,7 @@ def validate_findings_document(document):
         validate_review_content(base, schema=LEDGER_SCHEMA)
     except ValueError as error:
         raise ValueError(f"{FINDINGS_FILENAME}: {error}") from error
-    if document["verdict"] not in _RECONCILER_VERDICTS:
+    if document["verdict"] not in LEDGER_VERDICTS:
         raise ValueError(f"{FINDINGS_FILENAME}: reconciler verdict is invalid")
     if (
         isinstance(document["assessment"], str)
@@ -964,7 +961,7 @@ def validate_findings_document(document):
         raise ValueError(f"{FINDINGS_FILENAME}: rejected records must not be empty")
     if VERDICT_BEFORE_ADJUSTMENTS_KEY in extensions and extensions[
         VERDICT_BEFORE_ADJUSTMENTS_KEY
-    ] not in _RECONCILER_VERDICTS:
+    ] not in LEDGER_VERDICTS:
         raise ValueError(
             f"{FINDINGS_FILENAME}: verdict_before_adjustments is invalid"
         )
@@ -1070,18 +1067,19 @@ def _recount_summary(review, findings):
     module is validated, so the only source is a malformed pre-existing
     ledger — which is worth failing on, not smoothing over.
 
-    Returns the complete shared derivation so the caller publishes its gating
-    verdict without choosing a population or applying thresholds itself.
+    The block is replaced rather than patched key by key: the canonical
+    validator compares `summary` against this exact derivation, so a key
+    that survived a recount was already rejected on the next read.
+
+    Returns the complete shared derivation so the caller publishes its
+    gating verdict without choosing a population or applying thresholds
+    itself.
     """
     try:
-        derived = derive_review_state(findings)
+        derived = summary_for(findings)
     except ValueError as error:
         raise ValueError(f"{FINDINGS_FILENAME}: {error}") from error
-    summary = review.setdefault("summary", {})
-    summary["total_findings"] = len(findings)
-    summary["by_severity"] = derived["counts"]
-    summary.pop("verdict_without_advisory", None)
-    summary.update(derived["advisory"])
+    review["summary"] = derived["summary"]
     return derived
 
 
