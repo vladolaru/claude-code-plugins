@@ -3195,6 +3195,7 @@ class TestReviewerFilePartition:
         {"unclaimed_review_files": []},
         {"unclaimed_review_files": ["src/b.py", "src/a.py"]},
         {"reviewed_file_count": 999},
+        {"in_scope_review_file_count": 999},
         {"reviewed_file_claims": ["src/a.py", "src/a.py"]},
         {
             "reviewed_file_claims": ["src/b.py", "src/a.py"],

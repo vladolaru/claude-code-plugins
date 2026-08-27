@@ -2081,6 +2081,12 @@ def _validate_reviewer_envelope(review, reviewer):
         raise ValueError(
             "reviewed-file count does not equal inline plus claims"
         )
+    if review["in_scope_review_file_count"] != (
+        review["inline_diff_file_count"] + len(claimable)
+    ):
+        raise ValueError(
+            "reviewed-file in-scope count does not equal inline plus claimable"
+        )
 
 
 def validate_review_document(review, reviewer):
