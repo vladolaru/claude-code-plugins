@@ -30,11 +30,46 @@ _spec.loader.exec_module(_mod)
 AGENT_CONFIG = _mod.AGENT_CONFIG
 build_output = _mod.build_output
 derive_reviewer_name = _mod.derive_reviewer_name
-extract_scope_files = _mod.extract_scope_files
-extract_not_diffed_files = _mod.extract_not_diffed_files
-extract_list_only_files = _mod.extract_list_only_files
 
 ALL_AGENTS = sorted(AGENT_CONFIG.keys())
+
+
+# ---------------------------------------------------------------------------
+# Independent oracles for the rendered briefing
+# ---------------------------------------------------------------------------
+# Bootstrap derives every scope fact from scope.py's machine-readable summary
+# sidecar. These parsers read the OTHER artifact the same run produces — the
+# scope text scope.py renders for the reviewer to read — so a test asserting
+# a sidecar-derived number against them checks the two agree. Deliberately
+# test-local: production has exactly one authority for these facts, and a
+# second one living in the tests is an oracle, not a source.
+
+
+def _files_in_sections(scope_output, *header_prefixes):
+    """Paths from every "path  (+N -M)" line under the given headers."""
+    paths = []
+    in_section = False
+    for line in scope_output.splitlines():
+        if line.startswith("==="):
+            in_section = line.startswith(header_prefixes)
+            continue
+        match = re.match(r"\s*(.+?)\s{2,}\(\+\d+\s+-\d+\)", line)
+        if in_section and match:
+            paths.append(match.group(1).strip())
+    return paths
+
+
+def scope_files_in_text(scope_output):
+    return _files_in_sections(scope_output, "=== FILES ===")
+
+
+def not_diffed_files_in_text(scope_output):
+    return _files_in_sections(scope_output, "=== NOT DIFFED")
+
+
+def list_only_files_in_text(scope_output):
+    return _files_in_sections(scope_output, "=== CHANGED (no diff")
+
 
 # ---------------------------------------------------------------------------
 # Temp repo for integration tests (created once, reused across all tests)
@@ -139,9 +174,9 @@ class TestCategoryRepresentatives:
         # for context budget), and list-only CHANGED (no diff) paths the
         # reviewer is told to inspect when relevant.
         expected_scope = sorted(set(
-            extract_scope_files(result.stdout)
-            + extract_not_diffed_files(result.stdout)
-            + extract_list_only_files(result.stdout)
+            scope_files_in_text(result.stdout)
+            + not_diffed_files_in_text(result.stdout)
+            + list_only_files_in_text(result.stdout)
         ))
         events = [json.loads(line) for line in telemetry_log.read_text().splitlines()]
         agent_start = next(
@@ -174,7 +209,9 @@ class TestCategoryRepresentatives:
         summary = tmp_path / "repo-renewals-reviewer-scope-summary-code.json"
         assert summary.is_file()
         data = json.loads(summary.read_text())
-        assert data["domain"] == "code"
+        # The domain lives in the filename asserted above — the summary body
+        # carries only the facts its readers consume.
+        assert data["schema"] == 3
         assert isinstance(data["in_scope_stat_lines"], int)
         # Identity chain: the assignment is named for the reviewer
         # the instance is taught to construct its builder with.
@@ -295,7 +332,7 @@ class TestCategoryRepresentatives:
         assert assignment.is_file()
         data = json.loads(assignment.read_text())
         assert sorted(data["review_claimable_files"]) == sorted(
-            extract_not_diffed_files(result.stdout)
+            not_diffed_files_in_text(result.stdout)
         )
         # Closes the main()->build_output() seam: review_claimable_count must be
         # derived from this exact claimable set, not a neighboring fact
@@ -331,8 +368,8 @@ class TestCategoryRepresentatives:
         assert data["channels"] == ["blocking"]
         assert "budget_capped" not in data
 
-        diffed = extract_scope_files(result.stdout)
-        not_diffed = extract_not_diffed_files(result.stdout)
+        diffed = scope_files_in_text(result.stdout)
+        not_diffed = not_diffed_files_in_text(result.stdout)
         expected_in_scope = len(
             dict.fromkeys([*diffed, *not_diffed])
         )
@@ -1993,7 +2030,7 @@ class TestRepoRuleAndRefModeSelection:
             repo, "--agent", "code-reviewer", "--output-dir", str(outdir)
         )
         assert result.returncode == 0
-        assert "claimable_target.php" in extract_not_diffed_files(result.stdout)
+        assert "claimable_target.php" in not_diffed_files_in_text(result.stdout)
         assert "CLAIMABLE FILE RULE MARKER" in result.stdout
 
     def test_ref_mode_path_declaration_scopes_the_matching_file(
@@ -2027,7 +2064,7 @@ class TestRepoRuleAndRefModeSelection:
             "--output-dir", str(outdir),
         )
         assert result.returncode == 0
-        assert "docs/guide.md" in extract_scope_files(result.stdout)
+        assert "docs/guide.md" in scope_files_in_text(result.stdout)
 
 
 class TestOutputFilenameConsistency:
@@ -2185,13 +2222,13 @@ class TestNotDiffedContractIsDelivered:
 
     Regression guard for the 1.114.0 fix: build_output() used to re-derive the
     claimable-file count by regexing its OWN rendered scope text for
-    '=== NOT DIFFED (budget exceeded, N files) ===' — a second, independent
-    text-parsing path duplicating the one load_scope_facts()/main() already
-    used. Any rename or reformat of that header in scope.py silently zeroed
-    the count and dropped the entire honesty contract, with no error and
-    (because these tests hardcoded the same header text the regex expected)
-    no test failure either. build_output() now receives review_claimable_count as
-    an explicit fact from the caller and never inspects scope_output for it.
+    '=== NOT DIFFED (budget exceeded, N files) ===' — a second text-parsing
+    path for a fact the caller already held. Any rename or reformat of that
+    header in scope.py silently zeroed the count and dropped the entire
+    honesty contract, with no error and (because these tests hardcoded the
+    same header text the regex expected) no test failure either.
+    build_output() now receives review_claimable_count as an explicit fact
+    from the caller and never inspects scope_output for it.
     """
 
     NOT_DIFFED_SCOPE = (
@@ -2347,15 +2384,14 @@ class TestNotDiffedContractIsDelivered:
 class TestReviewClaimableOrderingEndToEnd:
     """The assignment's claimable list is largest-first end to end.
 
-    load_scope_facts() reads budget_exceeded_files straight off the
-    scope-summary sidecar in PRIORITY-TIER order (production files before
-    test files, regardless of size, for domains with budget_priority
-    "production_first") — not pure size order. A small production file can
-    therefore land ahead of a much larger test file in the raw list. This
+    build_scope() produces budget_exceeded_files in PRIORITY-TIER order
+    (production files before test files, regardless of size, for domains with
+    budget_priority "production_first") — not pure size order. A small
+    production file can therefore land ahead of a much larger test file. This
     reproduces that exact divergence with a real git repo and checks
-    bootstrap's own re-sort (order_by_diffstat_largest_first) fixes it in
-    the sidecar it persists — the same sidecar output.py's save() replays
-    for the NEXT UNREAD echo.
+    write_scope_summary()'s sort at the producer carries largest-first all the
+    way into the assignment bootstrap persists — the same assignment
+    output.py's save() replays for the NEXT UNREAD echo.
     """
 
     def _repo_with_priority_tier_divergence(self, repo_dir):

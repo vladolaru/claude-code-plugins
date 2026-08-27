@@ -48,7 +48,7 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 ### Fixed
 
 - **Reviewed files are derived, not stated** — `reviewed_file_count` is the inline scope plus validated reviewed-file claims at the artifact top level, while `meta.review_duration_ms` derives from the actor's dispatch marker instead of timing the final heredoc.
-- **The run-level file review is complete and honest** — `unscoped_files` stays `null` when unmeasured, and scope summaries keep the every-mode scoping population even when no diff is fetched. Both sides of the comparison share one path grammar.
+- **The run-level file review is complete and honest** — `unscoped_files` stays `null` when unmeasured, and the scope summary preserves the every-mode routing population even when no diff is fetched. Both sides of the comparison share one path grammar.
 - **Git C-quoted (non-ASCII) paths decode everywhere paths are consumed** — scope enumeration (such a file used to match no domain and be reviewed by nobody), diffstat budget keys, coverage comparisons, and the step-11 probe sweep, via one `git_path_cmd()` helper.
 - **The coverage measurement is machine-rendered into the review record** and quoted verbatim into the report, after a field run paraphrased a hedged measurement into a false "read by nobody". The verdict acknowledges a file gap only when no reviewer received the file inline or claimed it.
 - **An applying critic batch recomputes the ledger's verdict state** through the same derivation as a freshly published review, so advisory findings never become blockers after an unrelated adjustment. The pre-apply verdict is kept as `verdict_before_adjustments` when it changes.

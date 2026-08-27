@@ -204,17 +204,16 @@ def _load_agent_reviewed_files(
 # without adding it here would silently reclassify covered files as
 # never-scoped.
 #
-# `in_scope_review_files` is the only one written in every scope mode,
-# and it is why the union is trustworthy at all: a `--base-ref-only` or
-# `--summary` agent (patterns-reviewer by registry config; any reviewer on
-# a 100+-file PR by protocol) never fetches a diff, so its other three
-# lists are legitimately empty and every file it owned used to look
-# unowned.
+# `routing_files` is the only one written in every scope mode, and it is why
+# the union is trustworthy at all: a `--base-ref-only` or `--summary` agent
+# (patterns-reviewer by registry config; any reviewer on a 100+-file PR by
+# protocol) never fetches a diff, so its other three lists are legitimately
+# empty and every file it owned used to look unowned.
 _SCOPE_SUMMARY_FILE_LISTS = (
     "inline_diff_files",
     "review_claimable_files",
     "list_only_files",
-    "in_scope_review_files",
+    "routing_files",
 )
 
 
@@ -261,7 +260,7 @@ def aggregate_file_review(
 ) -> Optional[Dict[str, Any]]:
     """Aggregate per-agent scope summaries into the run-level file review.
 
-    Reads schema-2 ``*-scope-summary*.json`` sidecars, carries inline-diff
+    Reads schema-3 ``*-scope-summary*.json`` sidecars, carries inline-diff
     receipt by file, and takes each reviewer's claimed and unclaimed files
     from its finalized review document. An agent that never finalized one
     keeps every review-claimable path its summary reported visible as
@@ -310,7 +309,7 @@ def aggregate_file_review(
                 data = json.load(f)
         except (OSError, json.JSONDecodeError):
             continue
-        if not isinstance(data, dict) or data.get("schema") != 2:
+        if not isinstance(data, dict) or data.get("schema") != 3:
             continue
         if any(
             not isinstance(data.get(key), list)

@@ -1761,55 +1761,60 @@ def format_json_output(scope: dict) -> str:
 
 
 def write_scope_summary(scope: dict, path: str) -> None:
-    """Persist a compact machine-readable scope summary for run-level
-    file review.
+    """Persist the one machine-readable scope contract for this agent.
 
-    Fail-open: a summary-write failure must never break scope output.
+    Five facts, each with exactly one consumer relationship:
+    ``inline_diff_files`` and ``review_claimable_files`` are the reviewer's
+    assignment (bootstrap passes both straight through, and their lengths
+    ARE the assignment's two counts); ``list_only_files`` is descriptive
+    scope; ``routing_files`` is the every-mode population the run-level file
+    review subtracts from the changed set; ``in_scope_stat_lines`` sizes the
+    tool-call budget.
+
+    ``review_claimable_files`` is published largest-diffstat-first because
+    that is the order the assignment's claimable queue and the save echo's
+    next-unread list promise. build_scope produces it in priority-tier order
+    (production_first / markup_evidence ahead of size), so the sort happens
+    once, here, at the producer — bootstrap used to re-parse the rendered
+    text solely to redo it.
+
+    Fail-closed: nothing downstream has a second source for these facts, so
+    a write failure is an error rather than a silent downgrade.
     """
+    diffstat = scope.get("diffstat", {}) or {}
     inline_diff_files = sorted(scope.get("diffs", {}) or {})
-    review_claimable_files = list(
-        dict.fromkeys(scope.get("budget_exceeded_files", []) or [])
+    review_claimable_files = sorted(
+        dict.fromkeys(scope.get("budget_exceeded_files", []) or []),
+        key=lambda f: sum(diffstat.get(f, (0, 0))),
+        reverse=True,
     )
     list_only_files = list(dict.fromkeys(scope.get("list_only_files", []) or []))
+    # The reviewed-file denominator: what the agent must read inline plus
+    # what it may claim. List-only files are deliberately outside it — they
+    # neither size the budget nor count toward review progress.
     reviewed_files = list(
         dict.fromkeys([*inline_diff_files, *review_claimable_files])
     )
-    # `in_scope_files` is the every-mode routing population. In modes that
-    # never fetch a diff it remains populated while every reviewed-file
-    # population is empty. The fallback keeps direct/minimal callers useful.
-    raw_in_scope_files = scope.get("in_scope_files", reviewed_files)
-    in_scope_review_files = list(
-        dict.fromkeys(raw_in_scope_files or [])
-    )
-
-    # Raw diffstat lines over the reviewer's reviewed-file denominator: inline
-    # files plus review-claimable files. The broader every-mode scoping
-    # population above deliberately does not affect budget/progress counts.
-    diffstat = scope.get("diffstat", {}) or {}
-    in_scope_stat_lines = sum(
-        sum(diffstat.get(f, (0, 0))) for f in reviewed_files
-    )
     summary = {
-        "schema": 2,
-        "domain": scope.get("domain"),
-        "range": scope.get("range"),
-        "status": scope.get("status"),
+        "schema": 3,
         "inline_diff_files": inline_diff_files,
         "review_claimable_files": review_claimable_files,
         "list_only_files": list_only_files,
-        "in_scope_review_files": in_scope_review_files,
-        "total_diff_lines": scope.get("total_diff_lines", 0),
-        "in_scope_stat_lines": in_scope_stat_lines,
-        "budget_max": scope.get("budget_max"),
+        "routing_files": list(dict.fromkeys([
+            *(scope.get("in_scope_files") or []),
+            *inline_diff_files,
+            *review_claimable_files,
+            *list_only_files,
+        ])),
+        "in_scope_stat_lines": sum(
+            sum(diffstat.get(f, (0, 0))) for f in reviewed_files
+        ),
     }
-    try:
-        parent = os.path.dirname(path)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(summary, f, indent=2)
-    except OSError as e:
-        print(f"WARNING: could not write scope summary to {path}: {e}", file=sys.stderr)
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2)
 
 
 def main():

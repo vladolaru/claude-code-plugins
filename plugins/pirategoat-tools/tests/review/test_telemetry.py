@@ -1164,11 +1164,11 @@ class TestRunManifest:
         # scope.py runs `-c core.quotepath=false`.
         (output_dir / "security-reviewer-scope-summary.json").write_text(
             json.dumps({
-                "schema": 2,
+                "schema": 3,
                 "inline_diff_files": ["src/café.py"],
                 "review_claimable_files": [],
                 "list_only_files": [],
-                "in_scope_review_files": ["src/café.py"],
+                "routing_files": ["src/café.py"],
             })
         )
 

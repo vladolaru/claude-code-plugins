@@ -91,16 +91,14 @@ def _write_summary(
     path = os.path.join(output_dir, f"{agent}-scope-summary{suffix}.json")
     with open(path, "w") as f:
         json.dump({
-            "schema": 2,
-            "domain": "x",
-            "status": "OK",
+            "schema": 3,
             "inline_diff_files": files_with_diffs,
             "review_claimable_files": budget_exceeded,
             "list_only_files": list(list_only or []),
             # Real sidecars publish this in every mode; the helper defaults
             # it to the union of what was passed so ordinary-mode fixtures
             # stay honest without every caller restating their scope.
-            "in_scope_review_files": (
+            "routing_files": (
                 list(in_scope) if in_scope is not None
                 else sorted(
                     set(files_with_diffs)

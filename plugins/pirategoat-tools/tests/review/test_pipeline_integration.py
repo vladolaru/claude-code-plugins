@@ -172,16 +172,14 @@ class TestReviewerDraftFinalizationLifecycle:
         )
         (output_dir / "code-reviewer-scope-summary.json").write_text(
             json.dumps({
-                "schema": 2,
-                "domain": "code",
-                "status": "OK",
+                "schema": 3,
                 "inline_diff_files": ["second.txt"],
                 "review_claimable_files": [
                     "claimable/read.py",
                     "claimable/unread.py",
                 ],
                 "list_only_files": [],
-                "in_scope_review_files": [
+                "routing_files": [
                     "second.txt",
                     "claimable/read.py",
                     "claimable/unread.py",
@@ -2548,13 +2546,11 @@ class TestStep9CoverageMeasurement:
     @staticmethod
     def _summary(tmp_path, agent, *, inline=(), claimable=()):
         (tmp_path / f"{agent}-scope-summary.json").write_text(json.dumps({
-            "schema": 2,
-            "domain": "x",
-            "status": "OK",
+            "schema": 3,
             "inline_diff_files": list(inline),
             "review_claimable_files": list(claimable),
             "list_only_files": [],
-            "in_scope_review_files": sorted({*inline, *claimable}),
+            "routing_files": sorted({*inline, *claimable}),
         }))
 
     @staticmethod
@@ -2678,13 +2674,11 @@ class TestStep9Orchestration:
                    "--output-dir", str(tmp_path), cwd=tmp_path)
         for agent in ("code-reviewer", "security-reviewer"):
             (tmp_path / f"{agent}-scope-summary.json").write_text(json.dumps({
-                "schema": 2,
-                "domain": "x",
-                "status": "OK",
+                "schema": 3,
                 "inline_diff_files": ["src/a.php"],
                 "review_claimable_files": ["src/starved.php"],
                 "list_only_files": [],
-                "in_scope_review_files": ["src/a.php", "src/starved.php"],
+                "routing_files": ["src/a.php", "src/starved.php"],
             }))
         # The CSV step 8 hands the reconciliation-context builder is the
         # same one step 9 measures `unscoped_files` against.

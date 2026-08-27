@@ -26,6 +26,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -326,144 +327,16 @@ def get_file_history(files: List[str], max_commits: int = 15) -> str:
     return "\n".join(lines)
 
 
-def extract_scope_files(scope_output: str) -> List[str]:
-    """Extract file paths from all === FILES === sections of scope output."""
-    files = []
-    in_files = False
-    for line in scope_output.splitlines():
-        if line.startswith("=== FILES ==="):
-            in_files = True
-            continue
-        if in_files and line.startswith("==="):
-            in_files = False
-            continue
-        if in_files and line.strip():
-            # File line format: "path/to/file  (+N -M)"
-            file_path = line.split("  ")[0].strip()
-            if file_path:
-                files.append(file_path)
-    return files
-
-
-def _extract_stat_shaped_files(scope_output: str, header_prefix: str) -> List[str]:
-    """Extract file paths from every section whose header starts with
-    ``header_prefix``. Only lines carrying the "path  (+N -M)" stats shape
-    are files; the sections' instruction prose lines are never parsed as
-    paths.
-    """
-    files = []
-    in_section = False
-    for line in scope_output.splitlines():
-        if line.startswith(header_prefix):
-            in_section = True
-            continue
-        if in_section and line.startswith("==="):
-            in_section = False
-            continue
-        if in_section and line.strip():
-            match = re.match(r'\s*(.+?)\s{2,}\(\+\d+\s+-\d+\)', line)
-            if match:
-                files.append(match.group(1).strip())
-    return files
-
-
-def extract_not_diffed_files(scope_output: str) -> List[str]:
-    """Extract review-claimable paths from === NOT DIFFED === sections.
-
-    These files ARE the agent's scope — their diffs were withheld only to fit
-    the context budget — so telemetry must record them alongside the inline
-    FILES entries, or coverage reports them as uncovered and transcript
-    analysis counts reading them as out-of-scope.
-    """
-    return _extract_stat_shaped_files(scope_output, "=== NOT DIFFED")
-
-
-def extract_list_only_files(scope_output: str) -> List[str]:
-    """Extract lock/generated paths from === CHANGED (no diff ...) sections.
-
-    List-only files are in-scope changed files whose diffs scope.py withholds
-    as too large/noisy while still instructing the reviewer to inspect them
-    when relevant. Telemetry must carry them or coverage.by_agent omits a
-    legitimate scope path and a reviewer's read of it counts as out-of-scope.
-    Their lines stay out of budget sizing — extract_scope_line_count never
-    reads this section.
-    """
-    return _extract_stat_shaped_files(scope_output, "=== CHANGED (no diff")
-
-
-def extract_scope_line_count(scope_output: str) -> int:
-    """Extract total in-scope changed lines for budget sizing.
-
-    Sums (+N -M) stats from all === FILES === sections AND all
-    === NOT DIFFED === sections: NOT DIFFED files are in-scope work the
-    reviewer must still inspect — their diffs were withheld only to fit
-    the context budget, not removed from the workload.
-    """
-    total = 0
-    in_files = False
-    for line in scope_output.splitlines():
-        if line.startswith("=== FILES ===") or line.startswith("=== NOT DIFFED"):
-            in_files = True
-            continue
-        if in_files and line.startswith("==="):
-            in_files = False
-            continue
-        if in_files and line.strip():
-            # Parse "(+N -M)" from "path/to/file  (+N -M)"
-            match = re.search(r'\(\+(\d+)\s+-(\d+)\)', line)
-            if match:
-                total += int(match.group(1)) + int(match.group(2))
-    return total
-
-
-def extract_file_diffstat(scope_output: str) -> Dict[str, int]:
-    """Map each scope-listed file to its total changed lines (+N -M summed).
-
-    Parsed from every "path  (+N -M)" stat-shaped line scope.py renders,
-    regardless of section (FILES, NOT DIFFED, CHANGED (no diff)) — the one
-    per-file size bootstrap has, used only to ORDER already-known file sets
-    (the assignment's largest-first contract). A file matching
-    no stat line here sorts as 0, never excluded from whatever set it is
-    ordering.
-    """
-    stats: Dict[str, int] = {}
-    if not scope_output:
-        return stats
-    for line in scope_output.splitlines():
-        match = re.match(r'\s*(.+?)\s{2,}\(\+(\d+)\s+-(\d+)\)', line)
-        if match:
-            path, added, removed = match.groups()
-            stats[path.strip()] = int(added) + int(removed)
-    return stats
-
-
-def order_by_diffstat_largest_first(
-    paths: List[str], diffstat_totals: Dict[str, int]
-) -> List[str]:
-    """Order ``paths`` by descending total changed lines, largest first.
-
-    The ordering rule the assignment's ``review_claimable_files``
-    list is pinned to — the save echo's NEXT UNREAD list (output.py)
-    replays that order verbatim, and the briefing already promises
-    "largest first" for this queue. A path with no entry in
-    ``diffstat_totals`` sorts as 0, never excluded. Stable: paths tied on
-    size (including two unknown paths) keep their relative input order.
-    """
-    return sorted(
-        paths, key=lambda p: diffstat_totals.get(p, 0), reverse=True
-    )
-
-
 def partition_scope_paths(
-    inline_paths: List[str],
-    review_claimable_paths: List[str],
-    list_only_paths: List[str],
-) -> Tuple[List[str], List[str], List[str]]:
-    """Order-deduplicate three scope populations with fixed precedence.
+    inline_paths: List[str], review_claimable_paths: List[str]
+) -> Tuple[List[str], List[str]]:
+    """Order-deduplicate the two reviewed-file populations, inline first.
 
-    Inline paths win over review-claimable paths, and both win over list-only paths.
-    Each returned population is therefore disjoint while preserving the
-    first-seen order of paths that remain in that population.
+    One file can be inline in one domain's scope summary and review-claimable
+    in another's; the assignment's two counts must partition, so inline wins
+    and the claimable list drops the repeat. List-only paths need no pass —
+    they never reach the assignment, and their consumers (repo-rule
+    selection, the PHP gate, telemetry scope) read membership, not counts.
     """
     seen = set()
 
@@ -475,56 +348,49 @@ def partition_scope_paths(
                 population.append(path)
         return population
 
-    return (
-        take_unseen(inline_paths),
-        take_unseen(review_claimable_paths),
-        take_unseen(list_only_paths),
-    )
+    return take_unseen(inline_paths), take_unseen(review_claimable_paths)
 
 
-def load_scope_facts(summary_paths: List[str]) -> Optional[Dict[str, Any]]:
-    """Derive scope facts from the machine-readable scope-summary sidecars.
+_SCOPE_FACT_LISTS = (
+    "inline_diff_files",
+    "review_claimable_files",
+    "list_only_files",
+)
 
-    The sidecars carry the same producer dict the text renderer prints, so
-    consuming them directly means a scope section unknown to the text
-    extractors can never be silently invisible. Returns None when no paths
-    were given or any expected sidecar is missing, malformed, or predates
-    the in_scope_stat_lines field — callers then fall back to parsing the
-    rendered text (the sidecar write is fail-open by design).
+
+def load_scope_facts(summary_paths: List[str]) -> Dict[str, Any]:
+    """Accumulate this agent's scope facts from its scope-summary sidecars.
+
+    The sidecars are the producer's own dict, so their key names are used
+    unchanged and handed straight to persist_review_assignment. Empty when no
+    summary was requested — a no-domain agent has no scope — and a ValueError
+    when one was requested and is missing or malformed: there is no second
+    source for these facts, and re-deriving some of them from the rendered
+    text was a quietly different answer to the same question.
     """
-    if not summary_paths:
-        return None
-    facts: Dict[str, Any] = {
-        "files": [],
-        "review_claimable": [],
-        "list_only": [],
-        "stat_lines": 0,
-    }
+    facts: Dict[str, Any] = {key: [] for key in _SCOPE_FACT_LISTS}
+    facts["in_scope_stat_lines"] = 0
     for path in summary_paths:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            return None
-        if not isinstance(data, dict):
-            return None
-        if data.get("schema") != 2:
-            return None
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"unreadable scope summary {path}: {exc}") from exc
+        if not isinstance(data, dict) or data.get("schema") != 3:
+            raise ValueError(f"scope summary {path} is not schema 3")
         stat_lines = data.get("in_scope_stat_lines")
         if not isinstance(stat_lines, int) or isinstance(stat_lines, bool):
-            return None
-        for fact_key, summary_key in (
-            ("files", "inline_diff_files"),
-            ("review_claimable", "review_claimable_files"),
-            ("list_only", "list_only_files"),
-        ):
-            value = data.get(summary_key)
+            raise ValueError(
+                f"scope summary {path} has no in_scope_stat_lines count"
+            )
+        for key in _SCOPE_FACT_LISTS:
+            value = data.get(key)
             if not isinstance(value, list) or not all(
                 isinstance(p, str) for p in value
             ):
-                return None
-            facts[fact_key].extend(value)
-        facts["stat_lines"] += stat_lines
+                raise ValueError(f"scope summary {path} has a malformed {key}")
+            facts[key].extend(value)
+        facts["in_scope_stat_lines"] += stat_lines
     return facts
 
 
@@ -1023,23 +889,21 @@ def build_output(
     derives on its own:
 
     - review_claimable_count must be the caller's already-computed claimable-file
-      count (main() passes len(review_claimable_paths), its alias for
-      scope_facts["review_claimable"]).
+      count (main() passes len(review_claimable_files), partitioned from
+      scope_facts["review_claimable_files"]).
     - has_php must be the caller's already-computed PHP-in-scope fact
       (main() passes any(p.endswith(".php") for p in
       telemetry_scope_paths) — the same deduped fact-based path union used
-      for scope telemetry, itself preferring scope.py's machine-readable
-      summary sidecars over text parsing).
+      for scope telemetry, itself read from scope.py's machine-readable
+      summary sidecars).
 
-    This function does not parse scope_output for either fact — the sole
-    place either is ever text-derived is main()'s extract_scope_files() /
-    extract_not_diffed_files() / extract_list_only_files() fallback, used
-    only when load_scope_facts()'s machine-readable sidecars are
-    unavailable (load_scope_facts() itself returns None in that case, not
-    a text-derived value). Neither parameter has a default, so an omitted
-    caller fails loudly (TypeError) instead of silently dropping the NOT
-    DIFFED contract or handing dead-code-reviewer a wrong
-    DYNAMIC_DISPATCH_RISK.
+    This function does not parse scope_output for either fact, and neither
+    does main(): load_scope_facts() reads the scope-summary sidecars and
+    nothing else, and a run without a readable one stops with a structured
+    error rather than re-deriving them from rendered prose. Neither
+    parameter has a default, so an omitted caller fails loudly (TypeError)
+    instead of silently dropping the NOT DIFFED contract or handing
+    dead-code-reviewer a wrong DYNAMIC_DISPATCH_RISK.
     See TestNotDiffedContractIsDelivered and TestDynamicDispatchRisk in
     tests/review/agent/test_bootstrap_integration.py for the executable
     contracts and their regression history.
@@ -1570,6 +1434,11 @@ def main():
     exploration_scope = None
     secondary_with_content = []  # secondary domains that matched files
     scope_summary_paths = []  # machine-readable sidecars backing scope_output
+    # Where those sidecars land: the run directory when the caller pinned one
+    # — that is what the run-level file review reads — and a scratch directory
+    # otherwise. The summary is the ONLY source of scope facts, so a run
+    # without a pinned output dir must still produce one.
+    summary_dir = args.output_dir or tempfile.mkdtemp(prefix="pirategoat-scope-")
 
     if ref_mode:
         # Adapter ref-mode: the adapter has no registry domain. Scope by the
@@ -1608,12 +1477,9 @@ def main():
             # would not count as covered. Instance-named so N instances
             # never collide and the aggregator attributes the scope to the
             # identity every other artifact uses.
-            dom_summary_out = (
-                os.path.join(
-                    args.output_dir,
-                    f"{effective_agent_name}-scope-summary-{dom}.json",
-                )
-                if args.output_dir else None
+            dom_summary_out = os.path.join(
+                summary_dir,
+                f"{effective_agent_name}-scope-summary-{dom}.json",
             )
             dom_extra_flags, ref_include_flags = ref_include_flags, []
             dom_rc, dom_output = run_scope_discovery(
@@ -1621,8 +1487,7 @@ def main():
                 output_dir=args.output_dir,
                 summary_json_out=dom_summary_out,
             )
-            if dom_summary_out:
-                scope_summary_paths.append(dom_summary_out)
+            scope_summary_paths.append(dom_summary_out)
             # Capture output dir / PR number from the first domain that actually
             # runs (not the first list position — it may have been skipped).
             if not captured_meta:
@@ -1662,21 +1527,20 @@ def main():
         scope_flags = list(config.get("scope_flags", []))
         if config.get("no_semantic_filter", False):
             scope_flags.append("--no-semantic-filter")
-        # Persist a machine-readable scope summary per agent so the run
-        # level (reconciliation coverage aggregation) can compute which
-        # changed files no reviewer received inline. Only when the caller
-        # pinned the output dir — standalone runs detect it after the fact.
-        primary_summary_out = (
-            os.path.join(args.output_dir, f"{agent_name}-scope-summary.json")
-            if args.output_dir else None
+        # Persist a machine-readable scope summary per agent: it is this
+        # reviewer's only source of assignment facts, and when the caller
+        # pinned the output dir it is also what the run level
+        # (reconciliation coverage aggregation) reads to compute which
+        # changed files no reviewer received inline.
+        primary_summary_out = os.path.join(
+            summary_dir, f"{agent_name}-scope-summary.json"
         )
         rc, scope_output = run_scope_discovery(
             plugin_root, config["domain"], scope_flags, args.range,
             output_dir=args.output_dir,
             summary_json_out=primary_summary_out,
         )
-        if primary_summary_out:
-            scope_summary_paths.append(primary_summary_out)
+        scope_summary_paths.append(primary_summary_out)
 
         if rc != 0 and rc != 2:
             # rc=2 means no changes, which is still structured output
@@ -1710,20 +1574,15 @@ def main():
             sec_flags = list(config.get("scope_flags", []))
             if config.get("no_semantic_filter", False):
                 sec_flags.append("--no-semantic-filter")
-            sec_summary_out = (
-                os.path.join(
-                    args.output_dir,
-                    f"{agent_name}-scope-summary-{sec_domain}.json",
-                )
-                if args.output_dir else None
+            sec_summary_out = os.path.join(
+                summary_dir, f"{agent_name}-scope-summary-{sec_domain}.json"
             )
             sec_rc, sec_output = run_scope_discovery(
                 plugin_root, sec_domain, sec_flags, args.range,
                 output_dir=args.output_dir,
                 summary_json_out=sec_summary_out,
             )
-            if sec_summary_out:
-                scope_summary_paths.append(sec_summary_out)
+            scope_summary_paths.append(sec_summary_out)
             sec_status = extract_status(sec_output)
             if sec_status and sec_status == "OK":
                 scope_output += f"\n\n=== SECONDARY SCOPE: {sec_domain} ===\n"
@@ -1768,60 +1627,45 @@ def main():
         from datetime import datetime, timezone
         f.write(datetime.now(timezone.utc).isoformat())
 
-    # Prefer scope-level metrics (domain-filtered) over PR-level totals.
-    # Scope data gives the agent's actual workload; PR-level is a fallback
-    # for agents without domain scoping (domain=null). Facts come from the
-    # machine-readable sidecars first — the same producer dict the rendered
-    # text was printed from — with text parsing as the fallback for
-    # standalone runs (no pinned output dir) and failed sidecar writes.
-    scope_facts = load_scope_facts(scope_summary_paths)
-    if scope_facts is None:
-        scope_facts = {
-            "files": extract_scope_files(scope_output) if scope_output else [],
-            "review_claimable": (
-                extract_not_diffed_files(scope_output) if scope_output else []
-            ),
-            "list_only": (
-                extract_list_only_files(scope_output) if scope_output else []
-            ),
-            "stat_lines": (
-                extract_scope_line_count(scope_output) if scope_output else 0
-            ),
-        }
-    scope_lines_for_budget = scope_facts["stat_lines"]
-    # Review-claimable NOT DIFFED files and list-only CHANGED (no diff) files
-    # are in-scope work too: telemetry must carry them or the assignment marks
-    # them unscoped and reads of them count as out-of-scope. Both are kept out
-    # of scope_files_for_budget so inline-diff consumers (file history) keep
-    # their meaning, and list-only lines never enter budget sizing.
-    (
-        scope_files_for_budget,
-        review_claimable_paths,
-        list_only_paths,
-    ) = partition_scope_paths(
-        scope_facts["files"],
-        scope_facts["review_claimable"],
-        scope_facts["list_only"],
+    # Scope facts come from the machine-readable sidecars and only from them
+    # — the same producer dict the rendered text was printed from. A run that
+    # could not produce one has no facts, and a reviewer briefed with facts
+    # nobody measured is worse than one that stops.
+    try:
+        scope_facts = load_scope_facts(scope_summary_paths)
+    except ValueError as exc:
+        print(build_error_output(
+            effective_agent_name,
+            f"Could not read the scope summary: {exc}",
+            plugin_root,
+        ))
+        sys.exit(1)
+    scope_lines_for_budget = scope_facts["in_scope_stat_lines"]
+    inline_diff_files, review_claimable_files = partition_scope_paths(
+        scope_facts["inline_diff_files"], scope_facts["review_claimable_files"]
     )
-    # load_scope_facts() reads budget_exceeded_files straight off the
-    # summary sidecar in priority-tier order (production_first /
-    # markup_evidence ahead of size), not the pure size order the rendered
-    # NOT DIFFED text applies at print time — so this re-sort is required
-    # for that path and a no-op (already sorted) for the text-parsing
-    # fallback.
-    diffstat_totals = extract_file_diffstat(scope_output) if scope_output else {}
-    review_claimable_paths = order_by_diffstat_largest_first(
-        review_claimable_paths, diffstat_totals
+    list_only_files = scope_facts["list_only_files"]
+    # The reviewer's denominator, stated once: every file it must read inline
+    # plus every file it may claim. This is exactly the coherence rule
+    # derive_reviewed_files() enforces on the assignment
+    # (review_assignment.py), computed from the same two lists the assignment
+    # carries, so the two cannot disagree. List-only files are descriptive
+    # scope — never part of the count progress is reported against.
+    in_scope_review_file_count = len(inline_diff_files) + len(
+        review_claimable_files
     )
-    progress_scope_paths = [*scope_files_for_budget, *review_claimable_paths]
-    telemetry_scope_paths = [*progress_scope_paths, *list_only_paths]
+    telemetry_scope_paths = list(dict.fromkeys(
+        [*inline_diff_files, *review_claimable_files, *list_only_files]
+    ))
     # DYNAMIC_DISPATCH_RISK (dead-code-reviewer's Step 0 gate) is derived from
     # this same fact-based path set, not from re-parsing scope_output text —
     # see has_php's docstring note in build_output().
     has_php = any(p.endswith(".php") for p in telemetry_scope_paths)
 
     if scope_lines_for_budget > 0:
-        review_budget = compute_review_budget(scope_lines_for_budget, len(scope_files_for_budget))
+        review_budget = compute_review_budget(
+            scope_lines_for_budget, len(inline_diff_files)
+        )
         budget_capped = budget_was_capped(scope_lines_for_budget)
     else:
         # Fallback: use PR-level metrics when scope is unavailable or empty
@@ -1882,10 +1726,10 @@ def main():
         persist_review_assignment(
             output_dir,
             effective_agent_name,
-            review_claimable_paths,
+            review_claimable_files,
             review_budget=review_budget,
-            in_scope_review_file_count=len(progress_scope_paths),
-            inline_diff_file_count=len(scope_files_for_budget),
+            in_scope_review_file_count=in_scope_review_file_count,
+            inline_diff_file_count=len(inline_diff_files),
             channels=channels,
         )
     except (OSError, ValueError) as exc:
@@ -1926,7 +1770,7 @@ def main():
     # Compute file history for agents that request it
     file_history_output = None
     if config.get("file_history") and scope_output:
-        file_lines = scope_files_for_budget
+        file_lines = inline_diff_files
         if file_lines:
             max_commits = config.get("max_history_commits", 15)
             file_history_output = get_file_history(file_lines, max_commits=max_commits)
@@ -1989,7 +1833,7 @@ def main():
         output_dir=output_dir,
         pr_number=pr_number,
         reviewer_name=reviewer_name,
-        review_claimable_count=len(review_claimable_paths),
+        review_claimable_count=len(review_claimable_files),
         has_php=has_php,
         file_history=file_history_output,
         pr_intent=pr_intent,

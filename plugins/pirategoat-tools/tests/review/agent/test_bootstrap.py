@@ -36,13 +36,7 @@ load_change_purpose = _mod.load_change_purpose
 load_additional_instructions = _mod.load_additional_instructions
 compute_review_budget = _mod.compute_review_budget
 budget_was_capped = _mod.budget_was_capped
-extract_scope_files = _mod.extract_scope_files
-extract_not_diffed_files = _mod.extract_not_diffed_files
-extract_list_only_files = _mod.extract_list_only_files
-extract_scope_line_count = _mod.extract_scope_line_count
 load_scope_facts = _mod.load_scope_facts
-extract_file_diffstat = _mod.extract_file_diffstat
-order_by_diffstat_largest_first = _mod.order_by_diffstat_largest_first
 resolve_overall_status = _mod.resolve_overall_status
 REVIEWER_PROTOCOL_SKIP_SECTIONS = _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
 
@@ -277,7 +271,7 @@ class TestPartitionScopePaths:
     """Scope populations are disjoint, ordered sets with fixed precedence."""
 
     def test_partitions_duplicates_and_cross_population_overlap(self):
-        inline, claimable, list_only = _mod.partition_scope_paths(
+        inline, claimable = _mod.partition_scope_paths(
             ["src/inline-a.py", "src/shared.py", "src/inline-a.py"],
             [
                 "src/claimable-a.py",
@@ -285,18 +279,10 @@ class TestPartitionScopePaths:
                 "src/claimable-a.py",
                 "src/claimable-b.py",
             ],
-            [
-                "package-lock.json",
-                "src/claimable-b.py",
-                "package-lock.json",
-                "src/shared.py",
-                "generated/api.json",
-            ],
         )
 
         assert inline == ["src/inline-a.py", "src/shared.py"]
         assert claimable == ["src/claimable-a.py", "src/claimable-b.py"]
-        assert list_only == ["package-lock.json", "generated/api.json"]
 
     def test_save_echo_uses_reachable_progress_while_telemetry_keeps_list_only(
         self, tmp_path, monkeypatch, capsys
@@ -310,27 +296,20 @@ class TestPartitionScopePaths:
             _mod,
             "load_scope_facts",
             lambda _paths: {
-                "files": [
-                    "src/inline.py",
-                    "src/shared.py",
-                    "src/inline.py",
+                "inline_diff_files": [
+                    "src/inline.py", "src/shared.py", "src/inline.py",
+                    "src/secondary.py", "src/shared.py",
+                ],
+                "review_claimable_files": [
+                    "src/claimable-b.py", "src/shared.py",
+                    "src/claimable-a.py", "src/claimable-a.py",
                     "src/secondary.py",
-                    "src/shared.py",
                 ],
-                "review_claimable": [
-                    "src/shared.py",
-                    "src/claimable-a.py",
-                    "src/claimable-a.py",
-                    "src/secondary.py",
-                    "src/claimable-b.py",
+                "list_only_files": [
+                    "package-lock.json", "src/claimable-b.py",
+                    "package-lock.json", "generated/api.json",
                 ],
-                "list_only": [
-                    "package-lock.json",
-                    "src/claimable-b.py",
-                    "package-lock.json",
-                    "generated/api.json",
-                ],
-                "stat_lines": 100,
+                "in_scope_stat_lines": 100,
             },
         )
         scope_output = (
@@ -416,6 +395,17 @@ class TestPartitionScopePaths:
         monkeypatch.setattr(
             _mod, "run_scope_discovery", lambda *_args, **_kwargs: (0, "STATUS: OK\n=== FILES ===\nsrc/a.py  (+1 -0)\n")
         )
+        # The stub writes no sidecar; without facts the run stops earlier.
+        monkeypatch.setattr(
+            _mod,
+            "load_scope_facts",
+            lambda _paths: {
+                "inline_diff_files": ["src/a.py"],
+                "review_claimable_files": [],
+                "list_only_files": [],
+                "in_scope_stat_lines": 1,
+            },
+        )
         monkeypatch.setattr(
             _mod,
             "persist_review_assignment",
@@ -434,68 +424,34 @@ class TestPartitionScopePaths:
         assert "STATUS: ERROR" in output
         assert "Could not publish authoritative review assignment: disk full" in output
 
-
-class TestExtractFileDiffstat:
-    """Per-file size, parsed from any stat-shaped scope.py line."""
-
-    def test_extracts_stats_from_files_and_not_diffed_sections(self):
-        scope_output = (
-            "=== FILES ===\n"
-            "src/small.py  (+2 -1)\n"
-            "=== NOT DIFFED (budget exceeded, 1 files) ===\n"
-            "src/huge.py  (+400 -50)\n"
+    def test_main_refuses_to_run_without_scope_facts(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """A missing sidecar is a structured error, never a text re-parse."""
+        monkeypatch.setattr(_mod, "find_plugin_root", lambda: str(PLUGIN_ROOT))
+        monkeypatch.setattr(_mod, "read_file", lambda _path: "# rules")
+        monkeypatch.setattr(
+            _mod,
+            "run_scope_discovery",
+            lambda *_args, **_kwargs: (
+                0, "STATUS: OK\n=== FILES ===\nsrc/a.py  (+1 -0)\n"
+            ),
         )
-        assert extract_file_diffstat(scope_output) == {
-            "src/small.py": 3,
-            "src/huge.py": 450,
-        }
-
-    def test_empty_scope_output_returns_empty_dict(self):
-        assert extract_file_diffstat("") == {}
-
-    def test_lines_without_the_stat_shape_are_ignored(self):
-        scope_output = (
-            "=== NOT DIFFED (budget exceeded, 1 files) ===\n"
-            "These files ARE IN YOUR SCOPE\n"
-            "src/a.py  (+5 -0)\n"
+        monkeypatch.setattr(
+            sys, "argv",
+            [
+                "bootstrap.py", "--agent", "security-reviewer",
+                "--output-dir", str(tmp_path),
+            ],
         )
-        assert extract_file_diffstat(scope_output) == {"src/a.py": 5}
 
+        with pytest.raises(SystemExit, match="1"):
+            _mod.main()
 
-class TestOrderByDiffstatLargestFirst:
-    """The review-claimable queue's ordering contract, in isolation."""
-
-    def test_sorts_descending_by_total_lines(self):
-        result = order_by_diffstat_largest_first(
-            ["a.py", "b.py", "c.py"],
-            {"a.py": 10, "b.py": 500, "c.py": 100},
-        )
-        assert result == ["b.py", "c.py", "a.py"]
-
-    def test_unknown_paths_sort_as_zero_and_never_get_excluded(self):
-        result = order_by_diffstat_largest_first(
-            ["known.py", "unknown.py"], {"known.py": 5}
-        )
-        assert result == ["known.py", "unknown.py"]
-
-    def test_ties_keep_relative_input_order(self):
-        """Stable: two equal-size (or both-unknown) paths do not get
-        reordered relative to each other."""
-        result = order_by_diffstat_largest_first(
-            ["first.py", "second.py"], {}
-        )
-        assert result == ["first.py", "second.py"]
-
-    def test_priority_tier_order_is_overridden_by_size(self):
-        """The regression this exists for: load_scope_facts() hands back
-        budget_exceeded_files in priority-tier order (a small
-        production-tier file ahead of a much larger ordinary file) — this
-        function must re-sort by size regardless of the input order."""
-        result = order_by_diffstat_largest_first(
-            ["small-priority.py", "huge-ordinary.py"],
-            {"small-priority.py": 20, "huge-ordinary.py": 900},
-        )
-        assert result == ["huge-ordinary.py", "small-priority.py"]
+        output = capsys.readouterr().out
+        assert "STATUS: ERROR" in output
+        assert "scope summary" in output
+        assert not list(tmp_path.glob("*-assignment.json"))
 
 
 class TestExtractProtocolSections:
@@ -990,155 +946,22 @@ class TestBuildErrorOutput:
         assert "ERROR: Something went wrong" in result
         assert "ACTION: Report this error" in result
 
-class TestExtractScopeMultipleBlocks:
-    """extract_scope_files and extract_scope_line_count must accumulate across all === FILES === blocks."""
-
-    MULTI_BLOCK_SCOPE = (
-        "=== FILES ===\n"
-        "includes/class-account.php  (+10 -5)\n"
-        "includes/class-service.php  (+3 -2)\n"
-        "=== DIFFS ===\n"
-        "some diff content\n"
-        "=== SECONDARY SCOPE: config-ops ===\n"
-        "=== FILES ===\n"
-        "config/settings.php  (+7 -1)\n"
-        "=== DIFFS ===\n"
-        "more diff content\n"
-    )
-
-    def test_extract_files_across_blocks(self):
-        files = extract_scope_files(self.MULTI_BLOCK_SCOPE)
-        assert len(files) == 3
-        assert "includes/class-account.php" in files
-        assert "config/settings.php" in files
-
-    def test_extract_line_count_across_blocks(self):
-        total = extract_scope_line_count(self.MULTI_BLOCK_SCOPE)
-        # (10+5) + (3+2) + (7+1) = 28
-        assert total == 28
-
-    def test_single_block_still_works(self):
-        single = "=== FILES ===\nfoo.php  (+5 -3)\n=== DIFFS ===\n"
-        files = extract_scope_files(single)
-        assert files == ["foo.php"]
-        assert extract_scope_line_count(single) == 8
-
-    def test_line_count_includes_not_diffed_workload(self):
-        """NOT DIFFED files are claimable in-scope work: their lines must size
-        the budget, or the largest reviews get the smallest targets."""
-        scope = (
-            "=== FILES ===\n"
-            "src/inline.py  (+400 -100)\n"
-            "=== NOT DIFFED (budget exceeded, 2 files) ===\n"
-            "These files ARE IN YOUR SCOPE — their diffs were withheld only to fit\n"
-            "the context budget.\n"
-            "  src/claimable-large.py  (+700 -100)\n"
-            "  src/claimable-small.py  (+80 -20)\n"
-            "=== DIFFS ===\n"
-            "diff content\n"
-        )
-        # 500 inline + 800 + 100 claimable = 1400
-        assert extract_scope_line_count(scope) == 1400
-        # Claimable lines must not enter the FILES-only file list.
-        assert extract_scope_files(scope) == ["src/inline.py"]
-
-    def test_extract_not_diffed_files_skips_section_prose(self):
-        """Claimable paths come only from stats-shaped lines — the NOT DIFFED
-        section's instruction prose must never be parsed as file paths."""
-        scope = (
-            "=== FILES ===\n"
-            "src/inline.py  (+400 -100)\n"
-            "=== NOT DIFFED (budget exceeded, 2 files) ===\n"
-            "These files ARE IN YOUR SCOPE — their diffs were withheld only to fit\n"
-            "the context budget. This list is your remaining work queue, largest\n"
-            "first: review with 'git diff base..head -- <file>' while tool budget\n"
-            "remains. Claim every NOT DIFFED file you actually read; the builder "
-            "derives the rest as unclaimed review files.\n"
-            "  src/claimable-large.py  (+700 -100)\n"
-            "  src/claimable-small.py  (+80 -20)\n"
-            "=== DIFFS ===\n"
-            "diff content\n"
-        )
-        assert extract_not_diffed_files(scope) == [
-            "src/claimable-large.py",
-            "src/claimable-small.py",
-        ]
-
-    def test_extract_not_diffed_files_accumulates_across_secondary_scopes(self):
-        scope = (
-            "=== NOT DIFFED (budget exceeded, 1 files) ===\n"
-            "  src/primary.py  (+300 -10)\n"
-            "=== SECONDARY SCOPE: config-ops ===\n"
-            "=== NOT DIFFED (budget exceeded, 1 files) ===\n"
-            "  config/secondary.php  (+200 -5)\n"
-        )
-        assert extract_not_diffed_files(scope) == [
-            "src/primary.py",
-            "config/secondary.php",
-        ]
-
-    def test_extract_not_diffed_files_empty_without_section(self):
-        scope = "=== FILES ===\nsrc/a.py  (+5 -1)\n=== DIFFS ===\n"
-        assert extract_not_diffed_files(scope) == []
-
-    def test_line_count_excludes_lock_and_generated_stats(self):
-        """CHANGED (no diff) lock/generated files stay out of budget sizing."""
-        scope = (
-            "=== FILES ===\n"
-            "src/app.py  (+50 -10)\n"
-            "=== CHANGED (no diff — 1 lock/generated files) ===\n"
-            "These files changed but diffs are skipped (too large/noisy for inline review).\n"
-            "  package-lock.json  (+9000 -9000)\n"
-            "=== DIFFS ===\n"
-        )
-        assert extract_scope_line_count(scope) == 60
-
-    def test_extract_list_only_files_skips_section_prose(self):
-        """List-only files are in-scope (the section tells the reviewer to
-        inspect them), so telemetry must see them — while their stats stay
-        out of budget sizing and the inline FILES list."""
-        scope = (
-            "=== FILES ===\n"
-            "src/app.py  (+50 -10)\n"
-            "=== CHANGED (no diff — 1 lock/generated files) ===\n"
-            "These files changed but diffs are skipped (too large/noisy for inline review).\n"
-            "Use 'git diff base..head -- <file>' to inspect if relevant.\n"
-            "  package-lock.json  (+9000 -9000)\n"
-            "=== DIFFS ===\n"
-        )
-        assert extract_list_only_files(scope) == ["package-lock.json"]
-        assert extract_scope_files(scope) == ["src/app.py"]
-        assert extract_scope_line_count(scope) == 60
-
-    def test_extract_list_only_files_accumulates_across_secondary_scopes(self):
-        scope = (
-            "=== CHANGED (no diff — 1 lock/generated files) ===\n"
-            "  package-lock.json  (+9000 -9000)\n"
-            "=== SECONDARY SCOPE: config-ops ===\n"
-            "=== CHANGED (no diff — 1 lock/generated files) ===\n"
-            "  composer.lock  (+400 -400)\n"
-        )
-        assert extract_list_only_files(scope) == [
-            "package-lock.json",
-            "composer.lock",
-        ]
-
-    def test_extract_list_only_files_empty_without_section(self):
-        scope = "=== FILES ===\nsrc/a.py  (+5 -1)\n=== DIFFS ===\n"
-        assert extract_list_only_files(scope) == []
-
-
 class TestLoadScopeFacts:
-    """load_scope_facts derives scope facts from summary sidecars, falling
-    back to None (→ text parsing) on any missing or malformed sidecar."""
+    """load_scope_facts is the ONE source of a reviewer's scope facts.
+
+    It reads the sidecar's own key names and fails closed. There is no text
+    fallback: a run whose sidecar is missing or malformed has no facts, and
+    reporting none is honest where re-deriving some from rendered prose was
+    a second, quietly different answer.
+    """
 
     def _write_summary(self, path, **overrides):
         data = {
-            "schema": 2,
+            "schema": 3,
             "inline_diff_files": ["src/a.py"],
             "review_claimable_files": ["src/claimable.py"],
             "list_only_files": ["package-lock.json"],
-            "in_scope_review_files": ["src/a.py", "src/claimable.py"],
+            "routing_files": ["src/a.py", "src/claimable.py"],
             "in_scope_stat_lines": 100,
         }
         data.update(overrides)
@@ -1152,49 +975,53 @@ class TestLoadScopeFacts:
             inline_diff_files=["ci.yml"],
             review_claimable_files=[],
             list_only_files=[],
-            in_scope_review_files=["ci.yml"],
+            routing_files=["ci.yml"],
             in_scope_stat_lines=7,
         )
-        facts = load_scope_facts([primary, secondary])
-        assert facts == {
-            "files": ["src/a.py", "ci.yml"],
-            "review_claimable": ["src/claimable.py"],
-            "list_only": ["package-lock.json"],
-            "stat_lines": 107,
+        assert load_scope_facts([primary, secondary]) == {
+            "inline_diff_files": ["src/a.py", "ci.yml"],
+            "review_claimable_files": ["src/claimable.py"],
+            "list_only_files": ["package-lock.json"],
+            "in_scope_stat_lines": 107,
         }
 
-    def test_no_paths_returns_none(self):
-        assert load_scope_facts([]) is None
+    def test_no_paths_is_no_scope(self):
+        """A no-domain agent requests no summary and legitimately has none."""
+        assert load_scope_facts([]) == {
+            "inline_diff_files": [],
+            "review_claimable_files": [],
+            "list_only_files": [],
+            "in_scope_stat_lines": 0,
+        }
 
-    def test_missing_sidecar_returns_none(self, tmp_path):
-        primary = self._write_summary(tmp_path / "a-scope-summary.json")
-        assert load_scope_facts(
-            [primary, str(tmp_path / "gone.json")]
-        ) is None
+    def test_missing_sidecar_raises(self, tmp_path):
+        with pytest.raises(ValueError, match="scope summary"):
+            load_scope_facts([str(tmp_path / "absent.json")])
 
-    def test_malformed_json_returns_none(self, tmp_path):
+    def test_malformed_json_raises(self, tmp_path):
         path = tmp_path / "a-scope-summary.json"
         path.write_text("{not json")
-        assert load_scope_facts([str(path)]) is None
+        with pytest.raises(ValueError, match="scope summary"):
+            load_scope_facts([str(path)])
 
     @pytest.mark.parametrize(
         "overrides",
         [
-            {"in_scope_stat_lines": None},   # pre-field producer
-            {"in_scope_stat_lines": True},   # bool is not a count
+            {"schema": 2},
+            {"in_scope_stat_lines": None},
+            {"in_scope_stat_lines": True},
             {"in_scope_stat_lines": 1.5},
             {"inline_diff_files": "src/a.py"},
             {"review_claimable_files": [1]},
             {"list_only_files": None},
         ],
     )
-    def test_malformed_fields_return_none(self, tmp_path, overrides):
-        """Any deviation falls back wholesale to text parsing — mixed-source
-        facts would be harder to reason about than one honest fallback."""
+    def test_malformed_fields_raise(self, tmp_path, overrides):
         path = self._write_summary(
             tmp_path / "a-scope-summary.json", **overrides
         )
-        assert load_scope_facts([path]) is None
+        with pytest.raises(ValueError, match="scope summary"):
+            load_scope_facts([path])
 
 
 class TestLoadAdditionalInstructions:

@@ -1231,76 +1231,90 @@ class TestProductionFirstBudget:
 
 
 class TestScopeSummaryJson:
-    """--summary-json-out persists a machine-readable scope summary."""
+    """--summary-json-out persists the one machine-readable scope contract.
+
+    Everything downstream of scope discovery — the reviewer's assignment,
+    its budget, and the run-level file review — reads this file and nothing
+    else, so it publishes exactly what those readers consume, in the order
+    the assignment promises.
+    """
 
     def test_write_scope_summary_contents(self, tmp_path):
         scope = {
             "status": "OK",
             "domain": "security",
             "range": "abc123..HEAD",
-            "files": ["src/b.php", "src/a.php"],
             "diffs": {"src/b.php": "+x", "src/a.php": "+y"},
             "diffstat": {
                 "src/a.php": (10, 5),
                 "src/b.php": (3, 2),
+                "tests/test_small.php": (12, 0),
                 "tests/test_big.php": (700, 100),
                 "package-lock.json": (9000, 9000),
             },
-            "budget_exceeded_files": ["tests/test_big.php"],
+            # Priority-tier order, as build_scope produces it.
+            "budget_exceeded_files": ["tests/test_small.php", "tests/test_big.php"],
             "list_only_files": ["package-lock.json"],
             "in_scope_files": [
-                "src/a.php",
-                "src/b.php",
-                "tests/test_big.php",
+                "src/a.php", "src/b.php",
+                "tests/test_small.php", "tests/test_big.php",
                 "package-lock.json",
             ],
-            "total_diff_lines": 42,
-            "budget_max": 2000,
         }
         path = tmp_path / "security-reviewer-scope-summary.json"
         review_scope.write_scope_summary(scope, str(path))
 
         data = json.loads(path.read_text())
-        assert data["schema"] == 2
-        assert data["domain"] == "security"
-        assert data["status"] == "OK"
+        assert set(data) == {
+            "schema", "inline_diff_files", "review_claimable_files",
+            "list_only_files", "routing_files", "in_scope_stat_lines",
+        }
+        assert data["schema"] == 3
         assert data["inline_diff_files"] == ["src/a.php", "src/b.php"]
-        assert data["review_claimable_files"] == ["tests/test_big.php"]
-        assert data["list_only_files"] == ["package-lock.json"]
-        assert data["in_scope_review_files"] == [
-            "src/a.php",
-            "src/b.php",
-            "tests/test_big.php",
-            "package-lock.json",
+        # Largest first — the order the assignment's claimable queue and the
+        # save echo's next-unread list both promise.
+        assert data["review_claimable_files"] == [
+            "tests/test_big.php", "tests/test_small.php",
         ]
-        assert data["total_diff_lines"] == 42
-        # Raw diffstat over inline + budget-exceeded files, excluding the
-        # list-only lock file: (10+5) + (3+2) + (700+100) = 820.
-        assert data["in_scope_stat_lines"] == 820
-        assert data["budget_max"] == 2000
+        assert data["list_only_files"] == ["package-lock.json"]
+        # (10+5) + (3+2) + (700+100) + (12+0), excluding the lock file.
+        assert data["in_scope_stat_lines"] == 832
 
-    def test_write_scope_summary_publishes_the_in_scope_list(self, tmp_path):
-        """The union run-level coverage subtracts from the changed set has
-        to be uniform across scope modes, and only this field is."""
+    def test_routing_files_covers_every_population(self, tmp_path):
+        """The run-level file review subtracts this union from the changed
+        set, so a file in any list that is missing here reads as scoped by
+        nobody."""
         scope = {
             "status": "OK",
-            "domain": "patterns",
-            "diffs": {},
-            "budget_exceeded_files": [],
-            "list_only_files": [],
-            "in_scope_files": ["src/a.php", "src/b.php"],
+            "diffs": {"src/a.php": "+x"},
+            "diffstat": {},
+            "budget_exceeded_files": ["src/claimable.php"],
+            "list_only_files": ["package-lock.json"],
+            "in_scope_files": ["docs/only-routed.md"],
+        }
+        path = tmp_path / "s-scope-summary.json"
+        review_scope.write_scope_summary(scope, str(path))
+
+        data = json.loads(path.read_text())
+        assert set(data["routing_files"]) == {
+            "docs/only-routed.md", "src/a.php",
+            "src/claimable.php", "package-lock.json",
+        }
+
+    def test_base_ref_only_publishes_routing_without_diffs(self, tmp_path):
+        """Modes that fetch no diff contribute routing files and no budget."""
+        scope = {
+            "status": "OK", "diffs": {}, "budget_exceeded_files": [],
+            "list_only_files": [], "in_scope_files": ["src/a.php", "src/b.php"],
         }
         path = tmp_path / "patterns-reviewer-scope-summary.json"
         review_scope.write_scope_summary(scope, str(path))
 
         data = json.loads(path.read_text())
-        # The base-ref-only shape: nothing diffed, everything owned.
         assert data["inline_diff_files"] == []
         assert data["review_claimable_files"] == []
         assert data["list_only_files"] == []
-        assert data["in_scope_review_files"] == ["src/a.php", "src/b.php"]
-        # Scoping visibility is broader than the reviewed-file denominator:
-        # these modes fetched no diff, so they contribute no budget lines.
+        assert data["routing_files"] == ["src/a.php", "src/b.php"]
         assert data["in_scope_stat_lines"] == 0
 
     def test_write_scope_summary_tolerates_minimal_scope(self, tmp_path):
@@ -1308,20 +1322,19 @@ class TestScopeSummaryJson:
         path = tmp_path / "sub" / "summary.json"
         review_scope.write_scope_summary({"status": "NO_DOMAIN_FILES"}, str(path))
         data = json.loads(path.read_text())
-        assert data["inline_diff_files"] == []
-        assert data["review_claimable_files"] == []
-        assert data["list_only_files"] == []
-        assert data["in_scope_review_files"] == []
+        assert data["routing_files"] == []
         assert data["in_scope_stat_lines"] == 0
 
-    def test_write_scope_summary_fails_open(self, tmp_path, capsys):
-        # Unwritable path: warn on stderr, do not raise.
+    def test_write_scope_summary_fails_closed(self, tmp_path):
+        """The summary is the only source of a reviewer's assignment facts.
+        A run that could not write one has no facts to hand it, so the write
+        failure is the error rather than a silent downgrade."""
         blocker = tmp_path / "blocker"
         blocker.write_text("")
-        review_scope.write_scope_summary(
-            {"status": "OK"}, str(blocker / "impossible" / "summary.json")
-        )
-        assert "could not write scope summary" in capsys.readouterr().err
+        with pytest.raises(OSError):
+            review_scope.write_scope_summary(
+                {"status": "OK"}, str(blocker / "impossible" / "summary.json")
+            )
 
 
 # =============================================================================
