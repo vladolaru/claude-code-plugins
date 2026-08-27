@@ -1877,7 +1877,7 @@ def main():
     parser.add_argument(
         "--summary-json-out",
         default=None,
-        help="Write a machine-readable scope summary JSON (admitted/skipped files) to this path. Fail-open.",
+        help="Write a machine-readable scope summary JSON (admitted/skipped files) to this path. Fail-closed.",
     )
     parser.add_argument(
         "--include-path",
