@@ -29,7 +29,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 try:
     from .reviewer_names import derive_reviewer_name
-    from .reviewer_lifecycle import review_paths
     from .verdict_rules import VALID_SEVERITIES
     from .review_document import load_review_document
 except ImportError:
@@ -37,11 +36,8 @@ except ImportError:
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
     from review.reviewer_names import derive_reviewer_name
-    from review.reviewer_lifecycle import review_paths
     from review.verdict_rules import VALID_SEVERITIES
     from review.review_document import load_review_document
-
-from git_paths import normalize_repo_paths
 
 RECONCILIATION_CONTEXT_SCHEMA = 3
 
@@ -97,202 +93,6 @@ def strip_severity_floor_markers(text: Any) -> str:
 def _review_stem(agent: str) -> str:
     """Map an agent name to its review-file stem: derive_reviewer_name(agent) + "-review"."""
     return f"{derive_reviewer_name(agent)}-review"
-
-
-def _load_agent_reviewed_files(
-    output_dir: str, agent: str
-) -> Optional[Tuple[List[str], List[str]]]:
-    """Return (claimed, unclaimed) from one finalized review, or None.
-
-    Finalization already proved these two lists a coherent partition of the
-    reviewer's claimable set (`validate_review_document`), so the document
-    is read, not re-derived: a second derivation from the assignment
-    sidecar could only ever disagree with the artifact it describes.
-
-    ``load_agent_reviews`` reads the same files for the findings payload
-    through its own path and failure policy — it reports malformed output on
-    stderr and skips it, which is not what run-level file review wants.
-    """
-    reviewer = derive_reviewer_name(agent)
-    try:
-        data = load_review_document(review_paths(output_dir, reviewer).final, reviewer)
-    except ValueError:
-        return None
-    return data["reviewed_file_claims"], data["unclaimed_review_files"]
-
-
-# Every file-carrying list a scope summary sidecar can hold
-# (`agent/scope.py::write_scope_summary`). Their union is "every changed
-# file that reached at least one reviewer's scope in any form", which is
-# what `unscoped_files` is the complement of. Adding a list to the sidecar
-# without adding it here would silently reclassify covered files as
-# never-scoped.
-#
-# `routing_files` is the only one written in every scope mode, and it is why
-# the union is trustworthy at all: a `--base-ref-only` or `--summary` agent
-# (patterns-reviewer by registry config; any reviewer on a 100+-file PR by
-# protocol) never fetches a diff, so its other three lists are legitimately
-# empty and every file it owned used to look unowned.
-_SCOPE_SUMMARY_FILE_LISTS = (
-    "inline_diff_files",
-    "review_claimable_files",
-    "list_only_files",
-    "routing_files",
-)
-
-
-def _unscoped_files(
-    changed_files: Optional[List[str]],
-    scoped_anywhere: set,
-) -> Optional[List[str]]:
-    """Changed files no reviewer's scope contained, or None if unmeasured.
-
-    Both sides of the subtraction go through
-    ``git_paths.normalize_repo_paths`` — the one repo-path grammar the run
-    manifest's coverage builder already uses — because the two producers
-    quote differently: scope sidecars run ``-c core.quotepath=false`` and
-    emit ``src/café.php``, while ``context.py``'s plain
-    ``git diff --name-only`` emits ``"src/caf\303\251.php"``. Subtracting
-    one alphabet from the other publishes fully reviewed non-ASCII files as
-    reviewed by no one, inside a report block the orchestrator is now
-    forbidden to correct.
-
-    ``strict=True`` on the changed side: a path this grammar cannot make
-    safe leaves the whole population unmeasured (``None``) rather than
-    quietly shrinking it, because a shrunken set here reads as a cleaner
-    review than the run earned.
-
-    An EMPTY changed-file list is unmeasured too, not measured-and-zero.
-    A review of zero changed files does not exist, while a run whose file
-    list never reached the builder very much does: orchestration.py always
-    passes ``--changed-files`` and passes ``""`` when review-context.json
-    carries no CSV. One rule — no list means nothing was measured — is what
-    keeps that failure from publishing ``unscoped_files: []``, a clean
-    coverage bill for a population nothing looked at.
-    """
-    if not changed_files:
-        return None
-    normalized = normalize_repo_paths(changed_files, strict=True)
-    if normalized is None:
-        return None
-    return sorted(set(normalized) - scoped_anywhere)
-
-
-def aggregate_file_review(
-    output_dir: str,
-    changed_files: Optional[List[str]] = None,
-) -> Optional[Dict[str, Any]]:
-    """Aggregate per-agent scope summaries into the run-level file review.
-
-    Reads schema-3 ``*-scope-summary*.json`` sidecars, carries inline-diff
-    receipt by file, and takes each reviewer's claimed and unclaimed files
-    from its finalized review document. An agent that never finalized one
-    keeps every review-claimable path its summary reported visible as
-    unclaimed. When ``changed_files`` is supplied, ``unscoped_files`` is its
-    complement against every path any scope summary mentions; it stays None
-    when that population was not measured.
-
-    Returns None when no summaries exist (pre-sidecar runs) so callers can
-    distinguish "no data" from "no gaps".
-    """
-    inline: Dict[str, set] = {}
-    claimable_by_agent: Dict[str, set] = {}
-    # Distinct agent NAMES, not summary files: three reviewers ship a
-    # second `-config-ops` sidecar, so counting files reported 22 agents
-    # for a 19-agent run. Both of an agent's sidecars derive the same name
-    # through the rsplit below, so the set collapses them.
-    reporting_agents: set = set()
-    # Sidecar paths, normalized through the ONE shared repo-path grammar
-    # (`git_paths.normalize_repo_paths`) rather than compared raw. The
-    # `unscoped_files` set difference below is subtraction between two
-    # producers with different quoting settings — the sidecars run
-    # `-c core.quotepath=false`, `context.py` does not — so raw arithmetic
-    # reports `"src/caf\303\251.php"` and `src/café.php` as different
-    # files and publishes a fully reviewed non-ASCII file as reviewed by
-    # nobody. Non-strict here: one junk sidecar entry must not void an
-    # agent's whole contribution, and dropping it can only over-report a
-    # gap, never hide one.
-    scoped_anywhere: set = set()
-    try:
-        entries = sorted(os.scandir(output_dir), key=lambda e: e.name)
-    except OSError:
-        return None
-    for entry in entries:
-        name = entry.name
-        if "-scope-summary" not in name or not name.endswith(".json"):
-            continue
-        # Last occurrence is the delimiter: filenames always END with
-        # "-scope-summary[-<domain>].json" and no domain contains the
-        # marker, while adapter instance names are repo-authored kebab ids
-        # that legally may ("repo-payments-scope-summary-contract-reviewer").
-        # A first-occurrence split would truncate such an agent name and
-        # misattribute its scope.
-        agent = name.rsplit("-scope-summary", 1)[0]
-        try:
-            with open(entry.path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(data, dict) or data.get("schema") != 3:
-            continue
-        if any(
-            not isinstance(data.get(key), list)
-            for key in _SCOPE_SUMMARY_FILE_LISTS
-        ):
-            continue
-        reporting_agents.add(agent)
-        for key in _SCOPE_SUMMARY_FILE_LISTS:
-            scoped_anywhere.update(
-                normalize_repo_paths(data.get(key)) or []
-            )
-        for f_path in data["inline_diff_files"]:
-            if isinstance(f_path, str):
-                inline.setdefault(f_path, set()).add(agent)
-        for f_path in data["review_claimable_files"]:
-            if isinstance(f_path, str):
-                claimable_by_agent.setdefault(agent, set()).add(f_path)
-    if not reporting_agents:
-        return None
-
-    claimed: Dict[str, set] = {}
-    unclaimed: Dict[str, set] = {}
-    for agent in reporting_agents:
-        reviewed_files = _load_agent_reviewed_files(output_dir, agent)
-        if reviewed_files is None:
-            for f_path in claimable_by_agent.get(agent, set()):
-                unclaimed.setdefault(f_path, set()).add(agent)
-            continue
-        claimed_paths, unclaimed_paths = reviewed_files
-        for f_path in claimed_paths:
-            claimed.setdefault(f_path, set()).add(agent)
-        for f_path in unclaimed_paths:
-            unclaimed.setdefault(f_path, set()).add(agent)
-
-    return {
-        # Distinct reviewers that produced at least one scope summary, not
-        # summary files aggregated — an agent with a primary and a
-        # secondary-domain sidecar is one agent.
-        "scope_reporting_agent_count": len(reporting_agents),
-        # Changed files no reviewer's scope contained in any form — see
-        # `_unscoped_files` for the subtraction and its path grammar. NOT
-        # the same measurement as the run manifest's `coverage.uncovered`:
-        # different population (full changed set vs. noise-filtered
-        # `reviewable`) over different evidence (runtime sidecars vs.
-        # dispatch-time SCOPE events), so the two numbers legitimately
-        # differ. The full divergence note lives at the one other site,
-        # manifest_sections.py's `"uncovered"` key; read it before
-        # "reconciling" the two.
-        "unscoped_files": _unscoped_files(changed_files, scoped_anywhere),
-        "agents_receiving_inline_diff_by_file": {
-            f: sorted(a) for f, a in sorted(inline.items())
-        },
-        "agents_claiming_review_by_file": {
-            f: sorted(a) for f, a in sorted(claimed.items())
-        },
-        "agents_with_unclaimed_review_by_file": {
-            f: sorted(a) for f, a in sorted(unclaimed.items())
-        },
-    }
 
 
 def compute_missing_agents(

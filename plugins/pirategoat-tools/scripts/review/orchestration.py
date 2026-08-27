@@ -32,10 +32,7 @@ try:
     from .reviewer_lifecycle import close_review_intake, review_paths
     from .reviewer_names import derive_reviewer_name
     from .briefings import _render_file_review_section
-    from .reconciliation_context import (
-        aggregate_file_review,
-        strip_severity_floor_markers,
-    )
+    from .reconciliation_context import strip_severity_floor_markers
     from . import critic_adjustments
     from . import manifest_sections
     from . import synthesis_lifecycle
@@ -72,10 +69,7 @@ except ImportError:
     from review.reviewer_lifecycle import close_review_intake, review_paths
     from review.reviewer_names import derive_reviewer_name
     from review.briefings import _render_file_review_section
-    from review.reconciliation_context import (
-        aggregate_file_review,
-        strip_severity_floor_markers,
-    )
+    from review.reconciliation_context import strip_severity_floor_markers
     from review import critic_adjustments
     from review import manifest_sections
     from review import synthesis_lifecycle
@@ -1425,7 +1419,7 @@ def _orchestrate_step_9(mode, config, state, context, output_dir):
     # is — `unscoped_files` stays None rather than reading as a clean bill.
     changed_csv = context.get("git", {}).get("changed_files_csv", "")
     changed_files = [f.strip() for f in changed_csv.split(",") if f.strip()]
-    state["file_review"] = aggregate_file_review(
+    state["file_review"] = manifest_sections.aggregate_file_review(
         output_dir, changed_files=changed_files
     )
 

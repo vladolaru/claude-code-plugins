@@ -24,7 +24,7 @@ from review import (
     reviewer_lifecycle,
 )
 from review.agent.review_assignment import derive_reviewed_files
-from review.reconciliation_context import aggregate_file_review
+from review.manifest_sections import aggregate_file_review
 from review.critic_adjustments import write_findings
 from review.telemetry import ReviewTelemetry
 from review.verdict_rules import verdict_for_counts

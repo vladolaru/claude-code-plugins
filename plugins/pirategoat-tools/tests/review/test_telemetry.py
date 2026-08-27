@@ -27,7 +27,7 @@ from helpers.review_fixtures import (
 )
 from review import dependency_refresh
 from review import synthesis_lifecycle as lifecycle_contract
-from review.reconciliation_context import aggregate_file_review
+from review.manifest_sections import aggregate_file_review
 from review.reviewer_lifecycle import ReviewPaths
 
 

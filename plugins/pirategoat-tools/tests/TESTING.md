@@ -243,12 +243,12 @@ Direct tests for the mutable-draft/immutable-final state machine and schema-2 re
 
 ### Reconciliation Context Tests (`review/test_reconciliation_context.py`)
 
-Direct unit tests on `scripts/review/reconciliation_context.py` — finalized-review loading, scope and hunk checking, source-snippet extraction, severity normalization, and the run-level file review for pipeline step 9. The module builds schema-3 `reconciliation-context.json` and nothing else now: its two Markdown renderers (`to_markdown` for the reconciliator, `build_critic_context` for the decision critic) were projections whose only readers were agents, and both are gone — the agents read the JSON, and the decision critic reads `review-record.md` beside it.
+Direct unit tests on `scripts/review/reconciliation_context.py` — finalized-review loading, scope and hunk checking, source-snippet extraction, and severity normalization. The module builds schema-3 `reconciliation-context.json` and nothing else now: its two Markdown renderers (`to_markdown` for the reconciliator, `build_critic_context` for the decision critic) were projections whose only readers were agents, and both are gone — the agents read the JSON, and the decision critic reads `review-record.md` beside it.
 
 | Class | What it verifies |
 |---|---|
 | `TestLoadAgentReviews` | Only immutable finalized reviewer JSON enters synthesis; drafts, the reconciled ledger, and pipeline artifacts are excluded |
-| `TestSeverityFloorNormalization` | Reviewer-authored severity-floor prose becomes structured, bounded finding metadata |
+| `TestSeverityFloorNormalization` | The floor is the structured field only — description prose never promotes a finding, and the prose marker is stripped before the critic reads it |
 | `TestExtractReferences` | Source references are extracted only from canonical finding fields |
 | `TestReadSourceSnippets` | Repository reads stay bounded, normalized, and honest for missing or binary source |
 | `TestMergeWindows` | Overlapping source windows merge deterministically without losing referenced lines |
@@ -258,14 +258,20 @@ Direct unit tests on `scripts/review/reconciliation_context.py` — finalized-re
 | `TestParseDiffHunks` | Unified-diff hunk ranges and quoted paths parse into deterministic source coordinates |
 | `TestLineNearHunk` | The bounded line-proximity predicate handles absent and malformed line evidence |
 | `TestFindFileHunks` | File lookup distinguishes matching, missing, and metadata-only diff entries |
-| `TestResolveOutputBuilderPath` | The reconciler uses the installed plugin's output authority rather than a reviewed-repo lookalike |
 | `TestFullScript` | The CLI writes exact schema-3 reconciliation context from finalized schema-2 reviews and canonical assignments |
-| `TestAggregateReviewedFiles` | `aggregate_file_review()` carries inline-diff receipt per agent from the scope sidecars and each reviewer's claimed/unclaimed files from its finalized review, never re-derived from the assignment sidecar; a malformed document receives no credit, and one reviewer's claim cannot conceal another reviewer's unclaimed work |
-| `TestUnscopedFiles` | `unscoped_files` — the changed files no reviewer's scope contained in any form, with the measured-empty case distinct from `None` when no changed-file list was supplied |
-| `TestAgentsReportingCountsAgents` | `scope_reporting_agent_count` counts distinct agent names, not scope-summary files — reviewers with a secondary `-config-ops` summary still count once |
 | `TestMissingAgentDetection` | Dispatched-minus-reporting is a measurement, with unknown dispatch (`null`) distinct from a measured-empty dispatch (`[]`), through the CLI and back |
 | `TestPrefilterAnnotation` | Structurally-certain out-of-scope findings are annotated in place with a checkable count, never deleted, and `not_in_hunk` is never annotated |
 | `TestReviewStem` | Reviewer artifact stems are derived through the shared trailing-`-reviewer` rule |
+
+### Run-Level File Review Tests (`review/test_file_review.py`)
+
+Direct unit tests on `manifest_sections.aggregate_file_review()` — the run-level file review pipeline step 9 publishes into `state["file_review"]` for the review record. It reads the scope-summary sidecars and the finalized review documents, never the reconciliation context, and lives beside the coverage manifest that reads the same artifacts over a different population.
+
+| Class | What it verifies |
+|---|---|
+| `TestAggregateReviewedFiles` | `aggregate_file_review()` carries inline-diff receipt per agent from the scope sidecars and each reviewer's claimed/unclaimed files from its finalized review, never re-derived from the assignment sidecar; a malformed document receives no credit, and one reviewer's claim cannot conceal another reviewer's unclaimed work |
+| `TestUnscopedFiles` | `unscoped_files` — the changed files no reviewer's scope contained in any form, with the measured-empty case distinct from `None` when no changed-file list was supplied |
+| `TestAgentsReportingCountsAgents` | `scope_reporting_agent_count` counts distinct agent names, not scope-summary files — reviewers with a secondary `-config-ops` summary still count once |
 
 ### Review Record Assembly Tests (`review/test_report_assembly.py`)
 
