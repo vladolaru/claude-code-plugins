@@ -13,7 +13,6 @@ try:
     from .pipeline_contract import (
         AGENT_WAIT_GRACE_SECONDS,
         CONTEXT_GATHER_TIMEOUT,
-        DEFAULT_AGENT_TIMEOUT,
         REVIEW_RECORD_MD,
         SCRIPTS_DIR,
         _git_output,
@@ -28,6 +27,7 @@ try:
         load_dependency_refresh_report,
         observe_tracked_worktree,
     )
+    from . import agents_status
     from . import atomic_io
     from .atomic_io import atomic_write_json, atomic_write_text
     from .reviewer_lifecycle import close_review_intake, review_paths
@@ -48,7 +48,6 @@ except ImportError:
     from review.pipeline_contract import (
         AGENT_WAIT_GRACE_SECONDS,
         CONTEXT_GATHER_TIMEOUT,
-        DEFAULT_AGENT_TIMEOUT,
         REVIEW_RECORD_MD,
         SCRIPTS_DIR,
         _git_output,
@@ -63,6 +62,7 @@ except ImportError:
         load_dependency_refresh_report,
         observe_tracked_worktree,
     )
+    from review import agents_status
     from review import atomic_io
     from review.atomic_io import atomic_write_json, atomic_write_text
     from review.reviewer_lifecycle import close_review_intake, review_paths
@@ -195,14 +195,6 @@ def _materialize_markdown(output_dir: str, output_builder_path: str) -> list:
     """
     module = _load_output_module(output_builder_path)
     return module.materialize_markdown(output_dir)
-
-
-def _load_final_review(
-    output_builder_path: str, review_path: str, reviewer: str
-) -> dict:
-    """Load one semantic completion through the final-review authority."""
-    module = _load_output_module(output_builder_path)
-    return module.load_review_document(review_path, reviewer)
 
 
 _FINDINGS_MD = "review-findings.md"
@@ -1200,77 +1192,47 @@ def _orchestrate_step_7(mode, config, state, context, output_dir):
 
 
 def _orchestrate_step_8(mode, config, state, context, output_dir):
-    # Hard readiness gate: check if all dispatched agents have finished
-    # before allowing reconciliation to proceed.
-    # Exit code 0 = all done, 2 = agents still running, 1 = error.
-    status_cmd = [
-        sys.executable, str(SCRIPTS_DIR / "agents_status.py"),
-        "--output-dir", output_dir,
-    ]
+    # Hard readiness gate: every dispatched agent must have finished
+    # before reconciliation may start. A direct call, not a subprocess:
+    # check_status() builds this exact dict internally, and the branch
+    # this replaced spawned a Python interpreter to render that dict as a
+    # human-readable table and then recovered the agent names by splitting
+    # the table's lines on whitespace.
     try:
-        r = subprocess.run(status_cmd, capture_output=True, text=True, timeout=30)
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+        status = agents_status.check_status(output_dir)
+    except (FileNotFoundError, ValueError, OSError, json.JSONDecodeError) as exc:
         raise RuntimeError(
             "reviewer status checker failed — review intake remains open"
         ) from exc
 
-    if r.returncode == 2:
+    if not status["all_done"]:
         previous_waiting = state.get("waiting_on_agents", {})
-        # Agents still running — parse text output for names
-        running = []
-        not_dispatched = []
-        for line in r.stdout.splitlines():
-            stripped = line.strip()
-            if "RUNNING" in stripped and "NOT_DISPATCHED" not in stripped:
-                # Lines look like: "agent-name           RUNNING   (3m 42s)"
-                name = stripped.split()[0]
-                running.append(name)
-            elif "NOT_DISPATCHED" in stripped:
-                name = stripped.split()[0]
-                not_dispatched.append(name)
-        state["waiting_on_agents"] = {
-            "running": running,
-            "not_dispatched": not_dispatched,
-            "status_output": r.stdout.strip(),
+        agent_timeout = status["timeout_seconds"]
+        waiting = {
+            "running": [
+                agent["name"] for agent in status["agents"]
+                if agent["status"] == "RUNNING"
+            ],
+            "not_dispatched": [
+                agent["name"] for agent in status["agents"]
+                if agent["status"] == "NOT_DISPATCHED"
+            ],
+            "agent_timeout_seconds": agent_timeout,
+            "first_waiting_at": previous_waiting.get("first_waiting_at")
+            or datetime.now(timezone.utc).isoformat(),
         }
-        if previous_waiting.get("first_waiting_at"):
-            state["waiting_on_agents"]["first_waiting_at"] = previous_waiting[
-                "first_waiting_at"
-            ]
-        else:
-            state["waiting_on_agents"]["first_waiting_at"] = datetime.now(
-                timezone.utc
-            ).isoformat()
-        # Read per-agent timeout for escalation threshold
-        agent_timeout = DEFAULT_AGENT_TIMEOUT
-        ctx_path = os.path.join(output_dir, "review-context.json")
-        if os.path.isfile(ctx_path):
-            try:
-                with open(ctx_path) as f:
-                    ctx_data = json.load(f)
-                agent_timeout = ctx_data.get("review", {}).get(
-                    "agent_timeout_seconds", DEFAULT_AGENT_TIMEOUT
-                )
-            except (json.JSONDecodeError, OSError):
-                pass
-        state["waiting_on_agents"]["agent_timeout_seconds"] = agent_timeout
+        state["waiting_on_agents"] = waiting
         try:
-            first_waiting = datetime.fromisoformat(
-                state["waiting_on_agents"]["first_waiting_at"]
-            )
-            elapsed = (datetime.now(timezone.utc) - first_waiting).total_seconds()
-        except (ValueError, KeyError):
+            first_waiting = datetime.fromisoformat(waiting["first_waiting_at"])
+            elapsed = (
+                datetime.now(timezone.utc) - first_waiting
+            ).total_seconds()
+        except ValueError:
             elapsed = 0
         if elapsed < agent_timeout + AGENT_WAIT_GRACE_SECONDS:
             return context
-    elif r.returncode == 0:
-        state.pop("waiting_on_agents", None)
     else:
-        detail = r.stderr.strip() or r.stdout.strip() or "no diagnostic output"
-        raise RuntimeError(
-            "reviewer status checker failed "
-            f"with exit {r.returncode}: {detail}; review intake remains open"
-        )
+        state.pop("waiting_on_agents", None)
 
     # Freeze exactly the dispatched reviewer identities before any consumer
     # renders or loads final JSON. Draft saving/finalization and this close
@@ -1292,12 +1254,9 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
             "review intake could not be closed — reconciliation inputs "
             "are not frozen"
         ) from exc
-    invalid_at_close = {
-        entry["path"]
-        for entry in intake_close.get("invalid_final_reviews", [])
-    }
     review_intake = dict(intake_close)
     review_intake.pop("invalid_final_reviews", None)
+    review_intake.pop("completed", None)
     state["review_intake"] = review_intake
     discarded_drafts = review_intake["discarded_drafts"]
     degradation = state.setdefault("degradation", {})
@@ -1332,29 +1291,21 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
             file=sys.stderr,
         )
 
-    expected_markdown = set()
-    try:
-        expected_markdown = {
-            os.path.abspath(os.path.join(
-                output_dir,
-                name[: -len(".json")] + ".md",
-            ))
-            for name in os.listdir(output_dir)
-            if name.endswith("-review.json")
-        }
-    except Exception as err:  # noqa: BLE001 — best-effort by design
-        materialization_failed = True
-        print(
-            f"reviewer markdown materialization failed: {err}",
-            file=sys.stderr,
+    expected_markdown = {
+        os.path.abspath(
+            review_paths(output_dir, derive_reviewer_name(name)).final
+        )[: -len(".json")] + ".md"
+        for name in dispatched_names
+        if os.path.isfile(
+            review_paths(output_dir, derive_reviewer_name(name)).final
         )
-
-    reviewer_markdown["written"] = len(written_markdown)
+    }
+    reviewer_markdown["written"] = len(written_markdown & expected_markdown)
     reviewer_markdown["expected"] = len(expected_markdown)
     if not materialization_failed:
         reviewer_markdown["status"] = (
             "complete"
-            if written_markdown == expected_markdown
+            if expected_markdown <= written_markdown
             else "partial"
         )
     state["reviewer_markdown"] = reviewer_markdown
@@ -1382,36 +1333,11 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
             state["commit_messages"] = log_out.strip().split("\n")
 
     if dispatch_plan is not None:
-        try:
-            review_files = []
-            invalid_review_files = []
-            completed = []
-            output_builder_path = str(SCRIPTS_DIR / "agent" / "output.py")
-            for name in dispatched_names:
-                reviewer = derive_reviewer_name(name)
-                review_file = review_paths(output_dir, reviewer).final
-                if os.path.isfile(review_file):
-                    if review_file in invalid_at_close:
-                        invalid_review_files.append(review_file)
-                        continue
-                    try:
-                        _load_final_review(
-                            output_builder_path, review_file, reviewer
-                        )
-                    except ValueError:
-                        invalid_review_files.append(review_file)
-                    else:
-                        completed.append(name)
-                        review_files.append(review_file)
-            state["agents"] = {
-                "dispatched": dispatched_names,
-                "completed": completed,
-                "discarded_drafts": discarded_drafts,
-                "review_files": review_files,
-                "invalid_review_files": invalid_review_files,
-            }
-        except OSError:
-            pass
+        state["agents"] = {
+            "dispatched": dispatched_names,
+            "completed": intake_close["completed"],
+            "discarded_drafts": discarded_drafts,
+        }
 
     # Build reconciliation context (pre-gather all data for the reconciliator)
     recon_ctx_cmd = [

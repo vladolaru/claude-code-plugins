@@ -152,7 +152,9 @@ class TestCheckStatus:
             tmp_path, "42", "security"
         ).save_draft()
 
-        status = mod.check_status(str(tmp_path), timeout_seconds=0)
+        status = mod.attach_draft_evidence(
+            str(tmp_path), mod.check_status(str(tmp_path), timeout_seconds=0)
+        )
         agent = status["agents"][0]
 
         assert agent["status"] == "TIMED_OUT"
@@ -251,7 +253,9 @@ class TestCheckStatus:
         builder = ReviewOutputBuilder.open(str(tmp_path), "13", "a11y")
 
         first = builder.save_draft()
-        first_status = mod.check_status(str(tmp_path))
+        first_status = mod.attach_draft_evidence(
+            str(tmp_path), mod.check_status(str(tmp_path))
+        )
         assert first_status["all_done"] is False
         assert first_status["agents"][0]["status"] == "RUNNING"
         assert first_status["agents"][0]["draft_available"] is True
@@ -261,7 +265,9 @@ class TestCheckStatus:
 
         builder.claim_files_reviewed("src/late.ts")
         second = builder.save_draft()
-        second_status = mod.check_status(str(tmp_path))
+        second_status = mod.attach_draft_evidence(
+            str(tmp_path), mod.check_status(str(tmp_path))
+        )
         assert second_status["all_done"] is False
         assert second_status["agents"][0]["draft_digest"] == (
             second["review_digest"]
@@ -297,7 +303,9 @@ class TestCheckStatus:
         draft = tmp_path / "slow-review.draft.json"
         draft.write_bytes(b'{"snapshot":"late"}')
 
-        result = mod.check_status(str(tmp_path))
+        result = mod.attach_draft_evidence(
+            str(tmp_path), mod.check_status(str(tmp_path))
+        )
 
         assert result["all_done"] is True
         assert result["timed_out"] == 1
@@ -738,6 +746,37 @@ class TestWaitMode:
     "observed on the very next poll" property is what mattered, and
     `test_wait_wakes_on_completion` pins it deterministically.
     """
+
+    def test_the_wait_loop_hashes_each_draft_once(
+        self, mod, tmp_path, monkeypatch
+    ):
+        """Draft evidence is a presentation fact, computed when the wait ends.
+
+        check_status sha256'd every running agent's draft bytes on every
+        1.5s tick and threw all but the last result away.
+        """
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+        _write_assignment(tmp_path, "code", "code-reviewer", [])
+        _start_agent(tmp_path, "code-reviewer")
+        ReviewOutputBuilder.open(tmp_path, "42", "code").save_draft()
+        digested = []
+        original = mod.draft_evidence
+        monkeypatch.setattr(
+            mod, "draft_evidence",
+            lambda output_dir, name: digested.append(name)
+            or original(output_dir, name),
+        )
+
+        clock = _FakeClock()
+        result, expired = mod.wait_for_all_done(
+            str(tmp_path), max_seconds=6.0,
+            sleep_fn=clock.sleep_fn, now_fn=clock.now_fn,
+        )
+        mod.attach_draft_evidence(str(tmp_path), result)
+
+        assert expired is True
+        assert digested == ["code-reviewer"]
+        assert result["agents"][0]["draft_available"] is True
 
     def test_wait_returns_zero_immediately_when_all_done(self, mod, tmp_path):
         """Already-satisfied status must not sleep at all."""

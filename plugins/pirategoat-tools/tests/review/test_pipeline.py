@@ -1165,10 +1165,6 @@ class TestStep8Reconcile:
         individual review files (they are inside it) and not at a Markdown
         projection written for one agent's eyes only."""
         state = self._make_state_with_agents(change_purpose_exists=True)
-        state["agents"]["review_files"] = [
-            "/tmp/out/code-review.json",
-            "/tmp/out/security-review.json",
-        ]
         ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
         g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
@@ -2853,7 +2849,9 @@ class TestStep11PresentResults:
             "resolved_params": {},
             "completed_steps": [1, 2, 3, 5, 6, 7, 8, 9, 10],
             "verdict": None,
-            "agents": {"dispatched": [], "completed": [], "discarded_drafts": [], "review_files": []},
+            "agents": {
+                "dispatched": [], "completed": [], "discarded_drafts": [],
+            },
         }
         config = {"mode": "pr", "interactive": True}
         context = {}

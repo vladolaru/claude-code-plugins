@@ -386,20 +386,12 @@ class TestVerdictCapture:
 # Orchestration seams — the write and observation sites
 # ---------------------------------------------------------------------------
 
-import subprocess
-
 from review import orchestration as orchestration_mod
 
 
 def _step_8_harness(mod, out, monkeypatch):
     """Let step 8 reach its dispatch marker without real subprocesses."""
-    monkeypatch.setattr(
-        mod.subprocess,
-        "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(
-            args=args[0], returncode=0, stdout="", stderr=""
-        ),
-    )
+    (out / "dispatch-plan.json").write_text(json.dumps({"agents": []}))
 
     def reconciliation_succeeds(*_args, **_kwargs):
         (out / "reconciliation-context.json").write_text("{}")
@@ -427,13 +419,7 @@ class TestStepEightDispatchMarker:
         """A step that raises never dispatched anything — a marker here
         would make a failed setup read as a stalled agent."""
         mod = orchestration_mod
-        monkeypatch.setattr(
-            mod.subprocess,
-            "run",
-            lambda *args, **kwargs: subprocess.CompletedProcess(
-                args=args[0], returncode=0, stdout="", stderr=""
-            ),
-        )
+        _step_8_harness(mod, out, monkeypatch)
         monkeypatch.setitem(
             mod._orchestrate_step_8.__globals__,
             "_run_subprocess",
@@ -451,13 +437,11 @@ class TestStepEightDispatchMarker:
         """The waiting branch returns before the handoff. Stamping there
         would start the clock on a dispatch that has not happened."""
         mod = orchestration_mod
-        monkeypatch.setattr(
-            mod.subprocess,
-            "run",
-            lambda *args, **kwargs: subprocess.CompletedProcess(
-                args=args[0], returncode=2,
-                stdout="code-reviewer  RUNNING  (1m)", stderr="",
-            ),
+        (out / "dispatch-plan.json").write_text(json.dumps({
+            "agents": [{"name": "code-reviewer", "status": "DISPATCH"}],
+        }))
+        (out / "code-reviewer.started").write_text(
+            datetime.now(timezone.utc).isoformat()
         )
         mod._orchestrate_step_8(
             "full", {}, {"resolved_params": {}}, {}, str(out)

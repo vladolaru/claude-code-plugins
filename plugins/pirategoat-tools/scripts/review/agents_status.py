@@ -93,6 +93,23 @@ def draft_evidence(output_dir: str, agent_name: str) -> dict:
     }
 
 
+def attach_draft_evidence(output_dir: str, result: dict) -> dict:
+    """Attach finalization evidence to every unfinished agent, once.
+
+    Digesting a draft is the most expensive thing this module does, and it
+    is worth nothing to a caller that is not about to print the finalize
+    command. check_status() did it inside its own loop, so the wait loop
+    re-read and re-hashed every running agent's draft bytes on every 1.5s
+    tick and discarded all but the last tick's answer. The CLI attaches it
+    to the status it is about to render; step 8's readiness gate, which
+    wants only `all_done`, now pays nothing for it.
+    """
+    for agent in result["agents"]:
+        if agent["status"] in ("RUNNING", "TIMED_OUT"):
+            agent.update(draft_evidence(output_dir, agent["name"]))
+    return result
+
+
 def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
     """Check status of all agents in the dispatch plan."""
     plan_path = os.path.join(output_dir, "dispatch-plan.json")
@@ -182,7 +199,6 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
                     "name": name, "status": "RUNNING",
                     "elapsed_seconds": elapsed,
                 }
-            agent_state.update(draft_evidence(output_dir, name))
             agents.append(agent_state)
         else:
             not_dispatched += 1
@@ -195,6 +211,7 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
 
     return {
         "all_done": all_done,
+        "timeout_seconds": timeout_seconds,
         "dispatched": dispatched,
         "finished": finished,
         "invalid": invalid,
@@ -352,7 +369,7 @@ def main():
     try:
         if args.wait:
             result, expired = wait_for_all_done(args.output_dir, args.max_seconds)
-            print(format_output(result))
+            print(format_output(attach_draft_evidence(args.output_dir, result)))
             if expired:
                 # Both streams are typically merged by the caller (e.g. a
                 # Codex subprocess capture) — flush stdout first so the
@@ -368,7 +385,7 @@ def main():
             sys.exit(0)
         else:
             result = check_status(args.output_dir)
-            print(format_output(result))
+            print(format_output(attach_draft_evidence(args.output_dir, result)))
             sys.exit(0 if result["all_done"] else 2)
     except (FileNotFoundError, json.JSONDecodeError, ValueError) as e:
         print(f"ERROR: {e}", file=sys.stderr)

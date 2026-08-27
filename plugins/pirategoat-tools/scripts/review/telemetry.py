@@ -34,6 +34,8 @@ try:
     )
     from .atomic_io import atomic_write_json
     from .critic_adjustments import FINDINGS_READ_OK, read_findings_file
+    from .reviewer_lifecycle import review_paths
+    from .reviewer_names import derive_reviewer_name
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
@@ -51,6 +53,8 @@ except ImportError:
     )
     from review.atomic_io import atomic_write_json
     from review.critic_adjustments import FINDINGS_READ_OK, read_findings_file
+    from review.reviewer_lifecycle import review_paths
+    from review.reviewer_names import derive_reviewer_name
 
 from git_paths import normalize_repo_paths
 
@@ -1125,25 +1129,33 @@ class ReviewTelemetry:
             return None
 
     def _extract_agent_results(self) -> Optional[dict]:
-        """Extract completed agent review results."""
+        """Project every dispatched agent's finalized review.
+
+        Keyed and located through `review_paths()`, like every other
+        consumer of these files. Scanning the directory for `*-review.json`
+        made the filename the identity: a stray artifact from an earlier
+        run in a reused output directory counted as a completed agent, and
+        `review-findings.json` had to be excluded by name because it ends
+        in the same suffix.
+        """
+        final_info = manifest_sections.inspect_dispatch_plan(
+            self.output_dir, "dispatch-plan.json"
+        )
         results = {}
-        try:
-            names = sorted(os.listdir(self.output_dir))
-        except OSError:
-            return None
-        for name in names:
-            if not name.endswith("-review.json") or name == "review-findings.json":
+        for name, agent in sorted(final_info["index"].items()):
+            if not manifest_sections.is_dispatched(agent.get("status")):
                 continue
-            base = name.replace("-review.json", "")
+            reviewer = derive_reviewer_name(name)
+            path = review_paths(self.output_dir, reviewer).final
+            if not os.path.isfile(path):
+                continue
             try:
-                document = load_review_document(
-                    os.path.join(self.output_dir, name), base
-                )
+                document = load_review_document(path, reviewer)
             except ValueError:
-                results[base] = {"error": "malformed"}
+                results[reviewer] = {"error": "malformed"}
                 continue
             summary = review_summary(document)
-            results[base] = {
+            results[reviewer] = {
                 "verdict": summary["verdict"],
                 "finding_count": summary["finding_count"],
                 "severities": summary["severities"],

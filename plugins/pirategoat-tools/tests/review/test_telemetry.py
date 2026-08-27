@@ -74,6 +74,15 @@ def _read_manifest(telemetry):
     return json.loads(Path(telemetry.manifest_path).read_text())
 
 
+def _write_dispatch_plan(output_dir, agent_names):
+    """Name the agents whose finals the run is entitled to project."""
+    (output_dir / "dispatch-plan.json").write_text(json.dumps({
+        "agents": [
+            {"name": name, "status": "DISPATCH"} for name in agent_names
+        ],
+    }))
+
+
 def _write_coverage_inputs(output_dir, changed, reviewable, agents):
     """Write the two authoritative path sets used by coverage measurement."""
     (output_dir / "review-context.json").write_text(json.dumps({
@@ -2661,6 +2670,7 @@ class TestSnapshot:
     def test_extracts_agent_results(self, mod, output_dir, tmp_path):
         log_dir = tmp_path / "logs"
         review = canonical_review_document("security", ["high", "medium"])
+        _write_dispatch_plan(output_dir, ["security-reviewer"])
         (output_dir / "security-review.json").write_text(json.dumps(review))
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
         t.start(pr_number="42")
@@ -2675,6 +2685,7 @@ class TestSnapshot:
     def test_retired_agent_review_extracts_only_malformed_evidence(
         self, mod, output_dir, tmp_path
     ):
+        _write_dispatch_plan(output_dir, ["security-reviewer"])
         (output_dir / "security-review.json").write_text(json.dumps({
             "schema": 1,
             "reviewer": "security",
@@ -2698,6 +2709,7 @@ class TestSnapshot:
         review["verdict"] = "approve"
         review["summary"]["suppressed_advisory_finding_count"] = 2
         review["summary"]["verdict_without_advisory"] = "block"
+        _write_dispatch_plan(output_dir, ["security-reviewer"])
         (output_dir / "security-review.json").write_text(json.dumps(review))
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(tmp_path / "logs"))
 
@@ -2745,6 +2757,7 @@ class TestSnapshot:
         republishes as `final_severities` — now carry the whole
         vocabulary.
         """
+        _write_dispatch_plan(output_dir, ["security-reviewer"])
         (output_dir / "security-review.json").write_text(json.dumps(
             canonical_review_document("security", ["high"])
         ))
@@ -2877,6 +2890,7 @@ class TestSnapshot:
         See test_list_shaped_findings_file_extracts_empty_and_finalize_completes
         for the shared rationale — this is the sibling extractor.
         """
+        _write_dispatch_plan(output_dir, ["security-reviewer"])
         (output_dir / "security-review.json").write_text(json.dumps("oops"))
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(tmp_path / "logs"))
         t.start(pr_number="42")
@@ -3287,6 +3301,7 @@ class TestReviewVocabularyManifestProjection:
     def test_finalized_summary_and_reconciliation_use_finding_vocabulary(
         self, mod, output_dir, tmp_path
     ):
+        _write_dispatch_plan(output_dir, ["security-reviewer"])
         (output_dir / "security-review.json").write_text(json.dumps(
             canonical_review_document("security", ["medium"])
         ))

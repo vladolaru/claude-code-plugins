@@ -109,24 +109,28 @@ def _repair_finalized_completion(output_dir: str, reviewer: str) -> None:
     repair_finalized_completion(output_dir, reviewer)
 
 
-def close_review_intake(output_dir: str, dispatched_reviewers):
+def close_review_intake(output_dir: str, dispatched_agent_names):
     """Freeze reviewer inputs and discard only dispatched drafts.
 
     The closed marker is written before completion repair and cleanup. If
     cleanup is interrupted, ordinary save/finalize remains rejected and a
     repeated close resumes from the recorded discard set. Invalid finals
     are terminal inputs rather than an interruption: the returned runtime
-    result classifies them while the persisted intake marker stays schema 2.
+    result classifies BOTH halves — `completed` beside
+    `invalid_final_reviews` — while the persisted intake marker stays
+    schema 2.
     """
-    if not isinstance(dispatched_reviewers, (list, tuple)):
+    if not isinstance(dispatched_agent_names, (list, tuple)):
         raise ValueError("dispatched reviewer identities must be a list")
-    if not all(isinstance(name, str) and name for name in dispatched_reviewers):
+    if not all(
+        isinstance(name, str) and name for name in dispatched_agent_names
+    ):
         raise ValueError("dispatched reviewer identities must be non-empty strings")
 
     intake_path = os.path.join(output_dir, REVIEW_INTAKE_NAME)
     with output_dir_lock(output_dir):
         previous = _load_closed_intake(intake_path)
-        known_identities = set(dispatched_reviewers)
+        known_identities = set(dispatched_agent_names)
         if previous is not None:
             known_identities.update(previous["discarded_drafts"])
 
@@ -155,8 +159,12 @@ def close_review_intake(output_dir: str, dispatched_reviewers):
 
         # Canonical JSON is the only completion source at close. Repair is
         # deliberately after the closed marker so an interrupted operation
-        # cannot reopen the ordinary finalization channel.
+        # cannot reopen the ordinary finalization channel. Every final is
+        # opened and validated exactly here; the classification is returned
+        # so step 8 does not open and validate the same files again to
+        # learn what this loop already knows.
         classified_reviewers = set()
+        completed = []
         invalid_final_reviews = []
         for agent_name, reviewer, paths in recognized:
             if (
@@ -173,6 +181,8 @@ def close_review_intake(output_dir: str, dispatched_reviewers):
                         "path": paths.final,
                         "error": str(error),
                     })
+                else:
+                    completed.append(agent_name)
 
         deleted_paths = set()
         for _agent_name, _reviewer, paths in recognized:
@@ -187,5 +197,6 @@ def close_review_intake(output_dir: str, dispatched_reviewers):
 
     return {
         **intake,
+        "completed": completed,
         "invalid_final_reviews": invalid_final_reviews,
     }

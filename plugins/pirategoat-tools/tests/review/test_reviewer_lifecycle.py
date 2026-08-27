@@ -64,6 +64,14 @@ def _add_finding(builder, title="Finding"):
     )
 
 
+def _finalize_canonical_review(output_dir, reviewer="code"):
+    """Publish one reviewer's canonical final through the real lifecycle."""
+    _write_assignment(output_dir, reviewer=reviewer)
+    builder = _open_builder(output_dir, reviewer=reviewer)
+    saved = builder.save_draft()
+    finalize_review(str(output_dir), reviewer, saved["review_digest"])
+
+
 class TestReviewPaths:
     def test_names_exactly_one_draft_final_and_assignment(self, tmp_path):
         paths = review_paths(str(tmp_path), "code")
@@ -267,6 +275,29 @@ class TestFinalization:
 
 
 class TestReviewIntakeClose:
+    def test_close_returns_the_completed_invalid_split(self, tmp_path):
+        """Intake close already validates every final. It now says which."""
+        _finalize_canonical_review(tmp_path, "code")
+        broken = Path(tmp_path, "security-review.json")
+        broken.write_text(json.dumps({"verdict": "approve"}))
+
+        result = close_review_intake(
+            str(tmp_path), ["code-reviewer", "security-reviewer"]
+        )
+
+        assert result["completed"] == ["code-reviewer"]
+        assert [
+            entry["agent_name"] for entry in result["invalid_final_reviews"]
+        ] == ["security-reviewer"]
+
+    def test_a_dispatched_agent_with_no_final_is_in_neither_list(
+        self, tmp_path
+    ):
+        result = close_review_intake(str(tmp_path), ["code-reviewer"])
+
+        assert result["completed"] == []
+        assert result["invalid_final_reviews"] == []
+
     def test_close_classifies_invalid_final_without_telemetry(self, tmp_path):
         final = Path(tmp_path, "security-review.json")
         final.write_text("not json")

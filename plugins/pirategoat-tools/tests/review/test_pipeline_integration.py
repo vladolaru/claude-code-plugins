@@ -1161,7 +1161,6 @@ class TestStep8WaitingRouting:
             state["waiting_on_agents"] = {
                 "running": ["security-reviewer"],
                 "not_dispatched": [],
-                "status_output": "security-reviewer RUNNING",
                 "agent_timeout_seconds": 1200,
             }
             return context
@@ -1683,7 +1682,9 @@ class TestStep7Orchestration:
         )
         (tmp_path / "security-review.draft.json").write_text("{}")
         status_output = agents_status.format_output(
-            agents_status.check_status(str(tmp_path))
+            agents_status.attach_draft_evidence(
+                str(tmp_path), agents_status.check_status(str(tmp_path))
+            )
         )
         draft_line = next(
             line.strip()
@@ -1717,6 +1718,85 @@ class TestStep7Orchestration:
 
 class TestStep8Orchestration:
     """Step 8 main() reads change-purpose.md and agent completion status."""
+
+    def test_step_8_spawns_no_status_subprocess(
+        self, mod, tmp_path, monkeypatch
+    ):
+        """The status checker is a function in this process, not a CLI.
+
+        Step 8 shelled out to agents_status.py and then recovered the
+        agent names by splitting the human-readable table on whitespace —
+        a parser for a format written for people, in the one gate that
+        decides whether reconciliation may start.
+        """
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps({
+            "agents": [{"name": "code-reviewer", "status": "DISPATCH"}],
+        }))
+        _save_and_finalize(tmp_path, "code")
+        spawned = []
+        monkeypatch.setattr(
+            mod.subprocess, "run",
+            lambda *args, **kwargs: spawned.append(args)
+            or pytest.fail("step 8 spawned a status subprocess"),
+        )
+
+        def reconciliation_succeeds(*_args, **_kwargs):
+            (tmp_path / "reconciliation-context.json").write_text("{}")
+            return "", True
+
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "_run_subprocess",
+            reconciliation_succeeds,
+        )
+        state = {"resolved_params": {}}
+
+        mod._orchestrate_step(8, "full", {}, state, {}, str(tmp_path))
+
+        assert spawned == []
+        assert state["agents"]["completed"] == ["code-reviewer"]
+
+    def test_step_8_does_not_revalidate_what_intake_close_classified(
+        self, mod, tmp_path, monkeypatch
+    ):
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps({
+            "agents": [{"name": "code-reviewer", "status": "DISPATCH"}],
+        }))
+        (tmp_path / "code-review.json").write_text(
+            json.dumps({"verdict": "approve"})
+        )
+        loads = []
+        monkeypatch.setattr(
+            mod.subprocess,
+            "run",
+            lambda *args, **kwargs: subprocess.CompletedProcess(
+                args=args[0], returncode=0, stdout="", stderr=""
+            ),
+        )
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "_load_final_review",
+            lambda *args: loads.append(args)
+            or pytest.fail("step 8 validated a final a second time"),
+        )
+
+        def reconciliation_succeeds(*_args, **_kwargs):
+            (tmp_path / "reconciliation-context.json").write_text("{}")
+            return "", True
+
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "_run_subprocess",
+            reconciliation_succeeds,
+        )
+        state = {"resolved_params": {}}
+
+        mod._orchestrate_step(8, "full", {}, state, {}, str(tmp_path))
+
+        assert loads == []
+        assert state["agents"]["completed"] == []
+        assert "review_files" not in state["agents"]
+        assert "invalid_review_files" not in state["agents"]
 
     def test_step_8_completion_follows_the_review_paths_authority(
         self, mod, tmp_path, monkeypatch
@@ -1752,6 +1832,7 @@ class TestStep8Orchestration:
                 "status": "closed",
                 "closed_at": "2026-08-25T12:00:00+00:00",
                 "discarded_drafts": [],
+                "completed": ["code-reviewer"],
             },
         )
         monkeypatch.setitem(
@@ -1774,7 +1855,6 @@ class TestStep8Orchestration:
         mod._orchestrate_step(8, "full", {}, state, {}, str(tmp_path))
 
         assert state["agents"]["completed"] == ["code-reviewer"]
-        assert state["agents"]["review_files"] == [str(final_path)]
 
     def test_step_8_preserves_invalid_output_evidence_without_completion(
         self, tmp_path
@@ -1800,8 +1880,6 @@ class TestStep8Orchestration:
         assert result.returncode == 0, result.stderr
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         assert state["agents"]["completed"] == []
-        assert state["agents"]["review_files"] == []
-        assert state["agents"]["invalid_review_files"] == [str(review_path)]
         assert state["reviewer_markdown"]["status"] == "partial"
         assert not (tmp_path / "code-review.md").exists()
         intake = json.loads((tmp_path / "review-intake.json").read_text())
@@ -1882,8 +1960,8 @@ class TestStep8Orchestration:
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         assert "retry logic" in state.get("change_purpose", "").lower()
 
-    def test_step_8_stores_review_file_paths(self, tmp_path):
-        """Step 8 should store paths to completed review files in state."""
+    def test_step_8_records_which_dispatched_agents_completed(self, tmp_path):
+        """Step 8 stores the intake close's completion classification."""
         run_pipeline("--step", "1", "--mode", "full",
                    "--output-dir", str(tmp_path), cwd=tmp_path)
         plan = {
@@ -1902,12 +1980,17 @@ class TestStep8Orchestration:
                        "--output-dir", str(tmp_path), cwd=tmp_path)
         assert r.returncode == 0
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
-        review_files = state.get("agents", {}).get("review_files", [])
-        assert any("code-review.json" in f for f in review_files)
+        assert state["agents"]["completed"] == ["code-reviewer"]
 
     def test_step_8_materializes_every_settled_reviewer_json_at_readiness_gate(
         self, mod, tmp_path, monkeypatch
     ):
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps({
+            "agents": [
+                {"name": "code-reviewer", "status": "DISPATCH"},
+                {"name": "security-reviewer", "status": "DISPATCH"},
+            ],
+        }))
         for reviewer in ("code", "security"):
             (tmp_path / f"{reviewer}-review.json").write_text(
                 json.dumps(_review_json(reviewer))
@@ -1974,6 +2057,7 @@ class TestStep8Orchestration:
                 "status": "closed",
                 "closed_at": "2026-08-24T12:00:00+00:00",
                 "discarded_drafts": ["code-reviewer"],
+                "completed": [],
             }
 
         monkeypatch.setitem(
@@ -2049,28 +2133,16 @@ class TestStep8Orchestration:
                 8, "full", {}, {"resolved_params": {}}, {}, str(tmp_path)
             )
 
-    @pytest.mark.parametrize("returncode", [1, 17], ids=["error", "unexpected"])
     def test_step_8_status_checker_failure_preserves_open_intake(
-        self, mod, tmp_path, monkeypatch, returncode
+        self, mod, tmp_path, monkeypatch
     ):
+        """An unreadable dispatch plan is the checker's own error."""
         (tmp_path / "dispatch-plan.json").write_text(
-            json.dumps({
-                "agents": [{"name": "code-reviewer", "status": "DISPATCH"}],
-            })
+            json.dumps({"agents": "not a list of agents"})
         )
         draft = tmp_path / "code-review.draft.json"
         draft.write_bytes(b'{"draft":true}\n')
         events = []
-        monkeypatch.setattr(
-            mod.subprocess,
-            "run",
-            lambda *args, **_kwargs: subprocess.CompletedProcess(
-                args=args[0],
-                returncode=returncode,
-                stdout="status failed",
-                stderr="checker error",
-            ),
-        )
         monkeypatch.setitem(
             mod._orchestrate_step_8.__globals__,
             "_materialize_markdown",
@@ -2103,8 +2175,8 @@ class TestStep8Orchestration:
         draft.write_bytes(b'{"draft":true}\n')
         events = []
         monkeypatch.setattr(
-            mod.subprocess,
-            "run",
+            mod._orchestrate_step_8.__globals__["agents_status"],
+            "check_status",
             lambda *_args, **_kwargs: (_ for _ in ()).throw(
                 OSError("checker crashed")
             ),
@@ -2133,6 +2205,12 @@ class TestStep8Orchestration:
     def test_step_8_uses_post_render_snapshot_when_json_arrives_during_materialization(
         self, mod, tmp_path, monkeypatch
     ):
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps({
+            "agents": [
+                {"name": "code-reviewer", "status": "DISPATCH"},
+                {"name": "security-reviewer", "status": "DISPATCH"},
+            ],
+        }))
         (tmp_path / "security-review.json").write_text(
             json.dumps(_review_json("security"))
         )
@@ -2187,6 +2265,9 @@ class TestStep8Orchestration:
     def test_step_8_compares_materialized_path_identities_not_only_counts(
         self, mod, tmp_path, monkeypatch
     ):
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps({
+            "agents": [{"name": "security-reviewer", "status": "DISPATCH"}],
+        }))
         (tmp_path / "security-review.json").write_text(
             json.dumps(_review_json("security"))
         )
@@ -2223,7 +2304,7 @@ class TestStep8Orchestration:
         assert result == {}
         assert state["reviewer_markdown"] == {
             "ran": True,
-            "written": 1,
+            "written": 0,
             "expected": 1,
             "status": "partial",
         }
@@ -2232,6 +2313,9 @@ class TestStep8Orchestration:
     def test_step_8_records_materialization_failure_without_aborting(
         self, mod, tmp_path, monkeypatch, capsys
     ):
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps({
+            "agents": [{"name": "security-reviewer", "status": "DISPATCH"}],
+        }))
         (tmp_path / "security-review.json").write_text(
             json.dumps(_review_json("security"))
         )
@@ -2280,6 +2364,9 @@ class TestStep8Orchestration:
     def test_step_8_records_skipped_json_as_partial_materialization(
         self, mod, tmp_path, monkeypatch
     ):
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps({
+            "agents": [{"name": "security-reviewer", "status": "DISPATCH"}],
+        }))
         (tmp_path / "security-review.json").write_text("{}")
         monkeypatch.setattr(
             mod.subprocess,
@@ -2316,6 +2403,9 @@ class TestStep8Orchestration:
     def test_step_8_reconciliation_failure_happens_after_reviewer_markdown(
         self, mod, tmp_path, monkeypatch
     ):
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps({
+            "agents": [{"name": "security-reviewer", "status": "DISPATCH"}],
+        }))
         (tmp_path / "security-review.json").write_text(
             json.dumps(_review_json("security"))
         )
@@ -2346,9 +2436,14 @@ class TestStep8Orchestration:
 
         assert (tmp_path / "security-review.md").is_file()
 
-    def test_step_8_invalid_hand_edited_status_surfaces_value_error(
-        self, mod, tmp_path, monkeypatch
+    def test_step_8_invalid_hand_edited_status_names_the_agent(
+        self, mod, tmp_path
     ):
+        """The readiness gate reads the plan first, so it reports the defect.
+
+        It still names the agent and the unsupported value — the gate wraps
+        the plan validator's ValueError rather than swallowing it.
+        """
         plan = {
             "agents": [
                 {
@@ -2358,15 +2453,8 @@ class TestStep8Orchestration:
             ],
         }
         (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
-        monkeypatch.setattr(
-            mod.subprocess,
-            "run",
-            lambda *args, **kwargs: subprocess.CompletedProcess(
-                args=args[0], returncode=0, stdout="", stderr=""
-            ),
-        )
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(RuntimeError, match="status checker") as exc_info:
             mod._orchestrate_step(
                 8,
                 "full",
@@ -2376,9 +2464,10 @@ class TestStep8Orchestration:
                 str(tmp_path),
             )
 
-        message = str(exc_info.value)
+        message = str(exc_info.value.__cause__)
         assert "security-reviewer" in message
         assert repr(None) in message
+        assert not (tmp_path / "review-intake.json").exists()
 
 
 class TestStep9CoverageMeasurement:
