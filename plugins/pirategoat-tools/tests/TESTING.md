@@ -194,7 +194,7 @@ Deterministic pytest suite that validates structural properties of command files
 
 ### ReviewOutputBuilder Unit Tests (`review/agent/test_output.py`)
 
-Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/output.py`, and on `review_document.py`'s validators — the one leaf module it publishes through with no dedicated test file. `review_markdown.py`'s projection has its own suite below in `test_review_markdown.py`. Tests here cover the schema-2 findings/checks/assessment domain, mutable whole-state drafts, the six canonical reviewed-file fields, and verdict derivation.
+Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/output.py`, and — by decision, not by omission — on `scripts/review/review_document.py`'s validators too. **There is no `test_review_document.py`, and one should not be created.** The validators have two consumer boundaries: reviewer publication, which is this file, and ledger adjudication, which is `test_critic_adjustments.py`. Testing them where they are called is what keeps a validator change from passing its own suite while breaking the boundary that depends on it. `review_markdown.py`'s projection has its own suite below in `test_review_markdown.py`. Tests here cover the schema-2 findings/checks/assessment domain, mutable whole-state drafts, the six canonical reviewed-file fields, and verdict derivation.
 
 | Class | What it verifies |
 |---|---|
