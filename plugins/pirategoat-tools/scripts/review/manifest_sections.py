@@ -513,15 +513,18 @@ def build_coverage_manifest(
             path for paths in by_agent_sets.values() for path in paths
         )
 
-        # Positive-claim/gap populations for NOT DIFFED files: the claim
-        # counts come off each finalized review document, the claimable
-        # count off the durable assignment that also serves agents
-        # that never finalized — never derived from the events already
-        # folded into by_agent above, which only carry generated SCOPE
-        # (assigned files), not the reviewed files. Both dicts
-        # default to {} (measured, zero reviewers), never omitted, once
-        # this builder runs at all; only a run whose manifest predates this
-        # feature lacks the keys entirely (see
+        # Positive-claim/gap populations for NOT DIFFED files. A finalized
+        # agent answers both questions from its own review document — the
+        # claim counts and the claimable list all come off that one read,
+        # because finalization derived the claimable list from the
+        # assignment sidecar and validated the two against each other. The
+        # sidecar is opened only for an agent with no usable final, which
+        # is the one case the document cannot answer. Neither map is
+        # derived from the events already folded into by_agent above,
+        # which carry generated SCOPE (assigned files), not reviewed
+        # files. Both default to {} (measured, zero reviewers), never
+        # omitted, once this builder runs at all; only a run whose
+        # manifest predates this feature lacks the keys entirely (see
         # `_load_final_review`'s contract).
         reviewed_files_by_agent: Dict[str, Dict[str, int]] = {}
         review_claimable_file_count_by_agent: Dict[str, int] = {}
