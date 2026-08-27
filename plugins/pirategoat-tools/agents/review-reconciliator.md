@@ -90,7 +90,7 @@ For each concern group:
 
 ## Severity Floors and Verified Mitigations (regression-class findings)
 
-A finding carries a numeric floor only when reconciliation context shows an explicit line such as `Severity floor: medium`. Categories never invent a floor. The context builder normalizes the current legacy markers before this stage.
+A finding carries a floor only when it carries the structured `severity_floor` field in `reviews_by_agent`. Nothing else creates one: a description is reviewer narrative, not a machine directive, and categories never invent a floor.
 
 The rules below apply to findings with an explicit floor and, for mitigation verification only, findings in the `interface-break`, `hook-contract`, or `scheduled-action` categories:
 
