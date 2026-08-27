@@ -2706,7 +2706,6 @@ class TestStep11PresentResults:
             if "Reviewer Markdown:" in line
         ]
         assert lines == ["Reviewer Markdown: materialized 2/2 files."]
-        assert "agent/output.py materialize" not in lines[0]
 
     @pytest.mark.parametrize("interactive", [True, False])
     def test_findings_markdown_outcome_is_reported_beside_the_reviewer_one(
