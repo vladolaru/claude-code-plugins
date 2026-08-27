@@ -19,11 +19,13 @@ Zero external dependencies (stdlib only).
 """
 
 import argparse
+import atexit
 import importlib.util
 import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -1461,11 +1463,26 @@ def main():
     exploration_scope = None
     secondary_with_content = []  # secondary domains that matched files
     scope_summary_paths = []  # machine-readable sidecars backing scope_output
-    # Where those sidecars land: the run directory when the caller pinned one
-    # — that is what the run-level file review reads — and a scratch directory
-    # otherwise. The summary is the ONLY source of scope facts, so a run
-    # without a pinned output dir must still produce one.
-    summary_dir = args.output_dir or tempfile.mkdtemp(prefix="pirategoat-scope-")
+    scratch_summary_dir = None
+
+    def summary_dir() -> str:
+        """Where this run's scope sidecars land.
+
+        The run directory when the caller pinned one — that is what the
+        run-level file review reads. Otherwise a scratch directory, because
+        the summary is the ONLY source of scope facts and a run without a
+        pinned output dir must still produce one; nothing outside this
+        process reads it, so it is created on first use and removed at exit.
+        """
+        nonlocal scratch_summary_dir
+        if args.output_dir:
+            return args.output_dir
+        if scratch_summary_dir is None:
+            scratch_summary_dir = tempfile.mkdtemp(prefix="pirategoat-scope-")
+            atexit.register(
+                shutil.rmtree, scratch_summary_dir, ignore_errors=True
+            )
+        return scratch_summary_dir
 
     if ref_mode:
         # Adapter ref-mode: the adapter has no registry domain. Scope by the
@@ -1505,7 +1522,7 @@ def main():
             # never collide and the aggregator attributes the scope to the
             # identity every other artifact uses.
             dom_summary_out = os.path.join(
-                summary_dir,
+                summary_dir(),
                 f"{effective_agent_name}-scope-summary-{dom}.json",
             )
             dom_extra_flags, ref_include_flags = ref_include_flags, []
@@ -1560,7 +1577,7 @@ def main():
         # (reconciliation coverage aggregation) reads to compute which
         # changed files no reviewer received inline.
         primary_summary_out = os.path.join(
-            summary_dir, f"{agent_name}-scope-summary.json"
+            summary_dir(), f"{agent_name}-scope-summary.json"
         )
         rc, scope_output = run_scope_discovery(
             plugin_root, config["domain"], scope_flags, args.range,
@@ -1602,7 +1619,7 @@ def main():
             if config.get("no_semantic_filter", False):
                 sec_flags.append("--no-semantic-filter")
             sec_summary_out = os.path.join(
-                summary_dir, f"{agent_name}-scope-summary-{sec_domain}.json"
+                summary_dir(), f"{agent_name}-scope-summary-{sec_domain}.json"
             )
             sec_rc, sec_output = run_scope_discovery(
                 plugin_root, sec_domain, sec_flags, args.range,

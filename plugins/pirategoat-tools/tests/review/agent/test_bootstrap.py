@@ -1,6 +1,7 @@
 """Tests for review/agent/bootstrap.py — unit tests (direct function imports)."""
 
 import json
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -495,6 +496,65 @@ class TestPartitionScopePaths:
         # The downstream symptom must not displace the real diagnosis.
         assert "scope summary" not in output
         assert not list(tmp_path.glob("*-assignment.json"))
+
+    def test_unpinned_output_dir_still_gets_measured_facts(
+        self, tmp_path, monkeypatch
+    ):
+        """No --output-dir still means real facts, from a scratch sidecar.
+
+        The summary is the only source of assignment facts, so a run the
+        caller did not pin a directory for writes one to a scratch directory
+        and reads it back. Nothing outside the process reads that directory,
+        so it is created only when a sidecar is actually written and removed
+        at exit.
+        """
+        cleanups = []
+        monkeypatch.setattr(
+            _mod.atexit,
+            "register",
+            lambda func, *args, **kwargs: cleanups.append(
+                (func, args, kwargs)
+            ),
+        )
+        summary_paths = []
+
+        def fake_scope(*_args, **kwargs):
+            path = kwargs["summary_json_out"]
+            summary_paths.append(path)
+            with open(path, "w") as f:
+                json.dump({
+                    "schema": 3,
+                    "inline_diff_files": ["src/a.py"],
+                    "review_claimable_files": ["src/claimable.py"],
+                    "list_only_files": [],
+                    "routing_files": ["src/a.py", "src/claimable.py"],
+                    "in_scope_stat_lines": 40,
+                }, f)
+            return 0, f"STATUS: OK\nOUTPUT_DIR: {tmp_path}\n"
+
+        monkeypatch.setattr(_mod, "find_plugin_root", lambda: str(PLUGIN_ROOT))
+        monkeypatch.setattr(_mod, "read_file", lambda _path: "# rules")
+        monkeypatch.setattr(_mod, "run_scope_discovery", fake_scope)
+        monkeypatch.setattr(
+            sys, "argv", ["bootstrap.py", "--agent", "security-reviewer"]
+        )
+
+        with pytest.raises(SystemExit, match="0"):
+            _mod.main()
+
+        scratch = os.path.dirname(summary_paths[0])
+        assert os.path.basename(scratch).startswith("pirategoat-scope-")
+        payload = json.loads(
+            (tmp_path / "security-assignment.json").read_text()
+        )
+        assert payload["in_scope_review_file_count"] == 2
+        assert payload["inline_diff_file_count"] == 1
+
+        # The registered cleanup is the one that removes that directory.
+        assert cleanups, "scratch directory registered no cleanup"
+        for func, args, kwargs in cleanups:
+            func(*args, **kwargs)
+        assert not os.path.exists(scratch)
 
 
 class TestExtractProtocolSections:
