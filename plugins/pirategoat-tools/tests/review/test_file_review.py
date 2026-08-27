@@ -23,7 +23,6 @@ from helpers.review_fixtures import canonical_review_document
 from review import manifest_sections
 from review.manifest_sections import aggregate_file_review
 from review.reviewer_lifecycle import ReviewPaths
-import review.reconciliation_context as recon_mod
 
 
 def _write_summary(
@@ -127,12 +126,6 @@ class TestAggregateReviewedFiles:
 
         assert claimed == ["src/read.php"]
         assert unclaimed == ["src/unread.php"]
-
-    def test_context_carries_no_file_review(self):
-        """The reconciliator does not read this measurement, so the context
-        does not carry it (TestFullScript pins the exact key set) and no
-        reader for it survives. Step 9 aggregates it for the record."""
-        assert not hasattr(recon_mod, "file_review_from_context")
 
     def test_returns_none_without_summaries(self, tmp_path):
         assert aggregate_file_review(str(tmp_path)) is None

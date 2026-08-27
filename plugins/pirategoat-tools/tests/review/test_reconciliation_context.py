@@ -6,7 +6,6 @@ and by running the full script via subprocess for integration tests.
 
 import importlib.util
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -71,21 +70,6 @@ def _make_finding(
     if severity_floor is not None:
         finding["severity_floor"] = severity_floor
     return finding
-
-
-def _make_context_with_findings(reviews_by_agent):
-    """Create a minimal reconciliation context dict with given agent findings."""
-    return {
-        "reviews_by_agent": reviews_by_agent,
-        "source_snippets": {},
-        "scope_annotations": {},
-        "changed_files": ["src/app.py"],
-        "git_range": "abc123..HEAD",
-        "change_purpose": "Test change",
-        "pr_id": "42",
-        "output_dir": "/tmp/test-review",
-        "output_builder_path": "/path/to/output.py",
-    }
 
 
 def _make_review_json(
@@ -1362,7 +1346,6 @@ class TestFullScript:
             (tmp_path / "reconciliation-context.json").read_text()
         )
         assert ctx["host_context_banner"] is None
-
 
     def test_empty_output_dir(self, tmp_path):
         """Runs successfully with no review files."""
