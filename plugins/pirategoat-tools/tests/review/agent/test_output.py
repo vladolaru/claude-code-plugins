@@ -785,8 +785,8 @@ class TestRemovedToolMetadata:
 # =============================================================================
 
 
-class TestCalculateVerdict:
-    """_calculate_verdict auto-selects verdict from finding severity counts."""
+class TestDerivedVerdict:
+    """The published verdict is derived from finding severity counts."""
 
     def _builder_with_findings(self, severities):
         """Create a builder with findings at given severity levels."""
@@ -797,43 +797,43 @@ class TestCalculateVerdict:
 
     def test_no_findings_approve(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        assert b._calculate_verdict() == "approve"
+        assert b.to_dict()["verdict"] == "approve"
 
     def test_one_critical_blocks(self):
         b = self._builder_with_findings(["critical"])
-        assert b._calculate_verdict() == "block"
+        assert b.to_dict()["verdict"] == "block"
 
     def test_two_high_request_changes(self):
         b = self._builder_with_findings(["high", "high"])
-        verdict = b._calculate_verdict()
+        verdict = b.to_dict()["verdict"]
         assert verdict == "request_changes"
         assert verdict != "block"
 
     def test_three_high_blocks(self):
         b = self._builder_with_findings(["high", "high", "high"])
-        assert b._calculate_verdict() == "block"
+        assert b.to_dict()["verdict"] == "block"
 
     def test_one_high_request_changes(self):
         b = self._builder_with_findings(["high"])
-        assert b._calculate_verdict() == "request_changes"
+        assert b.to_dict()["verdict"] == "request_changes"
 
     def test_four_medium_comment(self):
         b = self._builder_with_findings(["medium"] * 4)
-        verdict = b._calculate_verdict()
+        verdict = b.to_dict()["verdict"]
         assert verdict == "comment"
         assert verdict != "request_changes"
 
     def test_five_medium_request_changes(self):
         b = self._builder_with_findings(["medium"] * 5)
-        assert b._calculate_verdict() == "request_changes"
+        assert b.to_dict()["verdict"] == "request_changes"
 
     def test_one_medium_comment(self):
         b = self._builder_with_findings(["medium"])
-        assert b._calculate_verdict() == "comment"
+        assert b.to_dict()["verdict"] == "comment"
 
     def test_low_and_info_only_approve(self):
         b = self._builder_with_findings(["low", "info", "low", "info"])
-        assert b._calculate_verdict() == "approve"
+        assert b.to_dict()["verdict"] == "approve"
 
 
 # =============================================================================
@@ -1452,7 +1452,7 @@ class TestAddObservation:
         """Observations don't count as findings — verdict unaffected."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         b.add_observation("f.py", "Looks risky", category="security")
-        assert b._calculate_verdict() == "approve"
+        assert b.to_dict()["verdict"] == "approve"
 
     def test_observations_in_markdown(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
@@ -1751,7 +1751,7 @@ class TestAdvisoryChannel:
         b = ReviewOutputBuilder.open(tmp_path, "1", "repo-reuse")
         b.add_finding(severity="high", title="Duplication", file="a.php",
                     description="d", recommendation="r", line=5, channel="advisory")
-        assert b._calculate_verdict() == "approve"
+        assert b.to_dict()["verdict"] == "approve"
 
     def test_unbound_builder_fails_open_after_vocabulary_validation(self):
         """A hand-rolled builder has no assignment to consult."""
@@ -1762,7 +1762,7 @@ class TestAdvisoryChannel:
             description="d", recommendation="r", line=5, channel="advisory",
         )
 
-        assert b._calculate_verdict() == "approve"
+        assert b.to_dict()["verdict"] == "approve"
 
     def test_absent_assignment_fails_open_after_vocabulary_validation(
         self, tmp_path
@@ -1774,7 +1774,7 @@ class TestAdvisoryChannel:
             description="d", recommendation="r", line=5, channel="advisory",
         )
 
-        assert b._calculate_verdict() == "approve"
+        assert b.to_dict()["verdict"] == "approve"
 
     @pytest.mark.parametrize(
         "payload",
@@ -1800,7 +1800,7 @@ class TestAdvisoryChannel:
             description="d", recommendation="r", line=5, channel="advisory",
         )
 
-        assert b._calculate_verdict() == "approve"
+        assert b.to_dict()["verdict"] == "approve"
 
     def test_invalid_utf8_assignment_fails_open_at_add_time(
         self, tmp_path
@@ -1815,7 +1815,7 @@ class TestAdvisoryChannel:
             description="d", recommendation="r", line=5, channel="advisory",
         )
 
-        assert b._calculate_verdict() == "approve"
+        assert b.to_dict()["verdict"] == "approve"
 
     def test_save_rejects_findings_off_this_reviewer_channels(self, tmp_path):
         """Add-time fail-open is not a way past publication.
@@ -1840,7 +1840,7 @@ class TestAdvisoryChannel:
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
         b.add_finding(severity="critical", title="x", file="a.php",
                     description="d", recommendation="r", line=5, channel="advisory")
-        assert b._calculate_verdict() == "approve"
+        assert b.to_dict()["verdict"] == "approve"
 
     def test_critical_advisory_records_stricter_counterfactual(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
@@ -1911,13 +1911,13 @@ class TestAdvisoryChannel:
         b.add_finding(severity="critical", title="x", file="a.php",
                     description="d", recommendation="r", line=5, channel="blocking")
         assert "channel" not in b.findings[0]
-        assert b._calculate_verdict() == "block"
+        assert b.to_dict()["verdict"] == "block"
 
     def test_no_channel_is_backward_compatible(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="security")
         b.add_finding(severity="high", title="x", file="a.php",
                     description="d", recommendation="r", line=5)
-        assert b._calculate_verdict() == "request_changes"
+        assert b.to_dict()["verdict"] == "request_changes"
 
     def test_advisory_channel_persisted_in_finding(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
@@ -1932,7 +1932,7 @@ class TestAdvisoryChannel:
         b.add_finding(severity="medium", title="block", file="a.php",
                     description="d", recommendation="r", line=6, channel="blocking")
         # Only the blocking medium counts → comment (not block from the advisory critical).
-        assert b._calculate_verdict() == "comment"
+        assert b.to_dict()["verdict"] == "comment"
 
 
 # =============================================================================

@@ -88,7 +88,6 @@ try:
     from ..verdict_rules import (
         SEVERITY_RANK,
         VALID_SEVERITIES,
-        derive_review_state,
         summary_for,
     )
 except ImportError:
@@ -107,7 +106,6 @@ except ImportError:
     from review.verdict_rules import (
         SEVERITY_RANK,
         VALID_SEVERITIES,
-        derive_review_state,
         summary_for,
     )
 
@@ -972,12 +970,6 @@ class ReviewOutputBuilder:
             )
         self._not_applicable = True
         self._skip_reason = reason.strip()
-
-    def _calculate_verdict(self) -> str:
-        """Auto-calculate verdict from findings."""
-        if self._not_applicable:
-            return 'not_applicable'
-        return derive_review_state(self.findings)['verdict']
 
     def to_dict(self) -> Dict:
         """Build the review content as a dictionary from this builder's own state.
