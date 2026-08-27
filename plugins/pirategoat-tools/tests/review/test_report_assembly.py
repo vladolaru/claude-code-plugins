@@ -719,13 +719,27 @@ class TestRecordSanitization:
             "recommendation": "No change after the source probe.",
             "confidence": 0.9,
             "critic_adjustment": {
-                "action": "remove", "rationale": "not reachable",
+                "action": "remove",
+                "rationale": "Severity-floor: high; not reachable",
             },
         }]
-        findings["applied_critic_adjustments"] = [{
-            "adjustment_id": "remove-f3", "outcome": "verified",
+        findings["checks_removed_by_critic"] = [{
+            "id": "c9",
+            "question": "Is the helper called?",
+            "method": "git grep",
+            "result": "0 hits",
+            "source_reviewers": ["code-reviewer"],
+            "critic_adjustment": {
+                "action": "remove",
+                "rationale": "Severity-floor: medium; the check was moot",
+            },
         }]
+        findings["applied_critic_adjustments"] = [
+            {"adjustment_id": "remove-f3", "outcome": "verified"},
+            {"adjustment_id": "remove-c9", "outcome": "verified"},
+        ]
         findings["meta"]["next_finding_number"] = 4
+        findings["meta"]["next_check_number"] = 10
         _write_ledger(out_dir, findings)
 
         assemble_review_record(str(out_dir), {})
@@ -733,6 +747,8 @@ class TestRecordSanitization:
 
         assert "Severity-floor:" not in text
         assert "withdrawn finding" in text
+        assert "not reachable" in text
+        assert "the check was moot" in text
 
     def test_structured_severity_floor_still_renders(self, out_dir):
         findings = _ledger()

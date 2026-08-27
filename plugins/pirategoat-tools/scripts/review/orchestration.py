@@ -344,6 +344,19 @@ def _sanitized_ledger(findings: dict) -> dict:
             for entry in invalidated
         ]
 
+    def _clean_critic_rationale(entry):
+        # A removed finding or check renders `critic_adjustment.rationale`
+        # in the record; the prior critic's prose is a marker source too.
+        adjustment = entry.get("critic_adjustment")
+        if isinstance(adjustment, dict) and adjustment.get("rationale"):
+            entry["critic_adjustment"] = {
+                **adjustment,
+                "rationale": strip_severity_floor_markers(
+                    adjustment["rationale"]
+                ),
+            }
+        return entry
+
     def _clean_finding(finding):
         if not isinstance(finding, dict):
             return finding
@@ -351,7 +364,7 @@ def _sanitized_ledger(findings: dict) -> dict:
         for field in ("title", "description", "recommendation"):
             if patched.get(field):
                 patched[field] = strip_severity_floor_markers(patched[field])
-        return patched
+        return _clean_critic_rationale(patched)
 
     for key in ("findings", "findings_removed_by_critic"):
         entries = clean.get(key)
@@ -368,14 +381,14 @@ def _sanitized_ledger(findings: dict) -> dict:
         if not isinstance(checks, list):
             continue
         clean[key] = [
-            {
+            _clean_critic_rationale({
                 field: (
                     strip_severity_floor_markers(value)
                     if field in ("question", "method", "result") and value
                     else value
                 )
                 for field, value in entry.items()
-            } if isinstance(entry, dict) else entry
+            }) if isinstance(entry, dict) else entry
             for entry in checks
         ]
 
