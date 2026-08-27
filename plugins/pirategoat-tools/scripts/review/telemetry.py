@@ -789,7 +789,6 @@ class ReviewTelemetry:
                 context,
                 repo_path,
                 final_info,
-                normalize_paths=normalize_repo_paths,
             )
             if settled else None
         )

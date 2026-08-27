@@ -1524,21 +1524,22 @@ class TestRunManifest:
 
         def _boom(*_args, **kwargs):
             # `repo_path` is passed only by build_assignment_manifest, so
-            # this breaks the coverage builder alone and leaves the
-            # context extract — which shares this same normalizer, and
-            # runs in the same finalize — working.
+            # this breaks the assignment builder alone and leaves the
+            # module's other calls on the same normalizer — which run in
+            # the same finalize — working.
             if "repo_path" not in kwargs:
                 return normalize_repo_paths(*_args, **kwargs)
-            raise RuntimeError("simulated coverage builder bug")
+            raise RuntimeError("simulated assignment builder bug")
 
-        # normalize_paths is the sole collaborator build_assignment_manifest
-        # takes as an injected dependency; breaking it simulates a real
-        # defect in the builder without touching its explicit absence
-        # branches (those `return None` directly, never raising). Patched
-        # in telemetry's namespace, which is where the injection site reads
-        # the shared `git_paths` normalizer from.
-        normalize_repo_paths = mod.normalize_repo_paths
-        monkeypatch.setattr(mod, "normalize_repo_paths", _boom)
+        # The shared repo-path grammar is build_assignment_manifest's sole
+        # collaborator; breaking it simulates a real defect in the builder
+        # without touching its explicit absence branches (those `return
+        # None` directly, never raising). Patched in manifest_sections'
+        # namespace, which is where the builder reads it from.
+        normalize_repo_paths = mod.manifest_sections.normalize_repo_paths
+        monkeypatch.setattr(
+            mod.manifest_sections, "normalize_repo_paths", _boom
+        )
 
         # Must not raise: a builder bug must never fail the review run.
         telemetry.start(run_id="run-1")
@@ -1550,20 +1551,23 @@ class TestRunManifest:
         err = capsys.readouterr().err
         assert "assignment manifest build failed" in err
         assert str(output_dir) in err
-        assert "simulated coverage builder bug" in err
+        assert "simulated assignment builder bug" in err
 
     def test_build_assignment_manifest_diagnoses_unexpected_exception_directly(
-        self, mod, capsys
+        self, mod, capsys, monkeypatch
     ):
         """Direct-call pin on build_assignment_manifest's own contract.
 
-        normalize_paths is an injected parameter of the function itself, so
-        this exercises the except-Exception path with zero telemetry
-        coupling — a stronger seam than going through ReviewTelemetry.
+        Breaking the path grammar the builder imports exercises the
+        except-Exception path with zero telemetry coupling — a stronger
+        seam than going through ReviewTelemetry.
         """
         def _boom(*args, **kwargs):
-            raise RuntimeError("simulated coverage builder bug")
+            raise RuntimeError("simulated assignment builder bug")
 
+        monkeypatch.setattr(
+            mod.manifest_sections, "normalize_repo_paths", _boom
+        )
         final_info = {
             "available": True,
             "duplicates": [],
@@ -1577,13 +1581,12 @@ class TestRunManifest:
             {"git": {"changed_files": ["src/a.py"]}},
             "/repo",
             final_info,
-            normalize_paths=_boom,
         )
 
         assert result is None
         err = capsys.readouterr().err
         assert "assignment manifest build failed for /output/dir" in err
-        assert "simulated coverage builder bug" in err
+        assert "simulated assignment builder bug" in err
 
     def test_valid_empty_path_sets_are_available_zero_coverage(
         self, telemetry, output_dir
@@ -3310,7 +3313,6 @@ class TestReviewVocabularyManifestProjection:
                     "security-reviewer": {"status": "DISPATCH"},
                 },
             },
-            normalize_paths=lambda paths, **kwargs: list(paths),
         )
 
         assert coverage == {

@@ -669,7 +669,6 @@ def build_assignment_manifest(
     context: Optional[dict],
     repo_path: str,
     final_info: dict,
-    normalize_paths,
 ) -> Optional[dict]:
     """Build the descriptive generated-scope assignment from durable inputs."""
     try:
@@ -678,7 +677,7 @@ def build_assignment_manifest(
         context_git = context.get("git")
         if not isinstance(context_git, dict):
             return None
-        changed = normalize_paths(
+        changed = normalize_repo_paths(
             context_git.get("changed_files"),
             repo_path=repo_path,
             strict=True,
@@ -686,7 +685,7 @@ def build_assignment_manifest(
 
         if not final_info["available"] or final_info["duplicates"]:
             return None
-        reviewable = normalize_paths(
+        reviewable = normalize_repo_paths(
             final_info["plan"].get("changed_files"),
             repo_path=repo_path,
             strict=True,
@@ -721,7 +720,7 @@ def build_assignment_manifest(
                 scope.get("paths"), list
             ):
                 return None
-            scope_paths = normalize_paths(
+            scope_paths = normalize_repo_paths(
                 scope["paths"],
                 repo_path=repo_path,
                 strict=True,
