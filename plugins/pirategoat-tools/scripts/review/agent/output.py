@@ -474,10 +474,12 @@ class ReviewOutputBuilder:
         under a stored ``severity_floor`` is promoted exactly as a fresh add
         would be, and a patched title is collapsed exactly as an added one is.
 
-        ``partial=False`` additionally drops the keys a new finding carries no
-        information in — an absent floor, evidence or citation, and the
-        default channel — so one writer cannot publish a shape the other
-        would not.
+        ``partial=False`` additionally drops the keys a fresh finding carries
+        no information in — an absent floor, evidence or citation, and the
+        default channel. ``add_finding`` calls this with ``partial=False``;
+        ``update_finding`` calls it with ``partial=True`` and never drops
+        these keys, so a patched finding can carry an explicit ``None``
+        where a freshly added one would omit the key entirely.
         """
         candidate = dict(fields)
         severity = candidate.get("severity")
