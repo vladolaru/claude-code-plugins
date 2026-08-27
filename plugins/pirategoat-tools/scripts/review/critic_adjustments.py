@@ -387,6 +387,7 @@ def _validate_proposal_entries(adjustments, *, require_adjustment_id):
         if (
             action not in ACTIONS
             or action == "add"
+            or target_kind not in TARGET_KINDS
             or not isinstance(target_id, str)
             or not target_id
         ):

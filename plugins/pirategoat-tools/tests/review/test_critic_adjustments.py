@@ -3050,6 +3050,20 @@ class TestSchemaTwoTargetUnion:
             validate_proposal_input(surplus)
         )
 
+    def test_unhashable_target_kind_is_a_validation_problem_not_a_crash(self):
+        """A model-authored `target.kind` of `[]` must reach the REJECTED path."""
+        proposal = {
+            "schema": 2,
+            "adjustments": [
+                self._entry("correct", kind=[], fields={"description": "x"}),
+                self._entry("correct", fields={"description": "y"}),
+            ],
+        }
+        problems = critic_adjustments_module.validate_adjustments_document(
+            proposal
+        )
+        assert any("'kind' must be one of" in problem for problem in problems)
+
     def test_duplicate_target_is_kind_aware(self):
         duplicate = {
             "schema": 2,
