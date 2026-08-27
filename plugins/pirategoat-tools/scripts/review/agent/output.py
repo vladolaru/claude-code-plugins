@@ -282,9 +282,10 @@ def _diff_reviews(before: Optional[Dict], after: Dict) -> List[str]:
 
     The receipt's CHANGED line, read off the two documents instead of a
     tally of builder calls. A tally has to be appended to by every mutator,
-    so seven of the thirteen were silently absent from the receipt, and a
-    call that changed nothing still announced itself. Neither is expressible
-    here: the documents either differ or they do not.
+    so the three that never did — add_observation, add_recommendation and
+    set_confidence — were silently absent from the receipt, and a call that
+    changed nothing still announced itself. Neither is expressible here: the
+    documents either differ or they do not.
 
     ``before`` is None on a first save, where there is no prior value for
     confidence to have changed from.
