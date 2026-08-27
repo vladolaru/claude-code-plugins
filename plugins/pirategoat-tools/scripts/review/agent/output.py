@@ -829,116 +829,93 @@ class ReviewOutputBuilder:
             return None
         return f"{reviewed_files.agent_name}{_REVIEWER_START_SUFFIX}"
 
-    @staticmethod
-    def _normalize_reviewed_file_claim(file: str) -> str:
-        """Normalize one reviewed-file claim.
+    def _normalize_claim_batch(self, files, api_name: str):
+        """Normalize one whole batch of claim paths; return paths and errors.
 
-        Normalizes "./src/x.php", "src\\x.php", and "src//x.php" to one
-        form, and rejects forms no scope path can ever take (absolute,
-        traversal, drive-prefixed, dot-only) — an unmatched path is not a
-        near miss, it is a claim about a file that does not exist in this
-        review.
+        The grammar itself is `normalize_review_path`, the same function the
+        authoritative derivation applies to the assignment's own paths and to
+        the claims at publication — so a form accepted here cannot be refused
+        there. Batched, and the errors are returned rather than raised, because
+        a call naming three bad paths should cost one correction round trip,
+        not three — and the positive-claim caller has a second error class to
+        report in the same raise.
         """
-        if not isinstance(file, str) or not file.strip():
-            raise ValueError(
-                "claim_files_reviewed requires a non-empty file path."
-            )
-        try:
-            return normalize_review_path(file, "claim_files_reviewed")
-        except ReviewAssignmentError as exc:
-            raise ValueError(str(exc)) from exc
-
-    @staticmethod
-    def _reject_unknown_reviewed_file_claims(
-        paths: List[str], known: frozenset
-    ) -> None:
-        """Reject claims outside the authoritative claimable set.
-
-        Collect every offender so a review carrying several bad claims costs
-        one correction round trip instead of one retry per path.
-        """
-        valid = (
-            "Valid paths: " + ", ".join(sorted(known))
-            if known
-            else "This review has no review-claimable files, so no claim may be made."
-        )
-        offenders = ", ".join(repr(p) for p in paths)
-        raise ValueError(
-            f"claim_files_reviewed received {len(paths)} claim(s) matching no "
-            f"review-claimable file of this review: {offenders}. {valid}"
-        )
+        if not files:
+            raise ValueError(f"{api_name} requires at least one file path")
+        normalized: List[str] = []
+        errors: List[str] = []
+        for file in files:
+            try:
+                normalized.append(normalize_review_path(file, api_name))
+            except ReviewAssignmentError as exc:
+                errors.append(str(exc))
+        return normalized, errors
 
     def _validate_reviewed_file_claims(self, files) -> List[str]:
         """Normalize and membership-check one positive-claim batch.
 
-        Both error classes collect across the whole batch — grammar
-        failures as their own messages and membership offenders together —
-        so one raise names every problem instead of surfacing them one retry
-        at a time. Nothing is recorded until the whole batch passes.
+        Both error classes collect across the whole batch — grammar failures
+        as their own messages and membership offenders together — so one
+        raise names every problem instead of surfacing the second one as a
+        fresh surprise on the retry. Nothing is recorded until the batch
+        passes: a claim that entered builder state unchecked would fail every
+        later save until it was retracted.
         """
-        if not files:
-            raise ValueError(
-                "claim_files_reviewed requires at least one file path — "
-                "a call naming nothing is a no-op, not a claim."
-            )
+        normalized, errors = self._normalize_claim_batch(
+            files, "claim_files_reviewed"
+        )
         reviewed_files = self._bound_reviewed_files()
         known = (
             frozenset(reviewed_files.review_claimable_files)
-            if reviewed_files is not None else None
+            if reviewed_files is not None
+            else None
         )
-        normalized: List[str] = []
-        unknown: List[str] = []
-        grammar_errors: List[str] = []
-        for file in files:
-            try:
-                path = self._normalize_reviewed_file_claim(file)
-            except ValueError as exc:
-                grammar_errors.append(str(exc))
-                continue
-            normalized.append(path)
-            if known is not None and path not in known:
-                unknown.append(path)
-        if grammar_errors or unknown:
-            parts = list(grammar_errors)
-            if unknown:
-                try:
-                    self._reject_unknown_reviewed_file_claims(unknown, known)
-                except ValueError as exc:
-                    parts.append(str(exc))
-            raise ValueError("; ".join(parts))
+        unknown = (
+            [path for path in normalized if path not in known]
+            if known is not None
+            else []
+        )
+        if unknown:
+            valid = (
+                "Valid paths: " + ", ".join(sorted(known))
+                if known
+                else "This review has no review-claimable files, so no claim "
+                "may be made."
+            )
+            errors.append(
+                f"claim_files_reviewed received {len(unknown)} claim(s) "
+                "matching no review-claimable file of this review: "
+                + ", ".join(repr(p) for p in unknown)
+                + f". {valid}"
+            )
+        if errors:
+            raise ValueError("; ".join(errors))
         return normalized
 
-    def _derive_reviewed_files(self, output_dir: str):
+    def _derive_reviewed_files(self):
         """Return the reviewed files this publication must carry.
 
-        Every draft save uses this path; the bound output directory makes the
-        check independent of the optional environment envelope. A caller
-        serializing manually via to_dict() knowingly opts out of
-        that validation — publication is the enforcing seam.
+        Every draft save uses this path, reading the assignment `_bind`
+        already located — the bound directory is what makes the check
+        independent of the environment envelope. A caller serializing
+        manually via to_dict/to_json knowingly opts out; publication is the
+        enforcing seam.
         """
-        assignment_path = review_paths(output_dir, self.reviewer).assignment
+        assignment_path = self._paths.assignment
         try:
             with open(assignment_path, "r", encoding="utf-8") as handle:
                 assignment = json.load(handle)
         except FileNotFoundError as exc:
             raise ValueError(
-                "missing authoritative review assignment: "
-                f"{assignment_path}"
+                f"missing authoritative review assignment: {assignment_path}"
             ) from exc
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError(
-                "malformed authoritative review assignment: "
-                f"{assignment_path}"
+                f"malformed authoritative review assignment: {assignment_path}"
             ) from exc
-        try:
-            return derive_reviewed_files(
-                assignment, self.reviewed_file_claims, reviewer=self.reviewer
-            )
-        except ReviewAssignmentError as exc:
-            raise ValueError(
-                "malformed authoritative review assignment: "
-                f"{exc}"
-            ) from exc
+        return derive_reviewed_files(
+            assignment, self.reviewed_file_claims, reviewer=self.reviewer
+        )
 
     def claim_files_reviewed(self, *files: str):
         """Claim review-claimable files as reviewed, atomically."""
@@ -949,17 +926,9 @@ class ReviewOutputBuilder:
 
     def retract_reviewed_file_claims(self, *files: str):
         """Retract existing reviewed-file claims, atomically."""
-        if not files:
-            raise ValueError(
-                "retract_reviewed_file_claims requires at least one file path"
-            )
-        normalized: List[str] = []
-        errors: List[str] = []
-        for file in files:
-            try:
-                normalized.append(self._normalize_reviewed_file_claim(file))
-            except ValueError as exc:
-                errors.append(str(exc))
+        normalized, errors = self._normalize_claim_batch(
+            files, "retract_reviewed_file_claims"
+        )
         if errors:
             raise ValueError("; ".join(errors))
         missing = [
@@ -1087,7 +1056,7 @@ class ReviewOutputBuilder:
             raise ValueError(
                 "save_draft requires ReviewOutputBuilder.open(...)"
             )
-        reviewed_files = self._derive_reviewed_files(self._output_dir)
+        reviewed_files = self._derive_reviewed_files()
         off_channel = sorted({
             finding.get("channel") or "blocking" for finding in self.findings
         } - set(reviewed_files.channels))

@@ -1629,6 +1629,35 @@ class TestReviewedFileClaims:
 
         assert builder.reviewed_file_claims == ["src/a.py", "src/b.py"]
 
+    def test_both_batch_apis_share_one_path_grammar(self, tmp_path):
+        """Claiming and retracting normalize through the same function the
+        authoritative derivation uses, so a path either has the grammar in
+        all three places or in none."""
+        builder = self._armed_builder(tmp_path, ["src/a.py"])
+        builder.claim_files_reviewed("./src/a.py")
+        assert builder.reviewed_file_claims == ["src/a.py"]
+        builder.retract_reviewed_file_claims("src\\a.py")
+        assert builder.reviewed_file_claims == []
+        with pytest.raises(ValueError, match="repository-relative"):
+            builder.retract_reviewed_file_claims("/abs/a.py")
+
+    def test_publication_reads_the_bound_assignment_path(
+        self, tmp_path, monkeypatch
+    ):
+        """save_draft derives from the assignment `_bind` already located —
+        it never recomputes the path from a reviewer name a second time."""
+        _write_assignment(tmp_path, "sec", ["src/a.py"])
+        builder = ReviewOutputBuilder.open(tmp_path, "1", "sec")
+        calls = []
+        real = review_output.review_paths
+        monkeypatch.setattr(
+            review_output,
+            "review_paths",
+            lambda *args: (calls.append(args), real(*args))[1],
+        )
+        builder.save_draft()
+        assert calls == []
+
 
 # =============================================================================
 # TestNotApplicable
@@ -2242,13 +2271,18 @@ class TestDraftFileGapReceipt:
             _save_draft(builder, tmp_path)
 
     @pytest.mark.parametrize(
-        ("in_scope_review_file_count", "inline_diff_file_count", "review_claimable_files"),
+        (
+            "in_scope_review_file_count",
+            "inline_diff_file_count",
+            "review_claimable_files",
+            "message",
+        ),
         [
-            (True, 0, ["a.go"]),
-            (1, False, ["a.go"]),
-            (1, -1, ["a.go"]),
-            (1, 2, ["a.go"]),
-            (3, 1, ["a.go"]),
+            (True, 0, ["a.go"], "in_scope_review_file_count must be"),
+            (1, False, ["a.go"], "inline_diff_file_count must be"),
+            (1, -1, ["a.go"], "inline_diff_file_count must be"),
+            (1, 2, ["a.go"], "incoherent inline and review-claimable scope"),
+            (3, 1, ["a.go"], "incoherent inline and review-claimable scope"),
         ],
     )
     def test_incoherent_progress_facts_reject_publication(
@@ -2259,7 +2293,9 @@ class TestDraftFileGapReceipt:
         in_scope_review_file_count,
         inline_diff_file_count,
         review_claimable_files,
+        message,
     ):
+        """The one authority's own text reaches the caller unwrapped."""
         self._clean_env(monkeypatch)
         self._write_assignment(
             tmp_path,
@@ -2269,7 +2305,7 @@ class TestDraftFileGapReceipt:
             inline_diff_file_count=inline_diff_file_count,
         )
         builder = ReviewOutputBuilder("123", "code")
-        with pytest.raises(ValueError, match="malformed authoritative review assignment"):
+        with pytest.raises(ValueError, match=message):
             _save_draft(builder, tmp_path)
 
     def test_incoherent_claim_partition_rejects_publication(
