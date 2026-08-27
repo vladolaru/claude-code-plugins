@@ -38,6 +38,7 @@ try:
     from . import critic_adjustments
     from .findings_ledger import RECONCILIATION_PIPELINE_FIELDS
     from .reconciliation_context import RECONCILIATION_CONTEXT_SCHEMA
+    from .verdict_rules import VERDICT_RANK
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
@@ -45,6 +46,7 @@ except ImportError:
     from review import critic_adjustments
     from review.findings_ledger import RECONCILIATION_PIPELINE_FIELDS
     from review.reconciliation_context import RECONCILIATION_CONTEXT_SCHEMA
+    from review.verdict_rules import VERDICT_RANK
 
 
 # The pipeline's own briefing for this run, written by
@@ -121,17 +123,40 @@ def _read_context(output_dir, problems):
         problems.append(f"{CONTEXT_FILENAME} has no reviews_by_agent object")
         return None
     for stem, review in reviews.items():
-        if (
-            not isinstance(review, dict)
-            or not isinstance(review.get("verdict"), str)
-            or not isinstance(review.get("findings"), list)
-        ):
+        if not _is_review_entry(review):
             problems.append(
                 f"{CONTEXT_FILENAME} reviews_by_agent[{stem!r}] is not a "
-                "review entry with a verdict and a findings list"
+                "finalized review: verdict, skip_reason, and findings must "
+                "carry the reviewer document's shape"
             )
             return None
     return context
+
+
+# The entries are finalized reviewer documents (`load_review_document`), so
+# the facts stamped from them are read at exactly that document's shape.
+_REVIEW_ENTRY_VERDICTS = frozenset(VERDICT_RANK) | {"not_applicable"}
+
+
+def _is_review_entry(review):
+    if not isinstance(review, dict):
+        return False
+    findings = review.get("findings")
+    if not isinstance(findings, list) or not all(
+        isinstance(finding, dict) for finding in findings
+    ):
+        return False
+    verdict = review.get("verdict")
+    if verdict not in _REVIEW_ENTRY_VERDICTS:
+        return False
+    if verdict == "not_applicable":
+        skip_reason = review.get("skip_reason")
+        return (
+            not findings
+            and isinstance(skip_reason, str)
+            and bool(skip_reason.strip())
+        )
+    return "skip_reason" not in review
 
 
 def stamp_pipeline_facts(document, context):
@@ -143,18 +168,12 @@ def stamp_pipeline_facts(document, context):
     for stem in sorted(reviews):
         review = reviews[stem]
         if review.get("verdict") == "not_applicable":
-            not_applicable.append({
-                "name": stem,
-                "skip_reason": review.get("skip_reason") or "(no reason recorded)",
-            })
+            not_applicable.append({"name": stem, "skip_reason": review["skip_reason"]})
         else:
             reviewing.append(stem)
-    recon["input_finding_count"] = sum(
-        len(r.get("findings") or []) for r in reviews.values()
-    )
+    recon["input_finding_count"] = sum(len(r["findings"]) for r in reviews.values())
     recon["contributing_agent_count"] = sum(
-        1 for r in reviews.values()
-        if r.get("verdict") != "not_applicable" and r.get("findings")
+        1 for r in reviews.values() if r["findings"]
     )
     recon["reviewing_agents"] = reviewing
     recon["not_applicable_agents"] = not_applicable

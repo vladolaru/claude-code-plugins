@@ -902,6 +902,16 @@ def test_save_rejects_a_context_written_at_another_schema(
     {"findings": []},
     {"verdict": "approve"},
     {"verdict": "approve", "findings": None},
+    {"verdict": "bogus", "findings": []},
+    {"verdict": "approve", "findings": ["not-a-finding"]},
+    {"verdict": "not_applicable", "findings": []},
+    {"verdict": "not_applicable", "skip_reason": "  ", "findings": []},
+    {
+        "verdict": "not_applicable",
+        "skip_reason": "No UI.",
+        "findings": [{"severity": "low"}],
+    },
+    {"verdict": "approve", "skip_reason": "No UI.", "findings": []},
 ])
 def test_save_rejects_a_context_review_entry_of_the_wrong_shape(
     tmp_path, capsys, entry
