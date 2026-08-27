@@ -327,10 +327,16 @@ def _diff_reviews(before: Optional[Dict], after: Dict) -> List[str]:
 
 
 def render_draft_index(review: dict) -> str:
-    """Render concise mutable review state for continuation bootstrap."""
-    findings = review.get("findings") or []
-    checks = review.get("checks") or []
-    reviewed_file_claims = review.get("reviewed_file_claims") or []
+    """Render concise mutable review state for continuation bootstrap.
+
+    ``review`` is always a validated document — ``open()`` is the only
+    caller, and it only reaches this call after ``_validate_review_bytes``
+    has proven ``findings``, ``checks``, and ``reviewed_file_claims`` are
+    present lists, never absent or null.
+    """
+    findings = review["findings"]
+    checks = review["checks"]
+    reviewed_file_claims = review["reviewed_file_claims"]
     lines = [
         "DRAFT INDEX:",
         f"  findings {len(findings)} | checks {len(checks)} | "

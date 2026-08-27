@@ -162,9 +162,13 @@ def test_draft_index_carries_locations_and_every_reviewed_file_claim():
 
 
 def test_draft_index_reports_zero_claims_without_claim_entries():
-    index = render_draft_index(
-        ReviewOutputBuilder(pr_id="42", reviewer="security").to_dict()
-    )
+    # Same stitch as the sibling test above: to_dict() carries no
+    # reviewed-file fields, and render_draft_index's real caller always
+    # supplies them.
+    index = render_draft_index({
+        **ReviewOutputBuilder(pr_id="42", reviewer="security").to_dict(),
+        "reviewed_file_claims": [],
+    })
 
     assert "reviewed-file claims 0" in index
     assert "reviewed-file claim:" not in index

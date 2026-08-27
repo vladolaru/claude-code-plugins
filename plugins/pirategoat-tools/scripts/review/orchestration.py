@@ -350,30 +350,27 @@ def _sanitized_ledger(findings: dict) -> dict:
             for entry in checks
         ]
 
-    positives = clean.get("positive_observations")
-    if isinstance(positives, list):
-        clean["positive_observations"] = [
-            strip_severity_floor_markers(entry) for entry in positives
-        ]
+    # `findings` validated these three as always-present and correctly
+    # shaped (a list, a list of {file, note, category} objects, and a
+    # three-priority object of string lists) — no absent/malformed branch
+    # remains to guard against.
+    clean["positive_observations"] = [
+        strip_severity_floor_markers(entry)
+        for entry in clean["positive_observations"]
+    ]
 
-    observations = clean.get("observations")
-    if isinstance(observations, list):
-        clean["observations"] = [
-            {
-                **entry,
-                "note": strip_severity_floor_markers(entry["note"]),
-            } if isinstance(entry, dict) and entry.get("note") else entry
-            for entry in observations
-        ]
+    clean["observations"] = [
+        {
+            **entry,
+            "note": strip_severity_floor_markers(entry["note"]),
+        } if entry["note"] else entry
+        for entry in clean["observations"]
+    ]
 
-    recommendations = clean.get("recommendations")
-    if isinstance(recommendations, dict):
-        clean["recommendations"] = {
-            priority: [
-                strip_severity_floor_markers(item) for item in entries
-            ] if isinstance(entries, list) else entries
-            for priority, entries in recommendations.items()
-        }
+    clean["recommendations"] = {
+        priority: [strip_severity_floor_markers(item) for item in entries]
+        for priority, entries in clean["recommendations"].items()
+    }
 
     return clean
 
