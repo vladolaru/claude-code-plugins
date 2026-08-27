@@ -699,7 +699,7 @@ class TestCanonicalExecutableBuilderSource:
         for phrase in (
             "rehydrates the existing complete draft",
             "full persisted draft's totals",
-            "mutations from this invocation",
+            "what this save changed against the draft you opened",
             "review files still unclaimed",
             "separate tool turn",
             "verbatim",
