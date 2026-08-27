@@ -2593,6 +2593,38 @@ class TestTypeScriptContractLockstep:
         meta_body = self._interface_body("ReviewMeta")
         assert top_level_fields(meta_body) == review_document._REQUIRED_META_FIELDS
 
+    @pytest.mark.parametrize(
+        "field", ["observations", "recommendations", "positive_observations"]
+    )
+    def test_the_always_serialized_lists_are_not_declared_nullable(self, field):
+        """Three fields the builder always emits, declared as it emits them.
+
+        They were `| null` because a producer with nothing to record used
+        to write `null`. The builder now serializes `[]` and the
+        three-key object unconditionally, and the validator requires them
+        non-null — so a `| null` in the schema would describe a document
+        this plugin can no longer produce, and a consumer written against
+        it would carry a branch that never runs.
+        """
+        content_body = self._interface_body("ReviewContent")
+        if field == "recommendations":
+            match = re.search(
+                r"^ {4}recommendations:\s*\{.*?\n {4}\};",
+                content_body,
+                re.DOTALL | re.MULTILINE,
+            )
+            assert match is not None, "recommendations must be declared"
+            declaration = match.group(0)
+        else:
+            declaration = next(
+                line for line in content_body.splitlines()
+                if line.strip().startswith(f"{field}:")
+            )
+        assert "| null" not in declaration
+
+        document = ReviewOutputBuilder(pr_id="1", reviewer="sec").to_dict()
+        assert document[field] is not None
+
 
 # =============================================================================
 # TestAssessment

@@ -76,7 +76,7 @@ Not all work requires the same level of reasoning. Agents are assigned to model 
 - **sonnet** (22 agents) — Structured analysis against well-defined checklists. The review-reconciliator performs judgment-heavy synthesis — conflict resolution, deduplication, and 10:1 compression across all agent outputs. Architecture reviewers apply SOLID principles and WordPress ecosystem patterns. Security tracing follows a source-to-sink framework. Performance detection matches known antipatterns (N+1, unbounded queries). The reliability reviewer checks error handling, rollback safety, and observability against concrete checklists. The API contract reviewer detects backwards-incompatible changes against public interfaces. The data flow/privacy reviewer traces PII through code paths. The concurrency reviewer identifies race conditions and missing transactions. The code-clarity reviewer catches naming-behavior mismatches and stale inline documentation with behavioral proof. The docs-drift reviewer detects when code changes cause external documentation (README, CLAUDE.md, guides) to become stale. The toolchain reviewer verifies package manager configs, build tool settings, and CI pipelines against actual tool versions via changelog research. Test reviewers check against catalogued smells. The patterns and history-insights reviewers search for codebase precedents. The mutation reviewer follows a rigid 5-phase protocol. The dead-code reviewer traces dependency graphs. All of these benefit from competence but don't need the deep ambiguity-resolution that the most capable models provide.
 - **haiku** (6 agents) — Orchestration or highly mechanical work. The gemini-reviewer and codex-reviewer just build prompts, shell out to external CLIs, and parse responses. The technical-writer fills token-constrained templates. The go-tests-reviewer, rust-tests-reviewer, and python-tests-reviewer match against highly standardized testing idioms — nearly every finding maps to a known pattern.
 
-### 21 Skills
+### 22 Skills
 
 | Skill | What it brings |
 |-------|---------------|
@@ -100,6 +100,7 @@ Not all work requires the same level of reasoning. Agents are assigned to model 
 | **using-figma** | Figma-to-code workflow — survey, specification, component tree, implementation, validation |
 | **figma-copy-sync** | Synchronize text copy between Figma designs and implemented code |
 | **analyzing-cc-sessions** | Parse CC session JSONL transcripts, analyze subagent behavior, extract metrics |
+| **analyzing-codex-sessions** | Parse Codex CLI rollout JSONL logs, investigate Codex subagent behavior, extract thread metrics |
 | **create-github-pr** | Structured PR creation workflow with pre-flight checks, context gathering, and approval gate |
 
 ### 7 Commands
@@ -192,7 +193,7 @@ pirategoat-tools/
 ├── agents/           # 34 agent definitions (28 reviewers, 2 pipeline, 2 cross-validators, 2 utility)
 ├── codex-skills/     # 7 generated Codex command adapters
 ├── commands/         # 7 slash commands
-├── skills/           # 21 shared skills
+├── skills/           # 22 shared skills
 │   ├── testing-patterns/references/      # 190KB test quality library
 │   └── software-architecture/patterns/   # 87KB design pattern library
 ├── scripts/          # Helper scripts organized by domain

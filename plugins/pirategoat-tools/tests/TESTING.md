@@ -194,7 +194,7 @@ Deterministic pytest suite that validates structural properties of command files
 
 ### ReviewOutputBuilder Unit Tests (`review/agent/test_output.py`)
 
-Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/output.py`. Tests cover the schema-2 findings/checks/assessment domain, mutable whole-state drafts, the six canonical reviewed-file fields, verdict derivation, and the shared JSON-to-Markdown projection.
+Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/output.py`, and on `review_document.py`'s validators — the one leaf module it publishes through with no dedicated test file. `review_markdown.py`'s projection has its own suite below in `test_review_markdown.py`. Tests here cover the schema-2 findings/checks/assessment domain, mutable whole-state drafts, the six canonical reviewed-file fields, and verdict derivation.
 
 | Class | What it verifies |
 |---|---|
@@ -207,8 +207,6 @@ Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/
 | `TestRemovedToolMetadata` | Reviewer artifacts expose no tool-result metadata API or field |
 | `TestCalculateVerdict` | All 9 verdict boundaries (approve/comment/request_changes/block) |
 | `TestToDict` | Exact schema-2 top-level shape, summary, counters, reviewed-file placeholders before publication, and plugin-version resolution |
-| `TestRenderMarkdown` | Markdown is a pure function of the canonical JSON dict — same dict in, same Markdown out |
-| `TestMaterializeMarkdown` | The on-demand `materialize` CLI/function reads finalized canonical JSON and writes its derived Markdown |
 | `TestSaveDraft` | `save_draft()` atomically replaces the complete mutable draft, emits exact totals/change receipt/finalization command, and never publishes final JSON or Markdown |
 | `TestFileScopedFindings` | `line=None` records a first-class file-scoped finding (`scope: "file"`) that still counts toward the verdict |
 | `TestLineRequired` | Invalid line values still raise for point defects — the file-scoped path never becomes a way to skip validation |
@@ -222,12 +220,21 @@ Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/
 | `TestMetaIsNeverFakeZero` | An unmeasured count stays unmeasured: no reviewed-file count without an authoritative assignment, no duration without a readable dispatch marker |
 | `TestTypeScriptContractLockstep` | `schemas/review-output.ts` and the Python validators describe one field set — a field added on either side without the other fails here |
 | `TestAssessment` | The reconciliator-owned nullable assessment serializes and renders, while raw reviewer use is blocked by protocol and bootstrap contracts |
+| `TestReviewerFilePartition` | The six-field reviewed-files envelope validates itself: a coherent claimed/unclaimed partition of the assignment's claimable files passes, and every incoherent variant (unknown claim, wrong unclaimed set, mismatched count, duplicate claim) is rejected |
+
+### Review Markdown Tests (`review/test_review_markdown.py`)
+
+Direct unit tests on `scripts/review/review_markdown.py` — the one JSON-to-Markdown projection shared by `<reviewer>-review.md` and `review-findings.md`. Split out of `review/agent/test_output.py` when the renderers left `agent/output.py`; the builder appears here only as a document factory. What is under test is the rendering: the sections a document produces, the `render`/`materialize` CLI, and the materializer that writes derived Markdown beside the JSON it came from.
+
+| Class | What it verifies |
+|---|---|
+| `TestRenderMarkdown` | Markdown is a pure function of the canonical JSON dict — same dict in, same Markdown out |
+| `TestMaterializeMarkdown` | The on-demand `materialize` CLI/function reads finalized canonical JSON and writes its derived Markdown |
 | `TestReconciliationSectionsRender` | Every section the reconciliator's old hand-written narrative template carried (recommendations, observations, host context banner, `meta.reconciliation`) now has a rendered home |
 | `TestMaterializeFindingsMarkdown` | One materializer, parameterized — `review-findings.md` and `<reviewer>-review.md` share the same render path, never a second one |
 | `TestAssessmentProvenance` | `## Assessment` is prose about a ledger that keeps changing after critic adjustments — provenance is pinned so a stale claim can't outlive the finding it described |
 | `TestRemovedByCriticSection` | The ledger deliberately keeps what the critic took out, rendered as an audit section rather than silently vanishing |
 | `TestRendererFaithfulness` | Minors that all share one failure mode: the renderer showing content that contradicts what the JSON actually says (e.g. a header claiming a section exists over content that was dropped) |
-| `TestReviewerFilePartition` | The six-field reviewed-files envelope validates itself: a coherent claimed/unclaimed partition of the assignment's claimable files passes, and every incoherent variant (unknown claim, wrong unclaimed set, mismatched count, duplicate claim) is rejected |
 
 ### Reviewer Lifecycle Tests (`review/test_reviewer_lifecycle.py`)
 
@@ -265,7 +272,7 @@ Direct unit tests on `scripts/review/reconciliation_context.py` — finalized-re
 
 ### Run-Level File Review Tests (`review/test_file_review.py`)
 
-Direct unit tests on `manifest_sections.aggregate_file_review()` — the run-level file review pipeline step 9 publishes into `state["file_review"]` for the review record. It reads the scope-summary sidecars and the finalized review documents, never the reconciliation context, and lives beside the coverage manifest that reads the same artifacts over a different population.
+Direct unit tests on `manifest_sections.aggregate_file_review()` — the run-level file review pipeline step 9 publishes into `state["file_review"]` for the review record. It reads the scope-summary sidecars and the finalized review documents, never the reconciliation context, and lives beside the assignment manifest that reads the same artifacts over a different population.
 
 | Class | What it verifies |
 |---|---|

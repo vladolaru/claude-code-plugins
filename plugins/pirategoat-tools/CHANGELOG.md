@@ -64,7 +64,7 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 - **Reviewer Markdown materializes as each JSON settles**, so a reconciliation failure cannot hide finished output; reviewed-file claims are validated at publication against the required assignment.
 - **Detection benchmark hardened** — per-entry status is stamped by the producing code path, and reviewer-path matching canonicalizes against the eval root.
 - **Doc-drift guards** pin the AGENTS.md registry reference and README model tiers to `agent_registry.json` in both directions.
-- **`schemas/review-output.ts` reconciled** — critic-adjustment provenance added, interfaces the pipeline never produced dropped, and `ReviewDocument`/`FindingsLedger` split since only the ledger carries reconciliation. The adjudicated-decision field is renamed from `spot_check` to `outcome`.
+- **`schemas/review-output.ts` reconciled** — critic-adjustment provenance added, interfaces the pipeline never produced dropped, and `ReviewDocument`/`FindingsLedger` split since only the ledger carries reconciliation. The adjudicated-decision field is renamed from `spot_check` to `outcome`, and the three always-serialized lists are declared non-null to match what the builder emits.
 - **Step handoffs pin a no-truncation rule** — every next-step and blocks-progress footer now tells the orchestrator to run the printed command unfiltered, since piping it through `head`/`tail`/`grep` was eating load-bearing briefing lines.
 - **`wp-architecture-reviewer` requires an actual PHP file** — keyword matches like "hook" or "filter" in commit messages no longer dispatch it into a pure-TS/JS diff.
 
