@@ -1332,6 +1332,9 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
         "--git-range", git_range,
         "--changed-files", context.get("git", {}).get("changed_files_csv", ""),
     ]
+    banner = (context.get("host_context") or {}).get("banner")
+    if banner:
+        recon_ctx_cmd.extend(["--host-banner-json", json.dumps(banner)])
     cp = state.get("change_purpose", "")
     if cp:
         recon_ctx_cmd.extend(["--change-purpose", cp])

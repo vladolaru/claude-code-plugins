@@ -43,7 +43,6 @@ except ImportError:
 
 from git_paths import normalize_repo_paths
 
-SCRIPTS_DIR = Path(__file__).resolve().parent
 RECONCILIATION_CONTEXT_SCHEMA = 3
 
 # Files in the output directory that are NOT agent review outputs.
@@ -61,29 +60,10 @@ _NON_REVIEW_FILES = frozenset([
     "reconciliation-context.json",
 ])
 
-_NUMERIC_SEVERITY_FLOOR_PATTERN = "|".join(
-    re.escape(value) for value in sorted(VALID_SEVERITIES)
-)
-_LEGACY_SEVERITY_FLOORS = {
-    "public-contract change": "medium",
-    "silent false-success": "high",
-}
-_LEGACY_SEVERITY_FLOOR_PATTERN = "|".join(
-    re.escape(marker) for marker in _LEGACY_SEVERITY_FLOORS
-)
-_NUMERIC_SEVERITY_FLOOR_RE = re.compile(
-    rf"(?im)^[ \t]*Severity-floor:[ \t]*"
-    rf"({_NUMERIC_SEVERITY_FLOOR_PATTERN})(?=[ \t]*(?:[;—-]|$))"
-)
-_LEGACY_SEVERITY_FLOOR_RE = re.compile(
-    rf"(?im)^[ \t]*Severity-floor:[ \t]*"
-    rf"({_LEGACY_SEVERITY_FLOOR_PATTERN})(?=[ \t]*(?:;|$))"
-)
-_CRITIC_SEVERITY_FLOOR_MARKER_RE = re.compile(
-    rf"(?im)Severity-floor:[ \t]*"
-    rf"(?:{_NUMERIC_SEVERITY_FLOOR_PATTERN}|"
-    rf"{_LEGACY_SEVERITY_FLOOR_PATTERN})"
-    rf"(?!\w)[ \t]*(?:(?:[;—-])[ \t]*)?"
+_SEVERITY_FLOOR_MARKER_RE = re.compile(
+    r"(?im)Severity-floor:[ \t]*"
+    r"(?:" + "|".join(re.escape(v) for v in sorted(VALID_SEVERITIES))
+    + r")(?!\w)[ \t]*(?:(?:[;—-])[ \t]*)?"
 )
 
 
@@ -98,76 +78,20 @@ def resolve_structured_severity_floor(finding: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def resolve_severity_floor(finding: Dict[str, Any]) -> Optional[str]:
-    """Resolve a structured or backward-compatible description floor."""
-    structured = resolve_structured_severity_floor(finding)
-    if structured is not None:
-        return structured
-
-    # Coerce first: a malformed (list/non-string) description must not silently
-    # drop a mandatory floor. load_agent_reviews pops severity_floor when this
-    # returns None, so returning None for a list that carries a legacy marker
-    # would downgrade the finding. _coerce_text joins list items on newlines,
-    # keeping the MULTILINE ^Severity-floor: anchor matchable.
-    description = _coerce_text(finding.get("description", ""))
-    numeric = _NUMERIC_SEVERITY_FLOOR_RE.search(description)
-    if numeric:
-        return numeric.group(1).lower()
-    legacy = _LEGACY_SEVERITY_FLOOR_RE.search(description)
-    if legacy:
-        return _LEGACY_SEVERITY_FLOORS[legacy.group(1).lower()]
-    return None
-
-
 def strip_severity_floor_markers(text: Any) -> str:
     """Remove prose floor markers before content reaches the critic.
 
-    A ``Severity-floor:`` marker is a reviewer-to-reconciliator directive.
-    The reconciliator has already acted on it by the time anything
-    downstream renders the finding, and prose that still carries it reads
-    to the decision critic as a standing instruction not to demote — which
-    is exactly the judgment the critic exists to make independently. The
-    STRUCTURED floor still renders (``resolve_structured_severity_floor``);
-    only the prose restatement goes.
+    A ``Severity-floor:`` marker is a reviewer-to-reconciliator directive
+    the reconciliator has already acted on. Prose that still carries it
+    reads to the decision critic as a standing instruction not to demote —
+    exactly the judgment the critic exists to make independently. The
+    STRUCTURED floor still renders; only the prose restatement goes.
 
     Public because its caller lives elsewhere:
-    ``orchestration.assemble_review_record()``, which renders the record
-    the critic reads. It stays here, beside the patterns it is compiled
-    from, rather than being copied to that caller.
-
-    Accepts any type and coerces first: this is a regex chokepoint that
-    free-form (model-authored) finding text flows through, so a non-string
-    value must not raise here.
+    ``orchestration.assemble_review_record()``. Accepts any type and
+    coerces first — free-form model-authored text flows through here.
     """
-    return _CRITIC_SEVERITY_FLOOR_MARKER_RE.sub("", _coerce_text(text))
-
-
-def extract_host_banner(output_dir: str) -> Optional[Dict[str, Any]]:
-    """Return host_context.banner from review-context.json, or None.
-
-    Safe on missing file, malformed JSON, and missing host_context key.
-
-    Args:
-        output_dir: Directory containing pipeline output files, including
-            ``review-context.json``.
-
-    Returns:
-        The ``host_context.banner`` dict if present, or ``None``.
-    """
-    if not output_dir:
-        return None
-    ctx_path = os.path.join(output_dir, "review-context.json")
-    if not os.path.isfile(ctx_path):
-        return None
-    try:
-        with open(ctx_path) as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return None
-    host_context = data.get("host_context") or {}
-    if not isinstance(host_context, dict):
-        return None
-    return host_context.get("banner")
+    return _SEVERITY_FLOOR_MARKER_RE.sub("", _coerce_text(text))
 
 
 def _review_stem(agent: str) -> str:
@@ -524,7 +448,7 @@ def load_agent_reviews(
                 for finding in review_findings:
                     if not isinstance(finding, dict):
                         continue
-                    floor = resolve_severity_floor(finding)
+                    floor = resolve_structured_severity_floor(finding)
                     if floor is None:
                         finding.pop("severity_floor", None)
                     else:
@@ -1031,14 +955,6 @@ def filter_in_scope_references(
     return filtered
 
 
-def resolve_output_builder_path() -> str:
-    """Return the path to the ReviewOutputBuilder script.
-
-    The script knows its own location relative to the output builder.
-    """
-    return str(SCRIPTS_DIR / "agent" / "output.py")
-
-
 def _coerce_text(value: Any) -> str:
     """Coerce an agent-supplied finding field to a string for rendering.
 
@@ -1085,6 +1001,13 @@ def main() -> int:
         help="Pull request ID.",
     )
     parser.add_argument(
+        "--host-banner-json", default="",
+        help=(
+            "The degraded-host banner as JSON, from the caller's own "
+            "review-context.json. Empty means no banner applies."
+        ),
+    )
+    parser.add_argument(
         "--dispatched-agents", default=None,
         help="Comma-separated agent names from the dispatch plan. "
              "When provided, only review files for these agents are loaded. "
@@ -1098,6 +1021,14 @@ def main() -> int:
     changed_files = [f.strip() for f in args.changed_files.split(",") if f.strip()]
     change_purpose = args.change_purpose
     pr_id = args.pr_id
+    # The orchestrator holds review-context.json in memory when it calls
+    # this script, so it passes the banner rather than making this script
+    # a second reader of a file it does not own. A malformed value is the
+    # caller's bug, and the traceback names it.
+    host_banner = (
+        json.loads(args.host_banner_json)
+        if args.host_banner_json.strip() else None
+    )
     dispatched_agents: Optional[List[str]] = None
     if args.dispatched_agents is not None:
         stripped = args.dispatched_agents.strip()
@@ -1137,9 +1068,6 @@ def main() -> int:
             old_side_files=files_with_deletions,
         )
 
-        # 5. Resolve output builder path
-        output_builder_path = resolve_output_builder_path()
-
         # 6. Adjudicate the two structurally-certain out-of-scope statuses
         #    HERE, so the reconciliator obeys a computed flag instead of
         #    re-deriving scope. Findings are annotated, never removed:
@@ -1161,13 +1089,12 @@ def main() -> int:
             "source_snippets": source_snippets,
             "scope_annotations": scope_annotations,
             "changed_files": changed_files,
-            "git_range": git_range,
             "change_purpose": change_purpose,
             "pr_id": pr_id,
-            "output_dir": output_dir,
-            "output_builder_path": output_builder_path,
-            # Host context banner — surfaced for reviewer agents to calibrate findings.
-            "host_context_banner": extract_host_banner(output_dir),
+            # The degraded-host banner the caller resolved. Reviewers'
+            # claims were scoped by its presence, and findings_save.py
+            # stamps it onto the ledger.
+            "host_context_banner": host_banner,
             # Dispatched but silent — measured here, not left as arithmetic
             # for the reconciliator. `None` when dispatch is unknown, which
             # is a different fact from a measured empty list.

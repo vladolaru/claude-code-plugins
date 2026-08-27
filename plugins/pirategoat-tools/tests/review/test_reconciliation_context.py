@@ -411,85 +411,75 @@ class TestLoadAgentReviews:
 
 
 class TestSeverityFloorNormalization:
-    def test_structured_floor_wins_over_legacy_marker(self, mod):
-        finding = _make_finding(
-            severity_floor="medium",
-            description="Severity-floor: silent false-success",
-        )
+    """The floor is a structured field; prose is not a second channel."""
 
-        assert mod.resolve_severity_floor(finding) == "medium"
+    def test_the_structured_field_is_the_floor(self, mod):
+        finding = _make_finding(severity_floor="medium")
 
-    @pytest.mark.parametrize(
-        ("description", "expected"),
-        [
-            pytest.param(
-                "Severity-floor: high — verified false-success",
-                "high",
-                id="numeric-marker",
-            ),
-            pytest.param(
-                "Severity-floor: public-contract change; consumers exist",
-                "medium",
-                id="legacy-public-contract",
-            ),
-            pytest.param(
-                "Severity-floor: silent false-success; blast radius is irrelevant",
-                "high",
-                id="legacy-false-success",
-            ),
-        ],
-    )
-    def test_resolves_numeric_and_current_legacy_markers(
-        self, mod, description, expected
-    ):
-        assert mod.resolve_severity_floor(
+        assert mod.resolve_structured_severity_floor(finding) == "medium"
+
+    @pytest.mark.parametrize("description", [
+        pytest.param(
+            "Severity-floor: high — verified false-success", id="numeric",
+        ),
+        pytest.param(
+            "Severity-floor: public-contract change; consumers exist",
+            id="retired-phrase",
+        ),
+        pytest.param(
+            "Severity-floor: silent false-success; blast radius is irrelevant",
+            id="retired-phrase-2",
+        ),
+        pytest.param("Severity-floor: future policy", id="unknown-phrase"),
+    ])
+    def test_prose_never_promotes_a_finding(self, mod, description):
+        """A description is reviewer narrative, not a machine directive.
+
+        The prose parser existed for a transition that is over: every
+        reviewer writes `severity_floor` structurally now, and a parser
+        that promotes findings off free text is a parser a model can
+        trigger by describing what it did not intend to assert.
+        """
+        assert mod.resolve_structured_severity_floor(
             _make_finding(description=description)
-        ) == expected
-
-    def test_category_alone_does_not_create_floor(self, mod):
-        assert mod.resolve_severity_floor(
-            _make_finding(category="scheduled-action")
         ) is None
 
-    def test_unknown_legacy_marker_does_not_guess_floor(self, mod):
-        assert mod.resolve_severity_floor(
-            _make_finding(description="Severity-floor: future policy")
-        ) is None
-
-    def test_legacy_marker_requires_a_marker_separator(self, mod):
-        assert mod.resolve_severity_floor(
-            _make_finding(
-                description="Severity-floor: silent false-success was rejected"
-            )
-        ) is None
-
-    def test_loading_findings_materializes_legacy_floor(self, mod, tmp_path):
+    def test_loading_findings_drops_a_prose_only_floor(self, mod, tmp_path):
         review = _make_review_json(
             reviewer="woo-regression",
-            findings=[
-                _make_finding(
-                    description=(
-                        "Severity-floor: public-contract change; consumers exist"
-                    ),
-                )
-            ]
+            findings=[_make_finding(
+                description=(
+                    "Severity-floor: public-contract change; consumers exist"
+                ),
+            )],
         )
-        (tmp_path / "woo-regression-review.json").write_text(json.dumps(review))
+        (tmp_path / "woo-regression-review.json").write_text(
+            json.dumps(review)
+        )
 
         loaded = mod.load_agent_reviews(str(tmp_path))
 
-        finding = loaded["woo-regression-review"]["findings"][0]
-        assert finding["severity_floor"] == "medium"
-
-    def test_resolves_floor_from_list_description(self, mod):
-        # A malformed (list-valued) description must not silently drop a
-        # mandatory floor marker: load_agent_reviews pops severity_floor when
-        # resolve_severity_floor returns None, so returning None here would
-        # downgrade the finding.
-        finding = _make_finding(
-            description=["Finding body.", "Severity-floor: high — verified"]
+        assert "severity_floor" not in (
+            loaded["woo-regression-review"]["findings"][0]
         )
-        assert mod.resolve_severity_floor(finding) == "high"
+
+    @pytest.mark.parametrize("text", [
+        "Severity-floor: high — the caller is unguarded",
+        ["Body.", "Severity-floor: critical; see above"],
+        None,
+    ])
+    def test_the_marker_is_stripped_before_the_critic_reads_it(
+        self, mod, text
+    ):
+        """The strip survives the parser's deletion, coercion included.
+
+        `strip_severity_floor_markers` is the one export
+        `orchestration.assemble_review_record()` uses, and it still has
+        to accept model-authored non-strings without raising.
+        """
+        stripped = mod.strip_severity_floor_markers(text)
+
+        assert "Severity-floor" not in stripped
 
 
 # ===========================================================================
@@ -1357,25 +1347,6 @@ class TestFindFileHunks:
 
 
 # ===========================================================================
-# TestResolveOutputBuilderPath
-# ===========================================================================
-
-class TestResolveOutputBuilderPath:
-    """Tests for resolve_output_builder_path()."""
-
-    def test_resolves_to_existing_file(self, mod):
-        """Should resolve to a path ending in output.py that exists."""
-        path = mod.resolve_output_builder_path()
-        assert path.endswith("output.py")
-        assert os.path.isfile(path)
-
-    def test_points_to_agent_output(self, mod):
-        """Should point to scripts/review/agent/output.py."""
-        path = mod.resolve_output_builder_path()
-        assert "scripts/review/agent/output.py" in path.replace("\\", "/")
-
-
-# ===========================================================================
 # TestFullScript — subprocess integration tests
 # ===========================================================================
 
@@ -1388,8 +1359,15 @@ class TestFullScript:
         return subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
 
     def test_produces_valid_output_json(self, tmp_path):
-        """Full run produces reconciliation-context.json with all fields."""
-        # Create a review file
+        """The context is exactly what the reconciliator reads.
+
+        Every key here has a reader in `agents/review-reconciliator.md`
+        or `scripts/review/findings_save.py`. `git_range`, `output_dir`,
+        and `output_builder_path` had none: the agent is handed the
+        directory and the builder path by the step-8 briefing, and it
+        never mentions the range at all. A key nobody reads is a key that
+        can go stale without anything noticing.
+        """
         review = _make_review_json(
             reviewer="security",
             findings=[_make_finding(file="src/auth.py", line=10)],
@@ -1402,45 +1380,65 @@ class TestFullScript:
             "--changed-files", "src/auth.py,src/db.py",
             "--change-purpose", "Fix auth bug",
             "--pr-id", "42",
+            "--host-banner-json", json.dumps(
+                {"degraded": True, "message": "no upstream source"}
+            ),
             cwd=tmp_path,
         )
 
         assert result.returncode == 0, f"stderr: {result.stderr}"
+        assert json.loads(result.stdout.strip())["status"] == "ok"
 
-        # Verify stdout has status JSON
-        stdout_json = json.loads(result.stdout.strip())
-        assert stdout_json["status"] == "ok"
-
-        # Verify output file exists and has all expected fields
-        ctx_path = tmp_path / "reconciliation-context.json"
-        assert ctx_path.is_file()
-
-        ctx = json.loads(ctx_path.read_text())
-        expected_keys = {
+        ctx = json.loads(
+            (tmp_path / "reconciliation-context.json").read_text()
+        )
+        assert set(ctx) == {
             "schema",
             "reviews_by_agent",
             "source_snippets",
             "scope_annotations",
             "changed_files",
-            "git_range",
             "change_purpose",
             "pr_id",
-            "output_dir",
-            "output_builder_path",
             "host_context_banner",
             "missing_agents",
             "prefiltered_out_of_scope",
         }
-        assert set(ctx.keys()) == expected_keys
         assert ctx["schema"] == 3
-
-        # Verify specific values
         assert "security-review" in ctx["reviews_by_agent"]
         assert ctx["changed_files"] == ["src/auth.py", "src/db.py"]
-        assert ctx["git_range"] == "abc123..HEAD"
         assert ctx["change_purpose"] == "Fix auth bug"
         assert ctx["pr_id"] == "42"
-        assert ctx["output_builder_path"].endswith("output.py")
+        assert ctx["host_context_banner"] == {
+            "degraded": True, "message": "no upstream source",
+        }
+
+    def test_the_banner_comes_from_the_caller_not_a_second_file_read(
+        self, tmp_path
+    ):
+        """The orchestrator already holds the banner it passes.
+
+        `review-context.json` is the orchestrator's own artifact and it
+        is in memory at step 8. Re-reading it here gave the pipeline two
+        readers of one field, and the second one silently reported `null`
+        for any run whose context file was written elsewhere.
+        """
+        (tmp_path / "review-context.json").write_text(json.dumps(
+            {"host_context": {"banner": {"degraded": True, "message": "x"}}}
+        ))
+
+        result = self._run(
+            "--output-dir", str(tmp_path),
+            "--git-range", "abc..HEAD",
+            cwd=tmp_path,
+        )
+
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        ctx = json.loads(
+            (tmp_path / "reconciliation-context.json").read_text()
+        )
+        assert ctx["host_context_banner"] is None
+
 
     def test_empty_output_dir(self, tmp_path):
         """Runs successfully with no review files."""
