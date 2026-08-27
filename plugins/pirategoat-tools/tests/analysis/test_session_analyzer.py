@@ -553,10 +553,10 @@ class TestArtifactBackedReviews:
         assert agent_record["findings_by_severity"] == {"high": 1, "medium": 1}
 
     @pytest.mark.parametrize(
-        "artifact_content",
+        "artifact_content,reviewer",
         [
-            pytest.param(None, id="absent"),
-            pytest.param("{ not json", id="malformed"),
+            pytest.param(None, "security", id="absent"),
+            pytest.param("{ not json", "security", id="malformed"),
             pytest.param(
                 json.dumps({
                     "schema": 1,
@@ -565,22 +565,38 @@ class TestArtifactBackedReviews:
                     "issues": [],
                     "verdict": "approve",
                 }),
+                "security",
                 id="retired-schema",
+            ),
+            # No artifact is ever looked up for these — review_paths()
+            # raises on the identity itself before any file is opened, the
+            # same ValueError branch _review_from_artifact catches.
+            pytest.param(None, "", id="empty-reviewer-identity"),
+            pytest.param(
+                None, "../escape", id="path-traversal-reviewer-identity"
             ),
         ],
     )
     def test_unreadable_artifact_is_unmeasured_not_zero(
-        self, tmp_path, artifact_content
+        self, tmp_path, artifact_content, reviewer
     ):
         """An artifact that does not validate is a missing record, never an
         empty findings list — a reviewer whose output was never observed and
-        a reviewer who genuinely found nothing are different facts."""
+        a reviewer who genuinely found nothing are different facts. An
+        unsafe reviewer identity (review_paths' own ValueError) is
+        unmeasured the same way as a missing or malformed artifact."""
         if artifact_content is not None:
-            Path(tmp_path, "security-review.json").write_text(artifact_content)
+            Path(tmp_path, f"{reviewer}-review.json").write_text(
+                artifact_content
+            )
         log = tmp_path / "agent.jsonl"
         log.write_text(
             json.dumps(
-                _bash_entry(_builder_heredoc(output_dir=str(tmp_path)))
+                _bash_entry(
+                    _builder_heredoc(
+                        reviewer=reviewer, output_dir=str(tmp_path)
+                    )
+                )
             )
             + "\n"
         )
@@ -666,23 +682,6 @@ def _bash_entry(command, tool_id="bash-1"):
     }
 
 
-def _tool_result_entry(tool_id, is_error=False):
-    return {
-        "type": "user",
-        "message": {
-            "role": "user",
-            "content": [
-                {
-                    "type": "tool_result",
-                    "tool_use_id": tool_id,
-                    "content": "DRAFT TOTALS: ..." if not is_error else "Traceback",
-                    "is_error": is_error,
-                }
-            ],
-        },
-    }
-
-
 class TestTextReportFindingCounts:
     """A save that parses as a review payload carries its exact finding list.
     The keyword heuristic estimates JSON findings by counting '"id"', which
@@ -732,3 +731,62 @@ def _write_tool_entry(path, content, tool_id="write-1"):
             ],
         },
     }
+
+
+class TestWriteRecordDeduplication:
+    """Write records reduce like the artifact reduction they sit beside:
+    same normalized path collapses to the last write, and a non-string path
+    carries no dedup identity — it must never raise, just stay unreduced."""
+
+    @pytest.mark.parametrize(
+        "malformed_path",
+        [
+            pytest.param(7, id="hashable-non-string"),
+            # An unhashable path (a list, from a malformed transcript) must
+            # never reach a dict membership check unguarded — that raises
+            # TypeError and crashes the whole run.
+            pytest.param(["nested", "path"], id="unhashable-non-string"),
+        ],
+    )
+    def test_non_string_path_is_kept_without_dedup_identity(
+        self, tmp_path, malformed_path
+    ):
+        log = tmp_path / "agent.jsonl"
+        entries = [
+            _write_tool_entry(
+                malformed_path, "first malformed path", tool_id="write-1"
+            ),
+            _write_tool_entry(
+                malformed_path, "second malformed path", tool_id="write-2"
+            ),
+        ]
+        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+        data = _mod.parse_subagent_log(str(log))
+
+        assert data["write_outputs"] == [
+            {"path": malformed_path, "content": "first malformed path"},
+            {"path": malformed_path, "content": "second malformed path"},
+        ]
+
+    def test_canonicalizes_path_before_last_save_wins(self, tmp_path):
+        log = tmp_path / "agent.jsonl"
+        entries = [
+            _write_tool_entry(
+                "/out/security-review.json",
+                json.dumps({"reviewer": "security", "findings": []}),
+                tool_id="write-1",
+            ),
+            _write_tool_entry(
+                "/out/./security-review.json",
+                json.dumps({"reviewer": "security", "findings": [], "v": 2}),
+                tool_id="write-2",
+            ),
+        ]
+        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+        data = _mod.parse_subagent_log(str(log))
+
+        [record] = data["write_outputs"]
+        assert record["path"] == "/out/./security-review.json"
+        assert json.loads(record["content"])["v"] == 2

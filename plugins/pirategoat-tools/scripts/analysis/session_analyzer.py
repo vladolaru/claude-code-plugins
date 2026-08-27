@@ -178,6 +178,28 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
         if role == "assistant" and isinstance(content, str):
             result["final_texts"].append(content)
 
+    # Same-artifact Writes overwrite each other regardless of transcript
+    # order — a corrected rewrite must count once, as its final content, not
+    # as an extra dispatch with duplicated findings. Pathless or non-string
+    # paths carry no artifact identity and are kept as-is, undeduped.
+    def _path_key(raw: object) -> str | None:
+        if not isinstance(raw, str) or not raw:
+            return None
+        return posixpath.normpath(raw)
+
+    deduped_write_saves: list[dict[str, Any]] = []
+    write_index_by_path: dict[str, int] = {}
+    for record in write_saves:
+        key = _path_key(record["path"])
+        if key is None:
+            deduped_write_saves.append(record)
+            continue
+        if key in write_index_by_path:
+            deduped_write_saves[write_index_by_path[key]] = record
+        else:
+            write_index_by_path[key] = len(deduped_write_saves)
+            deduped_write_saves.append(record)
+
     # One artifact, one record, whatever the transport: repeated saves in one
     # transcript all name the same file, and a legacy Write of that path is
     # superseded by what the file actually holds.
@@ -187,7 +209,11 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
         if record is not None:
             artifact_saves.setdefault(record["path"], record)
     result["write_outputs"] = [
-        record for record in write_saves if record["path"] not in artifact_saves
+        record for record in deduped_write_saves
+        if not (
+            isinstance(record["path"], str)
+            and record["path"] in artifact_saves
+        )
     ] + list(artifact_saves.values())
 
     return result
@@ -392,9 +418,9 @@ def format_text_report(dispatches: list[tuple[dict, dict]], agent_name: str | No
                 content = wo["content"]
                 # A save that parses as a review payload carries its exact
                 # findings list — count it directly. The keyword heuristic is
-                # only for prose saves; applied to JSON it miscounts (the
-                # builder-heredoc reconstruction has no "id" keys at all,
-                # so a real one-finding save would render as ~0 findings).
+                # only for prose saves: applied to a real review's JSON it
+                # miscounts, so a validated save is always counted exactly
+                # rather than estimated by counting '"id"' occurrences.
                 review_json = _parse_review_write_output(wo)
                 if review_json is not None:
                     count_display = f"{len(review_json['findings'])} findings"
