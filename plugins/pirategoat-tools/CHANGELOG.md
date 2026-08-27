@@ -43,7 +43,7 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 - **The decision critic publishes a proposal that is never rewritten**, and the orchestrator's adjudication is recorded by applying it to the ledger once.
 - **Agents are handed JSON** — the reconciliator reads `reconciliation-context.json` and the decision critic reads `review-record.md` beside `review-findings.json`. The two Markdown projections written for agent eyes only are gone, along with the per-run step that produced one of them.
 - **Missing agents and structurally out-of-scope findings stay machine-computed** — the reconciliation context carries `missing_agents` (`null` when dispatch was unknown) and marks each structurally out-of-scope finding with `prefiltered` beside a checkable count. The reconciliator obeys those measurements instead of re-deriving them.
-- **The reconciliator authors its four concern counts and the pipeline stamps the rest** (input counts, agent lists, host banner) at ledger save; the ledger no longer carries the reviewer assignment and reviewed files.
+- **The reconciliator authors its four concern counts and the pipeline stamps the rest** (input counts, agent lists, host banner) at ledger save; the ledger no longer carries the reviewer assignment and reviewed files. A reviewer's over-long or control-bearing skip reason is trimmed to fit the ledger's text bound instead of failing the save the reconciliator cannot fix.
 
 ### Fixed
 

@@ -33,6 +33,7 @@ import argparse
 import json
 import os
 import sys
+import unicodedata
 
 try:
     from . import critic_adjustments
@@ -70,6 +71,29 @@ CRITIC_OWNED_LEDGER_FIELDS = (
     "findings_removed_by_critic",
     "checks_removed_by_critic",
 )
+
+# The ledger caps this text (critic_adjustments._validate_bounded_text).
+# The reviewer authored it through mark_not_applicable(), which does not
+# bound it, and the PIPELINE copies it here — so the pipeline is what has
+# to make it fit. Truncating a reason is a smaller loss than dead-ending
+# a run on a rejection its only fixer cannot fix.
+_MAX_SKIP_REASON = critic_adjustments.MAX_LEDGER_TEXT_LENGTH
+_SKIP_REASON_ELLIPSIS = "…"
+_SKIP_REASON_UNPRINTABLE = "reason unavailable (unprintable)"
+
+
+def _bounded_skip_reason(text):
+    """Fit one reviewer's skip reason inside the ledger's text bound."""
+    cleaned = "".join(
+        character for character in text
+        if character in ("\n", "\t")
+        or unicodedata.category(character) not in ("Cc", "Cf")
+    ).strip()
+    if len(cleaned) > _MAX_SKIP_REASON:
+        cleaned = cleaned[
+            : _MAX_SKIP_REASON - len(_SKIP_REASON_ELLIPSIS)
+        ].rstrip() + _SKIP_REASON_ELLIPSIS
+    return cleaned or _SKIP_REASON_UNPRINTABLE
 
 
 def _read_findings_json(path, problems):
@@ -163,7 +187,10 @@ def stamp_pipeline_facts(document, context):
     for stem in sorted(reviews):
         review = reviews[stem]
         if review.get("verdict") == "not_applicable":
-            not_applicable.append({"name": stem, "skip_reason": review["skip_reason"]})
+            not_applicable.append({
+                "name": stem,
+                "skip_reason": _bounded_skip_reason(review["skip_reason"]),
+            })
         else:
             reviewing.append(stem)
     recon["input_finding_count"] = sum(len(r["findings"]) for r in reviews.values())

@@ -887,6 +887,59 @@ def test_save_rejects_a_context_written_at_another_schema(
     assert not (tmp_path / "review-findings.json").exists()
 
 
+@pytest.mark.parametrize("raw, expectation", [
+    pytest.param(
+        "x" * 5000,
+        lambda value: len(value) <= 4096 and value.endswith("…"),
+        id="over-long",
+    ),
+    pytest.param(
+        "not a\x07 WooCommerce\x00 codebase",
+        lambda value: value == "not a WooCommerce codebase",
+        id="control-characters",
+    ),
+    pytest.param(
+        "\x01\x02", lambda value: value.strip() != "", id="all-unprintable",
+    ),
+])
+def test_the_stamp_fits_a_skip_reason_inside_the_ledger_bound(
+    tmp_path, capsys, raw, expectation
+):
+    """The pipeline owns this field, so the pipeline makes it fit.
+
+    `mark_not_applicable()` does not bound `skip_reason`, and
+    `stamp_pipeline_facts` copies it into
+    `meta.reconciliation.not_applicable_agents[].skip_reason`, which the
+    ledger validator caps at 4096 characters with no control characters.
+    An over-long or control-bearing reason is the one REJECTED: line the
+    reconciliator cannot act on — it did not author the field and cannot
+    rewrite it, so the run dead-ends on a reviewer's prose.
+    """
+    _write_context(tmp_path, {
+        "security-review": {
+            "verdict": "not_applicable", "skip_reason": raw,
+            "findings": [], "checks": [],
+        },
+        # A reviewing agent beside it: the ledger's one grouped concern
+        # needs an input finding to have been grouped FROM, or the save
+        # rejects the count and the skip reason never gets its turn.
+        "code-review": {
+            "verdict": "comment",
+            "findings": [{"id": "f1"}, {"id": "f2"}],
+            "checks": [],
+        },
+    })
+    staged = tmp_path / "staged.json"
+    staged.write_text(json.dumps(_valid_findings()))
+
+    assert run_save(_args(tmp_path, staged)) == 0, capsys.readouterr().out
+
+    ledger = json.loads((tmp_path / "review-findings.json").read_text())
+    entry = ledger["meta"]["reconciliation"]["not_applicable_agents"][0]
+    assert entry["name"] == "security-review"
+    assert expectation(entry["skip_reason"])
+
+
 @pytest.mark.parametrize("entry", [
     "not-an-object",
     {"findings": []},
