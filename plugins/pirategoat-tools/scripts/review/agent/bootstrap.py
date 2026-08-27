@@ -1223,6 +1223,33 @@ def build_error_output(agent_name: str, error_msg: str, plugin_root: str = "UNKN
     )
 
 
+def build_scope_failure_output(
+    agent_name: str, scope_output: str, plugin_root: str = "UNKNOWN"
+) -> str:
+    """Re-report a failed scope discovery under the bootstrap header.
+
+    scope.py already named the real problem — NO_CHANGES, NO_RELEVANT_FILES,
+    an unusable range, not a git repository — and the ACTION that fits it: a
+    benign nothing-to-review no-op says APPROVE and exit, an infrastructure
+    failure says report to the caller. Both lines are carried through
+    verbatim. The symptom bootstrap meets downstream is a scope summary that
+    was never written, which names the wrong problem and would read a clean
+    no-op as broken infrastructure.
+    """
+    diagnosis = list(dict.fromkeys(
+        line for line in scope_output.splitlines()
+        if line.startswith(("ERROR:", "ACTION:"))
+    )) or ["ERROR: Scope discovery failed and reported no diagnosis."]
+    return (
+        f"=== BOOTSTRAP: {agent_name} ===\n"
+        f"PLUGIN_ROOT: {plugin_root}\n"
+        f"STATUS: ERROR\n"
+        f"\n"
+        + "\n".join(diagnosis)
+        + "\n"
+    )
+
+
 def resolve_reviewer_identity(args):
     """Resolve registry vs adapter-ref identity for this invocation.
 
@@ -1634,11 +1661,22 @@ def main():
     try:
         scope_facts = load_scope_facts(scope_summary_paths)
     except ValueError as exc:
-        print(build_error_output(
-            effective_agent_name,
-            f"Could not read the scope summary: {exc}",
-            plugin_root,
-        ))
+        # Two unrelated failures land here. Either scope discovery itself
+        # failed and never got as far as writing a summary — then it already
+        # printed the diagnosis and the ACTION that fits it, and a missing
+        # file is only the downstream symptom. Or scope succeeded and its
+        # summary is unreadable, which is the infrastructure failure this
+        # message names.
+        if scope_status == "ERROR":
+            print(build_scope_failure_output(
+                effective_agent_name, scope_output, plugin_root
+            ))
+        else:
+            print(build_error_output(
+                effective_agent_name,
+                f"Could not read the scope summary: {exc}",
+                plugin_root,
+            ))
         sys.exit(1)
     scope_lines_for_budget = scope_facts["in_scope_stat_lines"]
     inline_diff_files, review_claimable_files = partition_scope_paths(

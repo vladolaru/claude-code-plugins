@@ -453,6 +453,49 @@ class TestPartitionScopePaths:
         assert "scope summary" in output
         assert not list(tmp_path.glob("*-assignment.json"))
 
+    def test_scope_failure_reports_what_scope_said_not_the_missing_sidecar(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """A clean tree is a no-op, not broken infrastructure.
+
+        scope.py already answered the question — nothing changed, approve and
+        exit — and never got as far as writing a summary. Reporting the
+        missing file instead would hide that answer behind a symptom and
+        turn every benign no-op into an error the reviewer must escalate.
+        """
+        monkeypatch.setattr(_mod, "find_plugin_root", lambda: str(PLUGIN_ROOT))
+        monkeypatch.setattr(_mod, "read_file", lambda _path: "# rules")
+        monkeypatch.setattr(
+            _mod,
+            "run_scope_discovery",
+            lambda *_args, **_kwargs: (
+                2,
+                "=== REVIEW SCOPE ===\n"
+                "STATUS: ERROR\n"
+                "ERROR: NO_CHANGES: No changes to review — clean working "
+                "tree.\n"
+                "ACTION: APPROVE and exit — nothing to review.\n",
+            ),
+        )
+        monkeypatch.setattr(
+            sys, "argv",
+            [
+                "bootstrap.py", "--agent", "security-reviewer",
+                "--output-dir", str(tmp_path),
+            ],
+        )
+
+        with pytest.raises(SystemExit, match="1"):
+            _mod.main()
+
+        output = capsys.readouterr().out
+        assert "=== BOOTSTRAP: security-reviewer ===" in output
+        assert "ERROR: NO_CHANGES: No changes to review" in output
+        assert "ACTION: APPROVE and exit — nothing to review." in output
+        # The downstream symptom must not displace the real diagnosis.
+        assert "scope summary" not in output
+        assert not list(tmp_path.glob("*-assignment.json"))
+
 
 class TestExtractProtocolSections:
     """Skip-list extraction on synthetic markdown."""
