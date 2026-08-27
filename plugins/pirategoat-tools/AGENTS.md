@@ -748,5 +748,5 @@ These are normal — handle them, do not stop or apologize:
 | 1 | `.claude-plugin/marketplace.json` | Add entry to the plugin's `commands`, `skills`, or `agents` array |
 | 2 | `plugins/pirategoat-tools/README.md` | Update count in directory tree + add row to the relevant table |
 | 3 | Root `AGENTS.md` → Plugin Inventory → pirategoat-tools | Update summary count + add to the `commands/`/`skills/`/`agents/` contents row |
-| 4 | Root `README.md` | Update count in directory tree (e.g., "34 agents, 21 skills, 7 commands") |
+| 4 | Root `README.md` | Update count in directory tree (e.g., "34 agents, 22 skills, 7 commands") |
 | 5 | Generated Codex outputs | Run `python3 scripts/generate_codex_compat.py` and commit the result |

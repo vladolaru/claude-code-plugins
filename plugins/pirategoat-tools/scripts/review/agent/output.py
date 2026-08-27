@@ -903,7 +903,7 @@ class ReviewOutputBuilder:
         Every draft save uses this path, reading the assignment `_bind`
         already located — the bound directory is what makes the check
         independent of the environment envelope. A caller serializing
-        manually via to_dict/to_json knowingly opts out; publication is the
+        manually via to_dict knowingly opts out; publication is the
         enforcing seam.
         """
         assignment_path = self._paths.assignment
