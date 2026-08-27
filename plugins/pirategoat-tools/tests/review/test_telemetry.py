@@ -2733,6 +2733,39 @@ class TestSnapshot:
         assert f["final_finding_count"] == 3
         assert f["severities"]["high"] == 1
 
+    def test_severities_carry_every_severity_including_the_zeros(
+        self, mod, output_dir, tmp_path
+    ):
+        """A zero is a measurement, and every projection publishes all five.
+
+        The recounts these replaced built their dict from the findings
+        actually present, so a manifest could not tell "no critical
+        findings" from "critical was never counted". Both severity maps —
+        the per-agent one and the ledger's, which `outcome.summary`
+        republishes as `final_severities` — now carry the whole
+        vocabulary.
+        """
+        (output_dir / "security-review.json").write_text(json.dumps(
+            canonical_review_document("security", ["high"])
+        ))
+        (output_dir / "review-findings.json").write_text(json.dumps(
+            canonical_findings_ledger(["high"])
+        ))
+        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(tmp_path / "logs"))
+        t.start(pr_number="42")
+
+        t.finalize(step=15, phase="OUTPUT", title="Present Results")
+
+        expected = {
+            "critical": 0, "high": 1, "medium": 0, "low": 0, "info": 0,
+        }
+        snapshot = _read_events(t.log_path)[-1]["snapshot"]
+        assert snapshot["agent_results"]["security"]["severities"] == expected
+        assert snapshot["findings"]["severities"] == expected
+        assert _read_manifest(t)["outcome"]["summary"][
+            "final_severities"
+        ] == expected
+
     def test_findings_measurement_reaches_summary_and_manifest(
         self, mod, output_dir, tmp_path
     ):
