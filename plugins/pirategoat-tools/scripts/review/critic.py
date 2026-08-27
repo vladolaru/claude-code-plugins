@@ -372,7 +372,7 @@ def run_save(args):
     verdict = (args.verdict or "").strip().upper()
     if verdict not in critic_adjustments.CRITIC_VERDICTS:
         problems.append(
-            f"verdict must be one of "
+            "verdict must be one of "
             f"{sorted(critic_adjustments.CRITIC_VERDICTS)}, got "
             f"{args.verdict!r}"
         )

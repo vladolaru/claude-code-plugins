@@ -44,8 +44,9 @@ SEVERITY_RANK = {
 # reconciled `review-findings.json` may carry. REVIEW_VERDICTS adds the one
 # verdict no ladder produces: a reviewer with nothing in scope abstains,
 # and abstention is not a threshold outcome. PIPELINE_VERDICTS is the
-# uppercase layer `pipeline-result.json` publishes, pirategoat-bot maps
-# onto GitHub actions, and reviewers echo in their return signal.
+# uppercase layer a reviewer echoes in its return signal; `publish_verdict`
+# maps onto the three of them `pipeline-result.json` can carry, and BLOCK
+# is in the tuple for the return signal alone.
 LEDGER_VERDICTS = tuple(VERDICT_RANK)
 REVIEW_VERDICTS = LEDGER_VERDICTS + ("not_applicable",)
 PIPELINE_VERDICTS = ("APPROVE", "COMMENT", "REQUEST_CHANGES", "BLOCK")
