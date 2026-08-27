@@ -59,7 +59,6 @@ try:
         require_review_intake_open,
         review_paths,
     )
-    from ..reviewer_names import derive_reviewer_name
     from ..review_document import (
         REVIEW_OUTPUT_SCHEMA,
         VALID_CHANNELS,
@@ -75,7 +74,6 @@ except ImportError:
         require_review_intake_open,
         review_paths,
     )
-    from review.reviewer_names import derive_reviewer_name
     from review.review_document import (
         REVIEW_OUTPUT_SCHEMA,
         VALID_CHANNELS,
