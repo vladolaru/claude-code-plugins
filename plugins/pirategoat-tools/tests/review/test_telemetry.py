@@ -2750,8 +2750,18 @@ class TestSnapshot:
         assert extracted["verdict_without_advisory"] == "block"
 
     def test_excludes_review_findings_from_agent_results(self, mod, output_dir, tmp_path):
-        """review-findings.json is reconciled output, not an agent result."""
+        """review-findings.json is reconciled output, not an agent result.
+
+        Asserted on a run that HAS an agent result, so the projection is
+        populated and the boundary is a real one: the ledger belongs to
+        `findings` and the dispatched reviewer to `agent_results`, and
+        neither section may borrow from the other.
+        """
         log_dir = tmp_path / "logs"
+        _write_dispatch_plan(output_dir, ["security-reviewer"])
+        (output_dir / "security-review.json").write_text(json.dumps(
+            canonical_review_document("security", ["medium"])
+        ))
         (output_dir / "review-findings.json").write_text(json.dumps(
             canonical_findings_ledger(["medium"])
         ))
@@ -2760,8 +2770,8 @@ class TestSnapshot:
         t.finalize(step=15, phase="OUTPUT", title="Present Results")
         events = _read_events(t.log_path)
         snap = events[-1]["snapshot"]
-        assert "agent_results" not in snap
-        assert "findings" in snap
+        assert set(snap["agent_results"]) == {"security"}
+        assert snap["findings"]["final_finding_count"] == 1
 
     def test_extracts_findings(self, mod, output_dir, tmp_path):
         log_dir = tmp_path / "logs"
