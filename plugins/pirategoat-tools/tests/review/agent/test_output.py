@@ -38,6 +38,7 @@ from review.agent.output import (
     materialize_markdown,
     render_draft_index,
     render_markdown,
+    review_summary,
     validate_review_content,
     validate_review_document,
 )
@@ -1033,6 +1034,78 @@ class TestRenderMarkdown:
         data["unclaimed_review_files"] = unclaimed_review_files
 
         assert "**Not reviewed (budget):**" not in render_markdown(data)
+
+
+class TestReviewSummaryProjection:
+    """`review_summary` reads the document; it never recounts findings.
+
+    The three consumers that used to recount (agents_status, telemetry's
+    agent results, telemetry's ledger extract) each guessed a default for a
+    missing `severity`. A validated document has no missing severity — the
+    guess only ever produced a number that disagreed with the document's
+    own `summary`. So the projection reads.
+    """
+
+    def _document(self, severities, *, advisory=()):
+        builder = ReviewOutputBuilder("42", "code")
+        for index, severity in enumerate(severities, start=1):
+            builder.add_finding(
+                category="correctness",
+                severity=severity,
+                title=f"Finding {index}",
+                description="Body.",
+                recommendation="Fix it.",
+                file="src/a.py",
+                line=index,
+                confidence=0.9,
+                channel="advisory" if index in advisory else "blocking",
+            )
+        return builder.to_dict()
+
+    def test_projects_the_documents_own_summary(self):
+        document = self._document(["high", "medium", "medium"])
+
+        assert review_summary(document) == {
+            "verdict": document["verdict"],
+            "finding_count": 3,
+            "severities": {
+                "critical": 0, "high": 1, "medium": 2, "low": 0, "info": 0,
+            },
+            "suppressed_advisory_finding_count": 0,
+            "verdict_without_advisory": None,
+        }
+
+    def test_every_severity_is_reported_including_the_zeros(self):
+        """A zero is a measurement. The Counter recounts omitted them."""
+        summary = review_summary(self._document(["low"]))
+
+        assert set(summary["severities"]) == {
+            "critical", "high", "medium", "low", "info",
+        }
+        assert summary["severities"]["critical"] == 0
+
+    def test_advisory_suppression_is_carried_not_recomputed(self):
+        document = self._document(["high", "medium"], advisory=(1,))
+        summary = review_summary(document)
+
+        assert summary["suppressed_advisory_finding_count"] == 1
+        assert summary["verdict_without_advisory"] == (
+            document["summary"]["verdict_without_advisory"]
+        )
+        assert summary["verdict"] == document["verdict"]
+
+    def test_an_abstaining_review_projects_its_zeroed_summary(self):
+        builder = ReviewOutputBuilder("42", "code")
+        builder.mark_not_applicable(
+            "nothing in this reviewer's domain changed"
+        )
+
+        summary = review_summary(builder.to_dict())
+
+        assert summary["verdict"] == "not_applicable"
+        assert summary["finding_count"] == 0
+        assert summary["suppressed_advisory_finding_count"] == 0
+        assert summary["verdict_without_advisory"] is None
 
 
 # =============================================================================

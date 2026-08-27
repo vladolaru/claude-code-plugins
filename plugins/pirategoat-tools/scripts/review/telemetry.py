@@ -29,8 +29,8 @@ try:
     )
     from .agent.output import (
         _VALID_SEVERITIES,
-        _VERDICT_RANK,
         load_review_document,
+        review_summary,
     )
     from .atomic_io import atomic_write_json
     from .critic_adjustments import FINDINGS_READ_OK, read_findings_file
@@ -46,8 +46,8 @@ except ImportError:
     )
     from review.agent.output import (
         _VALID_SEVERITIES,
-        _VERDICT_RANK,
         load_review_document,
+        review_summary,
     )
     from review.atomic_io import atomic_write_json
     from review.critic_adjustments import FINDINGS_READ_OK, read_findings_file
@@ -123,35 +123,26 @@ _AGENT_COMPLETE_MANIFEST_FIELDS = (
 _SEVERITY_FIELDS = _VALID_SEVERITIES
 
 
-def _advisory_measurement(data: Any) -> Dict[str, Any]:
-    """Return typed advisory-suppression facts from a review summary."""
-    if not isinstance(data, dict):
-        return {}
-    summary = data.get("summary")
-    if not isinstance(summary, dict):
-        return {}
+def _advisory_fields(summary: Dict[str, Any]) -> Dict[str, Any]:
+    """The advisory keys a projection publishes, from one place.
 
-    suppressed = summary.get("suppressed_advisory_finding_count")
-    if (not isinstance(suppressed, int)
-            or isinstance(suppressed, bool)
-            or suppressed < 0):
-        return {}
-
-    measurement: Dict[str, Any] = {
-        "suppressed_advisory_finding_count": suppressed,
+    The count is always published — zero is a measurement. The
+    counterfactual verdict is published only when advisory suppression
+    actually softened the gating verdict, which is exactly when
+    `review_summary` carries a non-None value for it. The 30 lines this
+    replaced re-validated types and re-compared verdict ranks that
+    `validate_review_content` had already proven on the way in.
+    """
+    fields: Dict[str, Any] = {
+        "suppressed_advisory_finding_count": summary[
+            "suppressed_advisory_finding_count"
+        ],
     }
-    verdict = data.get("verdict")
-    verdict_without_advisory = summary.get("verdict_without_advisory")
-    if (
-        suppressed > 0
-        and isinstance(verdict, str)
-        and isinstance(verdict_without_advisory, str)
-        and verdict in _VERDICT_RANK
-        and verdict_without_advisory in _VERDICT_RANK
-        and _VERDICT_RANK[verdict_without_advisory] > _VERDICT_RANK[verdict]
-    ):
-        measurement["verdict_without_advisory"] = verdict_without_advisory
-    return measurement
+    if summary["verdict_without_advisory"] is not None:
+        fields["verdict_without_advisory"] = summary[
+            "verdict_without_advisory"
+        ]
+    return fields
 
 
 def _incomplete_agent_executions(
@@ -431,7 +422,7 @@ class ReviewTelemetry:
             "summary": self._build_summary(total_ms, extracts),
         }
         self._append(event)
-        self._materialize_manifest("complete")
+        self._materialize_manifest("complete", extracts)
 
     # ── Private helpers ──────────────────────────────────────────────
 
@@ -670,8 +661,20 @@ class ReviewTelemetry:
 
         return project_agent_lifecycle(items())
 
-    def _build_manifest(self, status: str) -> dict:
-        """Build the versioned materialized view from durable run events."""
+    def _build_manifest(
+        self, status: str, extracts: Optional[dict] = None
+    ) -> dict:
+        """Build the versioned materialized view from durable run events.
+
+        `status == "complete"` is the only state in which this reads the
+        run's output artifacts. A running manifest is a projection of the
+        event log alone: the ledger, the reviewer documents, the synthesis
+        rows, and the usage snapshot are all things a mid-run projection
+        would report as of an arbitrary step, and every consumer of them
+        keys on the settled manifest. `extracts` lets `finalize()` hand
+        over the ledger it already read instead of paying for a second
+        open of the same file inside one call.
+        """
         events = self._read_events()
         start = next(
             (event for event in events if event.get("event") == "pipeline_start"),
@@ -723,7 +726,13 @@ class ReviewTelemetry:
         incomplete = _incomplete_agent_executions(started, completed)
 
         pipeline_result = self._read_json_file("pipeline-result.json") or {}
-        findings = self._extract_findings()
+        settled = status == "complete"
+        findings = None
+        if settled:
+            findings = (
+                extracts["findings"] if extracts is not None
+                else self._extract_findings()
+            )
         summary = end.get("summary", {})
         if not isinstance(summary, dict):
             summary = {}
@@ -769,13 +778,16 @@ class ReviewTelemetry:
         manifest["dispatch"] = manifest_sections.build_dispatch_manifest(
             self.output_dir, final_info
         )
-        coverage = manifest_sections.build_coverage_manifest(
-            self.output_dir,
-            events,
-            context,
-            repo_path,
-            final_info,
-            normalize_paths=normalize_repo_paths,
+        coverage = (
+            manifest_sections.build_coverage_manifest(
+                self.output_dir,
+                events,
+                context,
+                repo_path,
+                final_info,
+                normalize_paths=normalize_repo_paths,
+            )
+            if settled else None
         )
         manifest["coverage"] = coverage
         manifest["availability"]["coverage"] = coverage is not None
@@ -808,12 +820,14 @@ class ReviewTelemetry:
         # never in the dispatch plan, and must not move any reviewer count.
         manifest["synthesis_agents"] = (
             manifest_sections.build_synthesis_agents_manifest(self.output_dir)
+            if settled else None
         )
         manifest["availability"]["synthesis_agents"] = (
             manifest["synthesis_agents"] is not None
         )
         manifest["usage"] = (
             manifest_sections.build_usage_manifest(self.output_dir)
+            if settled else None
         )
         manifest["availability"]["usage"] = manifest["usage"] is not None
         manifest["skipped_steps"] = (
@@ -826,13 +840,15 @@ class ReviewTelemetry:
             manifest["event_parse_gaps"] = self._event_parse_gaps
         return manifest
 
-    def _materialize_manifest(self, status: str) -> None:
+    def _materialize_manifest(
+        self, status: str, extracts: Optional[dict] = None
+    ) -> None:
         """Atomically refresh the run manifest without affecting telemetry."""
         try:
             manifest_path = self.manifest_path
             if not manifest_path:
                 return
-            manifest = self._build_manifest(status)
+            manifest = self._build_manifest(status, extracts)
             atomic_write_json(manifest_path, manifest)
         except (OSError, TypeError, ValueError, json.JSONDecodeError):
             pass
@@ -841,8 +857,9 @@ class ReviewTelemetry:
         """Patch a SETTLED manifest's `usage` section out of band.
 
         A normal run projects `usage` wholesale, inside `_build_manifest`,
-        every time an event is appended — the last time being `finalize()`.
-        This exists for the one case that flow never reaches again: a
+        once the run settles — which is `finalize()`, the only status in
+        which that builder reads the snapshot at all. This exists for the
+        one case that flow never reaches again: a
         manual re-run of `usage_snapshot.py`'s CLI, long after `finalize()`
         already returned, over a manifest that already settled. Nothing
         else revisits `usage` after that point, so a freshly re-measured
@@ -1111,34 +1128,27 @@ class ReviewTelemetry:
         """Extract completed agent review results."""
         results = {}
         try:
-            for name in sorted(os.listdir(self.output_dir)):
-                if not name.endswith("-review.json"):
-                    continue
-                if name == "review-findings.json":
-                    continue
-                path = os.path.join(self.output_dir, name)
-                base = name.replace("-review.json", "")
-                try:
-                    data = load_review_document(path, base)
-                except ValueError:
-                    results[base] = {"error": "malformed"}
-                    continue
-                try:
-                    findings = data["findings"]
-                    severities = dict(Counter(
-                        finding.get("severity", "medium").lower()
-                        for finding in findings
-                    ))
-                    results[base] = {
-                        "verdict": data.get("verdict"),
-                        "finding_count": len(findings),
-                        "severities": severities,
-                    }
-                    results[base].update(_advisory_measurement(data))
-                except (KeyError, TypeError):
-                    results[base] = {"error": "malformed"}
+            names = sorted(os.listdir(self.output_dir))
         except OSError:
-            pass
+            return None
+        for name in names:
+            if not name.endswith("-review.json") or name == "review-findings.json":
+                continue
+            base = name.replace("-review.json", "")
+            try:
+                document = load_review_document(
+                    os.path.join(self.output_dir, name), base
+                )
+            except ValueError:
+                results[base] = {"error": "malformed"}
+                continue
+            summary = review_summary(document)
+            results[base] = {
+                "verdict": summary["verdict"],
+                "finding_count": summary["finding_count"],
+                "severities": summary["severities"],
+                **_advisory_fields(summary),
+            }
         return results if results else None
 
     def _extract_findings(self) -> Optional[dict]:
@@ -1147,23 +1157,14 @@ class ReviewTelemetry:
         read = read_findings_file(path)
         if read.status != FINDINGS_READ_OK:
             return None
-        try:
-            data = read.findings
-            ledger_findings = data.get("findings", [])
-            severities = dict(Counter(
-                finding.get("severity", "medium").lower()
-                for finding in ledger_findings
-            ))
-            findings = {
-                "verdict": data.get("verdict"),
-                "final_finding_count": len(ledger_findings),
-                "severities": severities,
-                "reconciliation": self._extract_reconciliation(data),
-            }
-            findings.update(_advisory_measurement(data))
-            return findings
-        except (json.JSONDecodeError, KeyError):
-            return None
+        summary = review_summary(read.findings)
+        return {
+            "verdict": summary["verdict"],
+            "final_finding_count": summary["finding_count"],
+            "severities": summary["severities"],
+            "reconciliation": self._extract_reconciliation(read.findings),
+            **_advisory_fields(summary),
+        }
 
     @staticmethod
     def _extract_reconciliation(data: dict) -> Optional[dict]:
@@ -1213,7 +1214,7 @@ class ReviewTelemetry:
         if agents:
             summary["agents_completed"] = len(agents)
             summary["total_agent_findings"] = sum(
-                a.get("finding_count", 0)
+                a["finding_count"]
                 for a in agents.values()
                 if "error" not in a
             )

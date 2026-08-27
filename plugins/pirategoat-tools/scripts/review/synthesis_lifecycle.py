@@ -193,21 +193,20 @@ def _artifact_verdict(path):
     critic, the verdict is usable only when its marker schema and proposal
     digest validate against the adjacent committed proposal; the marker's
     existence and mtime remain the completion signal. None is the honest
-    answer for an absent, unreadable, malformed, or unbound artifact.
+    answer for an absent, unreadable, malformed, or unbound artifact. The
+    ledger is read through `read_findings_file` like every other consumer
+    — a bare `json.load` here was the fifth spelling of open-parse-use for
+    this one file, and the only one that would accept a document the
+    pipeline itself rejects.
     """
     if os.path.basename(path) == critic_adjustments.CRITIC_VERDICT_FILENAME:
         return critic_adjustments.read_critic_verdict(
             os.path.dirname(path) or "."
         )
-    try:
-        with open(path) as handle:
-            data = json.load(handle)
-    except (OSError, json.JSONDecodeError, ValueError):
+    read = critic_adjustments.read_findings_file(path)
+    if read.status != critic_adjustments.FINDINGS_READ_OK:
         return None
-    if not isinstance(data, dict):
-        return None
-    verdict = data.get("verdict")
-    return verdict if isinstance(verdict, str) else None
+    return read.findings["verdict"]
 
 
 def _artifact_mtime(path):

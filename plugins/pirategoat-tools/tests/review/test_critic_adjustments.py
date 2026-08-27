@@ -19,7 +19,10 @@ SCRIPT_PATH = SCRIPTS_DIR / "review" / "critic_adjustments.py"
 sys.path.insert(0, str(SCRIPTS_DIR))
 sys.path.insert(0, str(TESTS_DIR))
 
-from helpers.review_fixtures import canonical_findings_ledger
+from helpers.review_fixtures import (
+    canonical_findings_ledger,
+    failing_findings_renderer,
+)
 from review.atomic_io import atomic_write_json
 from review.critic_adjustments import (
     APPLIED_IDS_KEY,
@@ -1747,8 +1750,10 @@ class TestStepElevenRerendersFindingsMarkdown:
         import review.orchestration as orchestration_module
 
         monkeypatch.setattr(
-            orchestration_module, "_materialize_markdown",
-            lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("boom")),
+            orchestration_module, "_load_output_module",
+            failing_findings_renderer(
+                orchestration_module._load_output_module, "boom"
+            ),
         )
 
         self._step_11(tmp_path)  # must not raise
@@ -1809,11 +1814,11 @@ class TestStepElevenRerendersFindingsMarkdown:
         (tmp_path / "review-report.md").unlink()
         _publish_verdict(tmp_path, "STAND")
         state = {}
-        original_materialize = orchestration_mod._materialize_markdown
+        original_loader = orchestration_mod._load_output_module
 
         monkeypatch.setattr(
-            orchestration_mod, "_materialize_markdown",
-            lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("boom")),
+            orchestration_mod, "_load_output_module",
+            failing_findings_renderer(original_loader, "boom"),
         )
         _orchestrate_step_11("pr", {}, state, {}, str(tmp_path))
 
@@ -1824,8 +1829,8 @@ class TestStepElevenRerendersFindingsMarkdown:
 
         if render_recovers:
             monkeypatch.setattr(
-                orchestration_mod, "_materialize_markdown",
-                original_materialize,
+                orchestration_mod, "_load_output_module",
+                original_loader,
             )
         (tmp_path / "review-report.md").write_text("# report")
         _orchestrate_step_11("pr", {}, state, {}, str(tmp_path))
@@ -1841,14 +1846,12 @@ class TestStepElevenRerendersFindingsMarkdown:
         self._seed(tmp_path, severity="low")
         _publish_verdict(tmp_path, "STAND")
         state = {}
-        attempts = iter(("boom one", "boom two"))
-
-        def fail_with_changing_diagnostic(*_args, **_kwargs):
-            raise RuntimeError(next(attempts))
-
         monkeypatch.setattr(
-            orchestration_mod, "_materialize_markdown",
-            fail_with_changing_diagnostic,
+            orchestration_mod, "_load_output_module",
+            failing_findings_renderer(
+                orchestration_mod._load_output_module,
+                "boom one", "boom two",
+            ),
         )
 
         _orchestrate_step_11("pr", {}, state, {}, str(tmp_path))

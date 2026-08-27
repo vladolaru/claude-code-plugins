@@ -99,6 +99,13 @@ def _ledger(**overrides):
     return findings
 
 
+def _read(out_dir):
+    """The one `FindingsRead` a step takes, as the callers now pass it."""
+    return critic_adjustments.read_findings_file(
+        str(out_dir / critic_adjustments.FINDINGS_FILENAME)
+    )
+
+
 def _write_ledger(output_dir, findings=None):
     critic_adjustments.write_findings(
         str(output_dir), findings if findings is not None else _ledger()
@@ -158,7 +165,7 @@ class TestRecordAssembly:
         findings["meta"]["next_finding_number"] = 2
         _write_ledger(out_dir, findings)
 
-        outcome, error = assemble_review_record(str(out_dir), {})
+        outcome, error = assemble_review_record(str(out_dir), {}, _read(out_dir))
 
         assert error is None
         assert outcome["status"] == "complete"
@@ -174,7 +181,7 @@ class TestRecordAssembly:
     def test_writes_the_record_and_reports_a_complete_outcome(self, out_dir):
         _write_ledger(out_dir)
 
-        outcome, error = assemble_review_record(str(out_dir), {})
+        outcome, error = assemble_review_record(str(out_dir), {}, _read(out_dir))
 
         assert error is None
         assert outcome == {
@@ -194,7 +201,7 @@ class TestRecordAssembly:
             },
         }
 
-        assemble_review_record(str(out_dir), state)
+        assemble_review_record(str(out_dir), state, _read(out_dir))
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         order = [
@@ -213,7 +220,7 @@ class TestRecordAssembly:
     def test_header_carries_verdict_and_severity_counts(self, out_dir):
         _write_ledger(out_dir)
 
-        assemble_review_record(str(out_dir), {})
+        assemble_review_record(str(out_dir), {}, _read(out_dir))
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert "**Verdict:** REQUEST_CHANGES" in text
@@ -227,7 +234,7 @@ class TestRecordAssembly:
         findings = _ledger()
         _write_ledger(out_dir, findings)
 
-        assemble_review_record(str(out_dir), {})
+        assemble_review_record(str(out_dir), {}, _read(out_dir))
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert render_review_body(findings) in text
@@ -247,7 +254,7 @@ class TestRecordAssembly:
             },
         }
 
-        assemble_review_record(str(out_dir), state)
+        assemble_review_record(str(out_dir), state, _read(out_dir))
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert briefings_mod._render_file_review_section(
@@ -274,7 +281,7 @@ class TestRecordAssembly:
             "unscoped_files": [],
         }}
 
-        assemble_review_record(str(out_dir), state)
+        assemble_review_record(str(out_dir), state, _read(out_dir))
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert "skipped by every matching agent's diff budget" not in text
@@ -299,7 +306,7 @@ class TestRecordAssembly:
             "unscoped_files": ["assets/logo.png"],
         }}
 
-        assemble_review_record(str(out_dir), state)
+        assemble_review_record(str(out_dir), state, _read(out_dir))
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert (
@@ -311,7 +318,7 @@ class TestRecordAssembly:
     def test_unmeasured_coverage_renders_no_coverage_section(self, out_dir):
         _write_ledger(out_dir)
 
-        assemble_review_record(str(out_dir), {})
+        assemble_review_record(str(out_dir), {}, _read(out_dir))
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert "## Review coverage" not in text
@@ -326,7 +333,7 @@ class TestRecordAssembly:
             }],
         }))
 
-        assemble_review_record(str(out_dir), {})
+        assemble_review_record(str(out_dir), {}, _read(out_dir))
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert "> **⚠ Host Context Banner:** WooCommerce source" in text
@@ -352,7 +359,7 @@ class TestRecordAssembly:
             "dispatch_plan_warnings": ["unrecognized source language: .zig"],
         }
 
-        assemble_review_record(str(out_dir), state)
+        assemble_review_record(str(out_dir), state, _read(out_dir))
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert "## Run notes" in text
@@ -387,7 +394,7 @@ class TestRecordAssembly:
     ):
         _write_ledger(out_dir)
 
-        assemble_review_record(str(out_dir), state)
+        assemble_review_record(str(out_dir), state, _read(out_dir))
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         if expected_line is None:
@@ -404,7 +411,7 @@ class TestRecordAssembly:
             }
         }
 
-        assemble_review_record(str(out_dir), state)
+        assemble_review_record(str(out_dir), state, _read(out_dir))
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert "Dependency refresh: requested but not recorded" in text
@@ -431,7 +438,7 @@ class TestRecordAssembly:
             },
         }
 
-        assemble_review_record(str(out_dir), state)
+        assemble_review_record(str(out_dir), state, _read(out_dir))
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert "Dependency refresh: partial" in text
@@ -453,7 +460,7 @@ class TestRecordAssembly:
             },
         }
 
-        assemble_review_record(str(out_dir), state)
+        assemble_review_record(str(out_dir), state, _read(out_dir))
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert "Dependency refresh: refused before execution" in text
@@ -462,7 +469,7 @@ class TestRecordAssembly:
     def test_run_notes_say_not_requested_when_refresh_was_off(self, out_dir):
         _write_ledger(out_dir)
 
-        assemble_review_record(str(out_dir), {})
+        assemble_review_record(str(out_dir), {}, _read(out_dir))
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert "Dependency refresh: not requested" in text
@@ -470,7 +477,7 @@ class TestRecordAssembly:
     def test_closing_line_reports_the_ledger_verdict(self, out_dir):
         _write_ledger(out_dir)
 
-        assemble_review_record(str(out_dir), {})
+        assemble_review_record(str(out_dir), {}, _read(out_dir))
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert "Verdict — from the findings ledger: `request_changes`" in text
@@ -513,7 +520,7 @@ class TestRecordIsAProjection:
 
     def test_reassembly_reflects_adjusted_severity_and_verdict(self, out_dir):
         _write_ledger(out_dir)
-        assemble_review_record(str(out_dir), {})
+        assemble_review_record(str(out_dir), {}, _read(out_dir))
         before = (out_dir / REVIEW_RECORD_MD).read_text()
         assert "**Verdict:** REQUEST_CHANGES" in before
 
@@ -524,7 +531,7 @@ class TestRecordIsAProjection:
             "rationale": "the value is escaped one frame up",
         }], verified=(0,), assessment="Only one real problem after the probe.")
 
-        assemble_review_record(str(out_dir), {})
+        assemble_review_record(str(out_dir), {}, _read(out_dir))
         after = (out_dir / REVIEW_RECORD_MD).read_text()
 
         # Recomputed verdict (one medium left → comment), post-adjustment
@@ -554,7 +561,7 @@ class TestRecordIsAProjection:
         ], verified=(0,))
         assert result["applied"] == 2, result
 
-        assemble_review_record(str(out_dir), {})
+        assemble_review_record(str(out_dir), {}, _read(out_dir))
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert "## Critic Adjustment Decisions" in text
@@ -583,7 +590,7 @@ class TestRecordIsAProjection:
         ], verified=(0,), refuted=((1, "the source contradicts the claim"),))
         ids = [entry["adjustment_id"] for entry in proposal["adjustments"]]
 
-        assemble_review_record(str(out_dir), {})
+        assemble_review_record(str(out_dir), {}, _read(out_dir))
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert "## Critic Adjustment Decisions" in text
@@ -611,7 +618,7 @@ class TestRecordIsAProjection:
         ))
         ids = [entry["adjustment_id"] for entry in proposal["adjustments"]]
 
-        assemble_review_record(str(out_dir), {})
+        assemble_review_record(str(out_dir), {}, _read(out_dir))
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert "## Critic Adjustment Decisions" in text
@@ -627,7 +634,7 @@ class TestRecordIsAProjection:
             "rationale": "escaped one frame up",
         }], verified=(0,), assessment=None)
 
-        assemble_review_record(str(out_dir), {})
+        assemble_review_record(str(out_dir), {}, _read(out_dir))
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert "No current assessment" in text
@@ -660,7 +667,7 @@ class TestRecordSanitization:
         )
         _write_ledger(out_dir, findings)
 
-        assemble_review_record(str(out_dir), {})
+        assemble_review_record(str(out_dir), {}, _read(out_dir))
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert "Severity-floor:" not in text
@@ -696,7 +703,7 @@ class TestRecordSanitization:
         ]
         _write_ledger(out_dir, findings)
 
-        assemble_review_record(str(out_dir), {})
+        assemble_review_record(str(out_dir), {}, _read(out_dir))
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert "Severity-floor:" not in text
@@ -742,7 +749,7 @@ class TestRecordSanitization:
         findings["meta"]["next_check_number"] = 10
         _write_ledger(out_dir, findings)
 
-        assemble_review_record(str(out_dir), {})
+        assemble_review_record(str(out_dir), {}, _read(out_dir))
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert "Severity-floor:" not in text
@@ -755,7 +762,7 @@ class TestRecordSanitization:
         findings["findings"][0]["severity_floor"] = "high"
         _write_ledger(out_dir, findings)
 
-        assemble_review_record(str(out_dir), {})
+        assemble_review_record(str(out_dir), {}, _read(out_dir))
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert "**Severity floor:** high" in text
@@ -770,7 +777,7 @@ class TestRecordSanitization:
         findings["recommendations"]["immediate"] = [["escape", "the notice"]]
         _write_ledger(out_dir, findings)
 
-        outcome, error = assemble_review_record(str(out_dir), {})
+        outcome, error = assemble_review_record(str(out_dir), {}, _read(out_dir))
 
         assert error == "review-findings.json unreadable (invalid)"
         assert outcome["status"] == "failed"
@@ -783,7 +790,7 @@ class TestRecordSanitization:
         )
         _write_ledger(out_dir, findings)
 
-        assemble_review_record(str(out_dir), {})
+        assemble_review_record(str(out_dir), {}, _read(out_dir))
 
         on_disk = json.loads(
             (out_dir / critic_adjustments.FINDINGS_FILENAME).read_text()
@@ -793,7 +800,7 @@ class TestRecordSanitization:
 
 class TestRecordFailureModes:
     def test_no_ledger_is_a_measured_zero_not_a_failure(self, out_dir):
-        outcome, error = assemble_review_record(str(out_dir), {})
+        outcome, error = assemble_review_record(str(out_dir), {}, _read(out_dir))
 
         assert error is None
         assert outcome == {
@@ -806,7 +813,7 @@ class TestRecordFailureModes:
     ):
         (out_dir / critic_adjustments.FINDINGS_FILENAME).write_text("{ nope")
 
-        outcome, error = assemble_review_record(str(out_dir), {})
+        outcome, error = assemble_review_record(str(out_dir), {}, _read(out_dir))
 
         assert outcome["status"] == "failed"
         assert outcome["written"] == 0
@@ -820,10 +827,97 @@ class TestRecordFailureModes:
             json.dumps({"verdict": "approve"})
         )
 
-        outcome, error = assemble_review_record(str(out_dir), {})
+        outcome, error = assemble_review_record(str(out_dir), {}, _read(out_dir))
 
         assert outcome["status"] == "failed"
         assert error
+
+
+class TestStepsReadTheLedgerOnce:
+    """A step reads `review-findings.json` once and shares the result.
+
+    Step 9 opened it twice (render, then record assembly) and step 11
+    three times (render, record assembly, verdict derivation). Three reads
+    of one file inside one step is three chances to disagree about what
+    the run published, and the last of them decided the verdict.
+    """
+
+    def _count_reads(self, monkeypatch):
+        reads = []
+        real = critic_adjustments.read_findings_file
+
+        def counting(path):
+            reads.append(path)
+            return real(path)
+
+        monkeypatch.setattr(
+            orchestration_mod.critic_adjustments,
+            "read_findings_file",
+            counting,
+        )
+        return reads
+
+    def test_step_9_reads_the_ledger_once(self, out_dir, monkeypatch):
+        _write_ledger(out_dir)
+        reads = self._count_reads(monkeypatch)
+        state = {}
+
+        orchestration_mod._orchestrate_step_9(
+            "full", {}, state, {"git": {"changed_files_csv": ""}},
+            str(out_dir),
+        )
+
+        assert len(reads) == 1
+        assert state["findings_markdown"]["status"] == "complete"
+        assert state["review_record"]["status"] == "complete"
+
+    def test_the_record_and_the_render_share_one_read(self, out_dir):
+        """Both derived artifacts come from the same ledger object."""
+        _write_ledger(out_dir)
+        read = _read(out_dir)
+
+        render_outcome, render_error = (
+            orchestration_mod._render_findings_markdown(str(out_dir), read)
+        )
+        record_outcome, record_error = assemble_review_record(
+            str(out_dir), {}, read
+        )
+
+        assert render_error is None and record_error is None
+        assert render_outcome["written"] == 1
+        assert record_outcome["written"] == 1
+        assert (out_dir / "review-findings.md").exists()
+        assert (out_dir / REVIEW_RECORD_MD).exists()
+
+    def test_an_absent_ledger_is_a_measured_zero_for_both(self, out_dir):
+        read = _read(out_dir)
+
+        for outcome, error in (
+            orchestration_mod._render_findings_markdown(str(out_dir), read),
+            assemble_review_record(str(out_dir), {}, read),
+        ):
+            assert error is None
+            assert outcome == {
+                "ran": True, "written": 0, "expected": 0,
+                "status": "complete",
+            }
+
+    def test_an_unreadable_ledger_is_one_expected_artifact_unrendered(
+        self, out_dir
+    ):
+        (out_dir / critic_adjustments.FINDINGS_FILENAME).write_text("{ nope")
+        read = _read(out_dir)
+
+        for outcome, error in (
+            orchestration_mod._render_findings_markdown(str(out_dir), read),
+            assemble_review_record(str(out_dir), {}, read),
+        ):
+            assert outcome == {
+                "ran": True, "written": 0, "expected": 1,
+                "status": "failed",
+            }
+            assert error
+        assert not (out_dir / REVIEW_RECORD_MD).exists()
 
 
 class TestBriefingsAreConstantSize:
@@ -861,7 +955,7 @@ class TestBriefingsAreConstantSize:
         _write_ledger(out_dir)
         state = self._coverage_state(500)
 
-        assemble_review_record(str(out_dir), state)
+        assemble_review_record(str(out_dir), state, _read(out_dir))
         record = (out_dir / REVIEW_RECORD_MD).read_text()
 
         guidance = briefings_mod.get_step_guidance(
@@ -895,7 +989,7 @@ class TestRecordWriteIsAtomic:
         self, out_dir, monkeypatch
     ):
         _write_ledger(out_dir)
-        assemble_review_record(str(out_dir), {})
+        assemble_review_record(str(out_dir), {}, _read(out_dir))
         first = (out_dir / REVIEW_RECORD_MD).read_text()
 
         def boom(*_args, **_kwargs):
@@ -904,7 +998,7 @@ class TestRecordWriteIsAtomic:
         monkeypatch.setattr(
             orchestration_mod, "_render_record_body", boom, raising=True
         )
-        outcome, error = assemble_review_record(str(out_dir), {})
+        outcome, error = assemble_review_record(str(out_dir), {}, _read(out_dir))
 
         assert outcome["status"] == "failed"
         assert "render exploded" in str(error)
@@ -925,14 +1019,14 @@ class TestRecordWriteIsAtomic:
         monkeypatch.setattr(
             orchestration_mod, "atomic_write_text", spy, raising=True
         )
-        assemble_review_record(str(out_dir), {})
+        assemble_review_record(str(out_dir), {}, _read(out_dir))
 
         assert os.path.basename(seen["path"]) == REVIEW_RECORD_MD
 
     def test_no_temp_files_survive_a_successful_assembly(self, out_dir):
         _write_ledger(out_dir)
 
-        assemble_review_record(str(out_dir), {})
+        assemble_review_record(str(out_dir), {}, _read(out_dir))
 
         names = sorted(os.listdir(out_dir))
         assert names == sorted([
@@ -954,27 +1048,27 @@ class TestPreparedReportSourceFingerprint:
 
     def test_same_source_and_facts_are_deterministic(self, out_dir):
         _write_ledger(out_dir)
-        assemble_review_record(str(out_dir), {})
+        assemble_review_record(str(out_dir), {}, _read(out_dir))
 
         assert self._fingerprint(out_dir) == self._fingerprint(out_dir)
 
     def test_exact_record_and_ledger_bytes_are_bound(self, out_dir):
         _write_ledger(out_dir)
-        assemble_review_record(str(out_dir), {})
+        assemble_review_record(str(out_dir), {}, _read(out_dir))
         baseline = self._fingerprint(out_dir)
 
         record = out_dir / REVIEW_RECORD_MD
         record.write_bytes(record.read_bytes() + b"\n")
         assert self._fingerprint(out_dir) != baseline
 
-        assemble_review_record(str(out_dir), {})
+        assemble_review_record(str(out_dir), {}, _read(out_dir))
         findings = out_dir / critic_adjustments.FINDINGS_FILENAME
         findings.write_bytes(findings.read_bytes() + b"\n")
         assert self._fingerprint(out_dir) != baseline
 
     def test_ordered_degradation_facts_are_bound(self, out_dir):
         _write_ledger(out_dir)
-        assemble_review_record(str(out_dir), {})
+        assemble_review_record(str(out_dir), {}, _read(out_dir))
 
         first = self._fingerprint(out_dir, [
             {"code": "findings_missing", "message": "diagnostic a"},
@@ -988,7 +1082,7 @@ class TestPreparedReportSourceFingerprint:
 
     def test_diagnostic_prose_is_not_fingerprint_identity(self, out_dir):
         _write_ledger(out_dir)
-        assemble_review_record(str(out_dir), {})
+        assemble_review_record(str(out_dir), {}, _read(out_dir))
 
         first = self._fingerprint(out_dir, [{
             "code": "findings_markdown_render_failed", "message": "boom one",

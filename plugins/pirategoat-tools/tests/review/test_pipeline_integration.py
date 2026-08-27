@@ -39,6 +39,7 @@ from helpers.pipeline_process import (
 from helpers.review_fixtures import (
     canonical_findings_ledger,
     canonical_review_document,
+    failing_findings_renderer,
 )
 _dispatch_spec = importlib.util.spec_from_file_location(
     "plan_review_dispatch", str(_SCRIPTS_DIR / "review" / "plan_dispatch.py")
@@ -600,7 +601,10 @@ class TestDependencyRefreshSaveLifecycle:
             str(output_dir), _review_json("review-reconciliator")
         )
         record_outcome, record_error = orchestration_mod.assemble_review_record(
-            str(output_dir), state
+            str(output_dir), state,
+            orchestration_mod.critic_adjustments.read_findings_file(
+                str(output_dir / "review-findings.json")
+            ),
         )
         assert record_error is None
         assert record_outcome == {
@@ -2641,17 +2645,15 @@ class TestStep9FindingsMarkdown:
             json.dumps(self._findings())
         )
         monkey = mod._orchestrate_step_9.__globals__
-        original = monkey["_materialize_markdown"]
-        monkey["_materialize_markdown"] = (
-            lambda *_a, **_k: (_ for _ in ()).throw(
-                RuntimeError("renderer crashed")
-            )
+        original = monkey["_load_output_module"]
+        monkey["_load_output_module"] = failing_findings_renderer(
+            original, "renderer crashed"
         )
         state = {"resolved_params": {}}
         try:
             mod._orchestrate_step(9, "full", {}, state, {}, str(tmp_path))
         finally:
-            monkey["_materialize_markdown"] = original
+            monkey["_load_output_module"] = original
 
         assert state["findings_markdown"] == {
             "ran": True, "written": 0, "expected": 1, "status": "failed",
@@ -3572,8 +3574,11 @@ class TestFindingsMarkdownLockstep:
         (tmp_path / "review-report.md").write_text("# report")
         monkeypatch.setitem(
             mod._orchestrate_step_11.__globals__,
-            "_materialize_markdown",
-            lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("boom")),
+            "_load_output_module",
+            failing_findings_renderer(
+                mod._orchestrate_step_11.__globals__["_load_output_module"],
+                "boom",
+            ),
         )
         state = {}
 

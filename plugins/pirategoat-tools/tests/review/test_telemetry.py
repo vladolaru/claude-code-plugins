@@ -598,6 +598,90 @@ class TestRunManifest:
         assert manifest["steps"][-1]["step"] == 3
         assert manifest["steps"][-1]["phase"] == "AWARENESS"
 
+    def test_log_step_opens_no_review_artifact(
+        self, telemetry, output_dir, monkeypatch
+    ):
+        """A running manifest is cheap. Only finalize pays for the heavy sections.
+
+        `_build_manifest` ran on every `log_step`, and it re-opened
+        `review-findings.json` and every `<reviewer>-review.json` each
+        time — roughly 17 opens per file for a 15-step run, for sections
+        no consumer reads until the run settles.
+        """
+        telemetry.start(run_id="run-1")
+        (output_dir / "code-review.json").write_text(
+            json.dumps(canonical_review_document("code", ["medium"]))
+        )
+        (output_dir / "review-findings.json").write_text(
+            json.dumps(canonical_findings_ledger(["medium"]))
+        )
+
+        opened = []
+        real_open = open
+
+        def spy(path, *args, **kwargs):
+            opened.append(os.fspath(path))
+            return real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr("builtins.open", spy)
+        telemetry.log_step(step=9, phase="SYNTHESIS", title="Review Record")
+
+        assert not [
+            path for path in opened
+            if path.endswith("-review.json")
+            or path.endswith("review-findings.json")
+        ]
+
+    def test_a_running_manifest_declares_the_heavy_sections_unavailable(
+        self, telemetry, output_dir
+    ):
+        telemetry.start(run_id="run-1")
+        _write_coverage_inputs(
+            output_dir,
+            ["src/a.py"],
+            ["src/a.py"],
+            [{"name": "code-reviewer", "status": "DISPATCH"}],
+        )
+        (output_dir / "review-findings.json").write_text(
+            json.dumps(canonical_findings_ledger(["medium"]))
+        )
+
+        telemetry.log_step(step=9, phase="SYNTHESIS", title="Review Record")
+
+        manifest = _read_manifest(telemetry)
+        assert manifest["status"] == "running"
+        for section in ("coverage", "synthesis_agents", "usage"):
+            assert manifest[section] is None
+            assert manifest["availability"][section] is False
+        assert manifest["outcome"]["reconciliation"] is None
+
+    def test_finalize_builds_the_heavy_sections_and_reads_once(
+        self, mod, telemetry, output_dir, monkeypatch
+    ):
+        telemetry.start(run_id="run-1")
+        _write_coverage_inputs(
+            output_dir,
+            ["src/a.py"],
+            ["src/a.py"],
+            [{"name": "code-reviewer", "status": "DISPATCH"}],
+        )
+        (output_dir / "review-findings.json").write_text(
+            json.dumps(canonical_findings_ledger(["medium"]))
+        )
+
+        reads = []
+        real = mod.read_findings_file
+        monkeypatch.setattr(
+            mod, "read_findings_file",
+            lambda path: reads.append(path) or real(path),
+        )
+        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
+
+        manifest = _read_manifest(telemetry)
+        assert manifest["status"] == "complete"
+        assert manifest["coverage"] is not None
+        assert len(reads) == 1
+
     def test_log_step_manifest_allowlists_lifecycle_and_decision_fields(
         self, telemetry
     ):
@@ -1398,7 +1482,13 @@ class TestRunManifest:
             agents=[{"name": "security-reviewer", "status": "DISPATCH"}],
         )
 
-        def _boom(*args, **kwargs):
+        def _boom(*_args, **kwargs):
+            # `repo_path` is passed only by build_coverage_manifest, so
+            # this breaks the coverage builder alone and leaves the
+            # context extract — which shares this same normalizer, and
+            # runs in the same finalize — working.
+            if "repo_path" not in kwargs:
+                return normalize_repo_paths(*_args, **kwargs)
             raise RuntimeError("simulated coverage builder bug")
 
         # normalize_paths is the sole collaborator build_coverage_manifest
@@ -1407,10 +1497,12 @@ class TestRunManifest:
         # branches (those `return None` directly, never raising). Patched
         # in telemetry's namespace, which is where the injection site reads
         # the shared `git_paths` normalizer from.
+        normalize_repo_paths = mod.normalize_repo_paths
         monkeypatch.setattr(mod, "normalize_repo_paths", _boom)
 
         # Must not raise: a builder bug must never fail the review run.
         telemetry.start(run_id="run-1")
+        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
         manifest = _read_manifest(telemetry)
         assert manifest["availability"]["coverage"] is False
@@ -1461,6 +1553,7 @@ class TestRunManifest:
         )
 
         telemetry.start(run_id="run-1")
+        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
         manifest = _read_manifest(telemetry)
         assert manifest["availability"]["coverage"] is True
@@ -1571,10 +1664,8 @@ class TestRunManifest:
             mod.manifest_sections, "review_paths", lambda *_args: paths
         )
 
-        reviewed_files = (
-            mod.manifest_sections._load_reviewed_files(
-                str(output_dir), "security-reviewer"
-            )
+        review = mod.manifest_sections._load_final_review(
+            str(output_dir), "security-reviewer"
         )
         claimable_count = (
             mod.manifest_sections._load_review_claimable_file_count(
@@ -1582,10 +1673,9 @@ class TestRunManifest:
             )
         )
 
-        assert reviewed_files == {
-            "reviewed_file_claim_count": 1,
-            "unclaimed_review_file_count": 1,
-        }
+        assert len(review["reviewed_file_claims"]) == 1
+        assert len(review["unclaimed_review_files"]) == 1
+        assert len(review["review_claimable_files"]) == 2
         assert claimable_count == 2
 
     def test_reviewed_files_rejects_retired_final_review(
@@ -1615,7 +1705,7 @@ class TestRunManifest:
             "channels": ["blocking"],
         }))
 
-        assert mod.manifest_sections._load_reviewed_files(
+        assert mod.manifest_sections._load_final_review(
             str(output_dir), "security-reviewer"
         ) is None
 
@@ -2616,73 +2706,6 @@ class TestSnapshot:
         assert extracted["suppressed_advisory_finding_count"] == 2
         assert extracted["verdict_without_advisory"] == "block"
 
-    @pytest.mark.parametrize(
-        ("verdict", "summary", "expected_count"),
-        [
-            pytest.param(
-                "approve",
-                {"suppressed_advisory_finding_count": True, "verdict_without_advisory": "block"},
-                None,
-                id="boolean-count",
-            ),
-            pytest.param(
-                "approve",
-                {"suppressed_advisory_finding_count": -1, "verdict_without_advisory": "block"},
-                None,
-                id="negative-count",
-            ),
-            pytest.param(
-                "approve",
-                {"suppressed_advisory_finding_count": 1, "verdict_without_advisory": "banana"},
-                1,
-                id="unknown-verdict",
-            ),
-            pytest.param(
-                "approve",
-                {"suppressed_advisory_finding_count": 1, "verdict_without_advisory": []},
-                1,
-                id="non-string-verdict",
-            ),
-            pytest.param(
-                "approve",
-                {"suppressed_advisory_finding_count": 1, "verdict_without_advisory": "not_applicable"},
-                1,
-                id="not-applicable-counterfactual",
-            ),
-            pytest.param(
-                "block",
-                {"suppressed_advisory_finding_count": 1, "verdict_without_advisory": "block"},
-                1,
-                id="equal-counterfactual",
-            ),
-            pytest.param(
-                "request_changes",
-                {"suppressed_advisory_finding_count": 1, "verdict_without_advisory": "comment"},
-                1,
-                id="softer-counterfactual",
-            ),
-            pytest.param(
-                "banana",
-                {"suppressed_advisory_finding_count": 1, "verdict_without_advisory": "block"},
-                1,
-                id="unknown-actual-verdict",
-            ),
-        ],
-    )
-    def test_advisory_measurement_omits_malformed_values(
-        self, mod, verdict, summary, expected_count
-    ):
-        extracted = mod._advisory_measurement({
-            "verdict": verdict,
-            "summary": summary,
-        })
-
-        if expected_count is not None:
-            assert extracted["suppressed_advisory_finding_count"] == expected_count
-        else:
-            assert "suppressed_advisory_finding_count" not in extracted
-        assert "verdict_without_advisory" not in extracted
-
     def test_excludes_review_findings_from_agent_results(self, mod, output_dir, tmp_path):
         """review-findings.json is reconciled output, not an agent result."""
         log_dir = tmp_path / "logs"
@@ -3174,16 +3197,12 @@ class TestReviewVocabularyManifestProjection:
     ):
         monkeypatch.setattr(
             mod.manifest_sections,
-            "_load_reviewed_files",
+            "_load_final_review",
             lambda output_dir, agent: {
-                "reviewed_file_claim_count": 1,
-                "unclaimed_review_file_count": 0,
+                "reviewed_file_claims": ["a.php"],
+                "unclaimed_review_files": [],
+                "review_claimable_files": ["a.php"],
             },
-        )
-        monkeypatch.setattr(
-            mod.manifest_sections,
-            "_load_review_claimable_file_count",
-            lambda output_dir, agent: 1,
         )
 
         coverage = mod.manifest_sections.build_coverage_manifest(
@@ -4259,7 +4278,7 @@ class TestUsageManifest:
         t, out_dir = self._telemetry(mod, tmp_path)
         self._write(out_dir, self._snapshot())
 
-        t.log_step(step=11, phase="OUTPUT", title="Present Results")
+        t.finalize(step=11, phase="OUTPUT", title="Present Results")
         manifest = _read_manifest(t)
 
         assert manifest["usage"]["availability"]["subagents"] == "complete"
@@ -4527,7 +4546,7 @@ class TestSynthesisAgentsManifest:
         assert manifest["availability"]["synthesis_agents"] is False
 
         self._write(out_dir, self._artifact(self._row(self.CRITIC)))
-        t.log_step(step=11, phase="OUTPUT", title="Present Results")
+        t.finalize(step=11, phase="OUTPUT", title="Present Results")
 
         manifest = _read_manifest(t)
         assert manifest["availability"]["synthesis_agents"] is True
@@ -4696,8 +4715,8 @@ class TestOptionalSectionAvailabilityKeysContract:
         not declare. Patches the bound method for one call only."""
         real_build_manifest = telemetry._build_manifest
 
-        def _build_manifest_with_undeclared_flag(status):
-            manifest = real_build_manifest(status)
+        def _build_manifest_with_undeclared_flag(status, extracts=None):
+            manifest = real_build_manifest(status, extracts)
             manifest["availability"]["speculative_section"] = True
             return manifest
 

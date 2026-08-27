@@ -169,8 +169,9 @@ def _load_output_module(output_builder_path: str):
 
     The same contract the telemetry and dispatch-status loaders use, so a
     long-lived process can never render with a foreign checkout's
-    semantics. Both users of output.py's renderers go through this one
-    loader: `_materialize_markdown` (the derived-Markdown families) and
+    semantics. Every user of output.py's renderers goes through this one
+    loader: `_materialize_markdown` (the per-reviewer Markdown family),
+    `_render_findings_markdown` (the ledger's Markdown), and
     `assemble_review_record` (the record's shared body).
     """
     spec = importlib.util.spec_from_file_location(
@@ -181,19 +182,17 @@ def _load_output_module(output_builder_path: str):
     return module
 
 
-def _materialize_markdown(
-    output_dir: str, output_builder_path: str, suffix: str = "-review.json",
-) -> list:
-    """Render derived Markdown from the settled JSONs in `output_dir`.
+def _materialize_markdown(output_dir: str, output_builder_path: str) -> list:
+    """Render `<reviewer>-review.md` beside every settled reviewer JSON.
 
-    One entry point for both derived families: the per-reviewer
-    `<reviewer>-review.md` the step-8 readiness gate writes (the default
-    suffix) and `review-findings.md`, which steps 9 and 11 render from the
-    reconciliation ledger. The renderer itself lives in output.py; this is
-    only the caller, and there is deliberately no second one.
+    One caller: the step-8 readiness gate. The findings ledger used to
+    come through here too, on a `suffix` argument, which meant the ledger
+    was re-opened and re-validated inside the renderer after the step had
+    already read it. Steps 9 and 11 now render from the object they read;
+    this loop is for the per-reviewer family alone.
     """
     module = _load_output_module(output_builder_path)
-    return module.materialize_markdown(output_dir, suffix=suffix)
+    return module.materialize_markdown(output_dir)
 
 
 def _load_final_review(
@@ -269,8 +268,32 @@ def _record_findings_markdown(state, outcome):
         degradation["findings_markdown_incomplete"] = True
 
 
-def _render_findings_markdown(output_dir: str) -> tuple:
-    """Render `review-findings.md` from the reconciliation ledger.
+def _unusable_ledger_outcome(read) -> tuple:
+    """The `(outcome, error)` a derived artifact reports for a ledger it never got.
+
+    Absent is a measured zero: nothing was asked of the renderer, so
+    nothing is missing, and the step-9 briefing's degraded branch routes
+    the run to manual synthesis. Every other non-OK state is a ledger that
+    exists and could not be used — one expected artifact, unwritten.
+
+    Both derived artifacts report it identically because it is the same
+    fact about the same read. Two spellings of this shape is how the
+    findings render and the record once disagreed about whether a run had
+    a ledger at all.
+    """
+    if read.status == critic_adjustments.FINDINGS_READ_ABSENT:
+        return (
+            {"ran": True, "written": 0, "expected": 0, "status": "complete"},
+            None,
+        )
+    return (
+        {"ran": True, "written": 0, "expected": 1, "status": "failed"},
+        f"{critic_adjustments.FINDINGS_FILENAME} unreadable ({read.status})",
+    )
+
+
+def _render_findings_markdown(output_dir: str, read) -> tuple:
+    """Render `review-findings.md` from the ledger this step already read.
 
     Returns ``(outcome, error)``: ``outcome`` mirrors the reviewer-Markdown
     vocabulary (``complete`` / ``failed``) with the same written/expected
@@ -278,34 +301,27 @@ def _render_findings_markdown(output_dir: str) -> tuple:
     Never raises — a derived artifact that could not be rendered is a
     degradation to report, never a reason to abort a step.
 
-    ``expected`` is 0 when there is no ledger at all: nothing was asked of
-    the renderer, so nothing is missing. That is a different fact from a
-    ledger the renderer could not read, which reports ``failed``.
+    ``render_markdown`` is a pure function of the ledger dict, so the
+    rendering cannot disagree with what the step read; the write is atomic,
+    so a failed render leaves the previous file rather than a partial one.
     """
-    expected = 1 if os.path.isfile(
-        os.path.join(output_dir, _FINDINGS_JSON)
-    ) else 0
+    if read.status != critic_adjustments.FINDINGS_READ_OK:
+        return _unusable_ledger_outcome(read)
     outcome = {
-        "ran": True, "written": 0, "expected": expected, "status": "complete",
+        "ran": True, "written": 0, "expected": 1, "status": "complete",
     }
-    if not expected:
-        return outcome, None
     try:
-        written = _materialize_markdown(
-            output_dir,
-            str(SCRIPTS_DIR / "agent" / "output.py"),
-            suffix=_FINDINGS_JSON,
+        module = _load_output_module(
+            str(SCRIPTS_DIR / "agent" / "output.py")
+        )
+        atomic_write_text(
+            os.path.join(output_dir, _FINDINGS_MD),
+            module.render_markdown(read.findings),
         )
     except Exception as err:  # noqa: BLE001 — best-effort by design
         outcome["status"] = "failed"
         return outcome, str(err)
-    outcome["written"] = len(written)
-    if not written:
-        # The materializer skips a ledger it cannot read (malformed JSON,
-        # missing required keys) and says so on stderr rather than
-        # raising. An unwritten .md is still an unrendered artifact.
-        outcome["status"] = "failed"
-        return outcome, f"renderer skipped {_FINDINGS_JSON}"
+    outcome["written"] = 1
     return outcome, None
 
 
@@ -511,35 +527,24 @@ def _tri_state(value) -> str:
 def _render_record_verdict_line(findings: dict) -> str:
     """The record's closing verdict, stated at the layer that computed it.
 
-    The ledger verdict is the only one derived from findings. The published
-    APPROVE/COMMENT/REQUEST_CHANGES layer is shown beside it through the
-    module's one mapping, with the single override that can still change it
-    named rather than left as a surprise at finalize.
+    The ledger reaching here passed `read_findings_file`, whose validator
+    requires `verdict` to be one of the four reconciler verdicts — so the
+    "none recorded" and "unrecognized at the published layer" branches
+    this replaced could not fire, and every run they described was a run
+    where the assembler had already returned `failed`.
     """
-    raw = findings.get("verdict")
-    ledger = str(raw).strip().lower() if raw else ""
-    published = _LEDGER_TO_REVIEW_VERDICT.get(ledger)
-    if not ledger:
-        return (
-            "**Verdict — from the findings ledger: none recorded.** The "
-            "published verdict falls back to COMMENT and the run reports "
-            "the absence as a degradation."
-        )
-    published_clause = (
-        f"{published} at the published layer"
-        if published
-        else "unrecognized at the published layer — the run falls back to "
-             "COMMENT and reports it"
-    )
+    ledger = findings["verdict"]
+    published = _LEDGER_TO_REVIEW_VERDICT[ledger]
     return (
         f"**Verdict — from the findings ledger: `{ledger}` "
-        f"({published_clause}).** A critic ESCALATE overrides the published "
-        "verdict to COMMENT at finalize; this line reports the ledger, the "
-        "only verdict actually computed from findings."
+        f"({published} at the published layer).** A critic ESCALATE "
+        "overrides the published verdict to COMMENT at finalize; this "
+        "line reports the ledger, the only verdict actually computed from "
+        "findings."
     )
 
 
-def assemble_review_record(output_dir: str, state: dict) -> tuple:
+def assemble_review_record(output_dir: str, state: dict, read) -> tuple:
     """Assemble `review-record.md` from the ledger and the run's own facts.
 
     Returns ``(outcome, error)`` in the same vocabulary the derived-Markdown
@@ -547,9 +552,8 @@ def assemble_review_record(output_dir: str, state: dict) -> tuple:
     and never raises: a record the pipeline could not assemble is a
     degradation to report, never a reason to abort a step.
 
-    ``expected`` is 0 when there is no ledger — a degraded run that never
-    reconciled asked nothing of the assembler, and the step-9 briefing's
-    degraded branch routes it to manual synthesis instead.
+    The caller's single `FindingsRead` decides ``expected``: a run that
+    never reconciled asked nothing of the assembler, so it reports zero.
 
     Everything here is composed from renderers that already exist:
     ``render_review_body`` for the findings/checks body and
@@ -560,19 +564,11 @@ def assemble_review_record(output_dir: str, state: dict) -> tuple:
     The write is atomic, so a failed assembly leaves the previous record
     intact rather than replacing it with a half-built one.
     """
-    findings_path = os.path.join(output_dir, _FINDINGS_JSON)
-    expected = 1 if os.path.isfile(findings_path) else 0
-    outcome = {
-        "ran": True, "written": 0, "expected": expected, "status": "complete",
-    }
-    if not expected:
-        return outcome, None
-
-    read = critic_adjustments.read_findings_file(findings_path)
     if read.status != critic_adjustments.FINDINGS_READ_OK:
-        outcome["status"] = "failed"
-        return outcome, f"{_FINDINGS_JSON} unreadable ({read.status})"
-
+        return _unusable_ledger_outcome(read)
+    outcome = {
+        "ran": True, "written": 0, "expected": 1, "status": "complete",
+    }
     findings = read.findings
     try:
         sections = [
@@ -1504,7 +1500,12 @@ def _orchestrate_step_9(mode, config, state, context, output_dir):
     # to it, and finalize offers it as the report of last resort. Rendering
     # it here (rather than asking the agent to hand-write this projection) is
     # what makes those three consumers unable to read a stale artifact.
-    findings_markdown, render_error = _render_findings_markdown(output_dir)
+    read = critic_adjustments.read_findings_file(
+        os.path.join(output_dir, critic_adjustments.FINDINGS_FILENAME)
+    )
+    findings_markdown, render_error = _render_findings_markdown(
+        output_dir, read
+    )
     if render_error:
         print(
             f"findings markdown materialization failed: {render_error}",
@@ -1534,7 +1535,9 @@ def _orchestrate_step_9(mode, config, state, context, output_dir):
     # that had gaps. Same best-effort contract as the findings render — a
     # record the pipeline could not assemble is a degradation the step-9
     # briefing reports, never an exception out of the step.
-    record_outcome, record_error = assemble_review_record(output_dir, state)
+    record_outcome, record_error = assemble_review_record(
+        output_dir, state, read
+    )
     if record_error:
         print(
             f"review record assembly failed: {record_error}",
@@ -2022,7 +2025,10 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # Both are best-effort by construction: a render failure is a
     # degradation note, never an exception out of finalize, and never a
     # faked file.
-    findings_markdown, render_error = _render_findings_markdown(output_dir)
+    read = critic_adjustments.read_findings_file(findings_path)
+    findings_markdown, render_error = _render_findings_markdown(
+        output_dir, read
+    )
     _record_findings_markdown(state, findings_markdown)
     if render_error:
         _record_step_11_degradation(
@@ -2030,7 +2036,9 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
             "findings_markdown_render_failed",
             f"review-findings.md render failed: {render_error}"
         )
-    record_outcome, record_error = assemble_review_record(output_dir, state)
+    record_outcome, record_error = assemble_review_record(
+        output_dir, state, read
+    )
     _record_review_record(state, record_outcome)
     if record_error:
         _record_step_11_degradation(
@@ -2103,7 +2111,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # report verbatim, so publishing those two facts separately creates an
     # unrecoverable run.
     report_path = os.path.join(output_dir, "review-report.md")
-    if not os.path.isfile(findings_path):
+    if read.status == critic_adjustments.FINDINGS_READ_ABSENT:
         _record_step_11_degradation(
             degradation_records,
             "findings_missing",
@@ -2122,19 +2130,15 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # it as part of its one ledger write, so it is current by the time
     # finalize reads it. `_LEDGER_TO_REVIEW_VERDICT` (module scope) is
     # the one place the two verdict layers meet.
-    ledger_verdict = None
-    findings_read = critic_adjustments.read_findings_file(findings_path)
     # The pure report briefing must never reopen or independently classify
     # the ledger. Carry this exact reader result across the boundary so it
     # can name the ledger as source context only when this pass accepted it.
-    state["findings_read_status"] = findings_read.status
-    raw = (findings_read.findings or {}).get("verdict") if (
-        findings_read.status == critic_adjustments.FINDINGS_READ_OK
-    ) else None
-    if raw:
-        ledger_verdict = _LEDGER_TO_REVIEW_VERDICT.get(
-            str(raw).strip().lower()
-        )
+    state["findings_read_status"] = read.status
+    ledger_verdict = (
+        _LEDGER_TO_REVIEW_VERDICT[read.findings["verdict"]]
+        if read.status == critic_adjustments.FINDINGS_READ_OK
+        else None
+    )
 
     if critic_verdict == "ESCALATE":
         # The critic's one unilateral power, exercised by the pipeline
@@ -2171,7 +2175,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     status = "success" if not degradation_records else "degraded"
     source_fingerprint = _report_source_fingerprint(
         output_dir,
-        findings_read.status,
+        read.status,
         status,
         verdict,
         verdict_source,
@@ -2186,7 +2190,11 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
         "status": status,
         "verdict": verdict,
         "report_path": report_path,
-        "findings_path": findings_path if os.path.isfile(findings_path) else None,
+        "findings_path": (
+            findings_path
+            if read.status != critic_adjustments.FINDINGS_READ_ABSENT
+            else None
+        ),
         "critic_verdict": critic_verdict,
         "degradation_notes": degradation_notes,
         "review_baseline_saved": os.path.isfile(

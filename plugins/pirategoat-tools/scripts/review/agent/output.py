@@ -1677,6 +1677,36 @@ def reviewed_files_fields(reviewed_files) -> Dict:
     }
 
 
+def review_summary(document: Dict) -> Dict:
+    """Project one validated review document's own summary.
+
+    Every field here was computed by `derive_review_state()` when the
+    document was built and re-derived and compared field-for-field by
+    `validate_review_content()` when it was loaded, so `summary` is a
+    proven fact about `findings` rather than a claim about them. Three
+    consumers used to recount severities from the raw finding list with
+    `finding.get('severity', 'medium')` — a default for a case the
+    validator rejects — and they published only the severities that
+    happened to be non-zero, so a manifest could not tell "no critical
+    findings" from "critical was never counted". One projection, all five
+    severities, no arithmetic.
+
+    `verdict_without_advisory` is None unless advisory suppression
+    actually softened the gating verdict; that is the same condition the
+    document's own optional key encodes, carried rather than re-decided.
+    """
+    summary = document['summary']
+    return {
+        'verdict': document['verdict'],
+        'finding_count': summary['total_findings'],
+        'severities': dict(summary['by_severity']),
+        'suppressed_advisory_finding_count': summary[
+            'suppressed_advisory_finding_count'
+        ],
+        'verdict_without_advisory': summary.get('verdict_without_advisory'),
+    }
+
+
 _OPTIONAL_REVIEW_FIELDS = frozenset({"skip_reason"})
 _REQUIRED_FINDING_FIELDS = frozenset({
     "id",

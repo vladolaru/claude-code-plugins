@@ -398,24 +398,23 @@ def build_dispatch_manifest(output_dir: str, final_info: dict) -> dict:
     return result
 
 
-def _load_reviewed_files(
-    output_dir: str, agent: str
-) -> Optional[Dict[str, int]]:
-    """Count one finalized review's claimed and unclaimed files.
+def _load_final_review(output_dir: str, agent: str) -> Optional[Dict]:
+    """One dispatched agent's finalized review, or None if it has none.
 
-    Read off the document, not re-derived: finalization already proved the
-    two lists a coherent partition of the reviewer's claimable set.
+    The document carries `review_claimable_files` itself — finalization
+    derived it from this reviewer's own assignment sidecar and
+    `_validate_review` compared the two field for field — so a finalized
+    agent needs the sidecar opened not at all. Reading both was two opens
+    per dispatched agent per manifest build, of two files that a validator
+    had already proven to agree.
     """
     reviewer = derive_reviewer_name(agent)
-    paths = review_paths(output_dir, reviewer)
     try:
-        review = load_review_document(paths.final, reviewer)
+        return load_review_document(
+            review_paths(output_dir, reviewer).final, reviewer
+        )
     except ValueError:
         return None
-    return {
-        "reviewed_file_claim_count": len(review["reviewed_file_claims"]),
-        "unclaimed_review_file_count": len(review["unclaimed_review_files"]),
-    }
 
 
 def _load_review_claimable_file_count(
@@ -523,16 +522,29 @@ def build_coverage_manifest(
         # default to {} (measured, zero reviewers), never omitted, once
         # this builder runs at all; only a run whose manifest predates this
         # feature lacks the keys entirely (see
-        # `_load_reviewed_files`'s contract).
+        # `_load_final_review`'s contract).
         reviewed_files_by_agent: Dict[str, Dict[str, int]] = {}
         review_claimable_file_count_by_agent: Dict[str, int] = {}
         for name in sorted(final_agents):
             if not is_dispatched(final_agents[name].get("status")):
                 continue
-            reviewed_files = _load_reviewed_files(output_dir, name)
-            if reviewed_files is not None:
-                reviewed_files_by_agent[name] = reviewed_files
-            claimable_count = _load_review_claimable_file_count(output_dir, name)
+            review = _load_final_review(output_dir, name)
+            if review is not None:
+                reviewed_files_by_agent[name] = {
+                    "reviewed_file_claim_count": len(
+                        review["reviewed_file_claims"]
+                    ),
+                    "unclaimed_review_file_count": len(
+                        review["unclaimed_review_files"]
+                    ),
+                }
+                review_claimable_file_count_by_agent[name] = len(
+                    review["review_claimable_files"]
+                )
+                continue
+            claimable_count = _load_review_claimable_file_count(
+                output_dir, name
+            )
             if claimable_count is not None:
                 review_claimable_file_count_by_agent[name] = claimable_count
 

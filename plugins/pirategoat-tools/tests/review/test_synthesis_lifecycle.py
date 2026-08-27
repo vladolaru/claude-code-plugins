@@ -360,7 +360,9 @@ class TestVerdictCapture:
     def test_the_reconciliators_verdict_rides_its_row_too(self, out):
         lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
         findings = out / "review-findings.json"
-        findings.write_text('{"verdict": "request_changes"}')
+        findings.write_text(json.dumps(
+            canonical_findings_ledger(["high"])
+        ))
         _set_mtime(findings, T0 + timedelta(seconds=41))
         payload = lifecycle.observe(str(out))
         assert _entry(payload, lifecycle.RECONCILIATOR)["verdict"] == (

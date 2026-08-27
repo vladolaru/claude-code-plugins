@@ -35,7 +35,6 @@ import json
 import os
 import sys
 import time
-from collections import Counter
 from datetime import datetime, timezone
 
 try:
@@ -49,7 +48,7 @@ try:
         finalize_review_command,
         review_paths,
     )
-    from .agent.output import load_review_document
+    from .agent.output import load_review_document, review_summary
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
@@ -64,7 +63,7 @@ except ImportError:
         finalize_review_command,
         review_paths,
     )
-    from review.agent.output import load_review_document
+    from review.agent.output import load_review_document, review_summary
 
 
 DEFAULT_TIMEOUT = 1200  # 20 minutes
@@ -146,25 +145,23 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
 
         if os.path.isfile(review_path):
             try:
-                review = load_review_document(review_path, reviewer)
-                findings = review["findings"]
-                counts = dict(Counter(
-                    finding.get("severity", "medium").lower()
-                    for finding in findings
-                ))
-                verdict = review["verdict"]
-                finished += 1
-                agents.append({
-                    "name": name, "status": "FINISHED",
-                    "counts": counts, "verdict": verdict,
-                })
-            except (ValueError, KeyError, TypeError):
+                summary = review_summary(
+                    load_review_document(review_path, reviewer)
+                )
+            except ValueError:
                 invalid += 1
                 agents.append({
                     "name": name,
                     "status": "INVALID_OUTPUT",
                     "output_present": True,
                     "note": "final review failed canonical validation",
+                })
+            else:
+                finished += 1
+                agents.append({
+                    "name": name, "status": "FINISHED",
+                    "counts": summary["severities"],
+                    "verdict": summary["verdict"],
                 })
         elif os.path.isfile(started_path):
             try:
@@ -264,7 +261,11 @@ def format_output(result: dict) -> str:
         if st in SKIPPED_STATUSES:
             lines.append(f"  {name:30s} {st}  ({a.get('reason', '')})")
         elif st == "FINISHED":
-            counts = ", ".join(f"{k}={v}" for k, v in sorted(a.get("counts", {}).items()))
+            counts = ", ".join(
+                f"{k}={v}"
+                for k, v in sorted(a.get("counts", {}).items())
+                if v
+            )
             verdict = a.get("verdict", "")
             lines.append(f"  {name:30s} FINISHED  {counts:30s}  VERDICT={verdict}")
         elif st == "RUNNING":
