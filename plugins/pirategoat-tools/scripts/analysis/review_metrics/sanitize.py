@@ -1527,6 +1527,14 @@ def _sanitize_reconciliation(value: object) -> dict[str, Any] | None:
         if count is None:
             return None
         result[name] = count
+    # The producer's partition invariant, mirrored so a damaged manifest
+    # cannot republish counts the ledger validator would have refused.
+    if result["grouped_concern_count"] != (
+        result["verified_concern_count"]
+        + result["false_positive_concern_count"]
+        + result["out_of_scope_concern_count"]
+    ):
+        return None
     for name in _RECONCILIATION_AGENT_FIELDS:
         agents = value.get(name)
         if agents is None:

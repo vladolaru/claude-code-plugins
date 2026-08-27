@@ -418,6 +418,17 @@ def _task_5_manifest(run_id: str = "task-5-run") -> dict:
 
 
 class TestReviewVocabularyLifecycleMigration:
+    def test_reconciliation_counts_that_do_not_partition_are_dropped(
+        self, tmp_path
+    ):
+        """The sanitizer mirrors the ledger's partition invariant."""
+        manifest = _task_5_manifest()
+        manifest["outcome"]["reconciliation"]["false_positive_concern_count"] = 2
+
+        measured = measure_run(manifest, tmp_path, include_transcripts=False)
+
+        assert measured["outcome"]["reconciliation"] is None
+
     def test_schema_three_manifest_keeps_only_canonical_live_vocabulary(
         self, tmp_path
     ):
