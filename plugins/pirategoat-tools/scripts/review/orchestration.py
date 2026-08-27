@@ -1816,6 +1816,10 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     critic_verdict = state["critic_verdict"]
 
     findings_path = os.path.join(output_dir, "review-findings.json")
+    # The step's one read of the ledger, and therefore its one authority on
+    # whether a ledger exists. Everything below asks this result, never the
+    # filesystem a second time.
+    read = critic_adjustments.read_findings_file(findings_path)
     degradation_records = []
 
     # Critic-absence honesty, keyed on the DISPATCH MARKER and the usable
@@ -1859,7 +1863,10 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # must say out loud. Step 11 does not adjudicate on the orchestrator's
     # behalf: an unprobed batch applied here would publish "not_checked"
     # decisions nobody chose.
-    if os.path.isfile(findings_path) and critic_verdict == "REVISE":
+    if (
+        read.status != critic_adjustments.FINDINGS_READ_ABSENT
+        and critic_verdict == "REVISE"
+    ):
         try:
             proposal_state = critic_adjustments.adjudication_state(output_dir)
         except (ValueError, OSError, json.JSONDecodeError) as err:
@@ -1894,7 +1901,6 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # Both are best-effort by construction: a render failure is a
     # degradation note, never an exception out of finalize, and never a
     # faked file.
-    read = critic_adjustments.read_findings_file(findings_path)
     findings_markdown, render_error = _render_findings_markdown(
         output_dir, read
     )
