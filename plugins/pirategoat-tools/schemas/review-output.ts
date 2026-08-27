@@ -238,19 +238,19 @@ export interface ReviewContent {
     // File-level informational notes that do NOT count toward the verdict.
     // The reconciliator records verified, maintainer-intended tradeoffs here
     // (category: "tradeoff") — trigger condition, affected population
-    // verified at file:line, and why the compromise is intentional. The key
-    // is always present; null when there is nothing to record.
-    observations: Array<{ file: string; note: string; category: string }> | null;
+    // verified at file:line, and why the compromise is intentional. Always
+    // present, empty when there is nothing to record.
+    observations: Array<{ file: string; note: string; category: string }>;
 
-    // The key is always present; null when the producer proposed none.
+    // Always present; each priority is empty when the producer proposed none.
     recommendations: {
         immediate: string[]; // Must fix before merge
         important: string[]; // Should fix soon
         suggestions: string[]; // Nice to have
-    } | null;
+    };
 
-    // The key is always present; null when the producer offered none.
-    positive_observations: string[] | null;
+    // Always present, empty when the producer offered none.
+    positive_observations: string[];
 
     // The producer's own reading of the change as a whole — two or three
     // sentences the list of findings cannot express. Always present, null

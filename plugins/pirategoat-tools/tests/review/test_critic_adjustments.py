@@ -2519,8 +2519,11 @@ class TestWithdrawnAssessmentRender:
             "review_claimable_files": [], "reviewed_file_claims": [],
             "unclaimed_review_files": [], "inline_diff_file_count": 1,
             "reviewed_file_count": 1,
-            "in_scope_review_file_count": 1, "observations": None,
-            "recommendations": None, "positive_observations": None,
+            "in_scope_review_file_count": 1, "observations": [],
+            "recommendations": {
+                "immediate": [], "important": [], "suggestions": [],
+            },
+            "positive_observations": [],
             "checks": None,
             "meta": {"review_duration_ms": 1,
                      "confidence_score": 0.9},

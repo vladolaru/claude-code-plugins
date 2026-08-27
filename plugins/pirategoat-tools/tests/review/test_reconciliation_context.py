@@ -231,9 +231,11 @@ def _make_review_json(
         "inline_diff_file_count": 3,
         "reviewed_file_count": 3,
         "in_scope_review_file_count": 3,
-        "observations": None,
-        "recommendations": None,
-        "positive_observations": None,
+        "observations": [],
+        "recommendations": {
+            "immediate": [], "important": [], "suggestions": [],
+        },
+        "positive_observations": [],
         "checks": [],
         "assessment": None,
         "meta": {

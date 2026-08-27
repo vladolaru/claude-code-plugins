@@ -160,7 +160,6 @@ class TestRecordAssembly:
             ],
             assessment="One correction is required.",
             positive_observations=["The helper boundary is clear."],
-            recommendations=None,
         )
         findings["meta"]["next_finding_number"] = 2
         _write_ledger(out_dir, findings)

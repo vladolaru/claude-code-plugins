@@ -287,36 +287,38 @@ def validate_ledger_ids(
             )
 
 
-def _validate_optional_review_fields(review):
-    observations = review.get("observations")
-    if observations is not None and (
-        not isinstance(observations, list)
+def _validate_review_collections(review):
+    """Validate the three always-present review collections.
+
+    Reached only after the content-shape check proved all three keys exist.
+    They are lists and a three-priority object in every document any producer
+    writes, empty when nothing was recorded, so no reader has to tell an
+    absent collection from an empty one.
+    """
+    observations = review["observations"]
+    if not isinstance(observations, list) or any(
+        not isinstance(item, dict)
         or any(
-            not isinstance(item, dict)
-            or any(
-                not isinstance(item.get(field), str)
-                for field in ("file", "note", "category")
-            )
-            for item in observations
+            not isinstance(item.get(field), str)
+            for field in ("file", "note", "category")
         )
+        for item in observations
     ):
         raise ValueError("review observations are malformed")
 
-    recommendations = review.get("recommendations")
-    if recommendations is not None and (
+    recommendations = review["recommendations"]
+    if (
         not isinstance(recommendations, dict)
         or set(recommendations) != {"immediate", "important", "suggestions"}
         or any(
-            not _is_string_list(recommendations.get(priority))
+            not _is_string_list(recommendations[priority])
             for priority in ("immediate", "important", "suggestions")
         )
     ):
         raise ValueError("review recommendations are malformed")
 
-    for field in ("positive_observations",):
-        value = review.get(field)
-        if value is not None and not _is_string_list(value):
-            raise ValueError(f"review {field} must be strings or null")
+    if not _is_string_list(review["positive_observations"]):
+        raise ValueError("review positive_observations must be strings")
 
 
 def _validate_content_shape(document, *, schema):
@@ -382,7 +384,7 @@ def _validate_content_shape(document, *, schema):
         meta["next_finding_number"],
         meta["next_check_number"],
     )
-    _validate_optional_review_fields(document)
+    _validate_review_collections(document)
 
 
 def validate_review_content(document, *, schema):

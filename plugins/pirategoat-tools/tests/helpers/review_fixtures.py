@@ -56,9 +56,11 @@ def canonical_review_document(
         "inline_diff_file_count": 0,
         "reviewed_file_count": len(claimed),
         "in_scope_review_file_count": len(claimable),
-        "observations": None,
-        "recommendations": None,
-        "positive_observations": None,
+        "observations": [],
+        "recommendations": {
+            "immediate": [], "important": [], "suggestions": [],
+        },
+        "positive_observations": [],
         "checks": [],
         "assessment": None,
         "meta": {

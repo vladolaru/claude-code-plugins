@@ -353,7 +353,7 @@ class TestFindingAndCheckDomainModel:
         assert review["skip_reason"] == "No security-relevant files changed."
         assert review["findings"] == []
         assert review["checks"] == []
-        assert review["positive_observations"] is None
+        assert review["positive_observations"] == []
 
 
 # =============================================================================
@@ -849,6 +849,17 @@ class TestToDict:
         b.add_finding("medium", "Title", "f.py", "desc", "rec", line=1)
         d = b.to_dict()
         assert set(d.keys()) == REVIEW_CONTENT_FIELDS | {"reviewer"}
+
+    def test_the_three_collections_serialize_as_themselves_when_empty(self):
+        """Empty is [] and {} — never null. A reader that had to distinguish
+        "said nothing" from "has no field" wrote `or []` at every use, and
+        one that forgot it read a null as a crash."""
+        d = ReviewOutputBuilder(pr_id="1", reviewer="sec").to_dict()
+        assert d["observations"] == []
+        assert d["positive_observations"] == []
+        assert d["recommendations"] == {
+            "immediate": [], "important": [], "suggestions": [],
+        }
 
     def test_to_dict_has_no_reviewed_files_fields(self):
         """to_dict takes no parameters — save_draft stitches the six
@@ -2576,6 +2587,17 @@ def test_validate_review_content_rejects_reviewer_fields():
         validate_review_content(doc, schema=2)
     content = {k: v for k, v in doc.items() if k not in REVIEWER_FIELDS}
     assert validate_review_content(content, schema=2) is content
+
+
+@pytest.mark.parametrize(
+    "field", ["observations", "recommendations", "positive_observations"]
+)
+def test_validate_review_content_rejects_null_collections(field):
+    doc = canonical_review_document("security", ())
+    content = {k: v for k, v in doc.items() if k not in REVIEWER_FIELDS}
+    content[field] = None
+    with pytest.raises(ValueError):
+        validate_review_content(content, schema=2)
 
 
 def test_reviewed_files_fields_projects_the_six_envelope_keys():

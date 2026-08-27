@@ -350,15 +350,12 @@ class ReviewOutputBuilder:
         builder = cls(review["pr_id"], review["reviewer"])
         builder.timestamp = review["timestamp"]
         builder.findings = list(review["findings"])
-        builder.observations = list(review.get("observations") or [])
-        recommendations = review.get("recommendations") or {}
+        builder.observations = list(review["observations"])
         builder.recommendations = {
-            priority: list(recommendations.get(priority) or [])
+            priority: list(review["recommendations"][priority])
             for priority in ("immediate", "important", "suggestions")
         }
-        builder.positive_observations = list(
-            review.get("positive_observations") or []
-        )
+        builder.positive_observations = list(review["positive_observations"])
         builder.checks = list(review["checks"])
         builder.assessment = review.get("assessment")
         builder.reviewed_file_claims = list(review["reviewed_file_claims"])
@@ -994,9 +991,12 @@ class ReviewOutputBuilder:
             'verdict': verdict,
             'summary': summary,
             'findings': self.findings,
-            'observations': self.observations if self.observations else None,
-            'recommendations': self.recommendations if any(self.recommendations.values()) else None,
-            'positive_observations': self.positive_observations if self.positive_observations else None,
+            'observations': list(self.observations),
+            'recommendations': {
+                priority: list(self.recommendations[priority])
+                for priority in ('immediate', 'important', 'suggestions')
+            },
+            'positive_observations': list(self.positive_observations),
             'checks': list(self.checks),
             'assessment': self.assessment,
             'meta': {
