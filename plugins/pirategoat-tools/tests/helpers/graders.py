@@ -25,24 +25,26 @@ class GradeResult:
     detail: Optional[dict] = None  # grader-specific detail payload (detection match, trial aggregation)
 
 
-# The graded field sets ARE the production ones. A grader that re-spells
+# The graded vocabularies ARE the production ones. A grader that re-spells
 # them grades its own copy: `REQUIRED_JSON_TOP_FIELDS` had drifted to 15
 # hand-picked keys against a validator that requires all 20, so five real
-# fields were ungraded. `VALID_VERDICTS` and `SEVERITY_RANK` below stay
-# local — no single production constant holds exactly those sets (the
-# per-reviewer verdict field also carries `not_applicable`, which the
-# ledger ladder in `verdict_rules.py` deliberately excludes).
+# fields were ungraded.
 from review.review_document import (
     REQUIRED_CHECK_FIELDS,
     REQUIRED_FINDING_FIELDS,
     REVIEW_CONTENT_FIELDS,
     REVIEWER_FIELDS,
 )
-from review.verdict_rules import VALID_SEVERITIES as _PRODUCTION_SEVERITIES
+from review.verdict_rules import (
+    REVIEW_VERDICTS as _PRODUCTION_VERDICTS,
+    SEVERITY_RANK,
+    VALID_SEVERITIES as _PRODUCTION_SEVERITIES,
+)
 
 VALID_SEVERITIES = set(_PRODUCTION_SEVERITIES)
-SEVERITY_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
-VALID_VERDICTS = {"approve", "block", "request_changes", "comment", "not_applicable"}
+# The per-reviewer verdict layer — the ledger ladder's four outcomes plus
+# `not_applicable`, the abstention no ladder produces.
+VALID_VERDICTS = set(_PRODUCTION_VERDICTS)
 REQUIRED_JSON_TOP_FIELDS = REVIEW_CONTENT_FIELDS | REVIEWER_FIELDS
 
 

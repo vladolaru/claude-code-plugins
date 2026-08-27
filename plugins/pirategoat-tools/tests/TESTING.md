@@ -915,10 +915,10 @@ Never hardcode absolute paths. Tests run from any working directory.
 
 ## Valid Values Reference
 
-These are the canonical valid values used by graders. `REQUIRED_JSON_TOP_FIELDS`, `REQUIRED_FINDING_FIELDS`, and `REQUIRED_CHECK_FIELDS` are imported from production (`review/agent/output.py`), and `VALID_SEVERITIES` is imported from `verdict_rules.VALID_SEVERITIES` (`review/verdict_rules.py`) rather than restated, so a schema or vocabulary change moves them without a second edit. The three below that are not imported have no single production twin.
+These are the canonical valid values used by graders. Every vocabulary below except the last is imported from production rather than restated, so a schema or vocabulary change moves the graders without a second edit: `REQUIRED_JSON_TOP_FIELDS`, `REQUIRED_FINDING_FIELDS`, and `REQUIRED_CHECK_FIELDS` come from `review/review_document.py`, and `VALID_SEVERITIES`, `SEVERITY_RANK`, and `VALID_VERDICTS` from `review/verdict_rules.py`.
 
 | Constant | Values | Source |
 |---|---|---|
-| `VALID_VERDICTS` | `approve`, `block`, `request_changes`, `comment`, `not_applicable` | The per-reviewer verdict field — broader than `verdict_rules.VERDICT_RANK`, which is the ledger ladder |
-| `SEVERITY_RANK` | `info` < `low` < `medium` < `high` < `critical` | Answer-key severity comparison in `grading/test_answer_keys.py` |
+| `VALID_VERDICTS` | `approve`, `block`, `request_changes`, `comment`, `not_applicable` | `verdict_rules.REVIEW_VERDICTS` — the per-reviewer layer, broader than `LEDGER_VERDICTS`, which is the ladder |
+| `SEVERITY_RANK` | `info` < `low` < `medium` < `high` < `critical` | `verdict_rules.SEVERITY_RANK`, derived from `VALID_SEVERITIES` |
 | `REQUIRED_STATE_FIELDS` | `last_reviewed_sha`, `last_reviewed_at`, `review_count`, `base_ref`, `git_range_used` | `code-review.md` Step 5 |
