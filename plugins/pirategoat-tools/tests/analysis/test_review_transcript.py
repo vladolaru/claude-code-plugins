@@ -245,7 +245,7 @@ def _manifest(
             "ended_at": (_TEST_TRANSCRIPT_START + timedelta(hours=1)).isoformat(),
         },
         "steps": [],
-        "coverage": {"by_agent": {"security-reviewer": ["src/in.py"]}},
+        "assignment": {"by_agent": {"security-reviewer": ["src/in.py"]}},
     }
     if started is None:
         started = ["security-reviewer"]
@@ -4467,7 +4467,7 @@ class TestEnrichRunTranscript:
         manifest = _manifest(
             session_id, repo, output_dir, started=[agent]
         )
-        manifest["coverage"]["by_agent"] = {agent: ["src/in.py"]}
+        manifest["assignment"]["by_agent"] = {agent: ["src/in.py"]}
 
         result = enrich_run_transcript(
             manifest,
@@ -5632,7 +5632,7 @@ class TestBudgetAndEvidenceCounts:
             session_id, tmp_path, output_dir,
             started=["tests-mutation-reviewer"],
         )
-        manifest["coverage"] = {"by_agent": {"tests-mutation-reviewer": []}}
+        manifest["assignment"] = {"by_agent": {"tests-mutation-reviewer": []}}
 
         result = enrich_run_transcript(
             manifest, sessions, {"tests-mutation-reviewer"}
@@ -5687,7 +5687,7 @@ class TestBudgetAndEvidenceCounts:
             session_id, tmp_path, output_dir,
             started=["repo-renewals-reviewer"],
         )
-        manifest["coverage"] = {
+        manifest["assignment"] = {
             "by_agent": {"repo-renewals-reviewer": ["src/in.py"]}
         }
 
@@ -5793,7 +5793,7 @@ class TestBudgetAndEvidenceCounts:
             session_id, tmp_path, output_dir,
             started=["tests-mutation-reviewer"],
         )
-        manifest["coverage"] = {"by_agent": {"tests-mutation-reviewer": []}}
+        manifest["assignment"] = {"by_agent": {"tests-mutation-reviewer": []}}
 
         result = enrich_run_transcript(
             manifest, sessions, {"tests-mutation-reviewer"}
@@ -5915,7 +5915,7 @@ class TestBudgetAndEvidenceCounts:
         manifest = _manifest(
             session_id, tmp_path, output_dir, started=["security-reviewer"]
         )
-        manifest["coverage"] = None
+        manifest["assignment"] = None
 
         result = enrich_run_transcript(manifest, sessions, {"security-reviewer"})
 

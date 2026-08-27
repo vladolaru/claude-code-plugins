@@ -224,7 +224,7 @@ class TestPersistReviewedFilesInput:
         load_scope_facts() concatenates every summary's
         budget_exceeded_files without deduping. persist_review_assignment
         must not publish that duplicate: it inflates len(review_claimable_files),
-        the total manifest_sections.build_coverage_manifest reconciles
+        the total manifest_sections.build_assignment_manifest reconciles
         the agent's derived positive-claim/gap populations against."""
         _mod.persist_review_assignment(
             str(tmp_path),

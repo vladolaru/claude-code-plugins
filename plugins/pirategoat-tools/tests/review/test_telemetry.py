@@ -587,7 +587,7 @@ class TestRunManifest:
         assert manifest["availability"] == {
             "pipeline": True,
             "transcript": False,
-            "coverage": False,
+            "assignment": False,
             "worktree_hygiene": False,
             "synthesis_agents": False,
             "usage": False,
@@ -596,7 +596,7 @@ class TestRunManifest:
             "reviewer_markdown": False,
             "findings_markdown": False,
         }
-        assert manifest["coverage"] is None
+        assert manifest["assignment"] is None
 
     def test_log_step_refreshes_running_manifest(self, telemetry):
         telemetry.start(run_id="run-1")
@@ -659,7 +659,7 @@ class TestRunManifest:
 
         manifest = _read_manifest(telemetry)
         assert manifest["status"] == "running"
-        for section in ("coverage", "synthesis_agents", "usage"):
+        for section in ("assignment", "synthesis_agents", "usage"):
             assert manifest[section] is None
             assert manifest["availability"][section] is False
         assert manifest["outcome"]["reconciliation"] is None
@@ -688,8 +688,39 @@ class TestRunManifest:
 
         manifest = _read_manifest(telemetry)
         assert manifest["status"] == "complete"
-        assert manifest["coverage"] is not None
+        assert manifest["assignment"] is not None
         assert len(reads) == 1
+
+    def test_the_manifest_section_is_named_for_what_it_holds(
+        self, mod, telemetry, output_dir
+    ):
+        """`assignment`, not `coverage` — the section IS the assignment.
+
+        Its six fields are the assignment vocabulary Plan A settled on, and
+        the sidecar they describe is `<reviewer>-assignment.json`.
+        """
+        telemetry.start(run_id="run-1")
+        _write_coverage_inputs(
+            output_dir,
+            ["src/a.py"],
+            ["src/a.py"],
+            [{"name": "code-reviewer", "status": "DISPATCH"}],
+        )
+
+        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
+
+        manifest = _read_manifest(telemetry)
+        assert "coverage" not in manifest
+        assert "coverage" not in manifest["availability"]
+        assert set(manifest["assignment"]) >= set(
+            mod.manifest_sections.ASSIGNMENT_FIELDS
+        )
+        assert manifest["availability"]["assignment"] is True
+
+    def test_the_assignment_vocabulary_has_one_owner(self, mod):
+        with pytest.raises(ImportError):
+            import review.assignment_vocabulary  # noqa: F401
+        assert mod.manifest_sections.ASSIGNMENT_FIELDS
 
     def test_log_step_manifest_allowlists_lifecycle_and_decision_fields(
         self, telemetry
@@ -1067,8 +1098,8 @@ class TestRunManifest:
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
         manifest = _read_manifest(telemetry)
-        assert manifest["availability"]["coverage"] is True
-        assert manifest["coverage"] == {
+        assert manifest["availability"]["assignment"] is True
+        assert manifest["assignment"] == {
             "changed_files": [
                 "docs/readme.md",
                 "src/a.py",
@@ -1141,7 +1172,7 @@ class TestRunManifest:
             })
         )
 
-        manifest_uncovered = _read_manifest(telemetry)["coverage"][
+        manifest_uncovered = _read_manifest(telemetry)["assignment"][
             "unassigned_reviewable_files"
         ]
         recon_unscoped = aggregate_file_review(
@@ -1177,14 +1208,14 @@ class TestRunManifest:
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
         manifest = _read_manifest(telemetry)
-        assert manifest["availability"]["coverage"] is True
-        assert manifest["coverage"]["changed_files"] == [unicode_path]
-        assert manifest["coverage"]["reviewable_files"] == [unicode_path]
-        assert manifest["coverage"]["assigned_files_by_agent"] == {
+        assert manifest["availability"]["assignment"] is True
+        assert manifest["assignment"]["changed_files"] == [unicode_path]
+        assert manifest["assignment"]["reviewable_files"] == [unicode_path]
+        assert manifest["assignment"]["assigned_files_by_agent"] == {
             "code-reviewer": [unicode_path],
         }
-        assert manifest["coverage"]["assigned_files"] == [unicode_path]
-        assert manifest["coverage"]["unassigned_reviewable_files"] == []
+        assert manifest["assignment"]["assigned_files"] == [unicode_path]
+        assert manifest["assignment"]["unassigned_reviewable_files"] == []
 
     def test_git_quoted_literal_backslash_does_not_collide_with_nested_path(
         self, telemetry, output_dir
@@ -1205,7 +1236,7 @@ class TestRunManifest:
         )
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
-        coverage = _read_manifest(telemetry)["coverage"]
+        coverage = _read_manifest(telemetry)["assignment"]
         assert coverage["changed_files"] == [nested_path, literal_backslash]
         assert coverage["reviewable_files"] == [nested_path, literal_backslash]
         assert coverage["assigned_files_by_agent"]["code-reviewer"] == [
@@ -1240,7 +1271,7 @@ class TestRunManifest:
         assert manifest["agents"]["started"][0]["scope"]["paths"] == [
             literal_quoted_path,
         ]
-        coverage = manifest["coverage"]
+        coverage = manifest["assignment"]
         assert coverage["changed_files"] == [literal_quoted_path, plain_path]
         assert coverage["reviewable_files"] == [literal_quoted_path, plain_path]
         assert coverage["assigned_files_by_agent"] == {
@@ -1288,8 +1319,8 @@ class TestRunManifest:
         telemetry.start(run_id="run-1")
 
         manifest = _read_manifest(telemetry)
-        assert manifest["availability"]["coverage"] is False
-        assert manifest["coverage"] is None
+        assert manifest["availability"]["assignment"] is False
+        assert manifest["assignment"] is None
 
     def test_mixed_invalid_persisted_scope_paths_make_coverage_unavailable(
         self, telemetry, output_dir
@@ -1319,8 +1350,8 @@ class TestRunManifest:
         assert manifest["agents"]["started"][0]["scope"]["paths"] == [
             "src/a.py",
         ]
-        assert manifest["availability"]["coverage"] is False
-        assert manifest["coverage"] is None
+        assert manifest["availability"]["assignment"] is False
+        assert manifest["assignment"] is None
 
     def test_finally_skipped_agent_assigns_nothing_despite_start_event(
         self, telemetry, output_dir
@@ -1339,7 +1370,7 @@ class TestRunManifest:
         )
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
-        coverage = _read_manifest(telemetry)["coverage"]
+        coverage = _read_manifest(telemetry)["assignment"]
         assert coverage["assigned_files_by_agent"] == {}
         assert coverage["assigned_files"] == []
         assert coverage["unassigned_reviewable_files"] == ["src/a.py"]
@@ -1356,7 +1387,7 @@ class TestRunManifest:
         telemetry.start(run_id="run-1")
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
-        coverage = _read_manifest(telemetry)["coverage"]
+        coverage = _read_manifest(telemetry)["assignment"]
         assert coverage["assigned_files_by_agent"] == {}
         assert coverage["assigned_files"] == []
         assert coverage["unassigned_reviewable_files"] == ["src/a.py"]
@@ -1379,7 +1410,7 @@ class TestRunManifest:
         )
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
-        assert _read_manifest(telemetry)["coverage"]["assigned_files_by_agent"] == {
+        assert _read_manifest(telemetry)["assignment"]["assigned_files_by_agent"] == {
             "security-reviewer": ["src/a.py", "src/b.py"],
         }
 
@@ -1398,7 +1429,7 @@ class TestRunManifest:
         )
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
-        coverage = _read_manifest(telemetry)["coverage"]
+        coverage = _read_manifest(telemetry)["assignment"]
         assert coverage["assigned_files_by_agent"] == {
             "a11y-reviewer": ["templates/page.php"],
         }
@@ -1468,8 +1499,8 @@ class TestRunManifest:
         telemetry.start(run_id="run-1")
 
         manifest = _read_manifest(telemetry)
-        assert manifest["availability"]["coverage"] is False
-        assert manifest["coverage"] is None
+        assert manifest["availability"]["assignment"] is False
+        assert manifest["assignment"] is None
         # Legitimate absence (malformed/partial/missing inputs) is normal
         # operation and must stay silent — only an unexpected builder bug
         # is diagnostic-worthy. See
@@ -1492,7 +1523,7 @@ class TestRunManifest:
         )
 
         def _boom(*_args, **kwargs):
-            # `repo_path` is passed only by build_coverage_manifest, so
+            # `repo_path` is passed only by build_assignment_manifest, so
             # this breaks the coverage builder alone and leaves the
             # context extract — which shares this same normalizer, and
             # runs in the same finalize — working.
@@ -1500,7 +1531,7 @@ class TestRunManifest:
                 return normalize_repo_paths(*_args, **kwargs)
             raise RuntimeError("simulated coverage builder bug")
 
-        # normalize_paths is the sole collaborator build_coverage_manifest
+        # normalize_paths is the sole collaborator build_assignment_manifest
         # takes as an injected dependency; breaking it simulates a real
         # defect in the builder without touching its explicit absence
         # branches (those `return None` directly, never raising). Patched
@@ -1514,17 +1545,17 @@ class TestRunManifest:
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
         manifest = _read_manifest(telemetry)
-        assert manifest["availability"]["coverage"] is False
-        assert manifest["coverage"] is None
+        assert manifest["availability"]["assignment"] is False
+        assert manifest["assignment"] is None
         err = capsys.readouterr().err
-        assert "coverage manifest build failed" in err
+        assert "assignment manifest build failed" in err
         assert str(output_dir) in err
         assert "simulated coverage builder bug" in err
 
-    def test_build_coverage_manifest_diagnoses_unexpected_exception_directly(
+    def test_build_assignment_manifest_diagnoses_unexpected_exception_directly(
         self, mod, capsys
     ):
-        """Direct-call pin on build_coverage_manifest's own contract.
+        """Direct-call pin on build_assignment_manifest's own contract.
 
         normalize_paths is an injected parameter of the function itself, so
         this exercises the except-Exception path with zero telemetry
@@ -1540,7 +1571,7 @@ class TestRunManifest:
             "index": {},
         }
 
-        result = mod.manifest_sections.build_coverage_manifest(
+        result = mod.manifest_sections.build_assignment_manifest(
             "/output/dir",
             [],
             {"git": {"changed_files": ["src/a.py"]}},
@@ -1551,7 +1582,7 @@ class TestRunManifest:
 
         assert result is None
         err = capsys.readouterr().err
-        assert "coverage manifest build failed for /output/dir" in err
+        assert "assignment manifest build failed for /output/dir" in err
         assert "simulated coverage builder bug" in err
 
     def test_valid_empty_path_sets_are_available_zero_coverage(
@@ -1565,8 +1596,8 @@ class TestRunManifest:
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
         manifest = _read_manifest(telemetry)
-        assert manifest["availability"]["coverage"] is True
-        assert manifest["coverage"] == {
+        assert manifest["availability"]["assignment"] is True
+        assert manifest["assignment"] == {
             "changed_files": [],
             "reviewable_files": [],
             "assigned_files_by_agent": {},
@@ -1597,8 +1628,8 @@ class TestRunManifest:
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
         manifest = _read_manifest(telemetry)
-        assert manifest["availability"]["coverage"] is False
-        assert manifest["coverage"] is None
+        assert manifest["availability"]["assignment"] is False
+        assert manifest["assignment"] is None
 
     def test_coverage_carries_canonical_reviewed_files_per_reviewer(
         self, telemetry, output_dir
@@ -1633,7 +1664,7 @@ class TestRunManifest:
         )
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
-        coverage = _read_manifest(telemetry)["coverage"]
+        coverage = _read_manifest(telemetry)["assignment"]
         assert coverage["reviewed_files_by_agent"] == {
             "security-reviewer": {
                 "reviewed_file_claim_count": 1,
@@ -1746,7 +1777,7 @@ class TestRunManifest:
         ).save_draft()
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
-        coverage = _read_manifest(telemetry)["coverage"]
+        coverage = _read_manifest(telemetry)["assignment"]
         assert coverage["reviewed_files_by_agent"] == {}
         assert coverage["review_claimable_file_count_by_agent"] == {
             "security-reviewer": 1
@@ -3252,7 +3283,7 @@ class TestReviewVocabularyManifestProjection:
             },
         )
 
-        coverage = mod.manifest_sections.build_coverage_manifest(
+        coverage = mod.manifest_sections.build_assignment_manifest(
             str(output_dir),
             [{
                 "event": "agent_start",
@@ -4859,12 +4890,12 @@ class TestReprojectUsage:
                 "incomplete": [],
             },
             "dispatch": {"fixture": "dispatch-payload"},
-            "coverage": {"fixture": "coverage-payload"},
+            "assignment": {"fixture": "coverage-payload"},
             "outcome": {"summary": {"fixture": "outcome-payload"}},
             "availability": {
                 "pipeline": True,
                 "transcript": True,
-                "coverage": True,
+                "assignment": True,
                 "worktree_hygiene": True,
                 "synthesis_agents": True,
                 "usage": True,

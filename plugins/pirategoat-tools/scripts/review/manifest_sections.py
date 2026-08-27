@@ -12,15 +12,6 @@ from collections import Counter
 from typing import Any, Dict, List, Optional
 
 try:
-    from .assignment_vocabulary import (
-        ASSIGNED_FILES,
-        ASSIGNED_FILES_BY_AGENT,
-        ASSIGNMENT_FIELDS,
-        CHANGED_FILES,
-        FILE_EXCLUSIONS,
-        REVIEWABLE_FILES,
-        UNASSIGNED_REVIEWABLE_FILES,
-    )
     from .agent.review_assignment import ReviewAssignmentError, derive_reviewed_files
     from .agent.output import load_review_document
     from .reviewer_names import derive_reviewer_name
@@ -47,15 +38,6 @@ except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
-    from review.assignment_vocabulary import (
-        ASSIGNED_FILES,
-        ASSIGNED_FILES_BY_AGENT,
-        ASSIGNMENT_FIELDS,
-        CHANGED_FILES,
-        FILE_EXCLUSIONS,
-        REVIEWABLE_FILES,
-        UNASSIGNED_REVIEWABLE_FILES,
-    )
     from review.agent.review_assignment import ReviewAssignmentError, derive_reviewed_files
     from review.agent.output import load_review_document
     from review.reviewer_names import derive_reviewer_name
@@ -78,6 +60,50 @@ except ImportError:
         LIFECYCLE_SCHEMA as _SUPPORTED_SYNTHESIS_LIFECYCLE_SCHEMA,
         ROW_KEYS as _SYNTHESIS_ROW_KEYS,
     )
+
+
+# The schema-3 manifest assignment field names. They live with the
+# builder that emits them: the analysis package reaches them through the
+# same exact-path contract module it already loads for this file's
+# section-status vocabularies, so the separate no-imports module that
+# existed to avoid an import cycle was avoiding a cycle that the contract
+# loader had already made impossible.
+CHANGED_FILES = "changed_files"
+REVIEWABLE_FILES = "reviewable_files"
+ASSIGNED_FILES_BY_AGENT = "assigned_files_by_agent"
+ASSIGNED_FILES = "assigned_files"
+FILE_EXCLUSIONS = "file_exclusions"
+UNASSIGNED_REVIEWABLE_FILES = "unassigned_reviewable_files"
+
+ASSIGNMENT_FIELDS = (
+    CHANGED_FILES,
+    REVIEWABLE_FILES,
+    ASSIGNED_FILES_BY_AGENT,
+    ASSIGNED_FILES,
+    FILE_EXCLUSIONS,
+    UNASSIGNED_REVIEWABLE_FILES,
+)
+
+ASSIGNMENT_PATH_LIST_FIELDS = (
+    CHANGED_FILES,
+    REVIEWABLE_FILES,
+    ASSIGNED_FILES,
+    UNASSIGNED_REVIEWABLE_FILES,
+)
+
+ASSIGNMENT_COUNTABLE_LIST_FIELDS = (
+    CHANGED_FILES,
+    REVIEWABLE_FILES,
+    ASSIGNED_FILES,
+    FILE_EXCLUSIONS,
+    UNASSIGNED_REVIEWABLE_FILES,
+)
+
+ASSIGNMENT_TABLE_FIELDS = (
+    ASSIGNED_FILES,
+    REVIEWABLE_FILES,
+    UNASSIGNED_REVIEWABLE_FILES,
+)
 
 
 _DEPENDENCY_REFRESH_STATUSES = frozenset(REPORT_STATUSES)
@@ -434,7 +460,7 @@ def _load_review_claimable_file_count(
     return len(reviewed_files.review_claimable_files)
 
 
-def build_coverage_manifest(
+def build_assignment_manifest(
     output_dir: str,
     events: List[dict],
     context: Optional[dict],
@@ -442,7 +468,7 @@ def build_coverage_manifest(
     final_info: dict,
     normalize_paths,
 ) -> Optional[dict]:
-    """Build descriptive generated-scope coverage from durable inputs."""
+    """Build the descriptive generated-scope assignment from durable inputs."""
     try:
         if not isinstance(context, dict):
             return None
@@ -600,7 +626,7 @@ def build_coverage_manifest(
         # from those legitimate paths, so it is surfaced on stderr before
         # falling back to the same fail-open `None`.
         print(
-            f"coverage manifest build failed for {output_dir}: {err}",
+            f"assignment manifest build failed for {output_dir}: {err}",
             file=sys.stderr,
         )
         return None

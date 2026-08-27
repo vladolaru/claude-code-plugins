@@ -112,7 +112,9 @@ def _budget_utilization_cell(value: object) -> str:
 def _table_row(run: dict[str, Any]) -> list[str]:
     identity = run.get("run") if isinstance(run.get("run"), dict) else {}
     dispatch = run.get("dispatch") if isinstance(run.get("dispatch"), dict) else None
-    coverage = run.get("coverage") if isinstance(run.get("coverage"), dict) else None
+    assignment = (
+        run.get("assignment") if isinstance(run.get("assignment"), dict) else None
+    )
     outcome = run.get("outcome") if isinstance(run.get("outcome"), dict) else {}
     summary = outcome.get("summary") if isinstance(outcome.get("summary"), dict) else {}
     transcript = run.get("transcript") if isinstance(run.get("transcript"), dict) else {}
@@ -141,12 +143,12 @@ def _table_row(run: dict[str, Any]) -> list[str]:
             if dispatch.get("comparison_available") is True and isinstance(counts, dict)
             else "n/a"
         )
-    coverage_text = (
+    assignment_text = (
         "/".join(
-            str(len(coverage.get(field, [])))
+            str(len(assignment.get(field, [])))
             for field in _ASSIGNMENT_TABLE_FIELDS
         )
-        if coverage is not None else "—"
+        if assignment is not None else "—"
     )
     raw = _format_count(summary.get("total_agent_findings"))
     final = _format_count(summary.get("final_finding_count"))
@@ -191,7 +193,7 @@ def _table_row(run: dict[str, Any]) -> list[str]:
         f"{identity.get('plugin_version') or '—'}/{identity.get('mode') or '—'}",
         planner_actual,
         adjustments,
-        coverage_text,
+        assignment_text,
         outcome_text,
         wall_text,
         synthesis_text,
@@ -240,7 +242,8 @@ def format_table(runs: list[dict[str, Any]], aggregate: dict[str, Any]) -> str:
         "",
         f"Runs: {aggregate.get('runs', len(runs))}; "
         f"transcript data: {aggregate.get('transcript_runs', 0)} available.",
-        "Generated-scope coverage is descriptive, not proof of model reads; "
+        "The generated-scope assignment is descriptive, not proof of model "
+        "reads; "
         "observed reads are non-exhaustive.",
     ]
     return "\n".join(lines) + "\n"

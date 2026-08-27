@@ -245,36 +245,38 @@ def _aggregate_dispatch(
     }
 
 
-def _aggregate_coverage(
+def _aggregate_assignment(
     runs: list[dict[str, Any]], availability: dict[str, dict[str, int]]
 ) -> dict[str, Any]:
-    coverage_counts = Counter()
-    coverage_runs = 0
+    assignment_counts = Counter()
+    assignment_runs = 0
     for run in runs:
-        if run.get("metric_availability", {}).get("coverage") != "complete":
+        if run.get("metric_availability", {}).get("assignment") != "complete":
             continue
-        coverage = run.get("coverage")
-        if not isinstance(coverage, dict):
+        assignment = run.get("assignment")
+        if not isinstance(assignment, dict):
             continue
         for name in _ASSIGNMENT_COUNTABLE_LIST_FIELDS:
-            value = coverage.get(name)
-            coverage_counts[name] += len(value) if isinstance(value, list) else 0
-        coverage_runs += 1
-    coverage_rate = (
-        coverage_counts[_ASSIGNED_FILES_FIELD]
-        / coverage_counts[_REVIEWABLE_FILES_FIELD]
-        if coverage_runs and coverage_counts[_REVIEWABLE_FILES_FIELD]
+            value = assignment.get(name)
+            assignment_counts[name] += (
+                len(value) if isinstance(value, list) else 0
+            )
+        assignment_runs += 1
+    assignment_rate = (
+        assignment_counts[_ASSIGNED_FILES_FIELD]
+        / assignment_counts[_REVIEWABLE_FILES_FIELD]
+        if assignment_runs and assignment_counts[_REVIEWABLE_FILES_FIELD]
         else None
     )
     return {
         **{
-            name: coverage_counts[name] if coverage_runs else None
+            name: assignment_counts[name] if assignment_runs else None
             for name in _ASSIGNMENT_COUNTABLE_LIST_FIELDS
         },
-        "assignment_rate": coverage_rate,
-        "available_runs": coverage_runs,
+        "assignment_rate": assignment_rate,
+        "available_runs": assignment_runs,
         "semantics": "generated_scope_not_proof_of_model_read",
-        "availability": availability["coverage"],
+        "availability": availability["assignment"],
     }
 
 
@@ -305,15 +307,17 @@ def _aggregate_reviewed_files(
     measured_agents = 0
     unmeasured_agents = 0
     for run in runs:
-        if run.get("metric_availability", {}).get("coverage") != "complete":
+        if run.get("metric_availability", {}).get("assignment") != "complete":
             continue
-        coverage = run.get("coverage")
-        if not isinstance(coverage, dict):
+        assignment = run.get("assignment")
+        if not isinstance(assignment, dict):
             continue
-        by_agent = coverage.get("reviewed_files_by_agent")
+        by_agent = assignment.get("reviewed_files_by_agent")
         if not isinstance(by_agent, dict):
             continue
-        claimable_counts = coverage.get("review_claimable_file_count_by_agent")
+        claimable_counts = assignment.get(
+            "review_claimable_file_count_by_agent"
+        )
         claimable_counts = (
             claimable_counts if isinstance(claimable_counts, dict) else {}
         )
@@ -337,7 +341,7 @@ def _aggregate_reviewed_files(
         "measured_runs": measured_runs,
         "measured_agents": measured_agents,
         "unmeasured_agents": unmeasured_agents,
-        "availability": availability["coverage"],
+        "availability": availability["assignment"],
     }
 
 
@@ -732,7 +736,7 @@ def aggregate_cohort(runs: Iterable[dict[str, Any]]) -> dict[str, Any]:
     partial_usage = _usage_totals_for_state(run_list, "partial")
 
     dispatch = _aggregate_dispatch(run_list, availability)
-    coverage = _aggregate_coverage(run_list, availability)
+    assignment = _aggregate_assignment(run_list, availability)
     reviewed_files = _aggregate_reviewed_files(
         run_list, availability
     )
@@ -747,7 +751,7 @@ def aggregate_cohort(runs: Iterable[dict[str, Any]]) -> dict[str, Any]:
         "transcript_runs": availability["transcript"]["available"],
         "availability": availability,
         "dispatch": dispatch,
-        "coverage": coverage,
+        "assignment": assignment,
         "reviewed_files": reviewed_files,
         "lifecycle": {
             **_lifecycle_block(lifecycle_complete),

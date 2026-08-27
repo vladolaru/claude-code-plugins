@@ -132,7 +132,7 @@ def _manifest(session_id, output_dir: Path, repo: Path, *,
             "completed": [],
             "incomplete": [],
         },
-        "coverage": {"by_agent": {}},
+        "assignment": {"by_agent": {}},
         "outcome": {"summary": {}},
         "availability": {"pipeline": True, "transcript": False},
     }

@@ -1813,12 +1813,14 @@ def _unavailable(reason: str) -> dict[str, Any]:
 def _scope_for_agent(manifest: dict[str, Any], agent: str) -> list[str] | None:
     """Return the agent's authoritative scope mapping, or None without one.
 
-    An absent mapping (no coverage, no by_agent, no entry for the agent) is
+    An absent mapping (no assignment, no by_agent, no entry for the agent) is
     NOT an empty scope: classifying reads against it would report every
     read as out-of-scope while claiming completeness.
     """
-    coverage = manifest.get("coverage")
-    by_agent = coverage.get("by_agent") if isinstance(coverage, dict) else None
+    assignment = manifest.get("assignment")
+    by_agent = (
+        assignment.get("by_agent") if isinstance(assignment, dict) else None
+    )
     paths = by_agent.get(agent) if isinstance(by_agent, dict) else None
     if not isinstance(paths, list):
         return None

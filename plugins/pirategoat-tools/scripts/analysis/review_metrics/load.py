@@ -465,12 +465,12 @@ def _legacy_manifest(path: Path, *, invalid_sidecar: bool = False) -> dict[str, 
             "incomplete": [],
         },
         "dispatch": None,
-        "coverage": None,
+        "assignment": None,
         "outcome": {"summary": _sanitize_summary(summary)},
         "availability": {
             "pipeline": True,
             "transcript": False,
-            "coverage": False,
+            "assignment": False,
             "lifecycle": False,
         },
         "warnings": warnings,
@@ -490,20 +490,20 @@ def _canonical_manifest(manifest: dict[str, Any]) -> str:
     if isinstance(agents, dict) and isinstance(agents.get("incomplete"), list):
         agents["incomplete"] = sorted(agents["incomplete"])
 
-    coverage = canonical.get("coverage")
-    if isinstance(coverage, dict):
+    assignment = canonical.get("assignment")
+    if isinstance(assignment, dict):
         for name in _ASSIGNMENT_PATH_LIST_FIELDS:
-            values = coverage.get(name)
+            values = assignment.get(name)
             if isinstance(values, list):
-                coverage[name] = sorted(set(values))
-        by_agent = coverage.get(_ASSIGNED_FILES_BY_AGENT_FIELD)
+                assignment[name] = sorted(set(values))
+        by_agent = assignment.get(_ASSIGNED_FILES_BY_AGENT_FIELD)
         if isinstance(by_agent, dict):
             for name, values in by_agent.items():
                 if isinstance(values, list):
                     by_agent[name] = sorted(set(values))
-        file_exclusions = coverage.get(_FILE_EXCLUSIONS_FIELD)
+        file_exclusions = assignment.get(_FILE_EXCLUSIONS_FIELD)
         if isinstance(file_exclusions, list):
-            coverage[_FILE_EXCLUSIONS_FIELD] = sorted(
+            assignment[_FILE_EXCLUSIONS_FIELD] = sorted(
                 file_exclusions,
                 key=lambda item: json.dumps(
                     item, sort_keys=True, separators=(",", ":")
@@ -554,9 +554,9 @@ def _duplicate_conflict(
         "steps": [],
         "agents": {"started": [], "completed": [], "incomplete": []},
         "dispatch": None,
-        "coverage": None,
+        "assignment": None,
         "outcome": {"summary": {}},
-        "availability": {"pipeline": False, "transcript": False, "coverage": False},
+        "availability": {"pipeline": False, "transcript": False, "assignment": False},
         "warnings": ["duplicate_run_id_conflict"],
     }
 

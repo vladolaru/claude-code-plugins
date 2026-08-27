@@ -250,7 +250,7 @@ def _manifest(
                 },
             },
         },
-        "coverage": {
+        "assignment": {
             "changed_files": ["src/a.py", "vendor/generated.js"],
             "reviewable_files": ["src/a.py"],
             "assigned_files_by_agent": {"code-reviewer": ["src/a.py"]},
@@ -274,7 +274,7 @@ def _manifest(
             "critic_verdict": "STAND",
             "reconciliation": None,
         },
-        "availability": {"pipeline": True, "transcript": False, "coverage": True},
+        "availability": {"pipeline": True, "transcript": False, "assignment": True},
     }
 
 
@@ -380,7 +380,7 @@ def _agent_complete(
 def _task_5_manifest(run_id: str = "task-5-run") -> dict:
     """One schema-3 manifest using only the canonical Task 5 vocabulary."""
     manifest = _manifest(run_id)
-    manifest["coverage"] = {
+    manifest["assignment"] = {
         "changed_files": ["src/a.py", "vendor/generated.js"],
         "reviewable_files": ["src/a.py"],
         "assigned_files_by_agent": {"code-reviewer": ["src/a.py"]},
@@ -436,7 +436,7 @@ class TestReviewVocabularyLifecycleMigration:
             _task_5_manifest(), tmp_path, include_transcripts=False
         )
 
-        assert measured["coverage"] == _task_5_manifest()["coverage"]
+        assert measured["assignment"] == _task_5_manifest()["assignment"]
         assert measured["outcome"]["summary"]["total_agent_findings"] == 3
         assert measured["outcome"]["summary"]["final_finding_count"] == 1
         assert measured["outcome"]["reconciliation"] == (
@@ -463,7 +463,7 @@ class TestReviewVocabularyLifecycleMigration:
 
     def test_retired_schema_three_coverage_keys_are_rejected(self, tmp_path):
         manifest = _task_5_manifest()
-        manifest["coverage"] = {
+        manifest["assignment"] = {
             "changed": ["src/a.py"],
             "reviewable": ["src/a.py"],
             "by_agent": {"code-reviewer": ["src/a.py"]},
@@ -477,8 +477,8 @@ class TestReviewVocabularyLifecycleMigration:
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
-        assert measured["coverage"] is None
-        assert measured["metric_availability"]["coverage"] == "missing"
+        assert measured["assignment"] is None
+        assert measured["metric_availability"]["assignment"] == "missing"
 
     def test_completion_lifecycle_uses_finding_count(self, tmp_path):
         manifest = _task_5_manifest()
@@ -501,7 +501,7 @@ class TestReviewVocabularyLifecycleMigration:
             include_transcripts=False,
         )
         second_manifest = _task_5_manifest("task-5-b")
-        second_manifest["coverage"].update({
+        second_manifest["assignment"].update({
             "changed_files": ["src/b.py"],
             "reviewable_files": ["src/b.py"],
             "assigned_files_by_agent": {},
@@ -517,7 +517,7 @@ class TestReviewVocabularyLifecycleMigration:
 
         cohort = aggregate_cohort([first, second])
 
-        assert cohort["coverage"] == {
+        assert cohort["assignment"] == {
             "changed_files": 3,
             "reviewable_files": 2,
             "assigned_files": 1,
@@ -526,7 +526,7 @@ class TestReviewVocabularyLifecycleMigration:
             "assignment_rate": 0.5,
             "available_runs": 2,
             "semantics": "generated_scope_not_proof_of_model_read",
-            "availability": cohort["availability"]["coverage"],
+            "availability": cohort["availability"]["assignment"],
         }
         assert cohort["outcomes"]["raw_findings"] == 6
         assert cohort["outcomes"]["final_findings"] == 2
@@ -909,7 +909,7 @@ class TestLoadRuns:
 
         assert run["run"] == sanitize._sanitize_run(manifest["run"])
         assert run["dispatch"] == manifest["dispatch"]
-        assert run["coverage"] == manifest["coverage"]
+        assert run["assignment"] == manifest["assignment"]
         assert run["outcome"] == sanitize._sanitize_outcome(manifest["outcome"])
         assert [event["agent"] for event in run["agents"]["started"]] == [
             "code-reviewer"
@@ -1298,7 +1298,7 @@ class TestLoadRuns:
         assert measured["metric_availability"]["lifecycle"] == "missing"
         assert "running_lifecycle_overlay_invalid" in run["warnings"]
         assert run["dispatch"] == manifest["dispatch"]
-        assert run["coverage"] == manifest["coverage"]
+        assert run["assignment"] == manifest["assignment"]
 
     def test_running_overlay_accepts_equal_control_plane_timestamps(
         self, tmp_path
@@ -1435,7 +1435,7 @@ class TestLoadRuns:
         assert measured["metric_availability"]["lifecycle"] == "missing"
         assert "running_lifecycle_overlay_invalid" in run["warnings"]
         assert run["dispatch"] == manifest["dispatch"]
-        assert run["coverage"] == manifest["coverage"]
+        assert run["assignment"] == manifest["assignment"]
 
     @pytest.mark.parametrize(
         "events",
@@ -1559,7 +1559,7 @@ class TestLoadRuns:
 
         assert run["run"] == sanitize._sanitize_run(manifest["run"])
         assert run["dispatch"] == manifest["dispatch"]
-        assert run["coverage"] == manifest["coverage"]
+        assert run["assignment"] == manifest["assignment"]
         assert run["outcome"] == sanitize._sanitize_outcome(manifest["outcome"])
         assert measured["metric_availability"]["lifecycle"] == "missing"
         assert "running_lifecycle_overlay_invalid" in run["warnings"]
@@ -1579,7 +1579,7 @@ class TestLoadRuns:
         assert measured["metric_availability"]["lifecycle"] == "missing"
         assert "running_lifecycle_overlay_invalid" in run["warnings"]
         assert run["dispatch"] == manifest["dispatch"]
-        assert run["coverage"] == manifest["coverage"]
+        assert run["assignment"] == manifest["assignment"]
 
     def test_invalid_utf8_running_log_fails_closed_family_locally(
         self, tmp_path
@@ -1593,7 +1593,7 @@ class TestLoadRuns:
 
         assert run["run"] == sanitize._sanitize_run(manifest["run"])
         assert run["dispatch"] == manifest["dispatch"]
-        assert run["coverage"] == manifest["coverage"]
+        assert run["assignment"] == manifest["assignment"]
         assert run["outcome"] == sanitize._sanitize_outcome(manifest["outcome"])
         assert measured["metric_availability"]["lifecycle"] == "missing"
         assert "running_lifecycle_overlay_invalid" in run["warnings"]
@@ -1738,7 +1738,7 @@ class TestLoadRuns:
 
         assert run["run"]["id"] == "legacy-1"
         assert run["dispatch"] is None
-        assert run["coverage"] is None
+        assert run["assignment"] is None
         assert run["warnings"] == ["legacy_log_no_manifest"]
         serialized = json.dumps(run)
         assert "PRIVATE PROMPT" not in serialized
@@ -2035,8 +2035,8 @@ class TestLoadRuns:
         if status == "running":
             manifest["run"]["ended_at"] = None
             manifest["dispatch"] = _unavailable_dispatch()
-            manifest["coverage"] = None
-            manifest["availability"]["coverage"] = False
+            manifest["assignment"] = None
+            manifest["availability"]["assignment"] = False
             manifest["outcome"]["summary"] = {}
         _write_manifest(tmp_path / "review.manifest.json", manifest)
         _write_jsonl(tmp_path / "review.jsonl", _legacy_events("legacy-run"))
@@ -2058,7 +2058,7 @@ class TestLoadRuns:
 
         assert run["run"]["id"] == "sidecar-run"
         assert measured["metric_availability"]["lifecycle"] == "missing"
-        assert measured["metric_availability"]["coverage"] == "complete"
+        assert measured["metric_availability"]["assignment"] == "complete"
 
     @pytest.mark.parametrize(
         "malform",
@@ -2070,12 +2070,12 @@ class TestLoadRuns:
                 "pipeline", False
             ),
             lambda manifest: manifest["availability"].__setitem__(
-                "coverage", False
+                "assignment", False
             ),
             lambda manifest: manifest["dispatch"].__setitem__(
                 "planner_candidate_count", float("inf")
             ),
-            lambda manifest: manifest["coverage"].__setitem__(
+            lambda manifest: manifest["assignment"].__setitem__(
                 "assigned_files", ["outside.py"]
             ),
         ],
@@ -2118,7 +2118,7 @@ class TestLoadRuns:
 
         assert run["run"]["id"] == "sidecar-run"
         assert run["warnings"] == []
-        assert run["coverage"] == manifest["coverage"]
+        assert run["assignment"] == manifest["assignment"]
         assert run["outcome"] == manifest["outcome"]
         assert run["dispatch"] is None
         assert measured["metric_availability"]["dispatch"] == "missing"
@@ -2220,7 +2220,7 @@ class TestLoadRuns:
         assert run["run"]["id"] == "producer-run"
         assert run["warnings"] == []
         assert run["dispatch"] is None
-        assert run["coverage"] == producer_manifest["coverage"]
+        assert run["assignment"] == producer_manifest["assignment"]
         assert run["outcome"] == sanitize._sanitize_outcome(
             producer_manifest["outcome"]
         )
@@ -2300,12 +2300,12 @@ class TestLoadRuns:
                 },
             },
         }
-        assert run["coverage"] == producer_manifest["coverage"]
+        assert run["assignment"] == producer_manifest["assignment"]
         assert run["outcome"] == sanitize._sanitize_outcome(
             producer_manifest["outcome"]
         )
         assert measured["metric_availability"]["dispatch"] == "partial"
-        assert measured["metric_availability"]["coverage"] == "complete"
+        assert measured["metric_availability"]["assignment"] == "complete"
         cohort_dispatch = aggregate_cohort([measured])["dispatch"]
         assert cohort_dispatch["planner_candidates"] == planner_count
         assert cohort_dispatch["actual_dispatches"] == final_count
@@ -2496,7 +2496,7 @@ class TestLoadRuns:
         self, tmp_path
     ):
         first = _manifest("duplicate-run")
-        first["coverage"] = {
+        first["assignment"] = {
             "changed_files": [
                 "src/a.py",
                 "src/b.py",
@@ -2553,8 +2553,8 @@ class TestLoadRuns:
         second["warnings"].reverse()
         second["agents"]["incomplete"].reverse()
         for name in ("changed_files", "reviewable_files", "assigned_files", "unassigned_reviewable_files", "file_exclusions"):
-            second["coverage"][name].reverse()
-        second["coverage"]["assigned_files_by_agent"]["code-reviewer"].reverse()
+            second["assignment"][name].reverse()
+        second["assignment"]["assigned_files_by_agent"]["code-reviewer"].reverse()
         left = tmp_path / "left"
         right = tmp_path / "right"
         _write_manifest(left / "a.manifest.json", first)
@@ -2632,7 +2632,7 @@ class TestLoadRuns:
         assert cohort["runs"] == 0
         assert cohort["availability"]["dispatch"]["missing"] == 0
         assert cohort["dispatch"]["planner_candidates"] is None
-        assert cohort["coverage"]["changed_files"] is None
+        assert cohort["assignment"]["changed_files"] is None
         assert cohort["outcomes"]["raw_findings"] is None
         assert cohort["wall_time"]["total_ms"] is None
         serialized = json.dumps(measured)
@@ -2760,10 +2760,10 @@ class TestMeasureRun:
         )
         cohort = aggregate_cohort([measured])
 
-        assert measured["coverage"] == manifest["coverage"]
-        assert measured["metric_availability"]["coverage"] == "missing"
+        assert measured["assignment"] == manifest["assignment"]
+        assert measured["metric_availability"]["assignment"] == "missing"
         assert "partial" not in format_table([measured], cohort)
-        assert cohort["coverage"] == {
+        assert cohort["assignment"] == {
             "changed_files": None,
             "reviewable_files": None,
             "assigned_files": None,
@@ -2835,7 +2835,7 @@ class TestMeasureRun:
         measured = measure_run(manifest, tmp_path)
 
         assert measured["dispatch"] == manifest["dispatch"]
-        assert measured["coverage"] == manifest["coverage"]
+        assert measured["assignment"] == manifest["assignment"]
         assert measured["outcome"] == manifest["outcome"]
         assert measured["transcript"]["available"] is False
         assert measured["transcript"]["usage"] is None
@@ -2843,7 +2843,7 @@ class TestMeasureRun:
         assert manifest["availability"] == {
             "pipeline": True,
             "transcript": False,
-            "coverage": True,
+            "assignment": True,
         }
 
     def test_no_transcripts_is_disabled_not_missing_and_skips_registry(self, tmp_path):
@@ -3723,7 +3723,7 @@ class TestMeasureRun:
         assert run["run"]["id"] == "sidecar-run"
         assert run["dispatch"] is None
         assert run["warnings"] == ["invalid_dispatch_projection"]
-        assert run["coverage"] == manifest["coverage"]
+        assert run["assignment"] == manifest["assignment"]
         assert run["agents"] == manifest["agents"]
         assert run["outcome"] == manifest["outcome"]
         assert measured["metric_availability"]["dispatch"] == "missing"
@@ -3748,7 +3748,7 @@ class TestMeasureRun:
         assert run["run"]["id"] == "sidecar-run"
         assert run["dispatch"] is None
         assert run["warnings"] == ["invalid_dispatch_projection"]
-        assert run["coverage"] == manifest["coverage"]
+        assert run["assignment"] == manifest["assignment"]
         assert run["agents"] == manifest["agents"]
         assert run["outcome"] == manifest["outcome"]
         assert measured["metric_availability"]["dispatch"] == "missing"
@@ -3972,7 +3972,7 @@ class TestMeasureRun:
             "invalid_reason_codes": [],
             "agents": {},
         }
-        observed["coverage"] = {
+        observed["assignment"] = {
             "changed_files": [],
             "reviewable_files": [],
             "assigned_files_by_agent": {},
@@ -3985,20 +3985,20 @@ class TestMeasureRun:
         }
         missing = _manifest("missing")
         missing["dispatch"] = None
-        missing["coverage"] = None
-        missing["availability"]["coverage"] = False
+        missing["assignment"] = None
+        missing["availability"]["assignment"] = False
 
         measured_observed = measure_run(observed, tmp_path, include_transcripts=False)
         measured_missing = measure_run(missing, tmp_path, include_transcripts=False)
 
         assert measured_observed["metric_availability"]["dispatch"] == "complete"
-        assert measured_observed["metric_availability"]["coverage"] == "complete"
+        assert measured_observed["metric_availability"]["assignment"] == "complete"
         assert measured_missing["metric_availability"]["dispatch"] == "missing"
-        assert measured_missing["metric_availability"]["coverage"] == "missing"
+        assert measured_missing["metric_availability"]["assignment"] == "missing"
 
     def test_valid_explicit_empty_coverage_ledger_remains_complete(self, tmp_path):
         manifest = _manifest()
-        manifest["coverage"] = {
+        manifest["assignment"] = {
             "changed_files": [],
             "reviewable_files": [],
             "assigned_files_by_agent": {},
@@ -4012,12 +4012,12 @@ class TestMeasureRun:
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
-        assert measured["coverage"] == manifest["coverage"]
-        assert measured["metric_availability"]["coverage"] == "complete"
+        assert measured["assignment"] == manifest["assignment"]
+        assert measured["metric_availability"]["assignment"] == "complete"
 
     def test_realistic_coverage_ledger_remains_complete(self, tmp_path):
         manifest = _manifest()
-        manifest["coverage"] = {
+        manifest["assignment"] = {
             "changed_files": ["src/a.py", "src/b.py", "vendor/generated.js"],
             "reviewable_files": ["src/a.py", "src/b.py"],
             "assigned_files_by_agent": {
@@ -4036,8 +4036,8 @@ class TestMeasureRun:
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
-        assert measured["coverage"] == manifest["coverage"]
-        assert measured["metric_availability"]["coverage"] == "complete"
+        assert measured["assignment"] == manifest["assignment"]
+        assert measured["metric_availability"]["assignment"] == "complete"
 
     def test_prose_dispatch_agent_key_fails_the_dispatch_family_closed(
         self, tmp_path
@@ -4061,30 +4061,30 @@ class TestMeasureRun:
         self, tmp_path
     ):
         manifest = _manifest()
-        by_agent = manifest["coverage"]["assigned_files_by_agent"]
+        by_agent = manifest["assignment"]["assigned_files_by_agent"]
         by_agent["Security Reviewer | PRIVATE PROSE"] = by_agent.pop(
             "code-reviewer"
         )
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
-        assert measured["coverage"] is None
-        assert measured["metric_availability"]["coverage"] == "missing"
+        assert measured["assignment"] is None
+        assert measured["metric_availability"]["assignment"] == "missing"
         assert "PRIVATE PROSE" not in json.dumps(measured)
 
     def test_duplicate_assigned_path_cannot_report_two_hundred_percent_coverage(
         self, tmp_path
     ):
         manifest = _manifest()
-        manifest["coverage"]["assigned_files"] = ["src/a.py", "src/a.py"]
+        manifest["assignment"]["assigned_files"] = ["src/a.py", "src/a.py"]
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
         cohort = aggregate_cohort([measured])
 
-        assert measured["coverage"] is None
-        assert measured["metric_availability"]["coverage"] == "missing"
-        assert cohort["coverage"]["assignment_rate"] is None
-        assert cohort["coverage"]["available_runs"] == 0
+        assert measured["assignment"] is None
+        assert measured["metric_availability"]["assignment"] == "missing"
+        assert cohort["assignment"]["assignment_rate"] is None
+        assert cohort["assignment"]["available_runs"] == 0
 
     @pytest.mark.parametrize(
         "duplicate_location",
@@ -4095,7 +4095,7 @@ class TestMeasureRun:
         self, tmp_path, duplicate_location
     ):
         manifest = _manifest()
-        coverage = manifest["coverage"]
+        coverage = manifest["assignment"]
         if duplicate_location == "changed_files":
             coverage["changed_files"].append("src/a.py")
         elif duplicate_location == "reviewable_files":
@@ -4120,8 +4120,8 @@ class TestMeasureRun:
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
-        assert measured["coverage"] is None
-        assert measured["metric_availability"]["coverage"] == "missing"
+        assert measured["assignment"] is None
+        assert measured["metric_availability"]["assignment"] == "missing"
 
     @pytest.mark.parametrize(
         "assigned,uncovered",
@@ -4132,15 +4132,15 @@ class TestMeasureRun:
         self, tmp_path, assigned, uncovered
     ):
         manifest = _manifest()
-        manifest["coverage"]["assigned_files"] = assigned
-        manifest["coverage"]["unassigned_reviewable_files"] = uncovered
+        manifest["assignment"]["assigned_files"] = assigned
+        manifest["assignment"]["unassigned_reviewable_files"] = uncovered
         if not assigned and not uncovered:
-            manifest["coverage"]["assigned_files_by_agent"] = {}
+            manifest["assignment"]["assigned_files_by_agent"] = {}
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
-        assert measured["coverage"] is None
-        assert measured["metric_availability"]["coverage"] == "missing"
+        assert measured["assignment"] is None
+        assert measured["metric_availability"]["assignment"] == "missing"
 
     @pytest.mark.parametrize(
         "file_exclusions",
@@ -4158,16 +4158,16 @@ class TestMeasureRun:
         self, tmp_path, file_exclusions
     ):
         manifest = _manifest()
-        manifest["coverage"]["file_exclusions"] = file_exclusions
+        manifest["assignment"]["file_exclusions"] = file_exclusions
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
-        assert measured["coverage"] is None
-        assert measured["metric_availability"]["coverage"] == "missing"
+        assert measured["assignment"] is None
+        assert measured["metric_availability"]["assignment"] == "missing"
 
     def test_reviewable_paths_must_be_a_subset_of_changed_paths(self, tmp_path):
         manifest = _manifest()
-        manifest["coverage"].update(
+        manifest["assignment"].update(
             {
                 "reviewable_files": ["outside.py"],
                 "assigned_files_by_agent": {},
@@ -4182,12 +4182,12 @@ class TestMeasureRun:
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
-        assert measured["coverage"] is None
-        assert measured["metric_availability"]["coverage"] == "missing"
+        assert measured["assignment"] is None
+        assert measured["metric_availability"]["assignment"] == "missing"
 
     def test_by_agent_paths_must_be_a_subset_of_changed_paths(self, tmp_path):
         manifest = _manifest()
-        manifest["coverage"].update(
+        manifest["assignment"].update(
             {
                 "assigned_files_by_agent": {
                     "code-reviewer": ["outside.py"]
@@ -4199,17 +4199,17 @@ class TestMeasureRun:
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
-        assert measured["coverage"] is None
-        assert measured["metric_availability"]["coverage"] == "missing"
+        assert measured["assignment"] is None
+        assert measured["metric_availability"]["assignment"] == "missing"
 
     def test_by_agent_reviewable_union_must_exactly_equal_assigned(self, tmp_path):
         manifest = _manifest()
-        manifest["coverage"]["assigned_files_by_agent"] = {}
+        manifest["assignment"]["assigned_files_by_agent"] = {}
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
-        assert measured["coverage"] is None
-        assert measured["metric_availability"]["coverage"] == "missing"
+        assert measured["assignment"] is None
+        assert measured["metric_availability"]["assignment"] == "missing"
 
     @pytest.mark.parametrize(
         "invalid_coverage",
@@ -4273,28 +4273,28 @@ class TestMeasureRun:
         self, tmp_path, invalid_coverage
     ):
         manifest = _manifest()
-        manifest["coverage"] = invalid_coverage
+        manifest["assignment"] = invalid_coverage
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
-        assert measured["coverage"] is None
-        assert measured["metric_availability"]["coverage"] == "missing"
+        assert measured["assignment"] is None
+        assert measured["metric_availability"]["assignment"] == "missing"
 
     def test_explicit_false_coverage_availability_wins_over_valid_payload(self, tmp_path):
         manifest = _manifest()
-        manifest["availability"]["coverage"] = False
+        manifest["availability"]["assignment"] = False
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
-        assert measured["coverage"] is None
-        assert measured["metric_availability"]["coverage"] == "missing"
+        assert measured["assignment"] is None
+        assert measured["metric_availability"]["assignment"] == "missing"
 
     def test_recursively_drops_untrusted_noncanonical_payloads(self, tmp_path):
         manifest = _manifest()
         manifest["prompt"] = "PRIVACY_SENTINEL"
         manifest["run"]["tool_body"] = "PRIVACY_SENTINEL"
         manifest["outcome"]["findings"] = {"description": "PRIVACY_SENTINEL"}
-        manifest["coverage"]["arbitrary"] = ["PRIVACY_SENTINEL"]
+        manifest["assignment"]["arbitrary"] = ["PRIVACY_SENTINEL"]
         manifest["agents"]["started"].append(
             {"agent": "code-reviewer", "prompt": "PRIVACY_SENTINEL"}
         )
@@ -4411,55 +4411,55 @@ class TestReviewedFilesRows:
 
     def test_measured_populations_and_denominator_pass_through(self, tmp_path):
         manifest = _manifest()
-        manifest["coverage"]["reviewed_files_by_agent"] = {
+        manifest["assignment"]["reviewed_files_by_agent"] = {
             "code-reviewer": {"reviewed_file_claim_count": 2, "unclaimed_review_file_count": 1},
         }
-        manifest["coverage"]["review_claimable_file_count_by_agent"] = {"code-reviewer": 3}
+        manifest["assignment"]["review_claimable_file_count_by_agent"] = {"code-reviewer": 3}
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
-        assert measured["coverage"]["reviewed_files_by_agent"] == {
+        assert measured["assignment"]["reviewed_files_by_agent"] == {
             "code-reviewer": {"reviewed_file_claim_count": 2, "unclaimed_review_file_count": 1},
         }
-        assert measured["metric_availability"]["coverage"] == "complete"
+        assert measured["metric_availability"]["assignment"] == "complete"
 
     def test_count_conservation_mismatch_fails_coverage_closed(self, tmp_path):
         manifest = _manifest()
-        manifest["coverage"]["reviewed_files_by_agent"] = {
+        manifest["assignment"]["reviewed_files_by_agent"] = {
             "code-reviewer": {"reviewed_file_claim_count": 1, "unclaimed_review_file_count": 1},
         }
-        manifest["coverage"]["review_claimable_file_count_by_agent"] = {"code-reviewer": 3}
+        manifest["assignment"]["review_claimable_file_count_by_agent"] = {"code-reviewer": 3}
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
-        assert measured["coverage"] is None
-        assert measured["metric_availability"]["coverage"] == "missing"
+        assert measured["assignment"] is None
+        assert measured["metric_availability"]["assignment"] == "missing"
 
     def test_missing_denominator_fails_coverage_closed(self, tmp_path):
         manifest = _manifest()
-        manifest["coverage"]["reviewed_files_by_agent"] = {
+        manifest["assignment"]["reviewed_files_by_agent"] = {
             "code-reviewer": {"reviewed_file_claim_count": 1, "unclaimed_review_file_count": 1},
         }
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
-        assert measured["coverage"] is None
-        assert measured["metric_availability"]["coverage"] == "missing"
+        assert measured["assignment"] is None
+        assert measured["metric_availability"]["assignment"] == "missing"
 
     def test_retired_three_way_shape_is_rejected(self, tmp_path):
         manifest = _manifest()
-        manifest["coverage"]["reviewed_files_by_agent"] = {
+        manifest["assignment"]["reviewed_files_by_agent"] = {
             "code-reviewer": {
                 "reviewed_file_claim_count": 1,
                 "declared_" + "unclaimed_review_file_count": 1,
                 "unclaimed_review_file_count_" + "autofilled": 0,
             },
         }
-        manifest["coverage"]["review_claimable_file_count_by_agent"] = {"code-reviewer": 2}
+        manifest["assignment"]["review_claimable_file_count_by_agent"] = {"code-reviewer": 2}
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
-        assert measured["coverage"] is None
+        assert measured["assignment"] is None
 
     @pytest.mark.parametrize(
         "counts",
@@ -4471,14 +4471,14 @@ class TestReviewedFilesRows:
     )
     def test_malformed_population_row_fails_closed(self, tmp_path, counts):
         manifest = _manifest()
-        manifest["coverage"]["reviewed_files_by_agent"] = {
+        manifest["assignment"]["reviewed_files_by_agent"] = {
             "code-reviewer": counts
         }
-        manifest["coverage"]["review_claimable_file_count_by_agent"] = {"code-reviewer": 2}
+        manifest["assignment"]["review_claimable_file_count_by_agent"] = {"code-reviewer": 2}
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
-        assert measured["coverage"] is None
+        assert measured["assignment"] is None
 
     def test_cohort_aggregates_both_populations(self):
         measured_a = _measured_manifest_with_reviewed_files({
@@ -4513,11 +4513,11 @@ def _measured_manifest_with_reviewed_files(
     review_claimable_file_count_by_agent: dict | None = None,
 ) -> dict:
     manifest = _manifest(run_id)
-    manifest["coverage"]["reviewed_files_by_agent"] = (
+    manifest["assignment"]["reviewed_files_by_agent"] = (
         reviewed_files_by_agent
     )
     if review_claimable_file_count_by_agent is not None:
-        manifest["coverage"]["review_claimable_file_count_by_agent"] = (
+        manifest["assignment"]["review_claimable_file_count_by_agent"] = (
             review_claimable_file_count_by_agent
         )
     return measure_run(manifest, "/nonexistent", include_transcripts=False)
@@ -4917,7 +4917,7 @@ class TestLifecycleMeasurement:
 
         assert measured["lifecycle"] is None
         assert measured["metric_availability"]["lifecycle"] == "missing"
-        assert measured["metric_availability"]["coverage"] == "complete"
+        assert measured["metric_availability"]["assignment"] == "complete"
 
     @pytest.mark.parametrize(
         "identity_family",
@@ -7088,13 +7088,13 @@ class TestAggregateCohort:
     def test_aggregates_dispatch_coverage_outcomes_critic_and_wall_time(self):
         unavailable = _measured_run("unavailable", transcript_state="missing")
         unavailable["dispatch"] = None
-        unavailable["coverage"] = None
+        unavailable["assignment"] = None
         unavailable["outcome"] = {"summary": {}, "critic_verdict": None}
         unavailable["wall_time_ms"] = None
         unavailable["metric_availability"].update(
             {
                 "dispatch": "missing",
-                "coverage": "missing",
+                "assignment": "missing",
                 "raw_findings": "missing",
                 "final_findings": "missing",
                 "critic": "missing",
@@ -7117,14 +7117,14 @@ class TestAggregateCohort:
         )
         assert cohort["dispatch"]["compared_planner_candidates"] == 2
         assert cohort["dispatch"]["planner_removal_rate"] == pytest.approx(0.5)
-        assert cohort["coverage"]["reviewable_files"] == 1
-        assert cohort["coverage"]["assigned_files"] == 1
-        assert cohort["coverage"]["unassigned_reviewable_files"] == 0
+        assert cohort["assignment"]["reviewable_files"] == 1
+        assert cohort["assignment"]["assigned_files"] == 1
+        assert cohort["assignment"]["unassigned_reviewable_files"] == 0
         assert cohort["outcomes"]["raw_findings"] == 3
         assert cohort["outcomes"]["final_findings"] == 1
         assert cohort["critic"]["verdicts"] == {"STAND": 1}
         assert cohort["wall_time"]["total_ms"] == 60_000
-        assert cohort["availability"]["coverage"]["missing"] == 1
+        assert cohort["availability"]["assignment"]["missing"] == 1
 
     def test_planner_removal_rate_excludes_unchanged_skips_and_uncompared_runs(self):
         compared = _measured_run("compared")
@@ -7625,13 +7625,13 @@ class TestFormattingAndCli:
     def test_table_has_required_columns_and_missing_glyphs(self):
         run = _measured_run("missing", transcript_state="missing")
         run["dispatch"] = None
-        run["coverage"] = None
+        run["assignment"] = None
         run["outcome"] = {"summary": {}, "critic_verdict": None}
         run["wall_time_ms"] = None
         run["metric_availability"].update(
             {
                 "dispatch": "missing",
-                "coverage": "missing",
+                "assignment": "missing",
                 "raw_findings": "missing",
                 "final_findings": "missing",
                 "critic": "missing",
@@ -8015,7 +8015,7 @@ class TestNonCanonicalPathsFailClosed:
         self, tmp_path, bad_path
     ):
         manifest = _manifest("cover-run")
-        manifest["coverage"]["changed_files"].append(bad_path)
+        manifest["assignment"]["changed_files"].append(bad_path)
         _write_manifest(tmp_path / "review.manifest.json", manifest)
         _write_jsonl(tmp_path / "review.jsonl", _legacy_events("legacy-fallback"))
 
@@ -8028,8 +8028,8 @@ class TestNonCanonicalPathsFailClosed:
         self, tmp_path
     ):
         manifest = _manifest("cover-run")
-        manifest["coverage"]["changed_files"].append("/abs/noise.js")
-        manifest["coverage"]["file_exclusions"].append(
+        manifest["assignment"]["changed_files"].append("/abs/noise.js")
+        manifest["assignment"]["file_exclusions"].append(
             {"path": "/abs/noise.js", "reason": "noise_filtered"}
         )
         _write_manifest(tmp_path / "review.manifest.json", manifest)
@@ -8536,7 +8536,7 @@ def _derived_markdown_payload(**overrides) -> dict:
 
 def _optional_section_payload(name: str):
     return {
-        "coverage": _manifest()["coverage"],
+        "assignment": _manifest()["assignment"],
         "worktree_hygiene": _worktree_hygiene_payload(),
         "synthesis_agents": _synthesis_agents_payload(),
         "usage": _usage_snapshot_payload(),
@@ -8553,7 +8553,7 @@ def _optional_section_payload(name: str):
 # representative section, rather than restated per section. What IS
 # per-section is each entry's own sanitizer — covered by the structural
 # round-trip below plus each section's dedicated field-level class.
-_REPRESENTATIVE_OPTIONAL_SECTION = "coverage"
+_REPRESENTATIVE_OPTIONAL_SECTION = "assignment"
 
 
 class TestOptionalSectionAvailabilityConsistency:
@@ -8663,8 +8663,8 @@ class TestOptionalSectionSanitizerTableIsStructurallyComplete:
     def test_a_declared_key_with_no_sanitizer_fails_loudly_by_name(self):
         with pytest.raises(AssertionError) as excinfo:
             sanitize._require_complete_optional_section_sanitizers(
-                ("coverage", "dependency_refresh"),
-                {"coverage": sanitize._sanitize_coverage},
+                ("assignment", "dependency_refresh"),
+                {"assignment": sanitize._sanitize_assignment},
             )
         message = str(excinfo.value)
         assert "dependency_refresh" in message
@@ -8675,9 +8675,9 @@ class TestOptionalSectionSanitizerTableIsStructurallyComplete:
     ):
         with pytest.raises(AssertionError) as excinfo:
             sanitize._require_complete_optional_section_sanitizers(
-                ("coverage",),
+                ("assignment",),
                 {
-                    "coverage": sanitize._sanitize_coverage,
+                    "assignment": sanitize._sanitize_assignment,
                     "retired_section": sanitize._sanitize_skipped_steps,
                 },
             )
@@ -8730,7 +8730,7 @@ class TestOptionalSectionVocabulariesAreNotRestated:
         assert getattr(manifest_sections, "ASSIGNMENT_FIELDS", None) == expected
         assert getattr(contracts, "_ASSIGNMENT_FIELDS", None) == expected
         assert contracts._ASSIGNMENT_FIELDS is (
-            contracts._ASSIGNMENT_VOCABULARY_CONTRACT.ASSIGNMENT_FIELDS
+            contracts._MANIFEST_SECTIONS_CONTRACT.ASSIGNMENT_FIELDS
         )
         assert sanitize._ASSIGNMENT_FIELDS is contracts._ASSIGNMENT_FIELDS
         assert sanitize._ASSIGNMENT_PATH_LIST_FIELDS is (

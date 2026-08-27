@@ -923,7 +923,7 @@ def _sanitize_dispatch(value: object) -> dict[str, Any] | None:
     return result
 
 
-# The per-agent reviewed-files row shape `_sanitize_coverage` requires.
+# The per-agent reviewed-files row shape `_sanitize_assignment` requires.
 # Both populations are derived from the authoritative assignment and
 # validated positive claims.
 _REVIEWED_FILES_FIELDS = frozenset({
@@ -931,7 +931,7 @@ _REVIEWED_FILES_FIELDS = frozenset({
 })
 
 
-def _sanitize_coverage(value: object) -> dict[str, Any] | None:
+def _sanitize_assignment(value: object) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
     required = {
@@ -1598,7 +1598,7 @@ def _sanitize_outcome(value: object) -> dict[str, Any]:
 # gate lives inside `_sanitize_synthesis_agents` itself and needs no
 # special-casing here.
 _OPTIONAL_SECTION_SANITIZERS: dict[str, Any] = {
-    "coverage": _sanitize_coverage,
+    "assignment": _sanitize_assignment,
     "worktree_hygiene": _sanitize_worktree_hygiene,
     "synthesis_agents": _sanitize_synthesis_agents,
     "usage": _sanitize_usage_snapshot,
@@ -1663,7 +1663,7 @@ def _sanitize_optional_sections(
     function exists to close.
 
     An explicit producer `false` still wins outright — flag-wins, the
-    same precedent `coverage` and `synthesis_agents` established before
+    same precedent `assignment` and `synthesis_agents` established before
     this consolidation: a producer that measured the section absent is
     not overruled by a stray leftover payload.
 
@@ -1734,7 +1734,7 @@ def _sanitize_manifest(value: object) -> dict[str, Any]:
         "steps": _sanitize_steps(value.get("steps")),
         "agents": agents,
         "dispatch": dispatch,
-        "coverage": optional_sections.get("coverage"),
+        "assignment": optional_sections.get("assignment"),
         "synthesis_agents": optional_sections.get("synthesis_agents"),
         "worktree_hygiene": optional_sections.get("worktree_hygiene"),
         "usage": optional_sections.get("usage"),
@@ -1757,7 +1757,7 @@ def _supported_manifest_envelope(value: object) -> bool:
         "run",
         "steps",
         "dispatch",
-        "coverage",
+        "assignment",
         "outcome",
         "availability",
     }
@@ -1807,7 +1807,7 @@ def _supported_manifest_envelope(value: object) -> bool:
         return False
     if not all(
         type(availability.get(name)) is bool
-        for name in ("pipeline", "transcript", "coverage")
+        for name in ("pipeline", "transcript", "assignment")
     ):
         return False
     return availability["pipeline"] is True
@@ -1830,9 +1830,9 @@ def _valid_manifest(value: object) -> bool:
         and not _dispatch_projection_family_failure(raw_dispatch)
     ):
         return False
-    coverage_available = value["availability"]["coverage"]
-    if coverage_available != isinstance(sanitized.get("coverage"), dict):
+    assignment_available = value["availability"]["assignment"]
+    if assignment_available != isinstance(sanitized.get("assignment"), dict):
         return False
-    if coverage_available is False and value.get("coverage") is not None:
+    if assignment_available is False and value.get("assignment") is not None:
         return False
     return True

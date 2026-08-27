@@ -81,7 +81,7 @@ EVENT_SCHEMA = 3
 # `agents`, and `transcript`'s comes from a measurement source outside
 # the manifest entirely.
 OPTIONAL_SECTION_AVAILABILITY_KEYS = (
-    "coverage",
+    "assignment",
     "worktree_hygiene",
     "synthesis_agents",
     "usage",
@@ -782,8 +782,8 @@ class ReviewTelemetry:
         manifest["dispatch"] = manifest_sections.build_dispatch_manifest(
             self.output_dir, final_info
         )
-        coverage = (
-            manifest_sections.build_coverage_manifest(
+        assignment = (
+            manifest_sections.build_assignment_manifest(
                 self.output_dir,
                 events,
                 context,
@@ -793,8 +793,8 @@ class ReviewTelemetry:
             )
             if settled else None
         )
-        manifest["coverage"] = coverage
-        manifest["availability"]["coverage"] = coverage is not None
+        manifest["assignment"] = assignment
+        manifest["availability"]["assignment"] = assignment is not None
         manifest["dependency_refresh"] = (
             manifest_sections.build_dependency_refresh_manifest(self.output_dir)
         )

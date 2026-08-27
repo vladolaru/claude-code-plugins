@@ -613,20 +613,20 @@ def _pipeline_metric_availability(
     else:
         dispatch_state = "missing"
 
-    coverage = manifest.get("coverage")
+    assignment = manifest.get("assignment")
     manifest_availability = manifest.get("availability")
-    coverage_available = isinstance(coverage, dict) and not (
+    assignment_available = isinstance(assignment, dict) and not (
         isinstance(manifest_availability, dict)
-        and manifest_availability.get("coverage") is False
+        and manifest_availability.get("assignment") is False
     )
-    # Coverage is measured only from a settled manifest. `_build_manifest`
-    # builds the section at finalize alone, so a running manifest carries
-    # no coverage to classify; a pre-finalize manifest that still holds one
+    # The assignment is measured only from a settled manifest.
+    # `_build_manifest` builds the section at finalize alone, so a running
+    # manifest carries none to classify; a pre-finalize manifest that holds one
     # is a snapshot from a run that never settled, and reporting it as a
     # partial observation credited it as evidence it never was.
-    coverage_state = (
+    assignment_state = (
         "complete"
-        if coverage_available and manifest.get("status") == "complete"
+        if assignment_available and manifest.get("status") == "complete"
         else "missing"
     )
     outcome = manifest.get("outcome")
@@ -721,7 +721,7 @@ def _pipeline_metric_availability(
         )
     return {
         "dispatch": dispatch_state,
-        "coverage": coverage_state,
+        "assignment": assignment_state,
         "lifecycle": lifecycle_state,
         "synthesis_agents": synthesis_state,
         "outcomes": outcomes_state,
