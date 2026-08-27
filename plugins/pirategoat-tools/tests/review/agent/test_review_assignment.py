@@ -34,7 +34,7 @@ def _assignment(**overrides):
 
 def test_derives_reviewed_files_from_normalized_claims_in_authoritative_order():
     reviewed_files = derive_reviewed_files(
-        _assignment(), ["./src/d.py", "src/b.py", "src/b.py"]
+        _assignment(), ["./src/d.py", "src/b.py", "src/b.py"], reviewer="code"
     )
 
     assert reviewed_files.agent_name == "code-reviewer"
@@ -63,6 +63,7 @@ def test_rejects_claim_outside_review_claimable_files_as_one_batch():
                 in_scope_review_file_count=2,
             ),
             ["src/other.py", "src/second.py"],
+            reviewer="code",
         )
 
 
@@ -74,6 +75,7 @@ def test_empty_claimable_set_keeps_all_inline_files_accounted_for():
             in_scope_review_file_count=3,
         ),
         [],
+        reviewer="code",
     )
 
     assert reviewed_files.reviewed_file_claims == ()
@@ -90,6 +92,7 @@ def test_normalizes_authoritative_paths_before_rejecting_duplicates():
                 in_scope_review_file_count=3,
             ),
             [],
+            reviewer="code",
         )
 
 
@@ -124,13 +127,13 @@ def test_normalizes_authoritative_paths_before_rejecting_duplicates():
 )
 def test_validates_schema_identity_paths_and_conserved_counts(payload, message):
     if message is None:
-        reviewed_files = derive_reviewed_files(payload, [])
+        reviewed_files = derive_reviewed_files(payload, [], reviewer=payload.get("reviewer", "code"))
         assert reviewed_files.agent_name == "repo-renewals-reviewer"
         assert reviewed_files.reviewer == "repo-renewals"
         return
 
     with pytest.raises(ReviewAssignmentError, match=message):
-        derive_reviewed_files(payload, [])
+        derive_reviewed_files(payload, [], reviewer=payload.get("reviewer", "code"))
 
 
 @pytest.mark.parametrize(
@@ -148,14 +151,14 @@ def test_rejects_paths_outside_repository_relative_grammar(path, location):
         claims = [path]
 
     with pytest.raises(ReviewAssignmentError):
-        derive_reviewed_files(payload, claims)
+        derive_reviewed_files(payload, claims, reviewer=payload["reviewer"])
 
 
 def test_rejects_non_object_input_and_non_iterable_claims():
     with pytest.raises(ReviewAssignmentError, match="must be an object"):
-        derive_reviewed_files([], [])
+        derive_reviewed_files([], [], reviewer="code")
     with pytest.raises(ReviewAssignmentError, match="claims must be iterable"):
-        derive_reviewed_files(_assignment(), None)
+        derive_reviewed_files(_assignment(), None, reviewer="code")
 
 
 def _input(**overrides):
@@ -174,7 +177,9 @@ def _input(**overrides):
 
 
 def test_assignment_carries_budget_and_channels():
-    reviewed_files = derive_reviewed_files(_input(channels=["blocking", "advisory"]), [])
+    reviewed_files = derive_reviewed_files(
+        _input(channels=["blocking", "advisory"]), [], reviewer="security"
+    )
     assert reviewed_files.review_budget == 15
     assert reviewed_files.channels == ("blocking", "advisory")
 
@@ -190,7 +195,7 @@ def test_assignment_carries_budget_and_channels():
 ])
 def test_schema_four_rejects_retired_or_malformed_input(overrides):
     with pytest.raises(ReviewAssignmentError):
-        derive_reviewed_files(_input(**overrides), [])
+        derive_reviewed_files(_input(**overrides), [], reviewer="security")
 
 
 def test_accounting_vocabulary_is_retired():
@@ -214,3 +219,9 @@ def test_assignment_sidecar_path():
     paths = review_paths("/out", "security")
     assert paths.assignment == "/out/security-assignment.json"
     assert not hasattr(paths, "accounting" + "_input")
+
+
+def test_assignment_bound_to_another_reviewer_is_refused():
+    """A stale or misplaced but internally consistent sidecar lends nothing."""
+    with pytest.raises(ReviewAssignmentError, match="bound to reviewer 'code', not 'security'"):
+        derive_reviewed_files(_assignment(), [], reviewer="security")

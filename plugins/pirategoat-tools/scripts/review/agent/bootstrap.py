@@ -1437,7 +1437,7 @@ def persist_review_assignment(
         "review_budget": review_budget,
         "channels": list(channels),
     }
-    derive_reviewed_files(payload, [])
+    derive_reviewed_files(payload, [], reviewer=reviewer)
     atomic_write_json(review_paths(output_dir, reviewer).assignment, payload)
 
 

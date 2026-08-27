@@ -247,7 +247,7 @@ class TestReviewerDraftFinalizationLifecycle:
         manifest = json.loads(Path(telemetry.manifest_path).read_text())
         canonical = json.loads(canonical_bytes)
         reviewed_files = derive_reviewed_files(
-            assignment, ["claimable/read.py"]
+            assignment, ["claimable/read.py"], reviewer=assignment["reviewer"]
         )
         events = [
             json.loads(line)

@@ -427,7 +427,7 @@ def _load_review_claimable_file_count(
     if data is None:
         return None
     try:
-        reviewed_files = derive_reviewed_files(data, [])
+        reviewed_files = derive_reviewed_files(data, [], reviewer=reviewer)
     except ReviewAssignmentError:
         return None
     if reviewed_files.agent_name != agent:

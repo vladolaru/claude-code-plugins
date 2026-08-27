@@ -141,25 +141,38 @@ def _validated_claim_set(
 def derive_reviewed_files(
     assignment: Mapping[str, object],
     reviewed_file_claims: Iterable[str],
+    *,
+    reviewer: str,
 ) -> ReviewedFiles:
-    """Derive the complete reviewed-file partition from one assignment."""
+    """Derive the complete reviewed-file partition from one assignment.
+
+    `reviewer` is the identity the caller is acting as; an assignment bound
+    to any other reviewer is refused here, at the one authority, so a stale
+    or misplaced sidecar cannot lend another reviewer its scope, budget, or
+    channels.
+    """
     if not isinstance(assignment, Mapping):
         raise ReviewAssignmentError("assignment must be an object")
     (
         agent_name,
-        reviewer,
+        assigned_reviewer,
         review_claimable_files,
         inline_diff_file_count,
         in_scope_review_file_count,
         review_budget,
         channels,
     ) = _validated_assignment(assignment)
+    if assigned_reviewer != reviewer:
+        raise ReviewAssignmentError(
+            f"assignment is bound to reviewer {assigned_reviewer!r}, "
+            f"not {reviewer!r}"
+        )
     claimed = _validated_claim_set(reviewed_file_claims, review_claimable_files)
     reviewed = tuple(path for path in review_claimable_files if path in claimed)
     unclaimed = tuple(path for path in review_claimable_files if path not in claimed)
     return ReviewedFiles(
         agent_name=agent_name,
-        reviewer=reviewer,
+        reviewer=assigned_reviewer,
         review_claimable_files=review_claimable_files,
         reviewed_file_claims=reviewed,
         unclaimed_review_files=unclaimed,

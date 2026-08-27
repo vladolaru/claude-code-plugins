@@ -1269,7 +1269,7 @@ class ReviewOutputBuilder:
         try:
             with open(self._paths.assignment, "r", encoding="utf-8") as handle:
                 data = json.load(handle)
-            return derive_reviewed_files(data, [])
+            return derive_reviewed_files(data, [], reviewer=self.reviewer)
         except (OSError, UnicodeDecodeError, json.JSONDecodeError, ReviewAssignmentError):
             return None
 
@@ -1376,7 +1376,7 @@ class ReviewOutputBuilder:
             ) from exc
         try:
             return derive_reviewed_files(
-                assignment, self.reviewed_file_claims
+                assignment, self.reviewed_file_claims, reviewer=self.reviewer
             )
         except ReviewAssignmentError as exc:
             raise ValueError(
@@ -2129,7 +2129,7 @@ def _validate_review(output_dir, reviewer, paths, review_bytes):
     )
     try:
         reviewed_files = derive_reviewed_files(
-            assignment, review["reviewed_file_claims"]
+            assignment, review["reviewed_file_claims"], reviewer=reviewer
         )
     except ReviewAssignmentError as exc:
         raise ValueError(
