@@ -409,7 +409,7 @@ def render_review_body(data: Dict) -> str:
             md.append(f"- {obs}\n")
 
     # Observations
-    if data.get('observations'):
+    if data['observations']:
         md.append("\n## Observations\n\n")
         for obs in data['observations']:
             md.append(f"- **`{obs['file']}`** — {obs['note']}\n")
