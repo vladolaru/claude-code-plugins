@@ -36,8 +36,6 @@ Usage:
 """
 
 import argparse
-import ast
-import copy
 import datetime
 import json
 import os
@@ -45,384 +43,43 @@ import posixpath
 import re
 import sys
 from collections import Counter, defaultdict
-from dataclasses import dataclass
 from glob import glob
 from typing import Any
 
-# Sibling module in scripts/analysis — canonical tri-state result
-# classification shared with transcript enrichment.
+# Sibling module in scripts/analysis — the envelope parser that names the
+# artifact one builder save produced.
 _ANALYSIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(_ANALYSIS_DIR))
 sys.path.insert(0, _ANALYSIS_DIR)
-from review_builder_ast import (  # noqa: E402
-    BUILDER_ENV_NAMES,
-    BUILDER_ENV_OPTIONAL,
-    BUILDER_ENV_REQUIRED,
-    parse_builder_envelope,
-    recognize_canonical_builder_program,
-)
 from review.agent.output import (  # noqa: E402
-    _validate_review_bytes,
+    load_review_document,
     validate_review_document,
 )
-from review_transcript import _result_state  # noqa: E402
-
-# The canonical one-shot builder envelope mandated by bootstrap: these
-# assignments (any order) followed by `python3 <<'PY'` on the first line.
-# These four names are the envelope's stable identity — every generation of
-# bootstrap has emitted all of them, and reconstruction below reads only
-# these.
-# Public aliases retained for measurement-contract tests. The shared parser
-# owns their values and preserves the historical optional envelope names.
-_BUILDER_ENV_REQUIRED = BUILDER_ENV_REQUIRED
-_BUILDER_ENV_OPTIONAL = BUILDER_ENV_OPTIONAL
-_BUILDER_ENV_NAMES = BUILDER_ENV_NAMES
-# Must mirror ReviewOutputBuilder.add_finding()'s FULL positional order — a
-# parameter missing here is silently dropped from fully positional calls
-# (a dropped severity_floor records the pre-floor severity). A contract
-# test derives the expected tuple from the real signature.
-_BUILDER_FINDING_POSITIONAL = (
-    "severity",
-    "title",
-    "file",
-    "description",
-    "recommendation",
-    "category",
-    "line",
-    "confidence",
-    "behavior_evidence",
-    "source_cited",
-    "severity_floor",
-)
-# Mirrors ReviewOutputBuilder.add_finding severity normalization: severities
-# are lowercased and a severity_floor promotes lower severities to it. The
-# reconstruction must match what the builder actually saved.
-_SEVERITY_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
-_RECONSTRUCTED_REVIEW_SCHEMA = 1
+from review.reviewer_lifecycle import review_paths  # noqa: E402
+from review_transcript import parse_builder_envelope  # noqa: E402
 
 
-class _ProvenEmptyReviewState:
-    """Identity-only proof that no draft precedes the first invocation."""
+def _review_from_artifact(envelope: dict[str, str]) -> dict[str, Any] | None:
+    """Return the saved review one builder envelope names, or None.
 
-
-PROVEN_EMPTY_REVIEW_STATE = _ProvenEmptyReviewState()
-
-
-@dataclass(frozen=True)
-class _BuilderDomainState:
-    reviewer: str
-    pr_id: str
-    findings: list[dict[str, Any]]
-    checks: list[dict[str, Any]]
-    reviewed_file_claims: list[str]
-    next_finding_number: int
-    next_check_number: int
-
-
-def _normalize_builder_severity(finding: dict[str, Any]) -> None:
-    severity = finding.get("severity")
-    if isinstance(severity, str):
-        severity = severity.lower()
-        finding["severity"] = severity
-    floor = finding.get("severity_floor")
-    floor = floor.lower() if isinstance(floor, str) else None
-    if floor is not None:
-        finding["severity_floor"] = floor
-    if (
-        severity in _SEVERITY_RANK
-        and floor in _SEVERITY_RANK
-        and _SEVERITY_RANK[severity] < _SEVERITY_RANK[floor]
-    ):
-        finding["severity"] = floor
-
-
-def _literal_call_values(
-    call: ast.Call, positional_names: tuple[str, ...]
-) -> dict[str, Any] | None:
-    """Return exact literal arguments, or fail closed for dynamic calls."""
-    if len(call.args) > len(positional_names):
-        return None
-    values: dict[str, Any] = {}
-    for name, argument in zip(positional_names, call.args):
-        try:
-            values[name] = ast.literal_eval(argument)
-        except (ValueError, SyntaxError):
-            return None
-    for keyword in call.keywords:
-        if keyword.arg is None or keyword.arg in values:
-            return None
-        try:
-            values[keyword.arg] = ast.literal_eval(keyword.value)
-        except (ValueError, SyntaxError):
-            return None
-    return values
-
-
-def _entry_by_id(
-    entries: list[dict[str, Any]], entry_id: object
-) -> dict[str, Any] | None:
-    if not isinstance(entry_id, str):
-        return None
-    return next((entry for entry in entries if entry.get("id") == entry_id), None)
-
-
-def _builder_heredoc_env(command: Any) -> dict[str, str] | None:
-    """Parse the stable envelope without claiming that it saved a review."""
-    parsed = parse_builder_envelope(command)
-    return parsed[0] if parsed is not None else None
-
-
-def _prior_builder_state(
-    prior_review: object, reviewer: str, pr_id: str
-) -> _BuilderDomainState | None:
-    """Validate external snapshots once; copy analyzer-owned state exactly."""
-    if prior_review is PROVEN_EMPTY_REVIEW_STATE:
-        return _BuilderDomainState(reviewer, pr_id, [], [], [], 1, 1)
-    if isinstance(prior_review, _BuilderDomainState):
-        if (
-            prior_review.reviewer != reviewer
-            or prior_review.pr_id != pr_id
-        ):
-            return None
-        return _BuilderDomainState(
-            reviewer,
-            pr_id,
-            copy.deepcopy(prior_review.findings),
-            copy.deepcopy(prior_review.checks),
-            list(prior_review.reviewed_file_claims),
-            prior_review.next_finding_number,
-            prior_review.next_check_number,
-        )
-    if not isinstance(prior_review, dict):
-        return None
+    Compliant reviewers save through ReviewOutputBuilder inside a mandated
+    Bash heredoc, so the serialized review never appears in the transcript.
+    The artifact it wrote is the evidence, and the pipeline's own validator
+    is the one that decides whether it is readable. Absent or invalid is
+    unmeasured — no record, so nothing downstream reports a zero for a
+    reviewer whose output was never observed.
+    """
+    reviewer = envelope["reviewer"]
     try:
-        validated = _validate_review_bytes(
-            json.dumps(prior_review).encode("utf-8"),
-            reviewer=reviewer,
-            pr_id=pr_id,
-        )
-    except (TypeError, ValueError):
+        path = review_paths(envelope["output_dir"], reviewer).final
+        document = load_review_document(path, reviewer)
+    except ValueError:
         return None
-    return _BuilderDomainState(
-        reviewer,
-        pr_id,
-        validated["findings"],
-        validated["checks"],
-        validated["reviewed_file_claims"],
-        validated["meta"]["next_finding_number"],
-        validated["meta"]["next_check_number"],
-    )
+    return {"path": path, "content": json.dumps(document)}
 
 
-def _reconstruct_builder_review(
-    command: str, *, prior_review: object = None
-) -> tuple[dict[str, Any], _BuilderDomainState] | None:
-    """Return one synthesized record plus exact analyzer-owned next state.
-
-    Compliant reviewers save through a mandated Bash heredoc instead of a
-    Write call, so the serialized review JSON never appears in the
-    transcript. Reconstruction is possible only when the caller supplies a
-    canonical prior snapshot, including an explicitly proven empty snapshot.
-    Unknown prior state, dynamic values, or a non-canonical program degrade to
-    None rather than treating ReviewOutputBuilder.open() as guaranteed fresh.
-    """
-    program = recognize_canonical_builder_program(command)
-    if program is None:
-        return None
-    reviewer = program.env["PIRATEGOAT_REVIEWER_NAME"]
-    pr_id = program.env["PIRATEGOAT_PR_ID"]
-    prior = _prior_builder_state(prior_review, reviewer, pr_id)
-    if prior is None:
-        return None
-    (
-        findings,
-        checks,
-        reviewed_file_claims,
-        next_finding_number,
-        next_check_number,
-    ) = (
-        prior.findings,
-        prior.checks,
-        prior.reviewed_file_claims,
-        prior.next_finding_number,
-        prior.next_check_number,
-    )
-    mutation_methods = {
-        "add_finding",
-        "update_finding",
-        "remove_finding",
-        "record_check",
-        "update_check",
-        "remove_check",
-        "claim_files_reviewed",
-        "retract_reviewed_file_claims",
-    }
-    for call in program.receiver_calls_through_save():
-        method = call.func.attr
-        if method == "save_draft":
-            if call.args or call.keywords:
-                return None
-            continue
-        if method not in mutation_methods:
-            continue
-
-        if method == "add_finding":
-            values = _literal_call_values(call, _BUILDER_FINDING_POSITIONAL)
-            required = {
-                "severity", "title", "file", "description", "recommendation"
-            }
-            if values is None or not required <= set(values):
-                return None
-            finding = {
-                "id": f"f{next_finding_number}",
-                "category": "general",
-                "line": None,
-                "confidence": 0.95,
-                **values,
-            }
-            next_finding_number += 1
-            _normalize_builder_severity(finding)
-            if finding.get("line") is None:
-                finding["scope"] = "file"
-            channel = finding.pop("channel", None)
-            if channel == "advisory":
-                finding["channel"] = channel
-            for optional in ("behavior_evidence", "source_cited", "severity_floor"):
-                if finding.get(optional) is None:
-                    finding.pop(optional, None)
-            findings.append(finding)
-            continue
-
-        if method == "record_check":
-            values = _literal_call_values(call, ("question", "method", "result"))
-            if values is None or set(values) != {"question", "method", "result"}:
-                return None
-            checks.append({
-                "id": f"c{next_check_number}",
-                **values,
-                "source_reviewers": [reviewer],
-            })
-            next_check_number += 1
-            continue
-
-        if method in {"update_finding", "update_check"}:
-            id_name = "finding_id" if method == "update_finding" else "check_id"
-            values = _literal_call_values(call, (id_name,))
-            if values is None or id_name not in values or len(values) < 2:
-                return None
-            entries = findings if method == "update_finding" else checks
-            entry = _entry_by_id(entries, values.pop(id_name))
-            if entry is None:
-                return None
-            allowed = (
-                {
-                    "category", "severity", "title", "description", "file",
-                    "line", "recommendation", "confidence", "behavior_evidence",
-                    "source_cited", "severity_floor", "channel", "code_snippet",
-                    "references",
-                }
-                if method == "update_finding"
-                else {"question", "method", "result"}
-            )
-            if not set(values) <= allowed:
-                return None
-            entry.update(values)
-            if method == "update_finding":
-                _normalize_builder_severity(entry)
-                if entry.get("line") is None:
-                    entry["scope"] = "file"
-                else:
-                    entry.pop("scope", None)
-            continue
-
-        if method in {"remove_finding", "remove_check"}:
-            id_name = "finding_id" if method == "remove_finding" else "check_id"
-            values = _literal_call_values(call, (id_name,))
-            if values is None or set(values) != {id_name}:
-                return None
-            entries = findings if method == "remove_finding" else checks
-            entry = _entry_by_id(entries, values[id_name])
-            if entry is None:
-                return None
-            entries.remove(entry)
-            continue
-
-        # claim/retract are variadic positional-only in reviewer guidance, so
-        # evaluate every argument directly and reject unpacking/dynamic
-        # expressions.
-        if call.keywords:
-            return None
-        try:
-            paths = [ast.literal_eval(argument) for argument in call.args]
-        except (ValueError, SyntaxError):
-            return None
-        if not paths or any(not isinstance(path, str) for path in paths):
-            return None
-        if method == "claim_files_reviewed":
-            for path in paths:
-                if path not in reviewed_file_claims:
-                    reviewed_file_claims.append(path)
-        else:
-            if any(path not in reviewed_file_claims for path in paths):
-                return None
-            retracted = set(paths)
-            reviewed_file_claims = [
-                path for path in reviewed_file_claims if path not in retracted
-            ]
-
-    record = {
-        "path": posixpath.join(
-            program.env["PIRATEGOAT_OUTPUT_DIR"], f"{reviewer}-review.json"
-        ),
-        "content": json.dumps({
-            "analysis_schema": _RECONSTRUCTED_REVIEW_SCHEMA,
-            "reviewer": reviewer,
-            "findings": findings,
-            "checks": checks,
-            "reviewed_file_claims": reviewed_file_claims,
-            "meta": {
-                "next_finding_number": next_finding_number,
-                "next_check_number": next_check_number,
-            },
-        }),
-        "source": "bash_builder_heredoc",
-    }
-    state = _BuilderDomainState(
-        reviewer,
-        pr_id,
-        copy.deepcopy(findings),
-        copy.deepcopy(checks),
-        list(reviewed_file_claims),
-        next_finding_number,
-        next_check_number,
-    )
-    return record, state
-
-
-def _builder_review_from_heredoc(
-    command: str, *, prior_review: object = None
-) -> dict[str, Any] | None:
-    """Synthesize a review only from explicit, canonical prior state."""
-    reconstructed = _reconstruct_builder_review(
-        command,
-        prior_review=prior_review,
-    )
-    return reconstructed[0] if reconstructed is not None else None
-
-
-def parse_subagent_log(
-    filepath: str,
-    *,
-    prior_review_states: dict[str, object] | None = None,
-) -> dict[str, Any]:
-    """Parse a subagent JSONL file and extract detailed metrics.
-
-    ``prior_review_states`` is explicit evidence keyed by normalized review
-    artifact path. A canonical empty snapshot proves first use; absence means
-    the draft that ``ReviewOutputBuilder.open()`` may rehydrate is unknown.
-    Confirmed builder saves advance the owned state for later calls in the
-    same transcript.
-    """
+def parse_subagent_log(filepath: str) -> dict[str, Any]:
+    """Parse a subagent JSONL file and extract detailed metrics."""
     entries = []
     with open(filepath) as f:
         for line in f:
@@ -448,65 +105,20 @@ def parse_subagent_log(
         "final_texts": [],
     }
 
-    # Builder heredocs synthesize a review record only when their paired
-    # tool result classifies as a terminal success — failed, nonterminal,
-    # and unclassifiable results persisted nothing, and a retry after
-    # failure must count once, not twice. Pairing is strict: exactly one
-    # call across EVERY tool-use block and one later result per tool ID.
-    # Reused IDs (including a builder Bash call sharing an ID with an
-    # unrelated tool call), duplicate results, or a result preceding its
-    # call (concatenated or damaged logs) would let a foreign success
-    # validate a dangling heredoc and fabricate findings, so ambiguous IDs
-    # stay unresolved. Entries are position-stamped to order calls and
-    # results.
-    pending_builder_commands: dict[str, tuple[int, str]] = {}
-    tool_result_states: dict[str, tuple[int, str] | None] = {}
-    call_id_uses: Counter = Counter()
-    # Every save (Write tool or confirmed builder heredoc) with its entry
-    # position and — for Writes — the call ID, so failed Writes can be
-    # excluded and cross-transport overwrites reduce in transcript order.
-    ordered_saves: list[tuple[int, dict[str, Any]]] = []
-    pending_write_saves: list[tuple[int, dict[str, Any], str | None]] = []
+    # Write records are literal transcript evidence for every file a dispatch
+    # produced; the review itself is not among them, because the mandated
+    # builder heredoc writes it to disk. Collect the envelopes and read their
+    # artifacts once the transcript is exhausted.
+    builder_envelopes: list[dict[str, str]] = []
+    write_saves: list[dict[str, Any]] = []
 
-    for position, entry in enumerate(entries):
+    for entry in entries:
         msg = entry.get("message", {})
         if isinstance(msg, str):
             continue
 
         role = msg.get("role", "")
         content = msg.get("content", "")
-
-        # Tool results — needed to confirm builder heredoc saves succeeded.
-        # Classified with review_transcript's canonical tri-state logic so
-        # nonterminal (status: "running") and unclassifiable structured
-        # payloads stay unresolved instead of counting as saves; the
-        # entry-level structured payload applies when a lone result block
-        # carries none, mirroring review_transcript's pairing.
-        if role == "user" and isinstance(content, list):
-            result_blocks = [
-                block
-                for block in content
-                if isinstance(block, dict)
-                and block.get("type") == "tool_result"
-                and isinstance(block.get("tool_use_id"), str)
-            ]
-            for block in result_blocks:
-                structured = block.get("toolUseResult")
-                if (
-                    not isinstance(structured, (dict, list))
-                    and len(result_blocks) == 1
-                ):
-                    structured = entry.get("toolUseResult")
-                state, _category, _detector = _result_state(
-                    {"block": block, "structured": structured},
-                    "Bash",
-                    "builder_output_attempt",
-                )
-                result_id = block["tool_use_id"]
-                if result_id in tool_result_states:
-                    tool_result_states[result_id] = None
-                else:
-                    tool_result_states[result_id] = (position, state)
 
         # First user message = prompt
         if role == "user" and not result["prompt_content"]:
@@ -534,33 +146,18 @@ def parse_subagent_log(
                 if block.get("type") == "tool_use":
                     tool_name = block.get("name", "")
                     tool_input = block.get("input", {})
-                    detail = _categorize_tool_call(tool_name, tool_input)
-                    result["tool_calls"].append(detail)
-                    block_id = block.get("id")
-                    if isinstance(block_id, str):
-                        call_id_uses[block_id] += 1
+                    result["tool_calls"].append(
+                        _categorize_tool_call(tool_name, tool_input)
+                    )
 
                     if tool_name == "Read":
                         result["files_read"].append(tool_input.get("file_path", ""))
                     elif tool_name == "Bash":
                         command = tool_input.get("command", "")
                         result["bash_commands"].append(command)
-                        # The mandated builder heredoc replaces the old
-                        # Write-based save — synthesize the review record it
-                        # produces so output analysis and quality metrics
-                        # see Bash-saved reviews. Held back until the paired
-                        # tool result confirms the save succeeded.
-                        if (
-                            recognize_canonical_builder_program(command)
-                            is not None
-                            and isinstance(block.get("id"), str)
-                        ):
-                            # ID uniqueness is enforced at merge time via
-                            # call_id_uses, which sees every tool-use block.
-                            pending_builder_commands[block["id"]] = (
-                                position,
-                                command,
-                            )
+                        envelope = parse_builder_envelope(command)
+                        if envelope is not None:
+                            builder_envelopes.append(envelope)
                     elif tool_name == "Grep":
                         result["grep_searches"].append({
                             "pattern": tool_input.get("pattern", ""),
@@ -570,16 +167,10 @@ def parse_subagent_log(
                     elif tool_name == "Glob":
                         result["glob_searches"].append(tool_input.get("pattern", ""))
                     elif tool_name == "Write":
-                        pending_write_saves.append((
-                            position,
-                            {
-                                "path": tool_input.get("file_path", ""),
-                                "content": tool_input.get("content", ""),
-                            },
-                            block.get("id")
-                            if isinstance(block.get("id"), str)
-                            else None,
-                        ))
+                        write_saves.append({
+                            "path": tool_input.get("file_path", ""),
+                            "content": tool_input.get("content", ""),
+                        })
 
                 elif block.get("type") == "text":
                     result["final_texts"].append(block.get("text", ""))
@@ -587,114 +178,17 @@ def parse_subagent_log(
         if role == "assistant" and isinstance(content, str):
             result["final_texts"].append(content)
 
-    confirmed_builder_commands: list[tuple[int, str]] = []
-    for call_id, (call_position, command) in pending_builder_commands.items():
-        if call_id_uses[call_id] != 1:
-            continue
-        paired = tool_result_states.get(call_id)
-        if (
-            paired is not None
-            and paired[1] == "success"
-            and paired[0] > call_position
-        ):
-            confirmed_builder_commands.append((call_position, command))
-
-    # Write records are literal transcript evidence (the content is in the
-    # call itself), so the default is to keep them — but a Write whose own
-    # unambiguously paired result classifies as a definite failure persisted
-    # nothing, and letting it enter the by-path reduction would shadow a
-    # confirmed earlier save to the same artifact. Ambiguity (reused IDs,
-    # duplicate results, missing or unclassifiable results) keeps the
-    # legacy keep-the-record behavior.
-    confirmed_write_saves: list[tuple[int, dict[str, Any]]] = []
-    for call_position, record, call_id in pending_write_saves:
-        if call_id is not None and call_id_uses[call_id] == 1:
-            paired = tool_result_states.get(call_id)
-            if (
-                paired is not None
-                and paired[1] == "failure"
-                and paired[0] > call_position
-            ):
-                continue
-        confirmed_write_saves.append((call_position, record))
-
-    # Saves to the same artifact overwrite each other regardless of
-    # transport — a legacy Write followed by a corrected builder heredoc
-    # (or vice versa) must count once, as its final content, not as an
-    # extra dispatch with duplicated findings. Pathless or malformed-path
-    # records carry no artifact identity and are kept as-is.
-    def _path_key(raw: object) -> str | None:
-        if not isinstance(raw, str) or not raw:
-            return None
-        # normpath collapses `./`, `//`, `a/../b`; transcript paths are
-        # POSIX regardless of the analysis host.
-        return posixpath.normpath(raw)
-
-    known_review_states: dict[str, object] = {}
-    if isinstance(prior_review_states, dict):
-        for raw_path, review in prior_review_states.items():
-            key = _path_key(raw_path)
-            if key is None:
-                continue
-            if review is PROVEN_EMPTY_REVIEW_STATE:
-                known_review_states[key] = review
-            elif isinstance(review, dict):
-                known_review_states[key] = copy.deepcopy(review)
-
-    save_events = [
-        (position, "builder", command)
-        for position, command in confirmed_builder_commands
-    ] + [
-        (position, "write", record)
-        for position, record in confirmed_write_saves
-    ]
-    save_events.sort(key=lambda item: item[0])
-    for position, kind, payload in save_events:
-        if kind == "write":
-            ordered_saves.append((position, payload))
-            continue
-        program = recognize_canonical_builder_program(payload)
-        if program is None:
-            continue
-        reviewer = program.env["PIRATEGOAT_REVIEWER_NAME"]
-        path = posixpath.join(
-            program.env["PIRATEGOAT_OUTPUT_DIR"],
-            f"{reviewer}-review.json",
-        )
-        key = _path_key(path)
-        prior_review = known_review_states.get(key) if key is not None else None
-        reconstructed = _reconstruct_builder_review(
-            payload,
-            prior_review=prior_review,
-        )
-        if reconstructed is None:
-            if key is not None:
-                known_review_states.pop(key, None)
-                ordered_saves[:] = [
-                    (saved_position, record)
-                    for saved_position, record in ordered_saves
-                    if not (
-                        record.get("source") == "bash_builder_heredoc"
-                        and _path_key(record.get("path")) == key
-                    )
-                ]
-            continue
-        builder_output, next_state = reconstructed
-        ordered_saves.append((position, builder_output))
-        if key is not None:
-            known_review_states[key] = next_state
-
-    last_by_path: dict[str, int] = {}
-    for index, (_position, record) in enumerate(ordered_saves):
-        key = _path_key(record.get("path"))
-        if key is not None:
-            last_by_path[key] = index
+    # One artifact, one record, whatever the transport: repeated saves in one
+    # transcript all name the same file, and a legacy Write of that path is
+    # superseded by what the file actually holds.
+    artifact_saves: dict[str, dict[str, Any]] = {}
+    for envelope in builder_envelopes:
+        record = _review_from_artifact(envelope)
+        if record is not None:
+            artifact_saves.setdefault(record["path"], record)
     result["write_outputs"] = [
-        record
-        for index, (_position, record) in enumerate(ordered_saves)
-        if (key := _path_key(record.get("path"))) is None
-        or last_by_path[key] == index
-    ]
+        record for record in write_saves if record["path"] not in artifact_saves
+    ] + list(artifact_saves.values())
 
     return result
 
@@ -707,7 +201,7 @@ def _categorize_tool_call(tool_name: str, tool_input: dict) -> dict[str, Any]:
         cmd = tool_input.get("command", "")
         detail["command"] = cmd
 
-        if recognize_canonical_builder_program(cmd) is not None:
+        if parse_builder_envelope(cmd) is not None:
             detail["category"] = "builder-output"
         elif "git grep" in cmd:
             detail["category"] = "git-grep"
@@ -1046,7 +540,7 @@ def extract_agent_findings(write_output: Any) -> dict[str, Any]:
 
 
 def _parse_review_write_output(write_output: Any) -> dict[str, Any] | None:
-    """Return a validated reviewer result from a captured Write tool call."""
+    """Return a validated reviewer result from one captured save record."""
     if not isinstance(write_output, dict):
         return None
 
@@ -1060,30 +554,8 @@ def _parse_review_write_output(write_output: Any) -> dict[str, Any] | None:
         return None
 
     name = posixpath.basename(path.replace("\\", "/"))
-    reviewer = name[: -len("-review.json")]
-    if write_output.get("source") == "bash_builder_heredoc":
-        if (
-            not isinstance(review_json, dict)
-            or set(review_json) != {
-                "analysis_schema",
-                "reviewer",
-                "findings",
-                "checks",
-                "reviewed_file_claims",
-                "meta",
-            }
-            or review_json.get("analysis_schema")
-            != _RECONSTRUCTED_REVIEW_SCHEMA
-            or review_json.get("reviewer") != reviewer
-            or not isinstance(review_json.get("findings"), list)
-            or not isinstance(review_json.get("checks"), list)
-            or not isinstance(review_json.get("reviewed_file_claims"), list)
-            or not isinstance(review_json.get("meta"), dict)
-        ):
-            return None
-        return review_json
     try:
-        validate_review_document(review_json, reviewer)
+        validate_review_document(review_json, name[: -len("-review.json")])
     except ValueError:
         return None
 

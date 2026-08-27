@@ -12,7 +12,6 @@ Validates the --quality-metrics mode of analysis/session_analyzer.py:
 
 import importlib.util
 import json
-import ntpath
 import sys
 from pathlib import Path
 
@@ -26,7 +25,6 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 
 sys.path.insert(0, str(SCRIPTS_DIR))
 sys.path.insert(0, str(TESTS_DIR))
-from review.agent.output import ReviewOutputBuilder
 from helpers.review_fixtures import canonical_review_document
 
 _spec = importlib.util.spec_from_file_location("analyze_reviewer_sessions", str(SCRIPT_PATH))
@@ -39,40 +37,6 @@ _bootstrap_spec = importlib.util.spec_from_file_location(
 )
 _bootstrap_mod = importlib.util.module_from_spec(_bootstrap_spec)
 _bootstrap_spec.loader.exec_module(_bootstrap_mod)
-
-
-def _write_assignment(output_dir, reviewer="security", claimable=()):
-    Path(output_dir, f"{reviewer}-assignment.json").write_text(
-        json.dumps({
-            "schema": 4,
-            "agent_name": f"{reviewer}-reviewer",
-            "reviewer": reviewer,
-            "review_claimable_files": list(claimable),
-            "inline_diff_file_count": 0,
-            "in_scope_review_file_count": len(claimable),
-            "review_budget": 15,
-            "channels": ["blocking"],
-        })
-    )
-
-
-def _real_saved_review(output_dir, reviewer="security"):
-    """Return one production-validated persisted snapshot with f1 and c1."""
-    _write_assignment(
-        output_dir,
-        reviewer=reviewer,
-        claimable=("src/large-a.php",),
-    )
-    builder = ReviewOutputBuilder.open(output_dir, "42", reviewer)
-    builder.add_finding(
-        "high", "Initial", "src/a.php", "d", "r", line=3
-    )
-    builder.record_check("Initial check?", "Read initial path", "Yes")
-    builder.claim_files_reviewed("src/large-a.php")
-    builder.save_draft()
-    return json.loads(
-        Path(output_dir, f"{reviewer}-review.draft.json").read_text()
-    )
 
 
 def _real_bootstrap_builder_command(tmp_path, *, plugin_version=""):
@@ -523,7 +487,7 @@ class TestUnrelatedWritesInQualityReport:
 # Bash builder heredoc recognition (the mandated save mechanism)
 # ---------------------------------------------------------------------------
 
-def _builder_heredoc(reviewer="security", body=None):
+def _builder_heredoc(reviewer="security", body=None, output_dir="/tmp/pr-review-42"):
     """Build the canonical one-shot builder command bootstrap prescribes."""
     if body is None:
         body = (
@@ -539,13 +503,11 @@ def _builder_heredoc(reviewer="security", body=None):
             'unsafe echo", file="src/f.php",\n'
             '    description="What is wrong", recommendation="How to fix",\n'
             '    category="xss", line=42, confidence=0.9)\n'
-            'builder.add_finding("medium", "Positional style", "src/g.php",\n'
-            '    "desc", "rec", line=7)\n'
             "builder.save_draft()\n"
         )
     return (
         "PIRATEGOAT_PLUGIN_ROOT='/plug' "
-        "PIRATEGOAT_OUTPUT_DIR='/tmp/pr-review-42' "
+        f"PIRATEGOAT_OUTPUT_DIR='{output_dir}' "
         f"PIRATEGOAT_REVIEWER_NAME='{reviewer}' "
         "PIRATEGOAT_PR_ID='42' PIRATEGOAT_PLUGIN_VERSION='1.114.0' "
         "python3 <<'PY'\n"
@@ -554,20 +516,137 @@ def _builder_heredoc(reviewer="security", body=None):
     )
 
 
-def _fresh_builder_record(command):
-    """Reconstruct with explicit proof that no earlier draft exists."""
-    return _mod._builder_review_from_heredoc(
-        command,
-        prior_review=_mod.PROVEN_EMPTY_REVIEW_STATE,
-    )
+class TestArtifactBackedReviews:
+    """The mandated heredoc saves through ReviewOutputBuilder, so the review
+    JSON is on disk and never in the transcript. Analysis reads the artifact
+    the envelope names; an artifact it cannot read is unmeasured, which is a
+    missing record rather than a measured zero."""
 
+    def _quality_report(self, data):
+        return json.loads(
+            _mod.format_quality_json_report(
+                [({"agent_name": "security-reviewer"}, data)], None
+            )
+        )
 
-def _parse_with_empty_draft(log, path="/tmp/pr-review-42/security-review.json"):
-    """Parse a transcript whose caller proves this artifact starts empty."""
-    return _mod.parse_subagent_log(
-        str(log),
-        prior_review_states={path: _mod.PROVEN_EMPTY_REVIEW_STATE},
+    def test_real_bootstrap_envelope_reports_the_saved_artifact(self, tmp_path):
+        Path(tmp_path, "security-review.json").write_text(
+            json.dumps(
+                canonical_review_document("security", ["high", "medium"])
+            )
+        )
+        log = tmp_path / "agent.jsonl"
+        log.write_text(
+            json.dumps(_bash_entry(_real_bootstrap_builder_command(tmp_path)))
+            + "\n"
+        )
+
+        data = _mod.parse_subagent_log(str(log))
+        report = self._quality_report(data)
+
+        assert [record["path"] for record in data["write_outputs"]] == [
+            str(Path(tmp_path, "security-review.json"))
+        ]
+        [agent_record] = report["per_agent"]
+        assert agent_record["agent_name"] == "security"
+        assert agent_record["total_findings"] == 2
+        assert agent_record["findings_by_severity"] == {"high": 1, "medium": 1}
+
+    @pytest.mark.parametrize(
+        "artifact_content",
+        [
+            pytest.param(None, id="absent"),
+            pytest.param("{ not json", id="malformed"),
+            pytest.param(
+                json.dumps({
+                    "schema": 1,
+                    "reviewer": "security",
+                    "findings": [],
+                    "issues": [],
+                    "verdict": "approve",
+                }),
+                id="retired-schema",
+            ),
+        ],
     )
+    def test_unreadable_artifact_is_unmeasured_not_zero(
+        self, tmp_path, artifact_content
+    ):
+        """An artifact that does not validate is a missing record, never an
+        empty findings list — a reviewer whose output was never observed and
+        a reviewer who genuinely found nothing are different facts."""
+        if artifact_content is not None:
+            Path(tmp_path, "security-review.json").write_text(artifact_content)
+        log = tmp_path / "agent.jsonl"
+        log.write_text(
+            json.dumps(
+                _bash_entry(_builder_heredoc(output_dir=str(tmp_path)))
+            )
+            + "\n"
+        )
+
+        data = _mod.parse_subagent_log(str(log))
+        report = self._quality_report(data)
+
+        assert data["write_outputs"] == []
+        assert report["per_agent"] == []
+
+    def test_non_straight_line_body_is_still_a_measured_builder_save(
+        self, tmp_path
+    ):
+        Path(tmp_path, "security-review.json").write_text(
+            json.dumps(canonical_review_document("security", ["low"]))
+        )
+        body = (
+            "from review.agent.output import ReviewOutputBuilder\n"
+            'builder = ReviewOutputBuilder.open("/o", "42", "security")\n'
+            "for path in ['src/a.php', 'src/b.php']:\n"
+            "    builder.claim_files_reviewed(path)\n"
+            "builder.save_draft()\n"
+        )
+        command = _builder_heredoc(output_dir=str(tmp_path), body=body)
+        log = tmp_path / "agent.jsonl"
+        log.write_text(json.dumps(_bash_entry(command)) + "\n")
+
+        data = _mod.parse_subagent_log(str(log))
+        detail = _mod._categorize_tool_call("Bash", {"command": command})
+
+        assert detail["category"] == "builder-output"
+        assert [record["path"] for record in data["write_outputs"]] == [
+            str(Path(tmp_path, "security-review.json"))
+        ]
+        document = json.loads(data["write_outputs"][0]["content"])
+        assert [finding["severity"] for finding in document["findings"]] == [
+            "low"
+        ]
+
+    def test_legacy_write_of_the_same_artifact_counts_once(self, tmp_path):
+        artifact = Path(tmp_path, "security-review.json")
+        artifact.write_text(
+            json.dumps(canonical_review_document("security", ["high"]))
+        )
+        log = tmp_path / "agent.jsonl"
+        entries = [
+            _write_tool_entry(
+                str(artifact),
+                json.dumps(
+                    canonical_review_document("security", ["low", "low"])
+                ),
+            ),
+            _bash_entry(_builder_heredoc(output_dir=str(tmp_path))),
+        ]
+        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+        data = _mod.parse_subagent_log(str(log))
+        report = self._quality_report(data)
+
+        assert [record["path"] for record in data["write_outputs"]] == [
+            str(artifact)
+        ]
+        [agent_record] = report["per_agent"]
+        assert agent_record["dispatches"] == 1
+        assert agent_record["total_findings"] == 1
+        assert agent_record["findings_by_severity"] == {"high": 1}
 
 
 def _bash_entry(command, tool_id="bash-1"):
@@ -604,939 +683,30 @@ def _tool_result_entry(tool_id, is_error=False):
     }
 
 
-class TestBashBuilderRecognition:
-    """Compliant reviewers save via the mandated Bash heredoc, not Write —
-    session analysis must recognize that mechanism or new sessions produce
-    empty per-agent quality records."""
-
-    @pytest.mark.parametrize(
-        "plugin_version", ["1.114.0", ""], ids=["stamped", "unstamped"]
-    )
-    def test_recognizes_the_envelope_real_bootstrap_actually_emits(
-        self, tmp_path, plugin_version
-    ):
-        """Pins recognition to the producer, not to a hand-written string.
-
-        The rest of this class builds its own envelope text, so a change to
-        bootstrap's envelope shape cannot fail any of them — this one reads
-        the real `build_output()` prose and would.
-        """
-        command = _real_bootstrap_builder_command(
-            tmp_path, plugin_version=plugin_version
-        )
-
-        env = _mod._builder_heredoc_env(command)
-
-        assert env is not None
-        assert env["PIRATEGOAT_REVIEWER_NAME"] == "security"
-        assert env["PIRATEGOAT_PR_ID"] == "42"
-        assert env["PIRATEGOAT_PLUGIN_VERSION"] == plugin_version
-        assert _mod._categorize_tool_call("Bash", {"command": command})["category"] == "builder-output"
-
-    def test_pre_1_114_envelope_is_still_recognized(self):
-        """Sessions recorded before the version assignment stay measurable.
-
-        Nothing here reads the appended variable, so refusing the older
-        four-assignment form would report saves that happened as no-save.
-        """
-        legacy = (
-            "PIRATEGOAT_PLUGIN_ROOT='/plug' "
-            "PIRATEGOAT_OUTPUT_DIR='/tmp/pr-review-42' "
-            "PIRATEGOAT_REVIEWER_NAME='security' "
-            "PIRATEGOAT_PR_ID='42' python3 <<'PY'\n"
-            "builder = ReviewOutputBuilder.open('/tmp/pr-review-42', '42', 'security')\n"
-            "builder.save_draft()\n"
-            "PY"
-        )
-
-        env = _mod._builder_heredoc_env(legacy)
-
-        assert env is not None
-        assert set(env) == {
-            "PIRATEGOAT_PLUGIN_ROOT",
-            "PIRATEGOAT_OUTPUT_DIR",
-            "PIRATEGOAT_REVIEWER_NAME",
-            "PIRATEGOAT_PR_ID",
-        }
-        assert _mod._categorize_tool_call("Bash", {"command": legacy})["category"] == "builder-output"
-
-    def test_budget_carrying_envelope_is_still_recognized_historically(self):
-        """1.114.0 briefly carried the call-budget target on this envelope
-        before a later fix moved it to the assignment; the live
-        envelope never emits this name again (see
-        test_envelope_never_carries_a_budget_assignment in
-        test_bootstrap_integration.py). But run12's own recorded transcripts
-        DO carry it, and historical transcripts are immutable — a reader
-        that stops recognizing them lies about them, exactly like the
-        PLUGIN_VERSION case. The value is unread here; recognition is all
-        the envelope is used for."""
-        with_budget = (
-            "PIRATEGOAT_PLUGIN_ROOT='/plug' "
-            "PIRATEGOAT_OUTPUT_DIR='/tmp/pr-review-42' "
-            "PIRATEGOAT_REVIEWER_NAME='security' "
-            "PIRATEGOAT_PR_ID='42' "
-            "PIRATEGOAT_PLUGIN_VERSION='1.114.0' "
-            "PIRATEGOAT_REVIEW_BUDGET='80' python3 <<'PY'\n"
-            "builder = ReviewOutputBuilder.open('/tmp/pr-review-42', '42', 'security')\n"
-            "builder.save_draft()\n"
-            "PY"
-        )
-
-        env = _mod._builder_heredoc_env(with_budget)
-
-        assert env is not None
-        assert env["PIRATEGOAT_REVIEW_BUDGET"] == "80"
-        assert (
-            _mod._categorize_tool_call("Bash", {"command": with_budget})[
-                "category"
-            ]
-            == "builder-output"
-        )
-
-    def test_unknown_optional_assignment_drops_recognition(self):
-        """A foreign name outside the required four plus the two known
-        optionals (plugin version, the historical budget allowance)
-        correctly drops the save from the cohort rather than being
-        silently accepted."""
-        with_unknown_assignment = (
-            "PIRATEGOAT_PLUGIN_ROOT='/plug' "
-            "PIRATEGOAT_OUTPUT_DIR='/tmp/pr-review-42' "
-            "PIRATEGOAT_REVIEWER_NAME='security' "
-            "PIRATEGOAT_PR_ID='42' "
-            "PIRATEGOAT_PLUGIN_VERSION='1.114.0' "
-            "PIRATEGOAT_SOME_RETIRED_NAME='80' python3 <<'PY'\n"
-            "builder.save_draft()\n"
-            "PY"
-        )
-
-        env = _mod._builder_heredoc_env(with_unknown_assignment)
-
-        assert env is None
-        assert (
-            _mod._categorize_tool_call(
-                "Bash", {"command": with_unknown_assignment}
-            )["category"]
-            != "builder-output"
-        )
-
-    @pytest.mark.parametrize(
-        "command",
-        [
-            pytest.param(
-                "PIRATEGOAT_PLUGIN_ROOT=/p PIRATEGOAT_OUTPUT_DIR=/o "
-                "PIRATEGOAT_REVIEWER_NAME=security python3 <<PY\npass\nPY",
-                id="missing-required-name",
-            ),
-            pytest.param(
-                "PIRATEGOAT_PLUGIN_ROOT=/p PIRATEGOAT_OUTPUT_DIR=/o "
-                "PIRATEGOAT_REVIEWER_NAME=security PIRATEGOAT_PR_ID=42 "
-                "EXTRA=safe python3 <<PY\npass\nPY",
-                id="foreign-assignment",
-            ),
-            pytest.param(
-                "PIRATEGOAT_PLUGIN_ROOT=/p PIRATEGOAT_PLUGIN_ROOT=/other "
-                "PIRATEGOAT_OUTPUT_DIR=/o PIRATEGOAT_REVIEWER_NAME=security "
-                "PIRATEGOAT_PR_ID=42 python3 <<PY\npass\nPY",
-                id="duplicate-assignment",
-            ),
-        ],
-    )
-    def test_non_envelope_commands_are_not_builder_output(self, command):
-        assert _mod._builder_heredoc_env(command) is None
-        assert _mod._categorize_tool_call("Bash", {"command": command})["category"] != "builder-output"
-
-    def test_synthesizes_review_record_from_heredoc(self):
-        record = _fresh_builder_record(_builder_heredoc())
-
-        assert record is not None
-        assert record["path"] == "/tmp/pr-review-42/security-review.json"
-        assert record["source"] == "bash_builder_heredoc"
-        review = json.loads(record["content"])
-        assert review["reviewer"] == "security"
-        kw_finding, positional_finding = review["findings"]
-        assert kw_finding["severity"] == "high"
-        assert kw_finding["file"] == "src/f.php"
-        assert kw_finding["line"] == 42
-        assert "Reviewer's finding" in kw_finding["title"]
-        assert positional_finding["severity"] == "medium"
-        assert positional_finding["file"] == "src/g.php"
-        assert positional_finding["line"] == 7
-
-    def test_builder_record_path_is_posix_across_analysis_hosts(
-        self, monkeypatch
-    ):
-        command = _builder_heredoc().replace(
-            "PIRATEGOAT_OUTPUT_DIR='/tmp/pr-review-42'",
-            "PIRATEGOAT_OUTPUT_DIR='/out'",
-        )
-        with monkeypatch.context() as analysis_host:
-            analysis_host.setattr(_mod.os, "path", ntpath)
-            record = _fresh_builder_record(command)
-
-        assert record["path"] == "/out/security-review.json"
-
-    def test_positional_tuple_mirrors_the_full_add_finding_signature(self):
-        """Drift guard: the tuple must cover EVERY positional parameter of
-        the real add_finding — a name missing from it is silently dropped
-        from fully positional calls (a dropped severity_floor records the
-        pre-floor severity)."""
-        import inspect
-
-        spec = importlib.util.spec_from_file_location(
-            "output_for_positional_contract",
-            PLUGIN_ROOT / "scripts" / "review" / "agent" / "output.py",
-        )
-        output_mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(output_mod)
-
-        parameters = list(
-            inspect.signature(
-                output_mod.ReviewOutputBuilder.add_finding
-            ).parameters.values()
-        )[1:]  # drop self
-        positional = tuple(
-            parameter.name
-            for parameter in parameters
-            if parameter.kind == parameter.POSITIONAL_OR_KEYWORD
-        )
-        assert positional == _mod._BUILDER_FINDING_POSITIONAL
-
-    def test_fully_positional_severity_floor_is_applied(self):
-        body = (
-            "from review.agent.output import ReviewOutputBuilder\n"
-            'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
-            'builder.add_finding("low", "T", "src/f.php", "d", "r", "cat", 3,\n'
-            '    0.9, None, None, "high")\n'
-            "builder.save_draft()\n"
-        )
-        record = _fresh_builder_record(_builder_heredoc(body=body))
-
-        [finding] = json.loads(record["content"])["findings"]
-        assert finding["severity"] == "high"
-        assert finding["confidence"] == 0.9
-
-    def test_fully_positional_call_reconstructs_category_and_line(self):
-        """add_finding accepts category and line positionally after
-        recommendation — dropping them would restore the finding without
-        its line and exclude it from overlap scoring."""
-        body = (
-            "from review.agent.output import ReviewOutputBuilder\n"
-            'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
-            'builder.add_finding("high", "T", "src/f.php", "d", "r", "xss", 42)\n'
-            "builder.save_draft()\n"
-        )
-        record = _fresh_builder_record(_builder_heredoc(body=body))
-
-        [finding] = json.loads(record["content"])["findings"]
-        assert finding["category"] == "xss"
-        assert finding["line"] == 42
-
-    def test_reconstruction_applies_severity_floor_promotion(self):
-        """The builder lowercases severities and promotes to severity_floor;
-        the reconstruction must match what was actually saved."""
-        body = (
-            "from review.agent.output import ReviewOutputBuilder\n"
-            'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
-            'builder.add_finding(severity="LOW", title="Floored", file="f.php",\n'
-            '    description="d", recommendation="r", line=3,\n'
-            '    severity_floor="medium")\n'
-            "builder.save_draft()\n"
-        )
-        record = _fresh_builder_record(_builder_heredoc(body=body))
-
-        [finding] = json.loads(record["content"])["findings"]
-        assert finding["severity"] == "medium"
-        assert finding["severity_floor"] == "medium"
-
-    def test_reconstructs_exact_structured_mutations_before_the_last_save(self):
-        body = (
-            "from review.agent.output import ReviewOutputBuilder\n"
-            'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
-            'builder.add_finding("high", "Keep", "src/a.php", "d", "r", line=3)\n'
-            'builder.add_finding("low", "Remove", "src/b.php", "d", "r", line=7)\n'
-            'builder.update_finding("f1", title="Updated", severity="medium")\n'
-            'builder.remove_finding("f2")\n'
-            'builder.record_check("Can callers reach it?", "Read every caller", "No callers remain")\n'
-            'builder.record_check("Discarded?", "Temporary probe", "Superseded")\n'
-            'builder.update_check("c1", result="No in-tree callers remain")\n'
-            'builder.remove_check("c2")\n'
-            'builder.claim_files_reviewed("src/large-a.php", "src/large-b.php")\n'
-            'builder.retract_reviewed_file_claims("src/large-b.php")\n'
-            "builder.save_draft()\n"
-            'builder.add_finding("critical", "Unsaved", "src/c.php", "d", "r", line=9)\n'
-            'builder.claim_files_reviewed("src/never-saved.php")\n'
-        )
-
-        record = _fresh_builder_record(_builder_heredoc(body=body))
-        review = json.loads(record["content"])
-
-        assert review["findings"] == [{
-            "id": "f1",
-            "severity": "medium",
-            "title": "Updated",
-            "file": "src/a.php",
-            "description": "d",
-            "recommendation": "r",
-            "category": "general",
-            "line": 3,
-            "confidence": 0.95,
-        }]
-        assert review["checks"] == [{
-            "id": "c1",
-            "question": "Can callers reach it?",
-            "method": "Read every caller",
-            "result": "No in-tree callers remain",
-            "source_reviewers": ["security"],
-        }]
-        assert review["reviewed_file_claims"] == ["src/large-a.php"]
-        assert review["meta"] == {
-            "next_finding_number": 3,
-            "next_check_number": 3,
-        }
-
-    @pytest.mark.parametrize(
-        "mutation",
-        [
-            'builder.update_finding(finding_id, title="dynamic")',
-            'builder.remove_finding(finding_id)',
-            'builder.update_check(check_id, result="dynamic")',
-            'builder.remove_check(check_id)',
-            'builder.claim_files_reviewed(*paths)',
-            'builder.retract_reviewed_file_claims(*paths)',
-        ],
-    )
-    def test_nonliteral_mutations_fail_reconstruction_closed(self, mutation):
-        body = (
-            "from review.agent.output import ReviewOutputBuilder\n"
-            'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
-            'finding_id = builder.add_finding("high", "Existing", "src/a.php", "d", "r", line=3)\n'
-            'check_id = builder.record_check("Reachable?", "Read callers", "No")\n'
-            'paths = ["src/large.php"]\n'
-            f"{mutation}\n"
-            "builder.save_draft()\n"
-        )
-
-        assert _fresh_builder_record(_builder_heredoc(body=body)) is None
-
-    def test_finding_added_after_final_save_is_not_reconstructed(self):
-        """The builder persists its state at save(): an add_finding() after
-        the last save executed but entered no JSON — reconstructing it
-        would fabricate findings into the quality report."""
-        body = (
-            "from review.agent.output import ReviewOutputBuilder\n"
-            'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
-            'builder.add_finding(severity="high", title="Persisted", file="a.php",\n'
-            '    description="d", recommendation="r", line=1)\n'
-            "builder.save_draft()\n"
-            'builder.add_finding(severity="critical", title="Never saved", file="b.php",\n'
-            '    description="d", recommendation="r", line=2)\n'
-        )
-        record = _fresh_builder_record(_builder_heredoc(body=body))
-
-        findings = json.loads(record["content"])["findings"]
-        assert [finding["title"] for finding in findings] == ["Persisted"]
-
-    def test_findings_before_intermediate_saves_all_reach_the_final_save(self):
-        """Builder state accumulates across saves: everything added before
-        the FINAL save is in the persisted JSON, including findings that
-        also went out with an earlier save."""
-        body = (
-            "from review.agent.output import ReviewOutputBuilder\n"
-            'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
-            'builder.add_finding(severity="high", title="First", file="a.php",\n'
-            '    description="d", recommendation="r", line=1)\n'
-            "builder.save_draft()\n"
-            'builder.add_finding(severity="medium", title="Second", file="b.php",\n'
-            '    description="d", recommendation="r", line=2)\n'
-            "builder.save_draft()\n"
-        )
-        record = _fresh_builder_record(_builder_heredoc(body=body))
-
-        findings = json.loads(record["content"])["findings"]
-        assert [finding["title"] for finding in findings] == ["First", "Second"]
-
-    def test_continuation_matches_real_builder_with_explicit_prior_state(
-        self, tmp_path
-    ):
-        """Known prior bytes must survive an add-only continuation."""
-        _write_assignment(
-            tmp_path,
-            claimable=("src/large-a.php", "src/large-b.php"),
-        )
-        first = ReviewOutputBuilder.open(tmp_path, "42", "security")
-        first.add_finding(
-            "high", "Initial", "src/a.php", "d1", "r1", line=3
-        )
-        first.record_check("Initial check?", "Read initial path", "Yes")
-        first.claim_files_reviewed("src/large-a.php")
-        first.save_draft()
-        prior = json.loads(
-            (tmp_path / "security-review.draft.json").read_text()
-        )
-
-        body = (
-            "from review.agent.output import ReviewOutputBuilder\n"
-            f'builder = ReviewOutputBuilder.open("{tmp_path}", "42", "security")\n'
-            'builder.add_finding("medium", "Added", "src/b.php", "d2", "r2", line=7)\n'
-            'builder.record_check("Continuation check?", "Read added path", "Yes")\n'
-            'builder.claim_files_reviewed("src/large-b.php")\n'
-            "builder.save_draft()\n"
-        )
-        actual_builder = ReviewOutputBuilder.open(tmp_path, "42", "security")
-        actual_builder.add_finding(
-            "medium", "Added", "src/b.php", "d2", "r2", line=7
-        )
-        actual_builder.record_check(
-            "Continuation check?", "Read added path", "Yes"
-        )
-        actual_builder.claim_files_reviewed("src/large-b.php")
-        actual_builder.save_draft()
-        actual = json.loads(
-            (tmp_path / "security-review.draft.json").read_text()
-        )
-
-        record = _mod._builder_review_from_heredoc(
-            _builder_heredoc(body=body), prior_review=prior
-        )
-        reconstructed = json.loads(record["content"])
-
-        assert reconstructed["findings"] == actual["findings"]
-        assert reconstructed["checks"] == actual["checks"]
-        assert (
-            reconstructed["reviewed_file_claims"]
-            == actual["reviewed_file_claims"]
-        )
-        assert reconstructed["meta"] == {
-            "next_finding_number": actual["meta"]["next_finding_number"],
-            "next_check_number": actual["meta"]["next_check_number"],
-        }
-
-    def test_continuation_without_prior_state_fails_closed(self):
-        body = (
-            "from review.agent.output import ReviewOutputBuilder\n"
-            'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
-            'builder.add_finding("medium", "Added", "src/b.php", "d", "r", line=7)\n'
-            "builder.save_draft()\n"
-        )
-
-        assert _mod._builder_review_from_heredoc(
-            _builder_heredoc(body=body)
-        ) is None
-
-    def test_proven_empty_sentinel_reconstructs_first_use(self):
-        record = _mod._builder_review_from_heredoc(
-            _builder_heredoc(),
-            prior_review=_mod.PROVEN_EMPTY_REVIEW_STATE,
-        )
-
-        assert record is not None
-        assert [
-            finding["id"]
-            for finding in json.loads(record["content"])["findings"]
-        ] == ["f1", "f2"]
-
-    def test_prior_allocator_must_be_above_every_live_id(self, tmp_path):
-        prior = _real_saved_review(tmp_path)
-        prior["meta"]["next_finding_number"] = 1
-        body = (
-            "from review.agent.output import ReviewOutputBuilder\n"
-            f'builder = ReviewOutputBuilder.open("{tmp_path}", "42", "security")\n'
-            'builder.add_finding("medium", "Added", "src/b.php", "d", "r", line=7)\n'
-            "builder.save_draft()\n"
-        )
-
-        assert _mod._builder_review_from_heredoc(
-            _builder_heredoc(body=body), prior_review=prior
-        ) is None
-        assert prior["meta"]["next_finding_number"] == 1
-        assert [finding["id"] for finding in prior["findings"]] == ["f1"]
-
-    @pytest.mark.parametrize(
-        "malformation",
-        [
-            "noncanonical-finding-id",
-            "malformed-finding",
-            "duplicate-finding-id",
-            "noncanonical-check-id",
-            "malformed-check",
-            "duplicate-check-id",
-            "wrong-reviewer",
-            "wrong-schema",
-            "missing-reviewed-file-field",
-        ],
-    )
-    def test_noncanonical_prior_snapshot_fails_closed(
-        self, tmp_path, malformation
-    ):
-        prior = _real_saved_review(tmp_path)
-        if malformation == "noncanonical-finding-id":
-            prior["findings"][0]["id"] = "finding-1"
-        elif malformation == "malformed-finding":
-            prior["findings"][0].pop("title")
-        elif malformation == "duplicate-finding-id":
-            prior["findings"].append(dict(prior["findings"][0]))
-        elif malformation == "noncanonical-check-id":
-            prior["checks"][0]["id"] = "check-1"
-        elif malformation == "malformed-check":
-            prior["checks"][0].pop("result")
-        elif malformation == "duplicate-check-id":
-            prior["checks"].append(dict(prior["checks"][0]))
-        elif malformation == "wrong-reviewer":
-            prior["reviewer"] = "patterns"
-        elif malformation == "wrong-schema":
-            prior["schema"] = 1
-        else:
-            prior.pop("review_claimable_files")
-        untouched = json.loads(json.dumps(prior))
-
-        assert _mod._builder_review_from_heredoc(
-            _builder_heredoc(), prior_review=prior
-        ) is None
-        assert prior == untouched
-
-    def test_reconstruction_rejects_multiple_open_receivers(self):
-        """An unrelated open receiver is outside the canonical one-shot form."""
-        body = (
-            "from review.agent.output import ReviewOutputBuilder\n"
-            'other = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
-            'saved = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
-            'other.add_finding("high", "Unsaved", "a.php", "d", "r", "cat", 1)\n'
-            'saved.add_finding("low", "Saved", "b.php", "d", "r", "cat", 2)\n'
-            'saved.save_draft()\n'
-        )
-
-        assert _mod._builder_review_from_heredoc(
-            _builder_heredoc(body=body),
-            prior_review=_mod.PROVEN_EMPTY_REVIEW_STATE,
-        ) is None
-
-    def test_reconstruction_fails_closed_on_non_name_receiver(self):
-        """A save through anything but a plain variable is ambiguous."""
-        body = (
-            "from review.agent.output import ReviewOutputBuilder\n"
-            'holder.b = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
-            'holder.b.add_finding("high", "Finding", "a.php", "d", "r", "cat", 1)\n'
-            'holder.b.save("/tmp/pr-review-42")\n'
-        )
-
-        record = _fresh_builder_record(_builder_heredoc(body=body))
-
-        assert record is None
-
-    def test_reconstruction_fails_closed_when_save_receiver_is_rebound(self):
-        """A later alias rebind invalidates the receiver's old constructor."""
-        body = (
-            "from review.agent.output import ReviewOutputBuilder\n"
-            'saved = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
-            'saved.add_finding("high", "Stale", "a.php", "d", "r", "cat", 1)\n'
-            'other = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
-            'other.add_finding("low", "Actual", "b.php", "d", "r", "cat", 2)\n'
-            "saved = other\n"
-            'saved.save_draft()\n'
-        )
-
-        record = _fresh_builder_record(_builder_heredoc(body=body))
-
-        assert record is None
-
-    def test_reconstruction_fails_closed_without_receiver_constructor_binding(self):
-        """A plain save receiver still needs a provable builder constructor."""
-        body = (
-            "from review.agent.output import ReviewOutputBuilder\n"
-            "saved = make_builder()\n"
-            'saved.add_finding("high", "Unknown", "a.php", "d", "r", "cat", 1)\n'
-            'saved.save_draft()\n'
-        )
-
-        record = _fresh_builder_record(_builder_heredoc(body=body))
-
-        assert record is None
-
-    def test_non_builder_bash_is_not_recognized(self):
-        assert _mod._builder_review_from_heredoc("git diff main..HEAD") is None
-        assert (
-            _mod._builder_review_from_heredoc("python3 script.py <<PY\nx\nPY")
-            is None
-        )
-
-    def test_unparseable_heredoc_body_degrades_to_none(self):
-        command = _builder_heredoc(body="this is not python(\n")
-        assert _mod._builder_review_from_heredoc(command) is None
-
-    def test_parse_subagent_log_populates_write_outputs(self, tmp_path):
-        log = tmp_path / "agent.jsonl"
-        entries = [
-            _bash_entry("git diff main..HEAD -- src/f.php", tool_id="diff-1"),
-            _tool_result_entry("diff-1"),
-            _bash_entry(_builder_heredoc(), tool_id="builder-1"),
-            _tool_result_entry("builder-1"),
-        ]
-        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
-
-        data = _parse_with_empty_draft(log)
-
-        assert len(data["write_outputs"]) == 1
-        assert data["write_outputs"][0]["source"] == "bash_builder_heredoc"
-
-    def test_parse_subagent_log_drops_unknown_open_state(self, tmp_path):
-        """The parser cannot infer an empty draft from a first observed open."""
-        log = tmp_path / "agent.jsonl"
-        entries = [
-            _bash_entry(_builder_heredoc(), tool_id="builder-1"),
-            _tool_result_entry("builder-1"),
-        ]
-        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
-
-        data = _mod.parse_subagent_log(str(log))
-
-        assert data["write_outputs"] == []
-
-    def test_failed_builder_heredoc_does_not_count_as_saved(self, tmp_path):
-        """A heredoc that exited with an error saved nothing — its findings
-        must not enter quality reports."""
-        log = tmp_path / "agent.jsonl"
-        entries = [
-            _bash_entry(_builder_heredoc(), tool_id="builder-fail"),
-            _tool_result_entry("builder-fail", is_error=True),
-        ]
-        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
-
-        data = _parse_with_empty_draft(log)
-
-        assert data["write_outputs"] == []
-
-    @pytest.mark.parametrize(
-        "structured",
-        [{"exitCode": 1}],
-        ids=["exit-code"],
-    )
-    def test_structured_failure_without_is_error_does_not_count(
-        self, tmp_path, structured
-    ):
-        """A builder result can omit block-level is_error while reporting
-        failure through structured toolUseResult fields — the save did not
-        persist and must not reconstruct."""
-        log = tmp_path / "agent.jsonl"
-        result_entry = {
-            "type": "user",
-            "toolUseResult": structured,
-            "message": {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "builder-structured",
-                        "content": "Traceback",
-                    }
-                ],
-            },
-        }
-        entries = [
-            _bash_entry(_builder_heredoc(), tool_id="builder-structured"),
-            result_entry,
-        ]
-        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
-
-        data = _parse_with_empty_draft(log)
-
-        assert data["write_outputs"] == []
-
-    def test_failed_then_retried_builder_heredoc_counts_once(self, tmp_path):
-        """Two attempts at one artifact yield one save — in EITHER order.
-
-        Both heredocs reconstruct to the same path, so the by-path reduction
-        at :577-583 collapses them whatever the terminal-success filter at
-        :539 does; the fail-then-retry direction alone cannot tell whether
-        that filter still works. The reverse order can, and it is the
-        dangerous one: a failed retry allowed into the reduction would
-        shadow the confirmed earlier save to the same artifact.
-        """
-        def _attempt(title):
-            body = (
-                "import sys, os\n"
-                'plugin_root = os.environ["PIRATEGOAT_PLUGIN_ROOT"]\n'
-                'sys.path.insert(0, os.path.join(plugin_root, "scripts"))\n'
-                "from review.agent.output import ReviewOutputBuilder\n"
-                'builder = ReviewOutputBuilder.open('
-                'os.environ["PIRATEGOAT_OUTPUT_DIR"], '
-                'os.environ["PIRATEGOAT_PR_ID"], '
-                'os.environ["PIRATEGOAT_REVIEWER_NAME"])\n'
-                f'builder.add_finding("high", "{title}", "src/f.php", "d", "r", line=1)\n'
-                'builder.save_draft()\n'
-            )
-            return _builder_heredoc(body=body)
-
-        log = tmp_path / "agent.jsonl"
-        entries = [
-            _bash_entry(_attempt("LOST"), tool_id="builder-fail"),
-            _tool_result_entry("builder-fail", is_error=True),
-            _bash_entry(_attempt("KEPT"), tool_id="builder-retry"),
-            _tool_result_entry("builder-retry"),
-        ]
-        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
-
-        data = _parse_with_empty_draft(log)
-
-        assert len(data["write_outputs"]) == 1
-        assert "KEPT" in data["write_outputs"][0]["content"]
-
-        reversed_log = tmp_path / "agent-reversed.jsonl"
-        entries = [
-            _bash_entry(_attempt("KEPT"), tool_id="builder-ok"),
-            _tool_result_entry("builder-ok"),
-            _bash_entry(_attempt("LOST"), tool_id="builder-late-fail"),
-            _tool_result_entry("builder-late-fail", is_error=True),
-        ]
-        reversed_log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
-
-        data = _parse_with_empty_draft(reversed_log)
-
-        assert len(data["write_outputs"]) == 1
-        assert "KEPT" in data["write_outputs"][0]["content"]
-
-    @pytest.mark.parametrize(
-        "structured",
-        [{"weird": {"shape": 1}}],
-        ids=["unclassifiable"],
-    )
-    def test_nonterminal_or_unclassifiable_result_does_not_count(
-        self, tmp_path, structured
-    ):
-        """Only a terminal success confirms the save persisted — nonterminal
-        and unrecognized structured payloads stay unresolved."""
-        log = tmp_path / "agent.jsonl"
-        result_entry = {
-            "type": "user",
-            "toolUseResult": structured,
-            "message": {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "builder-open",
-                        "content": "",
-                    }
-                ],
-            },
-        }
-        entries = [
-            _bash_entry(_builder_heredoc(), tool_id="builder-open"),
-            result_entry,
-        ]
-        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
-
-        data = _parse_with_empty_draft(log)
-
-        assert data["write_outputs"] == []
-
-    def test_bare_legacy_result_still_confirms_the_save(self, tmp_path):
-        """A paired result with neither is_error nor structured data is the
-        legacy success signal — the canonical classifier preserves it."""
-        log = tmp_path / "agent.jsonl"
-        result_entry = {
-            "type": "user",
-            "message": {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "builder-legacy",
-                        "content": "DRAFT TOTALS: ...",
-                    }
-                ],
-            },
-        }
-        entries = [
-            _bash_entry(_builder_heredoc(), tool_id="builder-legacy"),
-            result_entry,
-        ]
-        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
-
-        data = _parse_with_empty_draft(log)
-
-        assert len(data["write_outputs"]) == 1
-
-    def test_heredoc_without_save_is_not_a_review_record(self):
-        """add_finding() calls without builder.save_draft() persisted nothing."""
-        body = (
-            "from review.agent.output import ReviewOutputBuilder\n"
-            'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
-            'builder.add_finding(severity="high", title="Unsaved", file="f.php",\n'
-            '    description="d", recommendation="r", line=3)\n'
-        )
-        assert _fresh_builder_record(_builder_heredoc(body=body)) is None
-
-    def test_corrected_rerun_counts_once_with_final_content(self, tmp_path):
-        """Successful saves overwrite the same artifact — quality reports
-        must see the final save only, not one dispatch per rerun."""
-        first_body = (
-            "from review.agent.output import ReviewOutputBuilder\n"
-            'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
-            'builder.add_finding(severity="high", title="First", file="f.php",\n'
-            '    description="d", recommendation="r", line=3)\n'
-            "builder.save_draft()\n"
-        )
-        corrected_body = (
-            "from review.agent.output import ReviewOutputBuilder\n"
-            'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
-            'builder.update_finding("f1", title="Corrected")\n'
-            'builder.add_finding(severity="low", title="Added", file="g.php",\n'
-            '    description="d", recommendation="r", line=9)\n'
-            "builder.save_draft()\n"
-        )
-        log = tmp_path / "agent.jsonl"
-        entries = [
-            _bash_entry(_builder_heredoc(body=first_body), tool_id="save-1"),
-            _tool_result_entry("save-1"),
-            _bash_entry(_builder_heredoc(body=corrected_body), tool_id="save-2"),
-            _tool_result_entry("save-2"),
-        ]
-        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
-
-        data = _parse_with_empty_draft(log)
-
-        [record] = data["write_outputs"]
-        findings = json.loads(record["content"])["findings"]
-        assert [finding["title"] for finding in findings] == ["Corrected", "Added"]
-
-    def test_unrepresentable_success_removes_earlier_reconstruction(
-        self, tmp_path
-    ):
-        first_body = (
-            "from review.agent.output import ReviewOutputBuilder\n"
-            'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
-            'builder.add_finding("high", "First", "a.php", "d", "r", line=1)\n'
-            'builder.claim_files_reviewed("src/large-a.php")\n'
-            "builder.save_draft()\n"
-        )
-        dynamic_body = (
-            "from review.agent.output import ReviewOutputBuilder\n"
-            'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
-            'builder.add_finding("medium", dynamic_title, "b.php", "d", "r", line=2)\n'
-            "builder.save_draft()\n"
-        )
-        log = tmp_path / "agent.jsonl"
-        entries = [
-            _bash_entry(_builder_heredoc(body=first_body), tool_id="save-1"),
-            _tool_result_entry("save-1"),
-            _bash_entry(
-                _builder_heredoc(body=dynamic_body), tool_id="save-2"
-            ),
-            _tool_result_entry("save-2"),
-        ]
-        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
-
-        data = _parse_with_empty_draft(log)
-
-        assert data["write_outputs"] == []
-
-    def test_literal_save_cannot_resume_after_uncertain_success(self, tmp_path):
-        def _attempt(title, *, dynamic=False):
-            title_expr = "dynamic_title" if dynamic else json.dumps(title)
-            return _builder_heredoc(body=(
-                "from review.agent.output import ReviewOutputBuilder\n"
-                'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
-                f'builder.add_finding("medium", {title_expr}, "a.php", "d", "r", line=1)\n'
-                'builder.claim_files_reviewed("src/large-a.php")\n'
-                "builder.save_draft()\n"
-            ))
-
-        log = tmp_path / "agent.jsonl"
-        entries = [
-            _bash_entry(_attempt("First"), tool_id="save-1"),
-            _tool_result_entry("save-1"),
-            _bash_entry(_attempt("Dynamic", dynamic=True), tool_id="save-2"),
-            _tool_result_entry("save-2"),
-            _bash_entry(_attempt("Later"), tool_id="save-3"),
-            _tool_result_entry("save-3"),
-        ]
-        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
-
-        data = _parse_with_empty_draft(log)
-
-        assert data["write_outputs"] == []
-
-    def test_unresolved_builder_heredoc_does_not_count_as_saved(self, tmp_path):
-        """No paired tool result means the save was never confirmed."""
-        log = tmp_path / "agent.jsonl"
-        entries = [_bash_entry(_builder_heredoc(), tool_id="builder-dangling")]
-        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
-
-        data = _parse_with_empty_draft(log)
-
-        assert data["write_outputs"] == []
-
-    def test_quality_report_counts_bash_saved_findings(self):
-        dispatch = (
-            {"agent_name": "security-reviewer"},
-            {
-                "write_outputs": [
-                    _fresh_builder_record(_builder_heredoc())
-                ],
-                "files_read": [],
-                "bash_commands": [],
-                "final_texts": [],
-            },
-        )
-
-        report = json.loads(format_quality_json_report([dispatch], None))
-
-        [agent_record] = report["per_agent"]
-        assert agent_record["agent_name"] == "security"
-        assert agent_record["total_findings"] == 2
-        assert agent_record["findings_by_severity"] == {"high": 1, "medium": 1}
-
-
-class TestStraightLineReconstruction:
-    """Reconstruction models execution by source position, which only holds
-    for the mandated straight-line heredoc — an add_finding() under
-    non-executed control flow would be collected as persisted, fabricating
-    findings. Non-straight-line bodies fail closed."""
-
-    def test_control_flow_fails_reconstruction_closed(self):
-        # One `if any(...)` over a 20-entry node-type tuple (:201-203) decides
-        # all of these, so they are inputs to one condition, not separate
-        # contracts — kept in full, collected as one node.
-        guards = {
-            "if-false": "if False:\n    builder.add_finding('high', 'Fake', 'f.php', 'd', 'r', line=1)",
-            "empty-loop": "for _ in []:\n    builder.add_finding('high', 'Fake', 'f.php', 'd', 'r', line=1)",
-            "while-false": "while False:\n    builder.add_finding('high', 'Fake', 'f.php', 'd', 'r', line=1)",
-            "function-def": "def helper():\n    builder.add_finding('high', 'Fake', 'f.php', 'd', 'r', line=1)",
-            "short-circuit": "False and builder.add_finding('high', 'Fake', 'f.php', 'd', 'r', line=1)",
-            "try-block": "try:\n    builder.add_finding('high', 'Fake', 'f.php', 'd', 'r', line=1)\nexcept Exception:\n    pass",
-            "comprehension": "[builder.add_finding('high', 'Fake', 'f.php', 'd', 'r', line=1) for _ in []]",
-        }
-        for case, guard in guards.items():
-            body = (
-                "from review.agent.output import ReviewOutputBuilder\n"
-                'builder = ReviewOutputBuilder.open("/tmp/pr-review-42", "42", "security")\n'
-                'builder.add_finding("high", "Real", "src/f.php", "d", "r", line=3)\n'
-                f"{guard}\n"
-                "builder.save_draft()\n"
-            )
-            record = _fresh_builder_record(_builder_heredoc(body=body))
-
-            assert record is None, case
-
-
 class TestTextReportFindingCounts:
     """A save that parses as a review payload carries its exact finding list.
-    The keyword heuristic estimated JSON findings by counting '"id"' — but
-    the builder-heredoc reconstruction omits ids entirely, so a canonical
-    one-finding save rendered as ~0 findings."""
+    The keyword heuristic estimates JSON findings by counting '"id"', which
+    is only right by accident — applied to a real review it miscounts, so a
+    payload that validates is counted directly."""
 
-    def test_reconstructed_builder_save_counts_findings_exactly(self, tmp_path):
+    def test_artifact_backed_save_counts_findings_exactly(self, tmp_path):
+        Path(tmp_path, "security-review.json").write_text(
+            json.dumps(
+                canonical_review_document("security", ["high", "medium"])
+            )
+        )
         log = tmp_path / "agent.jsonl"
-        entries = [
-            _bash_entry(_builder_heredoc(), tool_id="builder-1"),
-            _tool_result_entry("builder-1"),
-        ]
-        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
-        data = _parse_with_empty_draft(log)
+        log.write_text(
+            json.dumps(
+                _bash_entry(_builder_heredoc(output_dir=str(tmp_path)))
+            )
+            + "\n"
+        )
+        data = _mod.parse_subagent_log(str(log))
         # A prose save has no exact structure — it keeps the heuristic,
         # displayed as approximate.
         data["write_outputs"].append({
-            "path": "/tmp/pr-review-42/security-review.md",
+            "path": str(Path(tmp_path, "security-review.md")),
             "content": "## Finding A\n",
         })
         meta = {"session_id": "session-1234", "date": "2026-07-29"}
@@ -1544,7 +714,6 @@ class TestTextReportFindingCounts:
         report = _mod.format_text_report([(meta, data)], "security-reviewer")
 
         assert ", 2 findings)" in report
-        assert ", ~0 findings)" not in report
         assert ", ~1 findings)" in report
 
 
@@ -1563,223 +732,3 @@ def _write_tool_entry(path, content, tool_id="write-1"):
             ],
         },
     }
-
-
-class TestSaveIntegrity:
-    """Concatenated or damaged logs can reuse tool IDs, duplicate results,
-    or invert call/result order — a foreign success must never validate a
-    dangling builder heredoc, and the same artifact saved through both
-    transports must count once."""
-
-    def test_reused_call_id_stays_unresolved(self, tmp_path):
-        log = tmp_path / "agent.jsonl"
-        entries = [
-            _bash_entry(_builder_heredoc(), tool_id="reused"),
-            _bash_entry(_builder_heredoc(), tool_id="reused"),
-            _tool_result_entry("reused"),
-        ]
-        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
-
-        data = _parse_with_empty_draft(log)
-
-        assert data["write_outputs"] == []
-
-    def test_duplicate_results_stay_unresolved(self, tmp_path):
-        log = tmp_path / "agent.jsonl"
-        entries = [
-            _bash_entry(_builder_heredoc(), tool_id="doubled"),
-            _tool_result_entry("doubled", is_error=True),
-            _tool_result_entry("doubled"),
-        ]
-        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
-
-        data = _parse_with_empty_draft(log)
-
-        assert data["write_outputs"] == []
-
-    def test_result_preceding_its_call_does_not_confirm_the_save(
-        self, tmp_path
-    ):
-        log = tmp_path / "agent.jsonl"
-        entries = [
-            _tool_result_entry("inverted"),
-            _bash_entry(_builder_heredoc(), tool_id="inverted"),
-        ]
-        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
-
-        data = _parse_with_empty_draft(log)
-
-        assert data["write_outputs"] == []
-
-    def test_legacy_write_then_builder_correction_counts_once(self, tmp_path):
-        """An agent that first writes <reviewer>-review.json through the
-        legacy Write transport and then corrects it through the builder
-        heredoc overwrote one artifact — quality reports must see the
-        final content only, not two dispatches with both finding sets."""
-        log = tmp_path / "agent.jsonl"
-        entries = [
-            _write_tool_entry(
-                "/tmp/pr-review-42/security-review.json",
-                json.dumps({"reviewer": "security", "findings": []}),
-            ),
-            _tool_result_entry("write-1"),
-            _bash_entry(_builder_heredoc(), tool_id="builder-1"),
-            _tool_result_entry("builder-1"),
-        ]
-        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
-
-        data = _parse_with_empty_draft(log)
-
-        [record] = data["write_outputs"]
-        assert record["source"] == "bash_builder_heredoc"
-
-    def test_builder_then_legacy_write_keeps_the_later_write(self, tmp_path):
-        log = tmp_path / "agent.jsonl"
-        entries = [
-            _bash_entry(_builder_heredoc(), tool_id="builder-1"),
-            _tool_result_entry("builder-1"),
-            _write_tool_entry(
-                "/tmp/pr-review-42/security-review.json",
-                json.dumps({"reviewer": "security", "findings": []}),
-            ),
-            _tool_result_entry("write-1"),
-        ]
-        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
-
-        data = _parse_with_empty_draft(log)
-
-        [record] = data["write_outputs"]
-        assert "source" not in record
-
-    def test_canonicalizes_path_before_last_save_wins(self, tmp_path):
-        log = tmp_path / "agent.jsonl"
-        builder_save = _builder_heredoc().replace(
-            "PIRATEGOAT_OUTPUT_DIR='/tmp/pr-review-42'",
-            "PIRATEGOAT_OUTPUT_DIR='/out/.'",
-        )
-        entries = [
-            _write_tool_entry(
-                "/out/security-review.json",
-                json.dumps({"reviewer": "security", "findings": []}),
-            ),
-            _tool_result_entry("write-1"),
-            _bash_entry(builder_save, tool_id="builder-1"),
-            _tool_result_entry("builder-1"),
-        ]
-        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
-
-        data = _parse_with_empty_draft(
-            log, path="/out/security-review.json"
-        )
-
-        [record] = data["write_outputs"]
-        assert record["source"] == "bash_builder_heredoc"
-        assert record["path"] == "/out/./security-review.json"
-
-    def test_non_string_path_is_kept_without_dedup_identity(self, tmp_path):
-        log = tmp_path / "agent.jsonl"
-        entries = [
-            _write_tool_entry(7, "first malformed path", tool_id="write-1"),
-            _tool_result_entry("write-1"),
-            _write_tool_entry(7, "second malformed path", tool_id="write-2"),
-            _tool_result_entry("write-2"),
-        ]
-        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
-
-        data = _parse_with_empty_draft(log)
-
-        assert data["write_outputs"] == [
-            {"path": 7, "content": "first malformed path"},
-            {"path": 7, "content": "second malformed path"},
-        ]
-
-    def test_failed_write_does_not_shadow_a_confirmed_builder_save(
-        self, tmp_path
-    ):
-        """A legacy Write that FAILED persisted nothing — letting it win
-        the by-path reduction would drop the confirmed builder record and
-        replace real findings with content that never reached disk."""
-        log = tmp_path / "agent.jsonl"
-        entries = [
-            _bash_entry(_builder_heredoc(), tool_id="builder-1"),
-            _tool_result_entry("builder-1"),
-            _write_tool_entry(
-                "/tmp/pr-review-42/security-review.json",
-                json.dumps({"reviewer": "security", "findings": []}),
-            ),
-            _tool_result_entry("write-1", is_error=True),
-        ]
-        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
-
-        data = _parse_with_empty_draft(log)
-
-        [record] = data["write_outputs"]
-        assert record["source"] == "bash_builder_heredoc"
-
-    def test_write_without_a_paired_result_is_still_kept(self, tmp_path):
-        """Write records are literal transcript evidence; only a definite
-        failure refutes them. A truncated log missing the result must keep
-        the legacy keep-the-record behavior."""
-        log = tmp_path / "agent.jsonl"
-        entries = [
-            _write_tool_entry(
-                "/tmp/pr-review-42/security-review.json",
-                json.dumps({"reviewer": "security", "findings": []}),
-            ),
-        ]
-        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
-
-        data = _parse_with_empty_draft(log)
-
-        [record] = data["write_outputs"]
-        assert record["path"] == "/tmp/pr-review-42/security-review.json"
-
-    def test_builder_id_shared_with_another_tool_call_stays_unresolved(
-        self, tmp_path
-    ):
-        """ID reuse must be counted across EVERY tool-use block: when a
-        builder Bash call shares an ID with an unrelated tool call, the
-        other call's successful result must not validate the heredoc and
-        fabricate a saved review."""
-        read_entry = {
-            "type": "assistant",
-            "message": {
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "tool_use",
-                        "id": "shared",
-                        "name": "Read",
-                        "input": {"file_path": "/tmp/src/f.php"},
-                    }
-                ],
-            },
-        }
-        log = tmp_path / "agent.jsonl"
-        entries = [
-            read_entry,
-            _bash_entry(_builder_heredoc(), tool_id="shared"),
-            _tool_result_entry("shared"),
-        ]
-        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
-
-        data = _parse_with_empty_draft(log)
-
-        assert data["write_outputs"] == []
-
-    def test_saves_to_distinct_artifacts_are_both_kept(self, tmp_path):
-        log = tmp_path / "agent.jsonl"
-        entries = [
-            _write_tool_entry("/tmp/pr-review-42/notes.md", "notes"),
-            _tool_result_entry("write-1"),
-            _bash_entry(_builder_heredoc(), tool_id="builder-1"),
-            _tool_result_entry("builder-1"),
-        ]
-        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
-
-        data = _parse_with_empty_draft(log)
-
-        assert [record["path"] for record in data["write_outputs"]] == [
-            "/tmp/pr-review-42/notes.md",
-            "/tmp/pr-review-42/security-review.json",
-        ]

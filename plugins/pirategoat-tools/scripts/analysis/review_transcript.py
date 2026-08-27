@@ -15,12 +15,6 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from review_builder_ast import (  # noqa: E402
-    BUILDER_ENV_NAMES,
-    BUILDER_ENV_OPTIONAL,
-    BUILDER_ENV_REQUIRED,
-    recognize_canonical_builder_program,
-)
 
 
 _USAGE_FIELDS = (
@@ -64,11 +58,24 @@ _SAFE_TOOL_NAMES = {
 }
 _SHELL_OPERATORS = {";", "&", "&&", "|", "||", "<", ">", "<<", ">>"}
 _UNRESOLVED_PATH = re.compile(r"[$`*?\[\]{}]")
-# Public aliases retained for measurement-contract tests. The shared parser
-# owns their values and preserves the historical optional envelope names.
-_BOOTSTRAP_BUILDER_ENV_REQUIRED = BUILDER_ENV_REQUIRED
-_BOOTSTRAP_BUILDER_ENV_OPTIONAL = BUILDER_ENV_OPTIONAL
-_BOOTSTRAP_BUILDER_ENV = BUILDER_ENV_NAMES
+# The canonical one-shot builder envelope bootstrap mandates: these
+# assignments, in any order, before `python3 <<PY` on the first line. The
+# four required names are the envelope's stable identity — every generation
+# of bootstrap has emitted all of them. The optional names are historical
+# measurement only: transcripts are immutable, and a reader that stops
+# recognizing a recorded generation reports a measured false for a save that
+# demonstrably happened.
+_BUILDER_ENV_REQUIRED = frozenset({
+    "PIRATEGOAT_PLUGIN_ROOT",
+    "PIRATEGOAT_OUTPUT_DIR",
+    "PIRATEGOAT_REVIEWER_NAME",
+    "PIRATEGOAT_PR_ID",
+})
+_BUILDER_ENV_OPTIONAL = frozenset({
+    "PIRATEGOAT_PLUGIN_VERSION",
+    "PIRATEGOAT_REVIEW_BUDGET",
+})
+_BUILDER_ENV_NAMES = _BUILDER_ENV_REQUIRED | _BUILDER_ENV_OPTIONAL
 # Both current and legacy names of the subagent dispatch tool. Dispatch
 # anomalies (dangling, malformed, duplicated calls) are the correlation
 # machinery's domain — every unresolved-evidence carve-out must exempt both.
@@ -1280,9 +1287,35 @@ def _opaque_target(value: object) -> str:
     return f"opaque:{digest}"
 
 
-def _is_bootstrap_builder_heredoc(command: object) -> bool:
-    """Recognize an exact pipeline-owned save-draft attempt."""
-    return recognize_canonical_builder_program(command) is not None
+def parse_builder_envelope(command: object) -> dict[str, str] | None:
+    """Return the artifact identity a pipeline-owned builder save declares.
+
+    The envelope's assignments are the whole recognition. The heredoc body is
+    the reviewer's own program: session analysis reads the artifact the
+    envelope names rather than inferring what the program would have written,
+    so nothing here has to model Python.
+    """
+    if not isinstance(command, str):
+        return None
+    lines = command.splitlines()
+    try:
+        tokens = shlex.split(lines[0] if lines else "")
+    except ValueError:
+        return None
+    if tokens[-2:] != ["python3", "<<PY"]:
+        return None
+    env: dict[str, str] = {}
+    for token in tokens[:-2]:
+        name, separator, value = token.partition("=")
+        if separator != "=" or name in env:
+            return None
+        env[name] = value
+    if not _BUILDER_ENV_REQUIRED <= set(env) <= _BUILDER_ENV_NAMES:
+        return None
+    return {
+        "output_dir": env["PIRATEGOAT_OUTPUT_DIR"],
+        "reviewer": env["PIRATEGOAT_REVIEWER_NAME"],
+    }
 
 
 def _file_target(value: object, repo_root: str | Path) -> str:
@@ -1321,7 +1354,7 @@ def _operation(
         return (
             (
                 "builder_output_attempt"
-                if _is_bootstrap_builder_heredoc(command)
+                if parse_builder_envelope(command) is not None
                 else "bash"
             ),
             _opaque_target(command),

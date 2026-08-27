@@ -30,7 +30,7 @@ analyze_subagent = _mod.analyze_subagent
 enrich_run_transcript = _mod.enrich_run_transcript
 manifest_step_timeline = _mod._manifest_step_timeline
 result_state = _mod._result_state
-is_bootstrap_builder_heredoc = _mod._is_bootstrap_builder_heredoc
+parse_builder_envelope = _mod.parse_builder_envelope
 safe_model = _mod._safe_model
 
 _bootstrap_spec = importlib.util.spec_from_file_location(
@@ -1098,59 +1098,39 @@ class TestAnalyzeSubagent:
             "recovered": False,
         }
 
-    def test_envelope_requires_the_exact_final_save_call(self):
-        """Initialization is not saved-review evidence; the final exact save is."""
+    def test_envelope_names_are_the_whole_recognition(self):
+        """Historical envelope generations stay measurable.
+
+        Transcripts are immutable: a reader that stops recognizing a
+        generation reports `builder_attempted: false` for saves that
+        demonstrably happened, which cohort.py buckets into
+        runs_without_builder_attempts instead of the unknown bucket that
+        exists for genuinely unobservable state.
+        """
         stable = (
             "PIRATEGOAT_PLUGIN_ROOT=/plugin PIRATEGOAT_OUTPUT_DIR=/output "
             "PIRATEGOAT_REVIEWER_NAME=security PIRATEGOAT_PR_ID=42 "
         )
-        current = stable + "PIRATEGOAT_PLUGIN_VERSION=1.114.0 python3 <<PY\n"
-        opened = (
+        body = (
             "builder = ReviewOutputBuilder.open('/output', '42', 'security')\n"
+            "builder.save_draft()\nPY"
         )
-
-        assert not is_bootstrap_builder_heredoc(current + opened + "PY")
-        assert not is_bootstrap_builder_heredoc(
-            current + opened + "builder.save()\nPY"
-        )
-        assert is_bootstrap_builder_heredoc(
-            current + opened + "builder.save_draft()\nPY"
-        )
-        assert not is_bootstrap_builder_heredoc(
-            current + opened + "other.save_draft()\nPY"
-        )
-        assert not is_bootstrap_builder_heredoc(
-            current + opened + "alias = builder\nalias.save_draft()\nPY"
-        )
-        assert not is_bootstrap_builder_heredoc(
-            current + opened
-            + "raise SystemExit(0)\nbuilder.save_draft()\nPY"
-        )
-        assert is_bootstrap_builder_heredoc(
-            current + opened + "builder.save_draft()\n"
-            "builder.add_finding('high', 'unsaved', 'f.php', 'd', 'r')\nPY"
-        )
-        # Empty-valued is the shape bootstrap emits when the run resolved
-        # no version, and must not read as a foreign assignment.
-        assert is_bootstrap_builder_heredoc(
-            stable + "PIRATEGOAT_PLUGIN_VERSION= python3 <<PY\n"
-            + opened + "builder.save_draft()\nPY"
-        )
+        # Empty-valued is the shape bootstrap emits when the run resolved no
+        # version, and must not read as a foreign assignment.
+        assert parse_builder_envelope(
+            stable + "PIRATEGOAT_PLUGIN_VERSION= python3 <<PY\n" + body
+        ) == {"output_dir": "/output", "reviewer": "security"}
         # HISTORICAL-ENVELOPE ALLOWANCE ONLY — not live. 1.114.0 briefly
         # carried the call-budget target on this envelope before a later fix
-        # moved it to the assignment (the live envelope never
-        # emits this name again — see
-        # test_envelope_never_carries_a_budget_assignment in
+        # moved it to the assignment; the live envelope never emits this name
+        # again (see test_envelope_never_carries_a_budget_assignment in
         # test_bootstrap_integration.py). run12's own recorded transcripts DO
-        # carry it, and historical transcripts are immutable: a reader that
-        # stops recognizing them lies about them, exactly like the
-        # PLUGIN_VERSION case above.
-        assert is_bootstrap_builder_heredoc(
+        # carry it.
+        assert parse_builder_envelope(
             stable
             + "PIRATEGOAT_PLUGIN_VERSION=1.114.0 PIRATEGOAT_REVIEW_BUDGET=80 "
-            "python3 <<PY\n"
-            + opened + "builder.save_draft()\nPY"
-        )
+            "python3 <<PY\n" + body
+        ) == {"output_dir": "/output", "reviewer": "security"}
 
     def test_real_bootstrap_builder_envelope_is_counted_as_one_attempt(
         self, tmp_path
@@ -1167,7 +1147,7 @@ class TestAnalyzeSubagent:
         (`test_bootstrap_integration.py`), including across both a
         calibrated and an uncalibrated run. If it did start appending one
         again, this test would still recognize it (the historical-envelope
-        allowance in `_BOOTSTRAP_BUILDER_ENV_OPTIONAL` exists precisely so a
+        allowance in `_BUILDER_ENV_OPTIONAL` exists precisely so a
         recorded transcript carrying it is never misread as no-save) — this
         test only proves recognition, not envelope shape.
         """
@@ -1268,7 +1248,7 @@ class TestAnalyzeSubagent:
             ),
         ],
     )
-    def test_pipeline_builder_envelope_with_exact_save_is_one_attempt(
+    def test_pipeline_builder_envelope_is_one_attempt(
         self, tmp_path, command
     ):
         transcript = _write_jsonl(
@@ -1286,7 +1266,7 @@ class TestAnalyzeSubagent:
 
         result = analyze_subagent(transcript, tmp_path, [])
 
-        assert is_bootstrap_builder_heredoc(command) is True
+        assert parse_builder_envelope(command) is not None
         assert result["artifact_writes"] == {
             "builder_attempted": True,
             "builder_attempts": 1,
@@ -1302,19 +1282,32 @@ class TestAnalyzeSubagent:
         [
             pytest.param(
                 _builder_envelope("this is not: valid python"),
-                id="invalid-python-body",
+                id="unparseable-body",
             ),
             pytest.param(
                 _builder_envelope(None),
                 id="missing-body-and-footer",
             ),
+            pytest.param(
+                _builder_envelope(
+                    "for path in ['src/a.php', 'src/b.php']:\n"
+                    "    builder.claim_files_reviewed(path)"
+                ),
+                id="loop-over-claims",
+            ),
         ],
     )
-    def test_envelope_without_parseable_exact_save_is_not_an_attempt(
+    def test_envelope_with_an_unmodelled_body_is_still_an_attempt(
         self, tmp_path, command
     ):
+        """The envelope is the attempt; the body is the reviewer's program.
+
+        Analysis reads the artifact the envelope names, so a body this module
+        cannot parse — or would not have modelled — says nothing about
+        whether the save was attempted.
+        """
         transcript = _write_jsonl(
-            tmp_path / "invalid-builder-envelope.jsonl",
+            tmp_path / "unmodelled-builder-body.jsonl",
             [
                 _assistant(_call("builder", "Bash", command=command)),
                 _result("builder", "safe", structured={"exitCode": 0}),
@@ -1323,8 +1316,8 @@ class TestAnalyzeSubagent:
 
         result = analyze_subagent(transcript, tmp_path, [])
 
-        assert is_bootstrap_builder_heredoc(command) is False
-        assert result["artifact_writes"]["builder_attempted"] is False
+        assert parse_builder_envelope(command) is not None
+        assert result["artifact_writes"]["builder_attempted"] is True
 
     @pytest.mark.parametrize(
         "command",
@@ -1389,7 +1382,7 @@ class TestAnalyzeSubagent:
 
         result = analyze_subagent(transcript, tmp_path, [])
 
-        assert is_bootstrap_builder_heredoc(command) is False
+        assert parse_builder_envelope(command) is None
         assert result["artifact_writes"] == {
             "builder_attempted": False,
             "builder_attempts": 0,
