@@ -1351,7 +1351,7 @@ class ReviewOutputBuilder:
 
         Every draft save uses this path; the bound output directory makes the
         check independent of the optional environment envelope. A caller
-        serializing manually via to_dict/to_json knowingly opts out of
+        serializing manually via to_dict() knowingly opts out of
         that validation — publication is the enforcing seam.
         """
         assignment_path = review_paths(output_dir, self.reviewer).assignment
@@ -1519,10 +1519,6 @@ class ReviewOutputBuilder:
         if elapsed < 0:
             return None
         return int(elapsed * 1000)
-
-    def to_json(self, indent: int = 2) -> str:
-        """Generate JSON from this builder's own state."""
-        return json.dumps(self.to_dict(), indent=indent, ensure_ascii=False)
 
     def save_draft(self) -> dict[str, str]:
         """Validate and replace this builder's complete bound draft."""
@@ -1705,7 +1701,7 @@ def review_summary(document: Dict) -> Dict:
 
 
 _OPTIONAL_REVIEW_FIELDS = frozenset({"skip_reason"})
-_REQUIRED_FINDING_FIELDS = frozenset({
+REQUIRED_FINDING_FIELDS = frozenset({
     "id",
     "category",
     "severity",
@@ -1715,6 +1711,9 @@ _REQUIRED_FINDING_FIELDS = frozenset({
     "line",
     "recommendation",
     "confidence",
+})
+REQUIRED_CHECK_FIELDS = frozenset({
+    "id", "question", "method", "result", "source_reviewers",
 })
 _REQUIRED_META_FIELDS = frozenset({
     "review_duration_ms",
@@ -1777,7 +1776,7 @@ def _validate_finding_shape(finding, index):
     """Validate fields emitted by ``ReviewOutputBuilder.add_finding``."""
     if not isinstance(finding, dict):
         raise ValueError(f"review finding {index} must be an object")
-    missing = sorted(_REQUIRED_FINDING_FIELDS - set(finding))
+    missing = sorted(REQUIRED_FINDING_FIELDS - set(finding))
     if missing:
         raise ValueError(
             f"review finding {index} is missing required fields: "
@@ -1835,7 +1834,7 @@ def _validate_finding_shape(finding, index):
 
 def _validate_check_shape(check, index):
     """Validate one canonical check without inferring materiality."""
-    required = {"id", "question", "method", "result", "source_reviewers"}
+    required = REQUIRED_CHECK_FIELDS
     allowed = required | {"critic_adjustment"}
     if not isinstance(check, dict):
         raise ValueError(f"review check {index} must be an object")

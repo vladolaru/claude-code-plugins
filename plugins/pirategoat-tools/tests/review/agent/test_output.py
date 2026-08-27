@@ -47,24 +47,17 @@ from review.reviewer_lifecycle import ReviewPaths, review_paths
 
 sys.path.insert(0, str(TESTS_DIR))
 from helpers.review_fixtures import (
+    apply_schema,
+    canonical_assignment,
     canonical_findings_ledger,
     canonical_review_document,
+    rejected_schema_values,
+    write_canonical_assignment,
 )
 
 
 def _write_required_assignment(output_dir, reviewer):
-    Path(output_dir, f"{reviewer}-assignment.json").write_text(
-        json.dumps({
-            "schema": 4,
-            "agent_name": f"{reviewer}-reviewer",
-            "reviewer": reviewer,
-            "review_claimable_files": [],
-            "inline_diff_file_count": 0,
-            "in_scope_review_file_count": 0,
-            "review_budget": 15,
-            "channels": ["blocking"],
-        })
-    )
+    write_canonical_assignment(output_dir, reviewer)
 
 
 def _save_and_finalize(builder, output_dir):
@@ -93,16 +86,10 @@ def test_assignment_reads_follow_the_bound_review_paths(
         final=str(authority_dir / "final.json"),
         assignment=str(authority_dir / "authority.json"),
     )
-    Path(paths.assignment).write_text(json.dumps({
-        "schema": 4,
-        "agent_name": "code-reviewer",
-        "reviewer": "code",
-        "review_claimable_files": ["src/unread.py"],
-        "review_budget": 80,
-        "inline_diff_file_count": 0,
-        "in_scope_review_file_count": 1,
-        "channels": ["blocking"],
-    }))
+    Path(paths.assignment).write_text(json.dumps(canonical_assignment(
+        "code", agent_name="code-reviewer",
+        review_claimable_files=["src/unread.py"], review_budget=80,
+    )))
     monkeypatch.setattr(review_output, "review_paths", lambda *_args: paths)
 
     saved = ReviewOutputBuilder.open(tmp_path, "42", "code").save_draft()
@@ -113,21 +100,11 @@ def test_assignment_reads_follow_the_bound_review_paths(
 
 
 def _write_assignment(paths_or_dir, reviewer="security", claimable=("src/a.py",), *, channels=("blocking",), budget=12):
-    path = (
-        paths_or_dir.assignment
-        if hasattr(paths_or_dir, "assignment")
-        else review_paths(str(paths_or_dir), reviewer).assignment
+    write_canonical_assignment(
+        paths_or_dir, reviewer, review_claimable_files=claimable,
+        channels=channels, review_budget=budget,
+        in_scope_review_file_count=len(claimable),
     )
-    Path(path).write_text(json.dumps({
-        "schema": 4,
-        "agent_name": f"{reviewer}-reviewer",
-        "reviewer": reviewer,
-        "review_claimable_files": list(claimable),
-        "inline_diff_file_count": 0,
-        "in_scope_review_file_count": len(claimable),
-        "review_budget": budget,
-        "channels": list(channels),
-    }))
 
 
 def test_builder_ignores_env_envelope_and_uses_bound_input(tmp_path, monkeypatch):
@@ -938,6 +915,19 @@ class TestToDict:
         builder = ReviewOutputBuilder(123, "code")
         assert builder.to_dict()["pr_id"] == "123"
 
+    def test_the_builder_exposes_no_unvalidated_serializer(self):
+        """`to_dict()` is the only projection; there is no second one.
+
+        `to_json()` had zero production callers and emitted a document
+        without the six reviewed-file fields, so its output failed
+        `validate_review_document()` — a serializer whose result the
+        canonical reader rejects is a trap, not a convenience. Every
+        caller either goes through `save_draft()` (which stitches the
+        derived fields on) or `json.dumps(builder.to_dict())` in a test
+        that is asserting about content, not about publication.
+        """
+        assert not hasattr(ReviewOutputBuilder, "to_json")
+
 
 # =============================================================================
 # TestRenderMarkdown
@@ -984,7 +974,7 @@ class TestRenderMarkdown:
         """Rendering from the FILE representation — what materialization
         does — must equal rendering from the live builder."""
         b = self._rich_builder()
-        assert render_markdown(json.loads(b.to_json())) == render_markdown(b.to_dict())
+        assert render_markdown(json.loads(json.dumps(b.to_dict()))) == render_markdown(b.to_dict())
 
     def test_file_location_without_scope_renders_plainly(self):
         data = self._rich_builder().to_dict()
@@ -1159,35 +1149,25 @@ class TestMaterializeMarkdown:
             assert not Path(d, "empty-review.md").exists()
             assert "skipped empty-review.json" in capsys.readouterr().err
 
-    def test_skips_complete_review_with_retired_schema(self, capsys):
+    @pytest.mark.parametrize("schema", rejected_schema_values(2))
+    def test_skips_a_final_review_at_any_other_schema(self, capsys, schema):
+        """A final review the canonical reader refuses renders no Markdown.
+
+        The materializer is the observable end of `load_review_document`'s
+        gate: an unrenderable review leaves no `.md` behind and says so on
+        stderr, rather than publishing a projection of a document nothing
+        vouched for.
+        """
         with tempfile.TemporaryDirectory() as d:
             builder = ReviewOutputBuilder(pr_id="1", reviewer="security")
             _write_required_assignment(d, "security")
             _save_and_finalize(builder, d)
             path = Path(d, "security-review.json")
-            review = json.loads(path.read_text())
-            review["schema"] = 1
-            path.write_text(json.dumps(review))
+            path.write_text(json.dumps(
+                apply_schema(json.loads(path.read_text()), schema)
+            ))
 
             written = materialize_markdown(d)
-
-            assert written == []
-            assert not Path(d, "security-review.md").exists()
-            assert "skipped security-review.json" in capsys.readouterr().err
-
-    def test_custom_suffix_cannot_bypass_final_review_validation(self, capsys):
-        with tempfile.TemporaryDirectory() as d:
-            builder = ReviewOutputBuilder(pr_id="1", reviewer="security")
-            _write_required_assignment(d, "security")
-            _save_and_finalize(builder, d)
-            path = Path(d, "security-review.json")
-            review = json.loads(path.read_text())
-            review["schema"] = 1
-            path.write_text(json.dumps(review))
-
-            written = materialize_markdown(
-                d, suffix="security-review.json"
-            )
 
             assert written == []
             assert not Path(d, "security-review.md").exists()
@@ -1241,39 +1221,6 @@ class TestMaterializeMarkdown:
             assert result.returncode == 0, result.stderr
             assert str(md_path) in result.stdout
             assert md_path.is_file()
-
-    def test_materialize_cli_custom_suffix_validates_final_review(self):
-        output_py = (
-            Path(__file__).parents[3] / "scripts" / "review" / "agent"
-            / "output.py"
-        )
-        with tempfile.TemporaryDirectory() as d:
-            builder = ReviewOutputBuilder(pr_id="1", reviewer="security")
-            _write_required_assignment(d, "security")
-            _save_and_finalize(builder, d)
-            path = Path(d, "security-review.json")
-            review = json.loads(path.read_text())
-            review["schema"] = 1
-            path.write_text(json.dumps(review))
-
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(output_py),
-                    "materialize",
-                    d,
-                    "--suffix",
-                    "security-review.json",
-                ],
-                capture_output=True,
-                text=True,
-            )
-
-            assert result.returncode == 0
-            assert result.stdout == ""
-            assert "skipped security-review.json" in result.stderr
-            assert not Path(d, "security-review.md").exists()
-
 
 # =============================================================================
 # TestSave
@@ -1498,7 +1445,7 @@ class TestFileScopedFindings:
     def test_file_scoped_finding_json_roundtrip(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         b.add_finding("medium", "Title", "f.py", "desc", "rec", line=None)
-        parsed = json.loads(b.to_json())
+        parsed = json.loads(json.dumps(b.to_dict()))
         assert parsed["findings"][0]["line"] is None
         assert parsed["findings"][0]["scope"] == "file"
 
@@ -1776,8 +1723,7 @@ class TestNotApplicable:
     def test_in_json_output(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         b.mark_not_applicable("No relevant changes")
-        j = b.to_json()
-        parsed = json.loads(j)
+        parsed = json.loads(json.dumps(b.to_dict()))
         assert parsed["verdict"] == "not_applicable"
         assert parsed["skip_reason"] == "No relevant changes"
 
@@ -2017,16 +1963,10 @@ class TestDerivedReviewedFiles:
 
     @staticmethod
     def _write_assignment(tmp_path, claimable, *, inline_diff_file_count=0, reviewer="code"):
-        (tmp_path / f"{reviewer}-assignment.json").write_text(json.dumps({
-            "schema": 4,
-            "agent_name": f"{reviewer}-reviewer",
-            "reviewer": reviewer,
-            "review_claimable_files": claimable,
-            "inline_diff_file_count": inline_diff_file_count,
-            "in_scope_review_file_count": inline_diff_file_count + len(claimable),
-            "review_budget": 15,
-            "channels": ["blocking"],
-        }))
+        write_canonical_assignment(
+            tmp_path, reviewer, review_claimable_files=claimable,
+            inline_diff_file_count=inline_diff_file_count,
+        )
 
     def test_draft_derives_gaps_and_counts_from_claims(self, tmp_path):
         self._write_assignment(
@@ -2172,15 +2112,31 @@ class TestBudgetTargetEcho:
         with pytest.raises(ValueError, match="missing authoritative review assignment"):
             self._save_with_unreviewed(tmp_path, monkeypatch, capsys)
 
-    def test_schema_1_sidecar_rejects_publication(
-        self, tmp_path, monkeypatch, capsys
+    @pytest.mark.parametrize("publish", ["draft", "final"])
+    def test_a_sidecar_at_another_schema_refuses_publication(
+        self, tmp_path, monkeypatch, capsys, publish
     ):
+        """Neither publication path reads a sidecar it cannot vouch for.
+
+        The value space is pinned once at the derivation boundary
+        (`test_review_assignment.py`); what this pins is that BOTH the
+        progress save and the finalizing save consult it, so a draft
+        cannot slip past on a sidecar the final would have refused.
+        """
         self._clean_env(monkeypatch)
-        self._write_assignment(
-            tmp_path, schema=1, review_claimable_files=["some/file.go"]
+        Path(tmp_path, "code-assignment.json").write_text(
+            json.dumps(apply_schema(
+                canonical_assignment(
+                    "code", review_claimable_files=["some/file.go"]
+                ),
+                1,
+            ))
         )
         with pytest.raises(ValueError, match="schema must be 4"):
-            self._save_with_unreviewed(tmp_path, monkeypatch, capsys)
+            if publish == "final":
+                self._save_with_unreviewed(tmp_path, monkeypatch, capsys)
+            else:
+                _save_draft(ReviewOutputBuilder("123", "code"), tmp_path)
 
     @pytest.mark.parametrize(
         "raw", [None, "80", "abc", -5, 12.5, True]
@@ -2302,17 +2258,6 @@ class TestDraftFileGapReceipt:
         _save_draft(builder, tmp_path)
         out = capsys.readouterr().out
         assert "FILES NOT YET CLAIMED" not in out
-
-    def test_schema_1_sidecar_rejects_progress_publication(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        self._clean_env(monkeypatch)
-        self._write_assignment(
-            tmp_path, schema=1, review_claimable_files=["some/file.go"],
-        )
-        builder = ReviewOutputBuilder("123", "code")
-        with pytest.raises(ValueError, match="schema must be 4"):
-            _save_draft(builder, tmp_path)
 
     def test_next_unread_omitted_only_when_every_claimable_file_is_claimed(
         self, tmp_path, monkeypatch, capsys
@@ -2614,7 +2559,14 @@ class TestTypeScriptContractLockstep:
     def test_schema_two_rejected_outcome_is_required(self):
         """Both adjustment outcomes are derived from AdjudicationOutcome, so
         a fourth outcome cannot be added on one side only — and neither is
-        optional."""
+        optional.
+
+        `test_ts_schema_field_sets_match_python_validators` never parses
+        `CriticRejectedAdjustment`/`CriticAppliedAdjustment`, and its
+        `top_level_fields()` extractor tolerates a trailing `?` on any
+        field — so nothing else in this file stops `outcome` becoming
+        optional or `AdjudicationOutcome` drifting.
+        """
         schema = (PLUGIN_ROOT / "schemas" / "review-output.ts").read_text()
         assert "outcome: Extract<AdjudicationOutcome, 'refuted'>;" in schema
         assert "outcome: Exclude<AdjudicationOutcome, 'refuted'>;" in schema

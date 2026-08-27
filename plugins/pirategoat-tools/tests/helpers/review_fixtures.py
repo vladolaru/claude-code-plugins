@@ -1,12 +1,12 @@
 """Canonical finalized-review fixtures for consumer boundary tests."""
 
-import sys
+import json
 from pathlib import Path
 
-_SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "scripts"
-if str(_SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS_DIR))
+import pytest
 
+from review.agent.review_assignment import ASSIGNMENT_SCHEMA
+from review.reviewer_lifecycle import review_paths
 from review.verdict_rules import derive_review_state
 
 
@@ -126,3 +126,84 @@ def failing_findings_renderer(real_loader, *messages):
             raise RuntimeError(message)
 
     return lambda path: _Proxy(real_loader(path))
+
+
+# The sentinel for "the key is not there at all". A schema gate has to
+# refuse an absent key the same way it refuses a wrong one, and no literal
+# value can stand for absence — `None` is itself one of the wrong values.
+SCHEMA_ABSENT = object()
+
+
+def rejected_schema_values(correct):
+    """Every non-canonical spelling one schema gate must refuse.
+
+    One value set for every artifact boundary — assignment (4), findings
+    ledger (3), reviewer document (2), critic proposal (2), reconciliation
+    context (3) — so a boundary that grows a reader cannot quietly accept a
+    spelling its siblings refuse. The bool is here because `True == 1`:
+    a gate written as `!= expected` lets it through at the schema-1
+    neighbour, and every gate in this plugin is written as an `int`-typed
+    identity check for exactly that reason.
+    """
+    return [
+        pytest.param(correct - 1, id="prior-schema"),
+        pytest.param(correct + 1, id="future-schema"),
+        pytest.param(str(correct), id="numeric-string"),
+        pytest.param(True, id="bool"),
+        pytest.param(None, id="null"),
+        pytest.param({}, id="non-scalar"),
+        pytest.param(SCHEMA_ABSENT, id="absent"),
+    ]
+
+
+def apply_schema(document, value):
+    """Set or remove a document's `schema` field for a gate test."""
+    if value is SCHEMA_ABSENT:
+        document.pop("schema", None)
+    else:
+        document["schema"] = value
+    return document
+
+
+def canonical_assignment(
+    reviewer="code",
+    *,
+    agent_name=None,
+    review_claimable_files=(),
+    inline_diff_file_count=0,
+    in_scope_review_file_count=None,
+    review_budget=15,
+    channels=("blocking",),
+):
+    """The one schema-4 assignment sidecar payload the test estate writes.
+
+    `in_scope_review_file_count` defaults to the conserved value the
+    production validator requires (`inline + claimable`), so a fixture has
+    to opt in to incoherence rather than stumble into it.
+    """
+    claimable = list(review_claimable_files)
+    if in_scope_review_file_count is None:
+        in_scope_review_file_count = inline_diff_file_count + len(claimable)
+    return {
+        "schema": ASSIGNMENT_SCHEMA,
+        "agent_name": agent_name or f"{reviewer}-reviewer",
+        "reviewer": reviewer,
+        "review_claimable_files": claimable,
+        "inline_diff_file_count": inline_diff_file_count,
+        "in_scope_review_file_count": in_scope_review_file_count,
+        "review_budget": review_budget,
+        "channels": list(channels),
+    }
+
+
+def write_canonical_assignment(path_or_dir, reviewer="code", **overrides):
+    """Write `canonical_assignment(...)` to a ReviewPaths or output dir."""
+    path = (
+        path_or_dir.assignment
+        if hasattr(path_or_dir, "assignment")
+        else review_paths(str(path_or_dir), reviewer).assignment
+    )
+    Path(path).write_text(
+        json.dumps(canonical_assignment(reviewer, **overrides))
+    )
+    return path

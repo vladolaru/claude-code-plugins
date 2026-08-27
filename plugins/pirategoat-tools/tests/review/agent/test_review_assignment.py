@@ -16,6 +16,9 @@ from review.agent.review_assignment import (
 )
 from review.reviewer_lifecycle import review_paths
 
+sys.path.insert(0, str(TESTS_DIR))
+from helpers.review_fixtures import apply_schema, rejected_schema_values
+
 
 def _assignment(**overrides):
     payload = {
@@ -99,8 +102,6 @@ def test_normalizes_authoritative_paths_before_rejecting_duplicates():
 @pytest.mark.parametrize(
     "payload, message",
     [
-        ({}, "schema"),
-        (_assignment(schema=2), "schema"),
         (_assignment(agent_name=""), "agent_name"),
         (_assignment(reviewer="code-reviewer"), "identity"),
         (
@@ -184,8 +185,23 @@ def test_assignment_carries_budget_and_channels():
     assert reviewed_files.channels == ("blocking", "advisory")
 
 
+@pytest.mark.parametrize("value", rejected_schema_values(4))
+def test_rejects_an_assignment_at_any_other_schema(value):
+    """The sidecar's schema is an identity, not a version hint.
+
+    Every spelling a wrong writer can produce — the prior schema, a future
+    one, the integer as a string, the bool `True` that compares equal to 1,
+    `null`, a non-scalar, and no key at all — is one refusal, because the
+    assignment is what every reviewed-file count is derived from and a
+    misread one publishes coverage nobody measured.
+    """
+    with pytest.raises(ReviewAssignmentError, match="schema"):
+        derive_reviewed_files(
+            apply_schema(_input(), value), [], reviewer="security"
+        )
+
+
 @pytest.mark.parametrize("overrides", [
-    {"schema": 3},
     {"channels": "blocking"},
     {"channels": []},
     {"channels": ["blocking", "blocking"]},

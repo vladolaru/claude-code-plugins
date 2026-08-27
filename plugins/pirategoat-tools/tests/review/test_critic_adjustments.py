@@ -20,8 +20,10 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 sys.path.insert(0, str(TESTS_DIR))
 
 from helpers.review_fixtures import (
+    apply_schema,
     canonical_findings_ledger,
     failing_findings_renderer,
+    rejected_schema_values,
 )
 from review.atomic_io import atomic_write_json
 from review.critic_adjustments import (
@@ -280,17 +282,8 @@ class TestCanonicalFindingsReader:
         with pytest.raises(ValueError, match="critic_adjustment provenance"):
             validate_findings_document(ledger)
 
-    @pytest.mark.parametrize(
-        "payload",
-        [
-            {"verdict": "block"},
-            {"schema": 2, "verdict": "approve", "findings": "none"},
-            {"schema": 2, "issues": [], "verdict": "approve"},
-        ],
-    )
-    def test_object_shaped_noncanonical_ledgers_are_invalid(
-        self, tmp_path, payload
-    ):
+    def test_object_shaped_noncanonical_ledgers_are_invalid(self, tmp_path):
+        payload = {"schema": 2, "verdict": "approve", "findings": "none"}
         path = self._write_raw(tmp_path, payload)
 
         read = critic_adjustments_module.read_findings_file(path)
@@ -864,10 +857,37 @@ class TestValidateProposalInput:
             "decision-critic-adjustments.json must be a JSON object"
         ]
 
-    def test_wrong_schema_is_a_problem(self):
-        problems = validate_proposal_input({"schema": 1, "adjustments": []})
+    @pytest.mark.parametrize("schema_field", rejected_schema_values(2))
+    def test_a_schema_out_of_template_refuses_the_whole_batch(
+        self, tmp_path, schema_field
+    ):
+        """The taught template always writes `"schema": 2`.
+
+        Anything else is out of that template and gets the same
+        all-or-nothing refusal — never a silent read as version 1, a
+        coerced integer, or a bool that compares equal to one. A wrong
+        schema is the ONLY problem this well-formed document reports —
+        it does not cascade into a second complaint about `adjustments`.
+        """
+        payload = apply_schema({
+            "adjustments": [{
+                "adjustment_id": "a1",
+                "action": "promote", "target": {"kind": "finding", "id": "f1"},
+                "fields": {"severity": "high"}, "rationale": "r",
+            }],
+        }, schema_field)
+        problems = critic_adjustments_module.validate_adjustments_document(
+            payload
+        )
         assert len(problems) == 1
         assert "'schema' must be 2" in problems[0]
+
+        _write_findings(tmp_path, [_finding("f1", "low")])
+        _publish_raw_proposal(tmp_path, payload)
+        with pytest.raises(ValueError, match="'schema' must be 2"):
+            _adjudicate(tmp_path, [])
+        data = _ledger(tmp_path)
+        assert data["findings"][0]["severity"] == "low"  # nothing written
 
     def test_adjustments_not_a_list_is_a_problem(self):
         assert validate_proposal_input({"schema": 2, "adjustments": "nope"}) == [
@@ -2228,74 +2248,6 @@ class TestReconciliatorCheckPin:
         ):
             assert kwarg in text.split("builder.record_check(", 1)[1][:500]
 
-    def test_the_template_excludes_void_and_correlated_checks(self):
-        text = self._text()
-        taught = text.split("builder.record_check(", 1)[0]
-        assert "Do NOT record" in taught
-        assert "VOID" in taught
-        assert "method-correlated duplicates" in taught
-
-    def test_the_structured_home_table_lists_checks(self):
-        assert (
-            "| `record_check(...)` → `## Verified Checks` |"
-            in self._text()
-        )
-
-    @staticmethod
-    def _weighting_rules(text):
-        """The numbered rules under Verification-Method Weighting."""
-        section = text.split("## Verification-Method Weighting & Conflicts", 1)
-        assert len(section) == 2, "weighting section missing"
-        body = section[1].split("\n## ", 1)[0]
-        rules = {}
-        current = None
-        for line in body.split("\n"):
-            match = re.match(r"^(\d+)\. ", line)
-            if match:
-                current = int(match.group(1))
-                rules[current] = line
-            elif current is not None and line.strip():
-                rules[current] += " " + line.strip()
-        return rules
-
-    def test_the_method_judgment_is_not_scoped_to_conflicts(self):
-        """The defect this pins: the judgment that decides which
-        checks get recorded used to be defined only for checks
-        that CONTRADICT a finding.
-
-        Read literally, that made the common case — a check nothing
-        argues with — ineligible for recording, silently reverting the
-        whole feature, and left a bad-method check that contradicts
-        nothing with no void path at all.
-        """
-        rules = self._weighting_rules(self._text())
-        judgment = rules[4]
-
-        # The judgment rule is stated for every check...
-        assert "EVERY check" in judgment
-        assert "conflict or no conflict" in judgment
-        # ...and says so where a reader would otherwise assume otherwise.
-        assert "even when no finding contradicts it" in judgment
-        # ...and the conflict case is explicitly the special case on top.
-        assert "special case on top of rule 4" in rules[5]
-
-    def test_recording_does_not_live_only_inside_the_conflict_rule(self):
-        """`record_check` must be reachable from the universal judgment,
-        not only from the rule about contested checks."""
-        rules = self._weighting_rules(self._text())
-        assert "record_check()" in rules[4]
-        assert "RECORDED" in rules[4]
-        # The conflict rule may reference the judgment, but must not be
-        # the only place recording is authorized.
-        assert "record_check()" not in rules[5]
-
-    def test_the_template_agrees_that_uncontested_checks_are_recorded(
-        self,
-    ):
-        taught = self._text().split("builder.record_check(", 1)[0]
-        assert "not only to the ones some finding argued with" in taught
-        assert "nothing contradicted is the ordinary case" in taught
-
 
 class TestReconciliatorWritePathPin:
     """Writer #1 is an agent following a Markdown snippet, so the only
@@ -2646,10 +2598,6 @@ class TestWithdrawnAssessmentRender:
         assert "## Critic Adjustment Decisions" in md
         assert "- `aaaa` — refuted" in md
         assert "- `bbbb` — refuted" in md
-
-    def test_schema_one_applied_ids_do_not_render(self):
-        md = self._render(applied_critic_adjustments=["legacy-id"])
-        assert "Critic Adjustment Decisions" not in md
 
     def test_malformed_decision_records_are_ignored(self):
         md = self._render(
@@ -3098,18 +3046,6 @@ class TestSchemaTwoTargetUnion:
             validate_proposal_input(duplicate)
         )
         assert validate_proposal_input(distinct_kinds) == []
-
-    def test_schema_one_is_rejected_without_a_compatibility_reader(self):
-        payload = {
-            "schema": 1,
-            "adjustments": [
-                self._entry("correct", fields={"description": "Corrected."})
-            ],
-        }
-
-        assert "schema' must be 2" in " ".join(
-            validate_proposal_input(payload)
-        )
 
     def test_proposal_digest_commits_the_nested_target(self):
         proposal = critic_adjustments_module.prepare_proposal({

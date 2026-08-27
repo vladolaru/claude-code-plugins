@@ -8,9 +8,8 @@ Follows Anthropic eval guidance: deterministic, objective, grades outcomes not p
 import json
 import os
 import re
-import sys
 from dataclasses import dataclass, field
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import List, Optional
 
 
@@ -26,45 +25,34 @@ class GradeResult:
     detail: Optional[dict] = None  # grader-specific detail payload (detection match, trial aggregation)
 
 
-VALID_SEVERITIES = {"critical", "high", "medium", "low", "info"}
+# The graded field sets ARE the production ones. A grader that re-spells
+# them grades its own copy: `REQUIRED_JSON_TOP_FIELDS` had drifted to 15
+# hand-picked keys against a validator that requires all 20, so five real
+# fields were ungraded. `VALID_VERDICTS` and `SEVERITY_RANK` below stay
+# local — no single production constant holds exactly those sets (the
+# per-reviewer verdict field also carries `not_applicable`, which the
+# ledger ladder in `verdict_rules.py` deliberately excludes).
+from review.agent.output import (
+    REQUIRED_CHECK_FIELDS,
+    REQUIRED_FINDING_FIELDS,
+    REVIEW_CONTENT_FIELDS,
+    REVIEWER_FIELDS,
+)
+from review.verdict_rules import VALID_SEVERITIES as _PRODUCTION_SEVERITIES
+
+VALID_SEVERITIES = set(_PRODUCTION_SEVERITIES)
 SEVERITY_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 VALID_VERDICTS = {"approve", "block", "request_changes", "comment", "not_applicable"}
-REQUIRED_FINDING_FIELDS = {
-    "id",
-    "category",
-    "severity",
-    "title",
-    "description",
-    "file",
-    "line",
-    "recommendation",
-    "confidence",
-}
-REQUIRED_CHECK_FIELDS = {"id", "question", "method", "result", "source_reviewers"}
-REQUIRED_JSON_TOP_FIELDS = {
-    "pr_id",
-    "reviewer",
-    "schema",
-    "verdict",
-    "summary",
-    "findings",
-    "checks",
-    "assessment",
-    "review_claimable_files",
-    "reviewed_file_claims",
-    "unclaimed_review_files",
-    "inline_diff_file_count",
-    "reviewed_file_count",
-    "in_scope_review_file_count",
-    "meta",
-}
+REQUIRED_JSON_TOP_FIELDS = REVIEW_CONTENT_FIELDS | REVIEWER_FIELDS
 
 
 def _validate_review_domain(findings, checks, assessment, meta):
-    """Reuse the production review-domain boundary from the eval harness."""
-    scripts_dir = str(Path(__file__).resolve().parents[2] / "scripts")
-    if scripts_dir not in sys.path:
-        sys.path.insert(0, scripts_dir)
+    """Reuse the production review-domain boundary from the eval harness.
+
+    `scripts/` is already on `sys.path` by the time this module has
+    finished loading — the module-scope field-set imports above require
+    it — so there is nothing left for this function to guard.
+    """
     from review.agent.output import validate_review_domain
 
     validate_review_domain(findings, checks, assessment, meta)
@@ -72,9 +60,6 @@ def _validate_review_domain(findings, checks, assessment, meta):
 
 def _validate_review_document(review, reviewer):
     """Reuse the production finalized-review boundary from the harness."""
-    scripts_dir = str(Path(__file__).resolve().parents[2] / "scripts")
-    if scripts_dir not in sys.path:
-        sys.path.insert(0, scripts_dir)
     from review.agent.output import validate_review_document
 
     validate_review_document(review, reviewer)

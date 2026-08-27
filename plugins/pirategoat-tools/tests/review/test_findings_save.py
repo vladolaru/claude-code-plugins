@@ -26,7 +26,11 @@ SCRIPT = SCRIPTS_DIR / "review" / "findings_save.py"
 sys.path.insert(0, str(TESTS_DIR))
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from helpers.review_fixtures import canonical_findings_ledger
+from helpers.review_fixtures import (
+    apply_schema,
+    canonical_findings_ledger,
+    rejected_schema_values,
+)
 from review.findings_save import run_save
 
 CONTEXT_FILENAME = "reconciliation-context.json"
@@ -164,23 +168,12 @@ class TestFindingsSave:
         assert "clearances" not in saved
         assert "narrative_summary" not in saved
 
-    def test_rejects_missing_schema(self, tmp_path):
-        doc = _valid_findings()
-        del doc["schema"]
-        findings = self._write_findings(tmp_path, doc)
-
-        result = self._run_save(tmp_path, findings)
-
-        assert result.returncode != 0
-        assert "schema" in result.stdout
-        assert not (tmp_path / "review-findings.json").exists()
-
-    @pytest.mark.parametrize("schema", [1, 2, "3", True, None])
+    @pytest.mark.parametrize("schema", rejected_schema_values(3))
     def test_rejects_schema_other_than_the_exact_ledger_integer(
         self, tmp_path, schema
     ):
         findings = self._write_findings(
-            tmp_path, _valid_findings(schema=schema)
+            tmp_path, apply_schema(_valid_findings(), schema)
         )
 
         result = self._run_save(tmp_path, findings)
@@ -875,7 +868,7 @@ def test_save_rejects_a_host_context_banner_authored_by_the_agent(
     assert not (tmp_path / "review-findings.json").exists()
 
 
-@pytest.mark.parametrize("schema", [2, 4, "3", None, True])
+@pytest.mark.parametrize("schema", rejected_schema_values(3))
 def test_save_rejects_a_context_written_at_another_schema(
     tmp_path, capsys, schema
 ):
@@ -883,12 +876,9 @@ def test_save_rejects_a_context_written_at_another_schema(
     path = _write_context(tmp_path, {
         "security-review": {"verdict": "approve", "findings": [], "checks": []},
     })
-    context = json.loads(path.read_text())
-    if schema is None:
-        del context["schema"]
-    else:
-        context["schema"] = schema
-    path.write_text(json.dumps(context))
+    path.write_text(json.dumps(
+        apply_schema(json.loads(path.read_text()), schema)
+    ))
     staged = tmp_path / "staged.json"
     staged.write_text(json.dumps(_valid_findings()))
     assert run_save(_args(tmp_path, staged)) == 1

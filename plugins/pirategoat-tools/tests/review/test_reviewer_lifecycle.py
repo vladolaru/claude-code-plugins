@@ -23,22 +23,19 @@ from review.agent.output import ReviewOutputBuilder, finalize_review
 from review.reviewer_lifecycle import close_review_intake, review_paths
 from review.telemetry import ReviewTelemetry
 
+sys.path.insert(0, str(TESTS_DIR))
+from helpers.review_fixtures import write_canonical_assignment
+
 
 def _write_assignment(
     output_dir, reviewer="code", agent_name=None, claimable=None
 ):
     claimable = ["src/claimable.py"] if claimable is None else claimable
-    Path(output_dir, f"{reviewer}-assignment.json").write_text(
-        json.dumps({
-            "schema": 4,
-            "agent_name": agent_name or f"{reviewer}-reviewer",
-            "reviewer": reviewer,
-            "review_claimable_files": claimable,
-            "review_budget": 15,
-            "inline_diff_file_count": len(claimable),
-            "in_scope_review_file_count": len(claimable) + 1,
-            "channels": ["blocking"],
-        })
+    write_canonical_assignment(
+        output_dir, reviewer, agent_name=agent_name,
+        review_claimable_files=claimable,
+        inline_diff_file_count=len(claimable),
+        in_scope_review_file_count=len(claimable) + 1,
     )
 
 
@@ -273,6 +270,62 @@ class TestFinalization:
         assert retry.stdout == first.stdout
         assert first.stderr == retry.stderr == ""
 
+    def test_a_tampered_draft_cannot_finalize(self, tmp_path):
+        """The digest binds the finalization to the bytes that were seen.
+
+        Editing the draft between the save and the finalize is the one
+        way an agent could publish content no receipt ever described.
+        The draft survives the refusal — it is still the agent's working
+        state, and destroying it would cost the run a review to punish an
+        edit the agent may not have made on purpose.
+        """
+        _write_assignment(tmp_path)
+        saved = _open_builder(tmp_path).save_draft()
+        draft = Path(saved["draft"])
+        document = json.loads(draft.read_text())
+        document["confidence_score"] = 0.42
+        draft.write_text(json.dumps(document))
+
+        with pytest.raises(
+            ValueError, match="digest no longer matches the saved draft"
+        ):
+            finalize_review(str(tmp_path), "code", saved["review_digest"])
+
+        assert draft.exists()
+        assert not Path(tmp_path, "code-review.json").exists()
+
+    def test_telemetry_failure_after_promotion_leaves_the_final_standing(
+        self, tmp_path, monkeypatch
+    ):
+        """Promotion is the review; the completion event is bookkeeping.
+
+        The telemetry append happens after `os.replace()` has already made
+        the final canonical, so a failing log must not read as a failed
+        review. The agent's own retry is what resolves it: the same
+        digest against an existing final is the idempotent path.
+        """
+        _write_assignment(tmp_path)
+        saved = _open_builder(tmp_path).save_draft()
+
+        def _explode(*_args, **_kwargs):
+            raise OSError("no space left on device")
+
+        monkeypatch.setattr(
+            output_mod, "_log_agent_complete_telemetry", _explode
+        )
+        with pytest.raises(OSError):
+            finalize_review(str(tmp_path), "code", saved["review_digest"])
+
+        final = Path(tmp_path, "code-review.json")
+        assert final.is_file()
+        assert not Path(saved["draft"]).exists()
+
+        monkeypatch.undo()
+        retry = finalize_review(str(tmp_path), "code", saved["review_digest"])
+
+        assert Path(retry["final"]) == final
+        assert json.loads(final.read_text())["reviewer"] == "code"
+
 
 class TestReviewIntakeClose:
     def test_close_returns_the_completed_invalid_split(self, tmp_path):
@@ -376,6 +429,30 @@ class TestReviewIntakeClose:
                 save_future.result(timeout=5)
 
         assert not Path(tmp_path, "code-review.draft.json").exists()
+
+    def test_close_keeps_an_undispatched_reviewers_draft_on_disk(
+        self, tmp_path
+    ):
+        """Closing intake freezes the run; it does not tidy the directory.
+
+        A draft belonging to a reviewer this run never dispatched is not
+        the close's to discard — it is evidence, and the freeze is what
+        stops it becoming a review, not deletion. The later finalize is
+        refused for the intake reason, not for a missing file.
+        """
+        _write_assignment(tmp_path, reviewer="security")
+        saved = _open_builder(tmp_path, reviewer="security").save_draft()
+
+        closed = close_review_intake(str(tmp_path), ["code-reviewer"])
+
+        assert closed["discarded_drafts"] == []
+        assert Path(saved["draft"]).exists()
+        with pytest.raises(ValueError, match="intake"):
+            finalize_review(
+                str(tmp_path), "security", saved["review_digest"]
+            )
+        assert Path(saved["draft"]).exists()
+        assert not Path(tmp_path, "security-review.json").exists()
 
 
 class TestFinalizationTelemetry:
