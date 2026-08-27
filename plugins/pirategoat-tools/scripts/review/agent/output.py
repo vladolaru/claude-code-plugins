@@ -142,26 +142,16 @@ def coerce_text(value: Any, single_line: bool = False) -> str:
     return result
 
 
-# Dispatch-marker suffixes. Spelled here rather than imported from
-# review/synthesis_lifecycle.py so the `finalize-review` CLI needs no import
-# beyond the ones above to time an actor. Parity with the bootstrap-written
-# `<agent>.started` contract and review/synthesis_lifecycle.MARKER_SUFFIX is
-# pinned by tests, so a rename fails loudly instead of silently unmeasuring a
-# whole class of actor.
+# The reviewer dispatch-marker suffix. Spelled here rather than imported
+# from review/synthesis_lifecycle.py so the `finalize-review` CLI needs no
+# import beyond the ones above to time an actor. Parity with the
+# bootstrap-written `<agent>.started` contract is pinned by tests, so a
+# rename fails loudly instead of silently unmeasuring a whole class of actor.
 _REVIEWER_START_SUFFIX = ".started"
-_SYNTHESIS_START_SUFFIX = ".synthesis-started"
-
-# Builder `reviewer` name -> the agent name its dispatch marker is keyed on,
-# for the one actor where the two differ. The reconciliator is dispatched as
-# `review-reconciliator` but constructs its builder as `reconciliator`
-# (agents/review-reconciliator.md), and `reviewer` is a published field of
-# review-findings.json — so this maps the lookup rather than renaming an
-# artifact field to suit it.
-_MARKER_AGENT_BY_REVIEWER = {"reconciliator": "review-reconciliator"}
 
 
 def _actor_start_time(
-    output_dir: Optional[str], reviewer: Optional[str]
+    output_dir: Optional[str], marker_name: Optional[str]
 ) -> Optional[datetime]:
     """When this actor was dispatched, per the marker the pipeline wrote.
 
@@ -171,39 +161,21 @@ def _actor_start_time(
     every artifact of a 19-agent run came to carry a duration of ~0ms,
     including a reconciliator that ran for 211 seconds.
 
-    Two marker families exist because two kinds of actor do: reviewers get
-    `<agent>.started` from bootstrap, synthesis agents get
-    `<agent>.synthesis-started` from synthesis_lifecycle (deliberately NOT
-    `.started`, so tools scanning for reviewers do not seed them as one).
-    Both hold a tz-aware ISO timestamp.
-
-    None everywhere the answer is not known: no output directory, no
-    marker (hand-rolled builder, standalone use), unreadable or unparsable
-    stamp. Absence is reported as absence — never as zero.
+    ``marker_name`` is the exact filename its actor names for itself, never
+    a guess: a reviewer names ``<agent_name>.started`` from the agent name
+    its assignment carries, and a synthesis actor names its own
+    ``.synthesis-started`` file. None everywhere the answer is not known —
+    no directory, no name, no marker, or an unreadable stamp. Absence is
+    reported as absence, never as zero.
     """
-    directory = output_dir or os.environ.get("PIRATEGOAT_OUTPUT_DIR")
-    if not directory or not reviewer:
+    if not output_dir or not marker_name:
         return None
-    agent = _MARKER_AGENT_BY_REVIEWER.get(reviewer, reviewer)
-    # `reviewer` is derive_reviewer_name(agent_name), which strips a
-    # trailing "-reviewer"; the inverse is ambiguous, so try both spellings
-    # against both marker families.
-    for name in (
-        f"{agent}-reviewer{_REVIEWER_START_SUFFIX}",
-        f"{agent}{_REVIEWER_START_SUFFIX}",
-        f"{agent}{_SYNTHESIS_START_SUFFIX}",
-        f"{agent}-reviewer{_SYNTHESIS_START_SUFFIX}",
-    ):
-        path = os.path.join(directory, name)
-        if not os.path.isfile(path):
-            continue
-        try:
-            with open(path, "r", encoding="utf-8") as handle:
-                stamp = datetime.fromisoformat(handle.read().strip())
-        except (OSError, UnicodeDecodeError, ValueError):
-            return None
-        return stamp
-    return None
+    path = os.path.join(output_dir, marker_name)
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return datetime.fromisoformat(handle.read().strip())
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
 
 
 def _telemetry_for_output(output_dir):
@@ -808,6 +780,19 @@ class ReviewOutputBuilder:
         except (OSError, UnicodeDecodeError, json.JSONDecodeError, ReviewAssignmentError):
             return None
 
+    def _marker_name(self) -> Optional[str]:
+        """The dispatch marker filename this actor's duration is measured from.
+
+        The assignment is the one artifact that knows this builder's dispatch
+        identity: `reviewer` is derive_reviewer_name(agent_name), and that
+        derivation is not invertible — which is what the four-spelling probe
+        this replaced was working around.
+        """
+        reviewed_files = self._bound_reviewed_files()
+        if reviewed_files is None:
+            return None
+        return f"{reviewed_files.agent_name}{_REVIEWER_START_SUFFIX}"
+
     @staticmethod
     def _normalize_reviewed_file_claim(file: str) -> str:
         """Normalize one reviewed-file claim.
@@ -1000,7 +985,7 @@ class ReviewOutputBuilder:
         reviewed-file fields — ``save_draft`` stitches those on separately via
         ``reviewed_files_fields()``, from the one authoritative derivation.
         """
-        review_duration = self._review_duration_ms(self._output_dir)
+        review_duration = self._review_duration_ms()
 
         derived = summary_for(self.findings)
         verdict = (
@@ -1043,7 +1028,7 @@ class ReviewOutputBuilder:
             result['skip_reason'] = self._skip_reason
         return result
 
-    def _review_duration_ms(self, output_dir: Optional[str]) -> Optional[int]:
+    def _review_duration_ms(self) -> Optional[int]:
         """Milliseconds from this actor's dispatch to now, or None.
 
         Derived from the dispatch marker the pipeline wrote — the one clock
@@ -1051,7 +1036,7 @@ class ReviewOutputBuilder:
         after this serialization, which no ordering produces) is discarded
         rather than published: a wrong number is worse than a missing one.
         """
-        started = _actor_start_time(output_dir, self.reviewer)
+        started = _actor_start_time(self._output_dir, self._marker_name())
         if started is None:
             return None
         if started.tzinfo is None:

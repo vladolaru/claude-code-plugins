@@ -2164,52 +2164,54 @@ class TestMetaIsNeverFakeZero:
             "review_duration_ms"
         ] is None
 
-    def test_duration_comes_from_a_reviewer_marker(self, tmp_path, monkeypatch):
+    def test_duration_comes_from_the_assignments_agent_marker(
+        self, tmp_path, monkeypatch
+    ):
+        """One name, one file: the assignment says which agent this builder
+        is, and that agent's marker is opened by name — not guessed at
+        across four spellings."""
         monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        _write_required_assignment(tmp_path, "security")
         self._stamp(
             tmp_path / "security-reviewer.started",
             datetime.now(timezone.utc) - timedelta(seconds=30),
         )
         b = ReviewOutputBuilder.open(tmp_path, "1", "security")
-        duration = b.to_dict()["meta"][
-            "review_duration_ms"
-        ]
-        assert 29_000 <= duration <= 40_000
+        assert 29_000 <= b.to_dict()["meta"]["review_duration_ms"] <= 40_000
 
-    def test_duration_comes_from_the_reconciliators_marker(
+    def test_duration_is_null_without_an_assignment(self, tmp_path, monkeypatch):
+        """An unbound or unassigned builder has no agent name, so it has no
+        marker to name. Absence stays absence."""
+        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
+        self._stamp(tmp_path / "security-reviewer.started")
+        b = ReviewOutputBuilder(pr_id="1", reviewer="security")
+        assert b.to_dict()["meta"]["review_duration_ms"] is None
+
+    def test_ledger_duration_comes_from_the_synthesis_marker(
         self, tmp_path, monkeypatch
     ):
-        """The synthesis marker is deliberately NOT named `.started`, and
-        the reconciliator's builder name is not its agent name — the field
-        artifact's 0ms duration was that pair of mismatches, not a missing
-        marker."""
+        """The ledger has no assignment; it names its own synthesis marker."""
+        import review.findings_ledger as _ledger
+
         monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
         self._stamp(
             tmp_path / "review-reconciliator.synthesis-started",
             datetime.now(timezone.utc) - timedelta(seconds=211),
         )
-        b = ReviewOutputBuilder.open(tmp_path, "1", "reconciliator")
-        duration = b.to_dict()["meta"][
-            "review_duration_ms"
-        ]
+        builder = _ledger.FindingsLedgerBuilder("1", str(tmp_path))
+        builder.set_reconciliation(
+            grouped_concern_count=0, verified_concern_count=0,
+            false_positive_concern_count=0, out_of_scope_concern_count=0,
+        )
+        duration = builder.to_dict()["meta"]["review_duration_ms"]
         assert 211_000 <= duration <= 225_000
-
-    def test_marker_is_found_through_the_env_envelope(
-        self, tmp_path, monkeypatch
-    ):
-        """An unbound, hand-rolled builder still finds its own marker: with
-        no directory to read from, the envelope is what tells it where to
-        look."""
-        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
-        self._stamp(tmp_path / "security-reviewer.started")
-        b = ReviewOutputBuilder(pr_id="1", reviewer="security")
-        assert isinstance(b.to_dict()["meta"]["review_duration_ms"], int)
 
     @pytest.mark.parametrize("stamp", ["", "not-a-timestamp", "   "])
     def test_unparsable_marker_yields_null_not_zero(
         self, tmp_path, monkeypatch, stamp
     ):
         monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        _write_required_assignment(tmp_path, "security")
         (tmp_path / "security-reviewer.started").write_text(stamp)
         b = ReviewOutputBuilder.open(tmp_path, "1", "security")
         assert b.to_dict()["meta"][
@@ -2222,6 +2224,7 @@ class TestMetaIsNeverFakeZero:
         """A negative interval is impossible under any real ordering; a
         wrong number is worse than a missing one."""
         monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        _write_required_assignment(tmp_path, "security")
         self._stamp(
             tmp_path / "security-reviewer.started",
             datetime.now(timezone.utc) + timedelta(minutes=5),
@@ -2231,44 +2234,22 @@ class TestMetaIsNeverFakeZero:
             "review_duration_ms"
         ] is None
 
-    def test_marker_suffixes_match_their_writers(self):
-        """The suffixes are spelled in output.py so the module stays
-        importable stand-alone. Parity with the writers is what keeps that
-        copy from silently unmeasuring an entire class of actor."""
+    def test_marker_names_match_their_writers(self):
+        """The two marker names are spelled in the builder layer so output.py
+        stays importable stand-alone. Parity with the writers is what keeps
+        those copies from silently unmeasuring a whole class of actor."""
         import review.synthesis_lifecycle as _lifecycle
+        import review.findings_ledger as _ledger
         import review.agent.output as _output
 
         bootstrap_src = (
             PLUGIN_ROOT / "scripts" / "review" / "agent" / "bootstrap.py"
         ).read_text()
-        assert _output._SYNTHESIS_START_SUFFIX == _lifecycle.MARKER_SUFFIX
+        assert _ledger.SYNTHESIS_START_SUFFIX == _lifecycle.MARKER_SUFFIX
+        assert _ledger.LEDGER_AGENT_NAME == _lifecycle.RECONCILIATOR
         assert (
             f'f"{{effective_agent_name}}{_output._REVIEWER_START_SUFFIX}"'
             in bootstrap_src
-        )
-
-    def test_reconciliator_alias_matches_both_ends_it_bridges(self):
-        """The one hand-copied name pair in the marker lookup, pinned.
-
-        _MARKER_AGENT_BY_REVIEWER exists because the reconciliator is
-        dispatched as `review-reconciliator` but constructs its builder as
-        `reconciliator`. Both ends live in other files, and a rename at
-        either one would send the reconciliator's duration back to null
-        with the whole suite still green — the exact failure this map was
-        added to fix.
-        """
-        import review.synthesis_lifecycle as _lifecycle
-        import review.findings_ledger as _ledger
-        import review.agent.output as _output
-
-        alias = _output._MARKER_AGENT_BY_REVIEWER
-        # Marker end: the name synthesis_lifecycle stamps the marker with.
-        assert alias["reconciliator"] == _lifecycle.RECONCILIATOR
-        # Builder end: the actor name FindingsLedgerBuilder constructs
-        # itself with, on the agent's behalf.
-        assert _ledger.LEDGER_ACTOR == "reconciliator", (
-            "the ledger builder's actor name moved — update the alias key "
-            "in output.py's _MARKER_AGENT_BY_REVIEWER with it"
         )
 
 

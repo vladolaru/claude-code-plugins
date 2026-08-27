@@ -55,9 +55,16 @@ RECONCILIATION_FIELDS = frozenset(
     RECONCILIATION_JUDGMENT_FIELDS + RECONCILIATION_PIPELINE_FIELDS
 )
 # The reconciliator is dispatched as `review-reconciliator` and constructs its
-# builder as `reconciliator`; the inherited id allocation and duration lookup
-# are keyed on the latter (see _MARKER_AGENT_BY_REVIEWER in agent/output.py).
+# builder as `reconciliator`; the inherited id allocation is keyed on the
+# latter and the dispatch marker on the former.
 LEDGER_ACTOR = "reconciliator"
+# The dispatch identity and marker suffix this ledger's duration is measured
+# from. Spelled here rather than imported because synthesis_lifecycle imports
+# critic_adjustments, which imports this module — importing its RECONCILIATOR
+# back would close a cycle. Parity with both writers is pinned by
+# test_output.py::TestMetaIsNeverFakeZero::test_marker_names_match_their_writers.
+LEDGER_AGENT_NAME = "review-reconciliator"
+SYNTHESIS_START_SUFFIX = ".synthesis-started"
 
 
 def _no_lifecycle(*_args, **_kwargs):
@@ -84,6 +91,10 @@ class FindingsLedgerBuilder(ReviewOutputBuilder):
     claim_files_reviewed = _no_lifecycle
     retract_reviewed_file_claims = _no_lifecycle
     mark_not_applicable = _no_lifecycle
+
+    def _marker_name(self) -> str:
+        """The ledger has no assignment, so it names its own marker."""
+        return f"{LEDGER_AGENT_NAME}{SYNTHESIS_START_SUFFIX}"
 
     def set_reconciliation(
         self, *, grouped_concern_count: int, verified_concern_count: int,
