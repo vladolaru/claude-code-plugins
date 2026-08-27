@@ -31,7 +31,7 @@ import sys
 import uuid
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict
 
 try:
     from .review_assignment import (
@@ -62,6 +62,7 @@ try:
     from ..review_document import (
         REVIEW_OUTPUT_SCHEMA,
         VALID_CHANNELS,
+        coerce_text,
         validate_check_shape,
         validate_finding_shape,
         validate_review_document,
@@ -77,6 +78,7 @@ except ImportError:
     from review.review_document import (
         REVIEW_OUTPUT_SCHEMA,
         VALID_CHANNELS,
+        coerce_text,
         validate_check_shape,
         validate_finding_shape,
         validate_review_document,
@@ -106,36 +108,6 @@ except ImportError:
         VALID_SEVERITIES,
         summary_for,
     )
-
-
-def coerce_text(value: Any, single_line: bool = False) -> str:
-    """Coerce a free-form finding field to a string at write time.
-
-    These fields are model-authored, so a value the schema expects to be a
-    string (``title``, ``description``, ``recommendation``) can arrive as a
-    list, number, or ``None``. Persisting a non-string here lets the malformed
-    value flow downstream into the reconciliation Markdown renderer, which
-    crashes the whole review at pipeline step 8. Coerce at the producer so bad
-    values never reach disk: lists/tuples join on newlines, ``None`` becomes
-    empty, everything else stringifies. (The reconciliation renderer keeps its
-    own equivalent guard as defense in depth.)
-
-    ``single_line=True`` additionally collapses all whitespace to single
-    spaces. Titles render inline downstream (``**N. …**``, ``### F1: …``)
-    without block-syntax escaping, so a newline could forge a heading or
-    thematic break — keeping titles single-line prevents that.
-    """
-    if isinstance(value, str):
-        result = value
-    elif value is None:
-        result = ""
-    elif isinstance(value, (list, tuple)):
-        result = "\n".join(coerce_text(item) for item in value)
-    else:
-        result = str(value)
-    if single_line:
-        result = " ".join(result.split())
-    return result
 
 
 # The reviewer dispatch-marker suffix. Spelled here rather than imported

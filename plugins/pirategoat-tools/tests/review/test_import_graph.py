@@ -126,6 +126,21 @@ class TestNoCycles:
             target for target in reached if target.startswith("agent.output")
         ]
 
+    def test_review_markdown_does_not_reach_the_builder(self):
+        """Rendering reads documents; it does not build them.
+
+        The renderer imported one text coercer from `agent/output.py` and
+        got the whole builder — plus its lifecycle, assignment, and
+        atomic-write dependencies — as the price. The coercer is a
+        question about the document's shape, so it lives in
+        `review_document.py` with the rest of them.
+        """
+        reached = set(_all_imports(REVIEW_DIR / "review_markdown.py"))
+
+        assert not [
+            target for target in reached if target.startswith("agent.output")
+        ]
+
 
 class TestNoFunctionBodyImports:
     """One blind spot, stated rather than papered over: this walks import

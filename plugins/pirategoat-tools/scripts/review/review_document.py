@@ -15,7 +15,7 @@ import os
 import re
 import sys
 from datetime import datetime
-from typing import Dict
+from typing import Any, Dict
 
 try:
     from .verdict_rules import VALID_SEVERITIES, VERDICT_RANK, summary_for
@@ -97,6 +97,40 @@ _REQUIRED_META_FIELDS = frozenset({
 })
 _OPTIONAL_META_FIELDS = frozenset()
 _ALLOWED_META_FIELDS = _REQUIRED_META_FIELDS | _OPTIONAL_META_FIELDS
+
+
+def coerce_text(value: Any, single_line: bool = False) -> str:
+    """Coerce a free-form review field to a string.
+
+    These fields are model-authored, so a value the contract expects to be
+    a string (``title``, ``description``, ``recommendation``) can arrive as
+    a list, number, or ``None``. Both ends of the document's life need the
+    same answer: the builder coerces at write time so a malformed value
+    never reaches disk, and the renderers coerce at read time so an
+    artifact written before that guard existed cannot raise ``TypeError``
+    mid-render and abort a review. It lives here because it is a question
+    about the document's shape, and this module is what both ends already
+    depend on.
+
+    Lists and tuples join on newlines, ``None`` becomes empty, everything
+    else stringifies.
+
+    ``single_line=True`` additionally collapses all whitespace to single
+    spaces. Titles render inline downstream (``**N. …**``, ``### F1: …``)
+    without block-syntax escaping, so a newline could forge a heading or
+    thematic break — keeping titles single-line prevents that.
+    """
+    if isinstance(value, str):
+        result = value
+    elif value is None:
+        result = ""
+    elif isinstance(value, (list, tuple)):
+        result = "\n".join(coerce_text(item) for item in value)
+    else:
+        result = str(value)
+    if single_line:
+        result = " ".join(result.split())
+    return result
 
 
 def _is_confidence(value):

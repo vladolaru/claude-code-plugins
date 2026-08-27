@@ -30,14 +30,14 @@ from typing import Any, Dict, List, Optional, Tuple
 try:
     from .reviewer_names import derive_reviewer_name
     from .verdict_rules import VALID_SEVERITIES
-    from .review_document import load_review_document
+    from .review_document import coerce_text, load_review_document
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
     from review.reviewer_names import derive_reviewer_name
     from review.verdict_rules import VALID_SEVERITIES
-    from review.review_document import load_review_document
+    from review.review_document import coerce_text, load_review_document
 
 RECONCILIATION_CONTEXT_SCHEMA = 3
 
@@ -87,7 +87,7 @@ def strip_severity_floor_markers(text: Any) -> str:
     ``orchestration.assemble_review_record()``. Accepts any type and
     coerces first — free-form model-authored text flows through here.
     """
-    return _SEVERITY_FLOOR_MARKER_RE.sub("", _coerce_text(text))
+    return _SEVERITY_FLOOR_MARKER_RE.sub("", coerce_text(text))
 
 
 def _review_stem(agent: str) -> str:
@@ -753,26 +753,6 @@ def filter_in_scope_references(
         if in_scope_lines:
             filtered.append({"file": file_path, "lines": in_scope_lines})
     return filtered
-
-
-def _coerce_text(value: Any) -> str:
-    """Coerce an agent-supplied finding field to a string for rendering.
-
-    Reviewer JSON is model-authored, so a field the schema expects to be a
-    string (``title``, ``description``, ``recommendation``) can arrive as a
-    list, number, or ``None``.  Passing those straight into the regex helpers
-    below raises ``TypeError`` and \u2014 because rendering happens inside the
-    reconciliation step \u2014 aborts the entire review.  Coerce defensively:
-    lists/tuples join on newlines (matching how multi-part text is rendered
-    elsewhere), ``None`` becomes empty, everything else stringifies.
-    """
-    if isinstance(value, str):
-        return value
-    if value is None:
-        return ""
-    if isinstance(value, (list, tuple)):
-        return "\n".join(_coerce_text(item) for item in value)
-    return str(value)
 
 
 def main() -> int:

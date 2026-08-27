@@ -26,8 +26,7 @@ from typing import Dict, List
 
 try:
     from . import critic_adjustments
-    from .review_document import load_review_document
-    from .agent.output import coerce_text
+    from .review_document import coerce_text, load_review_document
 except ImportError:
     _scripts_parent = os.path.dirname(
         os.path.dirname(os.path.abspath(__file__))
@@ -35,8 +34,7 @@ except ImportError:
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
     from review import critic_adjustments
-    from review.review_document import load_review_document
-    from review.agent.output import coerce_text
+    from review.review_document import coerce_text, load_review_document
 
 
 def render_markdown(data: Dict) -> str:
