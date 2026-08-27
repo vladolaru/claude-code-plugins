@@ -1756,6 +1756,58 @@ class TestStep8Orchestration:
         assert spawned == []
         assert state["agents"]["completed"] == ["code-reviewer"]
 
+    def test_step_8_completed_never_names_an_undispatched_agent(
+        self, mod, tmp_path, monkeypatch
+    ):
+        """`completed` stays inside `dispatched`, and in its order.
+
+        Intake close classifies a wider population than this run
+        dispatched — it also carries forward every draft a previous close
+        discarded — so a resumed close can hand back an agent the plan
+        no longer names. The step-8 briefing renders both lists.
+        """
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps({
+            "agents": [
+                {"name": "code-reviewer", "status": "DISPATCH"},
+                {"name": "a11y-reviewer", "status": "DISPATCH"},
+            ],
+        }))
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "close_review_intake",
+            lambda *_args: {
+                "schema": 2,
+                "status": "closed",
+                "closed_at": "2026-08-27T12:00:00+00:00",
+                "discarded_drafts": [],
+                "completed": [
+                    "a11y-reviewer", "code-reviewer", "security-reviewer",
+                ],
+            },
+        )
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "_materialize_markdown",
+            lambda *_args, **_kwargs: [],
+        )
+
+        def reconciliation_succeeds(*_args, **_kwargs):
+            (tmp_path / "reconciliation-context.json").write_text("{}")
+            return "", True
+
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "_run_subprocess",
+            reconciliation_succeeds,
+        )
+        state = {"resolved_params": {}}
+
+        mod._orchestrate_step(8, "full", {}, state, {}, str(tmp_path))
+
+        assert state["agents"]["completed"] == [
+            "code-reviewer", "a11y-reviewer",
+        ]
+
     def test_step_8_does_not_revalidate_what_intake_close_classified(
         self, mod, tmp_path, monkeypatch
     ):

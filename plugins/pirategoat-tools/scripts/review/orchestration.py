@@ -1333,9 +1333,19 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
             state["commit_messages"] = log_out.strip().split("\n")
 
     if dispatch_plan is not None:
+        # Narrowed to THIS run's dispatched set, and ordered by it. The
+        # intake close classifies a wider population — the dispatched
+        # names plus any draft a previous close discarded — so on a
+        # resumed close an agent could otherwise stand under `completed`
+        # while the `dispatched` list beside it, which the step-8 briefing
+        # renders, never named it.
+        completed_at_close = set(intake_close["completed"])
         state["agents"] = {
             "dispatched": dispatched_names,
-            "completed": intake_close["completed"],
+            "completed": [
+                name for name in dispatched_names
+                if name in completed_at_close
+            ],
             "discarded_drafts": discarded_drafts,
         }
 
