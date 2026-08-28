@@ -23,6 +23,8 @@ SCRIPT_PATH = SCRIPTS_DIR / "review" / "reconciliation_context.py"
 sys.path.insert(0, str(SCRIPTS_DIR))
 sys.path.insert(0, str(TESTS_DIR))
 
+from review.verdict_rules import derive_review_state  # noqa: E402
+
 
 def _load_module():
     """Load the reconciliation_context module via importlib."""
@@ -86,41 +88,17 @@ def _make_review_json(
         dict(finding, id=f"f{index}")
         for index, finding in enumerate(findings, 1)
     ]
-    severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
-    blocking_counts = dict(severity_counts)
-    suppressed_advisory_finding_count = 0
-    for finding in findings:
-        sev = finding.get("severity", "medium")
-        if sev in severity_counts:
-            severity_counts[sev] += 1
-            if finding.get("channel") == "advisory":
-                suppressed_advisory_finding_count += 1
-            else:
-                blocking_counts[sev] += 1
-
-    def _verdict(counts):
-        if counts["critical"] or counts["high"] >= 3:
-            return "block"
-        if counts["high"] or counts["medium"] >= 5:
-            return "request_changes"
-        if counts["medium"]:
-            return "comment"
-        return "approve"
-
-    derived_verdict = _verdict(blocking_counts)
+    # The verdict ladder, the advisory split and the suppression
+    # measurement come from production. A fixture carrying its own copy
+    # grades the pipeline against thresholds that can silently disagree
+    # with the ones it ships.
+    derived = derive_review_state(findings)
+    derived_verdict = derived["verdict"]
     summary = {
         "total_findings": len(findings),
-        "by_severity": severity_counts,
-        "suppressed_advisory_finding_count": (
-            suppressed_advisory_finding_count
-        ),
+        "by_severity": derived["counts"],
+        **derived["advisory"],
     }
-    verdict_without_advisory = _verdict(severity_counts)
-    verdict_rank = {
-        "approve": 0, "comment": 1, "request_changes": 2, "block": 3,
-    }
-    if verdict_rank[verdict_without_advisory] > verdict_rank[derived_verdict]:
-        summary["verdict_without_advisory"] = verdict_without_advisory
 
     return {
         "pr_id": pr_id,
