@@ -109,7 +109,12 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
     # produced; the review itself is not among them, because the mandated
     # builder heredoc writes it to disk. Collect the envelopes and read their
     # artifacts once the transcript is exhausted.
-    builder_envelopes: list[dict[str, str]] = []
+    # An envelope whose paired tool result is a definite failure persisted
+    # nothing of its own; the artifact it names may still exist because a
+    # retry in another dispatch wrote it, and reading it here would count
+    # that reviewer twice. Ambiguity (no result observed) keeps the record.
+    builder_envelopes: list[tuple[str | None, dict[str, str]]] = []
+    failed_call_ids: set[str] = set()
     write_saves: list[dict[str, Any]] = []
 
     for entry in entries:
@@ -119,6 +124,16 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
 
         role = msg.get("role", "")
         content = msg.get("content", "")
+
+        if role == "user" and isinstance(content, list):
+            for block in content:
+                if (
+                    isinstance(block, dict)
+                    and block.get("type") == "tool_result"
+                    and block.get("is_error") is True
+                    and isinstance(block.get("tool_use_id"), str)
+                ):
+                    failed_call_ids.add(block["tool_use_id"])
 
         # First user message = prompt
         if role == "user" and not result["prompt_content"]:
@@ -157,7 +172,10 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
                         result["bash_commands"].append(command)
                         envelope = parse_builder_envelope(command)
                         if envelope is not None:
-                            builder_envelopes.append(envelope)
+                            call_id = block.get("id")
+                            builder_envelopes.append(
+                                (call_id if isinstance(call_id, str) else None, envelope)
+                            )
                     elif tool_name == "Grep":
                         result["grep_searches"].append({
                             "pattern": tool_input.get("pattern", ""),
@@ -204,7 +222,9 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
     # transcript all name the same file, and a legacy Write of that path is
     # superseded by what the file actually holds.
     artifact_saves: dict[str, dict[str, Any]] = {}
-    for envelope in builder_envelopes:
+    for call_id, envelope in builder_envelopes:
+        if call_id in failed_call_ids:
+            continue
         record = _review_from_artifact(envelope)
         if record is not None:
             artifact_saves.setdefault(record["path"], record)

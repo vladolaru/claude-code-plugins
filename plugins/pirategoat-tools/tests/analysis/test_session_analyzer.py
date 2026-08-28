@@ -552,6 +552,39 @@ class TestArtifactBackedReviews:
         assert agent_record["total_findings"] == 2
         assert agent_record["findings_by_severity"] == {"high": 1, "medium": 1}
 
+    def test_a_failed_builder_call_does_not_attribute_a_retry_artifact(
+        self, tmp_path
+    ):
+        """A builder call whose tool result is an error persisted nothing.
+        The artifact may exist because a later dispatch retried into the
+        same output directory; reading it for the failed call would count
+        that reviewer's findings once per dispatch."""
+        Path(tmp_path, "security-review.json").write_text(
+            json.dumps(canonical_review_document("security", ["high"]))
+        )
+        log = tmp_path / "agent.jsonl"
+        entries = [
+            _bash_entry(_real_bootstrap_builder_command(tmp_path), tool_id="b1"),
+            {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": "b1",
+                        "is_error": True,
+                        "content": "REJECTED: review draft is absent",
+                    }],
+                },
+            },
+        ]
+        log.write_text("".join(json.dumps(e) + "\n" for e in entries))
+
+        data = _mod.parse_subagent_log(str(log))
+
+        assert data["write_outputs"] == []
+        assert self._quality_report(data)["per_agent"] == []
+
     @pytest.mark.parametrize(
         "artifact_content,reviewer",
         [
