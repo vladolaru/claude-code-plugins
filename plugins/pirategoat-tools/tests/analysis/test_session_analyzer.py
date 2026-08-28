@@ -596,6 +596,7 @@ class TestArtifactBackedReviews:
         [
             pytest.param("session-A", 1, id="same-run"),
             pytest.param("session-B", 0, id="later-run-replaced-the-artifact"),
+            pytest.param(None, 0, id="no-provenance-is-unmeasured"),
         ],
     )
     def test_the_artifact_must_belong_to_the_transcripts_run(
@@ -603,16 +604,26 @@ class TestArtifactBackedReviews:
     ):
         """Output directories are reused per PR/branch and swept at step 1,
         so the artifact on disk is the latest run's. The manifest names
-        that run's session; a transcript from another session is credited
-        with nothing rather than with a foreign run's findings."""
+        that run's session; a transcript from another session — or one
+        whose run left no manifest to check — is credited with nothing
+        rather than with a possibly foreign run's findings."""
         out = tmp_path / "out"
         out.mkdir()
         Path(out, "security-review.json").write_text(
             json.dumps(canonical_review_document("security", ["high"]))
         )
-        Path(out, "pr-run1--x.manifest.json").write_text(
-            json.dumps({"run": {"session_id": manifest_session}})
-        )
+        if manifest_session is not None:
+            # Telemetry keeps the log and manifest outside the output dir and
+            # leaves only a marker naming the log; the analyzer resolves the
+            # manifest through that marker, never by scanning the directory.
+            logs = tmp_path / "logs"
+            logs.mkdir()
+            Path(logs, "pr-run1--x.manifest.json").write_text(
+                json.dumps({"run": {"session_id": manifest_session}})
+            )
+            Path(out, ".telemetry-log-path").write_text(
+                str(logs / "pr-run1--x.jsonl")
+            )
         log = self._session_log(
             tmp_path, "session-A",
             [_bash_entry(_real_bootstrap_builder_command(out))],

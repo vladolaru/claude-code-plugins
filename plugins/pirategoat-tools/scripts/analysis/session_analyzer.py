@@ -57,24 +57,24 @@ from review.review_document import (  # noqa: E402
     validate_review_document,
 )
 from review.reviewer_lifecycle import review_paths  # noqa: E402
+from review.telemetry import ReviewTelemetry  # noqa: E402
 from review_transcript import parse_builder_envelope  # noqa: E402
 
 
 def _artifact_session_id(output_dir: str) -> str | None:
-    """The session the output directory's run manifest names, if exactly one.
+    """The session the output directory's run manifest names, or None.
 
     Output directories are reused across runs of the same PR or branch and
     swept at step 1, so the artifact on disk belongs to the LATEST run. The
-    manifest is the only durable record of which session that was.
+    manifest is the durable record of which session that was, and it lives
+    wherever telemetry put it — resolved through the same marker file
+    ReviewTelemetry itself reads, never by scanning the output directory.
     """
     try:
-        manifests = [
-            name for name in os.listdir(output_dir)
-            if name.endswith(".manifest.json")
-        ]
-        if len(manifests) != 1:
+        manifest_path = ReviewTelemetry(output_dir).manifest_path
+        if manifest_path is None:
             return None
-        with open(os.path.join(output_dir, manifests[0]), "rb") as f:
+        with open(manifest_path, "rb") as f:
             manifest = json.load(f)
     except (OSError, ValueError):
         return None
@@ -95,10 +95,11 @@ def _review_from_artifact(
     unmeasured — no record, so nothing downstream reports a zero for a
     reviewer whose output was never observed.
 
-    The artifact must also be THIS dispatch's: when both the transcript's
-    session and the directory's manifest name a session and they differ,
-    a later run has replaced the file and the historical dispatch is
-    unmeasured rather than credited with a foreign run's findings.
+    The artifact must also be THIS dispatch's. When the transcript's session
+    is known, the directory's manifest must name the same session: a
+    different one means a later run replaced the file, and no provenance at
+    all means nothing proves the file is this run's — both are unmeasured
+    rather than credited with a possibly foreign run's findings.
     """
     reviewer = envelope["reviewer"]
     output_dir = envelope["output_dir"]
@@ -107,8 +108,7 @@ def _review_from_artifact(
         document = load_review_document(path, reviewer)
     except ValueError:
         return None
-    artifact_session = _artifact_session_id(output_dir)
-    if session_id and artifact_session and artifact_session != session_id:
+    if session_id and _artifact_session_id(output_dir) != session_id:
         return None
     return {"path": path, "content": json.dumps(document)}
 
