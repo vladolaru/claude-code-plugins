@@ -245,7 +245,7 @@ def _manifest(
             "ended_at": (_TEST_TRANSCRIPT_START + timedelta(hours=1)).isoformat(),
         },
         "steps": [],
-        "assignment": {"by_agent": {"security-reviewer": ["src/in.py"]}},
+        "assignment": {"assigned_files_by_agent": {"security-reviewer": ["src/in.py"]}},
     }
     if started is None:
         started = ["security-reviewer"]
@@ -4467,7 +4467,7 @@ class TestEnrichRunTranscript:
         manifest = _manifest(
             session_id, repo, output_dir, started=[agent]
         )
-        manifest["assignment"]["by_agent"] = {agent: ["src/in.py"]}
+        manifest["assignment"]["assigned_files_by_agent"] = {agent: ["src/in.py"]}
 
         result = enrich_run_transcript(
             manifest,
@@ -5632,7 +5632,7 @@ class TestBudgetAndEvidenceCounts:
             session_id, tmp_path, output_dir,
             started=["tests-mutation-reviewer"],
         )
-        manifest["assignment"] = {"by_agent": {"tests-mutation-reviewer": []}}
+        manifest["assignment"] = {"assigned_files_by_agent": {"tests-mutation-reviewer": []}}
 
         result = enrich_run_transcript(
             manifest, sessions, {"tests-mutation-reviewer"}
@@ -5688,7 +5688,7 @@ class TestBudgetAndEvidenceCounts:
             started=["repo-renewals-reviewer"],
         )
         manifest["assignment"] = {
-            "by_agent": {"repo-renewals-reviewer": ["src/in.py"]}
+            "assigned_files_by_agent": {"repo-renewals-reviewer": ["src/in.py"]}
         }
 
         result = enrich_run_transcript(
@@ -5793,7 +5793,7 @@ class TestBudgetAndEvidenceCounts:
             session_id, tmp_path, output_dir,
             started=["tests-mutation-reviewer"],
         )
-        manifest["assignment"] = {"by_agent": {"tests-mutation-reviewer": []}}
+        manifest["assignment"] = {"assigned_files_by_agent": {"tests-mutation-reviewer": []}}
 
         result = enrich_run_transcript(
             manifest, sessions, {"tests-mutation-reviewer"}
