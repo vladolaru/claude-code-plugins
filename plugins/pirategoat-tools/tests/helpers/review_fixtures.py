@@ -162,26 +162,35 @@ def canonical_assignment(
     *,
     agent_name=None,
     review_claimable_files=(),
-    inline_diff_file_count=0,
+    inline_diff_files=(),
+    inline_diff_file_count=None,
     in_scope_review_file_count=None,
     review_budget=15,
     channels=("blocking",),
 ):
-    """The one schema-4 assignment sidecar payload the test estate writes.
+    """The one schema-5 assignment sidecar payload the test estate writes.
 
     `in_scope_review_file_count` defaults to the conserved value the
     production validator requires (`inline + claimable`), so a fixture has
-    to opt in to incoherence rather than stumble into it.
+    to opt in to incoherence rather than stumble into it. A test that only
+    cares how MANY files were inline passes `inline_diff_file_count` and
+    gets that many placeholder paths; one that cares WHICH passes
+    `inline_diff_files`.
     """
     claimable = list(review_claimable_files)
+    inline = list(inline_diff_files)
+    if inline_diff_file_count is not None:
+        if inline:
+            raise ValueError("pass inline_diff_files or inline_diff_file_count, not both")
+        inline = [f"inline/file-{n}.txt" for n in range(inline_diff_file_count)]
     if in_scope_review_file_count is None:
-        in_scope_review_file_count = inline_diff_file_count + len(claimable)
+        in_scope_review_file_count = len(inline) + len(claimable)
     return {
         "schema": ASSIGNMENT_SCHEMA,
         "agent_name": agent_name or f"{reviewer}-reviewer",
         "reviewer": reviewer,
         "review_claimable_files": claimable,
-        "inline_diff_file_count": inline_diff_file_count,
+        "inline_diff_files": inline,
         "in_scope_review_file_count": in_scope_review_file_count,
         "review_budget": review_budget,
         "channels": list(channels),

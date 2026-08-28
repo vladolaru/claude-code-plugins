@@ -863,16 +863,22 @@ class ReviewOutputBuilder:
             files, "claim_files_reviewed"
         )
         reviewed_files = self._bound_reviewed_files()
-        known = (
-            frozenset(reviewed_files.review_claimable_files)
-            if reviewed_files is not None
-            else None
-        )
-        unknown = (
-            [path for path in normalized if path not in known]
-            if known is not None
-            else []
-        )
+        if reviewed_files is None:
+            if errors:
+                raise ValueError("; ".join(errors))
+            return normalized
+        known = frozenset(reviewed_files.review_claimable_files)
+        # An inline file is already counted as reviewed — the reviewer
+        # received its diff — so claiming it restates a fact the assignment
+        # holds. That is redundant, not false: it is dropped here rather
+        # than refused, and only a path outside the reviewer's scope is
+        # an error. Run 14 on pokedex: a third of reviewers claimed their
+        # inline files and each lost a builder call to the refusal.
+        inline = frozenset(reviewed_files.inline_diff_files)
+        unknown = [
+            path for path in normalized
+            if path not in known and path not in inline
+        ]
         if unknown:
             valid = (
                 "Valid paths: " + ", ".join(sorted(known))
@@ -884,11 +890,12 @@ class ReviewOutputBuilder:
                 f"claim_files_reviewed received {len(unknown)} claim(s) "
                 "matching no review-claimable file of this review: "
                 + ", ".join(repr(p) for p in unknown)
-                + f". {valid}"
+                + ". Inline files are counted automatically and need no "
+                f"claim. {valid}"
             )
         if errors:
             raise ValueError("; ".join(errors))
-        return normalized
+        return [path for path in normalized if path not in inline]
 
     def _derive_reviewed_files(self):
         """Return the reviewed files this publication must carry.

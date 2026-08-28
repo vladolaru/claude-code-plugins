@@ -22,11 +22,11 @@ from helpers.review_fixtures import apply_schema, rejected_schema_values
 
 def _assignment(**overrides):
     payload = {
-        "schema": 4,
+        "schema": 5,
         "agent_name": "code-reviewer",
         "reviewer": "code",
         "review_claimable_files": ["src/b.py", "src/c.py", "src/d.py"],
-        "inline_diff_file_count": 2,
+        "inline_diff_files": ["src/a.py", "src/e.py"],
         "in_scope_review_file_count": 5,
         "review_budget": 15,
         "channels": ["blocking"],
@@ -49,6 +49,7 @@ def test_derives_reviewed_files_from_normalized_claims_in_authoritative_order():
     )
     assert reviewed_files.reviewed_file_claims == ("src/b.py", "src/d.py")
     assert reviewed_files.unclaimed_review_files == ("src/c.py",)
+    assert reviewed_files.inline_diff_files == ("src/a.py", "src/e.py")
     assert reviewed_files.inline_diff_file_count == 2
     assert reviewed_files.reviewed_file_count == 4
     assert reviewed_files.in_scope_review_file_count == 5
@@ -62,7 +63,7 @@ def test_rejects_claim_outside_review_claimable_files_as_one_batch():
         derive_reviewed_files(
             _assignment(
                 review_claimable_files=["src/b.py"],
-                inline_diff_file_count=1,
+                inline_diff_files=["src/a.py"],
                 in_scope_review_file_count=2,
             ),
             ["src/other.py", "src/second.py"],
@@ -74,7 +75,7 @@ def test_empty_claimable_set_keeps_all_inline_files_accounted_for():
     reviewed_files = derive_reviewed_files(
         _assignment(
             review_claimable_files=[],
-            inline_diff_file_count=3,
+            inline_diff_files=["src/a.py", "src/e.py", "src/f.py"],
             in_scope_review_file_count=3,
         ),
         [],
@@ -91,7 +92,7 @@ def test_normalizes_authoritative_paths_before_rejecting_duplicates():
         derive_reviewed_files(
             _assignment(
                 review_claimable_files=["src/b.py", "./src/b.py"],
-                inline_diff_file_count=1,
+                inline_diff_files=["src/a.py"],
                 in_scope_review_file_count=3,
             ),
             [],
@@ -111,7 +112,18 @@ def test_normalizes_authoritative_paths_before_rejecting_duplicates():
             None,
         ),
         (_assignment(review_claimable_files=["src/b.py", 3]), "string-only"),
-        (_assignment(inline_diff_file_count=-1), "inline_diff_file_count"),
+        (_assignment(inline_diff_files=["src/a.py", 3]), "inline_diff_files.*string-only"),
+        (_assignment(inline_diff_files=2), "inline_diff_files.*string-only"),
+        (
+            _assignment(inline_diff_files=["src/a.py", "./src/a.py"]),
+            "inline_diff_files must not contain duplicates",
+        ),
+        (
+            _assignment(
+                inline_diff_files=["src/a.py", "src/b.py"],
+            ),
+            "must be disjoint: src/b.py",
+        ),
         (
             _assignment(in_scope_review_file_count=True),
             "in_scope_review_file_count",
@@ -119,7 +131,7 @@ def test_normalizes_authoritative_paths_before_rejecting_duplicates():
         (_assignment(review_budget=True), "review_budget"),
         (
             _assignment(
-                inline_diff_file_count=1,
+                inline_diff_files=["src/a.py"],
                 in_scope_review_file_count=5,
             ),
             "incoherent",
@@ -141,13 +153,18 @@ def test_validates_schema_identity_paths_and_conserved_counts(payload, message):
     "path",
     ["/etc/passwd", "../src/b.py", "src/../b.py", "C:\\src\\b.py", "."],
 )
-@pytest.mark.parametrize("location", ["review_claimable_files", "claim"])
+@pytest.mark.parametrize(
+    "location", ["review_claimable_files", "inline_diff_files", "claim"]
+)
 def test_rejects_paths_outside_repository_relative_grammar(path, location):
     payload = _assignment()
     claims = []
     if location == "review_claimable_files":
         payload["review_claimable_files"] = [path]
         payload["in_scope_review_file_count"] = 3
+    elif location == "inline_diff_files":
+        payload["inline_diff_files"] = [path]
+        payload["in_scope_review_file_count"] = 4
     else:
         claims = [path]
 
@@ -164,11 +181,11 @@ def test_rejects_non_object_input_and_non_iterable_claims():
 
 def _input(**overrides):
     payload = {
-        "schema": 4,
+        "schema": 5,
         "agent_name": "security-reviewer",
         "reviewer": "security",
         "review_claimable_files": ["src/a.py"],
-        "inline_diff_file_count": 1,
+        "inline_diff_files": ["src/z.py"],
         "in_scope_review_file_count": 2,
         "review_budget": 15,
         "channels": ["blocking"],
@@ -185,7 +202,7 @@ def test_assignment_carries_budget_and_channels():
     assert reviewed_files.channels == ("blocking", "advisory")
 
 
-@pytest.mark.parametrize("value", rejected_schema_values(4))
+@pytest.mark.parametrize("value", rejected_schema_values(5))
 def test_rejects_an_assignment_at_any_other_schema(value):
     """The sidecar's schema is an identity, not a version hint.
 
@@ -209,7 +226,7 @@ def test_rejects_an_assignment_at_any_other_schema(value):
     {"review_budget": -1},
     {"review_budget": True},
 ])
-def test_schema_four_rejects_retired_or_malformed_input(overrides):
+def test_schema_five_rejects_retired_or_malformed_input(overrides):
     with pytest.raises(ReviewAssignmentError):
         derive_reviewed_files(_input(**overrides), [], reviewer="security")
 

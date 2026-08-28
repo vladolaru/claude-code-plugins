@@ -239,7 +239,7 @@ This is a non-executable API reference. Bootstrap's **OUTPUT INSTRUCTIONS** bloc
 - `builder.add_observation(file, note, category="general")` - Add informational file-level note (doesn't affect verdict — do NOT use for real findings)
 - `builder.record_check(question, method, result)` - Record a material verification check with the exact question, searches/reads, and observed result. Required for material negative or blast-radius conclusions — see "Absence Claims" section
 - `builder.update_check(check_id, **fields)` / `builder.remove_check(check_id)` - Correct or remove a persisted check without recycling its stable ID
-- `builder.claim_files_reviewed(*files)` - Claim NOT DIFFED files you actually read from the review-claimable queue (a statement, not proof — surfaced as a claim downstream). The builder validates this entire batch against the authoritative review assignment, derives every unclaimed review file, and derives the reviewed-file count from inline files plus validated claims.
+- `builder.claim_files_reviewed(*files)` - Claim NOT DIFFED files you actually read from the review-claimable queue (a statement, not proof — surfaced as a claim downstream). The builder validates this entire batch against the authoritative review assignment, derives every unclaimed review file, and derives the reviewed-file count from inline files plus validated claims. Claiming an inline (diffed) file is harmless and records nothing — it is already counted.
 - `builder.retract_reviewed_file_claims(*files)` - Retract reviewed-file claims that no longer reflect what you actually read before saving again.
 - `builder.set_confidence(0.0-1.0)` - Set overall confidence
 - `builder.add_positive_observation("observation")` - Note good patterns

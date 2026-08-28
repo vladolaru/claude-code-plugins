@@ -97,6 +97,41 @@ def _write_assignment(paths_or_dir, reviewer="security", claimable=("src/a.py",)
     )
 
 
+def test_claiming_an_inline_file_is_a_redundant_no_op_not_a_refusal(tmp_path):
+    """The reviewer received the file's diff; saying "I reviewed it" is true.
+
+    Run 14 on pokedex: six of eighteen reviewers claimed their inline files
+    alongside the claimable ones and each lost a builder call to the
+    refusal. The assignment carries the inline set, so the builder drops the
+    redundant claim and records only the claimable one.
+    """
+    write_canonical_assignment(
+        tmp_path, "security",
+        review_claimable_files=("src/claimable.py",),
+        inline_diff_files=("src/inline.py",),
+    )
+    builder = ReviewOutputBuilder.open(tmp_path, "42", "security")
+    builder.claim_files_reviewed("src/inline.py", "src/claimable.py")
+    assert builder.reviewed_file_claims == ["src/claimable.py"]
+    builder.claim_files_reviewed("./src/inline.py")
+    assert builder.reviewed_file_claims == ["src/claimable.py"]
+
+
+def test_claim_outside_scope_still_refuses_and_names_the_inline_rule(tmp_path):
+    write_canonical_assignment(
+        tmp_path, "security",
+        review_claimable_files=("src/claimable.py",),
+        inline_diff_files=("src/inline.py",),
+    )
+    builder = ReviewOutputBuilder.open(tmp_path, "42", "security")
+    with pytest.raises(
+        ValueError,
+        match=r"'src/elsewhere.py'.*Inline files are counted automatically",
+    ):
+        builder.claim_files_reviewed("src/inline.py", "src/elsewhere.py")
+    assert builder.reviewed_file_claims == []
+
+
 def test_builder_ignores_env_envelope_and_uses_bound_input(tmp_path, monkeypatch):
     other = tmp_path / "other"
     other.mkdir()
@@ -178,6 +213,11 @@ def test_draft_index_reports_zero_claims_without_claim_entries():
 # TestFindingAndCheckDomainModel
 # =============================================================================
 
+
+
+def _inline(count):
+    """`count` distinct inline placeholder paths for a schema-5 assignment."""
+    return [f"src/inline-{n}.php" for n in range(count)]
 
 class TestFindingAndCheckDomainModel:
     """Schema-2 drafts expose only the canonical review-domain contract."""
@@ -1807,7 +1847,7 @@ class TestAdvisoryChannel:
             pytest.param("{not json", id="unparsable"),
             pytest.param("[]", id="top-level-not-object"),
             pytest.param(
-                json.dumps({"schema": 4, "channels": ["advisory"]}),
+                json.dumps({"schema": 5, "channels": ["advisory"]}),
                 id="incomplete-input",
             ),
         ],
@@ -1969,15 +2009,15 @@ class TestDerivedReviewedFiles:
     """Draft and final coverage are sidecar-derived from positive claims."""
 
     @staticmethod
-    def _write_assignment(tmp_path, claimable, *, inline_diff_file_count=0, reviewer="code"):
+    def _write_assignment(tmp_path, claimable, *, inline_diff_files=(), reviewer="code"):
         write_canonical_assignment(
             tmp_path, reviewer, review_claimable_files=claimable,
-            inline_diff_file_count=inline_diff_file_count,
+            inline_diff_files=inline_diff_files,
         )
 
     def test_draft_derives_gaps_and_counts_from_claims(self, tmp_path):
         self._write_assignment(
-            tmp_path, ["src/read.ts", "src/unread.ts"], inline_diff_file_count=3
+            tmp_path, ["src/read.ts", "src/unread.ts"], inline_diff_files=_inline(3)
         )
         builder = ReviewOutputBuilder("123", "code")
         builder.claim_files_reviewed("src/read.ts")
@@ -2014,7 +2054,7 @@ class TestDerivedReviewedFiles:
 
     def test_finalized_json_preserves_derived_coverage(self, tmp_path):
         self._write_assignment(
-            tmp_path, ["src/read.ts", "src/unread.ts"], inline_diff_file_count=2
+            tmp_path, ["src/read.ts", "src/unread.ts"], inline_diff_files=_inline(2)
         )
         builder = ReviewOutputBuilder("123", "code")
         builder.claim_files_reviewed("src/read.ts")
@@ -2066,7 +2106,7 @@ class TestBudgetTargetEcho:
         monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
 
     @staticmethod
-    def _write_assignment(tmp_path, reviewer="code", schema=4, review_claimable_files=None,
+    def _write_assignment(tmp_path, reviewer="code", schema=5, review_claimable_files=None,
                         **fields):
         review_claimable_files = review_claimable_files or []
         payload = {
@@ -2074,7 +2114,7 @@ class TestBudgetTargetEcho:
             "agent_name": f"{reviewer}-reviewer",
             "reviewer": reviewer,
             "review_claimable_files": review_claimable_files,
-            "inline_diff_file_count": 0,
+            "inline_diff_files": [],
             "in_scope_review_file_count": len(review_claimable_files),
             "review_budget": 15,
             "channels": ["blocking"],
@@ -2139,7 +2179,7 @@ class TestBudgetTargetEcho:
                 1,
             ))
         )
-        with pytest.raises(ValueError, match="schema must be 4"):
+        with pytest.raises(ValueError, match="schema must be 5"):
             if publish == "final":
                 self._save_with_unreviewed(tmp_path, monkeypatch, capsys)
             else:
@@ -2196,7 +2236,7 @@ class TestDraftFileGapReceipt:
         monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
 
     @staticmethod
-    def _write_assignment(tmp_path, reviewer="code", schema=4, review_claimable_files=None,
+    def _write_assignment(tmp_path, reviewer="code", schema=5, review_claimable_files=None,
                         **fields):
         review_claimable_files = review_claimable_files or []
         payload = {
@@ -2204,7 +2244,7 @@ class TestDraftFileGapReceipt:
             "agent_name": f"{reviewer}-reviewer",
             "reviewer": reviewer,
             "review_claimable_files": review_claimable_files,
-            "inline_diff_file_count": 0,
+            "inline_diff_files": [],
             "in_scope_review_file_count": len(review_claimable_files),
             "review_budget": 15,
             "channels": ["blocking"],
@@ -2222,7 +2262,7 @@ class TestDraftFileGapReceipt:
             tmp_path,
             review_claimable_files=["a.go", "b.go"],
             in_scope_review_file_count=4,
-            inline_diff_file_count=2,
+            inline_diff_files=_inline(2),
         )
         builder = ReviewOutputBuilder("123", "code")
         builder.claim_files_reviewed("b.go")
@@ -2240,7 +2280,7 @@ class TestDraftFileGapReceipt:
         claimable = [f"claimable/{i:02d}.go" for i in range(20)]  # largest first
         self._write_assignment(
             tmp_path, review_claimable_files=claimable, review_budget=80,
-            in_scope_review_file_count=30, inline_diff_file_count=10,
+            in_scope_review_file_count=30, inline_diff_files=_inline(10),
         )
         builder = ReviewOutputBuilder("123", "code")
         builder.claim_files_reviewed(*claimable[:3])  # claimed — read
@@ -2259,7 +2299,7 @@ class TestDraftFileGapReceipt:
         """An empty derived complement keeps the TARGET gate closed."""
         self._clean_env(monkeypatch)
         self._write_assignment(
-            tmp_path, review_budget=80, in_scope_review_file_count=30, inline_diff_file_count=30,
+            tmp_path, review_budget=80, in_scope_review_file_count=30, inline_diff_files=_inline(30),
         )
         builder = ReviewOutputBuilder("123", "code")
         _save_draft(builder, tmp_path)
@@ -2275,7 +2315,7 @@ class TestDraftFileGapReceipt:
         self._clean_env(monkeypatch)
         self._write_assignment(
             tmp_path, review_claimable_files=["a.go", "b.go"], review_budget=40,
-            in_scope_review_file_count=5, inline_diff_file_count=3,
+            in_scope_review_file_count=5, inline_diff_files=_inline(3),
         )
         builder = ReviewOutputBuilder("123", "code")
         builder.claim_files_reviewed("a.go", "b.go")
@@ -2298,16 +2338,17 @@ class TestDraftFileGapReceipt:
     @pytest.mark.parametrize(
         (
             "in_scope_review_file_count",
-            "inline_diff_file_count",
+            "inline_diff_files",
             "review_claimable_files",
             "message",
         ),
         [
-            (True, 0, ["a.go"], "in_scope_review_file_count must be"),
-            (1, False, ["a.go"], "inline_diff_file_count must be"),
-            (1, -1, ["a.go"], "inline_diff_file_count must be"),
-            (1, 2, ["a.go"], "incoherent inline and review-claimable scope"),
-            (3, 1, ["a.go"], "incoherent inline and review-claimable scope"),
+            (True, [], ["a.go"], "in_scope_review_file_count must be"),
+            (1, False, ["a.go"], "inline_diff_files must be"),
+            (1, ["x.go", 3], ["a.go"], "inline_diff_files must be"),
+            (1, ["a.go"], ["a.go"], "must be disjoint"),
+            (1, ["x.go", "y.go"], ["a.go"], "incoherent inline and review-claimable scope"),
+            (3, ["x.go"], ["a.go"], "incoherent inline and review-claimable scope"),
         ],
     )
     def test_incoherent_progress_facts_reject_publication(
@@ -2316,7 +2357,7 @@ class TestDraftFileGapReceipt:
         monkeypatch,
         capsys,
         in_scope_review_file_count,
-        inline_diff_file_count,
+        inline_diff_files,
         review_claimable_files,
         message,
     ):
@@ -2327,7 +2368,7 @@ class TestDraftFileGapReceipt:
             review_claimable_files=review_claimable_files,
             review_budget=40,
             in_scope_review_file_count=in_scope_review_file_count,
-            inline_diff_file_count=inline_diff_file_count,
+            inline_diff_files=inline_diff_files,
         )
         builder = ReviewOutputBuilder("123", "code")
         with pytest.raises(ValueError, match=message):
@@ -2342,7 +2383,7 @@ class TestDraftFileGapReceipt:
             review_claimable_files=["a.go", "b.go", "c.go"],
             review_budget=40,
             in_scope_review_file_count=1,
-            inline_diff_file_count=0,
+            inline_diff_files=_inline(0),
         )
         builder = ReviewOutputBuilder("123", "code")
         builder.claim_files_reviewed("a.go", "b.go")
@@ -2358,7 +2399,7 @@ class TestDraftFileGapReceipt:
             review_claimable_files=["a.go", "b.go"],
             review_budget=40,
             in_scope_review_file_count=2,
-            inline_diff_file_count=0,
+            inline_diff_files=_inline(0),
         )
         builder = ReviewOutputBuilder("123", "code")
         # Defensive against a caller mutating public builder state instead of
@@ -2783,6 +2824,7 @@ def test_reviewed_files_fields_projects_the_six_envelope_keys():
         review_claimable_files=("src/a.py", "src/b.py"),
         reviewed_file_claims=("src/a.py",),
         unclaimed_review_files=("src/b.py",),
+        inline_diff_files=("src/z.py",),
         inline_diff_file_count=1,
         reviewed_file_count=2,
         in_scope_review_file_count=2,

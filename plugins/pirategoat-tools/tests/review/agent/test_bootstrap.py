@@ -47,6 +47,11 @@ REVIEWER_PROTOCOL_SKIP_SECTIONS = _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
 # =============================================================================
 
 
+
+def _inline(count):
+    """`count` distinct inline placeholder paths for a schema-5 assignment."""
+    return [f"src/inline-{n}.php" for n in range(count)]
+
 class TestResolveReviewerIdentity:
     """Registry and adapter-ref invocations preserve their current identities."""
 
@@ -147,7 +152,7 @@ class TestPersistReviewedFilesInput:
             [],
             review_budget=40,
             in_scope_review_file_count=1,
-            inline_diff_file_count=1,
+            inline_diff_files=_inline(1),
             channels=["blocking"],
         )
 
@@ -161,7 +166,7 @@ class TestPersistReviewedFilesInput:
             ["src/claimable.php"],
             review_budget=80,
             in_scope_review_file_count=12,
-            inline_diff_file_count=11,
+            inline_diff_files=_inline(11),
             channels=["blocking"],
         )
 
@@ -169,13 +174,13 @@ class TestPersistReviewedFilesInput:
             (tmp_path / "repo-renewals-assignment.json").read_text()
         )
         assert payload == {
-            "schema": 4,
+            "schema": 5,
             "agent_name": "repo-renewals-reviewer",
             "reviewer": "repo-renewals",
             "review_claimable_files": ["src/claimable.php"],
             "review_budget": 80,
             "in_scope_review_file_count": 12,
-            "inline_diff_file_count": 11,
+            "inline_diff_files": _inline(11),
             "channels": ["blocking"],
         }
 
@@ -183,7 +188,7 @@ class TestPersistReviewedFilesInput:
         _mod.persist_review_assignment(
             str(tmp_path), "security-reviewer", [],
             review_budget=40,
-            in_scope_review_file_count=5, inline_diff_file_count=5,
+            in_scope_review_file_count=5, inline_diff_files=_inline(5),
             channels=["blocking"],
         )
 
@@ -191,13 +196,13 @@ class TestPersistReviewedFilesInput:
             (tmp_path / "security-assignment.json").read_text()
         )
         assert payload == {
-            "schema": 4,
+            "schema": 5,
             "agent_name": "security-reviewer",
             "reviewer": "security",
             "review_claimable_files": [],
             "review_budget": 40,
             "in_scope_review_file_count": 5,
-            "inline_diff_file_count": 5,
+            "inline_diff_files": _inline(5),
             "channels": ["blocking"],
         }
 
@@ -209,7 +214,7 @@ class TestPersistReviewedFilesInput:
             _mod.persist_review_assignment(
                 str(output_file), "security-reviewer", ["src/claimable.php"],
                 review_budget=80,
-                in_scope_review_file_count=1, inline_diff_file_count=0,
+                in_scope_review_file_count=1, inline_diff_files=_inline(0),
                 channels=["blocking"],
             )
 
@@ -226,7 +231,7 @@ class TestPersistReviewedFilesInput:
             "security-reviewer",
             ["src/a.php", "src/b.php", "src/a.php"],
             review_budget=80,
-            in_scope_review_file_count=4, inline_diff_file_count=2,
+            in_scope_review_file_count=4, inline_diff_files=_inline(2),
             channels=["blocking"],
         )
 
@@ -234,13 +239,13 @@ class TestPersistReviewedFilesInput:
             (tmp_path / "security-assignment.json").read_text()
         )
         assert payload == {
-            "schema": 4,
+            "schema": 5,
             "agent_name": "security-reviewer",
             "reviewer": "security",
             "review_claimable_files": ["src/a.php", "src/b.php"],
             "review_budget": 80,
             "in_scope_review_file_count": 4,
-            "inline_diff_file_count": 2,
+            "inline_diff_files": _inline(2),
             "channels": ["blocking"],
         }
 
@@ -249,15 +254,15 @@ class TestPersistReviewedFilesInput:
         [
             {
                 "review_budget": 40, "in_scope_review_file_count": None,
-                "inline_diff_file_count": 0, "channels": ["blocking"],
+                "inline_diff_files": _inline(0), "channels": ["blocking"],
             },
             {
                 "review_budget": 40, "in_scope_review_file_count": 1,
-                "inline_diff_file_count": None, "channels": ["blocking"],
+                "inline_diff_files": None, "channels": ["blocking"],
             },
             {
                 "review_budget": 40, "in_scope_review_file_count": 1,
-                "inline_diff_file_count": 1, "channels": ["blocking"],
+                "inline_diff_files": _inline(1), "channels": ["blocking"],
             },
         ],
     )
@@ -366,7 +371,7 @@ class TestPartitionScopePaths:
         payload = json.loads(
             (tmp_path / "security-assignment.json").read_text()
         )
-        covered = payload["inline_diff_file_count"] + len(builder.reviewed_file_claims)
+        covered = len(payload["inline_diff_files"]) + len(builder.reviewed_file_claims)
         assert telemetry_starts[0]["scope_paths"] == [
             "src/inline.py",
             "src/shared.py",
@@ -380,7 +385,7 @@ class TestPartitionScopePaths:
             "src/claimable-b.py",
             "src/claimable-a.py",
         ]
-        assert payload["inline_diff_file_count"] == 3
+        assert len(payload["inline_diff_files"]) == 3
         assert payload["in_scope_review_file_count"] == 5
         assert 0 <= covered <= payload["in_scope_review_file_count"]
         assert (
@@ -551,7 +556,7 @@ class TestPartitionScopePaths:
             (tmp_path / "security-assignment.json").read_text()
         )
         assert payload["in_scope_review_file_count"] == 2
-        assert payload["inline_diff_file_count"] == 1
+        assert len(payload["inline_diff_files"]) == 1
 
         # The registered cleanup is the one that removes that directory.
         assert cleanups, "scratch directory registered no cleanup"

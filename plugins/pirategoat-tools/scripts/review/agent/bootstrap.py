@@ -1010,8 +1010,9 @@ def build_output(
                 'read with builder.claim_files_reviewed("<path>"). '
                 "The builder validates those positive claims against the "
                 "authoritative review assignment, derives every unclaimed "
-                "review file, and counts inline files automatically. Never count "
-                "an unclaimed review file toward your verdict."
+                "review file, and counts inline files automatically — "
+                "claiming an inline file is harmless and changes nothing. "
+                "Never count an unclaimed review file toward your verdict."
             )
             # A sentence calling an under-budget completion a "protocol
             # violation" and a "false statement" used to close this
@@ -1307,17 +1308,21 @@ def persist_review_assignment(
     *,
     review_budget,
     in_scope_review_file_count,
-    inline_diff_file_count,
+    inline_diff_files,
     channels,
 ):
-    """Write the schema-4 assignment the builder derives from."""
+    """Write the schema-5 assignment the builder derives from."""
     reviewer = derive_reviewer_name(effective_agent_name)
     payload = {
         "schema": ASSIGNMENT_SCHEMA,
         "agent_name": effective_agent_name,
         "reviewer": reviewer,
         "review_claimable_files": list(dict.fromkeys(review_claimable_files)),
-        "inline_diff_file_count": inline_diff_file_count,
+        "inline_diff_files": (
+            list(dict.fromkeys(inline_diff_files))
+            if isinstance(inline_diff_files, list)
+            else inline_diff_files
+        ),
         "in_scope_review_file_count": in_scope_review_file_count,
         "review_budget": review_budget,
         "channels": list(channels),
@@ -1776,7 +1781,7 @@ def main():
             review_claimable_files,
             review_budget=review_budget,
             in_scope_review_file_count=in_scope_review_file_count,
-            inline_diff_file_count=len(inline_diff_files),
+            inline_diff_files=inline_diff_files,
             channels=channels,
         )
     except (OSError, ValueError) as exc:

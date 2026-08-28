@@ -107,6 +107,11 @@ def run_bootstrap(*args: str, timeout: int = 60, fixture: str = "multi-file-real
     )
 
 
+
+def _inline(count):
+    """`count` distinct inline placeholder paths for a schema-5 assignment."""
+    return [f"src/inline-{n}.php" for n in range(count)]
+
 class TestCategoryRepresentatives:
     """One integration test per agent category.
 
@@ -365,7 +370,7 @@ class TestCategoryRepresentatives:
         )
         assert assignment.is_file()
         data = json.loads(assignment.read_text())
-        assert data["schema"] == 4
+        assert data["schema"] == 5
         assert data["review_budget"] == 45
         assert data["channels"] == ["blocking"]
         assert "budget_capped" not in data
@@ -376,7 +381,8 @@ class TestCategoryRepresentatives:
             dict.fromkeys([*diffed, *not_diffed])
         )
         assert data["in_scope_review_file_count"] == expected_in_scope
-        assert data["inline_diff_file_count"] == len(diffed)
+        assert set(data["inline_diff_files"]) == set(diffed)
+        assert len(data["inline_diff_files"]) == len(set(diffed))
 
     def test_test_agent(self, tmp_path):
         """Test-reviewer agent gets DOMAIN RULES (php-tests-reviewer)."""
@@ -951,12 +957,12 @@ class TestNotApplicableCompletionContract:
             output_dir.mkdir(parents=True, exist_ok=True)
             (output_dir / f"{reviewer_name}-assignment.json").write_text(
                 json.dumps({
-                    "schema": 4,
+                    "schema": 5,
                     "agent_name": agent_name,
                     "reviewer": reviewer_name,
                     "review_claimable_files": [],
                     "review_budget": 15,
-                    "inline_diff_file_count": 2,
+                    "inline_diff_files": _inline(2),
                     "in_scope_review_file_count": 2,
                     "channels": ["blocking"],
                 })
@@ -1028,12 +1034,12 @@ class TestNotApplicableCompletionContract:
         output_dir = tmp_path / "reviewer's output folder"
         output_dir.mkdir(parents=True)
         (output_dir / "security-assignment.json").write_text(json.dumps({
-            "schema": 4,
+            "schema": 5,
             "agent_name": "security-reviewer",
             "reviewer": "security",
             "review_claimable_files": [],
             "review_budget": 15,
-            "inline_diff_file_count": 3,
+            "inline_diff_files": _inline(3),
             "in_scope_review_file_count": 3,
             "channels": ["blocking"],
         }))
@@ -1952,7 +1958,7 @@ class TestRepoRuleAndRefModeSelection:
         assignment = json.loads(
             (tmp_path / "performance-assignment.json").read_text()
         )
-        assert assignment["schema"] == 4
+        assert assignment["schema"] == 5
         assert assignment["channels"] == ["blocking", "advisory"]
         assert isinstance(assignment["review_budget"], int)
 
@@ -2079,12 +2085,12 @@ class TestOutputFilenameConsistency:
         from review.agent.output import ReviewOutputBuilder, finalize_review
 
         (tmp_path / "dead-code-assignment.json").write_text(json.dumps({
-            "schema": 4,
+            "schema": 5,
             "agent_name": "dead-code-reviewer",
             "reviewer": "dead-code",
             "review_claimable_files": [],
             "review_budget": 15,
-            "inline_diff_file_count": 1,
+            "inline_diff_files": _inline(1),
             "in_scope_review_file_count": 1,
             "channels": ["blocking"],
         }))

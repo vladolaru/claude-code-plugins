@@ -23,6 +23,7 @@ class ReviewedFiles:
     review_claimable_files: tuple[str, ...]
     reviewed_file_claims: tuple[str, ...]
     unclaimed_review_files: tuple[str, ...]
+    inline_diff_files: tuple[str, ...]
     inline_diff_file_count: int
     reviewed_file_count: int
     in_scope_review_file_count: int
@@ -30,7 +31,7 @@ class ReviewedFiles:
     channels: tuple[str, ...]
 
 
-ASSIGNMENT_SCHEMA = 4
+ASSIGNMENT_SCHEMA = 5
 
 
 def normalize_review_path(path: object, api_name: str) -> str:
@@ -61,9 +62,31 @@ def _validated_count(assignment: Mapping[str, object], key: str) -> int:
     return value
 
 
+def _validated_path_list(
+    assignment: Mapping[str, object], key: str
+) -> tuple[str, ...]:
+    raw_paths = assignment.get(key)
+    if not isinstance(raw_paths, list) or not all(
+        isinstance(path, str) for path in raw_paths
+    ):
+        raise ReviewAssignmentError(
+            f"assignment {key} must be a string-only list"
+        )
+    paths = tuple(
+        normalize_review_path(path, f"assignment {key}") for path in raw_paths
+    )
+    if len(set(paths)) != len(paths):
+        raise ReviewAssignmentError(
+            f"assignment {key} must not contain duplicates"
+        )
+    return paths
+
+
 def _validated_assignment(
     assignment: Mapping[str, object],
-) -> tuple[str, str, tuple[str, ...], int, int, int, tuple[str, ...]]:
+) -> tuple[
+    str, str, tuple[str, ...], tuple[str, ...], int, int, tuple[str, ...]
+]:
     if assignment.get("schema") != ASSIGNMENT_SCHEMA:
         raise ReviewAssignmentError(
             f"assignment schema must be {ASSIGNMENT_SCHEMA}"
@@ -80,23 +103,19 @@ def _validated_assignment(
     ):
         raise ReviewAssignmentError("assignment reviewer identity does not match agent_name")
 
-    raw_paths = assignment.get("review_claimable_files")
-    if not isinstance(raw_paths, list) or not all(
-        isinstance(path, str) for path in raw_paths
-    ):
+    paths = _validated_path_list(assignment, "review_claimable_files")
+    # The inline set travels on the assignment, not just its count, so the
+    # builder can tell a redundant claim (an inline file, already counted)
+    # from a false one (a path outside the reviewer's scope). The two
+    # populations are the assignment's partition (bootstrap's
+    # partition_scope_paths, inline wins), so overlap is a producer bug.
+    inline_files = _validated_path_list(assignment, "inline_diff_files")
+    overlap = sorted(set(inline_files) & set(paths))
+    if overlap:
         raise ReviewAssignmentError(
-            "assignment review_claimable_files must be a string-only list"
+            "assignment inline_diff_files and review_claimable_files must "
+            "be disjoint: " + ", ".join(overlap)
         )
-    paths = tuple(
-        normalize_review_path(path, "assignment review_claimable_files")
-        for path in raw_paths
-    )
-    if len(set(paths)) != len(paths):
-        raise ReviewAssignmentError(
-            "assignment review_claimable_files must not contain duplicates"
-        )
-
-    inline_count = _validated_count(assignment, "inline_diff_file_count")
     in_scope_count = _validated_count(
         assignment, "in_scope_review_file_count"
     )
@@ -113,9 +132,9 @@ def _validated_assignment(
             f"from {VALID_CHANNELS}"
         )
     channels = tuple(channels)
-    if inline_count + len(paths) != in_scope_count:
+    if len(inline_files) + len(paths) != in_scope_count:
         raise ReviewAssignmentError("incoherent inline and review-claimable scope counts")
-    return agent_name, reviewer, paths, inline_count, in_scope_count, review_budget, channels
+    return agent_name, reviewer, paths, inline_files, in_scope_count, review_budget, channels
 
 
 def _validated_claim_set(
@@ -158,7 +177,7 @@ def derive_reviewed_files(
         agent_name,
         assigned_reviewer,
         review_claimable_files,
-        inline_diff_file_count,
+        inline_diff_files,
         in_scope_review_file_count,
         review_budget,
         channels,
@@ -177,8 +196,9 @@ def derive_reviewed_files(
         review_claimable_files=review_claimable_files,
         reviewed_file_claims=reviewed,
         unclaimed_review_files=unclaimed,
-        inline_diff_file_count=inline_diff_file_count,
-        reviewed_file_count=inline_diff_file_count + len(reviewed),
+        inline_diff_files=inline_diff_files,
+        inline_diff_file_count=len(inline_diff_files),
+        reviewed_file_count=len(inline_diff_files) + len(reviewed),
         in_scope_review_file_count=in_scope_review_file_count,
         review_budget=review_budget,
         channels=channels,
