@@ -406,7 +406,7 @@ Typical ranges: 50-85% depending on agent and PR size.
 
 ### Common Waste Patterns (Ranked by Impact)
 
-1. **API hallucination** — Wrong method names on first write attempt (e.g., `add_finding()` instead of `add_issue()`). Agent introspects, retries. ~3 wasted calls/dispatch.
+1. **API hallucination** — Wrong method names on first write attempt (e.g., calling a retired builder method such as `add_issue()` instead of the current `add_finding()`; check `scripts/review/agent/output.py` for the live `ReviewBuilder` API before classifying a call as a hallucination). Agent introspects, retries. ~3 wasted calls/dispatch.
 2. **Bootstrap size cascade** — Output >30KB gets persisted; agent re-reads the persisted file which is even larger; cascades until agent uses offset/limit. ~2-3 wasted calls on large PRs.
 3. **Post-write verification** — Reading output files after `save()` already confirmed success. ~1-2 calls/dispatch.
 4. **Duplicate searches** — Same `git grep` pattern run multiple times. Often 2-4 duplicates per dispatch.

@@ -189,7 +189,7 @@ Not every JSON file in a run directory carries one, and this rule does not ask y
 | `reconciliation-context.json` | 3 | `main()` — `scripts/review/reconciliation_context.py` |
 | `decision-critic-adjustments.json`, `decision-critic-verdict.json` | 2 | `ADJUSTMENTS_SCHEMA`, `VERDICT_MARKER_SCHEMA` — `scripts/review/critic_adjustments.py`. The orchestrator's adjudication request to `adjudicate()` (stdin only, never persisted) validates at the same `ADJUDICATION_SCHEMA` value. |
 | Per-agent sidecars: worktree baseline / hygiene | 1 | Literal at the write site |
-| Per-agent scope summaries | 2 | `write_scope_summary()` — `scripts/review/agent/scope.py` |
+| Per-agent scope summaries | 3 | `write_scope_summary()` — `scripts/review/agent/scope.py` |
 
 **Exception — `review-context.json` and `issue-context.json` carry `version: 1`, and that key is not ours.** pirategoat-bot writes both files and asserts on that field (`src/orchestrator-review.test.js`, `src/orchestrator-linear.test.js`). Renaming it to `schema` would break the bot. Leave it alone.
 
