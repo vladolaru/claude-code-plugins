@@ -629,7 +629,15 @@ def aggregate_file_review(
     for agent in reporting_agents:
         reviewed_files = _load_agent_reviewed_files(output_dir, agent)
         if reviewed_files is None:
-            for f_path in claimable_by_agent.get(agent, set()):
+            # Same partition the assignment applies
+            # (`bootstrap.partition_scope_paths`): a path inline in one
+            # domain's sidecar and claimable in another's is inline. Without
+            # the subtraction the record lists one reviewer as both having
+            # received the file and never having reviewed it.
+            inline_here = {
+                f_path for f_path, agents in inline.items() if agent in agents
+            }
+            for f_path in claimable_by_agent.get(agent, set()) - inline_here:
                 unclaimed.setdefault(f_path, set()).add(agent)
             continue
         claimed_paths, unclaimed_paths = reviewed_files

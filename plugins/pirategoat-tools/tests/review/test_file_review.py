@@ -155,6 +155,31 @@ class TestAggregateReviewedFiles:
             ],
         }
 
+    def test_fallback_unclaimed_honors_the_inline_wins_partition(
+        self, tmp_path
+    ):
+        """A multi-domain reviewer that never finalized: a path inline in
+        one domain's sidecar and claimable in another's is inline, not
+        unclaimed — the same partition `bootstrap.partition_scope_paths`
+        applies to the assignment. Recording it in both maps publishes one
+        reviewer as having both received and never reviewed the file."""
+        _write_summary(
+            str(tmp_path), "security-reviewer",
+            ["src/shared.php"], [],
+        )
+        _write_summary(
+            str(tmp_path), "security-reviewer",
+            [], ["src/shared.php", "src/starved.php"],
+            domain="config-ops",
+        )
+        cov = aggregate_file_review(str(tmp_path))
+        assert cov["agents_receiving_inline_diff_by_file"] == {
+            "src/shared.php": ["security-reviewer"],
+        }
+        assert cov["agents_with_unclaimed_review_by_file"] == {
+            "src/starved.php": ["security-reviewer"],
+        }
+
     def test_inline_receipt_keeps_other_agents_unclaimed_work_from_becoming_a_run_gap(
         self, tmp_path
     ):
