@@ -256,17 +256,18 @@ class TestMaterializeMarkdown:
             assert md_path.is_file()
 
 
+def _reconciliator_findings(severity="high", title="Real problem", **extra):
+    """One reconciliator document carrying a single finding."""
+    b = ReviewOutputBuilder(pr_id="9", reviewer="reconciliator")
+    b.add_finding(severity, title, "a.py", "d", "r", line=4)
+    data = b.to_dict()
+    data.update(extra)
+    return data
+
+
 class TestReconciliationSectionsRender:
     """Every section the reconciliator's old narrative template carried has
     to come out of the renderer, or migrating to a script render loses it."""
-
-    @staticmethod
-    def _findings(**extra):
-        b = ReviewOutputBuilder(pr_id="9", reviewer="reconciliator")
-        b.add_finding("high", "Real problem", "a.py", "d", "r", line=4)
-        data = b.to_dict()
-        data.update(extra)
-        return data
 
     def test_pipeline_metrics_line_renders_from_meta_reconciliation(self):
         """Every number on the line comes from one canonical ledger, so a
@@ -313,7 +314,7 @@ class TestReconciliationSectionsRender:
         assert "a11y-review (no UI changed)" in rendered
 
     def test_missing_reconciliation_metrics_render_nothing(self):
-        assert "**Pipeline:**" not in render_markdown(self._findings())
+        assert "**Pipeline:**" not in render_markdown(_reconciliator_findings())
 
     def test_recommendations_render_by_priority(self):
         b = ReviewOutputBuilder(pr_id="9", reviewer="reconciliator")
@@ -330,12 +331,12 @@ class TestReconciliationSectionsRender:
         assert "- Rename the helper" in rendered
 
     def test_no_recommendations_renders_no_section(self):
-        assert "## Recommendations" not in render_markdown(self._findings())
+        assert "## Recommendations" not in render_markdown(_reconciliator_findings())
 
     def test_degraded_host_context_banner_leads_the_body(self):
         """Directly under the title — the H1 stays first so one grader rule
         covers every rendering (see TestRendererFaithfulness)."""
-        data = self._findings(host_context_banner={
+        data = _reconciliator_findings(host_context_banner={
             "degraded": True,
             "reason": "partial_unresolved",
             "message": "WooCommerce source was not resolved.",
@@ -350,7 +351,7 @@ class TestReconciliationSectionsRender:
         ) in rendered
 
     def test_undegraded_banner_is_not_rendered(self):
-        data = self._findings(host_context_banner={
+        data = _reconciliator_findings(host_context_banner={
             "degraded": False, "reason": "", "message": "all resolved",
             "unresolved": [],
         })
@@ -529,23 +530,17 @@ class TestAssessmentProvenance:
     contradicting the list printed beneath it.
     """
 
-    @staticmethod
-    def _findings(**extra):
-        b = ReviewOutputBuilder(pr_id="9", reviewer="reconciliator")
-        b.add_finding("low", "Minor problem", "a.py", "d", "r", line=4)
-        data = b.to_dict()
-        data.update(extra)
-        return data
-
     def test_prose_carries_a_provenance_marker(self):
-        data = self._findings(assessment="All clear on the whole.")
+        data = _reconciliator_findings(
+            "low", "Minor problem", assessment="All clear on the whole."
+        )
         rendered = render_markdown(data)
         assert "## Assessment\n\nAll clear on the whole." in rendered
         assert "reconciler-authored" in rendered.lower()
         assert "not adjusted by the decision critic" in rendered.lower()
 
     def test_invalidated_assessment_renders_the_invalidation_notice(self):
-        data = self._findings(
+        data = _reconciliator_findings("low", "Minor problem",
             assessment=None,
             applied_critic_adjustments=[{
                 "adjustment_id": "a1b2c3", "outcome": "not_checked",
@@ -571,26 +566,28 @@ class TestAssessmentProvenance:
         the writer side refuses to fabricate an empty invalidation entry, and
         the renderer must not assert one either. The invalidation record —
         not the applied-ids list — is the signal."""
-        data = self._findings(
+        data = _reconciliator_findings("low", "Minor problem",
             assessment=None,
             applied_critic_adjustments=["a1b2c3"],
         )
         assert "## Assessment" not in render_markdown(data)
 
     def test_no_summary_and_no_adjustments_renders_no_assessment(self):
-        assert "## Assessment" not in render_markdown(self._findings())
+        assert "## Assessment" not in render_markdown(
+            _reconciliator_findings("low", "Minor problem")
+        )
 
     def test_an_empty_adjustment_list_is_not_an_invalidation(self):
         """A ledger the critic reached but never changed said nothing about
         the assessment — the reconciler simply wrote none."""
-        data = self._findings(
+        data = _reconciliator_findings("low", "Minor problem",
             assessment=None, applied_critic_adjustments=[],
         )
         assert "## Assessment" not in render_markdown(data)
 
     def test_surviving_prose_beside_adjustments_still_renders_as_prose(self):
         """Applied provenance alone does not claim assessment invalidation."""
-        data = self._findings(
+        data = _reconciliator_findings("low", "Minor problem",
             assessment="Standing prose.",
             applied_critic_adjustments=[{
                 "adjustment_id": "a1b2c3", "outcome": "not_checked",
@@ -601,7 +598,7 @@ class TestAssessmentProvenance:
         assert "invalidated" not in rendered.lower()
 
     def test_mixed_applied_and_refuted_decisions_render_completely(self):
-        rendered = render_markdown(self._findings(
+        rendered = render_markdown(_reconciliator_findings("low", "Minor problem",
             applied_critic_adjustments=[
                 {"adjustment_id": "applied-one", "outcome": "verified"},
             ],
@@ -618,7 +615,7 @@ class TestAssessmentProvenance:
         assert "- `refuted-one` — refuted" in rendered
 
     def test_all_refuted_decisions_render_without_an_applied_bucket(self):
-        rendered = render_markdown(self._findings(
+        rendered = render_markdown(_reconciliator_findings("low", "Minor problem",
             rejected_critic_adjustments=[
                 {
                     "adjustment_id": "refuted-one", "action": "remove",
