@@ -3,7 +3,6 @@ Tests for quality metrics extraction from reviewer session JSONL logs.
 
 Validates the --quality-metrics mode of analysis/session_analyzer.py:
 - Parsing agent Write output (JSON) to extract finding counts
-- Parsing ingest subagent log to extract categorization outcomes
 - Handling missing/partial data gracefully
 - Overlap detection across agents
 - Severity disagreements across agents
@@ -68,8 +67,6 @@ def _real_bootstrap_builder_command(tmp_path, *, plugin_version=""):
 
 
 extract_agent_findings = _mod.extract_agent_findings
-extract_ingest_outcomes = _mod.extract_ingest_outcomes
-compute_survival_rate = _mod.compute_survival_rate
 detect_overlaps = _mod.detect_overlaps
 
 
@@ -184,103 +181,6 @@ class TestExtractAgentFindings:
 
 
 # ---------------------------------------------------------------------------
-# Tests: extract_ingest_outcomes
-# ---------------------------------------------------------------------------
-
-class TestExtractIngestOutcomes:
-    """extract_ingest_outcomes(ingest_texts) → dict with category counts."""
-
-    def test_all_categories(self):
-        """Recognizes all five ingest categories in text output."""
-        texts = [
-            "F1 [IN_SCOPE] VERIFIED:\n  Status: VERIFIED\n  Rationale: confirmed finding",
-            "F2 [OUT_OF_SCOPE: file not in diff]: Missing escape",
-            "F3 [IN_SCOPE] FAILED:\n  Status: FAILED\n  Rationale: code already handles this",
-            "F4 [IN_SCOPE] VERIFIED but STYLE/PREFERENCE:\n  Naming convention preference",
-            "Final category mapping:\n"
-            "| F1 | CONFIRMED |\n"
-            "| F2 | OUT OF SCOPE |\n"
-            "| F3 | FALSE POSITIVE |\n"
-            "| F4 | STYLE |\n"
-            "| F5 | LIKELY VALID |\n",
-        ]
-        result = extract_ingest_outcomes(texts)
-        assert result["confirmed"] >= 1
-        assert result["out_of_scope"] >= 1
-        assert result["false_positive"] >= 1
-        assert result["style"] >= 1
-        assert result["likely_valid"] >= 1
-
-    def test_empty_texts(self):
-        """Empty text list returns zeroes."""
-        result = extract_ingest_outcomes([])
-        assert result["confirmed"] == 0
-        assert result["out_of_scope"] == 0
-        assert result["false_positive"] == 0
-        assert result["style"] == 0
-        assert result["likely_valid"] == 0
-
-    def test_no_categories_found(self):
-        """Text without any recognizable categories returns zeroes."""
-        texts = ["Just some random text without any finding categories."]
-        result = extract_ingest_outcomes(texts)
-        assert all(v == 0 for v in result.values())
-
-    def test_multiple_confirmed(self):
-        """Multiple CONFIRMED findings are counted."""
-        texts = [
-            "| F1 | CONFIRMED |\n| F2 | CONFIRMED |\n| F3 | CONFIRMED |"
-        ]
-        result = extract_ingest_outcomes(texts)
-        assert result["confirmed"] == 3
-
-    def test_case_insensitive_categories(self):
-        """Categories are matched case-insensitively."""
-        texts = ["| F1 | confirmed |\n| F2 | Out of Scope |"]
-        result = extract_ingest_outcomes(texts)
-        assert result["confirmed"] >= 1
-        assert result["out_of_scope"] >= 1
-
-
-# ---------------------------------------------------------------------------
-# Tests: compute_survival_rate
-# ---------------------------------------------------------------------------
-
-class TestComputeSurvivalRate:
-    """compute_survival_rate(agent_findings, ingest_outcomes) → float 0.0-1.0."""
-
-    def test_partial_survival(self):
-        """Mix of confirmed/likely_valid and filtered → fractional rate."""
-        agent_findings = {"total_findings": 5, "findings_by_severity": {}, "findings": []}
-        ingest_outcomes = {
-            "confirmed": 2, "likely_valid": 1,
-            "false_positive": 1, "out_of_scope": 1, "style": 0,
-        }
-        # survived = confirmed + likely_valid = 3, total = 5
-        rate = compute_survival_rate(agent_findings, ingest_outcomes)
-        assert rate == pytest.approx(0.6)
-
-    def test_zero_findings(self):
-        """Zero total findings → 0.0 (avoid division by zero)."""
-        agent_findings = {"total_findings": 0, "findings_by_severity": {}, "findings": []}
-        ingest_outcomes = {
-            "confirmed": 0, "likely_valid": 0,
-            "false_positive": 0, "out_of_scope": 0, "style": 0,
-        }
-        rate = compute_survival_rate(agent_findings, ingest_outcomes)
-        assert rate == pytest.approx(0.0)
-
-    def test_missing_total_findings(self):
-        """Missing total_findings key → 0.0."""
-        agent_findings = {"findings_by_severity": {}, "findings": []}
-        ingest_outcomes = {"confirmed": 1, "likely_valid": 0, "false_positive": 0, "out_of_scope": 0, "style": 0}
-        rate = compute_survival_rate(agent_findings, ingest_outcomes)
-        assert rate == pytest.approx(0.0)
-
-
-# ---------------------------------------------------------------------------
-# Tests: detect_overlaps
-# ---------------------------------------------------------------------------
 
 class TestDetectOverlaps:
     """detect_overlaps(all_findings) → dict with overlap_clusters, severity_disagreements."""
@@ -357,75 +257,11 @@ class TestDetectOverlaps:
 
 
 # ---------------------------------------------------------------------------
-# Tests: format_quality_text_report — survival rate section
+# Tests: format_quality_text_report / format_quality_json_report
 # ---------------------------------------------------------------------------
 
 format_quality_text_report = _mod.format_quality_text_report
 format_quality_json_report = _mod.format_quality_json_report
-
-
-def _make_dispatch(reviewer="security", findings=None, ingest_texts=None):
-    """Build a (meta, data) tuple mimicking a reviewer dispatch."""
-    if findings is None:
-        findings = [_make_finding(severity="high", title="XSS", file="f.php", line=1)]
-    review = _make_review_json(reviewer=reviewer, findings=findings)
-    review_json_str = json.dumps(review)
-    data = {
-        "write_outputs": [{"content": review_json_str, "path": f"{reviewer}-review.json"}],
-        # Minimal fields for classify_dispatch
-        "files_read": [],
-        "bash_commands": [],
-        "final_texts": [],
-    }
-    if ingest_texts is not None:
-        data["ingest_texts"] = ingest_texts
-    return ({"agent_name": f"{reviewer}-reviewer"}, data)
-
-
-class TestSurvivalRateInReport:
-    """Survival rate appears in quality report when ingest data is available."""
-
-    def test_text_report_includes_survival_when_ingest_present(self):
-        """When dispatch data includes ingest outputs, show survival rate."""
-        ingest_text = "| F1 | CONFIRMED | SQL Injection |"
-        dispatch = _make_dispatch(
-            reviewer="security",
-            ingest_texts=[ingest_text],
-        )
-        report = format_quality_text_report([dispatch], None)
-        # "Survival rate" alone does not discriminate: the else branch emits
-        # it too, on the "N/A" line. The computed percentage and the outcome
-        # breakdown exist only when ingest data was actually read.
-        assert "Survival rate: 100%" in report
-        assert "Confirmed: 1" in report
-        assert "N/A" not in report
-
-    def test_text_report_shows_na_when_no_ingest(self):
-        """When no ingest data, show N/A for survival rate."""
-        dispatch = _make_dispatch(reviewer="security")
-        report = format_quality_text_report([dispatch], None)
-        assert "N/A" in report
-
-    def test_json_report_includes_survival_when_ingest_present(self):
-        """JSON report includes survival metrics when ingest data is present."""
-        ingest_text = "| F1 | CONFIRMED |\n| F2 | FALSE POSITIVE |"
-        dispatch = _make_dispatch(
-            reviewer="security",
-            ingest_texts=[ingest_text],
-        )
-        report_str = format_quality_json_report([dispatch], None)
-        report = json.loads(report_str)
-        assert "survival" in report
-        assert report["survival"] is not None
-        assert "rate" in report["survival"]
-        assert "outcomes" in report["survival"]
-
-    def test_json_report_survival_none_when_no_ingest(self):
-        """JSON report has survival=None when no ingest data."""
-        dispatch = _make_dispatch(reviewer="security")
-        report_str = format_quality_json_report([dispatch], None)
-        report = json.loads(report_str)
-        assert report["survival"] is None
 
 
 class TestUnrelatedWritesInQualityReport:

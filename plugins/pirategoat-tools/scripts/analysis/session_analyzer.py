@@ -7,8 +7,8 @@ and generates metrics for identifying inefficiencies in reviewer agents.
 
 Modes:
     Default: Tool call sequence analysis and behavior categorization.
-    --quality-metrics: Per-agent quality metrics (finding counts, ingest
-        survival rates, overlap detection, severity disagreements).
+    --quality-metrics: Per-agent quality metrics (finding counts, overlap
+        detection, severity disagreements).
 
 Usage:
     # Analyze all patterns-reviewer dispatches from the last 20 sessions
@@ -560,28 +560,6 @@ def format_json_report(dispatches: list[tuple[dict, dict]], agent_name: str | No
 # Quality metrics extraction functions
 # ---------------------------------------------------------------------------
 
-# Ingest category patterns — matches table rows like "| F1 | CONFIRMED |"
-# and freeform text like "F2 [OUT_OF_SCOPE: ...]"
-_INGEST_CATEGORY_PATTERNS = {
-    "confirmed": [
-        re.compile(r"\bCONFIRMED\b", re.IGNORECASE),
-    ],
-    "likely_valid": [
-        re.compile(r"\bLIKELY[\s_]VALID\b", re.IGNORECASE),
-    ],
-    "false_positive": [
-        re.compile(r"\bFALSE[\s_]POSITIVE\b", re.IGNORECASE),
-        re.compile(r"\bIN_SCOPE\]\s*FAILED\b", re.IGNORECASE),
-    ],
-    "out_of_scope": [
-        re.compile(r"\bOUT[\s_]OF[\s_]SCOPE\b", re.IGNORECASE),
-    ],
-    "style": [
-        re.compile(r"\bSTYLE(?:/PREFERENCE)?\b", re.IGNORECASE),
-    ],
-}
-
-
 def extract_agent_findings(write_output: Any) -> dict[str, Any]:
     """Parse agent review JSON output and extract finding counts.
 
@@ -657,76 +635,6 @@ def _parse_review_write_output(write_output: Any) -> dict[str, Any] | None:
         return None
 
     return review_json
-
-
-def extract_ingest_outcomes(ingest_texts: list[str]) -> dict[str, int]:
-    """Parse ingest subagent text output for finding categorization outcomes.
-
-    Scans text for category keywords (CONFIRMED, LIKELY VALID, FALSE POSITIVE,
-    OUT OF SCOPE, STYLE/PREFERENCE) in both table rows and freeform text.
-
-    Args:
-        ingest_texts: List of text blocks from the ingest subagent's output.
-
-    Returns:
-        Dict with keys: confirmed, likely_valid, false_positive, out_of_scope, style.
-    """
-    counts = {
-        "confirmed": 0,
-        "likely_valid": 0,
-        "false_positive": 0,
-        "out_of_scope": 0,
-        "style": 0,
-    }
-
-    if not ingest_texts:
-        return counts
-
-    combined = "\n".join(ingest_texts)
-
-    # Strategy: scan line-by-line. For table rows (contain |), count each category
-    # mention per row. For freeform text, count finding-level markers.
-    for line in combined.split("\n"):
-        line_stripped = line.strip()
-        if not line_stripped:
-            continue
-
-        # Count at most one category per line to avoid double-counting
-        # within a single finding reference.
-        for category, patterns in _INGEST_CATEGORY_PATTERNS.items():
-            for pat in patterns:
-                if pat.search(line_stripped):
-                    counts[category] += 1
-                    break  # One match per category per line is enough
-            else:
-                continue
-            break  # One category per line — first match wins
-
-    return counts
-
-
-def compute_survival_rate(
-    agent_findings: dict[str, Any],
-    ingest_outcomes: dict[str, int],
-) -> float:
-    """Compute the fraction of agent findings that survived ingest validation.
-
-    Survived = confirmed + likely_valid.
-    Rate = survived / total_findings.
-
-    Args:
-        agent_findings: Output of extract_agent_findings().
-        ingest_outcomes: Output of extract_ingest_outcomes().
-
-    Returns:
-        Float 0.0-1.0. Returns 0.0 if total_findings is 0 or missing.
-    """
-    total = agent_findings.get("total_findings", 0)
-    if total == 0:
-        return 0.0
-
-    survived = ingest_outcomes.get("confirmed", 0) + ingest_outcomes.get("likely_valid", 0)
-    return min(survived / total, 1.0)
 
 
 def detect_overlaps(all_findings: list[dict[str, Any]]) -> dict[str, Any]:
@@ -861,31 +769,6 @@ def format_quality_text_report(
                 f"agents={cluster['agents']}  severities={cluster['severities']}"
             )
 
-    # Survival rate (when ingest data is available)
-    all_ingest_texts = []
-    for meta, data in dispatches:
-        ingest_texts = data.get("ingest_texts", [])
-        all_ingest_texts.extend(ingest_texts)
-
-    lines.append("")
-    lines.append("SURVIVAL METRICS")
-    lines.append("-" * 60)
-
-    if all_ingest_texts:
-        ingest_outcomes = extract_ingest_outcomes(all_ingest_texts)
-        aggregate_findings = {
-            "total_findings": sum(s["total_findings"] for s in agent_totals.values()),
-        }
-        rate = compute_survival_rate(aggregate_findings, ingest_outcomes)
-        lines.append(f"  Survival rate: {rate:.0%}")
-        lines.append(f"    Confirmed: {ingest_outcomes['confirmed']}")
-        lines.append(f"    Likely valid: {ingest_outcomes['likely_valid']}")
-        lines.append(f"    False positive: {ingest_outcomes['false_positive']}")
-        lines.append(f"    Out of scope: {ingest_outcomes['out_of_scope']}")
-        lines.append(f"    Style/preference: {ingest_outcomes['style']}")
-    else:
-        lines.append("  Survival rate: N/A — run ingest for accuracy metrics")
-
     return "\n".join(lines)
 
 
@@ -938,23 +821,6 @@ def format_quality_json_report(
             "findings_by_severity": dict(rec["findings_by_severity"]),
         })
 
-    # Survival metrics
-    all_ingest_texts = []
-    for meta, data in dispatches:
-        all_ingest_texts.extend(data.get("ingest_texts", []))
-
-    if all_ingest_texts:
-        ingest_outcomes = extract_ingest_outcomes(all_ingest_texts)
-        aggregate_findings = {
-            "total_findings": sum(r["total_findings"] for r in agent_records.values()),
-        }
-        survival = {
-            "rate": compute_survival_rate(aggregate_findings, ingest_outcomes),
-            "outcomes": ingest_outcomes,
-        }
-    else:
-        survival = None
-
     report = {
         "agent_filter": agent_name,
         "dispatches_analyzed": len(dispatches),
@@ -962,7 +828,6 @@ def format_quality_json_report(
         "overlap_clusters": overlaps["overlap_clusters"],
         "severity_disagreements": overlaps["severity_disagreements"],
         "clusters": overlaps["clusters"],
-        "survival": survival,
     }
 
     return json.dumps(report, indent=2)
@@ -1004,7 +869,7 @@ def main() -> None:
         action="store_true",
         default=False,
         help="Quality metrics mode: extract per-agent finding counts, "
-             "ingest survival rates, and overlap analysis",
+             "and overlap analysis",
     )
 
     args = parser.parse_args()

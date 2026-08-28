@@ -68,6 +68,10 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 - **Step handoffs pin a no-truncation rule** — every next-step and blocks-progress footer now tells the orchestrator to run the printed command unfiltered, since piping it through `head`/`tail`/`grep` was eating load-bearing briefing lines.
 - **`wp-architecture-reviewer` requires an actual PHP file** — keyword matches like "hook" or "filter" in commit messages no longer dispatch it into a pure-TS/JS diff.
 
+### Removed
+
+- **Survival metrics are gone from `session_analyzer.py --quality-metrics`** — the measurement read ingest-subagent output that no longer exists, so it had been reporting `N/A` (and `survival: null`) on every run.
+
 *The full narrative for this release — rationale, evidence, and field-run numbers — lives in the commit bodies and `.claude/docs/analysis/`.*
 
 ## [1.113.0] - 2026-08-01
