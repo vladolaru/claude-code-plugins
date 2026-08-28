@@ -38,6 +38,7 @@ from helpers.pipeline_process import (
     run_pipeline,
 )
 from helpers.review_fixtures import (
+    canonical_assignment,
     canonical_findings_ledger,
     canonical_review_document,
     failing_findings_renderer,
@@ -81,16 +82,11 @@ def _write_critic_snapshot(output_dir, adjustments):
 def _write_required_assignment(output_dir, reviewer, agent_name=None):
     Path(
         output_dir, f"{reviewer}-assignment.json"
-    ).write_text(json.dumps({
-        "schema": 4,
-        "agent_name": agent_name or f"{reviewer}-reviewer",
-        "reviewer": reviewer,
-        "review_claimable_files": [],
-        "review_budget": 15,
-        "inline_diff_file_count": 1,
-        "in_scope_review_file_count": 1,
-        "channels": ["blocking"],
-    }))
+    ).write_text(json.dumps(canonical_assignment(
+        reviewer,
+        agent_name=agent_name,
+        inline_diff_file_count=1,
+    )))
 
 
 def _save_and_finalize(output_dir, reviewer, agent_name=None):
@@ -155,19 +151,14 @@ class TestReviewerDraftFinalizationLifecycle:
         (output_dir / "code-reviewer.started").write_text(
             datetime.now(timezone.utc).isoformat()
         )
-        assignment = {
-            "schema": 4,
-            "agent_name": "code-reviewer",
-            "reviewer": "code",
-            "review_claimable_files": [
+        assignment = canonical_assignment(
+            "code",
+            review_claimable_files=[
                 "claimable/read.py",
                 "claimable/unread.py",
             ],
-            "review_budget": 15,
-            "inline_diff_file_count": 1,
-            "in_scope_review_file_count": 3,
-            "channels": ["blocking"],
-        }
+            inline_diff_file_count=1,
+        )
         (output_dir / "code-assignment.json").write_text(
             json.dumps(assignment)
         )

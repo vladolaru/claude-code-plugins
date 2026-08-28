@@ -29,6 +29,7 @@ from review.agent.output import ReviewOutputBuilder, finalize_review
 # source rather than through the eval module's re-export.
 sys.path.insert(0, str(TESTS_DIR))
 from helpers.graders import GradeResult, grade_review_markdown
+from helpers.review_fixtures import canonical_assignment
 
 # The runner is mostly exercised as a subprocess (see _run_eval), but
 # run_grade_only is also called directly to inspect its GradeResults.
@@ -58,16 +59,9 @@ def _write_review_pair(output_dir: Path, reviewer: str = "security") -> None:
         "Enumerate every caller and trace each path to the rendering sink",
         "No caller escapes the value before it reaches the sink.",
     )
-    (output_dir / f"{reviewer}-assignment.json").write_text(json.dumps({
-        "schema": 4,
-        "agent_name": f"{reviewer}-reviewer",
-        "reviewer": reviewer,
-        "review_claimable_files": [],
-        "review_budget": 15,
-        "inline_diff_file_count": 1,
-        "in_scope_review_file_count": 1,
-        "channels": ["blocking"],
-    }))
+    (output_dir / f"{reviewer}-assignment.json").write_text(json.dumps(
+        canonical_assignment(reviewer, inline_diff_file_count=1)
+    ))
     saved = builder.save_draft()
     finalize_review(
         str(output_dir), reviewer, saved["review_digest"]

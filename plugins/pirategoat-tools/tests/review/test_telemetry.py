@@ -22,6 +22,7 @@ SCRIPT_PATH = PLUGIN_ROOT / "scripts" / "review" / "telemetry.py"
 sys.path.insert(0, str(TESTS_DIR))
 from helpers.context_fixtures import COMPLETE_CONTEXT
 from helpers.review_fixtures import (
+    canonical_assignment,
     canonical_findings_ledger,
     canonical_review_document,
 )
@@ -1645,16 +1646,10 @@ class TestRunManifest:
             reviewable=["a.py", "b.py", "c.py"],
             agents=[{"name": "security-reviewer", "status": "DISPATCH"}],
         )
-        (output_dir / "security-assignment.json").write_text(json.dumps({
-            "schema": 4,
-            "agent_name": "security-reviewer",
-            "reviewer": "security",
-            "review_claimable_files": ["a.py", "b.py", "c.py"],
-            "review_budget": 15,
-            "in_scope_review_file_count": 3,
-            "inline_diff_file_count": 0,
-            "channels": ["blocking"],
-        }))
+        (output_dir / "security-assignment.json").write_text(json.dumps(canonical_assignment(
+            "security",
+            review_claimable_files=["a.py", "b.py", "c.py"],
+        )))
         telemetry.start(run_id="run-1")
         telemetry.log_agent_start(
             "security-reviewer", scope_paths=["a.py", "b.py", "c.py"]
@@ -1693,16 +1688,9 @@ class TestRunManifest:
             reviewed_file_claims=["a.py"],
             review_claimable_files=["a.py", "b.py"],
         )))
-        Path(paths.assignment).write_text(json.dumps({
-            "schema": 4,
-            "agent_name": "security-reviewer",
-            "reviewer": "security",
-            "review_claimable_files": ["a.py", "b.py"],
-            "review_budget": 15,
-            "in_scope_review_file_count": 2,
-            "inline_diff_file_count": 0,
-            "channels": ["blocking"],
-        }))
+        Path(paths.assignment).write_text(json.dumps(canonical_assignment(
+            "security", review_claimable_files=["a.py", "b.py"],
+        )))
         monkeypatch.setattr(
             mod.manifest_sections, "review_paths", lambda *_args: paths
         )
@@ -1737,16 +1725,7 @@ class TestRunManifest:
             "issues": [],
             "reviewed_file_claims": [],
         }))
-        Path(paths.assignment).write_text(json.dumps({
-            "schema": 4,
-            "agent_name": "security-reviewer",
-            "reviewer": "security",
-            "review_claimable_files": [],
-            "review_budget": 15,
-            "in_scope_review_file_count": 0,
-            "inline_diff_file_count": 0,
-            "channels": ["blocking"],
-        }))
+        Path(paths.assignment).write_text(json.dumps(canonical_assignment("security")))
 
         assert mod.manifest_sections._load_final_review(
             str(output_dir), "security-reviewer"
@@ -1763,16 +1742,9 @@ class TestRunManifest:
             reviewable=["a.py"],
             agents=[{"name": "security-reviewer", "status": "DISPATCH"}],
         )
-        (output_dir / "security-assignment.json").write_text(json.dumps({
-            "schema": 4,
-            "agent_name": "security-reviewer",
-            "reviewer": "security",
-            "review_claimable_files": ["a.py"],
-            "review_budget": 15,
-            "in_scope_review_file_count": 1,
-            "inline_diff_file_count": 0,
-            "channels": ["blocking"],
-        }))
+        (output_dir / "security-assignment.json").write_text(json.dumps(canonical_assignment(
+            "security", review_claimable_files=["a.py"],
+        )))
         telemetry.start(run_id="run-1")
         telemetry.log_agent_start("security-reviewer", scope_paths=["a.py"])
         ReviewOutputBuilder.open(

@@ -19,7 +19,10 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 sys.path.insert(0, str(TESTS_DIR))
 
-from helpers.review_fixtures import canonical_review_document
+from helpers.review_fixtures import (
+    canonical_assignment,
+    canonical_review_document,
+)
 from review import manifest_sections
 from review.manifest_sections import aggregate_file_review
 from review.reviewer_lifecycle import ReviewPaths
@@ -80,16 +83,11 @@ def _write_review(output_dir, stem, claims, claimable=None):
 
 
 def _write_assignment(output_dir, reviewer, claimable, *, inline_count=0):
-    payload = {
-        "schema": 4,
-        "agent_name": f"{reviewer}-reviewer",
-        "reviewer": reviewer,
-        "review_claimable_files": claimable,
-        "review_budget": 15,
-        "inline_diff_file_count": inline_count,
-        "in_scope_review_file_count": inline_count + len(claimable),
-        "channels": ["blocking"],
-    }
+    payload = canonical_assignment(
+        reviewer,
+        review_claimable_files=claimable,
+        inline_diff_file_count=inline_count,
+    )
     with open(
         os.path.join(output_dir, f"{reviewer}-assignment.json"),
         "w",

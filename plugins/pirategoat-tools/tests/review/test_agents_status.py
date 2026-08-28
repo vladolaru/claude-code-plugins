@@ -20,7 +20,10 @@ from review import synthesis_lifecycle
 from review.agent.output import ReviewOutputBuilder, finalize_review
 from review.reconciliation_context import load_agent_reviews
 from review.reviewer_lifecycle import ReviewPaths
-from helpers.review_fixtures import canonical_review_document
+from helpers.review_fixtures import (
+    canonical_assignment,
+    canonical_review_document,
+)
 
 
 def _load_module():
@@ -63,16 +66,14 @@ def _finish_agent(tmp_path, name, findings=None, verdict=None):
 
 
 def _write_assignment(tmp_path, reviewer, agent_name, claimable_files):
-    (tmp_path / f"{reviewer}-assignment.json").write_text(json.dumps({
-        "schema": 4,
-        "agent_name": agent_name,
-        "reviewer": reviewer,
-        "review_claimable_files": claimable_files,
-        "review_budget": 15,
-        "inline_diff_file_count": 1,
-        "in_scope_review_file_count": 1 + len(claimable_files),
-        "channels": ["blocking"],
-    }))
+    (tmp_path / f"{reviewer}-assignment.json").write_text(json.dumps(
+        canonical_assignment(
+            reviewer,
+            agent_name=agent_name,
+            review_claimable_files=claimable_files,
+            inline_diff_file_count=1,
+        )
+    ))
 
 
 class _FakeClock:
