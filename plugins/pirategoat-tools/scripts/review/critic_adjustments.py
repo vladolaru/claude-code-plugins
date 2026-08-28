@@ -32,6 +32,9 @@ from typing import Mapping
 try:
     from . import atomic_io
     from .review_document import (
+        CHECK_TEXT_FIELDS,
+        REQUIRED_CHECK_FIELDS,
+        REQUIRED_FINDING_FIELDS,
         validate_finding_content_field,
         validate_ledger_ids,
         validate_review_content,
@@ -43,13 +46,20 @@ try:
         RECONCILIATION_COUNT_FIELDS,
         RECONCILIATION_FIELDS,
     )
-    from .verdict_rules import LEDGER_VERDICTS, VALID_SEVERITIES, summary_for
+    from .verdict_rules import (
+        LEDGER_VERDICTS,
+        SEVERITY_RANK,
+        summary_for,
+    )
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
     from review import atomic_io
     from review.review_document import (
+        CHECK_TEXT_FIELDS,
+        REQUIRED_CHECK_FIELDS,
+        REQUIRED_FINDING_FIELDS,
         validate_finding_content_field,
         validate_ledger_ids,
         validate_review_content,
@@ -61,7 +71,11 @@ except ImportError:
         RECONCILIATION_COUNT_FIELDS,
         RECONCILIATION_FIELDS,
     )
-    from review.verdict_rules import LEDGER_VERDICTS, VALID_SEVERITIES, summary_for
+    from review.verdict_rules import (
+        LEDGER_VERDICTS,
+        SEVERITY_RANK,
+        summary_for,
+    )
 
 atomic_write_json = atomic_io.atomic_write_json
 
@@ -76,7 +90,7 @@ FINDING_PATCH_FIELDS = (
     "severity", "title", "description", "recommendation", "file", "line",
     "category", "confidence",
 )
-CHECK_PATCH_FIELDS = ("question", "method", "result")
+CHECK_PATCH_FIELDS = CHECK_TEXT_FIELDS
 ADD_REQUIRED_FIELDS = ("severity", "title", "file", "description",
                        "recommendation")
 # Free-text ledger fields are bounded here because the ledger is their one
@@ -262,7 +276,7 @@ def _validate_field_value(key, value, label):
             validate_finding_content_field(key, value, label)
         except ValueError as error:
             return str(error)
-    if key in ("question", "method", "result") and (
+    if key in CHECK_PATCH_FIELDS and (
         not isinstance(value, str) or not value.strip()
     ):
         return f"{label}: {key!r} must be a non-empty string"
@@ -631,18 +645,12 @@ _LEDGER_EXTENSION_FIELDS = frozenset({
     REJECTED_ADJUSTMENTS_KEY,
     INVALIDATED_ASSESSMENTS_KEY,
 })
-_BASE_FINDING_FIELDS = frozenset({
-    "id", "category", "severity", "title", "description", "file", "line",
-    "recommendation", "confidence",
-})
+_BASE_FINDING_FIELDS = REQUIRED_FINDING_FIELDS
 _OPTIONAL_FINDING_FIELDS = frozenset({
     "severity_floor", "scope", "code_snippet", "references",
     "behavior_evidence", "source_cited", "channel", "critic_adjustment",
 })
-_CHECK_FIELDS = frozenset({
-    "id", "question", "method", "result", "source_reviewers",
-    "critic_adjustment",
-})
+_CHECK_FIELDS = REQUIRED_CHECK_FIELDS | {"critic_adjustment"}
 
 
 def _require_nonnegative_integer(value, label):
@@ -1294,14 +1302,14 @@ def _validate_pending_mutation(entry, target, label):
             raise ValueError(
                 f"{label}: {action} would not change severity {current!r}"
             )
-        current_rank = VALID_SEVERITIES.index(current)
-        replacement_rank = VALID_SEVERITIES.index(replacement)
-        if action == "promote" and replacement_rank > current_rank:
+        current_rank = SEVERITY_RANK[current]
+        replacement_rank = SEVERITY_RANK[replacement]
+        if action == "promote" and replacement_rank < current_rank:
             raise ValueError(
                 f"{label}: promote must increase severity, not change "
                 f"{current!r} to {replacement!r}"
             )
-        if action == "demote" and replacement_rank < current_rank:
+        if action == "demote" and replacement_rank > current_rank:
             raise ValueError(
                 f"{label}: demote must decrease severity, not change "
                 f"{current!r} to {replacement!r}"

@@ -28,10 +28,10 @@ try:
         validate_dispatch_plan_agents,
     )
     from .review_document import (
-        VALID_SEVERITIES,
         load_review_document,
         review_summary,
     )
+    from .verdict_rules import VALID_SEVERITIES
     from .atomic_io import atomic_write_json
     from .critic_adjustments import FINDINGS_READ_OK, read_findings_file
     from .reviewer_lifecycle import review_paths
@@ -47,10 +47,10 @@ except ImportError:
         validate_dispatch_plan_agents,
     )
     from review.review_document import (
-        VALID_SEVERITIES,
         load_review_document,
         review_summary,
     )
+    from review.verdict_rules import VALID_SEVERITIES
     from review.atomic_io import atomic_write_json
     from review.critic_adjustments import FINDINGS_READ_OK, read_findings_file
     from review.reviewer_lifecycle import review_paths

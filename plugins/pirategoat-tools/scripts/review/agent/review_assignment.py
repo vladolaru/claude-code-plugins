@@ -5,8 +5,10 @@ import posixpath
 from typing import Iterable, Mapping
 
 try:
+    from ..review_document import VALID_CHANNELS
     from ..reviewer_names import derive_reviewer_name
 except ImportError:
+    from review.review_document import VALID_CHANNELS
     from review.reviewer_names import derive_reviewer_name
 
 
@@ -29,7 +31,6 @@ class ReviewedFiles:
 
 
 ASSIGNMENT_SCHEMA = 4
-REVIEW_CHANNELS = ("blocking", "advisory")
 
 
 def normalize_review_path(path: object, api_name: str) -> str:
@@ -105,11 +106,11 @@ def _validated_assignment(
         not isinstance(channels, list)
         or not channels
         or len(channels) != len(set(channels))
-        or any(channel not in REVIEW_CHANNELS for channel in channels)
+        or any(channel not in VALID_CHANNELS for channel in channels)
     ):
         raise ReviewAssignmentError(
             "assignment channels must be a non-empty list of unique values "
-            f"from {REVIEW_CHANNELS}"
+            f"from {VALID_CHANNELS}"
         )
     channels = tuple(channels)
     if inline_count + len(paths) != in_scope_count:

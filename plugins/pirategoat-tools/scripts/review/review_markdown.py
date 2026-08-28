@@ -26,7 +26,12 @@ from typing import Dict, List
 
 try:
     from . import critic_adjustments
-    from .review_document import coerce_text, load_review_document
+    from .review_document import (
+        RECOMMENDATION_PRIORITIES,
+        coerce_text,
+        load_review_document,
+    )
+    from .verdict_rules import VALID_SEVERITIES
 except ImportError:
     _scripts_parent = os.path.dirname(
         os.path.dirname(os.path.abspath(__file__))
@@ -34,7 +39,12 @@ except ImportError:
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
     from review import critic_adjustments
-    from review.review_document import coerce_text, load_review_document
+    from review.review_document import (
+        RECOMMENDATION_PRIORITIES,
+        coerce_text,
+        load_review_document,
+    )
+    from review.verdict_rules import VALID_SEVERITIES
 
 
 def render_markdown(data: Dict) -> str:
@@ -69,14 +79,14 @@ def render_markdown(data: Dict) -> str:
 def _applied_critic_decision(record):
     """Project one complete schema-2 applied-decision record."""
     if not isinstance(record, dict) or set(record) != {
-        'adjustment_id', 'outcome'
+        'adjustment_id', critic_adjustments.OUTCOME_KEY
     }:
         return None
     adjustment_id = record.get('adjustment_id')
-    outcome = record.get('outcome')
+    outcome = record.get(critic_adjustments.OUTCOME_KEY)
     if (
         not isinstance(adjustment_id, str) or not adjustment_id
-        or outcome not in ('verified', 'refuted', 'not_checked')
+        or outcome not in critic_adjustments.OUTCOMES
     ):
         return None
     return adjustment_id, outcome
@@ -85,14 +95,15 @@ def _applied_critic_decision(record):
 def _rejected_critic_decision(record):
     """Project one complete schema-2 rejected-decision record."""
     if not isinstance(record, dict) or set(record) != {
-        'adjustment_id', 'action', 'target', 'outcome', 'rejection_reason'
+        'adjustment_id', 'action', 'target',
+        critic_adjustments.OUTCOME_KEY, 'rejection_reason'
     }:
         return None
     adjustment_id = record.get('adjustment_id')
-    outcome = record.get('outcome')
+    outcome = record.get(critic_adjustments.OUTCOME_KEY)
     if (
         not isinstance(adjustment_id, str) or not adjustment_id
-        or outcome != 'refuted'
+        or outcome != critic_adjustments.OUTCOME_REFUTED
     ):
         return None
     return adjustment_id, 'refuted'
@@ -258,8 +269,10 @@ def render_review_body(data: Dict) -> str:
     # What the orchestrator did with every critic decision, from the ledger's
     # own applied and rejected records rather than from prose in a report. A
     # batch nobody probed renders as N lines of `not_checked`; a rejected
-    # decision renders as `refuted`, including legacy rejection records from
-    # before that outcome was explicit on each record.
+    # decision renders as `refuted`. Both projections require the outcome to
+    # be explicit on the record — the ledger validator has already refused
+    # anything else, so a record without one is not a legacy shape to render
+    # but a malformed one to drop.
     applied_adjustments = data.get('applied_critic_adjustments')
     rejected_adjustments = data.get('rejected_critic_adjustments')
     decisions = []
@@ -285,7 +298,7 @@ def render_review_body(data: Dict) -> str:
 
     # Findings — every severity that counts toward total_findings must render,
     # or the Markdown claims findings it doesn't show.
-    for sev in ['critical', 'high', 'medium', 'low', 'info']:
+    for sev in VALID_SEVERITIES:
         severity_findings = [
             finding
             for finding in data['findings']
@@ -324,7 +337,7 @@ def render_review_body(data: Dict) -> str:
         # by its own key. Rendering only the known three would let an
         # unexpected priority print a heading with its content dropped
         # underneath — a document that shows a section it did not show.
-        known = ('immediate', 'important', 'suggestions')
+        known = RECOMMENDATION_PRIORITIES
         ordered = list(known) + [
             key for key in recommendations if key not in known
         ]

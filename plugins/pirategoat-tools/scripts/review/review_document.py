@@ -48,6 +48,18 @@ REVIEW_OUTPUT_SCHEMA = 2
 
 VALID_CHANNELS = ('blocking', 'advisory')
 
+# The three recommendation buckets, in render order. Named here because
+# this module validates the set and three other call sites iterate it; a
+# fourth priority added to one spelling and not the others produces a
+# document this module's own validator rejects.
+RECOMMENDATION_PRIORITIES = ('immediate', 'important', 'suggestions')
+
+# A check's three free-text fields. These are what the critic may patch,
+# what update_check may set, and what a rendered record must scrub of
+# prose markers — one name so an omission at any of those sites is a
+# missing import rather than a silently short tuple.
+CHECK_TEXT_FIELDS = ('question', 'method', 'result')
+
 
 REVIEW_CONTENT_FIELDS = frozenset({
     "pr_id",
@@ -95,8 +107,6 @@ _REQUIRED_META_FIELDS = frozenset({
     "next_finding_number",
     "next_check_number",
 })
-_OPTIONAL_META_FIELDS = frozenset()
-_ALLOWED_META_FIELDS = _REQUIRED_META_FIELDS | _OPTIONAL_META_FIELDS
 
 
 def coerce_text(value: Any, single_line: bool = False) -> str:
@@ -258,7 +268,7 @@ def validate_check_shape(check, index):
             f"review check {index} has invalid fields: " + "; ".join(details)
         )
     _canonical_id_number(check["id"], "c", f"review check {index}")
-    for field in ("question", "method", "result"):
+    for field in CHECK_TEXT_FIELDS:
         if not isinstance(check[field], str) or not check[field].strip():
             raise ValueError(
                 f"review check {index}.{field} must be a non-empty string"
@@ -343,10 +353,10 @@ def _validate_review_collections(review):
     recommendations = review["recommendations"]
     if (
         not isinstance(recommendations, dict)
-        or set(recommendations) != {"immediate", "important", "suggestions"}
+        or set(recommendations) != set(RECOMMENDATION_PRIORITIES)
         or any(
             not _is_string_list(recommendations[priority])
-            for priority in ("immediate", "important", "suggestions")
+            for priority in RECOMMENDATION_PRIORITIES
         )
     ):
         raise ValueError("review recommendations are malformed")
@@ -397,7 +407,7 @@ def _validate_content_shape(document, *, schema):
             "review meta is missing required fields: "
             + ", ".join(missing_meta)
         )
-    unexpected_meta = sorted(set(meta) - _ALLOWED_META_FIELDS)
+    unexpected_meta = sorted(set(meta) - _REQUIRED_META_FIELDS)
     if unexpected_meta:
         raise ValueError(
             "review meta has unexpected fields: "

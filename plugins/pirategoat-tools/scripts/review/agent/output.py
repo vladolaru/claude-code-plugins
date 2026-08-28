@@ -60,6 +60,9 @@ try:
         review_paths,
     )
     from ..review_document import (
+        CHECK_TEXT_FIELDS,
+        RECOMMENDATION_PRIORITIES,
+        REQUIRED_FINDING_FIELDS,
         REVIEW_OUTPUT_SCHEMA,
         VALID_CHANNELS,
         coerce_text,
@@ -76,6 +79,9 @@ except ImportError:
         review_paths,
     )
     from review.review_document import (
+        CHECK_TEXT_FIELDS,
+        RECOMMENDATION_PRIORITIES,
+        REQUIRED_FINDING_FIELDS,
         REVIEW_OUTPUT_SCHEMA,
         VALID_CHANNELS,
         coerce_text,
@@ -245,7 +251,7 @@ def _recommendation_count(review: Dict) -> int:
     recommendations = review.get("recommendations") or {}
     return sum(
         len(recommendations.get(priority) or [])
-        for priority in ("immediate", "important", "suggestions")
+        for priority in RECOMMENDATION_PRIORITIES
     )
 
 
@@ -412,7 +418,7 @@ class ReviewOutputBuilder:
         builder.observations = list(review["observations"])
         builder.recommendations = {
             priority: list(review["recommendations"][priority])
-            for priority in ("immediate", "important", "suggestions")
+            for priority in RECOMMENDATION_PRIORITIES
         }
         builder.positive_observations = list(review["positive_observations"])
         builder.checks = list(review["checks"])
@@ -519,22 +525,10 @@ class ReviewOutputBuilder:
 
     def update_finding(self, finding_id: str, **fields) -> None:
         """Strictly patch one finding without changing its identity."""
-        allowed = {
-            "category",
-            "severity",
-            "title",
-            "description",
-            "file",
-            "line",
-            "recommendation",
-            "confidence",
-            "behavior_evidence",
-            "source_cited",
-            "severity_floor",
-            "channel",
-            "code_snippet",
-            "references",
-        }
+        # Every required field except the identity, plus every optional
+        # attribute a patch may clear. Derived so a field added to either
+        # vocabulary is patchable without a third list remembering it.
+        allowed = (REQUIRED_FINDING_FIELDS - {"id"}) | _CLEARABLE_FINDING_FIELDS
         rejected = sorted(set(fields) - allowed)
         if rejected:
             raise ValueError(
@@ -623,7 +617,7 @@ class ReviewOutputBuilder:
 
     def update_check(self, check_id: str, **fields) -> None:
         """Strictly patch check content without changing identity or sources."""
-        allowed = {"question", "method", "result"}
+        allowed = set(CHECK_TEXT_FIELDS)
         rejected = sorted(set(fields) - allowed)
         if rejected:
             raise ValueError(
@@ -1014,7 +1008,7 @@ class ReviewOutputBuilder:
             'observations': list(self.observations),
             'recommendations': {
                 priority: list(self.recommendations[priority])
-                for priority in ('immediate', 'important', 'suggestions')
+                for priority in RECOMMENDATION_PRIORITIES
             },
             'positive_observations': list(self.positive_observations),
             'checks': list(self.checks),
