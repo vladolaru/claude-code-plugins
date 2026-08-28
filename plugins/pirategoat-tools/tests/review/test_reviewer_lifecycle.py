@@ -270,6 +270,29 @@ class TestFinalization:
         assert retry.stdout == first.stdout
         assert first.stderr == retry.stderr == ""
 
+    def test_telemetry_failure_after_promotion_is_a_warning_not_a_rejection(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """os.replace() is the publication. A log that cannot be appended
+        afterwards must not report REJECTED for a final that is already
+        canonical — a retry would take the existing-final branch and never
+        log the event anyway, so the only honest outcome is FINALIZED plus
+        a warning."""
+        _write_assignment(tmp_path)
+        saved = _open_builder(tmp_path).save_draft()
+
+        def _boom(*_args, **_kwargs):
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(output_mod, "_log_agent_complete_telemetry", _boom)
+        first = finalize_review(str(tmp_path), "code", saved["review_digest"])
+        retry = finalize_review(str(tmp_path), "code", saved["review_digest"])
+
+        assert Path(first["final"]).exists()
+        assert not Path(saved["draft"]).exists()
+        assert retry == first
+        assert "agent_complete telemetry failed" in capsys.readouterr().err
+
     def test_a_tampered_draft_cannot_finalize(self, tmp_path):
         """The digest binds the finalization to the bytes that were seen.
 
@@ -294,40 +317,6 @@ class TestFinalization:
         assert draft.exists()
         assert not Path(tmp_path, "code-review.json").exists()
 
-    def test_telemetry_failure_after_promotion_leaves_the_final_standing(
-        self, tmp_path, monkeypatch
-    ):
-        """Promotion is the review; the completion event is bookkeeping.
-
-        The telemetry append happens after `os.replace()` has already made
-        the final canonical, so a failing log must not read as a failed
-        review. The agent's own retry is what resolves it: the same
-        digest against an existing final is the idempotent path.
-        """
-        _write_assignment(tmp_path)
-        saved = _open_builder(tmp_path).save_draft()
-
-        def _explode(*_args, **_kwargs):
-            raise OSError("no space left on device")
-
-        monkeypatch.setattr(
-            output_mod, "_log_agent_complete_telemetry", _explode
-        )
-        with pytest.raises(OSError):
-            finalize_review(str(tmp_path), "code", saved["review_digest"])
-
-        final = Path(tmp_path, "code-review.json")
-        assert final.is_file()
-        assert not Path(saved["draft"]).exists()
-
-        monkeypatch.undo()
-        retry = finalize_review(str(tmp_path), "code", saved["review_digest"])
-
-        assert Path(retry["final"]) == final
-        assert json.loads(final.read_text())["reviewer"] == "code"
-
-
-class TestReviewIntakeClose:
     def test_close_returns_the_completed_invalid_split(self, tmp_path):
         """Intake close already validates every final. It now says which."""
         _finalize_canonical_review(tmp_path, "code")

@@ -1181,8 +1181,8 @@ def finalize_review(output_dir: str, reviewer: str, review_digest: str):
     Publishing is the only event: a retry with the same digest re-validates
     the final it already published, clears any stray draft, and returns the
     same result. Completion telemetry is logged by the promotion itself, so
-    a retry cannot double-log it, and status and the manifest read the final
-    file rather than the event.
+    a retry cannot double-log it; it is best-effort, and status and the
+    manifest read the final file rather than the event.
     """
     if (
         not isinstance(review_digest, str)
@@ -1217,14 +1217,26 @@ def finalize_review(output_dir: str, reviewer: str, review_digest: str):
                 output_dir, reviewer, paths, draft_bytes
             )
             os.replace(paths.draft, paths.final)
-            _log_agent_complete_telemetry(
-                output_dir,
-                agent_name,
-                review["verdict"],
-                review["summary"]["total_findings"],
-                review["summary"]["by_severity"],
-                review_digest,
-            )
+            # The promotion above is the publication; telemetry describes
+            # it. A log that cannot be appended must not turn a canonical
+            # final into REJECTED, and a retry would take the existing-final
+            # branch and never reach this call — so the event is lost, not
+            # deferred, and the lifecycle family records that absence.
+            try:
+                _log_agent_complete_telemetry(
+                    output_dir,
+                    agent_name,
+                    review["verdict"],
+                    review["summary"]["total_findings"],
+                    review["summary"]["by_severity"],
+                    review_digest,
+                )
+            except Exception as exc:
+                print(
+                    "WARNING: review finalized, but agent_complete "
+                    f"telemetry failed: {exc}",
+                    file=sys.stderr,
+                )
     return {"final": paths.final, "review_digest": review_digest}
 
 
