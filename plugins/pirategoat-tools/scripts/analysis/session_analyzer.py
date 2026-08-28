@@ -44,6 +44,7 @@ import posixpath
 import re
 import sys
 from collections import Counter, defaultdict
+from functools import lru_cache
 from glob import glob
 from typing import Any
 
@@ -61,6 +62,7 @@ from review.telemetry import ReviewTelemetry  # noqa: E402
 from review_transcript import parse_builder_envelope  # noqa: E402
 
 
+@lru_cache(maxsize=None)
 def _artifact_session_id(output_dir: str) -> str | None:
     """The session the output directory's run manifest names, or None.
 
@@ -69,6 +71,11 @@ def _artifact_session_id(output_dir: str) -> str | None:
     manifest is the durable record of which session that was, and it lives
     wherever telemetry put it — resolved through the same marker file
     ReviewTelemetry itself reads, never by scanning the output directory.
+
+    Cached because every subagent transcript of one run resolves the same
+    output directory, and the manifest is the largest artifact beside it.
+    This is a short-lived offline CLI reading artifacts a finished run left
+    behind, so one read per directory is exact.
     """
     try:
         manifest_path = ReviewTelemetry(output_dir).manifest_path
