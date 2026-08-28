@@ -41,21 +41,6 @@ except ImportError:
 
 RECONCILIATION_CONTEXT_SCHEMA = 3
 
-# Files in the output directory that are NOT agent review outputs.
-# These are pipeline infrastructure files that should be skipped when
-# loading agent findings.
-_NON_REVIEW_FILES = frozenset([
-    "dispatch-plan.json",
-    "review-findings.json",
-    "review-context.json",
-    "pipeline-state.json",
-    "run-config.json",
-    "pipeline-result.json",
-    "decision-critic-verdict.json",
-    "clarity-assessment.json",
-    "reconciliation-context.json",
-])
-
 _SEVERITY_FLOOR_MARKER_RE = re.compile(
     r"(?im)Severity-floor:[ \t]*"
     r"(?:" + "|".join(re.escape(v) for v in sorted(VALID_SEVERITIES))
@@ -201,9 +186,10 @@ def load_agent_reviews(
 ) -> Dict[str, Any]:
     """Load agent review JSON files from the output directory.
 
-    Reads ``*-review.json`` files, skipping pipeline infrastructure files
-    listed in ``_NON_REVIEW_FILES``. Malformed JSON files are skipped with
-    a warning on stderr.
+    Reads ``*-review.json`` files. The suffix is what separates a review
+    from pipeline infrastructure: no artifact this pipeline writes beside
+    them ends that way. Malformed JSON files are skipped with a warning on
+    stderr.
 
     Args:
         output_dir: Directory containing agent review outputs.
@@ -234,8 +220,6 @@ def load_agent_reviews(
 
     for entry in sorted(output_path.iterdir()):
         if not entry.name.endswith("-review.json"):
-            continue
-        if entry.name in _NON_REVIEW_FILES:
             continue
         if allowed_stems is not None and entry.stem not in allowed_stems:
             continue
