@@ -495,7 +495,7 @@ def _load_agent_reviewed_files(
 # (patterns-reviewer by registry config; any reviewer on a 100+-file PR by
 # protocol) never fetches a diff, so its other three lists are legitimately
 # empty and every file it owned used to look unowned.
-_SCOPE_SUMMARY_FILE_LISTS = (
+_REQUIRED_SCOPE_SUMMARY_LISTS = (
     "inline_diff_files",
     "review_claimable_files",
     "list_only_files",
@@ -604,14 +604,17 @@ def aggregate_file_review(
             continue
         if any(
             not isinstance(data.get(key), list)
-            for key in _SCOPE_SUMMARY_FILE_LISTS
+            for key in _REQUIRED_SCOPE_SUMMARY_LISTS
         ):
             continue
         reporting_agents.add(agent)
-        for key in _SCOPE_SUMMARY_FILE_LISTS:
-            scoped_anywhere.update(
-                normalize_repo_paths(data.get(key)) or []
-            )
+        # `routing_files` is the producer's own union of the other three
+        # plus `in_scope_files` (see `agent/scope.py`), so unioning it
+        # alone is the same set — the schema gate above already proved all
+        # four are lists.
+        scoped_anywhere.update(
+            normalize_repo_paths(data["routing_files"]) or []
+        )
         for f_path in data["inline_diff_files"]:
             if isinstance(f_path, str):
                 inline.setdefault(f_path, set()).add(agent)
