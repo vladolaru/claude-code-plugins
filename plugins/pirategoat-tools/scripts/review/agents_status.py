@@ -35,11 +35,11 @@ import json
 import os
 import sys
 import time
+from collections import Counter
 from datetime import datetime, timezone
 
 try:
     from .dispatch_status import (
-        DISPATCHED_STATUSES,
         SKIPPED_STATUSES,
         validate_dispatch_plan_agents,
     )
@@ -54,7 +54,6 @@ except ImportError:
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
     from review.dispatch_status import (
-        DISPATCHED_STATUSES,
         SKIPPED_STATUSES,
         validate_dispatch_plan_agents,
     )
@@ -140,29 +139,19 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
     now = datetime.now(timezone.utc)
     agents = []
     dispatched_names = []
-    dispatched = 0
-    finished = 0
-    invalid = 0
-    running = 0
-    timed_out = 0
-    not_dispatched = 0
-    skipped = 0
 
     for agent in plan_agents:
         name = agent["name"]
         status = agent["status"]
 
         if status in SKIPPED_STATUSES:
-            skipped += 1
             agents.append({
                 "name": name, "status": status,
                 "reason": agent.get("reason", ""),
             })
             continue
 
-        if status in DISPATCHED_STATUSES:
-            dispatched += 1
-            dispatched_names.append(name)
+        dispatched_names.append(name)
         reviewer = derive_reviewer_name(name)
         review_path = review_paths(output_dir, reviewer).final
         started_path = os.path.join(output_dir, f"{name}.started")
@@ -173,7 +162,6 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
                     load_review_document(review_path, reviewer)
                 )
             except ValueError:
-                invalid += 1
                 agents.append({
                     "name": name,
                     "status": "INVALID_OUTPUT",
@@ -181,7 +169,6 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
                     "note": "final review failed canonical validation",
                 })
             else:
-                finished += 1
                 agents.append({
                     "name": name, "status": "FINISHED",
                     "counts": summary["severities"],
@@ -195,21 +182,24 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
                 elapsed = 0
 
             if elapsed > timeout_seconds:
-                timed_out += 1
                 agent_state = {
                     "name": name, "status": "TIMED_OUT",
                     "elapsed_seconds": elapsed,
                 }
             else:
-                running += 1
                 agent_state = {
                     "name": name, "status": "RUNNING",
                     "elapsed_seconds": elapsed,
                 }
             agents.append(agent_state)
         else:
-            not_dispatched += 1
             agents.append({"name": name, "status": "NOT_DISPATCHED"})
+
+    # Every count is a projection of the rows above, derived once here so a
+    # row and its tally cannot come apart — they did once, when a malformed
+    # review was counted finished before its validation ran.
+    counts = Counter(entry["status"] for entry in agents)
+    running = counts["RUNNING"]
 
     # ALL_DONE = nothing left to WAIT for.
     # NOT_DISPATCHED agents will never start — don't wait for them.
@@ -219,14 +209,14 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
     return {
         "all_done": all_done,
         "timeout_seconds": timeout_seconds,
-        "dispatched": dispatched,
+        "dispatched": len(dispatched_names),
         "dispatched_names": dispatched_names,
-        "finished": finished,
-        "invalid": invalid,
+        "finished": counts["FINISHED"],
+        "invalid": counts["INVALID_OUTPUT"],
         "running": running,
-        "timed_out": timed_out,
-        "not_dispatched": not_dispatched,
-        "skipped": skipped,
+        "timed_out": counts["TIMED_OUT"],
+        "not_dispatched": counts["NOT_DISPATCHED"],
+        "skipped": sum(counts[status] for status in SKIPPED_STATUSES),
         "agents": agents,
     }
 
