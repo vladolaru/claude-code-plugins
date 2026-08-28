@@ -585,6 +585,87 @@ class TestArtifactBackedReviews:
         assert data["write_outputs"] == []
         assert self._quality_report(data)["per_agent"] == []
 
+    def _session_log(self, tmp_path, session_id, entries):
+        log = tmp_path / "sessions" / session_id / "subagents" / "agent-1.jsonl"
+        log.parent.mkdir(parents=True)
+        log.write_text("".join(json.dumps(e) + "\n" for e in entries))
+        return log
+
+    @pytest.mark.parametrize(
+        "manifest_session,expected_records",
+        [
+            pytest.param("session-A", 1, id="same-run"),
+            pytest.param("session-B", 0, id="later-run-replaced-the-artifact"),
+        ],
+    )
+    def test_the_artifact_must_belong_to_the_transcripts_run(
+        self, tmp_path, manifest_session, expected_records
+    ):
+        """Output directories are reused per PR/branch and swept at step 1,
+        so the artifact on disk is the latest run's. The manifest names
+        that run's session; a transcript from another session is credited
+        with nothing rather than with a foreign run's findings."""
+        out = tmp_path / "out"
+        out.mkdir()
+        Path(out, "security-review.json").write_text(
+            json.dumps(canonical_review_document("security", ["high"]))
+        )
+        Path(out, "pr-run1--x.manifest.json").write_text(
+            json.dumps({"run": {"session_id": manifest_session}})
+        )
+        log = self._session_log(
+            tmp_path, "session-A",
+            [_bash_entry(_real_bootstrap_builder_command(out))],
+        )
+
+        data = _mod.parse_subagent_log(str(log))
+
+        assert len(data["write_outputs"]) == expected_records
+
+    def test_a_failed_write_does_not_shadow_an_earlier_successful_save(
+        self, tmp_path
+    ):
+        good = json.dumps(canonical_review_document("security", ["high"]))
+        bad = json.dumps(canonical_review_document("security", ["low", "low"]))
+        entries = [
+            _write_entry("/out/security-review.json", good, tool_id="w1"),
+            _write_entry("/out/security-review.json", bad, tool_id="w2"),
+            {
+                "type": "user",
+                "message": {"role": "user", "content": [{
+                    "type": "tool_result", "tool_use_id": "w2",
+                    "is_error": True, "content": "EACCES",
+                }]},
+            },
+        ]
+        log = tmp_path / "agent.jsonl"
+        log.write_text("".join(json.dumps(e) + "\n" for e in entries))
+
+        data = _mod.parse_subagent_log(str(log))
+
+        assert [r["content"] for r in data["write_outputs"]] == [good]
+
+    def test_write_and_builder_spellings_of_one_artifact_count_once(
+        self, tmp_path
+    ):
+        Path(tmp_path, "security-review.json").write_text(
+            json.dumps(canonical_review_document("security", ["high"]))
+        )
+        entries = [
+            _write_entry(
+                f"{tmp_path}/./security-review.json", "{}", tool_id="w1"
+            ),
+            _bash_entry(_real_bootstrap_builder_command(tmp_path), tool_id="b1"),
+        ]
+        log = tmp_path / "agent.jsonl"
+        log.write_text("".join(json.dumps(e) + "\n" for e in entries))
+
+        data = _mod.parse_subagent_log(str(log))
+
+        assert [r["path"] for r in data["write_outputs"]] == [
+            str(Path(tmp_path, "security-review.json"))
+        ]
+
     @pytest.mark.parametrize(
         "artifact_content,reviewer",
         [
@@ -696,6 +777,19 @@ class TestArtifactBackedReviews:
         assert agent_record["dispatches"] == 1
         assert agent_record["total_findings"] == 1
         assert agent_record["findings_by_severity"] == {"high": 1}
+
+
+def _write_entry(file_path, content, tool_id="write-1"):
+    return {
+        "type": "assistant",
+        "message": {
+            "role": "assistant",
+            "content": [{
+                "type": "tool_use", "id": tool_id, "name": "Write",
+                "input": {"file_path": file_path, "content": content},
+            }],
+        },
+    }
 
 
 def _bash_entry(command, tool_id="bash-1"):

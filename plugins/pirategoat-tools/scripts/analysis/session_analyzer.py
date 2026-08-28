@@ -39,6 +39,7 @@ import argparse
 import datetime
 import json
 import os
+from pathlib import Path
 import posixpath
 import re
 import sys
@@ -59,7 +60,32 @@ from review.reviewer_lifecycle import review_paths  # noqa: E402
 from review_transcript import parse_builder_envelope  # noqa: E402
 
 
-def _review_from_artifact(envelope: dict[str, str]) -> dict[str, Any] | None:
+def _artifact_session_id(output_dir: str) -> str | None:
+    """The session the output directory's run manifest names, if exactly one.
+
+    Output directories are reused across runs of the same PR or branch and
+    swept at step 1, so the artifact on disk belongs to the LATEST run. The
+    manifest is the only durable record of which session that was.
+    """
+    try:
+        manifests = [
+            name for name in os.listdir(output_dir)
+            if name.endswith(".manifest.json")
+        ]
+        if len(manifests) != 1:
+            return None
+        with open(os.path.join(output_dir, manifests[0]), "rb") as f:
+            manifest = json.load(f)
+    except (OSError, ValueError):
+        return None
+    run = manifest.get("run") if isinstance(manifest, dict) else None
+    session_id = run.get("session_id") if isinstance(run, dict) else None
+    return session_id if isinstance(session_id, str) and session_id else None
+
+
+def _review_from_artifact(
+    envelope: dict[str, str], session_id: str | None
+) -> dict[str, Any] | None:
     """Return the saved review one builder envelope names, or None.
 
     Compliant reviewers save through ReviewOutputBuilder inside a mandated
@@ -68,14 +94,32 @@ def _review_from_artifact(envelope: dict[str, str]) -> dict[str, Any] | None:
     is the one that decides whether it is readable. Absent or invalid is
     unmeasured — no record, so nothing downstream reports a zero for a
     reviewer whose output was never observed.
+
+    The artifact must also be THIS dispatch's: when both the transcript's
+    session and the directory's manifest name a session and they differ,
+    a later run has replaced the file and the historical dispatch is
+    unmeasured rather than credited with a foreign run's findings.
     """
     reviewer = envelope["reviewer"]
+    output_dir = envelope["output_dir"]
     try:
-        path = review_paths(envelope["output_dir"], reviewer).final
+        path = review_paths(output_dir, reviewer).final
         document = load_review_document(path, reviewer)
     except ValueError:
         return None
+    artifact_session = _artifact_session_id(output_dir)
+    if session_id and artifact_session and artifact_session != session_id:
+        return None
     return {"path": path, "content": json.dumps(document)}
+
+
+def _session_id_for_transcript(filepath: str) -> str | None:
+    """The session a subagent transcript belongs to, from its location:
+    ``<sessions-dir>/<session-id>/subagents/agent-<id>.jsonl``."""
+    parent = Path(filepath).resolve().parent
+    if parent.name != "subagents":
+        return None
+    return parent.parent.name or None
 
 
 def parse_subagent_log(filepath: str) -> dict[str, Any]:
@@ -109,13 +153,16 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
     # produced; the review itself is not among them, because the mandated
     # builder heredoc writes it to disk. Collect the envelopes and read their
     # artifacts once the transcript is exhausted.
-    # An envelope whose paired tool result is a definite failure persisted
-    # nothing of its own; the artifact it names may still exist because a
-    # retry in another dispatch wrote it, and reading it here would count
-    # that reviewer twice. Ambiguity (no result observed) keeps the record.
+    # A save whose paired tool result is a definite failure persisted
+    # nothing of its own. For a builder envelope the artifact it names may
+    # still exist because a retry in another dispatch wrote it, and reading
+    # it here would count that reviewer twice; for a Write the attempted
+    # payload would shadow an earlier save that did land. Ambiguity (no
+    # result observed) keeps the record.
     builder_envelopes: list[tuple[str | None, dict[str, str]]] = []
     failed_call_ids: set[str] = set()
-    write_saves: list[dict[str, Any]] = []
+    write_saves: list[tuple[str | None, dict[str, Any]]] = []
+    session_id = _session_id_for_transcript(filepath)
 
     for entry in entries:
         msg = entry.get("message", {})
@@ -185,10 +232,14 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
                     elif tool_name == "Glob":
                         result["glob_searches"].append(tool_input.get("pattern", ""))
                     elif tool_name == "Write":
-                        write_saves.append({
-                            "path": tool_input.get("file_path", ""),
-                            "content": tool_input.get("content", ""),
-                        })
+                        call_id = block.get("id")
+                        write_saves.append((
+                            call_id if isinstance(call_id, str) else None,
+                            {
+                                "path": tool_input.get("file_path", ""),
+                                "content": tool_input.get("content", ""),
+                            },
+                        ))
 
                 elif block.get("type") == "text":
                     result["final_texts"].append(block.get("text", ""))
@@ -207,7 +258,9 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
 
     deduped_write_saves: list[dict[str, Any]] = []
     write_index_by_path: dict[str, int] = {}
-    for record in write_saves:
+    for call_id, record in write_saves:
+        if call_id in failed_call_ids:
+            continue
         key = _path_key(record["path"])
         if key is None:
             deduped_write_saves.append(record)
@@ -220,20 +273,18 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
 
     # One artifact, one record, whatever the transport: repeated saves in one
     # transcript all name the same file, and a legacy Write of that path is
-    # superseded by what the file actually holds.
+    # superseded by what the file actually holds. Both transports compare
+    # through the same normalized key so spelling never splits one file.
     artifact_saves: dict[str, dict[str, Any]] = {}
     for call_id, envelope in builder_envelopes:
         if call_id in failed_call_ids:
             continue
-        record = _review_from_artifact(envelope)
+        record = _review_from_artifact(envelope, session_id)
         if record is not None:
-            artifact_saves.setdefault(record["path"], record)
+            artifact_saves.setdefault(_path_key(record["path"]), record)
     result["write_outputs"] = [
         record for record in deduped_write_saves
-        if not (
-            isinstance(record["path"], str)
-            and record["path"] in artifact_saves
-        )
+        if _path_key(record["path"]) not in artifact_saves
     ] + list(artifact_saves.values())
 
     return result
