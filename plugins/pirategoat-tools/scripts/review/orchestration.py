@@ -271,119 +271,26 @@ def _render_findings_markdown(output_dir: str, read) -> tuple:
 # Review Record Assembly
 # ---------------------------------------------------------------------------
 
-def _sanitized_ledger(findings: dict) -> dict:
-    """A copy of the ledger with prose severity-floor markers removed.
-
-    Rendered clean AT THE SOURCE, which is where this strip belongs now:
-    it used to live in `build_critic_context`, a Markdown context builder
-    that existed only to merge the report and the ledger for the decision
-    critic. The record replaced that builder, so the protection moved with
-    the reader — a `Severity-floor:` restatement left in prose reads to the
-    critic as an instruction not to demote, and demoting is the judgment
-    the critic exists to make on its own.
-
-    Copies rather than mutates: `review-findings.json` on disk keeps the
-    reviewer's own words, and the structured `severity_floor` field (which
-    `render_review_body` renders as its own line) is untouched.
-    """
-    clean = dict(findings)
-
-    if clean.get("assessment"):
-        clean["assessment"] = strip_severity_floor_markers(
-            clean["assessment"]
-        )
-    invalidated = clean.get("invalidated_assessments")
-    if isinstance(invalidated, list):
-        clean["invalidated_assessments"] = [
-            {
-                **entry,
-                "text": strip_severity_floor_markers(entry["text"]),
-            } if isinstance(entry, dict) and entry.get("text") else entry
-            for entry in invalidated
-        ]
-
-    def _clean_critic_rationale(entry):
-        # A removed finding or check renders `critic_adjustment.rationale`
-        # in the record; the prior critic's prose is a marker source too.
-        adjustment = entry.get("critic_adjustment")
-        if isinstance(adjustment, dict) and adjustment.get("rationale"):
-            entry["critic_adjustment"] = {
-                **adjustment,
-                "rationale": strip_severity_floor_markers(
-                    adjustment["rationale"]
-                ),
-            }
-        return entry
-
-    def _clean_finding(finding):
-        if not isinstance(finding, dict):
-            return finding
-        patched = dict(finding)
-        for field in ("title", "description", "recommendation"):
-            if patched.get(field):
-                patched[field] = strip_severity_floor_markers(patched[field])
-        return _clean_critic_rationale(patched)
-
-    for key in ("findings", "findings_removed_by_critic"):
-        entries = clean.get(key)
-        if isinstance(entries, list):
-            clean[key] = [_clean_finding(entry) for entry in entries]
-
-    # The field list has to match what `render_review_body` actually puts
-    # in the record, not just the findings. What this replaced stripped the
-    # WHOLE report text in one pass, so it could not miss a field; naming
-    # fields is what makes an omission possible, and a rendered field the
-    # strip skips is a marker reaching the critic through the back door.
-    for key in ("checks", "checks_removed_by_critic"):
-        checks = clean.get(key)
-        if not isinstance(checks, list):
-            continue
-        clean[key] = [
-            _clean_critic_rationale({
-                field: (
-                    strip_severity_floor_markers(value)
-                    if field in ("question", "method", "result") and value
-                    else value
-                )
-                for field, value in entry.items()
-            }) if isinstance(entry, dict) else entry
-            for entry in checks
-        ]
-
-    # `findings` validated these three as always-present and correctly
-    # shaped (a list, a list of {file, note, category} objects, and a
-    # three-priority object of string lists) — no absent/malformed branch
-    # remains to guard against.
-    clean["positive_observations"] = [
-        strip_severity_floor_markers(entry)
-        for entry in clean["positive_observations"]
-    ]
-
-    clean["observations"] = [
-        {
-            **entry,
-            "note": strip_severity_floor_markers(entry["note"]),
-        } if entry["note"] else entry
-        for entry in clean["observations"]
-    ]
-
-    clean["recommendations"] = {
-        priority: [strip_severity_floor_markers(item) for item in entries]
-        for priority, entries in clean["recommendations"].items()
-    }
-
-    return clean
-
-
 def _render_record_body(findings: dict) -> str:
-    """The record's findings/checks body — `review_markdown`'s own renderer.
+    """The record's findings/checks body, stripped of prose floor markers.
 
     Byte-identical to what `review-findings.md` shows for the same ledger
-    (modulo the prose-marker strip above), because it IS the same function.
-    A second copy of these sections is how the two documents would
+    (modulo the prose-marker strip), because it IS the same function. A
+    second copy of these sections is how the two documents would
     eventually disagree about a finding.
+
+    The strip runs on the RENDERED text rather than on a field-by-field
+    copy of the ledger. A `Severity-floor:` restatement left in prose reads
+    to the decision critic as an instruction not to demote, and demoting is
+    the judgment the critic exists to make on its own — so the strip has to
+    cover every field the renderer prints. Enumerating those fields is what
+    made an omission possible; stripping the output cannot miss one. The
+    structured floor survives: `render_review_body` writes it as
+    `**Severity floor:** <severity>`, which the marker pattern
+    (`Severity-floor:`, hyphenated) does not match. `review-findings.json`
+    on disk is untouched — the reviewer keeps their own words.
     """
-    return render_review_body(_sanitized_ledger(findings))
+    return strip_severity_floor_markers(render_review_body(findings))
 
 
 def _render_run_notes(state: dict) -> str:
