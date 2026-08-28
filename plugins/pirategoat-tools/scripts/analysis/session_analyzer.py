@@ -150,8 +150,6 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
         "tool_calls": [],
         "files_read": [],
         "bash_commands": [],
-        "grep_searches": [],
-        "glob_searches": [],
         "write_outputs": [],
         "final_texts": [],
     }
@@ -230,14 +228,6 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
                             builder_envelopes.append(
                                 (call_id if isinstance(call_id, str) else None, envelope)
                             )
-                    elif tool_name == "Grep":
-                        result["grep_searches"].append({
-                            "pattern": tool_input.get("pattern", ""),
-                            "path": tool_input.get("path", ""),
-                            "glob": tool_input.get("glob", ""),
-                        })
-                    elif tool_name == "Glob":
-                        result["glob_searches"].append(tool_input.get("pattern", ""))
                     elif tool_name == "Write":
                         call_id = block.get("id")
                         write_saves.append((
