@@ -496,6 +496,9 @@ class TestPartitionScopePaths:
         # The downstream symptom must not displace the real diagnosis.
         assert "scope summary" not in output
         assert not list(tmp_path.glob("*-assignment.json"))
+        # No marker either: agents_status would otherwise report a reviewer
+        # that never received a briefing as RUNNING until the timeout.
+        assert not list(tmp_path.glob("*.started"))
 
     def test_unpinned_output_dir_still_gets_measured_facts(
         self, tmp_path, monkeypatch

@@ -1663,14 +1663,6 @@ def main():
         output_dir = args.output_dir
     os.makedirs(output_dir, exist_ok=True)
 
-    # Write started marker — agents_status.py uses this
-    # to distinguish RUNNING from NOT_DISPATCHED. Keyed on the per-instance name
-    # so parallel adapter instances (same registry key) don't collide.
-    started_path = os.path.join(output_dir, f"{effective_agent_name}.started")
-    with open(started_path, "w") as f:
-        from datetime import datetime, timezone
-        f.write(datetime.now(timezone.utc).isoformat())
-
     # Scope facts come from the machine-readable sidecars and only from them
     # — the same producer dict the rendered text was printed from. A run that
     # could not produce one has no facts, and a reviewer briefed with facts
@@ -1903,6 +1895,15 @@ def main():
         plugin_version=load_plugin_version(output_dir),
     )
 
+    # The started marker is the last thing bootstrap writes: agents_status.py
+    # reads it as RUNNING, and a reviewer whose briefing failed above never
+    # started — leaving the marker would hold step 8 open until the timeout.
+    # Keyed on the per-instance name so parallel adapter instances (same
+    # registry key) don't collide.
+    started_path = os.path.join(output_dir, f"{effective_agent_name}.started")
+    with open(started_path, "w") as f:
+        from datetime import datetime, timezone
+        f.write(datetime.now(timezone.utc).isoformat())
     print(output)
 
     # Exit code: 0 for success (including NO_DOMAIN_FILES), 1 for errors
