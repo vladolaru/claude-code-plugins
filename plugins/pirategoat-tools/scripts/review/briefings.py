@@ -1236,6 +1236,26 @@ def _run_wide_review_gaps(file_review):
     }
 
 
+def _has_file_review_content(file_review):
+    """True when the coverage section would render anything at all.
+
+    This is `_render_file_review_section`'s own early-return condition,
+    named. The gate that decides whether to point the report at the
+    record's coverage block used to build the entire section — sorting
+    three dicts and emitting a line per file — purely to test the result
+    for emptiness, then discard it.
+    """
+    if not isinstance(file_review, dict):
+        return False
+    claims = file_review.get("agents_claiming_review_by_file")
+    unscoped = file_review.get("unscoped_files")
+    return bool(
+        _run_wide_review_gaps(file_review)
+        or (claims if isinstance(claims, dict) else {})
+        or (unscoped if isinstance(unscoped, list) else [])
+    )
+
+
 def _has_file_review_gap(file_review):
     """True when something is PROVEN uncovered, claims aside.
 
@@ -1276,7 +1296,6 @@ def _render_file_review_section(file_review):
     gaps = _run_wide_review_gaps(file_review)
     claims = file_review.get("agents_claiming_review_by_file")
     unscoped = file_review.get("unscoped_files")
-    gaps = gaps if isinstance(gaps, dict) else {}
     claims = claims if isinstance(claims, dict) else {}
     unscoped = unscoped if isinstance(unscoped, list) else []
     if not (gaps or claims or unscoped):
@@ -2095,9 +2114,7 @@ def _report_authoring_actions(mode, state, context, config, output_dir):
     # re-deriving it. A field run once paraphrased "skipped by every
     # matching agent's diff budget and no reviewer reported reviewing
     # them" into "read by nobody", false for 8 of 41 files.
-    if record_usable and _render_file_review_section(
-        state.get("file_review")
-    ):
+    if record_usable and _has_file_review_content(state.get("file_review")):
         gap_clause = (
             " The verdict must acknowledge this gap."
             if _has_file_review_gap(state.get("file_review"))
