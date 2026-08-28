@@ -582,6 +582,27 @@ class TestFindingNormalizationIsShared:
         b.update_finding("f1", line=7)
         assert "scope" not in b.findings[0]
 
+    def test_none_clears_an_optional_field_and_keeps_the_id(self, tmp_path):
+        b = self._builder(tmp_path)
+        b.add_finding(
+            severity="high", title="t", file="f.py", description="d",
+            recommendation="r", category="c", line=1, confidence=0.9,
+            severity_floor="high",
+        )
+        b.update_finding("f1", severity_floor=None)
+        [finding] = b.findings
+        assert finding["id"] == "f1"
+        assert "severity_floor" not in finding
+
+    def test_a_required_field_cannot_be_cleared(self, tmp_path):
+        b = self._builder(tmp_path)
+        b.add_finding(
+            severity="high", title="t", file="f.py", description="d",
+            recommendation="r", category="c", line=1, confidence=0.9,
+        )
+        with pytest.raises(ValueError, match="cannot clear required field"):
+            b.update_finding("f1", title=None)
+
     def test_a_new_finding_omits_the_keys_it_carries_no_value_in(
         self, tmp_path
     ):

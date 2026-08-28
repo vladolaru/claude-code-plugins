@@ -334,6 +334,15 @@ def render_draft_index(review: dict) -> str:
     return "\n".join(lines)
 
 
+# Optional finding attributes update_finding(..., field=None) removes.
+# ``line`` is not among them: the key is required and None is its own
+# value (file scope), so it flows through as an ordinary update.
+_CLEARABLE_FINDING_FIELDS = frozenset({
+    "severity_floor", "behavior_evidence", "source_cited", "channel",
+    "code_snippet", "references",
+})
+
+
 class ReviewOutputBuilder:
     """Simple builder for structured review outputs."""
 
@@ -534,10 +543,28 @@ class ReviewOutputBuilder:
             )
         if not fields:
             raise ValueError("update_finding requires at least one field")
+        # None clears an optional attribute — the way to correct a mistaken
+        # floor or channel without dropping the finding and losing its id.
+        # Required fields cannot be cleared; the shape validator would refuse
+        # the null anyway, this just names the mistake.
+        nulls = {name for name, value in fields.items() if value is None}
+        cleared = nulls & _CLEARABLE_FINDING_FIELDS
+        uncleared = sorted(nulls - _CLEARABLE_FINDING_FIELDS - {"line"})
+        if uncleared:
+            raise ValueError(
+                "update_finding cannot clear required field(s): "
+                + ", ".join(uncleared)
+            )
         index = self._entry_index(self.findings, finding_id, "finding")
-        candidate = self._normalize_finding(
-            {**self.findings[index], **fields}, partial=True
-        )
+        base = {
+            name: value for name, value in self.findings[index].items()
+            if name not in cleared
+        }
+        updates = {
+            name: value for name, value in fields.items()
+            if name not in cleared
+        }
+        candidate = self._normalize_finding({**base, **updates}, partial=True)
         validate_finding_shape(candidate, index)
         self.findings[index] = candidate
 
