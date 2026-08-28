@@ -864,16 +864,23 @@ def validate_findings_document(document):
     """
     if not isinstance(document, dict):
         raise ValueError(f"{FINDINGS_FILENAME} must be a JSON object")
-    base = copy.deepcopy(document)
+    # Shallow copies, not a deep one: the only keys removed are top-level
+    # and one inside `meta`, and every validator below reads without
+    # writing. Deep-copying the whole ledger — findings, removed entries,
+    # checks, every prose string — ran on each of the dozen-odd validations
+    # a single run performs.
+    base = dict(document)
     extensions = {
         field: base.pop(field)
         for field in _LEDGER_EXTENSION_FIELDS
         if field in base
     }
     meta = base.get("meta")
-    reconciliation = (
-        meta.pop("reconciliation", None) if isinstance(meta, dict) else None
-    )
+    reconciliation = None
+    if isinstance(meta, dict):
+        meta = dict(meta)
+        base["meta"] = meta
+        reconciliation = meta.pop("reconciliation", None)
     try:
         validate_review_content(base, schema=LEDGER_SCHEMA)
     except ValueError as error:
