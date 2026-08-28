@@ -1527,23 +1527,37 @@ def _sanitize_reconciliation(value: object) -> dict[str, Any] | None:
         if count is None:
             return None
         result[name] = count
-    # The producer's partition invariant, mirrored so a damaged manifest
-    # cannot republish counts the ledger validator would have refused.
+    # The producer's invariants (findings_save.validate_findings and
+    # critic_adjustments' reconciliation validator), mirrored so a damaged
+    # manifest cannot republish a population the ledger would have refused:
+    # the three classifications partition the grouped count, and grouped
+    # concerns cannot outnumber the findings they were grouped from.
     if result["grouped_concern_count"] != (
         result["verified_concern_count"]
         + result["false_positive_concern_count"]
         + result["out_of_scope_concern_count"]
     ):
         return None
+    if result["grouped_concern_count"] > result["input_finding_count"]:
+        return None
+    # Rosters are unique agent names; reviewing_agents is the one roster
+    # the producer always fills, the others are null when dispatch is
+    # unknown.
     for name in _RECONCILIATION_AGENT_FIELDS:
         agents = value.get(name)
         if agents is None:
+            if name == "reviewing_agents":
+                return None
             result[name] = None
             continue
-        if not isinstance(agents, list) or any(
-            type(agent) is not str
-            or _PRODUCER_AGENT_NAME_RE.fullmatch(agent) is None
-            for agent in agents
+        if (
+            not isinstance(agents, list)
+            or len(agents) != len(set(agents))
+            or any(
+                type(agent) is not str
+                or _PRODUCER_AGENT_NAME_RE.fullmatch(agent) is None
+                for agent in agents
+            )
         ):
             return None
         result[name] = list(agents)
@@ -1556,13 +1570,17 @@ def _sanitize_reconciliation(value: object) -> dict[str, Any] | None:
             return None
         safe = _safe_scalar_map(agent, ("name", "skip_reason"))
         name = safe.get("name")
+        reason = safe.get("skip_reason")
         if (
             type(name) is not str
             or _PRODUCER_AGENT_NAME_RE.fullmatch(name) is None
-            or type(safe.get("skip_reason")) is not str
+            or type(reason) is not str
+            or not reason.strip()
         ):
             return None
         skipped.append(safe)
+    if len(skipped) != len({entry["name"] for entry in skipped}):
+        return None
     result["not_applicable_agents"] = skipped
     return result
 

@@ -429,6 +429,50 @@ class TestReviewVocabularyLifecycleMigration:
 
         assert measured["outcome"]["reconciliation"] is None
 
+    @pytest.mark.parametrize(
+        "damage",
+        [
+            pytest.param(
+                {"grouped_concern_count": 9, "verified_concern_count": 9},
+                id="grouped-exceeds-input",
+            ),
+            pytest.param({"reviewing_agents": None}, id="reviewing-null"),
+            pytest.param(
+                {"reviewing_agents": ["security-reviewer", "security-reviewer"]},
+                id="reviewing-duplicate",
+            ),
+            pytest.param(
+                {"dispatched_agents": ["code-reviewer", "code-reviewer"]},
+                id="dispatched-duplicate",
+            ),
+            pytest.param(
+                {"not_applicable_agents": [
+                    {"name": "a11y-reviewer", "skip_reason": "no ui"},
+                    {"name": "a11y-reviewer", "skip_reason": "no ui"},
+                ]},
+                id="not-applicable-duplicate",
+            ),
+            pytest.param(
+                {"not_applicable_agents": [
+                    {"name": "a11y-reviewer", "skip_reason": "   "},
+                ]},
+                id="not-applicable-blank-reason",
+            ),
+        ],
+    )
+    def test_reconciliation_states_the_producer_refuses_are_dropped(
+        self, tmp_path, damage
+    ):
+        """Every invariant findings_save / the ledger validator enforce on
+        the way in is mirrored on the way out, so damaged telemetry is
+        unmeasured rather than republished as a measurement."""
+        manifest = _task_5_manifest()
+        manifest["outcome"]["reconciliation"].update(damage)
+
+        measured = measure_run(manifest, tmp_path, include_transcripts=False)
+
+        assert measured["outcome"]["reconciliation"] is None
+
     def test_schema_three_manifest_keeps_only_canonical_live_vocabulary(
         self, tmp_path
     ):
