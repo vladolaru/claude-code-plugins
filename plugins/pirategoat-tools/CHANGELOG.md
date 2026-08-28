@@ -59,7 +59,7 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 - **a11y scope asks for UI evidence, not extensions** — bare `.ts`/`.js` need evidence in their diff or a bounded repo-rooted disk read; `.tsx`/`.jsx`, components, styles, and templates stay unconditional; triage is untouched.
 - **`scope_reporting_agent_count` counts agents, not scope-summary files.**
 - **Briefing no longer instructs bulk enumeration of unclaimed review files** — the builder derives the complement from reviewed-file claims, freeing that budget for real analysis instead of bookkeeping.
-- **Measurement honesty sweep** — damaged JSONL records are counted, unmeasured never publishes as zero, and availability flags derive from what was actually parsed. A coverage-manifest build failure is now distinguishable from legitimate absence.
+- **Measurement honesty sweep** — damaged JSONL records are counted, unmeasured never publishes as zero, availability flags derive from what was actually parsed, and a builder save is recognized by its envelope on any line of the command rather than only as a first-line heredoc. A coverage-manifest build failure is now distinguishable from legitimate absence.
 - **Dispatch decisions stopped re-parsing bootstrap's rendered text** — each fact now arrives as a structured parameter computed once, upstream.
 - **Reviewer Markdown materializes as each JSON settles**, so a reconciliation failure cannot hide finished output; reviewed-file claims are validated at publication against the required assignment.
 - **Detection benchmark hardened** — per-entry status is stamped by the producing code path, and reviewer-path matching canonicalizes against the eval root.

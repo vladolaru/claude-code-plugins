@@ -76,6 +76,8 @@ _BUILDER_ENV_OPTIONAL = frozenset({
     "PIRATEGOAT_REVIEW_BUDGET",
 })
 _BUILDER_ENV_NAMES = _BUILDER_ENV_REQUIRED | _BUILDER_ENV_OPTIONAL
+# A shell variable assignment, as opposed to a token that merely contains "=".
+_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # Both current and legacy names of the subagent dispatch tool. Dispatch
 # anomalies (dangling, malformed, duplicated calls) are the correlation
 # machinery's domain — every unresolved-evidence carve-out must exempt both.
@@ -1290,32 +1292,42 @@ def _opaque_target(value: object) -> str:
 def parse_builder_envelope(command: object) -> dict[str, str] | None:
     """Return the artifact identity a pipeline-owned builder save declares.
 
-    The envelope's assignments are the whole recognition. The heredoc body is
-    the reviewer's own program: session analysis reads the artifact the
-    envelope names rather than inferring what the program would have written,
-    so nothing here has to model Python.
+    The envelope's assignments are the whole recognition. The program they
+    prefix is the reviewer's own — a heredoc, a scratch file written a line
+    earlier in the same command, `-` on stdin — and session analysis reads
+    the artifact the envelope names rather than inferring what the program
+    would have written, so nothing here has to model Python or care which
+    line the reviewer ran it on. Only the shape is fixed: a run of
+    `NAME=VALUE` assignments carrying every required name and no foreign
+    one, immediately followed by `python3`.
     """
     if not isinstance(command, str):
         return None
-    lines = command.splitlines()
-    try:
-        tokens = shlex.split(lines[0] if lines else "")
-    except ValueError:
-        return None
-    if tokens[-2:] != ["python3", "<<PY"]:
-        return None
-    env: dict[str, str] = {}
-    for token in tokens[:-2]:
-        name, separator, value = token.partition("=")
-        if separator != "=" or name in env:
-            return None
-        env[name] = value
-    if not _BUILDER_ENV_REQUIRED <= set(env) <= _BUILDER_ENV_NAMES:
-        return None
-    return {
-        "output_dir": env["PIRATEGOAT_OUTPUT_DIR"],
-        "reviewer": env["PIRATEGOAT_REVIEWER_NAME"],
-    }
+    for line in command.splitlines():
+        try:
+            tokens = shlex.split(line)
+        except ValueError:
+            continue
+        env: dict[str, str] = {}
+        for token in tokens:
+            name, separator, value = token.partition("=")
+            if separator == "=" and _ENV_NAME.fullmatch(name):
+                if name in env:
+                    env = {}
+                    break
+                env[name] = value
+                continue
+            if (
+                token == "python3"
+                and env
+                and _BUILDER_ENV_REQUIRED <= set(env) <= _BUILDER_ENV_NAMES
+            ):
+                return {
+                    "output_dir": env["PIRATEGOAT_OUTPUT_DIR"],
+                    "reviewer": env["PIRATEGOAT_REVIEWER_NAME"],
+                }
+            env = {}
+    return None
 
 
 def _file_target(value: object, repo_root: str | Path) -> str:

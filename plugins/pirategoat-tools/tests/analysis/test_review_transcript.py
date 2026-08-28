@@ -1132,6 +1132,70 @@ class TestAnalyzeSubagent:
             "python3 <<PY\n" + body
         ) == {"output_dir": "/output", "reviewer": "security"}
 
+    @pytest.mark.parametrize(
+        "command",
+        [
+            pytest.param(
+                "cat > \"$TMPDIR/perf_builder.py\" <<'PYEOF'\n"
+                "import sys, os\n"
+                "plugin_root = os.environ[\"PIRATEGOAT_PLUGIN_ROOT\"]\n"
+                "PYEOF\n"
+                "PIRATEGOAT_PLUGIN_ROOT=/plugin PIRATEGOAT_OUTPUT_DIR=/output "
+                "PIRATEGOAT_REVIEWER_NAME=security PIRATEGOAT_PR_ID=42 "
+                "PIRATEGOAT_PLUGIN_VERSION=1.114.0 "
+                "python3 \"$TMPDIR/perf_builder.py\"",
+                id="script-written-then-run-in-one-command",
+            ),
+            pytest.param(
+                "cd /repo\n"
+                "PIRATEGOAT_PLUGIN_ROOT=/plugin PIRATEGOAT_OUTPUT_DIR=/output "
+                "PIRATEGOAT_REVIEWER_NAME=security PIRATEGOAT_PR_ID=42 "
+                "PIRATEGOAT_PLUGIN_VERSION=1.114.0 python3 <<'PY'\npass\nPY",
+                id="cd-on-the-first-line",
+            ),
+            pytest.param(
+                "PIRATEGOAT_PLUGIN_ROOT=/plugin PIRATEGOAT_OUTPUT_DIR=/output "
+                "PIRATEGOAT_REVIEWER_NAME=security PIRATEGOAT_PR_ID=42 "
+                "PIRATEGOAT_PLUGIN_VERSION=1.114.0 "
+                "python3 /private/tmp/scratch/concurrency_builder.py",
+                id="script-path-instead-of-heredoc",
+            ),
+            pytest.param(
+                "cd /repo && "
+                "PIRATEGOAT_PLUGIN_ROOT=/plugin PIRATEGOAT_OUTPUT_DIR=/output "
+                "PIRATEGOAT_REVIEWER_NAME=security PIRATEGOAT_PR_ID=42 "
+                "python3 - <<'PY'\npass\nPY",
+                id="chained-after-cd-with-stdin-dash",
+            ),
+        ],
+    )
+    def test_envelope_is_recognized_wherever_the_reviewer_ran_it(
+        self, command
+    ):
+        """The envelope is the recognition, not its position in the command.
+
+        Run 14 on pokedex: six of eighteen reviewers ran the exact envelope
+        bootstrap prescribed, but wrote the program to a scratch file first,
+        put `cd <repo>` on line one, or passed a script path instead of a
+        heredoc. A first-line-only reader reported all six as
+        `builder_attempted: false`, which cohort.py buckets as reviewers
+        that never used the builder — for saves that demonstrably happened
+        and finalized.
+        """
+        assert parse_builder_envelope(command) == {
+            "output_dir": "/output", "reviewer": "security",
+        }
+
+    def test_envelope_names_inside_a_heredoc_body_are_not_an_envelope(self):
+        """A Python line that mentions the names is the program, not a save."""
+        command = (
+            "python3 <<'PY'\n"
+            "env = 'PIRATEGOAT_PLUGIN_ROOT=/plugin PIRATEGOAT_OUTPUT_DIR=/o "
+            "PIRATEGOAT_REVIEWER_NAME=s PIRATEGOAT_PR_ID=1 python3'\n"
+            "PY"
+        )
+        assert parse_builder_envelope(command) is None
+
     def test_real_bootstrap_builder_envelope_is_counted_as_one_attempt(
         self, tmp_path
     ):
