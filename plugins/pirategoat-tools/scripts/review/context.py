@@ -31,6 +31,8 @@ try:
 except ImportError:
     _HOSTS_CHAIN = None
 
+from review.orchestration import baseline_path
+
 # Repo-contributed review-config reader (best-effort, same rationale as the host
 # chain above). Loaded from file so it works whether context.py runs as a script
 # or is imported under a test's import machinery.
@@ -136,11 +138,22 @@ def resolve_gh_cmd():
     return "gh"
 
 
+def _read_run_config(output_dir):
+    """Read the run config used to resolve target-level review state."""
+    try:
+        with open(os.path.join(output_dir, "run-config.json")) as f:
+            config = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+    return config if isinstance(config, dict) else {}
+
+
 # ---------------------------------------------------------------------------
 # Fill helpers — each only runs external commands when fields are missing
 # ---------------------------------------------------------------------------
 
-def _fill_git_context(ctx, pr_number=None, branch=False, incremental=False, git_range=None):
+def _fill_git_context(ctx, pr_number=None, branch=False, incremental=False,
+                      git_range=None, config=None):
     """Fill git context fields (merge_base, head_ref, changed_files, etc.)."""
     git = ctx.setdefault("git", {})
 
@@ -183,8 +196,10 @@ def _fill_git_context(ctx, pr_number=None, branch=False, incremental=False, git_
         if incremental:
             # Baseline migration (rule 26): read new format first, fall back to legacy
             output_base = ctx.get("output", {}).get("directory", ".")
-            baseline_file = os.path.join(output_base, ".branch-review-baseline.json")
-            legacy_file = os.path.join(output_base, ".review-state.json")
+            baseline_file = baseline_path(config or {}, output_base)
+            legacy_file = os.path.join(
+                os.path.dirname(baseline_file), ".review-state.json"
+            )
             state_file = None
             if os.path.isfile(baseline_file):
                 state_file = baseline_file
@@ -363,7 +378,8 @@ def _fill_reviews(ctx):
 # ---------------------------------------------------------------------------
 
 def load_and_fill(ctx_path, pr_number=None, gh_cmd=None, branch=False,
-                  incremental=False, git_range=None, repo_path=None):
+                  incremental=False, git_range=None, repo_path=None,
+                  config=None):
     """Load existing context, fill missing fields, return complete context."""
     ctx = {}
     if os.path.isfile(ctx_path):
@@ -397,7 +413,8 @@ def load_and_fill(ctx_path, pr_number=None, gh_cmd=None, branch=False,
         if "merge_base" in git:
             git.clear()
         _fill_git_context(ctx, pr_number=pr_number, branch=branch,
-                         incremental=incremental, git_range=git_range)
+                         incremental=incremental, git_range=git_range,
+                         config=config)
 
     # Derived git fields
     if "changed_files_csv" not in git and "changed_files" in git:
@@ -646,6 +663,7 @@ def main():
         incremental=args.incremental,
         git_range=args.git_range,
         repo_path=args.repo_path,
+        config=_read_run_config(args.output_dir),
     )
 
     # Set output directory

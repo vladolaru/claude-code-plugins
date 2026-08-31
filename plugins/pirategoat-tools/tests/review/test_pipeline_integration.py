@@ -891,7 +891,10 @@ class TestTelemetryIntegration:
         baseline_sha = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=repo, text=True
         ).strip()
-        (out / ".branch-review-baseline.json").write_text(json.dumps({
+        (out / "run-config.json").write_text(json.dumps({
+            "target_dir": str(repo),
+        }))
+        (repo / ".branch-review-baseline.json").write_text(json.dumps({
             "last_reviewed_sha": baseline_sha,
         }))
         log_dir = tmp_path / "telemetry-logs"
@@ -917,7 +920,7 @@ class TestTelemetryIntegration:
         assert context["output"]["directory"] == str(out)
         assert context["git"]["merge_base"] == baseline_sha
         assert context["git"]["git_range"] == f"{baseline_sha}..HEAD"
-        assert (out / ".branch-review-baseline.json").is_file()
+        assert (repo / ".branch-review-baseline.json").is_file()
 
 
 
@@ -1636,6 +1639,9 @@ class TestStep7Orchestration:
     def test_step_7_baseline_grades_clean(self, tmp_path):
         """The written baseline should pass the grader."""
         from helpers.graders import grade_review_baseline
+        (tmp_path / "run-config.json").write_text(json.dumps({
+            "target_dir": str(tmp_path),
+        }))
         run_pipeline("--step", "1", "--mode", "incremental",
                    "--output-dir", str(tmp_path), cwd=tmp_path)
         ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main"}}
@@ -1711,6 +1717,65 @@ class TestStep7Orchestration:
         assert all(f"`{label}`" in text for label in rendered_labels)
         assert "draft_available" not in text
         assert "`finalize_review_command`" not in text
+
+
+class TestBaselineInTargetDir:
+    def test_incremental_reads_and_writes_the_baseline_in_target_dir(
+        self, tmp_path
+    ):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_git_repo(repo)
+        baseline_sha = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+        ).strip()
+        _add_commit(repo)
+        output_dir = tmp_path / "out"
+        output_dir.mkdir()
+        (output_dir / "run-config.json").write_text(json.dumps({
+            "target_dir": str(repo),
+        }))
+        target_baseline = repo / ".branch-review-baseline.json"
+        target_baseline.write_text(json.dumps({
+            "last_reviewed_sha": baseline_sha,
+            "review_count": 4,
+        }))
+
+        step_1 = run_pipeline(
+            "--step", "1", "--mode", "incremental",
+            "--output-dir", str(output_dir), cwd=repo,
+        )
+        step_3 = run_pipeline(
+            "--step", "3", "--output-dir", str(output_dir), cwd=repo,
+        )
+        step_7 = run_pipeline(
+            "--step", "7", "--output-dir", str(output_dir), cwd=repo,
+        )
+
+        assert step_1.returncode == 0, step_1.stderr
+        assert step_3.returncode == 0, step_3.stderr
+        assert step_7.returncode == 0, step_7.stderr
+        config = json.loads((output_dir / "run-config.json").read_text())
+        assert config["target_dir"] == str(repo)
+        context = json.loads((output_dir / "review-context.json").read_text())
+        assert context["git"]["merge_base"] == baseline_sha
+        baseline = json.loads(target_baseline.read_text())
+        assert baseline["review_count"] == 5
+        assert not (output_dir / ".branch-review-baseline.json").exists()
+
+    def test_incremental_without_target_dir_fails_closed(self, mod, tmp_path):
+        with pytest.raises(
+            RuntimeError,
+            match="incremental review needs run-config.json target_dir",
+        ):
+            mod._orchestrate_step(
+                7,
+                "incremental",
+                {"mode": "incremental"},
+                {"resolved_params": {}},
+                {"git": {}},
+                str(tmp_path),
+            )
 
 
 class TestStep8Orchestration:

@@ -755,10 +755,11 @@ def main():
 
         # Write/update run-config.json (seed from CLI on first call)
         if not existing_config.get("mode"):
-            config = {
+            config = dict(existing_config)
+            config.update({
                 "mode": mode,
                 "host": args.host or HOST_CLAUDE,
-            }
+            })
             if args.pr_number:
                 config["pr_number"] = args.pr_number
             if args.interactive is not None:

@@ -115,6 +115,19 @@ _GIT_STATUS_ARGS = ["status", "--porcelain", "--untracked-files=all"]
 # finalize open; the timeout expiring simply leaves the run unmeasured.
 USAGE_SNAPSHOT_TIMEOUT = 60
 
+
+def baseline_path(config, output_dir):
+    """Resolve the cross-run review baseline outside the run directory."""
+    target_dir = config.get("target_dir")
+    if target_dir:
+        return os.path.join(target_dir, ".branch-review-baseline.json")
+    if config.get("mode") == "incremental":
+        raise RuntimeError(
+            "incremental review needs run-config.json target_dir"
+        )
+    return os.path.join(output_dir, ".branch-review-baseline.json")
+
+
 # ---------------------------------------------------------------------------
 # Dispatch Plan Persistence
 # ---------------------------------------------------------------------------
@@ -1039,11 +1052,11 @@ def _orchestrate_step_7(mode, config, state, context, output_dir):
     if not head_sha or len(head_sha) < 7:
         head_sha = "0000000"
 
-    baseline_path = os.path.join(output_dir, ".branch-review-baseline.json")
+    review_baseline_path = baseline_path(config, output_dir)
     review_count = 0
-    if os.path.isfile(baseline_path):
+    if os.path.isfile(review_baseline_path):
         try:
-            with open(baseline_path) as f:
+            with open(review_baseline_path) as f:
                 old = json.load(f)
             review_count = old.get("review_count", 0)
         except (json.JSONDecodeError, OSError):
@@ -1057,7 +1070,7 @@ def _orchestrate_step_7(mode, config, state, context, output_dir):
         "base_ref": base_ref,
         "git_range_used": git_range or f"{head_sha}..HEAD",
     }
-    with open(baseline_path, "w") as f:
+    with open(review_baseline_path, "w") as f:
         json.dump(baseline, f, indent=2)
 
     return context
@@ -1980,7 +1993,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
         "critic_verdict": critic_verdict,
         "degradation_notes": degradation_notes,
         "review_baseline_saved": os.path.isfile(
-            os.path.join(output_dir, ".branch-review-baseline.json")
+            baseline_path(config, output_dir)
         ),
         "worktree_hygiene": hygiene_summary,
         "usage": usage_summary,

@@ -901,7 +901,8 @@ def _step_7_save_baseline(mode, state, context, config, output_dir):
     od = output_dir or "<OUTPUT_DIR>"
 
     situation = [
-        f"Review baseline saved to `.branch-review-baseline.json`.",
+        "Review baseline saved to `.branch-review-baseline.json` in the "
+        "target directory.",
     ]
 
     actions = []
@@ -917,8 +918,8 @@ def _step_7_save_baseline(mode, state, context, config, output_dir):
         actions.append("Review baseline saved.")
 
     actions.append("")
-    actions.append("The script wrote `.branch-review-baseline.json` with the current HEAD SHA, "
-                   "timestamp, review type, and git range.")
+    actions.append("The script wrote `.branch-review-baseline.json` in the target directory "
+                   "with the current HEAD SHA, timestamp, review type, and git range.")
 
     actions.append("")
     actions.append("**Wait for agents before step 8.**")
