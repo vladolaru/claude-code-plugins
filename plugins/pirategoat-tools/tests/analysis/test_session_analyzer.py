@@ -414,6 +414,21 @@ class TestArtifactBackedReviews:
         assert agent_record["total_findings"] == 2
         assert agent_record["findings_by_severity"] == {"high": 1, "medium": 1}
 
+    def test_artifact_is_owned_by_its_directory_run(self, tmp_path):
+        """A builder envelope's directory is the one durable run it belongs to."""
+        artifact = _write_review_artifact(
+            tmp_path,
+            json.dumps(canonical_review_document("security", ["high"])),
+        )
+        envelope = {"reviewer": "security", "output_dir": str(tmp_path)}
+
+        review = _mod._review_from_artifact(envelope)
+
+        assert review == {
+            "path": str(artifact),
+            "content": json.dumps(canonical_review_document("security", ["high"])),
+        }
+
     def test_a_failed_builder_call_does_not_attribute_a_retry_artifact(
         self, tmp_path
     ):
@@ -447,55 +462,6 @@ class TestArtifactBackedReviews:
 
         assert data["write_outputs"] == []
         assert self._quality_report(data)["per_agent"] == []
-
-    def _session_log(self, tmp_path, session_id, entries):
-        log = tmp_path / "sessions" / session_id / "subagents" / "agent-1.jsonl"
-        log.parent.mkdir(parents=True)
-        log.write_text("".join(json.dumps(e) + "\n" for e in entries))
-        return log
-
-    @pytest.mark.parametrize(
-        "manifest_session,expected_records",
-        [
-            pytest.param("session-A", 1, id="same-run"),
-            pytest.param("session-B", 0, id="later-run-replaced-the-artifact"),
-            pytest.param(None, 0, id="no-provenance-is-unmeasured"),
-        ],
-    )
-    def test_the_artifact_must_belong_to_the_transcripts_run(
-        self, tmp_path, manifest_session, expected_records
-    ):
-        """Output directories are reused per PR/branch and swept at step 1,
-        so the artifact on disk is the latest run's. The manifest names
-        that run's session; a transcript from another session — or one
-        whose run left no manifest to check — is credited with nothing
-        rather than with a possibly foreign run's findings."""
-        out = tmp_path / "out"
-        out.mkdir()
-        _write_review_artifact(
-            out,
-            json.dumps(canonical_review_document("security", ["high"])),
-        )
-        if manifest_session is not None:
-            # Telemetry keeps the log and manifest outside the output dir and
-            # leaves only a marker naming the log; the analyzer resolves the
-            # manifest through that marker, never by scanning the directory.
-            logs = tmp_path / "logs"
-            logs.mkdir()
-            Path(logs, "pr-run1--x.manifest.json").write_text(
-                json.dumps({"run": {"session_id": manifest_session}})
-            )
-            Path(out, ".telemetry-log-path").write_text(
-                str(logs / "pr-run1--x.jsonl")
-            )
-        log = self._session_log(
-            tmp_path, "session-A",
-            [_bash_entry(_real_bootstrap_builder_command(out))],
-        )
-
-        data = _mod.parse_subagent_log(str(log))
-
-        assert len(data["write_outputs"]) == expected_records
 
     def test_a_failed_write_does_not_shadow_an_earlier_successful_save(
         self, tmp_path

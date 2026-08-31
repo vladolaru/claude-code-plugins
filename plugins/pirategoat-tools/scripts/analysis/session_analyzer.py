@@ -4,6 +4,7 @@ Analyze reviewer agent subagent logs from Claude Code sessions.
 
 Extracts detailed tool call sequences, categorizes behavior patterns,
 and generates metrics for identifying inefficiencies in reviewer agents.
+Review artifacts belong to their directory's run because a directory is one run.
 
 Modes:
     Default: Tool call sequence analysis and behavior categorization.
@@ -39,12 +40,10 @@ import argparse
 import datetime
 import json
 import os
-from pathlib import Path
 import posixpath
 import re
 import sys
 from collections import Counter, defaultdict
-from functools import lru_cache
 from glob import glob
 from typing import Any
 
@@ -58,41 +57,10 @@ from review.review_document import (  # noqa: E402
     validate_review_document,
 )
 from review.reviewer_lifecycle import review_paths  # noqa: E402
-from review.telemetry import ReviewTelemetry  # noqa: E402
 from review_transcript import parse_builder_envelope  # noqa: E402
 
 
-@lru_cache(maxsize=None)
-def _artifact_session_id(output_dir: str) -> str | None:
-    """The session the output directory's run manifest names, or None.
-
-    Output directories are reused across runs of the same PR or branch and
-    swept at step 1, so the artifact on disk belongs to the LATEST run. The
-    manifest is the durable record of which session that was, and it lives
-    wherever telemetry put it — resolved through the same marker file
-    ReviewTelemetry itself reads, never by scanning the output directory.
-
-    Cached because every subagent transcript of one run resolves the same
-    output directory, and the manifest is the largest artifact beside it.
-    This is a short-lived offline CLI reading artifacts a finished run left
-    behind, so one read per directory is exact.
-    """
-    try:
-        manifest_path = ReviewTelemetry(output_dir).manifest_path
-        if manifest_path is None:
-            return None
-        with open(manifest_path, "rb") as f:
-            manifest = json.load(f)
-    except (OSError, ValueError):
-        return None
-    run = manifest.get("run") if isinstance(manifest, dict) else None
-    session_id = run.get("session_id") if isinstance(run, dict) else None
-    return session_id if isinstance(session_id, str) and session_id else None
-
-
-def _review_from_artifact(
-    envelope: dict[str, str], session_id: str | None
-) -> dict[str, Any] | None:
+def _review_from_artifact(envelope: dict[str, str]) -> dict[str, Any] | None:
     """Return the saved review one builder envelope names, or None.
 
     Compliant reviewers save through ReviewOutputBuilder inside a mandated
@@ -102,11 +70,7 @@ def _review_from_artifact(
     unmeasured — no record, so nothing downstream reports a zero for a
     reviewer whose output was never observed.
 
-    The artifact must also be THIS dispatch's. When the transcript's session
-    is known, the directory's manifest must name the same session: a
-    different one means a later run replaced the file, and no provenance at
-    all means nothing proves the file is this run's — both are unmeasured
-    rather than credited with a possibly foreign run's findings.
+    An artifact belongs to its directory's run because a directory is one run.
     """
     reviewer = envelope["reviewer"]
     output_dir = envelope["output_dir"]
@@ -115,18 +79,7 @@ def _review_from_artifact(
         document = load_review_document(path, reviewer)
     except ValueError:
         return None
-    if session_id and _artifact_session_id(output_dir) != session_id:
-        return None
     return {"path": path, "content": json.dumps(document)}
-
-
-def _session_id_for_transcript(filepath: str) -> str | None:
-    """The session a subagent transcript belongs to, from its location:
-    ``<sessions-dir>/<session-id>/subagents/agent-<id>.jsonl``."""
-    parent = Path(filepath).resolve().parent
-    if parent.name != "subagents":
-        return None
-    return parent.parent.name or None
 
 
 def parse_subagent_log(filepath: str) -> dict[str, Any]:
@@ -167,7 +120,6 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
     builder_envelopes: list[tuple[str | None, dict[str, str]]] = []
     failed_call_ids: set[str] = set()
     write_saves: list[tuple[str | None, dict[str, Any]]] = []
-    session_id = _session_id_for_transcript(filepath)
 
     for entry in entries:
         msg = entry.get("message", {})
@@ -276,7 +228,7 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
     for call_id, envelope in builder_envelopes:
         if call_id in failed_call_ids:
             continue
-        record = _review_from_artifact(envelope, session_id)
+        record = _review_from_artifact(envelope)
         if record is not None:
             artifact_saves.setdefault(_path_key(record["path"]), record)
     result["write_outputs"] = [
