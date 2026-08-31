@@ -6,11 +6,11 @@ Single source of truth for all filtering logic. Agents call this script
 instead of running 5+ ad-hoc git/grep commands to determine their review scope.
 
 Usage:
-    python3 scope.py --domain code
-    python3 scope.py --domain code --summary
-    python3 scope.py --domain php-tests --range main..feature-branch
-    python3 scope.py --domain security --max-lines 3000
-    python3 scope.py --domain patterns --base-ref-only
+    python3 scope.py --domain code --output-dir <output-dir>
+    python3 scope.py --domain code --summary --output-dir <output-dir>
+    python3 scope.py --domain php-tests --range main..feature-branch --output-dir <output-dir>
+    python3 scope.py --domain security --max-lines 3000 --output-dir <output-dir>
+    python3 scope.py --domain patterns --base-ref-only --output-dir <output-dir>
 
 Exit codes:
     0  Success — scope determined, output on stdout
@@ -35,6 +35,16 @@ if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
 from git_paths import decode_git_c_quoted_path
+
+
+class ReviewArgumentParser(argparse.ArgumentParser):
+    """Render the required output-directory failure as a stable contract."""
+
+    def error(self, message: str) -> None:
+        if message == "the following arguments are required: --output-dir":
+            message = "ERROR: --output-dir is required"
+        super().error(message)
+
 
 # =============================================================================
 # Semantic filter — content-level noise removal from diffs
@@ -1231,40 +1241,6 @@ def get_diffstat(range_spec: str, files: List[str]) -> Dict[str, Tuple[int, int]
     return stats
 
 
-def detect_output_dir() -> Tuple[str, Optional[str]]:
-    """
-    Detect output directory. Try gh/ghe to find PR number.
-
-    Returns:
-        (output_dir, pr_number_or_none)
-    """
-    # Detect if this is a github.a8c.com (GHE) or github.com repo
-    try:
-        remote_url = run_cmd(["git", "remote", "get-url", "origin"], check=False)
-    except RuntimeError:
-        remote_url = ""
-
-    is_ghe = "github.a8c.com" in remote_url
-
-    # Try the appropriate CLI first, then fallback
-    cli_order = ["ghe", "gh"] if is_ghe else ["gh", "ghe"]
-
-    for cli in cli_order:
-        try:
-            pr_num = run_cmd(
-                [cli, "pr", "view", "--json", "number", "-q", ".number"],
-                check=True,
-            )
-            if pr_num and pr_num.isdigit():
-                output_dir = f"/tmp/pr-review-{pr_num}"
-                os.makedirs(output_dir, exist_ok=True)
-                return output_dir, pr_num
-        except RuntimeError:
-            continue
-
-    return "/tmp", None
-
-
 def detect_base_ref(range_spec: str) -> str:
     """Extract the base ref from a range spec."""
     if ".." in range_spec:
@@ -1535,13 +1511,10 @@ def build_scope(args: argparse.Namespace) -> dict:
             if not is_protected_oversized_diff:
                 ordinary_budget_lines += diff_lines
 
-    # Step 7: Detect output directory (skip network calls when --output-dir provided)
-    if args.output_dir:
-        output_dir = args.output_dir
-        pr_number = None
-        os.makedirs(output_dir, exist_ok=True)
-    else:
-        output_dir, pr_number = detect_output_dir()
+    # Step 7: The dispatcher provides a durable per-run output directory.
+    output_dir = args.output_dir
+    pr_number = None
+    os.makedirs(output_dir, exist_ok=True)
 
     return {
         "status": "OK",
@@ -1818,7 +1791,7 @@ def write_scope_summary(scope: dict, path: str) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(
+    parser = ReviewArgumentParser(
         description="Review Scope — efficient diff scoping for review agents.",
         epilog="Available domains: " + ", ".join(sorted(DOMAIN_CATALOG.keys())),
     )
@@ -1856,8 +1829,8 @@ def main():
     )
     parser.add_argument(
         "--output-dir",
-        default=None,
-        help="Override output directory. Skips gh/ghe PR detection when provided.",
+        required=True,
+        help="Durable output directory for this review run.",
     )
     parser.add_argument(
         "--list-domains",

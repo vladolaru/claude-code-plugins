@@ -42,6 +42,22 @@ _scope_spec.loader.exec_module(review_scope)
 
 
 # =============================================================================
+# CLI argument contract
+# =============================================================================
+
+
+def test_cli_requires_output_dir():
+    result = subprocess.run(
+        [sys.executable, str(REVIEW_SCOPE_SCRIPT), "--domain", "code"],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "ERROR: --output-dir is required" in result.stderr
+
+
+# =============================================================================
 # Pure function tests — no git, no mocking
 # =============================================================================
 
@@ -530,7 +546,7 @@ class TestMergeBaseGatingIntegration:
             max_lines=2000,
             base_ref_only=False,
             summary=False,
-            output_dir=None,
+            output_dir=str(Path(repo) / ".review-output"),
             no_merge_base=no_merge_base,
             no_semantic_filter=False,
         )
@@ -2075,7 +2091,7 @@ class TestIncludePathRescue:
             max_lines=2000,
             base_ref_only=False,
             summary=False,
-            output_dir=None,
+            output_dir=str(Path(repo) / ".review-output"),
             no_merge_base=True,
             no_semantic_filter=False,
             include_path=include_path,
@@ -2181,7 +2197,7 @@ class TestA11yUiEvidenceSniff:
             max_lines=2000,
             base_ref_only=False,
             summary=False,
-            output_dir=None,
+            output_dir=str(Path(repo) / ".review-output"),
             no_merge_base=True,
             no_semantic_filter=False,
             include_path=None,
@@ -2387,7 +2403,8 @@ class TestNonAsciiPathsReachTheirDomain:
     def _scope(self, repo, domain):
         args = argparse.Namespace(
             domain=domain, range="main..HEAD", format="json", max_lines=2000,
-            base_ref_only=False, summary=False, output_dir=None,
+            base_ref_only=False, summary=False,
+            output_dir=str(Path(repo) / ".review-output"),
             no_merge_base=True, no_semantic_filter=False, include_path=None,
         )
         saved_cwd = os.getcwd()

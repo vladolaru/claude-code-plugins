@@ -200,22 +200,7 @@ Rules for any "nothing depends on this" / "no blast radius" / "no consumers" cla
 
 ## Output Directory
 
-**If Output Directory was provided:** use it (`mkdir -p` if needed).
-
-**If not provided:** use the `OUTPUT_DIR` from `scope.py` output. The script auto-detects PR number via `gh` (github.com) or `ghe` (github.a8c.com) and creates `/tmp/pr-review-{N}`. Falls back to `/tmp/` when no PR is found.
-
-**If the script was not available:**
-```bash
-PR_NUMBER=$(gh pr view --json number -q .number 2>/dev/null || ghe pr view --json number -q .number 2>/dev/null || echo "")
-if [ -n "$PR_NUMBER" ]; then
-  OUTPUT_DIR="/tmp/pr-review-${PR_NUMBER}"
-else
-  OUTPUT_DIR="/tmp"
-fi
-mkdir -p "$OUTPUT_DIR"
-```
-
-**Note on GHE:** For repos hosted on `github.a8c.com`, the `ghe` CLI is used (requires SOCKS5 proxy). The `scope.py` script handles this automatically by detecting the remote URL.
+The dispatch prompt always provides `--output-dir`. Use that durable run directory (`mkdir -p` if needed) for every review artifact.
 
 ## Canonical Draft Lifecycle
 

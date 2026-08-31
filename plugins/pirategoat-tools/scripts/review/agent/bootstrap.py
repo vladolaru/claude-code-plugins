@@ -9,7 +9,7 @@ script as their first action and get everything they need.
 Usage:
     python3 bootstrap.py --agent security-reviewer
     python3 bootstrap.py --agent php-tests-reviewer --range main..feature
-    python3 bootstrap.py --agent patterns-reviewer --output-dir /tmp/pr-review-42
+    python3 bootstrap.py --agent patterns-reviewer --output-dir <output-dir>
 
 Exit codes:
     0  Success (scope may be OK or NO_DOMAIN_FILES)
@@ -19,16 +19,13 @@ Zero external dependencies (stdlib only).
 """
 
 import argparse
-import atexit
 import importlib.util
 import json
 import os
 import re
 import shlex
-import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -50,6 +47,16 @@ from review.agent.review_assignment import ASSIGNMENT_SCHEMA, derive_reviewed_fi
 from review.atomic_io import atomic_write_json
 from review.reviewer_lifecycle import review_paths
 from review.verdict_rules import PIPELINE_VERDICTS
+
+
+class ReviewArgumentParser(argparse.ArgumentParser):
+    """Render the required output-directory failure as a stable contract."""
+
+    def error(self, message: str) -> None:
+        if message == "the following arguments are required: --output-dir":
+            message = "ERROR: --output-dir is required"
+        super().error(message)
+
 
 # Import telemetry (parent directory script, best-effort)
 try:
@@ -274,12 +281,6 @@ def extract_pr_number(scope_output: str) -> Optional[str]:
     """Extract PR_NUMBER from scope discovery output."""
     match = re.search(r"PR_NUMBER:\s*(\d+)", scope_output)
     return match.group(1) if match else None
-
-
-def extract_output_dir(scope_output: str) -> Optional[str]:
-    """Extract OUTPUT_DIR from scope discovery output."""
-    match = re.search(r"OUTPUT_DIR:\s*(.+)", scope_output)
-    return match.group(1).strip() if match else None
 
 
 def extract_status(scope_output: str) -> Optional[str]:
@@ -1332,7 +1333,7 @@ def persist_review_assignment(
 
 
 def main():
-    parser = argparse.ArgumentParser(
+    parser = ReviewArgumentParser(
         description="Bootstrap Reviewer — single-command setup for reviewer agents.",
     )
     parser.add_argument(
@@ -1347,8 +1348,8 @@ def main():
     )
     parser.add_argument(
         "--output-dir",
-        default=None,
-        help="Override output directory. Auto-detected if omitted.",
+        required=True,
+        help="Durable output directory for this review run.",
     )
     # Adapter ref-mode: run a repo-contributed reviewer prompt under the generic
     # repo-reviewer-adapter agent. When --repo-agent-ref is set, the adapter's
@@ -1463,31 +1464,14 @@ def main():
     # Step 4: Run scope discovery (skip for agents with no domain)
     scope_output = ""
     scope_status = "OK"
-    output_dir = args.output_dir or "/tmp"
+    output_dir = args.output_dir
     pr_number = None
     exploration_scope = None
     secondary_with_content = []  # secondary domains that matched files
     scope_summary_paths = []  # machine-readable sidecars backing scope_output
-    scratch_summary_dir = None
-
     def summary_dir() -> str:
-        """Where this run's scope sidecars land.
-
-        The run directory when the caller pinned one — that is what the
-        run-level file review reads. Otherwise a scratch directory, because
-        the summary is the ONLY source of scope facts and a run without a
-        pinned output dir must still produce one; nothing outside this
-        process reads it, so it is created on first use and removed at exit.
-        """
-        nonlocal scratch_summary_dir
-        if args.output_dir:
-            return args.output_dir
-        if scratch_summary_dir is None:
-            scratch_summary_dir = tempfile.mkdtemp(prefix="pirategoat-scope-")
-            atexit.register(
-                shutil.rmtree, scratch_summary_dir, ignore_errors=True
-            )
-        return scratch_summary_dir
+        """Return the durable run directory for scope sidecars."""
+        return output_dir
 
     if ref_mode:
         # Adapter ref-mode: the adapter has no registry domain. Scope by the
@@ -1537,12 +1521,9 @@ def main():
                 summary_json_out=dom_summary_out,
             )
             scope_summary_paths.append(dom_summary_out)
-            # Capture output dir / PR number from the first domain that actually
-            # runs (not the first list position — it may have been skipped).
+            # Capture the PR number from the first domain that actually runs
+            # (not the first list position — it may have been skipped).
             if not captured_meta:
-                parsed_dir = extract_output_dir(dom_output)
-                if parsed_dir and not args.output_dir:
-                    output_dir = parsed_dir
                 pr_number = extract_pr_number(dom_output)
                 captured_meta = True
             if extract_status(dom_output) == "OK":
@@ -1595,14 +1576,10 @@ def main():
             # rc=2 means no changes, which is still structured output
             scope_status = "ERROR"
 
-        # Parse status, output_dir, pr_number from scope output
+        # Parse status and PR number from scope output.
         parsed_status = extract_status(scope_output)
         if parsed_status:
             scope_status = parsed_status
-
-        parsed_dir = extract_output_dir(scope_output)
-        if parsed_dir and not args.output_dir:
-            output_dir = parsed_dir
 
         pr_number = extract_pr_number(scope_output)
 
@@ -1638,34 +1615,22 @@ def main():
                 scope_output += sec_output
                 secondary_with_content.append(sec_domain)
     else:
-        # No domain (tests-mutation-reviewer) — detect output dir manually
+        # No domain (tests-mutation-reviewer) — discover PR metadata directly.
         scope_output = "(No scope discovery — this agent does not use domain-based scope)"
-        # Still try to detect PR number and output dir
-        detect_script = os.path.join(plugin_root, "scripts", "review", "agent", "scope.py")
-        if os.path.isfile(detect_script):
-            # Use a dummy domain just to get output dir detection, but we won't use the scope
-            # Instead, just detect PR number via gh/ghe directly
-            pass
 
-        # Try gh/ghe for PR number
+        # This PR number supplies briefing metadata; it never determines paths.
         for cli in ["gh", "ghe"]:
             rc, stdout, _ = run_cmd(
                 [cli, "pr", "view", "--json", "number", "-q", ".number"]
             )
             if rc == 0 and stdout and stdout.isdigit():
                 pr_number = stdout
-                if not args.output_dir:
-                    output_dir = f"/tmp/pr-review-{pr_number}"
-                    os.makedirs(output_dir, exist_ok=True)
                 break
 
         # Fallback: read PR number from review-context.json
         if not pr_number:
             pr_number = load_pr_number_from_context(output_dir)
 
-    # Apply output dir override
-    if args.output_dir:
-        output_dir = args.output_dir
     os.makedirs(output_dir, exist_ok=True)
 
     # Scope facts come from the machine-readable sidecars and only from them

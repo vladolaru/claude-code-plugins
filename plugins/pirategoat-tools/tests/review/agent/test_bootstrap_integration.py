@@ -34,6 +34,14 @@ derive_reviewer_name = _mod.derive_reviewer_name
 ALL_AGENTS = sorted(AGENT_CONFIG.keys())
 
 
+def test_reviewer_protocol_has_no_tmp_pr_review_fallback():
+    protocol = (
+        PLUGIN_ROOT / "agents" / "shared" / "reviewer-protocol.md"
+    ).read_text(encoding="utf-8")
+
+    assert "/tmp/pr-review" not in protocol
+
+
 # ---------------------------------------------------------------------------
 # Independent oracles for the rendered briefing
 # ---------------------------------------------------------------------------

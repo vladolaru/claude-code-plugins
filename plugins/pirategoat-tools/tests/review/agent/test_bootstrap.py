@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -40,6 +41,22 @@ budget_was_capped = _mod.budget_was_capped
 load_scope_facts = _mod.load_scope_facts
 resolve_overall_status = _mod.resolve_overall_status
 REVIEWER_PROTOCOL_SKIP_SECTIONS = _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
+
+
+# =============================================================================
+# CLI argument contract
+# =============================================================================
+
+
+def test_cli_requires_output_dir():
+    result = subprocess.run(
+        [sys.executable, str(BOOTSTRAP_SCRIPT), "--agent", "security-reviewer"],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "ERROR: --output-dir is required" in result.stderr
 
 
 # =============================================================================
@@ -505,25 +522,10 @@ class TestPartitionScopePaths:
         # that never received a briefing as RUNNING until the timeout.
         assert not list(tmp_path.glob("*.started"))
 
-    def test_unpinned_output_dir_still_gets_measured_facts(
+    def test_pinned_output_dir_gets_measured_facts(
         self, tmp_path, monkeypatch
     ):
-        """No --output-dir still means real facts, from a scratch sidecar.
-
-        The summary is the only source of assignment facts, so a run the
-        caller did not pin a directory for writes one to a scratch directory
-        and reads it back. Nothing outside the process reads that directory,
-        so it is created only when a sidecar is actually written and removed
-        at exit.
-        """
-        cleanups = []
-        monkeypatch.setattr(
-            _mod.atexit,
-            "register",
-            lambda func, *args, **kwargs: cleanups.append(
-                (func, args, kwargs)
-            ),
-        )
+        """A durable output directory carries the scope facts between steps."""
         summary_paths = []
 
         def fake_scope(*_args, **kwargs):
@@ -544,25 +546,22 @@ class TestPartitionScopePaths:
         monkeypatch.setattr(_mod, "read_file", lambda _path: "# rules")
         monkeypatch.setattr(_mod, "run_scope_discovery", fake_scope)
         monkeypatch.setattr(
-            sys, "argv", ["bootstrap.py", "--agent", "security-reviewer"]
+            sys, "argv", [
+                "bootstrap.py", "--agent", "security-reviewer",
+                "--output-dir", str(tmp_path),
+            ]
         )
 
         with pytest.raises(SystemExit, match="0"):
             _mod.main()
 
-        scratch = os.path.dirname(summary_paths[0])
-        assert os.path.basename(scratch).startswith("pirategoat-scope-")
+        assert os.path.dirname(summary_paths[0]) == str(tmp_path)
         payload = json.loads(
             (tmp_path / "security-assignment.json").read_text()
         )
         assert payload["in_scope_review_file_count"] == 2
         assert len(payload["inline_diff_files"]) == 1
 
-        # The registered cleanup is the one that removes that directory.
-        assert cleanups, "scratch directory registered no cleanup"
-        for func, args, kwargs in cleanups:
-            func(*args, **kwargs)
-        assert not os.path.exists(scratch)
 
 
 class TestExtractProtocolSections:
