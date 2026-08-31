@@ -1,10 +1,12 @@
 """run_paths — location, allocation, retention, and internal layout of review run dirs."""
 
+import fcntl
 import json
 import os
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -134,7 +136,7 @@ class TestAllocateRunDir:
         timestamps = iter((datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
                            datetime(2026, 1, 2, 3, 4, 6, tzinfo=timezone.utc)))
 
-        class FrozenDateTime:
+        class FrozenDateTime(datetime):
             @classmethod
             def now(cls, tz):
                 return next(timestamps)
@@ -150,6 +152,176 @@ class TestAllocateRunDir:
 
         assert run != exhausted
         assert run_paths.RUN_ID_RE.match(run.name)
+
+    def test_retries_when_the_selected_run_id_collides(
+        self, home, monkeypatch
+    ):
+        class FrozenDateTime(datetime):
+            @classmethod
+            def now(cls, tz):
+                return datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+        target = run_paths.target_dir("branch", "/r", "feat-x")
+        real_mkdir = Path.mkdir
+        collided = []
+
+        def collide_once(path, *args, **kwargs):
+            if run_paths.RUN_ID_RE.match(path.name) and not collided:
+                real_mkdir(path, *args, **kwargs)
+                collided.append(path)
+                raise FileExistsError(path)
+            return real_mkdir(path, *args, **kwargs)
+
+        monkeypatch.setattr(run_paths, "datetime", FrozenDateTime)
+        monkeypatch.setattr(run_paths.secrets, "token_hex", lambda _size: "1000")
+        monkeypatch.setattr(Path, "mkdir", collide_once)
+
+        run = run_paths.allocate_run_dir(target)
+
+        assert collided[0].name == "20260102T030405Z-1000"
+        assert run.name == "20260102T030405Z-1001"
+
+    def test_failed_initialization_removes_the_partial_run_and_releases_lock(
+        self, home, monkeypatch
+    ):
+        target = run_paths.target_dir("branch", "/r", "feat-x")
+        real_mkdir = Path.mkdir
+        failed = False
+
+        def fail_synthesis_once(path, *args, **kwargs):
+            nonlocal failed
+            if path.name == "synthesis" and not failed:
+                failed = True
+                raise OSError("injected initialization failure")
+            return real_mkdir(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "mkdir", fail_synthesis_once)
+        with pytest.raises(OSError, match="injected initialization failure"):
+            run_paths.allocate_run_dir(target)
+
+        runs_dir = target / "runs"
+        assert list(runs_dir.iterdir()) == []
+
+        monkeypatch.setattr(Path, "mkdir", real_mkdir)
+        assert run_paths.allocate_run_dir(target).is_dir()
+
+    def test_live_allocator_lock_times_out_and_an_unlocked_file_is_harmless(
+        self, home, monkeypatch
+    ):
+        target = run_paths.target_dir("branch", "/r", "feat-x")
+        target.mkdir(parents=True)
+        lock_path = target / ".run-allocation.lock"
+        lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        monkeypatch.setattr(
+            run_paths, "_ALLOCATION_LOCK_TIMEOUT_SECONDS", 0.05, raising=False
+        )
+        started = time.monotonic()
+        try:
+            with pytest.raises(TimeoutError, match="allocator lock"):
+                run_paths.allocate_run_dir(target)
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            os.close(lock_fd)
+
+        assert time.monotonic() - started < 1
+        assert not (target / "runs").exists()
+        assert run_paths.allocate_run_dir(target).is_dir()
+
+    def test_concurrent_processes_preserve_allocation_order_and_retention(
+        self, home, tmp_path
+    ):
+        target = run_paths.target_dir("branch", "/r", "feat-x")
+        (target / "runs").mkdir(parents=True)
+        gate = tmp_path / "start"
+        ready_dir = tmp_path / "ready"
+        ready_dir.mkdir()
+        scripts_dir = SCRIPT.parents[1]
+        worker = """
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+from review import run_paths
+
+target = Path(sys.argv[2])
+gate = Path(sys.argv[3])
+ready = Path(sys.argv[4])
+suffix = sys.argv[5]
+delay = float(sys.argv[6])
+
+class FrozenDateTime(datetime):
+    @classmethod
+    def now(cls, tz):
+        return datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+run_paths.datetime = FrozenDateTime
+run_paths.secrets.token_hex = lambda _size: suffix
+real_iterdir = Path.iterdir
+slowed = False
+
+def slow_first_scan(path):
+    global slowed
+    entries = list(real_iterdir(path))
+    if path == target / "runs" and not slowed:
+        slowed = True
+        time.sleep(delay)
+    return iter(entries)
+
+Path.iterdir = slow_first_scan
+ready.touch()
+deadline = time.monotonic() + 5
+while not gate.exists():
+    if time.monotonic() >= deadline:
+        raise TimeoutError("start gate")
+    time.sleep(0.005)
+print(run_paths.allocate_run_dir(target))
+"""
+        suffixes = [
+            "f000", "e000", "d000", "c000", "b000", "a000",
+            "9000", "8000", "7000", "6000", "5000", "4000",
+        ]
+        processes = [
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    worker,
+                    str(scripts_dir),
+                    str(target),
+                    str(gate),
+                    str(ready_dir / str(index)),
+                    suffix,
+                    str(0.1 + index * 0.01),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            for index, suffix in enumerate(suffixes)
+        ]
+        deadline = time.monotonic() + 5
+        while len(list(ready_dir.iterdir())) != len(processes):
+            if time.monotonic() >= deadline:
+                pytest.fail("concurrent allocators did not reach the start gate")
+            time.sleep(0.005)
+        gate.touch()
+        results = [process.communicate(timeout=15) for process in processes]
+
+        assert [
+            (process.returncode, stderr)
+            for process, (_stdout, stderr) in zip(processes, results)
+        ] == [(0, "")] * len(processes)
+        survivors = sorted(
+            path for path in (target / "runs").iterdir()
+            if path.is_dir() and run_paths.RUN_ID_RE.match(path.name)
+        )
+        creation_order = sorted(survivors, key=lambda path: path.stat().st_mtime_ns)
+        assert len(survivors) == run_paths.KEEP_RUNS
+        assert creation_order == survivors
+        assert run_paths.latest_run_dir(target) == survivors[-1]
 
 
 class TestPruneRuns:

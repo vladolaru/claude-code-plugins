@@ -17,6 +17,8 @@ Leaf module: stdlib only.
 """
 
 import argparse
+import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -24,8 +26,10 @@ import re
 import secrets
 import shutil
 import sys
+import time
 import unicodedata
-from datetime import datetime, timezone
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 RUN_ID_RE = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{4}$")
@@ -39,6 +43,10 @@ SCRATCH_SUBDIR = "tmp"
 _RUN_SUBDIRS = (PIPELINE_SUBDIR, REVIEWERS_SUBDIR, SYNTHESIS_SUBDIR, SCRATCH_SUBDIR)
 _IDENTITY_DIGEST_LENGTH = 12
 _READABLE_SEGMENT_LENGTH = 80
+_RUN_TIMESTAMP_FORMAT = "%Y%m%dT%H%M%SZ"
+_ALLOCATION_LOCK_FILENAME = ".run-allocation.lock"
+_ALLOCATION_LOCK_TIMEOUT_SECONDS = 10.0
+_ALLOCATION_LOCK_POLL_SECONDS = 0.01
 
 
 def state_root() -> Path:
@@ -77,32 +85,80 @@ def target_dir(kind: str, repo_root: str, target: str) -> Path:
     return candidate
 
 
-def allocate_run_dir(target: Path) -> Path:
-    runs = target / "runs"
-    runs.mkdir(parents=True, exist_ok=True)
+@contextmanager
+def _allocation_lock(target: Path):
+    target.mkdir(parents=True, exist_ok=True)
+    lock_path = target / _ALLOCATION_LOCK_FILENAME
+    lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    acquired = False
+    deadline = time.monotonic() + _ALLOCATION_LOCK_TIMEOUT_SECONDS
+    try:
+        while True:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except OSError as exc:
+                if exc.errno not in {errno.EACCES, errno.EAGAIN}:
+                    raise
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"timed out waiting for allocator lock: {lock_path}"
+                    ) from exc
+                time.sleep(min(_ALLOCATION_LOCK_POLL_SECONDS, remaining))
+        yield
+    finally:
+        if acquired:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
+
+
+def _next_timestamp(timestamp: str) -> str:
+    current = datetime.strptime(timestamp, _RUN_TIMESTAMP_FORMAT)
+    return (current + timedelta(seconds=1)).strftime(_RUN_TIMESTAMP_FORMAT)
+
+
+def _next_run_id(target: Path) -> str:
+    children = _run_dirs(target)
+    timestamp = datetime.now(timezone.utc).strftime(_RUN_TIMESTAMP_FORMAT)
+    if children:
+        timestamp = max(timestamp, children[-1].name[:16])
     while True:
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        suffix = secrets.token_hex(2)
-        same_timestamp = sorted(
-            c.name for c in runs.iterdir()
-            if c.is_dir() and c.name.startswith(timestamp + "-") and RUN_ID_RE.match(c.name)
-        )
-        if same_timestamp and suffix <= same_timestamp[-1].rsplit("-", 1)[1]:
-            greatest_suffix = same_timestamp[-1].rsplit("-", 1)[1]
-            if greatest_suffix == "ffff":
+        suffixes = [
+            int(child.name[-4:], 16)
+            for child in children
+            if child.name.startswith(timestamp + "-")
+        ]
+        random_suffix = int(secrets.token_hex(2), 16)
+        if not suffixes:
+            return f"{timestamp}-{random_suffix:04x}"
+        greatest_suffix = max(suffixes)
+        if greatest_suffix < 0xFFFF:
+            suffix = max(random_suffix, greatest_suffix + 1)
+            return f"{timestamp}-{suffix:04x}"
+        timestamp = _next_timestamp(timestamp)
+
+
+def allocate_run_dir(target: Path) -> Path:
+    target = Path(target)
+    with _allocation_lock(target):
+        runs = target / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        while True:
+            run_dir = runs / _next_run_id(target)
+            try:
+                run_dir.mkdir()
+            except FileExistsError:
                 continue
-            suffix = f"{int(greatest_suffix, 16) + 1:04x}"
-        run_id = timestamp + "-" + suffix
-        run_dir = runs / run_id
-        try:
-            run_dir.mkdir()
-        except FileExistsError:
-            continue
-        break
-    for sub in _RUN_SUBDIRS:
-        (run_dir / sub).mkdir()
-    prune_runs(target)
-    return run_dir
+            try:
+                for sub in _RUN_SUBDIRS:
+                    (run_dir / sub).mkdir()
+                _prune_runs_unlocked(target, KEEP_RUNS)
+            except Exception:
+                shutil.rmtree(run_dir, ignore_errors=True)
+                raise
+            return run_dir
 
 
 def _run_dirs(target: Path) -> list[Path]:
@@ -113,16 +169,28 @@ def _run_dirs(target: Path) -> list[Path]:
 
 
 def latest_run_dir(target: Path) -> Path | None:
-    children = _run_dirs(target)
-    return children[-1] if children else None
+    target = Path(target)
+    if not (target / "runs").is_dir():
+        return None
+    with _allocation_lock(target):
+        children = _run_dirs(target)
+        return children[-1] if children else None
 
 
-def prune_runs(target: Path, keep: int = KEEP_RUNS) -> list[Path]:
+def _prune_runs_unlocked(target: Path, keep: int) -> list[Path]:
     children = _run_dirs(target)
     deleted = children[:-keep] if keep > 0 else children
     for child in deleted:
         shutil.rmtree(child)
     return deleted
+
+
+def prune_runs(target: Path, keep: int = KEEP_RUNS) -> list[Path]:
+    target = Path(target)
+    if not (target / "runs").is_dir():
+        return []
+    with _allocation_lock(target):
+        return _prune_runs_unlocked(target, keep)
 
 
 def reviewer_dir(run_dir, reviewer: str) -> Path:
