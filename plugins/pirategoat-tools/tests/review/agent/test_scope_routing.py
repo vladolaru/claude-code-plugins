@@ -493,7 +493,7 @@ class TestBranchFreshness:
             max_lines=2000,
             base_ref_only=False,
             summary=False,
-            output_dir=None,
+            output_dir=os.path.join(repo, "review-output"),
             no_merge_base=no_merge_base,
             no_semantic_filter=False,
         )
