@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.115.0] - UNRELEASED
+
+### Changed
+
+- Interactive review runs now write to `~/.pirategoat-tools/reviews/<kind>/<repo>/<target>/runs/<run-id>/` (override via `$PIRATEGOAT_TOOLS_HOME`), one fresh directory per run with the newest 10 kept and an internal layout (`pipeline/`, `reviewers/<reviewer>/`, `synthesis/`, `tmp/`, boundary files at the root); `/tmp/pr-review-*` and `/tmp/branch-review-*` are retired.
+
 ## [1.114.0] - 2026-08-28
 
 Adds trust-gated dependency refresh and a durable measurement layer (worktree hygiene, token usage, skipped steps, synthesis-agent duration), and closes the drift between the reconciliator's hand-written Markdown and its own JSON ledger.

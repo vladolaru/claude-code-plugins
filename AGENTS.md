@@ -248,6 +248,7 @@ The `plugins/pirategoat-tools/tests/` directory contains deterministic evals (no
 | `agents/shared/tests-reviewer-protocol.md` | `pytest plugins/pirategoat-tools/tests/review/agent/test_bootstrap_integration.py -v` |
 | `scripts/review/pipeline.py` | `pytest plugins/pirategoat-tools/tests/review/test_pipeline_infra.py -v` |
 | `scripts/review/pipeline_contract.py` | `pytest plugins/pirategoat-tools/tests/review/test_pipeline.py plugins/pirategoat-tools/tests/review/test_pipeline_infra.py plugins/pirategoat-tools/tests/review/test_pipeline_integration.py -v` |
+| `scripts/review/run_paths.py` | `pytest plugins/pirategoat-tools/tests/review/test_run_paths.py -v` |
 | `scripts/review/briefings.py` | `pytest plugins/pirategoat-tools/tests/review/test_pipeline.py -v` |
 | `scripts/review/orchestration.py` | `pytest plugins/pirategoat-tools/tests/review/test_pipeline_integration.py plugins/pirategoat-tools/tests/review/test_orchestration_hygiene.py plugins/pirategoat-tools/tests/review/test_critic_adjustments.py plugins/pirategoat-tools/tests/review/test_synthesis_lifecycle.py plugins/pirategoat-tools/tests/review/test_report_assembly.py -v` (hygiene covers the step-3 baseline / step-11 sweep and the step-11 usage capture; critic-adjustments covers step 11's adjudication-state inspection and verdict sync; synthesis-lifecycle covers the step-8/10 dispatch markers and the step-9/11 observations; report-assembly covers the step-9/11 `review-record.md` assembly seams) |
 | `scripts/review/orchestration.py` review-record assembler (`assemble_review_record`, `_render_run_notes`, `_render_record_verdict_line`) or `render_review_body` in `scripts/review/review_markdown.py` | `pytest plugins/pirategoat-tools/tests/review/test_report_assembly.py plugins/pirategoat-tools/tests/review/test_review_markdown.py -v` (the record's shared body IS `render_review_body`, so a change to either lands in both) |
@@ -270,11 +271,10 @@ The `plugins/pirategoat-tools/tests/` directory contains deterministic evals (no
 | `scripts/review/agent/output.py` | `pytest plugins/pirategoat-tools/tests/review/agent/test_output.py plugins/pirategoat-tools/tests/grading/test_graders.py -v` |
 | `scripts/review/review_document.py` | `pytest plugins/pirategoat-tools/tests/review/agent/test_output.py plugins/pirategoat-tools/tests/review/test_critic_adjustments.py plugins/pirategoat-tools/tests/grading/test_graders.py -v` (the validators plus both of their consumer boundaries — reviewer publication and ledger adjudication) |
 | `scripts/review/review_markdown.py` | `pytest plugins/pirategoat-tools/tests/review/test_review_markdown.py plugins/pirategoat-tools/tests/review/test_report_assembly.py -v` (the renderer's own suite plus the review-record assembler that shares `render_review_body`) |
-| Any `scripts/review/**/*.py` import block, module-level or inside a function body | `pytest plugins/pirategoat-tools/tests/review/test_import_graph.py -v` (asserts the package's whole import graph — a depth-first walk of every module-level edge finds no cycle, the two documented leaf modules stay leaves, two layering directions an acyclic graph cannot expose stay one-way, and no undocumented function-body import exists; `review_document.py`'s, `review_markdown.py`'s, `critic_adjustments.py`'s, and `agent/output.py`'s rows above rely on this test for their import-graph invariants. `importlib.util.spec_from_file_location` loaders are invisible to it — `pipeline.py`, `agent/scope.py`, and `context.py` load modules that way, so those three are untracked here) |
+| Any `scripts/review/**/*.py` import block, module-level or inside a function body | `pytest plugins/pirategoat-tools/tests/review/test_import_graph.py -v` (asserts the package's whole import graph — a depth-first walk of every module-level edge finds no cycle, the three documented leaf modules stay leaves, two layering directions an acyclic graph cannot expose stay one-way, and no undocumented function-body import exists; `review_document.py`'s, `review_markdown.py`'s, `critic_adjustments.py`'s, and `agent/output.py`'s rows above rely on this test for their import-graph invariants. `importlib.util.spec_from_file_location` loaders are invisible to it — `pipeline.py`, `agent/scope.py`, and `context.py` load modules that way, so those three are untracked here) |
 | `scripts/review/telemetry.py` | `pytest plugins/pirategoat-tools/tests/review/test_telemetry.py -v` |
 | `scripts/review/synthesis_lifecycle.py` | `pytest plugins/pirategoat-tools/tests/review/test_synthesis_lifecycle.py -v` (the module plus its four orchestration seams) |
 | `scripts/review/manifest_sections.py` | `pytest plugins/pirategoat-tools/tests/review/test_telemetry.py plugins/pirategoat-tools/tests/review/test_file_review.py -v` |
-| `scripts/review/pipeline.py` stale-artifact sweep (`_SWEEP_ALLOWLIST`) | `pytest plugins/pirategoat-tools/tests/review/test_pipeline_infra.py -v` |
 | `scripts/review/critic.py` | `pytest plugins/pirategoat-tools/tests/review/test_critic.py -v` |
 | `scripts/review/critic_adjustments.py` | `pytest plugins/pirategoat-tools/tests/review/test_critic_adjustments.py -v` |
 | `scripts/review/verdict_rules.py` | `pytest plugins/pirategoat-tools/tests/review/test_verdict_rules.py plugins/pirategoat-tools/tests/review/agent/test_output.py plugins/pirategoat-tools/tests/review/test_critic_adjustments.py -v` (the shared ladder plus both callers — output.py publishing a review and critic_adjustments recomputing the ledger verdict) |
@@ -322,8 +322,8 @@ The `plugins/pirategoat-tools/tests/` directory contains deterministic evals (no
 
 **Offline compliance grading** (no model calls):
 ```bash
-# Grade existing review output files
-python3 plugins/pirategoat-tools/tests/grading/eval_agent_compliance.py --grade-only /tmp/pr-review-<N>
+# Grade finalized output in one durable review run
+python3 plugins/pirategoat-tools/tests/grading/eval_agent_compliance.py --grade-only <run-dir>
 ```
 
 ### yoloing-safe

@@ -167,6 +167,20 @@ The Codex review path uses native parallel subagents. Each subagent receives
 the same canonical reviewer file used by Claude Code. Claude-specific model
 labels are not translated because the hosts expose different model catalogs.
 
+### Review artifact permissions
+
+Interactive reviews write durable artifacts under `~/.pirategoat-tools/`. If permission prompts are enabled, add `Read(~/.pirategoat-tools/**)` and `Edit(~/.pirategoat-tools/**)` to your user-scope allow rules.
+
+Agents never edit user settings. Add these rules yourself only when you want review sessions to read and write this machine-local state.
+
+## Review Run Storage
+
+Every interactive `/pr-review`, `/code-review`, `/full-code-review`, or `/iterative-review` allocates a fresh run directory under `~/.pirategoat-tools/reviews/<kind>/<repo>/<target>/runs/<run-id>/`; an absolute `$PIRATEGOAT_TOOLS_HOME` changes the state root, and the newest 10 runs per target are kept.
+
+The target directory owns cross-run state such as the incremental branch baseline. Each run directory owns one run and groups its artifacts as boundary files at the root, orchestration state under `pipeline/`, per-reviewer state under `reviewers/<reviewer>/`, reconciliation and critic state under `synthesis/`, and sanctioned probe scratch under `tmp/`.
+
+There is no `latest` symlink: commands resolve the newest lexically sorted run id through `scripts/review/run_paths.py`, the single path authority.
+
 ## How Reviews Work
 
 1. Check for project-specific context (AGENTS.md, CLAUDE.md, skills)
@@ -175,7 +189,7 @@ labels are not translated because the hosts expose different model catalogs.
 4. Report findings with confidence scores
 5. Output both JSON (automation) and Markdown (humans)
 
-All output is dual-format — `.json` for automation, `.md` for reading.
+Final review output is dual-format — canonical `reviewers/<reviewer>/review.json` for automation and derived `reviewers/<reviewer>/review.md` for reading.
 
 ## Documentation
 
@@ -200,6 +214,7 @@ pirategoat-tools/
 │   ├── review/             # Review pipeline, dispatch, context, telemetry
 │   │   ├── pipeline.py           # Executable facade: routing, state, output, telemetry, CLI
 │   │   ├── pipeline_contract.py  # Shared host, step, timeout, path, and Git vocabulary
+│   │   ├── run_paths.py          # Durable run allocation, retention, and artifact paths
 │   │   ├── briefings.py          # Pure curated guidance and briefing formatters
 │   │   ├── orchestration.py      # Side-effecting per-step subprocess and artifact work
 │   │   ├── dispatch_status.py  # Canonical dispatch vocabulary + plan validation

@@ -19,6 +19,7 @@ tests/
 │   ├── test_pipeline.py              # briefings.py through the pipeline.py compatibility facade
 │   ├── test_pipeline_infra.py        # pipeline.py + pipeline_contract.py routing, state, and CLI
 │   ├── test_pipeline_integration.py  # orchestration.py through the pipeline.py compatibility facade
+│   ├── test_run_paths.py             # Durable review location, allocation, retention, and layout authority
 │   ├── test_plan_dispatch.py         # Dispatch planning tests
 │   ├── test_context.py               # Review context collection tests
 │   ├── test_agent_registry.py        # agent_registry.json schema/completeness/cross-reference tests
@@ -128,6 +129,7 @@ The review pipeline tests load `scripts/review/pipeline.py` as the stable compat
 |---|---|---|
 | `scripts/review/pipeline.py` | Conditions, routing, state I/O, output formatting, telemetry/Git identity, CLI | `review/test_pipeline_infra.py` |
 | `scripts/review/pipeline_contract.py` | Shared host, step-sequence, timeout, path, and Git vocabulary | All three pipeline test files |
+| `scripts/review/run_paths.py` | Durable review location, fresh allocation, retention, and grouped artifact paths | `pytest plugins/pirategoat-tools/tests/review/test_run_paths.py -v` |
 | `scripts/review/briefings.py` | Pure guidance and briefing formatting | `review/test_pipeline.py` |
 | `scripts/review/orchestration.py` | Side-effecting per-step subprocess and artifact work | `review/test_pipeline_integration.py` |
 | `scripts/review/manifest_sections.py` | Run-manifest section projections (reached through `telemetry.py`, not the facade) | `review/test_telemetry.py` |
@@ -155,7 +157,7 @@ Integration tests that run `review/agent/bootstrap.py` via subprocess against a 
 | `TestReviewOutputBuilderAPIExample` | Section 3 includes complete builder API usage example (direct `build_output()` call) |
 | `TestBootstrapOutputSizeCap` | Large scope truncated with file reference; small scope inline (direct `build_output()` call) |
 | `TestDynamicDispatchRisk` | dead-code-reviewer gets DYNAMIC_DISPATCH_RISK from the caller's `has_php` fact (PHP → high, no PHP → low); rendered scope text can't drive the decision in either direction (direct `build_output()` call); 3 end-to-end subprocess tests cover `main()`'s own `has_php` derivation, which the direct calls can't reach — including that a domain-excluded PHP test file (under `=== SKIPPED ===`) must not force `high` |
-| `TestOutputFilenameConsistency` | `save_draft()` replaces `<reviewer>-review.draft.json`, then finalization publishes the immutable `<reviewer>-review.json` that bootstrap `OUTPUT_FILES` and reconciliation expect; delivered guidance names final output, never the draft or derived Markdown |
+| `TestOutputFilenameConsistency` | `save_draft()` replaces `reviewers/<reviewer>/review.draft.json`, then finalization publishes immutable `reviewers/<reviewer>/review.json` that bootstrap `OUTPUT_FILES` and reconciliation expect; delivered guidance names final output, never the draft or derived Markdown |
 | `TestBootstrapImportDoesNotBreakTelemetry` | Importing `review.agent.bootstrap` first (package-qualified) must leave a working `ReviewTelemetry` — pins the exact import-cycle regression `derive_reviewer_name`'s extraction to `reviewer_names.py` fixed (a same-package caller importing the name FROM bootstrap re-entered bootstrap mid-initialization and silently broke the telemetry load). Runs in a fresh subprocess since in-process `sys.modules` caching from other tests would mask it. |
 | `TestNotDiffedContractIsDelivered` | The NOT DIFFED positive-claim/derived-complement contract survives protocol stripping through `build_output()`, while rendered scope and source guidance never instruct reviewers to declare gaps. Guards the 1.108.0 failure where a mandatory contract reached zero agents. |
 | `TestEmpiricalProbeContract` | The `pirategoat-probe` naming convention survives protocol stripping into built prompts, and the section is not on the skip-list. The step-11 residue sweep only ever fires on files an agent named this way, so a stripped section makes the enforcement half inert. |
@@ -224,14 +226,14 @@ Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/
 
 ### Review Markdown Tests (`review/test_review_markdown.py`)
 
-Direct unit tests on `scripts/review/review_markdown.py` — the one JSON-to-Markdown projection shared by `<reviewer>-review.md` and `review-findings.md`. Split out of `review/agent/test_output.py` when the renderers left `agent/output.py`; the builder appears here only as a document factory. What is under test is the rendering: the sections a document produces, the `render`/`materialize` CLI, and the materializer that writes derived Markdown beside the JSON it came from.
+Direct unit tests on `scripts/review/review_markdown.py` — the one JSON-to-Markdown projection shared by `reviewers/<reviewer>/review.md` and `review-findings.md`. Split out of `review/agent/test_output.py` when the renderers left `agent/output.py`; the builder appears here only as a document factory. What is under test is the rendering: the sections a document produces, the `render`/`materialize` CLI, and the materializer that writes derived Markdown beside the JSON it came from.
 
 | Class | What it verifies |
 |---|---|
 | `TestRenderMarkdown` | Markdown is a pure function of the canonical JSON dict — same dict in, same Markdown out |
 | `TestMaterializeMarkdown` | The on-demand `materialize` CLI/function reads finalized canonical JSON and writes its derived Markdown |
 | `TestReconciliationSectionsRender` | Every section the reconciliator's old hand-written narrative template carried (recommendations, observations, host context banner, `meta.reconciliation`) now has a rendered home |
-| `TestMaterializeFindingsMarkdown` | One materializer, parameterized — `review-findings.md` and `<reviewer>-review.md` share the same render path, never a second one |
+| `TestMaterializeFindingsMarkdown` | One materializer, parameterized — `review-findings.md` and `reviewers/<reviewer>/review.md` share the same render path, never a second one |
 | `TestAssessmentProvenance` | `## Assessment` is prose about a ledger that keeps changing after critic adjustments — provenance is pinned so a stale claim can't outlive the finding it described |
 | `TestRemovedByCriticSection` | The ledger deliberately keeps what the critic took out, rendered as an audit section rather than silently vanishing |
 | `TestRendererFaithfulness` | Minors that all share one failure mode: the renderer showing content that contradicts what the JSON actually says (e.g. a header claiming a section exists over content that was dropped) |
@@ -393,7 +395,7 @@ Direct unit tests on `scripts/review/telemetry.py` and the run-manifest projecti
 
 ### Synthesis Agent Lifecycle Tests (`review/test_synthesis_lifecycle.py`)
 
-Direct unit tests on `scripts/review/synthesis_lifecycle.py` and its five orchestration seams. The review-reconciliator (step 8) and the decision critic (step 10) never run `agent/bootstrap.py`, never write a `<agent>-review.json`, and are never in `dispatch-plan.json` — the only list `agents_status.py` iterates — so the reviewer lifecycle machinery structurally cannot see them. This suite pins the measurement that replaces it.
+Direct unit tests on `scripts/review/synthesis_lifecycle.py` and its five orchestration seams. The review-reconciliator (step 8) and the decision critic (step 10) never run `agent/bootstrap.py`, never write `reviewers/<agent>/review.json`, and are never in `dispatch-plan.json` — the only list `agents_status.py` iterates — so the reviewer lifecycle machinery structurally cannot see them. This suite pins the measurement that replaces it.
 
 | Class | What it verifies |
 |---|---|
@@ -436,8 +438,8 @@ class GradeResult:
 
 | Function | Input | Checks |
 |---|---|---|
-| `grade_review_json(path)` | Path to `{reviewer}-review.json` | File exists, valid JSON, required fields (`pr_id`, `reviewer`, `schema`, `verdict`, `summary`, `findings`, `checks`, `assessment`, the reviewed-file fields, `meta`), valid severities, exact schema 2, finding/check schemas, reviewed-file coherence, summary structure |
-| `grade_review_markdown(path)` | Path to `{reviewer}-review.md` | File exists, `# ... Review` header, `## Executive Summary`, `**Verdict:**` — rendered from the JSON when absent |
+| `grade_review_json(path)` | Path to `reviewers/<reviewer>/review.json` | File exists, valid JSON, required fields (`pr_id`, `reviewer`, `schema`, `verdict`, `summary`, `findings`, `checks`, `assessment`, the reviewed-file fields, `meta`), valid severities, exact schema 2, finding/check schemas, reviewed-file coherence, summary structure |
+| `grade_review_markdown(path)` | Path to `reviewers/<reviewer>/review.md` | File exists, `# ... Review` header, `## Executive Summary`, `**Verdict:**` — rendered from the JSON when absent |
 | `grade_signal_format(text)` | Return signal text | `STATUS: FINISHED`, `OUTPUT_FILES:`, `COUNTS:`, `VERDICT:`, `SUMMARY:` |
 | `grade_no_domain_files(text)` | Agent output for no-code scenario | APPROVE verdict, zero findings |
 | `grade_error_exit(text)` | Agent output for error scenario | Error indication, no STATUS: FINISHED |
@@ -448,7 +450,7 @@ class GradeResult:
 
 Offline grading tool for review output files — not part of the pytest suite.
 
-- **`--grade-only /path/to/output`** — Scans an existing output directory for finalized `*-review.json` files and grades each JSON/Markdown pair, materializing the derived Markdown from canonical JSON first. Fast, no model calls. Use after a real review run to validate agent output format.
+- **`--grade-only /path/to/run`** — Scans an existing run directory for finalized `reviewers/<reviewer>/review.json` files and grades each JSON/Markdown pair, materializing the derived Markdown from canonical JSON first. Fast, no model calls. Use after a real review run to validate agent output format.
 
 ### Detection Benchmark (live model calls)
 

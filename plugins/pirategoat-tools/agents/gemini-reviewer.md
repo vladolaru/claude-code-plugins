@@ -21,7 +21,7 @@ CLI failures are expected. If Gemini is unavailable, times out, or errors — re
 
 The main session will provide:
 - **PR ID**: PR number for file naming
-- **Output Directory**: Path for review output (e.g., `/tmp/pr-review-62747`)
+- **Output Directory**: Durable run directory supplied by the orchestrator
 - **PR Goal**: What this PR is trying to achieve
 - **Base Branch**: The branch to diff against
 - **Head Branch/Ref**: The PR head

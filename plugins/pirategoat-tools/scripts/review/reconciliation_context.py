@@ -7,8 +7,8 @@ this script collects all agent findings, referenced source snippets, scope annot
 and metadata into a single JSON file the agent can consume immediately.
 
 Usage:
-    python3 reconciliation_context.py --output-dir /tmp/pr-review-42 --git-range abc123..HEAD
-    python3 reconciliation_context.py --output-dir /tmp/pr-review-42 --git-range abc123..HEAD \
+    python3 reconciliation_context.py --output-dir <run-dir> --git-range abc123..HEAD
+    python3 reconciliation_context.py --output-dir <run-dir> --git-range abc123..HEAD \
         --changed-files src/a.py,src/b.py --change-purpose "Fix auth bug" --pr-id 42
 
 Exit codes:

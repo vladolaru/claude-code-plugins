@@ -10,7 +10,7 @@ Replaces duplicated triage logic in command files with a single script.
 Usage:
     python3 plan_dispatch.py --mode full --git-range "main..HEAD" --output-dir /tmp/review
     python3 plan_dispatch.py --mode incremental --git-range "abc123..HEAD" --output-dir /tmp/review
-    python3 plan_dispatch.py --mode pr --git-range "main..HEAD" --output-dir /tmp/pr-review-42
+    python3 plan_dispatch.py --mode pr --git-range "main..HEAD" --output-dir <run-dir>
     python3 plan_dispatch.py --mode full --git-range "main..HEAD" --output-dir /tmp/review --changed-files-list "a.py,b.ts"
 
 Output: JSON dispatch plan on stdout.

@@ -17,7 +17,7 @@ CLI failures are normal — a clean UNAVAILABLE report is a successful outcome. 
 
 The dispatching session provides:
 - **PR ID** — for file naming
-- **Output Directory** — e.g., `/tmp/pr-review-62747`
+- **Output Directory** — the durable run directory supplied by the orchestrator
 - **PR Goal** — what this PR achieves
 - **Base Branch** — diff target (required for Codex)
 - **Head Branch/Ref** — the PR head
@@ -121,7 +121,7 @@ SUMMARY: <One sentence summary of Codex findings>
 
 <example type="CORRECT">
 STATUS: FINISHED
-OUTPUT_FILE: /tmp/pr-review-62747/codex.md
+OUTPUT_FILE: <output-dir>/codex.md
 COUNTS:
   critical: 1
   important: 2
