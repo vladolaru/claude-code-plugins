@@ -15,11 +15,24 @@ SCRIPTS_DIR_FOR_IMPORTS = PLUGIN_ROOT_FOR_IMPORTS / "scripts"
 if str(SCRIPTS_DIR_FOR_IMPORTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR_FOR_IMPORTS))
 from iterative_review.loop import MAX_ROUNDS_HARD_LIMIT
+from iterative_review.paths import iterative_artifact_path, round_artifact_path
 
 TESTS_DIR = Path(__file__).resolve().parent.parent  # iterative_review/ -> tests/
 PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 MODULE_DIR = SCRIPTS_DIR / "iterative_review"
+
+
+def _artifact(output_dir, key):
+    path = iterative_artifact_path(output_dir, key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _round_artifact(output_dir, round_num, key):
+    path = round_artifact_path(output_dir, round_num, key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 class TestCLIParsing:
@@ -66,9 +79,9 @@ class TestCLIParsing:
         # Write state but no outcomes
         state = {"current_round": 1, "max_rounds": 3, "rounds": [],
                  "merge_base": "abc", "terminated": False}
-        (d / "review-loop-state.json").write_text(json.dumps(state))
+        _artifact(d, "state").write_text(json.dumps(state))
         # Write findings so advance expects outcomes
-        (d / "round-1-findings.json").write_text(json.dumps([
+        _round_artifact(d, 1, "findings").write_text(json.dumps([
             {"id": "r1_f1", "severity": "P1", "title": "Test", "body": "X", "location": "a.py:1"}
         ]))
 
@@ -89,11 +102,11 @@ class TestCLIParsing:
                  "merge_base": "abc", "diff_lines_relevant": 100,
                  "terminated": False, "termination": None,
                  "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
-        (d / "review-loop-state.json").write_text(json.dumps(state))
+        _artifact(d, "state").write_text(json.dumps(state))
         findings = [{"id": "r1_f1", "severity": "P1", "title": "T", "body": "B", "location": "a.py:1"}]
-        (d / "round-1-findings.json").write_text(json.dumps(findings))
+        _round_artifact(d, 1, "findings").write_text(json.dumps(findings))
         outcomes = [{"id": "r1_f1", "action": "rejected", "reasoning": "False positive."}]
-        (d / "round-1-outcomes.json").write_text(json.dumps(outcomes))
+        _round_artifact(d, 1, "outcomes").write_text(json.dumps(outcomes))
 
         result = subprocess.run(
             [sys.executable, "-m", "iterative_review",
@@ -104,7 +117,7 @@ class TestCLIParsing:
         )
         assert result.returncode == 0
         # Should detect all_rejected convergence
-        updated_state = json.loads((d / "review-loop-state.json").read_text())
+        updated_state = json.loads(_artifact(d, "state").read_text())
         assert updated_state["terminated"] is True
         assert updated_state["termination"] == "all_rejected"
 
@@ -122,17 +135,17 @@ class TestDeferredPruning:
                  "merge_base": "abc", "diff_lines_relevant": 500,
                  "terminated": False, "termination": None,
                  "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
-        (d / "review-loop-state.json").write_text(json.dumps(state))
+        _artifact(d, "state").write_text(json.dumps(state))
         r1_findings = [
             {"id": "r1_f1", "severity": "P2", "title": "Typo", "body": "X", "location": "readme.md:1"},
             {"id": "r1_f2", "severity": "P2", "title": "Null check", "body": "X", "location": "handler.py:42"},
         ]
-        (d / "round-1-findings.json").write_text(json.dumps(r1_findings))
+        _round_artifact(d, 1, "findings").write_text(json.dumps(r1_findings))
         r1_outcomes = [
             {"id": "r1_f1", "action": "fixed", "summary": "Fixed typo."},
             {"id": "r1_f2", "action": "deferred", "reasoning": "Out of scope."},
         ]
-        (d / "round-1-outcomes.json").write_text(json.dumps(r1_outcomes))
+        _round_artifact(d, 1, "outcomes").write_text(json.dumps(r1_outcomes))
 
         subprocess.run(
             [sys.executable, "-m", "iterative_review",
@@ -145,9 +158,9 @@ class TestDeferredPruning:
         # P3 triggers nitpicks_only convergence so the loop terminates here.
         r2_findings = [{"id": "r2_f1", "severity": "P3", "title": "Null check",
                         "body": "X", "location": "handler.py:42"}]
-        (d / "round-2-findings.json").write_text(json.dumps(r2_findings))
+        _round_artifact(d, 2, "findings").write_text(json.dumps(r2_findings))
         r2_outcomes = [{"id": "r2_f1", "action": "fixed", "summary": "Added null check."}]
-        (d / "round-2-outcomes.json").write_text(json.dumps(r2_outcomes))
+        _round_artifact(d, 2, "outcomes").write_text(json.dumps(r2_outcomes))
 
         subprocess.run(
             [sys.executable, "-m", "iterative_review",
@@ -157,7 +170,7 @@ class TestDeferredPruning:
         )
 
         # The result should prune the deferred item (same title+location was fixed)
-        result_path = d / "review-loop-result.json"
+        result_path = _artifact(d, "result")
         assert result_path.exists()
         result = json.loads(result_path.read_text())
         assert len(result.get("deferred_items", [])) == 0
@@ -173,11 +186,11 @@ class TestAdvanceIdempotency:
                  "merge_base": "abc", "diff_lines_relevant": 500,
                  "terminated": False, "termination": None,
                  "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
-        (d / "review-loop-state.json").write_text(json.dumps(state))
+        _artifact(d, "state").write_text(json.dumps(state))
         findings = [{"id": "r1_f1", "severity": "P1", "title": "A", "body": "X", "location": "a.py:1"}]
-        (d / "round-1-findings.json").write_text(json.dumps(findings))
+        _round_artifact(d, 1, "findings").write_text(json.dumps(findings))
         outcomes = [{"id": "r1_f1", "action": "fixed", "summary": "Done."}]
-        (d / "round-1-outcomes.json").write_text(json.dumps(outcomes))
+        _round_artifact(d, 1, "outcomes").write_text(json.dumps(outcomes))
 
         cmd = [sys.executable, "-m", "iterative_review",
                "--action", "advance", "--round", "1",
@@ -187,7 +200,7 @@ class TestAdvanceIdempotency:
         subprocess.run(cmd, capture_output=True, text=True, cwd=str(SCRIPTS_DIR))
         subprocess.run(cmd, capture_output=True, text=True, cwd=str(SCRIPTS_DIR))
 
-        updated_state = json.loads((d / "review-loop-state.json").read_text())
+        updated_state = json.loads(_artifact(d, "state").read_text())
         round_records = [r for r in updated_state["rounds"] if r["round"] == 1]
         assert len(round_records) == 1, f"Expected 1 record for round 1, got {len(round_records)}"
 
@@ -203,19 +216,19 @@ class TestAdvanceRoundSummary:
                  "merge_base": "abc", "diff_lines_relevant": 500,
                  "terminated": False, "termination": None,
                  "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
-        (d / "review-loop-state.json").write_text(json.dumps(state))
+        _artifact(d, "state").write_text(json.dumps(state))
         findings = [
             {"id": "r1_f1", "severity": "P1", "title": "A", "body": "X", "location": "a.py:1"},
             {"id": "r1_f2", "severity": "P1", "title": "B", "body": "Y", "location": "b.py:2"},
             {"id": "r1_f3", "severity": "P2", "title": "C", "body": "Z", "location": "c.py:3"},
         ]
-        (d / "round-1-findings.json").write_text(json.dumps(findings))
+        _round_artifact(d, 1, "findings").write_text(json.dumps(findings))
         outcomes = [
             {"id": "r1_f1", "action": "fixed", "summary": "Fixed it."},
             {"id": "r1_f2", "action": "rejected", "reasoning": "Not real."},
             {"id": "r1_f3", "action": "deferred", "reasoning": "Out of scope."},
         ]
-        (d / "round-1-outcomes.json").write_text(json.dumps(outcomes))
+        _round_artifact(d, 1, "outcomes").write_text(json.dumps(outcomes))
 
         result = subprocess.run(
             [sys.executable, "-m", "iterative_review",
@@ -225,7 +238,7 @@ class TestAdvanceRoundSummary:
             cwd=str(SCRIPTS_DIR),
         )
         assert result.returncode == 0
-        updated_state = json.loads((d / "review-loop-state.json").read_text())
+        updated_state = json.loads(_artifact(d, "state").read_text())
         assert len(updated_state["rounds"]) == 1
         r = updated_state["rounds"][0]
         assert r["fixed"] == 1
@@ -241,15 +254,15 @@ class TestAdvanceRoundSummary:
                  "merge_base": "abc", "diff_lines_relevant": 500,
                  "terminated": False, "termination": None,
                  "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
-        (d / "review-loop-state.json").write_text(json.dumps(state))
+        _artifact(d, "state").write_text(json.dumps(state))
         findings = [
             {"id": "r1_f1", "severity": "P1", "title": "Bug", "body": "X", "location": "a.py:1"},
         ]
-        (d / "round-1-findings.json").write_text(json.dumps(findings))
+        _round_artifact(d, 1, "findings").write_text(json.dumps(findings))
         outcomes = [
             {"id": "r1_f1", "action": "deferred", "reasoning": "Out of scope."},
         ]
-        (d / "round-1-outcomes.json").write_text(json.dumps(outcomes))
+        _round_artifact(d, 1, "outcomes").write_text(json.dumps(outcomes))
 
         subprocess.run(
             [sys.executable, "-m", "iterative_review",
@@ -258,7 +271,7 @@ class TestAdvanceRoundSummary:
             capture_output=True, text=True,
             cwd=str(SCRIPTS_DIR),
         )
-        jsonl_path = d / "deferred-items.jsonl"
+        jsonl_path = _artifact(d, "deferred")
         assert jsonl_path.exists()
         items = [json.loads(line) for line in jsonl_path.read_text().strip().split("\n")]
         assert len(items) == 1
@@ -276,18 +289,18 @@ class TestAdvanceConvergence:
                  "merge_base": "abc", "diff_lines_relevant": 100,
                  "terminated": False, "termination": None,
                  "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
-        (d / "review-loop-state.json").write_text(json.dumps(state))
+        _artifact(d, "state").write_text(json.dumps(state))
         # Use mixed P3 severities — P3 fixed does not trigger extension
         findings = [
             {"id": "r3_f1", "severity": "P3", "title": "A", "body": "X", "location": "a.py:1"},
             {"id": "r3_f2", "severity": "P2", "title": "B", "body": "Y", "location": "b.py:2"},
         ]
-        (d / "round-3-findings.json").write_text(json.dumps(findings))
+        _round_artifact(d, 3, "findings").write_text(json.dumps(findings))
         outcomes = [
             {"id": "r3_f1", "action": "fixed", "summary": "Fixed."},
             {"id": "r3_f2", "action": "rejected", "reasoning": "Not real."},
         ]
-        (d / "round-3-outcomes.json").write_text(json.dumps(outcomes))
+        _round_artifact(d, 3, "outcomes").write_text(json.dumps(outcomes))
 
         result = subprocess.run(
             [sys.executable, "-m", "iterative_review",
@@ -297,7 +310,7 @@ class TestAdvanceConvergence:
             cwd=str(SCRIPTS_DIR),
         )
         assert result.returncode == 0
-        updated_state = json.loads((d / "review-loop-state.json").read_text())
+        updated_state = json.loads(_artifact(d, "state").read_text())
         assert updated_state["terminated"] is True
         assert updated_state["termination"] == "max_rounds"
 
@@ -309,15 +322,15 @@ class TestAdvanceConvergence:
                  "merge_base": "abc", "diff_lines_relevant": 100,
                  "terminated": False, "termination": None,
                  "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
-        (d / "review-loop-state.json").write_text(json.dumps(state))
+        _artifact(d, "state").write_text(json.dumps(state))
         findings = [
             {"id": "r3_f1", "severity": "P1", "title": "Bug", "body": "X", "location": "a.py:1"},
         ]
-        (d / "round-3-findings.json").write_text(json.dumps(findings))
+        _round_artifact(d, 3, "findings").write_text(json.dumps(findings))
         outcomes = [
             {"id": "r3_f1", "action": "fixed", "summary": "Fixed."},
         ]
-        (d / "round-3-outcomes.json").write_text(json.dumps(outcomes))
+        _round_artifact(d, 3, "outcomes").write_text(json.dumps(outcomes))
 
         result = subprocess.run(
             [sys.executable, "-m", "iterative_review",
@@ -327,7 +340,7 @@ class TestAdvanceConvergence:
             cwd=str(SCRIPTS_DIR),
         )
         assert result.returncode == 0
-        updated_state = json.loads((d / "review-loop-state.json").read_text())
+        updated_state = json.loads(_artifact(d, "state").read_text())
         assert updated_state["terminated"] is False
         assert updated_state["max_rounds"] == 5  # P1 extends by +2
         assert "round 4" in result.stdout.lower()
@@ -340,15 +353,15 @@ class TestAdvanceConvergence:
                  "merge_base": "abc", "diff_lines_relevant": 100,
                  "terminated": False, "termination": None,
                  "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
-        (d / "review-loop-state.json").write_text(json.dumps(state))
+        _artifact(d, "state").write_text(json.dumps(state))
         findings = [
             {"id": "r3_f1", "severity": "P0", "title": "Critical", "body": "X", "location": "a.py:1"},
         ]
-        (d / "round-3-findings.json").write_text(json.dumps(findings))
+        _round_artifact(d, 3, "findings").write_text(json.dumps(findings))
         outcomes = [
             {"id": "r3_f1", "action": "fixed", "summary": "Fixed."},
         ]
-        (d / "round-3-outcomes.json").write_text(json.dumps(outcomes))
+        _round_artifact(d, 3, "outcomes").write_text(json.dumps(outcomes))
 
         result = subprocess.run(
             [sys.executable, "-m", "iterative_review",
@@ -358,7 +371,7 @@ class TestAdvanceConvergence:
             cwd=str(SCRIPTS_DIR),
         )
         assert result.returncode == 0
-        updated_state = json.loads((d / "review-loop-state.json").read_text())
+        updated_state = json.loads(_artifact(d, "state").read_text())
         assert updated_state["max_rounds"] == 5  # P0 extends by +2
 
     def test_p2_at_max_rounds_extends(self, tmp_path):
@@ -369,15 +382,15 @@ class TestAdvanceConvergence:
                  "merge_base": "abc", "diff_lines_relevant": 100,
                  "terminated": False, "termination": None,
                  "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
-        (d / "review-loop-state.json").write_text(json.dumps(state))
+        _artifact(d, "state").write_text(json.dumps(state))
         findings = [
             {"id": "r3_f1", "severity": "P2", "title": "Minor", "body": "X", "location": "a.py:1"},
         ]
-        (d / "round-3-findings.json").write_text(json.dumps(findings))
+        _round_artifact(d, 3, "findings").write_text(json.dumps(findings))
         outcomes = [
             {"id": "r3_f1", "action": "fixed", "summary": "Fixed."},
         ]
-        (d / "round-3-outcomes.json").write_text(json.dumps(outcomes))
+        _round_artifact(d, 3, "outcomes").write_text(json.dumps(outcomes))
 
         result = subprocess.run(
             [sys.executable, "-m", "iterative_review",
@@ -387,7 +400,7 @@ class TestAdvanceConvergence:
             cwd=str(SCRIPTS_DIR),
         )
         assert result.returncode == 0
-        updated_state = json.loads((d / "review-loop-state.json").read_text())
+        updated_state = json.loads(_artifact(d, "state").read_text())
         assert updated_state["terminated"] is False
         assert updated_state["max_rounds"] == 4  # P2 extends by +1
 
@@ -399,15 +412,15 @@ class TestAdvanceConvergence:
                  "merge_base": "abc", "diff_lines_relevant": 100,
                  "terminated": False, "termination": None,
                  "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
-        (d / "review-loop-state.json").write_text(json.dumps(state))
+        _artifact(d, "state").write_text(json.dumps(state))
         findings = [
             {"id": "r3_f1", "severity": "P1", "title": "Bug", "body": "X", "location": "a.py:1"},
         ]
-        (d / "round-3-findings.json").write_text(json.dumps(findings))
+        _round_artifact(d, 3, "findings").write_text(json.dumps(findings))
         outcomes = [
             {"id": "r3_f1", "action": "deferred", "reasoning": "Out of scope."},
         ]
-        (d / "round-3-outcomes.json").write_text(json.dumps(outcomes))
+        _round_artifact(d, 3, "outcomes").write_text(json.dumps(outcomes))
 
         result = subprocess.run(
             [sys.executable, "-m", "iterative_review",
@@ -417,7 +430,7 @@ class TestAdvanceConvergence:
             cwd=str(SCRIPTS_DIR),
         )
         assert result.returncode == 0
-        updated_state = json.loads((d / "review-loop-state.json").read_text())
+        updated_state = json.loads(_artifact(d, "state").read_text())
         assert updated_state["terminated"] is True
         assert updated_state["max_rounds"] == 3  # not extended
 
@@ -429,15 +442,15 @@ class TestAdvanceConvergence:
                  "merge_base": "abc", "diff_lines_relevant": 100,
                  "terminated": False, "termination": None,
                  "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
-        (d / "review-loop-state.json").write_text(json.dumps(state))
+        _artifact(d, "state").write_text(json.dumps(state))
         findings = [
             {"id": "r15_f1", "severity": "P1", "title": "Bug", "body": "X", "location": "a.py:1"},
         ]
-        (d / "round-15-findings.json").write_text(json.dumps(findings))
+        _round_artifact(d, 15, "findings").write_text(json.dumps(findings))
         outcomes = [
             {"id": "r15_f1", "action": "fixed", "summary": "Fixed."},
         ]
-        (d / "round-15-outcomes.json").write_text(json.dumps(outcomes))
+        _round_artifact(d, 15, "outcomes").write_text(json.dumps(outcomes))
 
         result = subprocess.run(
             [sys.executable, "-m", "iterative_review",
@@ -447,7 +460,7 @@ class TestAdvanceConvergence:
             cwd=str(SCRIPTS_DIR),
         )
         assert result.returncode == 0
-        updated_state = json.loads((d / "review-loop-state.json").read_text())
+        updated_state = json.loads(_artifact(d, "state").read_text())
         assert updated_state["terminated"] is True
         assert updated_state["termination"] == "hard_limit"
         assert updated_state["max_rounds"] == 15  # not extended
@@ -475,16 +488,16 @@ class TestTieredRoundExtension:
                  "rounds": [], "merge_base": "abc", "diff_lines_relevant": 100,
                  "terminated": False, "termination": None,
                  "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
-        (d / "review-loop-state.json").write_text(json.dumps(state))
+        _artifact(d, "state").write_text(json.dumps(state))
         findings = [
             {"id": f"r{limit_minus_1}_f1", "severity": "P0", "title": "Critical",
              "body": "X", "location": "a.py:1"},
         ]
-        (d / f"round-{limit_minus_1}-findings.json").write_text(json.dumps(findings))
+        _round_artifact(d, limit_minus_1, "findings").write_text(json.dumps(findings))
         outcomes = [
             {"id": f"r{limit_minus_1}_f1", "action": "fixed", "summary": "Fixed."},
         ]
-        (d / f"round-{limit_minus_1}-outcomes.json").write_text(json.dumps(outcomes))
+        _round_artifact(d, limit_minus_1, "outcomes").write_text(json.dumps(outcomes))
 
         result = subprocess.run(
             [sys.executable, "-m", "iterative_review",
@@ -494,7 +507,7 @@ class TestTieredRoundExtension:
             cwd=str(SCRIPTS_DIR),
         )
         assert result.returncode == 0
-        updated_state = json.loads((d / "review-loop-state.json").read_text())
+        updated_state = json.loads(_artifact(d, "state").read_text())
         # P0 wants +2, but capped at hard limit
         assert updated_state["max_rounds"] == MAX_ROUNDS_HARD_LIMIT
         assert updated_state["terminated"] is False
@@ -511,11 +524,11 @@ class TestAdvanceResultFile:
                  "merge_base": "abc", "diff_lines_relevant": 100,
                  "terminated": False, "termination": None,
                  "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
-        (d / "review-loop-state.json").write_text(json.dumps(state))
+        _artifact(d, "state").write_text(json.dumps(state))
         findings = [{"id": "r1_f1", "severity": "P1", "title": "T", "body": "B", "location": "a.py:1"}]
-        (d / "round-1-findings.json").write_text(json.dumps(findings))
+        _round_artifact(d, 1, "findings").write_text(json.dumps(findings))
         outcomes = [{"id": "r1_f1", "action": "rejected", "reasoning": "False positive."}]
-        (d / "round-1-outcomes.json").write_text(json.dumps(outcomes))
+        _round_artifact(d, 1, "outcomes").write_text(json.dumps(outcomes))
 
         subprocess.run(
             [sys.executable, "-m", "iterative_review",
@@ -524,7 +537,7 @@ class TestAdvanceResultFile:
             capture_output=True, text=True,
             cwd=str(SCRIPTS_DIR),
         )
-        result_path = d / "review-loop-result.json"
+        result_path = _artifact(d, "result")
         assert result_path.exists()
         result_data = json.loads(result_path.read_text())
         assert result_data["termination"] == "all_rejected"
@@ -540,17 +553,17 @@ class TestAdvanceResultFile:
                  "merge_base": "abc", "diff_lines_relevant": 500,
                  "terminated": False, "termination": None,
                  "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
-        (d / "review-loop-state.json").write_text(json.dumps(state))
+        _artifact(d, "state").write_text(json.dumps(state))
         findings = [
             {"id": "r1_f1", "severity": "P1", "title": "A", "body": "X", "location": "a.py:1"},
             {"id": "r1_f2", "severity": "P2", "title": "B", "body": "Y", "location": "b.py:2"},
         ]
-        (d / "round-1-findings.json").write_text(json.dumps(findings))
+        _round_artifact(d, 1, "findings").write_text(json.dumps(findings))
         outcomes = [
             {"id": "r1_f1", "action": "fixed", "summary": "Done."},
             {"id": "r1_f2", "action": "rejected", "reasoning": "Not real."},
         ]
-        (d / "round-1-outcomes.json").write_text(json.dumps(outcomes))
+        _round_artifact(d, 1, "outcomes").write_text(json.dumps(outcomes))
 
         subprocess.run(
             [sys.executable, "-m", "iterative_review",
@@ -559,7 +572,7 @@ class TestAdvanceResultFile:
             capture_output=True, text=True,
             cwd=str(SCRIPTS_DIR),
         )
-        result_path = d / "review-loop-result.json"
+        result_path = _artifact(d, "result")
         assert not result_path.exists()
 
 
@@ -575,7 +588,7 @@ class TestAdvanceTerminatedState:
                  "merge_base": "abc", "diff_lines_relevant": 100,
                  "terminated": True, "termination": "all_rejected",
                  "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
-        (d / "review-loop-state.json").write_text(json.dumps(state))
+        _artifact(d, "state").write_text(json.dumps(state))
 
         result = subprocess.run(
             [sys.executable, "-m", "iterative_review",
@@ -599,17 +612,17 @@ class TestAdvanceMissingOutcomes:
                  "merge_base": "abc", "diff_lines_relevant": 100,
                  "terminated": False, "termination": None,
                  "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
-        (d / "review-loop-state.json").write_text(json.dumps(state))
+        _artifact(d, "state").write_text(json.dumps(state))
         findings = [
             {"id": "r1_f1", "severity": "P1", "title": "A", "body": "X", "location": "a.py:1"},
             {"id": "r1_f2", "severity": "P2", "title": "B", "body": "Y", "location": "b.py:2"},
         ]
-        (d / "round-1-findings.json").write_text(json.dumps(findings))
+        _round_artifact(d, 1, "findings").write_text(json.dumps(findings))
         # Only outcome for r1_f1 -- r1_f2 is missing
         outcomes = [
             {"id": "r1_f1", "action": "fixed", "summary": "Done."},
         ]
-        (d / "round-1-outcomes.json").write_text(json.dumps(outcomes))
+        _round_artifact(d, 1, "outcomes").write_text(json.dumps(outcomes))
 
         result = subprocess.run(
             [sys.executable, "-m", "iterative_review",
@@ -699,7 +712,7 @@ class TestZeroFindingsArtifact:
             "total_rejected": 0, "total_deferred": 0,
             "rounds": state["rounds"],
         }
-        result_path = d / "review-loop-result.json"
+        result_path = _artifact(d, "result")
         result_path.write_text(json.dumps(result_data, indent=2))
 
         # Verify
@@ -866,7 +879,7 @@ class TestPreflightIntegration:
         assert result.returncode == 0
         assert "UNAVAILABLE" in result.stdout
         # Verify result file was written
-        result_path = d / "review-loop-result.json"
+        result_path = _artifact(d, "result")
         assert result_path.exists()
         data = json.loads(result_path.read_text())
         assert data["termination"] == "backend_unavailable"

@@ -17,6 +17,7 @@ from iterative_review.briefing import (
     format_timeout_briefing,
     _TERMINATION_REASONS,
 )
+from iterative_review.paths import round_artifact_path
 
 
 SAMPLE_FINDINGS = [
@@ -49,15 +50,22 @@ class TestEvaluationBriefing:
         assert "db.py:42-45" in text
         assert "handler.py:10" in text
 
-    def test_contains_evaluation_steps(self):
-        text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=1, merge_base="abc", diff_lines=100)
+    def test_contains_evaluation_steps(self, tmp_path):
+        outcomes_path = round_artifact_path(tmp_path, 1, "outcomes")
+        text = format_evaluation_briefing(
+            SAMPLE_FINDINGS,
+            round_num=1,
+            merge_base="abc",
+            diff_lines=100,
+            outcomes_path=outcomes_path,
+        )
         assert "Evaluate" in text
         assert "1. READ" in text
         assert "2. VERIFY" in text
         assert "3. EVALUATE" in text
         assert "4. DECIDE" in text
         assert "Fix discipline" in text
-        assert "outcomes.json" in text
+        assert str(outcomes_path) in text
 
     def test_contains_phase_headers(self):
         text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=1, merge_base="abc", diff_lines=100)
@@ -65,11 +73,18 @@ class TestEvaluationBriefing:
         assert "### Phase 2: Fix" in text
         assert "### Phase 3: Commit and Record" in text
 
-    def test_outcomes_format_uses_round_num(self):
-        text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=3, merge_base="abc", diff_lines=100)
+    def test_outcomes_format_uses_round_num(self, tmp_path):
+        outcomes_path = round_artifact_path(tmp_path, 3, "outcomes")
+        text = format_evaluation_briefing(
+            SAMPLE_FINDINGS,
+            round_num=3,
+            merge_base="abc",
+            diff_lines=100,
+            outcomes_path=outcomes_path,
+        )
         assert "r3_f1" in text
         assert "r3_f2" in text
-        assert "round-3-outcomes.json" in text
+        assert str(outcomes_path) in text
 
     def test_outcomes_format_shows_all_actions(self):
         text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=1, merge_base="abc", diff_lines=100)
@@ -187,9 +202,12 @@ class TestDegradedBriefing:
         assert "EVALUATE" in text
         assert "DECIDE" in text
 
-    def test_uses_round_num_for_outcomes_file(self):
-        text = format_degraded_briefing(round_num=3, raw_id="r3_raw")
-        assert "round-3-outcomes.json" in text
+    def test_uses_round_num_for_outcomes_file(self, tmp_path):
+        outcomes_path = round_artifact_path(tmp_path, 3, "outcomes")
+        text = format_degraded_briefing(
+            round_num=3, raw_id="r3_raw", outcomes_path=outcomes_path
+        )
+        assert str(outcomes_path) in text
         assert "r3_raw" in text
 
 

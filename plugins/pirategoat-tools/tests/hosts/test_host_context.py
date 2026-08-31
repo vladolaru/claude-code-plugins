@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from hosts import host_context
+
 PLUGIN_SCRIPTS = (
     Path(__file__).parent.parent.parent / "scripts"
 ).resolve()
@@ -96,6 +98,28 @@ def test_cli_writes_host_context_into_review_context(tmp_path):
     assert review_context["git"]["head_ref"] == "feature"
     assert review_context["host_context"]["resolved"][0]["name"] == "woocommerce"
     assert review_context["host_context"]["resolved"][0]["path"] == str(plugin)
+
+
+def test_main_resolves_review_context_through_canonical_authority(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    outdir = tmp_path / "out"
+    canonical_path = outdir / "canonical-review-context.json"
+    resolved = []
+
+    def resolve_artifact(run_dir, key):
+        resolved.append((Path(run_dir), key))
+        return canonical_path
+
+    monkeypatch.setattr(host_context, "artifact_path", resolve_artifact)
+
+    assert host_context.main(
+        ["--repo", str(repo), "--output-dir", str(outdir)]
+    ) == 0
+    assert resolved == [(outdir, "review_context")]
+    assert json.loads(canonical_path.read_text())["host_context"]["version"] == 1
 
 
 def test_cli_missing_args_errors(tmp_path):

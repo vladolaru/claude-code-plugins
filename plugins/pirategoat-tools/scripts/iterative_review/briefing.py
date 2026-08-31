@@ -6,7 +6,13 @@ SITUATION / ACTIONS / HANDOFF structure in the briefing headers.
 """
 
 
-def format_evaluation_briefing(findings, round_num, merge_base, diff_lines):
+def format_evaluation_briefing(
+    findings,
+    round_num,
+    merge_base,
+    diff_lines,
+    outcomes_path=None,
+):
     """Format the evaluation briefing for a round's findings."""
     lines = []
 
@@ -121,7 +127,12 @@ def format_evaluation_briefing(findings, round_num, merge_base, diff_lines):
     lines.append("  - The next review round reviews committed changes against the merge base")
     lines.append("  - Uncommitted fixes are invisible to the independent reviewer")
     lines.append("")
-    lines.append(f"Record — write round-{round_num}-outcomes.json with one entry per finding:")
+    outcomes_target = (
+        f"`{outcomes_path}`" if outcomes_path else "the round outcomes artifact"
+    )
+    lines.append(
+        f"Record — write {outcomes_target} with one entry per finding:"
+    )
     lines.append("")
     lines.append(f'  [{{"id": "r{round_num}_f1", "severity": "P1", "action": "fixed", "summary": "What was fixed."}},')
     lines.append(f'   {{"id": "r{round_num}_f2", "severity": "P0", "action": "rejected", "reasoning": "Why it was rejected."}},')
@@ -218,11 +229,13 @@ def format_completion_briefing(termination, rounds_completed, total_fixed,
     lines.append(f"Fixed: {total_fixed} | Rejected: {total_rejected} | Deferred: {total_deferred}")
     lines.append("")
     lines.append("Report these results to the user. If there are deferred items in")
-    lines.append("review-loop-result.json, list them as follow-ups for the PR description.")
+    lines.append(
+        "the loop result, list them as follow-ups for the PR description."
+    )
     return "\n".join(lines)
 
 
-def format_degraded_briefing(round_num, raw_id):
+def format_degraded_briefing(round_num, raw_id, outcomes_path=None):
     """Format briefing when the review backend returned unstructured output."""
     lines = []
     lines.append(f"{'═' * 55}")
@@ -238,7 +251,10 @@ def format_degraded_briefing(round_num, raw_id):
     lines.append("  - Evaluate each issue against the code (READ → VERIFY → EVALUATE → DECIDE)")
     lines.append("  - Assess overall severity (P0-P3) across all issues found")
     lines.append("")
-    lines.append(f"Write exactly one outcome to round-{round_num}-outcomes.json")
+    outcomes_target = (
+        f"`{outcomes_path}`" if outcomes_path else "the round outcomes artifact"
+    )
+    lines.append(f"Write exactly one outcome to {outcomes_target}")
     lines.append(f"with `{raw_id}` as the finding ID. Set severity to your assessed level (P0-P3).")
     lines.append("Pick the action using this priority:")
     lines.append("  - If any issues were fixed → action: fixed (ensures another review pass)")

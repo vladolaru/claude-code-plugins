@@ -8,6 +8,8 @@ import json
 import os
 import subprocess
 
+from ..paths import round_artifact_path
+
 TIMEOUT = 1800  # 30 minutes — used by invoke_review and timeout briefings
 TIMEOUT_SENTINEL = "__CODEX_TIMEOUT__"
 
@@ -212,10 +214,11 @@ def write_prompt_file(output_dir, round_num, rubric, merge_base,
         f"and what you considered but chose not to flag.\n"
     )
 
-    path = os.path.join(output_dir, f"round-{round_num}-prompt.md")
+    path = round_artifact_path(output_dir, round_num, "prompt")
+    path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         f.write("\n".join(parts))
-    return path
+    return str(path)
 
 
 def get_schema_path():
@@ -262,7 +265,7 @@ def invoke_review(prompt_file, schema_file, timeout=TIMEOUT, effort=None,
     output_file = kwargs.get("output_file")
     if output_file is None:
         import tempfile
-        fd, output_file = tempfile.mkstemp(suffix="-codex-output.json")
+        fd, output_file = tempfile.mkstemp(suffix="-review-output.json")
         os.close(fd)
 
     # Resolve all paths to absolute before changing cwd to repo root

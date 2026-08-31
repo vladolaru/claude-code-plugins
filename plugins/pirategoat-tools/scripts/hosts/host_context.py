@@ -3,7 +3,7 @@
 Usage:
   python <plugin>/scripts/hosts/host_context.py --repo <repo-path> --output-dir <out-dir>
 
-Writes host-context.json and review-context.json.host_context into --output-dir.
+Writes host discovery output and embeds it in the canonical review context.
 Also echoes JSON to stdout.
 """
 
@@ -20,6 +20,7 @@ if SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, SCRIPTS_DIR)
 
 from hosts.chain import ResolverChain
+from review.run_paths import artifact_path
 
 
 def main(argv=None) -> int:
@@ -39,7 +40,7 @@ def main(argv=None) -> int:
     with open(out_path, "w") as f:
         json.dump(payload, f, indent=2)
 
-    review_context_path = os.path.join(args.output_dir, "review-context.json")
+    review_context_path = artifact_path(args.output_dir, "review_context")
     review_context = {}
     if os.path.exists(review_context_path):
         try:

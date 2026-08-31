@@ -386,15 +386,30 @@ class TestInternalLayout:
 class TestArtifactLiteralAuthority:
     def test_run_artifact_literals_exist_only_in_path_authorities(self):
         scripts = Path(__file__).resolve().parents[2] / "scripts"
+        from iterative_review import paths as iterative_paths
+
         allowed = {
             scripts / "review" / "run_paths.py",
             scripts / "review" / "reviewer_lifecycle.py",
+            scripts / "iterative_review" / "paths.py",
         }
         literals = {
             filename for _subdir, filename in run_paths.ARTIFACTS.values()
-        } | {"scope-summary", "scoped-diff.patch", ".synthesis-started"}
+        } | {
+            filename
+            for _subdir, filename in iterative_paths.ITERATIVE_ARTIFACTS.values()
+        } | set(iterative_paths.ROUND_ARTIFACTS.values()) | {
+            "scope-summary",
+            "scoped-diff.patch",
+            ".synthesis-started",
+        }
         violations = []
-        for root in (scripts / "review", scripts / "analysis"):
+        for root in (
+            scripts / "review",
+            scripts / "analysis",
+            scripts / "hosts",
+            scripts / "iterative_review",
+        ):
             for path in root.rglob("*.py"):
                 if path in allowed:
                     continue

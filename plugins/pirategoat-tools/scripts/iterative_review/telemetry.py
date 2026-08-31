@@ -1,13 +1,9 @@
-"""JSONL telemetry for the iterative review loop.
-
-Two output files:
-- review-progress.jsonl: Live heartbeat log, reset each round. Main session tails this.
-- pipeline-events.jsonl: Durable pipeline events for bot/post-run analysis.
-"""
+"""JSONL telemetry for iterative review progress and durable events."""
 
 import json
-import os
 from datetime import datetime, timezone
+
+from .paths import iterative_artifact_path
 
 
 class ReviewTelemetry:
@@ -15,12 +11,13 @@ class ReviewTelemetry:
 
     def __init__(self, output_dir):
         self._output_dir = output_dir
-        self._progress_path = os.path.join(output_dir, "review-progress.jsonl")
-        self._events_path = os.path.join(output_dir, "pipeline-events.jsonl")
+        self._progress_path = iterative_artifact_path(output_dir, "progress")
+        self._events_path = iterative_artifact_path(output_dir, "events")
 
     def _write(self, path, event, fields=None):
         """Append a JSONL line. Best-effort — never raises."""
         try:
+            path.parent.mkdir(parents=True, exist_ok=True)
             line = json.dumps({
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "event": event,
@@ -32,16 +29,17 @@ class ReviewTelemetry:
             pass
 
     def progress(self, event, **fields):
-        """Write to review-progress.jsonl (live, reset each round)."""
+        """Write to the live progress log, which resets each round."""
         self._write(self._progress_path, event, fields)
 
     def pipeline_event(self, event, **fields):
-        """Write to pipeline-events.jsonl (durable, never reset)."""
+        """Write to the durable pipeline event log."""
         self._write(self._events_path, event, fields)
 
     def reset_progress(self):
-        """Truncate review-progress.jsonl for a new round."""
+        """Truncate the live progress log for a new round."""
         try:
+            self._progress_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self._progress_path, "w") as f:
                 f.truncate(0)
         except Exception:

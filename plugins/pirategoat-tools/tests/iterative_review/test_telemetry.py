@@ -12,6 +12,7 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from iterative_review.telemetry import ReviewTelemetry
+from iterative_review.paths import iterative_artifact_path
 
 
 class TestProgressLog:
@@ -20,7 +21,7 @@ class TestProgressLog:
         t = ReviewTelemetry(d)
         t.progress("test_event", round=1)
         t.reset_progress()
-        path = Path(d) / "review-progress.jsonl"
+        path = iterative_artifact_path(d, "progress")
         assert path.read_text() == ""
 
     def test_progress_appends_jsonl(self, tmp_path):
@@ -28,7 +29,7 @@ class TestProgressLog:
         t = ReviewTelemetry(d)
         t.progress("round_started", round=1)
         t.progress("codex_invoked", round=1, diff_lines=500)
-        lines = (Path(d) / "review-progress.jsonl").read_text().strip().split("\n")
+        lines = iterative_artifact_path(d, "progress").read_text().strip().split("\n")
         assert len(lines) == 2
         e1 = json.loads(lines[0])
         assert e1["event"] == "round_started"
@@ -46,7 +47,7 @@ class TestPipelineEvents:
         d = str(tmp_path)
         t = ReviewTelemetry(d)
         t.pipeline_event("review_loop_started", max_rounds=4)
-        path = Path(d) / "pipeline-events.jsonl"
+        path = iterative_artifact_path(d, "events")
         lines = path.read_text().strip().split("\n")
         assert len(lines) == 1
         e = json.loads(lines[0])
@@ -59,6 +60,6 @@ class TestContextTracking:
         d = str(tmp_path)
         t = ReviewTelemetry(d)
         t.progress("composing_context", round=2, context_chars=2500, context_limit=50000)
-        lines = (Path(d) / "review-progress.jsonl").read_text().strip().split("\n")
+        lines = iterative_artifact_path(d, "progress").read_text().strip().split("\n")
         e = json.loads(lines[0])
         assert e["context_chars"] == 2500

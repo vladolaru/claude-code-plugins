@@ -39,6 +39,9 @@ OUTPUT_DIR=$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review/run_paths.py allocate 
 
 ```bash
 SCRIPTS_DIR="${CLAUDE_PLUGIN_ROOT}/scripts"
+ITERATIVE_PATHS="$SCRIPTS_DIR/iterative_review/paths.py"
+CONTEXT_FILE=$(python3 "$ITERATIVE_PATHS" artifact --output-dir "$OUTPUT_DIR" --key context)
+RESULT_FILE=$(python3 "$ITERATIVE_PATHS" artifact --output-dir "$OUTPUT_DIR" --key result)
 ```
 
 **Ensure the worktree is in a reviewable state:**
@@ -84,7 +87,7 @@ MERGE_BASE=$(git merge-base "origin/$BASE_BRANCH" HEAD)
 
 **Write context file:**
 
-Write a brief summary to `$OUTPUT_DIR/review-context.md` describing:
+Write a brief summary to `$CONTEXT_FILE` describing:
 - What this branch does (goal, scope)
 - Key changes and files modified
 - What the reviewer should focus on
@@ -103,7 +106,7 @@ PYTHONPATH=$SCRIPTS_DIR:$PYTHONPATH python3 -m iterative_review \
   --action review --round 1 \
   --output-dir "$OUTPUT_DIR" \
   --merge-base "$MERGE_BASE" \
-  --context-file "$OUTPUT_DIR/review-context.md" \
+  --context-file "$CONTEXT_FILE" \
   [--max-rounds $MAX_ROUNDS]
 ```
 
@@ -166,7 +169,14 @@ decision.
 
 ### Write Outcomes
 
-Write `$OUTPUT_DIR/round-N-outcomes.json` — an array where each entry has:
+Resolve the current round's canonical outcomes artifact (replace `N` with the
+round number), then write the outcome array to `$OUTCOMES_FILE`:
+
+```bash
+OUTCOMES_FILE=$(python3 "$ITERATIVE_PATHS" round --output-dir "$OUTPUT_DIR" --round N --key outcomes)
+```
+
+Each entry has:
 
 ```json
 [
@@ -205,7 +215,7 @@ Then repeat from Triage above.
 Report the final result:
 - Termination reason (zero findings, all addressed, max rounds, hard limit)
 - Rounds completed and stats (fixed, rejected, deferred)
-- If `$OUTPUT_DIR/review-loop-result.json` has `deferred_items`, list them —
+- If `$RESULT_FILE` has `deferred_items`, list them —
   these should go into the PR description under a `## Follow-ups` section.
   Cross-check: if a deferred item describes the same issue as something you
   fixed in a later round (even with different wording), drop it.

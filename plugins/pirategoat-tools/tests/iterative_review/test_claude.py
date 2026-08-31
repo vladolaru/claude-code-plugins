@@ -318,7 +318,7 @@ class TestWritePromptFile:
             str(tmp_path), 3, rubric="# R", merge_base="x",
             context="", pushback_log=None, analysis_doc_path="a.md",
         )
-        assert "round-3-prompt.md" in path
+        assert Path(path) == tmp_path / "reviewers" / "round-3" / "prompt.md"
 
 
 class TestInvokeReview:

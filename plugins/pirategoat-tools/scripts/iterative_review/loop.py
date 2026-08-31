@@ -6,6 +6,8 @@ import sys
 import re
 from copy import deepcopy
 
+from .paths import iterative_artifact_path
+
 # ---------------------------------------------------------------------------
 # Max Rounds Table (diff-size-based)
 # ---------------------------------------------------------------------------
@@ -78,8 +80,8 @@ DEFAULT_STATE = {
 
 
 def read_loop_state(output_dir):
-    """Read review-loop-state.json, return default if missing or corrupted."""
-    path = os.path.join(output_dir, "review-loop-state.json")
+    """Read loop state, returning the default if missing or corrupted."""
+    path = iterative_artifact_path(output_dir, "state")
     try:
         with open(path) as f:
             return json.load(f)
@@ -88,8 +90,9 @@ def read_loop_state(output_dir):
 
 
 def write_loop_state(output_dir, state):
-    """Write review-loop-state.json."""
-    path = os.path.join(output_dir, "review-loop-state.json")
+    """Write loop state to its canonical pipeline artifact."""
+    path = iterative_artifact_path(output_dir, "state")
+    path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         json.dump(state, f, indent=2)
 
@@ -132,9 +135,10 @@ def build_pushback_entry(outcome, finding, round_num, severity_gate=None):
 
 
 def append_pushback_log(output_dir, entry_text):
-    """Append text to pushback-log.md."""
-    path = os.path.join(output_dir, "pushback-log.md")
+    """Append text to the canonical pushback log."""
+    path = iterative_artifact_path(output_dir, "pushback")
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a") as f:
             f.write(entry_text)
     except OSError:
@@ -142,8 +146,8 @@ def append_pushback_log(output_dir, entry_text):
 
 
 def read_pushback_log(output_dir):
-    """Read pushback-log.md, return empty string if missing."""
-    path = os.path.join(output_dir, "pushback-log.md")
+    """Read the pushback log, returning an empty string if missing."""
+    path = iterative_artifact_path(output_dir, "pushback")
     try:
         with open(path) as f:
             return f.read()
@@ -156,9 +160,10 @@ def read_pushback_log(output_dir):
 # ---------------------------------------------------------------------------
 
 def append_deferred_item(output_dir, item):
-    """Append a deferred item to deferred-items.jsonl."""
-    path = os.path.join(output_dir, "deferred-items.jsonl")
+    """Append one item to the canonical deferred-items artifact."""
+    path = iterative_artifact_path(output_dir, "deferred")
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a") as f:
             f.write(json.dumps(item) + "\n")
     except OSError:
@@ -166,8 +171,8 @@ def append_deferred_item(output_dir, item):
 
 
 def read_deferred_items(output_dir):
-    """Read all deferred items from deferred-items.jsonl."""
-    path = os.path.join(output_dir, "deferred-items.jsonl")
+    """Read all deferred items from the canonical synthesis artifact."""
+    path = iterative_artifact_path(output_dir, "deferred")
     items = []
     try:
         with open(path) as f:

@@ -26,6 +26,7 @@ from iterative_review.loop import (
     compute_relevant_diff_size,
     outcome_severity,
 )
+from iterative_review.paths import iterative_artifact_path
 
 
 class TestMaxRounds:
@@ -74,7 +75,9 @@ class TestStateManagement:
     def test_read_handles_corrupted_json(self, tmp_path):
         d = tmp_path / "code-review"
         d.mkdir()
-        (d / "review-loop-state.json").write_text("not json{{{")
+        state_path = iterative_artifact_path(d, "state")
+        state_path.parent.mkdir(parents=True)
+        state_path.write_text("not json{{{")
         state = read_loop_state(str(d))
         assert state["current_round"] == 0
 

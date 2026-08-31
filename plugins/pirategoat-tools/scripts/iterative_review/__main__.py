@@ -25,6 +25,12 @@ from .briefing import (
     format_degraded_briefing, format_timeout_briefing,
 )
 from .effort import resolve_effort
+from .paths import (
+    backend_raw_path,
+    ensure_iterative_layout,
+    iterative_artifact_path,
+    round_artifact_path,
+)
 from .telemetry import ReviewTelemetry
 
 
@@ -134,8 +140,12 @@ def _collect_resolved_locations(output_dir, rounds):
     resolved = set()
     for r in rounds:
         round_num = r["round"]
-        findings_path = os.path.join(output_dir, f"round-{round_num}-findings.json")
-        outcomes_path = os.path.join(output_dir, f"round-{round_num}-outcomes.json")
+        findings_path = round_artifact_path(
+            output_dir, round_num, "findings"
+        )
+        outcomes_path = round_artifact_path(
+            output_dir, round_num, "outcomes"
+        )
         try:
             with open(findings_path) as f:
                 findings = json.load(f)
@@ -154,7 +164,7 @@ def _collect_resolved_locations(output_dir, rounds):
 
 
 def _write_loop_result(output_dir, state, termination):
-    """Write review-loop-result.json with cumulative stats and deferred items."""
+    """Write the canonical loop result with stats and deferred items."""
     from .loop import read_deferred_items
 
     rounds = state.get("rounds", [])
@@ -179,7 +189,8 @@ def _write_loop_result(output_dir, state, termination):
         "effort_profile": [r.get("effort") for r in rounds],
         "rounds": rounds,
     }
-    result_path = os.path.join(output_dir, "review-loop-result.json")
+    result_path = iterative_artifact_path(output_dir, "result")
+    result_path.parent.mkdir(parents=True, exist_ok=True)
     with open(result_path, "w") as f:
         json.dump(result_data, f, indent=2)
     return result_data
@@ -219,7 +230,7 @@ def action_review(args):
     """REVIEW action -- invoke review backend, parse output, produce evaluation briefing."""
     output_dir = args.output_dir
     round_num = args.round
-    os.makedirs(output_dir, exist_ok=True)
+    ensure_iterative_layout(output_dir)
 
     # Pre-flight: select the best available backend and verify it's ready.
     # Tries Codex first, then falls back to Claude Code CLI.
@@ -242,7 +253,7 @@ def action_review(args):
             "total_deferred": 0,
             "rounds": [],
         }
-        result_path = os.path.join(output_dir, "review-loop-result.json")
+        result_path = iterative_artifact_path(output_dir, "result")
         with open(result_path, "w") as f:
             json.dump(result_data, f, indent=2)
         print(preflight_err)
@@ -261,20 +272,6 @@ def action_review(args):
         state["merge_base"] = args.merge_base
         state["current_round"] = 1
 
-        # Clear stale artifacts from prior runs in the same directory
-        import glob
-        for stale in ["pushback-log.md", "deferred-items.jsonl",
-                      "review-loop-state.json", "review-loop-result.json"]:
-            stale_path = os.path.join(output_dir, stale)
-            if os.path.isfile(stale_path):
-                os.remove(stale_path)
-        # Remove all round-specific files (findings, outcomes, prompts, raw output, analysis)
-        for pattern in ["round-*-findings.json", "round-*-outcomes.json",
-                        "round-*-prompt.md", "round-*-codex-output.json",
-                        "round-*-codex-raw.md", "round-*-claude-raw.md",
-                        "round-*-backend-raw.md", "*-analysis.md"]:
-            for f in glob.glob(os.path.join(output_dir, pattern)):
-                os.remove(f)
         if args.no_prior_analysis:
             state["pass_prior_analysis"] = False
         if getattr(args, "adaptive_effort", False):
@@ -393,11 +390,15 @@ def action_review(args):
     pushback_log = read_pushback_log(output_dir)
     deferred_items = read_deferred_items(output_dir) if round_num > 1 else []
     prefix = state.get("analysis_doc_prefix", "independent-review")
-    analysis_path = os.path.join(output_dir, f"{prefix}-r{round_num}-analysis.md")
+    analysis_path = round_artifact_path(
+        output_dir, round_num, "analysis", prefix=prefix
+    )
 
     prior_path = None
     if round_num > 1 and state.get("pass_prior_analysis", True):
-        candidate = os.path.join(output_dir, f"{prefix}-r{round_num - 1}-analysis.md")
+        candidate = round_artifact_path(
+            output_dir, round_num - 1, "analysis", prefix=prefix
+        )
         if os.path.isfile(candidate):
             prior_path = candidate
         else:
@@ -436,8 +437,12 @@ def action_review(args):
         prior_outcomes = None
         if round_num > 1:
             prev = round_num - 1
-            prior_findings_path = os.path.join(output_dir, f"round-{prev}-findings.json")
-            prior_outcomes_path = os.path.join(output_dir, f"round-{prev}-outcomes.json")
+            prior_findings_path = round_artifact_path(
+                output_dir, prev, "findings"
+            )
+            prior_outcomes_path = round_artifact_path(
+                output_dir, prev, "outcomes"
+            )
             try:
                 with open(prior_findings_path) as f:
                     prior_findings = json.load(f)
@@ -472,8 +477,9 @@ def action_review(args):
     invoke_kwargs = dict(prompt_file=prompt_file, schema_file=schema_file,
                          effort=effort, output_dir=output_dir)
     if backend_name == "codex":
-        invoke_kwargs["output_file"] = os.path.join(
-            output_dir, f"round-{round_num}-codex-output.json")
+        invoke_kwargs["output_file"] = round_artifact_path(
+            output_dir, round_num, "codex_output"
+        )
     raw_output, success = backend.invoke_review(**invoke_kwargs)
 
     # --- Failure detection and runtime fallback ---
@@ -520,8 +526,9 @@ def action_review(args):
                                    schema_file=fallback_schema,
                                    effort=effort, output_dir=output_dir)
             if fallback_name == "codex":
-                fallback_kwargs["output_file"] = os.path.join(
-                    output_dir, f"round-{round_num}-codex-output.json")
+                fallback_kwargs["output_file"] = round_artifact_path(
+                    output_dir, round_num, "codex_output"
+                )
             fb_output, fb_success = fallback_backend.invoke_review(**fallback_kwargs)
 
             # Check if fallback produced a usable result
@@ -572,7 +579,9 @@ def action_review(args):
         at_round_cap = round_num >= max_rounds or round_num >= MAX_ROUNDS_HARD_LIMIT
 
         if autonomous:
-            findings_path = os.path.join(output_dir, f"round-{round_num}-findings.json")
+            findings_path = round_artifact_path(
+                output_dir, round_num, "findings"
+            )
             with open(findings_path, "w") as f:
                 json.dump([], f)
 
@@ -606,7 +615,9 @@ def action_review(args):
                            backend=backend_name)
         telemetry.pipeline_event("backend_unavailable", round=round_num,
                                  backend=backend_name)
-        findings_path = os.path.join(output_dir, f"round-{round_num}-findings.json")
+        findings_path = round_artifact_path(
+            output_dir, round_num, "findings"
+        )
         with open(findings_path, "w") as f:
             json.dump([], f)
         state["terminated"] = True
@@ -629,12 +640,12 @@ def action_review(args):
                              backend=backend_name)
 
     if degraded:
-        raw_path = os.path.join(output_dir, f"round-{round_num}-{backend_name}-raw.md")
+        raw_path = backend_raw_path(output_dir, round_num, backend_name)
         with open(raw_path, "w") as f:
             f.write(raw_output)
 
     # Write findings
-    findings_path = os.path.join(output_dir, f"round-{round_num}-findings.json")
+    findings_path = round_artifact_path(output_dir, round_num, "findings")
     with open(findings_path, "w") as f:
         json.dump(findings, f, indent=2)
 
@@ -667,14 +678,18 @@ def action_review(args):
     write_loop_state(output_dir, state)
 
     # Produce briefing
+    outcomes_path = round_artifact_path(output_dir, round_num, "outcomes")
     if degraded:
-        briefing = format_degraded_briefing(round_num, findings[0]["id"])
+        briefing = format_degraded_briefing(
+            round_num, findings[0]["id"], outcomes_path=outcomes_path
+        )
         briefing += "\n\n" + raw_output
     else:
         briefing = format_evaluation_briefing(
             findings, round_num,
             merge_base=merge_base,
             diff_lines=state.get("diff_lines_relevant", 0),
+            outcomes_path=outcomes_path,
         )
 
     telemetry.progress("briefing_ready", round=round_num)
@@ -685,6 +700,7 @@ def action_advance(args):
     """ADVANCE action -- read outcomes, update pushback, check convergence."""
     output_dir = args.output_dir
     round_num = args.round
+    ensure_iterative_layout(output_dir)
 
     telemetry = ReviewTelemetry(output_dir)
     state = read_loop_state(output_dir)
@@ -699,7 +715,7 @@ def action_advance(args):
         return
 
     # Read findings
-    findings_path = os.path.join(output_dir, f"round-{round_num}-findings.json")
+    findings_path = round_artifact_path(output_dir, round_num, "findings")
     try:
         with open(findings_path) as f:
             findings = json.load(f)
@@ -708,7 +724,7 @@ def action_advance(args):
         sys.exit(1)
 
     # Read outcomes
-    outcomes_path = os.path.join(output_dir, f"round-{round_num}-outcomes.json")
+    outcomes_path = round_artifact_path(output_dir, round_num, "outcomes")
     try:
         with open(outcomes_path) as f:
             outcomes = json.load(f)
