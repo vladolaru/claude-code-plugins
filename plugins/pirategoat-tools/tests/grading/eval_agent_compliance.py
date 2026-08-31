@@ -43,6 +43,8 @@ from helpers.graders import (
     aggregate_detection_trials,
 )
 from review.review_document import load_review_document
+from review.reviewer_lifecycle import review_paths
+from review.run_paths import REVIEWERS_SUBDIR
 
 # Import agent config
 import importlib.util
@@ -508,12 +510,20 @@ def run_grade_only(output_dir: str) -> dict:
 
     _materialize_missing_markdown(output_dir)
 
-    # Find all *-review.json files
-    for filename in sorted(os.listdir(output_dir)):
-        if filename.endswith("-review.json"):
-            reviewer_name = filename.replace("-review.json", "")
-            result = grade_output_pair(output_dir, reviewer_name)
-            results[reviewer_name] = result
+    reviewers_dir = Path(output_dir) / REVIEWERS_SUBDIR
+    if reviewers_dir.is_dir():
+        for directory in sorted(reviewers_dir.iterdir()):
+            if not directory.is_dir():
+                continue
+            reviewer_name = directory.name
+            try:
+                final_path = review_paths(output_dir, reviewer_name).final
+            except ValueError:
+                continue
+            if os.path.isfile(final_path):
+                results[reviewer_name] = grade_output_pair(
+                    output_dir, reviewer_name
+                )
 
     return results
 
@@ -954,7 +964,7 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
         if scenario["grader"] == "output_pair":
             _materialize_missing_markdown(output_dir)
             reviewer_name = _mod.derive_reviewer_name(agent_name)
-            review_path = os.path.join(output_dir, f"{reviewer_name}-review.json")
+            review_path = review_paths(output_dir, reviewer_name).final
             compliance = grade_review_json(
                 review_path, expected_reviewer=reviewer_name,
             )

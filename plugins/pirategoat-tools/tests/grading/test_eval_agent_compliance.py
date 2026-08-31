@@ -23,6 +23,7 @@ EVAL_SCRIPT = TESTS_DIR / "grading" / "eval_agent_compliance.py"
 
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
 from review.agent.output import ReviewOutputBuilder, finalize_review
+from review.reviewer_lifecycle import reviewer_markdown_path, review_paths
 
 # Same precedent as grading/test_graders.py: add tests/ to sys.path so the
 # `helpers` package resolves, then import graders directly from their real
@@ -59,7 +60,10 @@ def _write_review_pair(output_dir: Path, reviewer: str = "security") -> None:
         "Enumerate every caller and trace each path to the rendering sink",
         "No caller escapes the value before it reaches the sink.",
     )
-    (output_dir / f"{reviewer}-assignment.json").write_text(json.dumps(
+    paths = review_paths(output_dir, reviewer)
+    assignment = Path(paths.assignment)
+    assignment.parent.mkdir(parents=True, exist_ok=True)
+    assignment.write_text(json.dumps(
         canonical_assignment(reviewer, inline_diff_file_count=1)
     ))
     saved = builder.save_draft()
@@ -99,7 +103,8 @@ class TestGradeOnlyMode:
     def test_grades_a_passing_review_pair(self, tmp_path):
         _write_review_pair(tmp_path)
 
-        review = json.loads((tmp_path / "security-review.json").read_text())
+        final_path = Path(review_paths(tmp_path, "security").final)
+        review = json.loads(final_path.read_text())
         assert len(review["checks"]) == 1
         assert review["checks"][0]["source_reviewers"] == ["security"]
         assert review["unclaimed_review_files"] == []
@@ -114,7 +119,7 @@ class TestGradeOnlyMode:
     def test_reports_a_failing_review_pair(self, tmp_path):
         """A malformed JSON review is reported, not crashed on."""
         _write_review_pair(tmp_path)
-        bad = tmp_path / "security-review.json"
+        bad = Path(review_paths(tmp_path, "security").final)
         data = json.loads(bad.read_text())
         del data["verdict"]  # required top-level field
         bad.write_text(json.dumps(data))
@@ -139,7 +144,7 @@ class TestGradeOnlyMode:
         self, tmp_path, malformation, diagnostic
     ):
         _write_review_pair(tmp_path)
-        bad = tmp_path / "security-review.json"
+        bad = Path(review_paths(tmp_path, "security").final)
         data = json.loads(bad.read_text())
         if malformation == "numeric-summary":
             data["summary"] = 7
@@ -156,7 +161,7 @@ class TestGradeOnlyMode:
         assert grade.passed is False
         assert grade.failures == [
             diagnostic,
-            f"File does not exist: {tmp_path / 'security-review.md'}",
+            f"File does not exist: {reviewer_markdown_path(tmp_path, 'security')}",
         ]
         assert grade.checks_run == 4
         assert grade.checks_passed == 2
@@ -167,7 +172,8 @@ class TestGradeOnlyMode:
     def test_grade_only_materializes_missing_markdown(self, tmp_path):
         """Finalized runs may lack derived Markdown until materialization."""
         _write_review_pair(tmp_path)
-        assert not (tmp_path / "security-review.md").is_file()
+        markdown_path = Path(reviewer_markdown_path(tmp_path, "security"))
+        assert not markdown_path.is_file()
 
         results = run_grade_only(str(tmp_path))
         assert "security" in results
@@ -176,10 +182,10 @@ class TestGradeOnlyMode:
         # pass the markdown grader (same grader grade_output_pair delegates to).
         result = results["security"]
         assert result.passed, result.failures
-        assert not any("security-review.md" in failure for failure in result.failures)
-        md_grade = grade_review_markdown(str(tmp_path / "security-review.md"))
+        assert not any("review.md" in failure for failure in result.failures)
+        md_grade = grade_review_markdown(str(markdown_path))
         assert md_grade.passed, md_grade.failures
-        assert (tmp_path / "security-review.md").is_file()
+        assert markdown_path.is_file()
 
     def test_missing_directory_is_reported_not_crashed(self, tmp_path):
         result = _run_eval("--grade-only", str(tmp_path / "does-not-exist"), cwd=tmp_path)

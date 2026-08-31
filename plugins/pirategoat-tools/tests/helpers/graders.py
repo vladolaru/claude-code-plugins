@@ -40,6 +40,7 @@ from review.verdict_rules import (
     SEVERITY_RANK,
     VALID_SEVERITIES as _PRODUCTION_SEVERITIES,
 )
+from review.reviewer_lifecycle import reviewer_markdown_path, review_paths
 
 VALID_SEVERITIES = set(_PRODUCTION_SEVERITIES)
 # The per-reviewer verdict layer — the ledger ladder's four outcomes plus
@@ -421,8 +422,8 @@ def grade_output_pair(output_dir: str, reviewer_name: str) -> GradeResult:
     Checks: both files exist, delegates to grade_review_json + grade_review_markdown,
     reviewer name in JSON matches expected.
     """
-    json_path = os.path.join(output_dir, f"{reviewer_name}-review.json")
-    md_path = os.path.join(output_dir, f"{reviewer_name}-review.md")
+    json_path = review_paths(output_dir, reviewer_name).final
+    md_path = reviewer_markdown_path(output_dir, reviewer_name)
 
     # Collect all checks from sub-graders
     json_result = grade_review_json(

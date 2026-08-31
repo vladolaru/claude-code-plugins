@@ -38,6 +38,7 @@ from helpers.graders import (
 from helpers.review_fixtures import canonical_assignment
 from review.agent.output import ReviewOutputBuilder, finalize_review
 from review.review_markdown import render_markdown
+from review.reviewer_lifecycle import reviewer_markdown_path, review_paths
 
 
 @pytest.fixture
@@ -62,17 +63,16 @@ def _make_valid_json(tmp_dir: str, reviewer: str = "security") -> str:
         "Trace the request handler into the database call",
         "Yes; the value reaches the query without parameterization.",
     )
-    assignment = os.path.join(
-        tmp_dir, f"{reviewer}-assignment.json"
-    )
+    paths = review_paths(tmp_dir, reviewer)
+    assignment = paths.assignment
+    Path(assignment).parent.mkdir(parents=True, exist_ok=True)
     with open(assignment, "w") as f:
         json.dump(canonical_assignment(
             reviewer, inline_diff_file_count=3
         ), f)
     saved = builder.save_draft()
     finalize_review(tmp_dir, reviewer, saved["review_digest"])
-    path = os.path.join(tmp_dir, f"{reviewer}-review.json")
-    return path
+    return paths.final
 
 
 def _make_valid_markdown(tmp_dir: str, reviewer: str = "security") -> str:
@@ -87,7 +87,8 @@ def _make_valid_markdown(tmp_dir: str, reviewer: str = "security") -> str:
         line=42,
     )
 
-    path = os.path.join(tmp_dir, f"{reviewer}-review.md")
+    path = reviewer_markdown_path(tmp_dir, reviewer)
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         f.write(render_markdown(builder.to_dict()))
     return path
