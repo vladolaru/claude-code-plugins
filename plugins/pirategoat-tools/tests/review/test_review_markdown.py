@@ -31,6 +31,7 @@ from review.reviewer_lifecycle import review_paths, reviewer_markdown_path
 sys.path.insert(0, str(TESTS_DIR))
 from helpers.review_fixtures import (
     apply_schema,
+    canonical_assignment,
     canonical_findings_ledger,
     canonical_review_document,
     rejected_schema_values,
@@ -227,6 +228,31 @@ class TestMaterializeMarkdown:
             assert written == []
             assert not Path(d, "arbitrary.md").exists()
             assert "unsupported review artifact" in capsys.readouterr().err
+
+    @pytest.mark.parametrize(
+        ("filename", "payload"),
+        [
+            pytest.param(
+                "security-review.json",
+                canonical_review_document("security"),
+                id="legacy-flat-final",
+            ),
+            pytest.param(
+                "security-assignment.json",
+                canonical_assignment("security"),
+                id="legacy-flat-sidecar",
+            ),
+        ],
+    )
+    def test_canonical_looking_legacy_flat_artifacts_are_not_rendered(
+        self, tmp_path, capsys, filename, payload
+    ):
+        artifact = tmp_path / filename
+        artifact.write_text(json.dumps(payload))
+
+        assert materialize_markdown(tmp_path, suffix=filename) == []
+        assert not artifact.with_suffix(".md").exists()
+        assert "unsupported review artifact" in capsys.readouterr().err
 
     @pytest.mark.parametrize(
         ("relative_path", "reviewer"),

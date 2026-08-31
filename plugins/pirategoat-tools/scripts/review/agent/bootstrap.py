@@ -7,8 +7,8 @@ and output instructions into one structured prompt block. Agents run this
 script as their first action and get everything they need.
 
 Usage:
-    python3 bootstrap.py --agent security-reviewer
-    python3 bootstrap.py --agent php-tests-reviewer --range main..feature
+    python3 bootstrap.py --agent security-reviewer --output-dir <output-dir>
+    python3 bootstrap.py --agent php-tests-reviewer --output-dir <output-dir> --range main..feature
     python3 bootstrap.py --agent patterns-reviewer --output-dir <output-dir>
 
 Exit codes:

@@ -172,6 +172,22 @@ class TestLoadAgentReviews:
         assert result["security-review"]["reviewer"] == "security"
         assert result["code-review"]["reviewer"] == "code"
 
+    def test_ignores_canonical_looking_legacy_flat_artifacts(
+        self, mod, tmp_path
+    ):
+        (tmp_path / "security-review.json").write_text(
+            json.dumps(_make_review_json(reviewer="security"))
+        )
+        (tmp_path / "security-assignment.json").write_text(
+            json.dumps({
+                "schema": 5,
+                "agent_name": "security-reviewer",
+                "reviewer": "security",
+            })
+        )
+
+        assert mod.load_agent_reviews(str(tmp_path)) == {}
+
     def test_skips_non_review_files(self, mod, tmp_path):
         """Pipeline infrastructure files are not loaded."""
         _write_review_json(tmp_path, "security", _make_review_json())

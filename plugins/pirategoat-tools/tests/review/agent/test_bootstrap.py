@@ -61,6 +61,20 @@ def test_cli_requires_output_dir():
     assert "ERROR: --output-dir is required" in result.stderr
 
 
+def test_module_usage_examples_include_the_required_output_dir():
+    usage_examples = [
+        line.strip()
+        for line in _mod.__doc__.splitlines()
+        if line.strip().startswith("python3 bootstrap.py")
+    ]
+
+    assert len(usage_examples) >= 3
+    assert all(
+        "--output-dir <output-dir>" in example
+        for example in usage_examples
+    )
+
+
 # =============================================================================
 # Unit Tests — direct import
 # =============================================================================

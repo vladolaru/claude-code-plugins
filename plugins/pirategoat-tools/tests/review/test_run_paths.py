@@ -3,7 +3,6 @@
 import fcntl
 import json
 import os
-import re
 import subprocess
 import sys
 import time
@@ -435,6 +434,47 @@ class TestCli:
         assert run_dir.is_dir()
         config = json.loads((run_dir / "run-config.json").read_text())
         assert config == {"target_dir": str(run_dir.parent.parent)}
+
+    @pytest.mark.parametrize(
+        ("kind", "target_name"),
+        [
+            ("pr", "42"),
+            ("branch", "feature/durable"),
+            ("iterative", "feature/durable"),
+        ],
+    )
+    def test_all_command_kinds_share_containment_layout_and_retention(
+        self, home, kind, target_name
+    ):
+        allocated = []
+        for _ in range(run_paths.KEEP_RUNS + 1):
+            result = self._run(
+                home,
+                "allocate",
+                "--kind",
+                kind,
+                "--repo-root",
+                "/repo",
+                "--target",
+                target_name,
+            )
+            assert result.returncode == 0, result.stderr
+            allocated.append(Path(result.stdout.strip()))
+
+        target = run_paths.target_dir(kind, "/repo", target_name)
+        survivors = sorted((target / "runs").iterdir())
+        assert survivors == allocated[-run_paths.KEEP_RUNS:]
+        assert allocated[0] not in survivors
+        assert run_paths.latest_run_dir(target) == allocated[-1]
+        for run_dir in survivors:
+            run_dir.resolve().relative_to((target / "runs").resolve())
+            assert {child.name for child in run_dir.iterdir()} == {
+                "run-config.json",
+                "pipeline",
+                "reviewers",
+                "synthesis",
+                "tmp",
+            }
 
     def test_latest_finds_the_allocated_run(self, home):
         first = self._run(home, "allocate", "--kind", "pr", "--repo-root", "/r", "--target", "42")

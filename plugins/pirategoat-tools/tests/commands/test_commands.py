@@ -275,6 +275,28 @@ class TestDurableReviewRunDirectories:
             f"allocate --kind {kind} --repo-root \"$REPO_ROOT\" --target {target})"
         ) in content
 
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "pr-review.md",
+            "code-review.md",
+            "full-code-review.md",
+            "iterative-review.md",
+        ],
+    )
+    def test_migrated_allocators_do_not_recreate_legacy_output_dirs(
+        self, command
+    ):
+        content = read_command(command)
+        output_assignments = [
+            line for line in content.splitlines() if "OUTPUT_DIR=" in line
+        ]
+
+        assert output_assignments
+        assert all("/tmp" not in line for line in output_assignments)
+        assert all("TMPDIR" not in line for line in output_assignments)
+        assert 'mkdir -p "$OUTPUT_DIR"' not in content
+
     def test_code_review_reset_removes_the_target_baseline(self):
         """Fail if reset clears a single run instead of the branch-wide baseline."""
         content = read_command("code-review.md")
