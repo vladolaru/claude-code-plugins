@@ -48,11 +48,9 @@ Read the user's input as free-form text. Determine:
 **Construct output directory:**
 
 ```bash
+CODEX_PLUGIN_ROOT="<absolute plugin root: two directories above the directory containing this SKILL.md>"
 REPO_ROOT=$(git rev-parse --show-toplevel)
-SAFE_BRANCH=$(git branch --show-current | tr '/' '-' | tr -c 'a-zA-Z0-9._-' '-')
-SAFE_REPO_PATH=$(echo "${REPO_ROOT#/}" | tr '/' '-' | tr -c 'a-zA-Z0-9._-' '-')
-OUTPUT_DIR="/tmp/iterative-review-${SAFE_REPO_PATH}-${SAFE_BRANCH}"
-mkdir -p "$OUTPUT_DIR"
+OUTPUT_DIR=$(python3 ${CODEX_PLUGIN_ROOT}/scripts/review/run_paths.py allocate --kind iterative --repo-root "$REPO_ROOT" --target "$(git branch --show-current)")
 ```
 
 **Resolve the scripts directory:**

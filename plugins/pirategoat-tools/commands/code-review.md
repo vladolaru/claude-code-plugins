@@ -41,10 +41,7 @@ refresh for this run, add `--no-refresh-deps`.
 
 ```bash
 REPO_ROOT=$(git rev-parse --show-toplevel)
-SAFE_BRANCH=$(git branch --show-current | tr '/' '-' | tr -c 'a-zA-Z0-9._-' '-')
-SAFE_REPO_PATH=$(echo "${REPO_ROOT#/}" | tr '/' '-' | tr -c 'a-zA-Z0-9._-' '-')
-OUTPUT_DIR="/tmp/branch-review-${SAFE_REPO_PATH}-${SAFE_BRANCH}"
-mkdir -p "$OUTPUT_DIR"
+OUTPUT_DIR=$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review/run_paths.py allocate --kind branch --repo-root "$REPO_ROOT" --target "$(git branch --show-current)")
 
 # Default review mode; full/reset switches it to a clean full review below.
 MODE=incremental
@@ -54,7 +51,8 @@ MODE=incremental
 
 If `$ARGUMENTS` is `full` or `reset`, delete the baseline and switch to full mode:
 ```bash
-rm -f "${OUTPUT_DIR}/.branch-review-baseline.json"
+TARGET_DIR=$(dirname "$(dirname "$OUTPUT_DIR")")
+rm -f "${TARGET_DIR}/.branch-review-baseline.json"
 MODE=full
 ```
 

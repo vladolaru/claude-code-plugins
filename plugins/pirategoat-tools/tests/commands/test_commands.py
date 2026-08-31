@@ -252,3 +252,49 @@ class TestDependencyRefreshFlagDocumented:
         text = (COMMANDS_DIR / command).read_text()
         assert "--refresh-deps" in text
         assert "refresh" in text.lower()
+
+
+class TestDurableReviewRunDirectories:
+    """Interactive review commands allocate a distinct durable run directory."""
+
+    @pytest.mark.parametrize(
+        ("command", "kind", "target"),
+        [
+            ("pr-review.md", "pr", '"<PR_NUMBER>"'),
+            ("code-review.md", "branch", '"$(git branch --show-current)"'),
+            ("full-code-review.md", "branch", '"$(git branch --show-current)"'),
+            ("iterative-review.md", "iterative", '"$(git branch --show-current)"'),
+        ],
+    )
+    def test_allocates_a_run_directory_through_run_paths(self, command, kind, target):
+        """Fail if a command reuses a manually constructed review directory."""
+        content = read_command(command)
+        assert "REPO_ROOT=$(git rev-parse --show-toplevel)" in content
+        assert (
+            "OUTPUT_DIR=$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review/run_paths.py "
+            f"allocate --kind {kind} --repo-root \"$REPO_ROOT\" --target {target})"
+        ) in content
+
+    def test_code_review_reset_removes_the_target_baseline(self):
+        """Fail if reset clears a single run instead of the branch-wide baseline."""
+        content = read_command("code-review.md")
+        assert 'TARGET_DIR=$(dirname "$(dirname "$OUTPUT_DIR")")' in content
+        assert 'rm -f "${TARGET_DIR}/.branch-review-baseline.json"' in content
+
+    def test_pr_update_resolves_latest_matching_review_artifacts(self):
+        """Fail if PR descriptions look up stale hard-coded /tmp artifact paths."""
+        content = read_command("pr-update.md")
+        assert (
+            "latest --kind branch --repo-root \"$REPO_ROOT\" "
+            '--target "$(git branch --show-current)")/review-findings.md'
+        ) in content
+        assert (
+            "latest --kind pr --repo-root \"$REPO_ROOT\" "
+            '--target "${PR_NUMBER}")/review-findings.md'
+        ) in content
+
+    def test_pr_update_uses_tmpdir_for_its_description_scratch_file(self):
+        """Fail if the disposable PR body bypasses the environment temp directory."""
+        content = read_command("pr-update.md")
+        scratch_path = "${TMPDIR:-/tmp}/pr-description-${PR_NUMBER}.md"
+        assert content.count(scratch_path) == 3

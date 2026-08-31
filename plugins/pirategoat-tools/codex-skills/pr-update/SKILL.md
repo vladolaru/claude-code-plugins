@@ -111,20 +111,17 @@ Skip "Deferred Work" if nothing was deferred.
 
 **Skip this step for small PRs** - the diff tells the story.
 
-For medium and large PRs, check these locations. The review commands write to
-**repo-qualified** directories, so derive the same prefix the producers use
+For medium and large PRs, resolve the most recent matching review artifact
 before looking - otherwise the artifacts are silently missed:
 
 ```bash
 REPO_ROOT=$(git rev-parse --show-toplevel)
-SAFE_REPO_PATH=$(echo "${REPO_ROOT#/}" | tr '/' '-' | tr -c 'a-zA-Z0-9._-' '-')
-SAFE_BRANCH=$(git branch --show-current | tr '/' '-' | tr -c 'a-zA-Z0-9._-' '-')
 ```
 
 | Location | What | Relevance Check |
 |----------|------|-----------------|
-| `/tmp/branch-review-${SAFE_REPO_PATH}-${SAFE_BRANCH}/review-findings.md` | `$pirategoat-tools:full-code-review` or `$pirategoat-tools:code-review` findings | Same repo + branch? |
-| `/tmp/pr-review-${SAFE_REPO_PATH}-${PR_NUMBER}/review-findings.md` | `$pirategoat-tools:pr-review` findings | Same repo + PR number? |
+| `$(python3 ${CODEX_PLUGIN_ROOT}/scripts/review/run_paths.py latest --kind branch --repo-root "$REPO_ROOT" --target "$(git branch --show-current)")/review-findings.md` | `$pirategoat-tools:full-code-review` or `$pirategoat-tools:code-review` findings | Same repo + branch? |
+| `$(python3 ${CODEX_PLUGIN_ROOT}/scripts/review/run_paths.py latest --kind pr --repo-root "$REPO_ROOT" --target "${PR_NUMBER}")/review-findings.md` | `$pirategoat-tools:pr-review` findings | Same repo + PR number? |
 | `~/.claude/plans/*.md` | Implementation plans | References this branch's files? |
 | `.claude/docs/plans/*.md` | Project-level plans | Date and content match? |
 | `.claude/reviews/*.md` | Code review output | References this branch? |
@@ -230,12 +227,12 @@ After approval:
 
 ```bash
 # Write description to temp file for safe --body-file usage
-cat > /tmp/pr-description-${PR_NUMBER}.md << 'PRBODY'
+cat > ${TMPDIR:-/tmp}/pr-description-${PR_NUMBER}.md << 'PRBODY'
 <generated description>
 PRBODY
 
 # Update the PR
-${GH_CMD} pr edit ${PR_NUMBER} --body-file /tmp/pr-description-${PR_NUMBER}.md
+${GH_CMD} pr edit ${PR_NUMBER} --body-file ${TMPDIR:-/tmp}/pr-description-${PR_NUMBER}.md
 ```
 
 Verify the update succeeded:
@@ -247,5 +244,5 @@ ${GH_CMD} pr view ${PR_NUMBER} --json url -q .url
 Report success with the PR URL. Clean up the temp file:
 
 ```bash
-rm -f /tmp/pr-description-${PR_NUMBER}.md
+rm -f ${TMPDIR:-/tmp}/pr-description-${PR_NUMBER}.md
 ```

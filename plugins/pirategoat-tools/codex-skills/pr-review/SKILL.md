@@ -64,10 +64,9 @@ refresh for this run, add `--no-refresh-deps`.
 **Construct output directory** (sanitize all fragments):
 
 ```bash
+CODEX_PLUGIN_ROOT="<absolute plugin root: two directories above the directory containing this SKILL.md>"
 REPO_ROOT=$(git rev-parse --show-toplevel)
-SAFE_REPO_PATH=$(echo "${REPO_ROOT#/}" | tr '/' '-' | tr -c 'a-zA-Z0-9._-' '-')
-OUTPUT_DIR="/tmp/pr-review-${SAFE_REPO_PATH}-<PR_NUMBER>"
-mkdir -p "$OUTPUT_DIR"
+OUTPUT_DIR=$(python3 ${CODEX_PLUGIN_ROOT}/scripts/review/run_paths.py allocate --kind pr --repo-root "$REPO_ROOT" --target "<PR_NUMBER>")
 ```
 
 **Run Step 1:**
