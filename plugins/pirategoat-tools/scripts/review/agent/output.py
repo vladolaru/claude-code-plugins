@@ -61,6 +61,7 @@ try:
         started_marker_path,
     )
     from ..reviewer_names import derive_reviewer_name
+    from ..run_paths import artifact_path, synthesis_started_marker
     from ..review_document import (
         CHECK_TEXT_FIELDS,
         RECOMMENDATION_PRIORITIES,
@@ -82,6 +83,7 @@ except ImportError:
         started_marker_path,
     )
     from review.reviewer_names import derive_reviewer_name
+    from review.run_paths import artifact_path, synthesis_started_marker
     from review.review_document import (
         CHECK_TEXT_FIELDS,
         RECOMMENDATION_PRIORITIES,
@@ -124,6 +126,7 @@ except ImportError:
 # fixed filenames, so the identity travels separately and resolves through
 # ``started_marker_path`` rather than being encoded in a filename.
 _REVIEWER_MARKER_PREFIX = "reviewer:"
+SYNTHESIS_MARKER_PREFIX = "synthesis:"
 
 
 def _actor_start_time(
@@ -140,7 +143,7 @@ def _actor_start_time(
     ``marker_name`` is the exact filename its actor names for itself, never
     a guess: a reviewer maps the agent name its assignment carries to a
     short reviewer directory, and a synthesis actor names its own
-    ``.synthesis-started`` file. None everywhere the answer is not known —
+    synthesis dispatch marker. None everywhere the answer is not known —
     no directory, no name, no marker, or an unreadable stamp. Absence is
     reported as absence, never as zero.
     """
@@ -150,6 +153,10 @@ def _actor_start_time(
         agent_name = marker_name.removeprefix(_REVIEWER_MARKER_PREFIX)
         path = started_marker_path(
             output_dir, derive_reviewer_name(agent_name)
+        )
+    elif marker_name.startswith(SYNTHESIS_MARKER_PREFIX):
+        path = synthesis_started_marker(
+            output_dir, marker_name.removeprefix(SYNTHESIS_MARKER_PREFIX)
         )
     else:
         path = os.path.join(output_dir, marker_name)
@@ -779,10 +786,10 @@ class ReviewOutputBuilder:
         is detected once, at pipeline step 1, and travels from there:
 
         1. ``PIRATEGOAT_PLUGIN_VERSION`` in the builder envelope, which
-           bootstrap fills from the run's ``run-config.json`` stamp. Always
+           bootstrap fills from the run's caller-configuration stamp. Always
            present in the envelope, sometimes empty (unresolvable run).
         2. That same stamp read from the bound output directory's
-           ``run-config.json``, for a builder that has one and no envelope.
+           caller configuration, for a builder that has one and no envelope.
 
         Fails open to None everywhere — an unbound builder outside the
         envelope has no honest answer. An unstamped artifact is honest about
@@ -795,7 +802,7 @@ class ReviewOutputBuilder:
             return None
         try:
             with open(
-                os.path.join(output_dir, "run-config.json"), "r", encoding="utf-8"
+                artifact_path(output_dir, "run_config"), "r", encoding="utf-8"
             ) as f:
                 config = json.load(f)
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):

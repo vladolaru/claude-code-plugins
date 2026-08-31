@@ -35,6 +35,7 @@ try:
         reviewer_markdown_path,
     )
     from .reviewer_names import derive_reviewer_name
+    from .run_paths import artifact_path
     from .briefings import _render_file_review_section
     from .reconciliation_context import strip_severity_floor_markers
     from . import critic_adjustments
@@ -76,6 +77,7 @@ except ImportError:
         reviewer_markdown_path,
     )
     from review.reviewer_names import derive_reviewer_name
+    from review.run_paths import artifact_path
     from review.briefings import _render_file_review_section
     from review.reconciliation_context import strip_severity_floor_markers
     from review import critic_adjustments
@@ -131,9 +133,9 @@ def baseline_path(config, output_dir):
         return os.path.join(target_dir, ".branch-review-baseline.json")
     if config.get("mode") == "incremental":
         raise RuntimeError(
-            "incremental review needs run-config.json target_dir"
+            "incremental review needs target_dir in caller configuration"
         )
-    return os.path.join(output_dir, ".branch-review-baseline.json")
+    return str(artifact_path(output_dir, "worktree_baseline"))
 
 
 # ---------------------------------------------------------------------------
@@ -146,13 +148,14 @@ def _preserve_initial_dispatch_plan(output_dir, plan):
     Any prior baseline is removed first so a failed measurement write cannot
     make an older plan look like the current run's deterministic output.
     """
-    initial_path = os.path.join(output_dir, "dispatch-plan.initial.json")
+    initial_path = artifact_path(output_dir, "dispatch_plan_initial")
     try:
         try:
             os.remove(initial_path)
         except FileNotFoundError:
             pass
 
+        initial_path.parent.mkdir(exist_ok=True)
         atomic_write_json(initial_path, plan)
     except (OSError, TypeError, ValueError):
         try:
@@ -190,28 +193,30 @@ def _run_subprocess(cmd, cwd=None, timeout=60):
         return "", False
 
 
-_FINDINGS_MD = "review-findings.md"
+_FINDINGS_MD = artifact_path("", "review_findings_md").name
 
 
 # What the step-10 briefing may point the decision critic at, best first.
 # Existence decides, not a flag: the branch this replaced read a
 # `report_synthesis_failed` key no writer under scripts/ ever set.
 #
-# `review-report.md` is deliberately NOT a candidate: it does not exist
+# The audience-facing report is deliberately NOT a candidate: it does not exist
 # yet at step 10 — it is authored once at step 11, after this critic has
 # run — and listing a file that cannot be there would make the fallback
 # branch fire on every single run. The record is what the critic reads.
 _CRITIC_SOURCE_CANDIDATES = (
-    REVIEW_RECORD_MD, _FINDINGS_MD, critic_adjustments.FINDINGS_FILENAME,
+    ("review_record", REVIEW_RECORD_MD),
+    ("review_findings_md", _FINDINGS_MD),
+    ("review_findings_json", critic_adjustments.FINDINGS_FILENAME),
 )
 
 # The complete output of one critic attempt. Step 10 removes this set before
 # handing off a replacement, so every reader sees either the new attempt's
 # snapshot or an honestly incomplete attempt — never the prior decision.
-_CRITIC_OUTPUT_FILENAMES = (
-    "decision-critic-findings.md",
-    critic_adjustments.ADJUSTMENTS_FILENAME,
-    critic_adjustments.CRITIC_VERDICT_FILENAME,
+_CRITIC_OUTPUT_KEYS = (
+    "critic_findings",
+    "critic_adjustments",
+    "critic_verdict",
 )
 
 
@@ -259,7 +264,7 @@ def _unusable_ledger_outcome(read) -> tuple:
 
 
 def _render_findings_markdown(output_dir: str, read) -> tuple:
-    """Render `review-findings.md` from the ledger this step already read.
+    """Render findings Markdown from the ledger this step already read.
 
     Returns ``(outcome, error)``: ``outcome`` mirrors the reviewer-Markdown
     vocabulary (``complete`` / ``failed``) with the same written/expected
@@ -278,7 +283,7 @@ def _render_findings_markdown(output_dir: str, read) -> tuple:
     }
     try:
         atomic_write_text(
-            os.path.join(output_dir, _FINDINGS_MD),
+            artifact_path(output_dir, "review_findings_md"),
             render_markdown(read.findings),
         )
     except Exception as err:  # noqa: BLE001 — best-effort by design
@@ -295,7 +300,7 @@ def _render_findings_markdown(output_dir: str, read) -> tuple:
 def _render_record_body(findings: dict) -> str:
     """The record's findings/checks body, stripped of prose floor markers.
 
-    Byte-identical to what `review-findings.md` shows for the same ledger
+    Byte-identical to what the findings Markdown shows for the same ledger
     (modulo the prose-marker strip), because it IS the same function. A
     second copy of these sections is how the two documents would
     eventually disagree about a finding.
@@ -308,7 +313,7 @@ def _render_record_body(findings: dict) -> str:
     made an omission possible; stripping the output cannot miss one. The
     structured floor survives: `render_review_body` writes it as
     `**Severity floor:** <severity>`, which the marker pattern
-    (`Severity-floor:`, hyphenated) does not match. `review-findings.json`
+    (`Severity-floor:`, hyphenated) does not match. The findings ledger
     on disk is untouched — the reviewer keeps their own words.
     """
     return strip_severity_floor_markers(render_review_body(findings))
@@ -414,7 +419,7 @@ def _render_record_verdict_line(findings: dict) -> str:
 
 
 def assemble_review_record(output_dir: str, state: dict, read) -> tuple:
-    """Assemble `review-record.md` from the ledger and the run's own facts.
+    """Assemble the review record from the ledger and the run's own facts.
 
     Returns ``(outcome, error)`` in the same vocabulary the derived-Markdown
     renders use (``complete`` / ``failed`` with written/expected counts),
@@ -443,21 +448,23 @@ def assemble_review_record(output_dir: str, state: dict, read) -> tuple:
         sections = [
             "# Review Record",
             "",
-            "*Assembled by the review pipeline from `review-findings.json` "
+            f"*Assembled by the review pipeline from "
+            f"`{critic_adjustments.FINDINGS_FILENAME}` "
             "and this run's own measurements. No agent writes or edits this "
             "file — it is the reference the audience-facing report must not "
             "contradict.*",
             "",
             # The one handle this rendering deliberately does not carry.
             # Findings are addressed by a canonical fN ledger `id`, and the
-            # renderer this body shares with `review-findings.md` titles
+            # renderer this body shares with the findings Markdown titles
             # each finding rather than numbering it. Saying so here is what
             # keeps a reader — the decision critic above all — from
             # inventing a positional label ("F1") as a key: that exact
             # substitution once failed every adjustment in a REVISE batch
             # with "no finding with id 'F1'".
             "*Findings are keyed by the canonical fN `id` in "
-            "`review-findings.json` (`findings[].id`). There are no "
+            f"`{critic_adjustments.FINDINGS_FILENAME}` (`findings[].id`). "
+            "There are no "
             "positional labels here, and a positional label is not a key "
             "anything can resolve.*",
             "",
@@ -478,7 +485,7 @@ def assemble_review_record(output_dir: str, state: dict, read) -> tuple:
             "",
         ])
         atomic_write_text(
-            os.path.join(output_dir, REVIEW_RECORD_MD), "\n".join(sections)
+            artifact_path(output_dir, "review_record"), "\n".join(sections)
         )
     except Exception as err:  # noqa: BLE001 — best-effort by design
         outcome["status"] = "failed"
@@ -625,15 +632,17 @@ def _capture_worktree_baseline(output_dir):
         "entries": entries,
     }
     try:
+        baseline_file = artifact_path(output_dir, "worktree_baseline")
+        baseline_file.parent.mkdir(exist_ok=True)
         atomic_write_json(
-            os.path.join(output_dir, ".worktree-baseline.json"), payload
+            baseline_file, payload
         )
     except OSError:
         pass
 
 
 def _capture_usage_snapshot(output_dir):
-    """Capture the run's token usage into `usage-snapshot.json`.
+    """Capture the run's token usage into its pipeline artifact.
 
     A subprocess rather than an import on purpose: the measurement lives in
     `scripts/analysis/`, which already depends on `scripts/review/` for the
@@ -641,7 +650,7 @@ def _capture_usage_snapshot(output_dir):
     close that loop and make the pipeline's finalize path depend on the
     analysis package's import graph.
 
-    Returns the compact summary for `pipeline-result.json`, or None when the
+    Returns the compact summary for the pipeline result, or None when the
     run has no snapshot to report.
     """
     _run_subprocess(
@@ -656,7 +665,7 @@ def _capture_usage_snapshot(output_dir):
 
 
 def _usage_summary(output_dir):
-    """Compact token-usage projection for `pipeline-result.json`.
+    """Compact token-usage projection for the pipeline result.
 
     Built from the manifest section rather than from the raw artifact, so
     both durable surfaces sanitize the snapshot exactly once and cannot
@@ -705,7 +714,7 @@ def _usage_summary(output_dir):
 def _check_worktree_hygiene(output_dir):
     """Compare current git status to the step-3 baseline; sweep probe residue.
 
-    Writes and returns worktree-hygiene.json.
+    Writes and returns the run's worktree-hygiene evidence.
 
     Probe-removal evidence is cumulative within one run directory. Step 11
     has a report-handoff re-entry, and a successful first sweep necessarily
@@ -734,7 +743,8 @@ def _check_worktree_hygiene(output_dir):
     hold uncommitted work. A probe someone staged is therefore reported, not
     deleted.
     """
-    hygiene_path = os.path.join(output_dir, "worktree-hygiene.json")
+    hygiene_path = artifact_path(output_dir, "worktree_hygiene")
+    hygiene_path.parent.mkdir(exist_ok=True)
     prior_removed = []
     prior_baseline_captured_at = None
     try:
@@ -764,7 +774,7 @@ def _check_worktree_hygiene(output_dir):
     baseline = None
     baseline_root = None
     baseline_captured_at = None
-    baseline_path = os.path.join(output_dir, ".worktree-baseline.json")
+    baseline_path = artifact_path(output_dir, "worktree_baseline")
     if os.path.isfile(baseline_path):
         try:
             with open(baseline_path, "r", encoding="utf-8") as f:
@@ -885,7 +895,7 @@ def _check_worktree_hygiene(output_dir):
 
 
 def _orchestrate_step_3(mode, config, state, context, output_dir):
-    context_path = os.path.join(output_dir, "review-context.json")
+    context_path = artifact_path(output_dir, "review_context")
 
     # Run context.py to collect git context, PR metadata, etc.
     gather_cmd = [sys.executable, str(SCRIPTS_DIR / "context.py"),
@@ -903,7 +913,7 @@ def _orchestrate_step_3(mode, config, state, context, output_dir):
         gather_cmd.extend(["--git-range", git_range])
 
     stdout, ok = _run_subprocess(gather_cmd, timeout=CONTEXT_GATHER_TIMEOUT)
-    # Re-read context (context.py writes review-context.json)
+    # Re-read context after context.py writes the boundary artifact.
     if os.path.isfile(context_path):
         try:
             with open(context_path) as f:
@@ -958,7 +968,7 @@ def _orchestrate_step_5(mode, config, state, context, output_dir):
         if changed_csv:
             planner_cmd.extend(["--changed-files-list", changed_csv])
         # Pass review context for PR metadata triage (title, body, labels, branch, issues)
-        ctx_path = os.path.join(output_dir, "review-context.json")
+        ctx_path = artifact_path(output_dir, "review_context")
         if os.path.isfile(ctx_path):
             planner_cmd.extend(["--review-context", ctx_path])
         if config.get("quick"):
@@ -966,7 +976,7 @@ def _orchestrate_step_5(mode, config, state, context, output_dir):
 
         stdout, ok = _run_subprocess(planner_cmd, timeout=60)
 
-        plan_path = os.path.join(output_dir, "dispatch-plan.json")
+        plan_path = artifact_path(output_dir, "dispatch_plan")
         if os.path.isfile(plan_path):
             try:
                 plan = _load_dispatch_plan(plan_path)
@@ -1003,7 +1013,7 @@ def _orchestrate_step_5(mode, config, state, context, output_dir):
 
 
 def _orchestrate_step_6(mode, config, state, context, output_dir):
-    plan_path = os.path.join(output_dir, "dispatch-plan.json")
+    plan_path = artifact_path(output_dir, "dispatch_plan")
     if os.path.isfile(plan_path):
         try:
             plan = _load_dispatch_plan(plan_path)
@@ -1207,7 +1217,7 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
     else:
         degradation["reviewer_markdown_incomplete"] = True
 
-    cp_path = os.path.join(output_dir, "change-purpose.md")
+    cp_path = artifact_path(output_dir, "change_purpose")
     if os.path.isfile(cp_path):
         try:
             with open(cp_path) as f:
@@ -1261,7 +1271,7 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
     # than scan for stale reviewer-directory finals.
     recon_ctx_cmd.extend(["--dispatched-agents", ",".join(dispatched_names)])
     _, ctx_ok = _run_subprocess(recon_ctx_cmd, timeout=30)
-    recon_ctx_path = os.path.join(output_dir, "reconciliation-context.json")
+    recon_ctx_path = artifact_path(output_dir, "reconciliation_context")
     if not ctx_ok or not os.path.isfile(recon_ctx_path):
         raise RuntimeError(
             "reconciliation_context.py failed — cannot proceed to "
@@ -1291,20 +1301,20 @@ def _orchestrate_step_9(mode, config, state, context, output_dir):
     # briefing handed the agent off, so this is the earliest — and
     # therefore tightest — observation the run can take. What it records
     # is a completion, not this moment: `completed_at` in the artifact is
-    # review-findings.json's mtime.
+    # the findings ledger's mtime.
     # `finalize=False` — an agent with no artifact here is one this
     # observation caught mid-flight, which is not yet a stall.
     synthesis_lifecycle.observe(output_dir)
 
     # The step-8 completion path: the reconciliator has published
-    # review-findings.json and nothing else. review-findings.md is a
+    # the findings ledger and nothing else. Findings Markdown is a
     # mechanical render of that ledger, owned by the pipeline — the report
     # this step is about to brief reads it, the step-10 critic falls back
     # to it, and finalize offers it as the report of last resort. Rendering
     # it here (rather than asking the agent to hand-write this projection) is
     # what makes those three consumers unable to read a stale artifact.
     read = critic_adjustments.read_findings_file(
-        os.path.join(output_dir, critic_adjustments.FINDINGS_FILENAME)
+        artifact_path(output_dir, "review_findings_json")
     )
     state["ledger_status"] = read.status
     findings_markdown, render_error = _render_findings_markdown(
@@ -1364,7 +1374,7 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
     #
     # 2. It closes the REVISE window on the RECONCILIATOR. The
     #    orchestrator's adjudication is the one write that carries critic
-    #    adjustments into review-findings.json, and it lands between step
+    #    adjustments into the findings ledger, and it lands between step
     #    10 and step 11, so on a run whose step 9 never observed, finalize
     #    alone would read that write's mtime and fold the critic's phase
     #    into the reconciliator's duration. Reading here — before the
@@ -1382,7 +1392,7 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
     # `read_committed_proposal()` closed for the verdict files, one
     # artifact over. Any state but OK means no usable verdict to read.
     read = critic_adjustments.read_findings_file(
-        os.path.join(output_dir, critic_adjustments.FINDINGS_FILENAME)
+        artifact_path(output_dir, "review_findings_json")
     )
     state["ledger_status"] = read.status
     if read.status == critic_adjustments.FINDINGS_READ_OK:
@@ -1398,15 +1408,15 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
     # (`render_incomplete`) restated a degradation flag already in state.
     state["critic_source"] = next(
         (
-            name for name in _CRITIC_SOURCE_CANDIDATES
-            if os.path.isfile(os.path.join(output_dir, name))
+            name for key, name in _CRITIC_SOURCE_CANDIDATES
+            if os.path.isfile(artifact_path(output_dir, key))
         ),
         None,
     ) if read.status == critic_adjustments.FINDINGS_READ_OK else None
 
     # Record critic skip decision for telemetry.
     # Clear any stale decision first (step 10 may be rerun after
-    # review-findings.json changes from approve/comment to a higher verdict).
+    # the findings ledger changes from approve/comment to a higher verdict).
     state.setdefault("step_decisions", {}).pop("10", None)
     is_quick = config.get("quick", False)
     recon_verdict = state.get("reconciliation_verdict", "")
@@ -1425,9 +1435,9 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
     # same lock as the next marker/snapshot so a failed replacement cannot
     # leave an old verdict readable as the new result.
     with atomic_io.output_dir_lock(output_dir):
-        for filename in _CRITIC_OUTPUT_FILENAMES:
+        for key in _CRITIC_OUTPUT_KEYS:
             try:
-                os.unlink(os.path.join(output_dir, filename))
+                os.unlink(artifact_path(output_dir, key))
             except FileNotFoundError:
                 pass
         try:
@@ -1624,13 +1634,11 @@ def _report_source_fingerprint(
     """Bind source bytes to settled facts and stable degradation identities."""
     source = {
         "review_record": _artifact_source_identity(
-            os.path.join(output_dir, REVIEW_RECORD_MD)
+            artifact_path(output_dir, "review_record")
         ),
         "review_findings": {
             **_artifact_source_identity(
-                os.path.join(
-                    output_dir, critic_adjustments.FINDINGS_FILENAME
-                )
+                artifact_path(output_dir, "review_findings_json")
             ),
             "read_status": findings_status,
         },
@@ -1703,7 +1711,7 @@ def _bind_report_handoff(state, report_path, source_fingerprint):
 
 def _orchestrate_step_11(mode, config, state, context, output_dir):
     # Synthesis-agent lifecycle, adjudicated FIRST and for a hard ordering
-    # reason: finalize itself may recover an apply to review-findings.json,
+    # reason: finalize itself may recover an apply to the findings ledger,
     # and that write moves the mtime this measurement
     # reads as the reconciliator's
     # completion. Observing after that write would report the
@@ -1714,7 +1722,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # 11 each observe before doing anything else, and every observation
     # carries an already-completed row forward verbatim, so the recorded
     # completion is always the EARLIEST evidence any step saw:
-    #   step 9  — reads review-findings.json straight out of the
+    #   step 9  — reads the findings ledger straight out of the
     #             reconciliator's own write.
     #   step 10 — reads it again before the critic is dispatched, which
     #             is what covers a run whose step 9 never observed: the
@@ -1743,7 +1751,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
 
     critic_verdict = state["critic_verdict"]
 
-    findings_path = os.path.join(output_dir, "review-findings.json")
+    findings_path = artifact_path(output_dir, "review_findings_json")
     # The step's one read of the ledger, and therefore its one authority on
     # whether a ledger exists. Everything below asks this result, never the
     # filesystem a second time.
@@ -1820,7 +1828,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # the hand-written Markdown showing pre-adjustment severities while
     # the JSON showed post-adjustment ones.
     #
-    # `review-record.md` matters most here. It is what the step-11 briefing
+    # The review record matters most here. It is what the step-11 briefing
     # tells the orchestrator to author the report from, and the report is
     # the run's whole audience-facing output — a record still describing
     # the pre-critic ledger would be a post-critic report built on
@@ -1837,7 +1845,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
         _record_step_11_degradation(
             degradation_records,
             "findings_markdown_render_failed",
-            f"review-findings.md render failed: {render_error}"
+            f"{_FINDINGS_MD} render failed: {render_error}"
         )
     record_outcome, record_error = assemble_review_record(
         output_dir, state, read
@@ -1908,17 +1916,18 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # projection. On the first pass it is expected to be absent: settlement
     # above prepares the state and the briefing asks the orchestrator to
     # author it. Only a re-entered step 11 may publish the terminal result,
-    # and that result points at this exact file — never review-record.md or
-    # review-findings.md as a fallback. pirategoat-bot treats the result's
+    # and that result points at this exact file — never the review record or
+    # findings Markdown as a fallback. pirategoat-bot treats the result's
     # existence as "complete" during resume discovery and then reads the
     # report verbatim, so publishing those two facts separately creates an
     # unrecoverable run.
-    report_path = os.path.join(output_dir, "review-report.md")
+    report_path = str(artifact_path(output_dir, "review_report"))
     if read.status == critic_adjustments.FINDINGS_READ_ABSENT:
         _record_step_11_degradation(
             degradation_records,
             "findings_missing",
-            "review-findings.json was absent during step 11 settlement"
+            f"{critic_adjustments.FINDINGS_FILENAME} was absent during "
+            "step 11 settlement"
         )
 
     # The published verdict is DERIVED from the findings ledger, not
@@ -1959,7 +1968,8 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
         _record_step_11_degradation(
             degradation_records,
             "ledger_verdict_unusable",
-            "no usable verdict in review-findings.json — verdict fell "
+            f"no usable verdict in {critic_adjustments.FINDINGS_FILENAME} — "
+            "verdict fell "
             "back to COMMENT"
         )
 
@@ -1994,7 +2004,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
         "verdict": verdict,
         "report_path": report_path,
         "findings_path": (
-            findings_path
+            str(findings_path)
             if read.status != critic_adjustments.FINDINGS_READ_ABSENT
             else None
         ),
@@ -2012,13 +2022,13 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
         # beside it already explains.
         "verdict_source": verdict_source,
     }
-    result_path = os.path.join(output_dir, "pipeline-result.json")
+    result_path = artifact_path(output_dir, "pipeline_result")
 
     state["verdict"] = verdict
     state["pipeline_status"] = status
     # Carried into state so step 11's pure briefing can describe prepared
     # settlement on pass one and terminal publication on pass two without
-    # re-reading pipeline-result.json — the same division that already puts
+    # re-reading the pipeline result — the same division that already puts
     # `critic_source` here.
     state["verdict_source"] = verdict_source
     state["degradation_notes"] = list(degradation_notes)

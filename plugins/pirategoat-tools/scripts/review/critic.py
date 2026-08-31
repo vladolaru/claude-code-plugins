@@ -20,11 +20,13 @@ from typing import Optional
 
 try:
     from . import atomic_io, critic_adjustments
+    from .run_paths import artifact_path
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
     from review import atomic_io, critic_adjustments
+    from review.run_paths import artifact_path
 
 atomic_write_text = atomic_io.atomic_write_text
 
@@ -230,9 +232,10 @@ def get_step_guidance(
                 "BORDERLINE: When between STAND and REVISE, favor REVISE (cheaper to refine "
                 "than to ship an unfair review).",
                 "",
-                "Author findings in `$TMPDIR/decision-critic-findings.md` "
+                "Author findings in `$TMPDIR/"
+                f"{artifact_path('', 'critic_findings').name}` "
                 "using the format specified in the agent definition; never "
-                f"write `{output_dir}/decision-critic-findings.md` directly.",
+                f"write `{artifact_path(output_dir, 'critic_findings')}` directly.",
                 "Invoke `critic.py --save` for the final STAND, REVISE, or "
                 "ESCALATE verdict. Pass the temp adjustments file only for "
                 "REVISE, as specified in the agent definition.",
@@ -328,9 +331,7 @@ def _read_json(path, problems, label):
 
 def _invalidate_verdict_commit_marker(output_dir):
     """Make any prior critic snapshot incomplete before replacing payloads."""
-    path = os.path.join(
-        output_dir, critic_adjustments.CRITIC_VERDICT_FILENAME
-    )
+    path = artifact_path(output_dir, "critic_verdict")
     try:
         os.unlink(path)
     except FileNotFoundError:
@@ -340,12 +341,10 @@ def _invalidate_verdict_commit_marker(output_dir):
 def run_save(args):
     """Validate and publish one committed critic snapshot.
 
-    The ONLY channel the decision-reviewer agent is allowed to write
-    `decision-critic-findings.md`, `decision-critic-adjustments.json`, and
-    `decision-critic-verdict.json` through (see agents/decision-reviewer.md)
-    — raw writes to the output directory are forbidden, closing the gap a
-    critic writing those files directly left open: nothing here validates
-    a hand-written artifact after the fact.
+    The ONLY channel the decision-reviewer agent is allowed to use for its
+    findings, proposal, and source-bound verdict artifacts. Raw writes to the
+    output directory are forbidden because nothing here validates a
+    hand-written artifact after the fact.
 
     Every problem is collected before anything is decided, the same
     all-or-nothing style `critic_adjustments.prepare_proposal()` and
@@ -412,9 +411,9 @@ def run_save(args):
         # propagate before the snapshot can be mixed. The shared lock keeps a
         # concurrent adjudication from observing this incomplete publication.
         _invalidate_verdict_commit_marker(od)
-        atomic_write_text(
-            os.path.join(od, "decision-critic-findings.md"), findings_text
-        )
+        findings_path = artifact_path(od, "critic_findings")
+        findings_path.parent.mkdir(exist_ok=True)
+        atomic_write_text(findings_path, findings_text)
         digest = critic_adjustments.write_critic_verdict(
             od, verdict, adjustment_snapshot
         )
@@ -482,13 +481,13 @@ def main():
         "--report",
         type=str,
         default=None,
-        help="Path to the review document being criticized (normally review-record.md)",
+        help="Path to the review document being criticized",
     )
     parser.add_argument(
         "--context",
         type=str,
         default=None,
-        help="Path to review-findings.json (the structured findings ledger)",
+        help="Path to the structured findings ledger",
     )
     parser.add_argument(
         "--output-dir",

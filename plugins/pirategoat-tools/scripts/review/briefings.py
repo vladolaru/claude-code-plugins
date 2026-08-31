@@ -23,6 +23,7 @@ try:
         SKIPPED_QUICK_MODE,
         SKIPPED_STATUSES,
     )
+    from .run_paths import artifact_path
 except ImportError:
     _scripts_parent = str(Path(__file__).resolve().parent.parent)
     if _scripts_parent not in sys.path:
@@ -43,6 +44,17 @@ except ImportError:
         SKIPPED_QUICK_MODE,
         SKIPPED_STATUSES,
     )
+    from review.run_paths import artifact_path
+
+
+def _artifact_display(output_dir, key):
+    """Render one registry-owned artifact path for briefing prose."""
+    return str(artifact_path(output_dir or "<OUTPUT_DIR>", key))
+
+
+def _artifact_name(key):
+    """Return one registry-owned basename for state comparisons and prose."""
+    return artifact_path("", key).name
 
 # ---------------------------------------------------------------------------
 # Pipeline Identity
@@ -91,9 +103,9 @@ def get_step_guidance(step, mode, state, context, config=None, output_dir=None):
     Args:
         step: Step number (1-12)
         mode: Review mode (pr, full, incremental)
-        state: Pipeline state dict (from pipeline-state.json)
-        context: Review context dict (from review-context.json or gathered data)
-        config: Run config dict (from run-config.json), optional
+        state: Pipeline state dict (from the pipeline-state artifact)
+        context: Review context dict (from the canonical artifact or gathered data)
+        config: Run config dict (from the canonical run configuration), optional
         output_dir: Output directory path, optional
 
     Returns:
@@ -383,9 +395,9 @@ def _format_linked_issues(context):
 
 
 def _change_purpose_handoff(output_dir):
-    """Shared handoff instructions for writing change-purpose.md."""
+    """Shared handoff instructions for writing the change-purpose artifact."""
     return [
-        f"Write a brief change-purpose summary to `{output_dir or '<OUTPUT_DIR>'}/change-purpose.md`.",
+        f"Write a brief change-purpose summary to `{_artifact_display(output_dir, 'change_purpose')}`.",
         "Include: what the change does, why it's being made, and what to focus on during review.",
         "Attribute intent to its source (\"the PR description states...\", \"the linked issue asks for...\") "
         "and keep author-asserted discriminators, assumptions, and likelihood claims recognizable as "
@@ -466,7 +478,7 @@ def _dependency_refresh_briefing(state, config, output_dir):
         f"--output-dir {od} --report "
         '"$TMPDIR/dependency-refresh-report.json"`',
         "Proceed only when the command prints literal `SAVED "
-        "dependency-refresh.json` and the canonical file exists in the "
+        f"{_artifact_name('dependency_refresh')}` and the canonical file exists in the "
         "output directory.",
     ]
     return situation, actions, handoff
@@ -712,7 +724,7 @@ def _step_5_dispatch_plan(mode, state, context, config, output_dir):
     )
     actions.append("")
     actions.append(
-        f"To record a main orchestrator adjustment, edit `{od}/dispatch-plan.json`:"
+        f"To record a main orchestrator adjustment, edit `{_artifact_display(od, 'dispatch_plan')}`:"
     )
     actions.append('- Force-skip a dispatched agent: set status to `"SKIPPED_OVERRIDE"` with `"override_reason": "..."`')
     actions.append('- Force-dispatch a skipped agent: set status to `"DISPATCH_OVERRIDE"` with `"override_reason": "..."`')
@@ -1165,7 +1177,7 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
     else:
         actions.append("**2. Dispatch `review-reconciliator`** with:")
     actions.extend([
-        f"- **Reconciliation context:** `{od}/reconciliation-context.json` (pre-gathered: all agent findings, source snippets, scope annotations)",
+        f"- **Reconciliation context:** `{_artifact_display(od, 'reconciliation_context')}` (pre-gathered: all agent findings, source snippets, scope annotations)",
         f"- **Output builder path:** `{SCRIPTS_DIR / 'agent' / 'output.py'}`",
         f"- Output directory: `{od}`",
     ])
@@ -1181,9 +1193,9 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
 
     actions.append("")
     actions.append(
-        f"**Expected output:** `{od}/review-findings.json` — the "
+        f"**Expected output:** `{_artifact_display(od, 'review_findings_json')}` — the "
         "reconciliator's only artifact. The pipeline renders "
-        f"`{od}/review-findings.md` from it; the agent writes no Markdown."
+        f"`{_artifact_display(od, 'review_findings_md')}` from it; the agent writes no Markdown."
     )
 
     additional = config.get("additional_instructions") if config else None
@@ -1194,7 +1206,7 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
         actions.append("Give additional weight to findings addressing this guidance.")
 
     handoff = [
-        f"Verify `{od}/review-findings.json` exists before proceeding.",
+        f"Verify `{_artifact_display(od, 'review_findings_json')}` exists before proceeding.",
     ]
 
     return {
@@ -1360,12 +1372,12 @@ def _render_file_review_section(file_review):
 def _step_9_review_record(mode, state, context, config, output_dir):
     """Step 9: Review Record — read what the pipeline assembled.
 
-    This step used to have the orchestrator author `review-report.md` from
+    This step used to have the orchestrator author the audience report from
     the ledger, which meant the audience-facing document was born BEFORE
     the decision critic ran and had to be edited back into agreement with
     a ledger that moved underneath it. Authoring moved wholesale to step
     11, after validation. What is left here is a reading step: the
-    pipeline has already assembled `review-record.md` — the complete,
+    pipeline has already assembled the review record — the complete,
     machine-written account of the run — and the orchestrator's job is to
     read it and satisfy itself that it presents a review worth standing
     behind before the critic starts pulling on it.
@@ -1399,7 +1411,7 @@ def _step_9_review_record(mode, state, context, config, output_dir):
             "(raw agent output) and build your own picture of the change."
         )
         actions.append(
-            "You will synthesize `review-report.md` manually at step 11, "
+            f"You will synthesize `{_artifact_display(od, 'review_report')}` manually at step 11, "
             "from that raw output. Do not write it now — the decision "
             "critic runs first."
         )
@@ -1420,21 +1432,21 @@ def _step_9_review_record(mode, state, context, config, output_dir):
     record_outcome = state.get("review_record")
     if not isinstance(record_outcome, dict):
         actions.append(
-            f"**Read `{od}/{REVIEW_RECORD_MD}` if it is there.** This run "
+            f"**Read `{_artifact_display(od, 'review_record')}` if it is there.** This run "
             "recorded no assembly outcome, so whether the pipeline wrote "
             "the record is unknown — look, rather than assume either way. "
-            f"If it is absent, read `{od}/review-findings.json` directly; "
+            f"If it is absent, read `{_artifact_display(od, 'review_findings_json')}` directly; "
             "it is the canonical ledger the record projects."
         )
     elif record_outcome.get("status") != "complete":
         situation.append(
-            f"⚠️ The pipeline could not assemble `{od}/{REVIEW_RECORD_MD}`. "
-            f"Read `{od}/review-findings.json` directly instead — it is the "
+            f"⚠️ The pipeline could not assemble `{_artifact_display(od, 'review_record')}`. "
+            f"Read `{_artifact_display(od, 'review_findings_json')}` directly instead — it is the "
             "canonical ledger the record would have projected."
         )
     else:
         actions.append(
-            f"**The review record is assembled at `{od}/{REVIEW_RECORD_MD}`.** "
+            f"**The review record is assembled at `{_artifact_display(od, 'review_record')}`.** "
             "The pipeline wrote it from the findings ledger and this run's "
             "own measurements — findings, verified checks, the reconciler's "
             "assessment, run notes, and the coverage measurement. Nothing "
@@ -1451,7 +1463,7 @@ def _step_9_review_record(mode, state, context, config, output_dir):
         actions.append(
             "**Do not edit it, and do not write a report yet.** The record "
             "is the pipeline's own account and stays machine-written; the "
-            "audience-facing `review-report.md` is authored from a "
+            f"audience-facing `{_artifact_name('review_report')}` is authored from a "
             "source-bound settlement at step 11, after the decision critic "
             "has run and any adjustments have landed. Writing prose now "
             "would only be prose that has to be corrected later."
@@ -1494,6 +1506,9 @@ _NO_RECORDED_SOURCE = object()
 def _step_10_decision_critic(mode, state, context, config, output_dir):
     """Step 10: Decision Critic — stress-test conclusions."""
     od = output_dir or "<OUTPUT_DIR>"
+    review_record_name = _artifact_name("review_record")
+    findings_md_name = _artifact_name("review_findings_md")
+    findings_json_name = _artifact_name("review_findings_json")
 
     # Quick-mode critic skip: low-risk verdicts don't need stress-testing
     is_quick = config.get("quick", False)
@@ -1508,8 +1523,8 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         ]
         actions = [
             f"Nothing to do here. The pipeline recorded the skip itself in "
-            f"`{od}/decision-critic-verdict.json`, and step 11 derives the "
-            f"published verdict from `{od}/review-findings.json`.",
+            f"`{_artifact_display(od, 'critic_verdict')}`, and step 11 derives the "
+            f"published verdict from `{_artifact_display(od, 'review_findings_json')}`.",
             "",
             "Proceed to the next step.",
         ]
@@ -1545,34 +1560,41 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     # first, the pipeline-rendered findings Markdown second, and the
     # canonical ledger last — the critic can read JSON, and a raw findings
     # list is a worse read than a rendering but an infinitely better one
-    # than a missing file. `review-report.md` is not in the list at all:
+    # than a missing file. The audience report is not in the list at all:
     # it is authored at step 11, after this critic runs.
     critic_source = state.get("critic_source", _NO_RECORDED_SOURCE)
     if critic_source is _NO_RECORDED_SOURCE:
         # No recorded facts at all (step 10's orchestration never ran).
         # That is not a measured absence and must not render as one, so
         # the nominal target stands.
-        critic_target = f"{od}/{REVIEW_RECORD_MD}"
+        critic_target = _artifact_display(od, "review_record")
     elif critic_source is None:
         # Measured absence: step 10 looked and found none of the three.
-        critic_target = f"{od}/{REVIEW_RECORD_MD}"
+        critic_target = _artifact_display(od, "review_record")
         situation.append(
             f"⚠️ No review artifact was found to stress-test — neither "
-            f"{REVIEW_RECORD_MD}, review-findings.md, nor "
-            "review-findings.json is present. The critic has nothing to "
+            f"{review_record_name}, {findings_md_name}, nor "
+            f"{findings_json_name} is present. The critic has nothing to "
             "read; expect its verdict to be unusable."
         )
     else:
-        critic_target = f"{od}/{critic_source}"
-        if critic_source != REVIEW_RECORD_MD:
+        source_keys = {
+            review_record_name: "review_record",
+            findings_md_name: "review_findings_md",
+            findings_json_name: "review_findings_json",
+        }
+        critic_target = _artifact_display(
+            od, source_keys.get(critic_source, "review_record")
+        )
+        if critic_source != review_record_name:
             reason = (
                 " (the findings Markdown render did not complete)"
-                if critic_source == "review-findings.json"
+                if critic_source == findings_json_name
                 and degradation.get("findings_markdown_incomplete")
                 else ""
             )
             situation.append(
-                f"⚠️ `{REVIEW_RECORD_MD}` is missing — critic will "
+                f"⚠️ `{review_record_name}` is missing — critic will "
                 f"review `{critic_source}` instead{reason}."
             )
 
@@ -1581,7 +1603,7 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         ledger_status == "ok" if ledger_status is not None
         else not degradation.get("reconciliation_failed")
     )
-    findings_path = f"{od}/review-findings.json"
+    findings_path = _artifact_display(od, "review_findings_json")
 
     if _host(config) == HOST_CODEX:
         actions.append(
@@ -1619,13 +1641,13 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append(f"Context: <one-line summary of PR scope, verdict, and finding count>")
     actions.append(
         "Return STAND, REVISE, or ESCALATE. Author findings first at "
-        "`$TMPDIR/decision-critic-findings.md`, then publish the findings "
+        f"`$TMPDIR/{_artifact_name('critic_findings')}`, then publish the findings "
         "and verdict through `critic.py --save` for every verdict. Never "
         "write a canonical `decision-critic-*` artifact directly."
     )
     actions.append(
         "On REVISE, also author every finding or check adjustment in "
-        "`$TMPDIR/decision-critic-adjustments.json` and pass it to the "
+        f"`$TMPDIR/{_artifact_name('critic_adjustments')}` and pass it to the "
         "same `critic.py --save` command, "
         "per your agent instructions. "
         "On STAND or ESCALATE, invoke that command without an adjustments "
@@ -1644,7 +1666,7 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         "writes it atomically:"
     )
     actions.append("```bash")
-    actions.append(f'cat "{od}/decision-critic-verdict.json"')
+    actions.append(f'cat "{_artifact_display(od, "critic_verdict")}"')
     actions.append("```")
     actions.append(
         "**You write nothing here.** That file is the critic's own "
@@ -1675,9 +1697,9 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     )
     actions.append(
         f"1) Read the critic's recommendations, the committed proposal IDs "
-        f"in `{od}/decision-critic-adjustments.json`, the source-bound marker "
-        f"in `{od}/decision-critic-verdict.json`, the current "
-        f"`{od}/review-findings.json` ledger, and the source files needed to "
+        f"in `{_artifact_display(od, 'critic_adjustments')}`, the source-bound marker "
+        f"in `{_artifact_display(od, 'critic_verdict')}`, the current "
+        f"`{_artifact_display(od, 'review_findings_json')}` ledger, and the source files needed to "
         f"probe each material claim."
     )
     actions.append(
@@ -1732,13 +1754,13 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     )
     actions.append(
         f"The adjudication channel verifies "
-        f"`{od}/decision-critic-verdict.json` "
+        f"`{_artifact_display(od, 'critic_verdict')}` "
         f"against the committed proposal digest and then records your "
-        f"adjudication in `{od}/review-findings.json` in a single write "
+        f"adjudication in `{_artifact_display(od, 'review_findings_json')}` in a single write "
         f"through the ledger's sole writer."
     )
     actions.append(
-        "Never hand-edit `review-findings.json` either: that one write "
+        "Never hand-edit the findings ledger either: that one write "
         "carries provenance, invalidates the reconciler's prior assessment "
         "only when an accepted operation really changes the ledger, installs "
         "a supplied revised assessment, recounts findings, and derives the "
@@ -1747,8 +1769,8 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     )
     actions.append(
         f"4) Nothing else to edit. The pipeline re-assembles "
-        f"`{od}/{REVIEW_RECORD_MD}` from the updated ledger at step 11, and "
-        f"`review-report.md` is authored there — once, from that settled "
+        f"`{_artifact_display(od, 'review_record')}` from the updated ledger at step 11, and "
+        f"`{_artifact_name('review_report')}` is authored there — once, from that settled "
         f"record. There is no report to bring back into agreement with the "
         f"JSON, which is exactly why authoring waits until after you."
     )
@@ -1769,18 +1791,18 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append("")
     actions.append(
         "**You do not write a final review verdict.** Step 11 DERIVES it "
-        f"from `{od}/review-findings.json` — the one artifact whose verdict "
+        f"from `{_artifact_display(od, 'review_findings_json')}` — the one artifact whose verdict "
         "was actually computed from findings, and which the adjustments "
         "command above recomputes for you. Transcribing a verdict by hand "
         "is how a review holding a critical finding used to publish COMMENT."
     )
 
     handoff = [
-        f"You have READ `{od}/decision-critic-verdict.json` if the critic "
+        f"You have READ `{_artifact_display(od, 'critic_verdict')}` if the critic "
         f"saved one, and written nothing verdict-shaped yourself. If the "
         f"critic produced no verdict, that file is absent and stays "
         f"absent — step 11 reports it.",
-        f"On REVISE: `{od}/review-findings.json` carries the applied "
+        f"On REVISE: `{_artifact_display(od, 'review_findings_json')}` carries the applied "
         f"adjustments. Nothing else needs syncing — step 11 re-assembles "
         f"the record from that ledger before the report is written.",
     ]
@@ -1799,7 +1821,7 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
 # ---------------------------------------------------------------------------
 
 # The report's voice. Bot runs override this wholesale through
-# `output_instructions` in run-config.json (pirategoat-bot seeds it, and
+# `output_instructions` in the run configuration (pirategoat-bot seeds it, and
 # the result IS the posted PR comment); interactive runs fall back to the
 # mode-appropriate default below. These live at step 11 because that is
 # where the report is authored — once, from the final post-critic state.
@@ -1848,7 +1870,7 @@ def _derived_markdown_status_line(state, output_dir, *, key, label, suffix=None)
     """Summarize one derived-Markdown outcome for a human.
 
     Both derived families — the per-reviewer `reviewers/<reviewer>/review.md` rendered
-    at step 8 and `review-findings.md` rendered at steps 9 and 11 — are
+    at step 8 and the ledger Markdown rendered at steps 9 and 11 — are
     best-effort renders that record the same written/expected/status
     outcome, so they report through one helper rather than two that drift.
     `suffix` is passed to the printed recovery command, which is what makes
@@ -1896,11 +1918,11 @@ def _settlement_lines(state):
     """Render settled state according to its publication phase.
 
     Reads the facts step 11's orchestration recorded in state rather than
-    re-opening pipeline-result.json — this module is pure, the same division
+    re-opening the terminal result — this module is pure, the same division
     that already puts `critic_source` in state for step 10.
 
     A prepare pass may describe state as prepared, but must not call it a
-    projection: pipeline-result.json does not exist yet. A publish pass can
+    projection: the terminal result does not exist yet. A publish pass can
     say published because the report handoff and terminal marker now exist.
     A run whose settlement never ran records nothing rather than fabricating
     a success line.
@@ -1986,7 +2008,7 @@ def _report_authoring_actions(mode, state, context, config, output_dir):
 
     action_verb = "Regenerate" if regenerate else "Author"
     actions.append(
-        f"**{action_verb} `{od}/review-report.md` now"
+        f"**{action_verb} `{_artifact_display(od, 'review_report')}` now"
         + (".** " if regenerate else " — once.** ")
         + "This is the "
         "audience-facing presentation of the review"
@@ -2023,9 +2045,9 @@ def _report_authoring_actions(mode, state, context, config, output_dir):
         )
     elif record_usable:
         actions.append(
-            f"**Source:** `{od}/{REVIEW_RECORD_MD}` — the pipeline's own "
+            f"**Source:** `{_artifact_display(od, 'review_record')}` — the pipeline's own "
             "machine-assembled account of this run, re-assembled moments "
-            f"ago from the final ledger — and `{od}/review-findings.json`, "
+            f"ago from the final ledger — and `{_artifact_display(od, 'review_findings_json')}`, "
             "the canonical ledger it projects. The record is the reference "
             "the report must not contradict: every finding, severity, "
             "count, check, and coverage statement in your report has to "
@@ -2033,14 +2055,14 @@ def _report_authoring_actions(mode, state, context, config, output_dir):
         )
     else:
         actions.append(
-            f"**Source:** `{od}/review-findings.json` — the canonical "
+            f"**Source:** `{_artifact_display(od, 'review_findings_json')}` — the canonical "
             f"ledger. The pipeline could not assemble `{REVIEW_RECORD_MD}` "
             "for this run, so read the ledger directly."
         )
     actions.append("")
 
     # The report's voice: the caller's override verbatim when one exists
-    # (bot mode seeds it into run-config.json), otherwise the
+    # (bot mode seeds it into the run configuration), otherwise the
     # mode-appropriate default with the PR author's name folded in.
     output_instructions = config.get("output_instructions")
     if output_instructions:
@@ -2065,7 +2087,7 @@ def _report_authoring_actions(mode, state, context, config, output_dir):
 
     actions.append("")
     verdict_source_clause = (
-        f"it came from `{od}/review-findings.json`, and the report is a "
+        f"it came from `{_artifact_display(od, 'review_findings_json')}`, and the report is a "
         "presentation of that decision, not a second one."
         if ledger_usable
         else "the rejected or absent ledger is not a source for this report, "
@@ -2105,7 +2127,7 @@ def _report_authoring_actions(mode, state, context, config, output_dir):
         )
         actions.append(
             f"**Host context banner:** prepend this blockquote to the top of "
-            f"`review-report.md`{record_projection}:"
+            f"`{_artifact_name('review_report')}`{record_projection}:"
         )
         actions.append("")
         actions.append(f"> **⚠ Host Context Banner:** {banner.get('message', '')}")
@@ -2124,7 +2146,7 @@ def _report_authoring_actions(mode, state, context, config, output_dir):
         actions.append("")
         actions.append(
             f"**⚠ Review coverage.** The record carries a `## Review "
-            f"coverage` section. Copy it into `{od}/review-report.md` "
+            f"coverage` section. Copy it into `{_artifact_display(od, 'review_report')}` "
             "VERBATIM. You may add your own commentary AFTER the block; "
             "never restate, summarize, re-count, or edit the machine's "
             "sentences — the hedges in them are the measurement, and a "
@@ -2169,13 +2191,13 @@ def _step_11_present_results(mode, state, context, config, output_dir):
         actions.append(
             "After writing the report, verify the file exists and re-run "
             "step 11 exactly as printed below. A matching pass publishes "
-            "`pipeline-result.json`; do not report this run complete before "
+            f"`{_artifact_name('pipeline_result')}`; do not report this run complete before "
             "that pass succeeds."
         )
     else:
         actions = [
-            f"Report handoff verified at `{od}/review-report.md`; the "
-            "terminal `pipeline-result.json` is now published.",
+            f"Report handoff verified at `{_artifact_display(od, 'review_report')}`; the "
+            f"terminal `{_artifact_name('pipeline_result')}` is now published.",
             "",
         ]
 
@@ -2195,17 +2217,17 @@ def _step_11_present_results(mode, state, context, config, output_dir):
     elif not publication_pending:
         # Non-interactive: list output files
         actions.append("Published output files:")
-        actions.append(f"- `{od}/review-report.md` — the report you author "
+        actions.append(f"- `{_artifact_display(od, 'review_report')}` — the report you author "
                        "here; posted verbatim as the PR comment")
         actions.append(
-            f"- `{od}/{REVIEW_RECORD_MD}` — the pipeline's machine-assembled "
+            f"- `{_artifact_display(od, 'review_record')}` — the pipeline's machine-assembled "
             "record of the run"
         )
         actions.append(
-            f"- `{od}/review-findings.json` + `review-findings.md` "
+            f"- `{_artifact_display(od, 'review_findings_json')}` + `{_artifact_display(od, 'review_findings_md')}` "
             "(rendered from the JSON by the pipeline)"
         )
-        actions.append(f"- `{od}/pipeline-result.json` — status, verdict, report_path, "
+        actions.append(f"- `{_artifact_display(od, 'pipeline_result')}` — status, verdict, report_path, "
                        "findings_path, critic_verdict, degradation_notes, "
                        "worktree_hygiene (compact hygiene summary; null when "
                        "the run never measured it), usage (compact token "
@@ -2228,7 +2250,7 @@ def _step_11_present_results(mode, state, context, config, output_dir):
     if ledger_status in ("ok", "absent"):
         actions.append(_derived_markdown_status_line(
             state, od, key="findings_markdown", label="Findings Markdown",
-            suffix="review-findings.json",
+            suffix=_artifact_name("review_findings_json"),
         ))
     else:
         actions.append(
@@ -2254,14 +2276,14 @@ def _step_11_present_results(mode, state, context, config, output_dir):
         # here rather than left implicit.
         "handoff": (
             [(
-                f"Regenerate `{od}/review-report.md` from the newly settled "
+                f"Regenerate `{_artifact_display(od, 'review_report')}` from the newly settled "
                 "source, then re-run step 11 before reporting the pipeline "
                 "complete."
                 if handoff_status in {
                     "source_changed", "stale_report_unchanged",
                     "unbound_report",
                 }
-                else f"Verify `{od}/review-report.md` exists, then re-run "
+                else f"Verify `{_artifact_display(od, 'review_report')}` exists, then re-run "
                      "step 11 before reporting the pipeline complete."
             )]
             if publication_pending

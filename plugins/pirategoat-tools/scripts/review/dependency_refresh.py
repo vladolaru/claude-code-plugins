@@ -16,17 +16,19 @@ from pathlib import Path
 
 try:
     from .atomic_io import atomic_write_json
+    from .run_paths import artifact_path
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
     from review.atomic_io import atomic_write_json
+    from review.run_paths import artifact_path
 
 
 REPORT_SCHEMA = 1
 REPORT_STATUSES = ("not_needed", "completed", "partial", "failed")
 EXIT_STATUSES = ("ok", "failed")
-REPORT_FILENAME = "dependency-refresh.json"
+REPORT_FILENAME = artifact_path("", "dependency_refresh").name
 
 _MAX_DIRTY_FILES = 20
 _MAX_DIRTY_FILE_CHARS = 500
@@ -233,7 +235,7 @@ def load_dependency_refresh_report(output_dir):
     """Return a complete canonical report, or ``None`` when absent/invalid."""
     try:
         payload, read_problems = _read_report_request(
-            Path(output_dir) / REPORT_FILENAME
+            artifact_path(output_dir, "dependency_refresh")
         )
     except OSError:
         return None
@@ -258,7 +260,9 @@ def save_report(output_dir, report_path, repo_root):
         "tracked_files_dirty": observation["tracked_files_dirty"],
         "dirty_files": list(observation["dirty_files"]),
     }
-    atomic_write_json(Path(output_dir) / REPORT_FILENAME, canonical)
+    path = artifact_path(output_dir, "dependency_refresh")
+    path.parent.mkdir(exist_ok=True)
+    atomic_write_json(path, canonical)
     return []
 
 

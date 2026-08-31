@@ -8,7 +8,7 @@ consumer reading a finished run's artifacts has to go find the session
 transcripts and correlate them again — if they still exist.
 
 This CLI closes that gap by capturing the same measurement AT FINALIZE and
-writing it into the run directory as ``usage-snapshot.json``. It is a thin
+writing it into the run's pipeline-state area. It is a thin
 projection over the existing correlation machinery
 (``review_metrics.measure.measure_run`` over ``review_transcript.py``), not
 a second implementation of it.
@@ -35,13 +35,13 @@ half — but two more facts make that upgrade honest rather than merely
 optimistic:
 
 * MONOTONIC. A re-run's candidate measurement is compared, half by half,
-  against whatever ``usage-snapshot.json`` is already on disk. A candidate
+  against whatever usage snapshot is already on disk. A candidate
   that would DOWNGRADE either half (fresher evidence found LESS than a
   prior run already recorded — e.g. transcripts have since rotated out)
   is discarded; the existing artifact is left byte-for-byte untouched,
   because a re-run that could not re-measure must never cost the run its
   best evidence. This guarantee is scoped to the artifact, not to the run:
-  deleting ``usage-snapshot.json`` is an explicit act, and the next
+  deleting that snapshot is an explicit act, and the next
   capture over an empty slate re-measures from scratch and records
   whatever it finds — including a fresh ``missing`` — per the same
   recorded-absence doctrine as every other unmeasured state here. There is
@@ -67,13 +67,13 @@ as ``manifest_reprojection: <reason>`` (``written`` / ``absent`` /
 string, not a bool, because on a settled current-schema manifest
 ``io_failure`` is the one outcome a human re-running by hand needs to be
 able to see) and never turns into a nonzero exit or a
-stderr line, unlike a failure to write ``usage-snapshot.json`` itself —
+stderr line, unlike a failure to write the usage snapshot itself —
 that IS this CLI's sole reason for existing, and fails loudly. The
 manifest, by contrast, is a derived surface this CLI can always
 regenerate on the next re-run; losing one write to it is not silent data
 loss in the way losing the snapshot artifact would be.
 
-``pipeline-result.json``'s compact ``usage`` block is a THIRD surface,
+The terminal result's compact ``usage`` block is a THIRD surface,
 built once at step 11 from the same ``manifest_sections.build_usage_manifest``
 projection — a manual re-run of this CLI does not, and cannot, revisit
 it: it is step 11's own point-in-time record, not a durable artifact this
@@ -94,6 +94,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from review_metrics.contracts import (  # noqa: E402
     DEFAULT_REGISTRY,
@@ -103,11 +104,12 @@ from review_metrics.contracts import (  # noqa: E402
 )
 from review_metrics.measure import measure_run  # noqa: E402
 from review_metrics.usage import _add_usage, _empty_usage  # noqa: E402
+from review.run_paths import artifact_path  # noqa: E402
 
 
-SNAPSHOT_FILENAME = "usage-snapshot.json"
+SNAPSHOT_FILENAME = artifact_path("", "usage_snapshot").name
 SNAPSHOT_SCHEMA = 1
-RUN_CONFIG_FILENAME = "run-config.json"
+RUN_CONFIG_FILENAME = artifact_path("", "run_config").name
 
 # Warning codes that speak about SUBAGENT evidence specifically. The
 # enrichment's own `completeness.agent_data` cannot be used for the subagent
@@ -187,7 +189,7 @@ def _manifest_path(output_dir: Path) -> Path | None:
 
 
 def _config_session_id(output_dir: Path) -> str | None:
-    config = _read_json(output_dir / RUN_CONFIG_FILENAME)
+    config = _read_json(artifact_path(output_dir, "run_config"))
     value = config.get("session_id") if isinstance(config, dict) else None
     return value if isinstance(value, str) and value else None
 
@@ -373,8 +375,9 @@ def _build_snapshot(
 def _write_snapshot(output_dir: Path, snapshot: dict) -> bool:
     """Atomically replace the run's snapshot; never raises."""
     try:
+        artifact_path(output_dir, "usage_snapshot").parent.mkdir(exist_ok=True)
         _ATOMIC_IO_CONTRACT.atomic_write_json(
-            str(output_dir / SNAPSHOT_FILENAME), snapshot
+            str(artifact_path(output_dir, "usage_snapshot")), snapshot
         )
         return True
     except (OSError, TypeError, ValueError):
@@ -472,7 +475,7 @@ def main(argv: list[str] | None = None) -> int:
     # already on disk. A downgrade is discarded wholesale — the existing
     # artifact is reported and left byte-for-byte untouched, never merged
     # with the weaker candidate.
-    existing = _read_json(output_dir / SNAPSHOT_FILENAME)
+    existing = _read_json(artifact_path(output_dir, "usage_snapshot"))
     downgrade_avoided = _is_downgrade(existing, candidate)
     snapshot = existing if downgrade_avoided else candidate
 
@@ -507,7 +510,7 @@ def main(argv: list[str] | None = None) -> int:
         "written": written,
         "downgrade_avoided": downgrade_avoided,
         "manifest_reprojection": manifest_reprojection,
-        "path": str(output_dir / SNAPSHOT_FILENAME),
+        "path": str(artifact_path(output_dir, "usage_snapshot")),
         "availability": snapshot["availability"],
         "agents_measured": (
             f"{agents.get('measured', 0)}/"

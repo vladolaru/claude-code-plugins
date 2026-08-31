@@ -39,6 +39,7 @@ try:
         SKIPPED_QUICK_MODE,
         SKIPPED_TRIAGE,
     )
+    from .run_paths import artifact_path
 except ImportError:
     _scripts_parent = str(Path(__file__).resolve().parent.parent)
     if _scripts_parent not in sys.path:
@@ -49,6 +50,7 @@ except ImportError:
         SKIPPED_QUICK_MODE,
         SKIPPED_TRIAGE,
     )
+    from review.run_paths import artifact_path
 
 # =============================================================================
 # Import DOMAIN_CATALOG from agent/scope.py
@@ -1777,7 +1779,7 @@ def _build_pr_text(review_context: Optional[dict]) -> str:
     into a single searchable text block.
 
     Args:
-        review_context: Parsed review-context.json dict, or None.
+        review_context: Parsed review-context mapping, or None.
 
     Returns:
         Combined text in original case (keyword matching normalizes
@@ -1808,7 +1810,7 @@ def _build_pr_text(review_context: Optional[dict]) -> str:
 
 
 def _load_review_context(path: Optional[str]) -> Optional[dict]:
-    """Load review-context.json from disk. Returns None on any failure."""
+    """Load review context from disk. Returns None on any failure."""
     if not path or not os.path.isfile(path):
         return None
     try:
@@ -1924,7 +1926,7 @@ def build_dispatch_plan(
         registry: Agent registry dict. Loaded from default path if None.
         commit_messages: Pre-fetched commit messages (fetched from git if None).
         diffstat: Pre-fetched diffstat (fetched from git if None).
-        review_context: Parsed review-context.json dict (for PR metadata triage).
+        review_context: Parsed review-context mapping for PR metadata triage.
         quick: If True, exclude low-signal agents with SKIPPED_QUICK_MODE status.
         host: Dispatch host. Codex native subagents ignore Claude model
             declarations, so repo-reviewer entries project their effective tier.
@@ -2093,7 +2095,7 @@ def main():
     parser.add_argument(
         "--review-context",
         default=None,
-        help="Path to review-context.json for PR metadata triage (title, body, labels, branch, issues).",
+        help="Path to review context for PR metadata triage.",
     )
     parser.add_argument(
         "--quick",
@@ -2137,8 +2139,9 @@ def main():
     print(json.dumps(plan, indent=2))
 
     # Write to disk (for downstream scripts: agents_status.py)
-    plan_path = os.path.join(args.output_dir, "dispatch-plan.json")
+    plan_path = artifact_path(args.output_dir, "dispatch_plan")
     os.makedirs(args.output_dir, exist_ok=True)
+    plan_path.parent.mkdir(exist_ok=True)
     with open(plan_path, "w") as f:
         json.dump(plan, f, indent=2)
 

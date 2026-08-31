@@ -27,6 +27,7 @@ from helpers.review_fixtures import (
     canonical_review_document,
 )
 from review import dependency_refresh
+from review import run_paths
 from review import synthesis_lifecycle as lifecycle_contract
 from review.manifest_sections import aggregate_file_review
 from review.reviewer_lifecycle import (
@@ -80,9 +81,15 @@ def _read_manifest(telemetry):
     return json.loads(Path(telemetry.manifest_path).read_text())
 
 
+def _artifact(output_dir, key):
+    path = run_paths.artifact_path(output_dir, key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def _write_dispatch_plan(output_dir, agent_names):
     """Name the agents whose finals the run is entitled to project."""
-    (output_dir / "dispatch-plan.json").write_text(json.dumps({
+    _artifact(output_dir, "dispatch_plan").write_text(json.dumps({
         "agents": [
             {"name": name, "status": "DISPATCH"} for name in agent_names
         ],
@@ -94,7 +101,7 @@ def _write_assignment_inputs(output_dir, changed, reviewable, agents):
     (output_dir / "review-context.json").write_text(json.dumps({
         "git": {"changed_files": changed},
     }))
-    (output_dir / "dispatch-plan.json").write_text(json.dumps({
+    _artifact(output_dir, "dispatch_plan").write_text(json.dumps({
         "changed_files": reviewable,
         "agents": agents,
     }))
@@ -156,7 +163,7 @@ class TestStart:
 
     def test_writes_marker_file(self, telemetry, output_dir):
         path = telemetry.start(pr_number="42")
-        marker = output_dir / ".telemetry-log-path"
+        marker = _artifact(output_dir, "telemetry_log_path")
         assert marker.is_file()
         assert marker.read_text().strip() == path
 
@@ -1516,7 +1523,7 @@ class TestRunManifest:
                 else json.dumps(context_payload)
             )
         if plan_payload is not None:
-            (output_dir / "dispatch-plan.json").write_text(
+            (_artifact(output_dir, "dispatch_plan")).write_text(
                 plan_payload
                 if isinstance(plan_payload, str)
                 else json.dumps(plan_payload)
@@ -1908,8 +1915,8 @@ class TestRunManifest:
                 },
             ]
         }
-        (output_dir / "dispatch-plan.initial.json").write_text(json.dumps(initial))
-        (output_dir / "dispatch-plan.json").write_text(json.dumps(final))
+        (_artifact(output_dir, "dispatch_plan_initial")).write_text(json.dumps(initial))
+        (_artifact(output_dir, "dispatch_plan")).write_text(json.dumps(final))
 
         telemetry.start(run_id="run-1")
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
@@ -1969,10 +1976,10 @@ class TestRunManifest:
             "adapter": "repo-reviewer-adapter",
             "model": "opus",
         }
-        (output_dir / "dispatch-plan.initial.json").write_text(
+        (_artifact(output_dir, "dispatch_plan_initial")).write_text(
             json.dumps({"agents": [entry]})
         )
-        (output_dir / "dispatch-plan.json").write_text(
+        (_artifact(output_dir, "dispatch_plan")).write_text(
             json.dumps({"agents": [entry]})
         )
 
@@ -1994,10 +2001,10 @@ class TestRunManifest:
             "model": "inherit",
             "declared_model": "opus",
         }
-        (output_dir / "dispatch-plan.initial.json").write_text(
+        (_artifact(output_dir, "dispatch_plan_initial")).write_text(
             json.dumps({"agents": [entry]})
         )
-        (output_dir / "dispatch-plan.json").write_text(
+        (_artifact(output_dir, "dispatch_plan")).write_text(
             json.dumps({"agents": [entry]})
         )
 
@@ -2032,10 +2039,10 @@ class TestRunManifest:
             initial_agent.pop("status")
         else:
             initial_agent["status"] = invalid_status
-        (output_dir / "dispatch-plan.initial.json").write_text(
+        (_artifact(output_dir, "dispatch_plan_initial")).write_text(
             json.dumps({"agents": [initial_agent]})
         )
-        (output_dir / "dispatch-plan.json").write_text(
+        (_artifact(output_dir, "dispatch_plan")).write_text(
             json.dumps({"agents": [final_agent]})
         )
 
@@ -2065,8 +2072,8 @@ class TestRunManifest:
         self, telemetry, output_dir, status, dispatched
     ):
         plan = {"agents": [{"name": "code-reviewer", "status": status}]}
-        (output_dir / "dispatch-plan.initial.json").write_text(json.dumps(plan))
-        (output_dir / "dispatch-plan.json").write_text(json.dumps(plan))
+        (_artifact(output_dir, "dispatch_plan_initial")).write_text(json.dumps(plan))
+        (_artifact(output_dir, "dispatch_plan")).write_text(json.dumps(plan))
 
         telemetry.start(run_id="run-1")
         dispatch = _read_manifest(telemetry)["dispatch"]
@@ -2101,10 +2108,10 @@ class TestRunManifest:
                 ]
             }
 
-        (output_dir / "dispatch-plan.initial.json").write_text(
+        (_artifact(output_dir, "dispatch_plan_initial")).write_text(
             json.dumps(plan(initial_names))
         )
-        (output_dir / "dispatch-plan.json").write_text(
+        (_artifact(output_dir, "dispatch_plan")).write_text(
             json.dumps(plan(final_names))
         )
 
@@ -2155,10 +2162,10 @@ class TestRunManifest:
                 {"name": "a-reviewer", "status": "DISPATCH_OVERRIDE"},
             ]
         }
-        (output_dir / "dispatch-plan.initial.json").write_text(
+        (_artifact(output_dir, "dispatch_plan_initial")).write_text(
             json.dumps(initial)
         )
-        (output_dir / "dispatch-plan.json").write_text(json.dumps(final))
+        (_artifact(output_dir, "dispatch_plan")).write_text(json.dumps(final))
 
         telemetry.start(run_id="run-1")
         dispatch = _read_manifest(telemetry)["dispatch"]
@@ -2197,10 +2204,10 @@ class TestRunManifest:
     def test_manifest_agent_set_mismatch_allows_one_empty_identity_set(
         self, telemetry, output_dir
     ):
-        (output_dir / "dispatch-plan.initial.json").write_text(
+        (_artifact(output_dir, "dispatch_plan_initial")).write_text(
             json.dumps({"agents": []})
         )
-        (output_dir / "dispatch-plan.json").write_text(
+        (_artifact(output_dir, "dispatch_plan")).write_text(
             json.dumps(
                 {
                     "agents": [
@@ -2237,11 +2244,11 @@ class TestRunManifest:
             initial = plan
             if mode == "duplicate":
                 initial = {"agents": plan["agents"] * 2}
-            (output_dir / "dispatch-plan.initial.json").write_text(
+            (_artifact(output_dir, "dispatch_plan_initial")).write_text(
                 json.dumps(initial)
             )
         if mode in {"comparable", "legacy-final", "duplicate"}:
-            (output_dir / "dispatch-plan.json").write_text(json.dumps(plan))
+            (_artifact(output_dir, "dispatch_plan")).write_text(json.dumps(plan))
 
         telemetry.start(run_id="run-1")
 
@@ -2261,7 +2268,7 @@ class TestRunManifest:
                 }
             ]
         }
-        (output_dir / "dispatch-plan.json").write_text(json.dumps(final))
+        (_artifact(output_dir, "dispatch_plan")).write_text(json.dumps(final))
 
         telemetry.start(run_id="run-1")
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
@@ -2285,8 +2292,8 @@ class TestRunManifest:
     def test_manifest_malformed_baseline_uses_legacy_unchanged_projection(
         self, telemetry, output_dir
     ):
-        (output_dir / "dispatch-plan.initial.json").write_text("NOT JSON")
-        (output_dir / "dispatch-plan.json").write_text(json.dumps({
+        (_artifact(output_dir, "dispatch_plan_initial")).write_text("NOT JSON")
+        (_artifact(output_dir, "dispatch_plan")).write_text(json.dumps({
             "agents": [
                 {
                     "name": "code-reviewer",
@@ -2313,8 +2320,8 @@ class TestRunManifest:
     def test_manifest_dispatch_is_fail_open_for_malformed_partial_plans(
         self, telemetry, output_dir
     ):
-        (output_dir / "dispatch-plan.initial.json").write_text("NOT JSON")
-        (output_dir / "dispatch-plan.json").write_text(json.dumps({
+        (_artifact(output_dir, "dispatch_plan_initial")).write_text("NOT JSON")
+        (_artifact(output_dir, "dispatch_plan")).write_text(json.dumps({
             "agents": [
                 None,
                 "not-an-agent",
@@ -2358,8 +2365,8 @@ class TestRunManifest:
                 }
             ],
         }
-        (output_dir / "dispatch-plan.initial.json").write_text(json.dumps(plan))
-        (output_dir / "dispatch-plan.json").write_text(json.dumps(plan))
+        (_artifact(output_dir, "dispatch_plan_initial")).write_text(json.dumps(plan))
+        (_artifact(output_dir, "dispatch_plan")).write_text(json.dumps(plan))
 
         telemetry.start(run_id="run-1")
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
@@ -2376,10 +2383,10 @@ class TestRunManifest:
     def test_manifest_continues_when_final_dispatch_plan_is_malformed(
         self, telemetry, output_dir
     ):
-        (output_dir / "dispatch-plan.initial.json").write_text(json.dumps({
+        (_artifact(output_dir, "dispatch_plan_initial")).write_text(json.dumps({
             "agents": [{"name": "code-reviewer", "status": "DISPATCH"}]
         }))
-        (output_dir / "dispatch-plan.json").write_text("NOT JSON")
+        (_artifact(output_dir, "dispatch_plan")).write_text("NOT JSON")
 
         telemetry.start(run_id="run-1")
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
@@ -2407,8 +2414,8 @@ class TestRunManifest:
         assert unavailable["comparison_available"] is False
 
         empty_plan = {"agents": []}
-        (output_dir / "dispatch-plan.initial.json").write_text(json.dumps(empty_plan))
-        (output_dir / "dispatch-plan.json").write_text(json.dumps(empty_plan))
+        (_artifact(output_dir, "dispatch_plan_initial")).write_text(json.dumps(empty_plan))
+        (_artifact(output_dir, "dispatch_plan")).write_text(json.dumps(empty_plan))
         telemetry.log_step(step=5, phase="EXECUTION", title="Dispatch Plan")
 
         observed = _read_manifest(telemetry)["dispatch"]
@@ -2443,8 +2450,8 @@ class TestRunManifest:
                 {"name": "security-reviewer", "status": "DISPATCH_OVERRIDE"},
             ]
         }
-        (output_dir / "dispatch-plan.initial.json").write_text(json.dumps(initial))
-        (output_dir / "dispatch-plan.json").write_text(json.dumps(final))
+        (_artifact(output_dir, "dispatch_plan_initial")).write_text(json.dumps(initial))
+        (_artifact(output_dir, "dispatch_plan")).write_text(json.dumps(final))
 
         telemetry.start(run_id="run-1")
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
@@ -2640,7 +2647,7 @@ class TestSnapshot:
                 {"name": "performance-reviewer", "status": "SKIPPED_TRIAGE", "domain": "performance", "reason": "no perf files"},
             ]
         }
-        (output_dir / "dispatch-plan.json").write_text(json.dumps(dispatch))
+        (_artifact(output_dir, "dispatch_plan")).write_text(json.dumps(dispatch))
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
         t.start(pr_number="42")
         t.finalize(step=15, phase="OUTPUT", title="Present Results")
@@ -2671,7 +2678,7 @@ class TestSnapshot:
     def test_invalid_dispatch_plan_omits_snapshot_and_summary(
         self, mod, output_dir, tmp_path, plan
     ):
-        (output_dir / "dispatch-plan.json").write_text(json.dumps(plan))
+        (_artifact(output_dir, "dispatch_plan")).write_text(json.dumps(plan))
         telemetry = mod.ReviewTelemetry(
             str(output_dir), log_dir=str(tmp_path / "logs")
         )
@@ -2686,7 +2693,7 @@ class TestSnapshot:
         assert "agents_skipped" not in event["summary"]
 
     def test_dispatch_plan_read_error_fails_open(self, mod, output_dir, tmp_path):
-        (output_dir / "dispatch-plan.json").write_text(json.dumps({
+        (_artifact(output_dir, "dispatch_plan")).write_text(json.dumps({
             "agents": [
                 {"name": "code-reviewer", "status": "DISPATCH"},
             ],
@@ -3406,7 +3413,7 @@ class TestSummaryOverrideCounting:
                 {"name": "concurrency-reviewer", "status": "SKIPPED_OVERRIDE"},
             ]
         }
-        (output_dir / "dispatch-plan.json").write_text(json.dumps(plan))
+        (_artifact(output_dir, "dispatch_plan")).write_text(json.dumps(plan))
 
         log_dir = tmp_path / "logs"
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
@@ -3429,7 +3436,7 @@ class TestSummaryOverrideCounting:
                 {"name": "security-reviewer", "status": "SKIPPED_TRIAGE"},
             ],
         }
-        (output_dir / "dispatch-plan.json").write_text(json.dumps(plan))
+        (_artifact(output_dir, "dispatch_plan")).write_text(json.dumps(plan))
         telemetry = mod.ReviewTelemetry(
             str(output_dir), log_dir=str(tmp_path / "logs")
         )
@@ -3555,7 +3562,7 @@ class TestReviewerMarkdownManifest:
 
     def test_state_outcome_is_sanitized_into_manifest(self, mod, tmp_path):
         telemetry, out_dir = self._telemetry(mod, tmp_path)
-        (out_dir / "pipeline-state.json").write_text(json.dumps({
+        (_artifact(out_dir, "pipeline_state")).write_text(json.dumps({
             "reviewer_markdown": {
                 "ran": True,
                 "written": 2,
@@ -3579,7 +3586,7 @@ class TestReviewerMarkdownManifest:
         self, mod, tmp_path
     ):
         telemetry, out_dir = self._telemetry(mod, tmp_path)
-        (out_dir / "pipeline-state.json").write_text(json.dumps({
+        (_artifact(out_dir, "pipeline_state")).write_text(json.dumps({
             "reviewer_markdown": {
                 "ran": True,
                 "written": 1,
@@ -3600,7 +3607,7 @@ class TestReviewerMarkdownManifest:
 
     def test_malformed_state_outcome_is_unavailable(self, mod, tmp_path):
         telemetry, out_dir = self._telemetry(mod, tmp_path)
-        (out_dir / "pipeline-state.json").write_text(json.dumps({
+        (_artifact(out_dir, "pipeline_state")).write_text(json.dumps({
             "reviewer_markdown": {
                 "ran": "yes",
                 "written": True,
@@ -3625,7 +3632,7 @@ class TestReviewerMarkdownManifest:
         absent_manifest = json.loads(Path(telemetry.manifest_path).read_text())
         assert absent_manifest["availability"]["reviewer_markdown"] is False
 
-        (out_dir / "pipeline-state.json").write_text(json.dumps({
+        (_artifact(out_dir, "pipeline_state")).write_text(json.dumps({
             "reviewer_markdown": {
                 "ran": True,
                 "written": 1,
@@ -3670,7 +3677,7 @@ class TestFindingsMarkdownManifest:
 
     def test_state_outcome_is_sanitized_into_manifest(self, mod, tmp_path):
         telemetry, out_dir = self._telemetry(mod, tmp_path)
-        (out_dir / "pipeline-state.json").write_text(json.dumps({
+        (_artifact(out_dir, "pipeline_state")).write_text(json.dumps({
             "findings_markdown": {
                 "ran": True,
                 "written": 1,
@@ -3693,7 +3700,7 @@ class TestFindingsMarkdownManifest:
 
     def test_a_failed_render_is_recorded_not_dropped(self, mod, tmp_path):
         telemetry, out_dir = self._telemetry(mod, tmp_path)
-        (out_dir / "pipeline-state.json").write_text(json.dumps({
+        (_artifact(out_dir, "pipeline_state")).write_text(json.dumps({
             "findings_markdown": {
                 "ran": True,
                 "written": 0,
@@ -3715,7 +3722,7 @@ class TestFindingsMarkdownManifest:
 
     def test_malformed_state_outcome_is_unavailable(self, mod, tmp_path):
         telemetry, out_dir = self._telemetry(mod, tmp_path)
-        (out_dir / "pipeline-state.json").write_text(json.dumps({
+        (_artifact(out_dir, "pipeline_state")).write_text(json.dumps({
             "findings_markdown": {
                 "ran": "yes",
                 "written": True,
@@ -3822,7 +3829,7 @@ class TestDependencyRefreshManifest:
         t, out_dir = self._telemetry(mod, tmp_path)
         (out_dir / "run-config.json").write_text(json.dumps(
             {"mode": "full", "refresh_dependencies": True}))
-        (out_dir / "pipeline-state.json").write_text(json.dumps({
+        (_artifact(out_dir, "pipeline_state")).write_text(json.dumps({
             "dependency_refresh_precheck": {
                 "tracked_files_dirty": True,
                 "dirty_files": ["tracked.txt"],
@@ -3847,7 +3854,7 @@ class TestDependencyRefreshManifest:
         t, out_dir = self._telemetry(mod, tmp_path)
         (out_dir / "run-config.json").write_text(json.dumps(
             {"mode": "full", "refresh_dependencies": True}))
-        (out_dir / "pipeline-state.json").write_text(json.dumps({
+        (_artifact(out_dir, "pipeline_state")).write_text(json.dumps({
             "dependency_refresh_precheck": {
                 "tracked_files_dirty": None,
                 "dirty_files": [],
@@ -3873,7 +3880,7 @@ class TestDependencyRefreshManifest:
         t, out_dir = self._telemetry(mod, tmp_path)
         (out_dir / "run-config.json").write_text(json.dumps(
             {"mode": "full", "refresh_dependencies": True}))
-        (out_dir / "dependency-refresh.json").write_text(json.dumps({
+        (_artifact(out_dir, "dependency_refresh")).write_text(json.dumps({
             "status": [],
             "commands": [],
             "tracked_files_dirty": False,
@@ -3913,7 +3920,7 @@ class TestDependencyRefreshManifest:
         t, out_dir = self._telemetry(mod, tmp_path)
         (out_dir / "run-config.json").write_text(json.dumps(
             {"mode": "full", "refresh_dependencies": True}))
-        (out_dir / "pipeline-state.json").write_text(json.dumps({
+        (_artifact(out_dir, "pipeline_state")).write_text(json.dumps({
             "dependency_refresh_precheck": {
                 "tracked_files_dirty": False,
                 "dirty_files": [],
@@ -3951,7 +3958,7 @@ class TestDependencyRefreshManifest:
         t, out_dir = self._telemetry(mod, tmp_path)
         (out_dir / "run-config.json").write_text(json.dumps(
             {"mode": "full", "refresh_dependencies": True}))
-        (out_dir / "dependency-refresh.json").write_bytes(report_bytes)
+        (_artifact(out_dir, "dependency_refresh")).write_bytes(report_bytes)
 
         t.log_step(step=5, phase="EXECUTION", title="Dispatch Plan + Triage")
 
@@ -3961,7 +3968,7 @@ class TestDependencyRefreshManifest:
 
     def test_invalid_report_values_read_as_unreported(self, mod, tmp_path):
         t, out_dir = self._telemetry(mod, tmp_path)
-        (out_dir / "dependency-refresh.json").write_text(json.dumps({
+        (_artifact(out_dir, "dependency_refresh")).write_text(json.dumps({
             "status": "did-things",
             "commands": [
                 "rm -rf /",                       # not a dict — dropped
@@ -3977,7 +3984,7 @@ class TestDependencyRefreshManifest:
         t, out_dir = self._telemetry(mod, tmp_path)
         (out_dir / "run-config.json").write_text(json.dumps(
             {"mode": "full", "refresh_dependencies": True}))
-        (out_dir / "dependency-refresh.json").write_text("[1, 2, 3]")
+        (_artifact(out_dir, "dependency_refresh")).write_text("[1, 2, 3]")
         t.log_step(step=3, phase="SETUP", title="Gather Context")
         manifest = json.loads(Path(t.manifest_path).read_text())
         section = manifest["dependency_refresh"]
@@ -4020,7 +4027,7 @@ class TestWorktreeHygieneManifest:
         assert build(str(tmp_path)) is None
 
     def test_artifact_projected_into_manifest(self, mod, tmp_path):
-        (tmp_path / "worktree-hygiene.json").write_text(json.dumps({
+        (_artifact(tmp_path, "worktree_hygiene")).write_text(json.dumps({
             "schema": 1,
             "status": "clean",
             "new_files": [],
@@ -4038,12 +4045,12 @@ class TestWorktreeHygieneManifest:
         assert section["baseline_captured_at"] == "2026-08-19T10:00:00+00:00"
 
     def test_malformed_artifact_yields_none(self, mod, tmp_path):
-        (tmp_path / "worktree-hygiene.json").write_text("[]")
+        (_artifact(tmp_path, "worktree_hygiene")).write_text("[]")
         build = mod.manifest_sections.build_worktree_hygiene_manifest
         assert build(str(tmp_path)) is None
 
     def test_missing_fields_project_safely(self, mod, tmp_path):
-        (tmp_path / "worktree-hygiene.json").write_text(json.dumps(
+        (_artifact(tmp_path, "worktree_hygiene")).write_text(json.dumps(
             {"schema": 1}
         ))
 
@@ -4058,7 +4065,7 @@ class TestWorktreeHygieneManifest:
         assert section["baseline_captured_at"] is None
 
     def test_non_string_entries_are_dropped(self, mod, tmp_path):
-        (tmp_path / "worktree-hygiene.json").write_text(json.dumps({
+        (_artifact(tmp_path, "worktree_hygiene")).write_text(json.dumps({
             "schema": 1,
             "status": 7,
             "new_files": ["?? a.txt", 3, None],
@@ -4079,7 +4086,7 @@ class TestWorktreeHygieneManifest:
 
     def test_unrecognized_status_degrades_to_unknown(self, mod, tmp_path):
         """A well-typed status outside the allowlist reads "unknown"."""
-        (tmp_path / "worktree-hygiene.json").write_text(json.dumps(
+        (_artifact(tmp_path, "worktree_hygiene")).write_text(json.dumps(
             {"schema": 1, "status": "corrupted"}
         ))
 
@@ -4092,7 +4099,7 @@ class TestWorktreeHygieneManifest:
     def test_measured_unknown_is_not_absent(self, mod, tmp_path):
         """A measured "unknown" is a section; only an absent artifact is None."""
         t, out_dir = self._telemetry(mod, tmp_path)
-        (out_dir / "worktree-hygiene.json").write_text(json.dumps({
+        (_artifact(out_dir, "worktree_hygiene")).write_text(json.dumps({
             "schema": 1,
             "status": "unknown",
             "new_files": [],
@@ -4111,7 +4118,7 @@ class TestWorktreeHygieneManifest:
         self, mod, tmp_path
     ):
         t, out_dir = self._telemetry(mod, tmp_path)
-        (out_dir / "worktree-hygiene.json").write_text(json.dumps({
+        (_artifact(out_dir, "worktree_hygiene")).write_text(json.dumps({
             "schema": 1,
             "status": "changed_during_review",
             "new_files": ["?? notes.md"],
@@ -4195,7 +4202,7 @@ class TestUsageManifest:
         return snapshot
 
     def _write(self, output_dir, snapshot):
-        (Path(output_dir) / "usage-snapshot.json").write_text(
+        (_artifact(output_dir, "usage_snapshot")).write_text(
             json.dumps(snapshot)
         )
 
@@ -4204,7 +4211,7 @@ class TestUsageManifest:
         assert build(str(tmp_path)) is None
 
     def test_malformed_artifact_yields_none(self, mod, tmp_path):
-        (tmp_path / "usage-snapshot.json").write_text("[]")
+        (_artifact(tmp_path, "usage_snapshot")).write_text("[]")
         build = mod.manifest_sections.build_usage_manifest
         assert build(str(tmp_path)) is None
 
@@ -4394,7 +4401,7 @@ class TestSkippedStepsManifest:
         assert build(str(tmp_path)) is None
 
     def test_recorded_skips_projected(self, mod, tmp_path):
-        (tmp_path / "pipeline-state.json").write_text(json.dumps({
+        (_artifact(tmp_path, "pipeline_state")).write_text(json.dumps({
             "skipped_steps": [
                 {"step": 2, "title": "Repo Setup",
                  "condition": "needs_workspace_setup"},
@@ -4409,24 +4416,24 @@ class TestSkippedStepsManifest:
                             "condition": "needs_workspace_setup"}]
 
     def test_state_without_the_key_yields_none(self, mod, tmp_path):
-        (tmp_path / "pipeline-state.json").write_text(json.dumps({}))
+        (_artifact(tmp_path, "pipeline_state")).write_text(json.dumps({}))
         build = mod.manifest_sections.build_skipped_steps_manifest
         assert build(str(tmp_path)) is None
 
     def test_empty_list_is_a_measured_zero(self, mod, tmp_path):
-        (tmp_path / "pipeline-state.json").write_text(json.dumps({
+        (_artifact(tmp_path, "pipeline_state")).write_text(json.dumps({
             "skipped_steps": [],
         }))
         build = mod.manifest_sections.build_skipped_steps_manifest
         assert build(str(tmp_path)) == []
 
     def test_malformed_state_yields_none(self, mod, tmp_path):
-        (tmp_path / "pipeline-state.json").write_text("[]")
+        (_artifact(tmp_path, "pipeline_state")).write_text("[]")
         build = mod.manifest_sections.build_skipped_steps_manifest
         assert build(str(tmp_path)) is None
 
     def test_non_list_value_yields_none(self, mod, tmp_path):
-        (tmp_path / "pipeline-state.json").write_text(json.dumps({
+        (_artifact(tmp_path, "pipeline_state")).write_text(json.dumps({
             "skipped_steps": {"step": 2},
         }))
         build = mod.manifest_sections.build_skipped_steps_manifest
@@ -4436,7 +4443,7 @@ class TestSkippedStepsManifest:
         self, mod, tmp_path
     ):
         """Only step-identified records survive; absent prose reads empty."""
-        (tmp_path / "pipeline-state.json").write_text(json.dumps({
+        (_artifact(tmp_path, "pipeline_state")).write_text(json.dumps({
             "skipped_steps": [
                 {"step": 4},
                 {"step": "12", "title": "Cleanup"},
@@ -4456,7 +4463,7 @@ class TestSkippedStepsManifest:
         self, mod, tmp_path
     ):
         t, out_dir = self._telemetry(mod, tmp_path)
-        (out_dir / "pipeline-state.json").write_text(json.dumps({
+        (_artifact(out_dir, "pipeline_state")).write_text(json.dumps({
             "skipped_steps": [
                 {"step": 2, "title": "Repo Setup",
                  "condition": "needs_workspace_setup"},
@@ -4479,7 +4486,7 @@ class TestSkippedStepsManifest:
     def test_measured_zero_skips_is_available(self, mod, tmp_path):
         """[] is a measured result, not an absent measurement."""
         t, out_dir = self._telemetry(mod, tmp_path)
-        (out_dir / "pipeline-state.json").write_text(json.dumps({
+        (_artifact(out_dir, "pipeline_state")).write_text(json.dumps({
             "skipped_steps": [],
         }))
 
@@ -4527,7 +4534,7 @@ class TestSynthesisAgentsManifest:
         return row
 
     def _write(self, tmp_path, payload):
-        (tmp_path / "synthesis-agents.json").write_text(json.dumps(payload))
+        (_artifact(tmp_path, "synthesis_agents")).write_text(json.dumps(payload))
 
     def _artifact(self, *rows, **overrides):
         payload = {
@@ -4697,7 +4704,7 @@ class TestSynthesisAgentsManifestShape:
     """The section self-describes, and its row shape is declared once."""
 
     def _build(self, mod, tmp_path, payload):
-        (tmp_path / "synthesis-agents.json").write_text(json.dumps(payload))
+        (_artifact(tmp_path, "synthesis_agents")).write_text(json.dumps(payload))
         return mod.manifest_sections.build_synthesis_agents_manifest(
             str(tmp_path)
         )
@@ -4844,7 +4851,7 @@ class TestReprojectUsage:
             "orchestrator_usage": None,
         }
         payload.update(overrides)
-        (Path(output_dir) / "usage-snapshot.json").write_text(
+        (_artifact(output_dir, "usage_snapshot")).write_text(
             json.dumps(payload)
         )
 
@@ -5019,7 +5026,7 @@ class TestReprojectUsage:
         (regression: the first cut read the property unguarded)."""
         log_dir = tmp_path / "logs-corrupt"
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
-        marker = Path(output_dir) / mod.MARKER_FILE
+        marker = _artifact(output_dir, "telemetry_log_path")
         marker.write_bytes(b"\xff\xfe not utf-8")
 
         assert t.reproject_usage() == "io_failure"

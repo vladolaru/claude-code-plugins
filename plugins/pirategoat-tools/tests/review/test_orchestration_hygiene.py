@@ -26,6 +26,7 @@ from helpers.review_fixtures import canonical_findings_ledger
 
 from review import critic_adjustments
 from review import orchestration as orchestration_mod
+from review import run_paths
 from review.critic_adjustments import write_findings
 from review.orchestration import (
     PROBE_MARKER,
@@ -33,6 +34,12 @@ from review.orchestration import (
     _check_worktree_hygiene,
     _orchestrate_step_11,
 )
+
+
+def _artifact(output_dir, key):
+    path = run_paths.artifact_path(output_dir, key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 @pytest.fixture
@@ -64,28 +71,28 @@ class TestBaselineCapture:
         repo, out = git_repo
         (repo / "wip.txt").write_text("uncommitted user work")
         _capture_worktree_baseline(str(out))
-        data = json.loads((out / ".worktree-baseline.json").read_text())
+        data = json.loads((_artifact(out, "worktree_baseline")).read_text())
         assert data["schema"] == 1
         assert any("wip.txt" in e for e in data["entries"])
 
     def test_clean_tree_writes_empty_entries(self, git_repo):
         repo, out = git_repo
         _capture_worktree_baseline(str(out))
-        data = json.loads((out / ".worktree-baseline.json").read_text())
+        data = json.loads((_artifact(out, "worktree_baseline")).read_text())
         assert data["entries"] == []
 
     def test_baseline_records_the_repo_it_measured(self, git_repo):
         """Identity, not just content: the sweep will check this later."""
         repo, out = git_repo
         _capture_worktree_baseline(str(out))
-        data = json.loads((out / ".worktree-baseline.json").read_text())
+        data = json.loads((_artifact(out, "worktree_baseline")).read_text())
         assert data["repo_root"] == os.path.realpath(str(repo))
 
     def test_capture_failure_writes_nothing(self, git_repo, monkeypatch):
         repo, out = git_repo
         monkeypatch.chdir("/")  # not a git repo — git status exits nonzero
         _capture_worktree_baseline(str(out))
-        assert not (out / ".worktree-baseline.json").exists()
+        assert not (_artifact(out, "worktree_baseline")).exists()
 
 
 class TestHygieneCheck:
@@ -95,14 +102,14 @@ class TestHygieneCheck:
         result = _check_worktree_hygiene(str(out))
         assert result["status"] == "clean"
         assert result["new_files"] == []
-        data = json.loads((out / "worktree-hygiene.json").read_text())
+        data = json.loads((_artifact(out, "worktree_hygiene")).read_text())
         assert data["status"] == "clean"
 
     def test_clean_run_dates_its_baseline(self, git_repo):
         """The counts mean nothing without the window they cover."""
         repo, out = git_repo
         _capture_worktree_baseline(str(out))
-        baseline = json.loads((out / ".worktree-baseline.json").read_text())
+        baseline = json.loads((_artifact(out, "worktree_baseline")).read_text())
         result = _check_worktree_hygiene(str(out))
         assert result["baseline_captured_at"] == baseline["captured_at"]
 
@@ -125,7 +132,7 @@ class TestHygieneCheck:
     def test_malformed_prior_probe_paths_are_not_inherited(self, git_repo):
         repo, out = git_repo
         _capture_worktree_baseline(str(out))
-        (out / "worktree-hygiene.json").write_text(json.dumps({
+        (_artifact(out, "worktree_hygiene")).write_text(json.dumps({
             "schema": 1,
             "probe_residue_removed": ["../foreign", "/absolute/probe"],
         }))
@@ -257,7 +264,7 @@ class TestHygieneCheck:
     def test_baseline_without_repo_root_never_sweeps(self, git_repo):
         """A baseline that cannot prove its origin authorizes nothing."""
         repo, out = git_repo
-        (out / ".worktree-baseline.json").write_text(
+        (_artifact(out, "worktree_baseline")).write_text(
             json.dumps({"schema": 1, "entries": []})
         )
         probe = repo / f"zz_{PROBE_MARKER}_test.go"
@@ -419,7 +426,7 @@ class TestStepElevenHygieneNotes:
         result = json.loads((out / "pipeline-result.json").read_text())
         assert result["degradation_notes"] == []
         assert result["status"] == "success"
-        baseline = json.loads((out / ".worktree-baseline.json").read_text())
+        baseline = json.loads((_artifact(out, "worktree_baseline")).read_text())
         assert result["worktree_hygiene"] == {
             "status": "clean", "new_files": 0,
             "changed_files": 0, "probe_residue_removed": 0,
@@ -442,7 +449,7 @@ class TestStepElevenHygieneNotes:
         result = json.loads((out / "pipeline-result.json").read_text())
         assert result["degradation_notes"] == []
         assert result["status"] == "success"
-        baseline = json.loads((out / ".worktree-baseline.json").read_text())
+        baseline = json.loads((_artifact(out, "worktree_baseline")).read_text())
         assert result["worktree_hygiene"] == {
             "status": "changed_during_review", "new_files": 1,
             "changed_files": 0, "probe_residue_removed": 0,
@@ -467,7 +474,7 @@ class TestStepElevenHygieneNotes:
         assert any("probe residue swept" in n
                    for n in result["degradation_notes"])
         assert result["status"] == "degraded"
-        baseline = json.loads((out / ".worktree-baseline.json").read_text())
+        baseline = json.loads((_artifact(out, "worktree_baseline")).read_text())
         assert result["worktree_hygiene"] == {
             "status": "clean", "new_files": 0,
             "changed_files": 0, "probe_residue_removed": 1,
@@ -497,7 +504,7 @@ class TestStepElevenHygieneNotes:
         _orchestrate_step_11("pr", {}, state, {}, str(out))
 
         result = json.loads((out / "pipeline-result.json").read_text())
-        hygiene = json.loads((out / "worktree-hygiene.json").read_text())
+        hygiene = json.loads((_artifact(out, "worktree_hygiene")).read_text())
         assert result["status"] == "degraded"
         assert result["worktree_hygiene"]["probe_residue_removed"] == 1
         assert hygiene["probe_residue_removed"] == [probe.name]
@@ -592,7 +599,7 @@ class TestStepElevenHygieneNotes:
         _capture_worktree_baseline(str(out))
         probe_a = f"a_{PROBE_MARKER}_\udcff.go"
         probe_b = f"b_{PROBE_MARKER}_\udcfe.go"
-        (out / "worktree-hygiene.json").write_text(json.dumps({
+        (_artifact(out, "worktree_hygiene")).write_text(json.dumps({
             "schema": 1,
             "probe_residue_removed": [probe_a],
         }))
@@ -605,9 +612,9 @@ class TestStepElevenHygieneNotes:
         assert not (out / "pipeline-result.json").exists()
 
         (out / "review-report.md").write_text("# report for probe A")
-        hygiene = json.loads((out / "worktree-hygiene.json").read_text())
+        hygiene = json.loads((_artifact(out, "worktree_hygiene")).read_text())
         hygiene["probe_residue_removed"].append(probe_b)
-        (out / "worktree-hygiene.json").write_text(json.dumps(hygiene))
+        (_artifact(out, "worktree_hygiene")).write_text(json.dumps(hygiene))
         _orchestrate_step_11("pr", {}, state, {}, str(out))
 
         assert state["publication_pending"] is True
@@ -642,7 +649,7 @@ class TestStepElevenHygieneNotes:
         assert result["degradation_notes"] == []
         assert result["status"] == "success"
         assert result["worktree_hygiene"] is None
-        hygiene = json.loads((out / "worktree-hygiene.json").read_text())
+        hygiene = json.loads((_artifact(out, "worktree_hygiene")).read_text())
         assert hygiene["status"] == "unknown"
 
 
@@ -690,7 +697,7 @@ class TestStepElevenUsageSnapshot:
         def fake(cmd, cwd=None, timeout=60):
             if payload is not None:
                 out_dir = Path(cmd[cmd.index("--output-dir") + 1])
-                (out_dir / "usage-snapshot.json").write_text(payload)
+                (_artifact(out_dir, "usage_snapshot")).write_text(payload)
             return "", payload is not None
         monkeypatch.setattr(orchestration_mod, "_run_subprocess", fake)
 
@@ -700,7 +707,7 @@ class TestStepElevenUsageSnapshot:
         _seed_step_11(out)
         self._step_11(out)
 
-        snapshot = json.loads((out / "usage-snapshot.json").read_text())
+        snapshot = json.loads((_artifact(out, "usage_snapshot")).read_text())
         result = json.loads((out / "pipeline-result.json").read_text())
 
         assert snapshot["availability"] == {
@@ -769,7 +776,7 @@ class TestStepElevenUsageSnapshot:
         self._step_11(out)
         result = json.loads((out / "pipeline-result.json").read_text())
 
-        assert not (out / "usage-snapshot.json").exists()
+        assert not (_artifact(out, "usage_snapshot")).exists()
         assert result["usage"] is None
         assert result["status"] == "success"
         assert result["degradation_notes"] == []

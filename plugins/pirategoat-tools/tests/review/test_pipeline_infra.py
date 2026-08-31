@@ -13,6 +13,13 @@ TESTS_DIR = Path(__file__).resolve().parent.parent  # review/ -> tests/
 sys.path.insert(0, str(TESTS_DIR))
 from conftest import PIPELINE_TOTAL_STEPS as TOTAL_STEPS
 from helpers.pipeline_process import hermetic_env, init_repo, run_pipeline
+from review import run_paths
+
+
+def _state_path(output_dir):
+    path = run_paths.artifact_path(output_dir, "pipeline_state")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 @pytest.fixture(scope="module")
@@ -438,7 +445,7 @@ class TestFailureRecovery:
 
     def test_corrupted_state_file(self, mod, tmp_path):
         """Pipeline survives corrupted pipeline-state.json."""
-        (tmp_path / "pipeline-state.json").write_text("not json{{{")
+        _state_path(tmp_path).write_text("not json{{{")
         state = mod.read_state(str(tmp_path))
         assert state["completed_steps"] == []  # returns default
 
@@ -643,7 +650,7 @@ class TestCLIIntegration:
         run_pipeline("--step", "1", "--mode", "pr",
                    "--output-dir", str(tmp_path / "out"), "--pr-number", "42", cwd=tmp_path / "repo")
         config_path = tmp_path / "out" / "run-config.json"
-        state_path = tmp_path / "out" / "pipeline-state.json"
+        state_path = _state_path(tmp_path / "out")
         assert config_path.is_file()
         assert state_path.is_file()
         config = json.loads(config_path.read_text())
@@ -762,7 +769,7 @@ class TestCLIIntegration:
         run_pipeline("--step", "1", "--mode", "pr",
                    "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
                    "--original-branch", "develop", "--stash-ref", "abc123", cwd=tmp_path / "repo")
-        state = json.loads((tmp_path / "out" / "pipeline-state.json").read_text())
+        state = json.loads(_state_path(tmp_path / "out").read_text())
         assert state["workspace"]["original_branch"] == "develop"
         assert state["workspace"]["stash_ref"] == "abc123"
 
@@ -812,7 +819,7 @@ class TestCLIIntegration:
         """Step 1 should write a run_id to pipeline-state.json."""
         run_pipeline("--step", "1", "--mode", "pr",
                    "--output-dir", str(tmp_path / "out"), "--pr-number", "42", cwd=tmp_path / "repo")
-        state = json.loads((tmp_path / "out" / "pipeline-state.json").read_text())
+        state = json.loads(_state_path(tmp_path / "out").read_text())
         assert "run_id" in state
         assert len(state["run_id"]) > 0
 
@@ -879,8 +886,8 @@ class TestCLIIntegration:
         run_pipeline("--step", "1", "--mode", "full", "--output-dir", str(first), cwd=tmp_path / "repo")
         run_pipeline("--step", "1", "--mode", "full", "--output-dir", str(second), cwd=tmp_path / "repo")
 
-        first_state = json.loads((first / "pipeline-state.json").read_text())
-        second_state = json.loads((second / "pipeline-state.json").read_text())
+        first_state = json.loads(_state_path(first).read_text())
+        second_state = json.loads(_state_path(second).read_text())
         assert first_state["run_id"] != second_state["run_id"]
 
 
@@ -901,7 +908,7 @@ class TestSkippedStepRecording:
         )
         assert result.returncode == 0
         state = json.loads(
-            (tmp_path / "out" / "pipeline-state.json").read_text()
+            _state_path(tmp_path / "out").read_text()
         )
         assert state["publication_pending"] is True
         assert 11 not in state["completed_steps"]
@@ -922,7 +929,7 @@ class TestSkippedStepRecording:
         r = run_pipeline("--step", "1", "--mode", "full",
                        "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
         assert r.returncode == 0
-        state = json.loads((tmp_path / "out" / "pipeline-state.json").read_text())
+        state = json.loads(_state_path(tmp_path / "out").read_text())
         skipped = {s["step"]: s for s in state["skipped_steps"]}
         assert 2 in skipped
         assert skipped[2]["condition"] == "needs_workspace_setup"
@@ -935,7 +942,7 @@ class TestSkippedStepRecording:
         self._prepare_step_11(tmp_path)
         self._publish_step_11(tmp_path)
 
-        state = json.loads((tmp_path / "out" / "pipeline-state.json").read_text())
+        state = json.loads(_state_path(tmp_path / "out").read_text())
         skipped = {s["step"]: s for s in state["skipped_steps"]}
         assert 11 in state["completed_steps"]
         assert 12 in skipped
@@ -951,7 +958,7 @@ class TestSkippedStepRecording:
         run_pipeline("--step", "11", "--mode", "full",
                    "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
 
-        state = json.loads((tmp_path / "out" / "pipeline-state.json").read_text())
+        state = json.loads(_state_path(tmp_path / "out").read_text())
         recorded = [entry["step"] for entry in state["skipped_steps"]]
         assert recorded == sorted(set(recorded))
         assert recorded.count(12) == 1
@@ -960,7 +967,7 @@ class TestSkippedStepRecording:
         """A step the router runs must not appear in the skip ledger."""
         run_pipeline("--step", "1", "--mode", "full",
                    "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
-        state = json.loads((tmp_path / "out" / "pipeline-state.json").read_text())
+        state = json.loads(_state_path(tmp_path / "out").read_text())
         recorded = {entry["step"] for entry in state["skipped_steps"]}
         assert recorded.isdisjoint({1, 3, 5, 6, 7, 8, 9, 10, 11})
 

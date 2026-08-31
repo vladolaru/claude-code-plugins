@@ -25,8 +25,10 @@ MANIFEST_SECTIONS_SCRIPT_PATH = (
 )
 
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts" / "analysis"))
+sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
 
 import review_metrics as _mod  # noqa: E402
+from review import run_paths  # noqa: E402
 from review_metrics import (  # noqa: E402
     cli,
     cohort,
@@ -2206,11 +2208,17 @@ class TestLoadRuns:
             return result
 
         if initial_state != "missing":
-            (output_dir / "dispatch-plan.initial.json").write_text(
+            path = run_paths.artifact_path(
+                output_dir, "dispatch_plan_initial"
+            )
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
                 json.dumps(plan(initial_state))
             )
         if final_state != "missing":
-            (output_dir / "dispatch-plan.json").write_text(
+            path = run_paths.artifact_path(output_dir, "dispatch_plan")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
                 json.dumps(plan(final_state, final=True))
             )
         (output_dir / "review-context.json").write_text(
@@ -2304,10 +2312,14 @@ class TestLoadRuns:
                 ]
             }
 
-        (output_dir / "dispatch-plan.initial.json").write_text(
+        initial_path = run_paths.artifact_path(
+            output_dir, "dispatch_plan_initial"
+        )
+        initial_path.parent.mkdir(parents=True, exist_ok=True)
+        initial_path.write_text(
             json.dumps(plan(initial_names))
         )
-        (output_dir / "dispatch-plan.json").write_text(
+        run_paths.artifact_path(output_dir, "dispatch_plan").write_text(
             json.dumps({**plan(final_names), "changed_files": ["src/a.py"]})
         )
         (output_dir / "review-context.json").write_text(
@@ -2361,7 +2373,11 @@ class TestLoadRuns:
         output_dir = tmp_path / "output"
         log_dir = tmp_path / "logs"
         output_dir.mkdir()
-        (output_dir / "dispatch-plan.initial.json").write_text(
+        initial_path = run_paths.artifact_path(
+            output_dir, "dispatch_plan_initial"
+        )
+        initial_path.parent.mkdir(parents=True, exist_ok=True)
+        initial_path.write_text(
             json.dumps(
                 {
                     "agents": [
@@ -2371,7 +2387,7 @@ class TestLoadRuns:
                 }
             )
         )
-        (output_dir / "dispatch-plan.json").write_text(
+        run_paths.artifact_path(output_dir, "dispatch_plan").write_text(
             json.dumps(
                 {
                     "agents": [

@@ -27,6 +27,8 @@ _spec = importlib.util.spec_from_file_location("usage_snapshot", SCRIPT_PATH)
 _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 
+from review import run_paths
+
 main = _mod.main
 SNAPSHOT_FILENAME = _mod.SNAPSHOT_FILENAME
 # The MANIFEST's own schema (telemetry's `EVENT_SCHEMA`, currently 3) — a
@@ -147,7 +149,9 @@ class Run:
         self.manifest_path = manifest_path
 
     def snapshot(self) -> dict:
-        return json.loads((self.out / SNAPSHOT_FILENAME).read_text())
+        return json.loads(
+            run_paths.artifact_path(self.out, "usage_snapshot").read_text()
+        )
 
 
 def _seed_run(tmp_path: Path, manifest: dict, *, session_id_in_config=None,
@@ -160,13 +164,17 @@ def _seed_run(tmp_path: Path, manifest: dict, *, session_id_in_config=None,
     log_path.write_text("", encoding="utf-8")
     manifest_path = logs / "review.manifest.json"
     if write_marker:
-        (out / ".telemetry-log-path").write_text(str(log_path), encoding="utf-8")
+        marker = run_paths.artifact_path(out, "telemetry_log_path")
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(str(log_path), encoding="utf-8")
     if write_manifest:
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     config = {"mode": "pr", "host": "claude", "interactive": True}
     if session_id_in_config is not None:
         config["session_id"] = session_id_in_config
-    (out / "run-config.json").write_text(json.dumps(config), encoding="utf-8")
+    run_paths.artifact_path(out, "run_config").write_text(
+        json.dumps(config), encoding="utf-8"
+    )
     return Run(out, tmp_path / "sessions", manifest_path)
 
 
@@ -427,9 +435,10 @@ class TestRecordedAbsence:
         manifest = json.loads(run.manifest_path.read_text())
         manifest["run"]["session_id"] = None
         run.manifest_path.write_text(json.dumps(manifest))
-        config = json.loads((run.out / "run-config.json").read_text())
+        config_path = run_paths.artifact_path(run.out, "run_config")
+        config = json.loads(config_path.read_text())
         config["session_id"] = "session-1"
-        (run.out / "run-config.json").write_text(json.dumps(config))
+        config_path.write_text(json.dumps(config))
 
         _run_cli(run)
 
@@ -584,7 +593,8 @@ class TestMonotonicNoDowngrade:
         assert before["availability"] == {
             "subagents": "complete", "orchestrator": "complete",
         }
-        before_bytes = (run.out / SNAPSHOT_FILENAME).read_bytes()
+        snapshot_path = run_paths.artifact_path(run.out, "usage_snapshot")
+        before_bytes = snapshot_path.read_bytes()
 
         # Transcripts have since rotated out: point the re-run at an empty
         # sessions root, as if the JSONL files were gone.
@@ -596,7 +606,7 @@ class TestMonotonicNoDowngrade:
         ])
 
         assert exit_code == 0
-        after_bytes = (run.out / SNAPSHOT_FILENAME).read_bytes()
+        after_bytes = snapshot_path.read_bytes()
         assert after_bytes == before_bytes
 
     def test_downgrade_avoided_is_reported_not_written(self, tmp_path, capsys):

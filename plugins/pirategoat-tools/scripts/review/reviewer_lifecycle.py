@@ -9,17 +9,16 @@ from datetime import datetime, timezone
 
 try:
     from .atomic_io import atomic_write_json, output_dir_lock
-    from .run_paths import reviewer_dir
+    from .run_paths import artifact_path, reviewer_dir
     from .reviewer_names import derive_reviewer_name
     from .review_document import load_review_document
 except ImportError:
     from review.atomic_io import atomic_write_json, output_dir_lock
-    from review.run_paths import reviewer_dir
+    from review.run_paths import artifact_path, reviewer_dir
     from review.reviewer_names import derive_reviewer_name
     from review.review_document import load_review_document
 
 
-REVIEW_INTAKE_NAME = "review-intake.json"
 FINALIZE_REVIEW_COMMAND = (
     "python3 {output_script} finalize-review "
     "--output-dir {output_dir} --reviewer {reviewer} "
@@ -76,6 +75,13 @@ def scope_summary_path(
     return str(reviewer_dir(output_dir, reviewer) / name)
 
 
+def is_scope_summary_name(name: str) -> bool:
+    """Return whether a basename is a canonical scope-summary sidecar."""
+    return name == "scope-summary.json" or (
+        name.startswith("scope-summary-") and name.endswith(".json")
+    )
+
+
 def scoped_diff_path(output_dir: str, reviewer: str) -> str:
     """Return one reviewer's complete scoped diff path."""
     return str(reviewer_dir(output_dir, reviewer) / "scoped-diff.patch")
@@ -88,7 +94,7 @@ def started_marker_path(output_dir: str, reviewer: str) -> str:
 
 def require_review_intake_open(output_dir: str) -> None:
     """Reject reviewer state transitions after synthesis freezes intake."""
-    intake_path = os.path.join(output_dir, REVIEW_INTAKE_NAME)
+    intake_path = artifact_path(output_dir, "review_intake")
     if os.path.exists(intake_path):
         raise ValueError("review intake is closed")
 
@@ -143,7 +149,8 @@ def close_review_intake(output_dir: str, dispatched_agent_names):
     ):
         raise ValueError("dispatched reviewer identities must be non-empty strings")
 
-    intake_path = os.path.join(output_dir, REVIEW_INTAKE_NAME)
+    intake_path = artifact_path(output_dir, "review_intake")
+    intake_path.parent.mkdir(exist_ok=True)
     with output_dir_lock(output_dir):
         previous = _load_closed_intake(intake_path)
         known_identities = set(dispatched_agent_names)

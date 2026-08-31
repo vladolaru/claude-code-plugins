@@ -16,7 +16,7 @@ dispatch-plan baseline, pipeline.py's review-context reset, telemetry.py's
 run manifest, and analysis/usage_snapshot.py's token snapshot. One drifts,
 they all drift eventually — so there is now exactly one.
 
-One artifact may NOT use this function directly: review-findings.json is
+The canonical findings ledger may NOT use this function directly: it is
 never written with a bare ``atomic_write_json``. It goes through
 ``critic_adjustments.write_findings(output_dir, findings)``, which owns
 the ledger's filename and calls this underneath. That artifact has exactly
@@ -105,7 +105,7 @@ def atomic_write_json(path, payload):
     findings and telemetry text carry ordinary prose (em dashes, curly
     quotes), and escaping it would turn a routine rewrite into a wall of
     ``\\uXXXX`` runs — lossless, but indistinguishable from corruption to
-    whoever reads the artifact next. ``review-findings.json`` alone has
+    whoever reads the artifact next. The canonical findings ledger alone has
     two writers across a run (the review-reconciliator agent's first
     write, and critic_adjustments.py applying decision-critic adjustments)
     and both reach this function through
@@ -130,7 +130,7 @@ def atomic_write_text(path, text):
     intact — the same crash-safety contract as ``atomic_write_json``
     (same-directory temp file, then ``os.replace``), for artifacts that
     are prose rather than JSON. The decision critic's save channel uses
-    this for ``decision-critic-findings.md``: a Markdown findings document
+    this for the decision critic's Markdown findings artifact: that document
     has no JSON shape to serialize, but still must never be observable
     half-written on disk.
     """

@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Findings Save — the reconciliator's validating save channel for
-review-findings.json.
+"""Findings Save — the reconciliator's validating ledger save channel.
 
 Sibling to critic.py's ``--save`` mode: this is the ONLY channel the
-review-reconciliator agent is allowed to write review-findings.json through
+review-reconciliator agent is allowed to write the findings ledger through
 (see agents/review-reconciliator.md). A raw write — a hand-rolled
 ``json.dump`` or the shared ``atomic_write_json`` used directly — closes the
 gap this module exists to close, because nothing downstream validates a
@@ -11,7 +10,7 @@ hand-written ledger after the fact.
 
 The agent authors the review content and its four reconciliation judgments;
 it authors nothing about the run it read. This module reads
-``reconciliation-context.json`` — the very file the agent was briefed from —
+the reconciliation context — the very artifact the agent was briefed from —
 and stamps the six pipeline-owned reconciliation facts and the degraded-host
 banner onto the ledger itself. A measurement the pipeline already made is
 never retyped by an agent, so it cannot be mistyped, and the ledger
@@ -23,7 +22,7 @@ echoed as its own ``REJECTED: <problem>`` line — this module's failure mode is
 silence on disk, never a partial ledger.
 
 The write itself goes through ``critic_adjustments.write_findings()`` — the
-ONE sanctioned write path for review-findings.json, shared by both of its
+ONE sanctioned write path for the findings ledger, shared by both of its
 writers (the reconciliator's first write via this module, and the critic
 adjustments applier). This module adds no new writer; it only gates what
 reaches the existing one.
@@ -40,6 +39,7 @@ try:
     from .findings_ledger import RECONCILIATION_PIPELINE_FIELDS
     from .reconciliation_context import RECONCILIATION_CONTEXT_SCHEMA
     from .verdict_rules import REVIEW_VERDICTS
+    from .run_paths import artifact_path
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
@@ -48,6 +48,7 @@ except ImportError:
     from review.findings_ledger import RECONCILIATION_PIPELINE_FIELDS
     from review.reconciliation_context import RECONCILIATION_CONTEXT_SCHEMA
     from review.verdict_rules import REVIEW_VERDICTS
+    from review.run_paths import artifact_path
 
 
 # The pipeline's own briefing for this run, written by
@@ -55,7 +56,7 @@ except ImportError:
 # in. It is this module's source for every pipeline-owned reconciliation
 # fact, and it is required: without it there is nothing to stamp, and a
 # ledger missing those facts is rejected by the canonical validator anyway.
-CONTEXT_FILENAME = "reconciliation-context.json"
+CONTEXT_FILENAME = artifact_path("", "reconciliation_context").name
 
 # Severities the breakdown echo reports, in the order the brief's format
 # specifies. Deliberately excludes 'info' from VALID_SEVERITIES: the echo
@@ -126,7 +127,7 @@ def _read_findings_json(path, problems):
 
 def _read_context(output_dir, problems):
     """Read the run's reconciliation context, or record why it could not be."""
-    path = os.path.join(output_dir, CONTEXT_FILENAME)
+    path = artifact_path(output_dir, "reconciliation_context")
     try:
         with open(path, "r", encoding="utf-8") as handle:
             context = json.load(handle)
@@ -356,14 +357,14 @@ def main():
     parser = argparse.ArgumentParser(
         description=(
             "Findings Save - validate and atomically record the "
-            "review-reconciliator's review-findings.json ledger"
+            f"review-reconciliator's {FINDINGS_FILENAME} ledger"
         ),
     )
     parser.add_argument(
         "--output-dir",
         type=str,
         required=True,
-        help="Directory to write review-findings.json into",
+        help=f"Directory to write {FINDINGS_FILENAME} into",
     )
     parser.add_argument(
         "--findings",

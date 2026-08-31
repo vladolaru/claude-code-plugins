@@ -3,7 +3,7 @@
 
 Reads the OPTIONAL ``review`` section of the reviewed repository's
 ``.pirategoat/config.json`` and normalizes it into a structure the pipeline
-carries in ``review-context.json`` under the ``review_config`` key. Two
+carries in its review-context artifact under the ``review_config`` key. Two
 capabilities are declared here by the repo under review:
 
 - ``rules[]``  - regression-seeded review checklists that pirategoat's existing

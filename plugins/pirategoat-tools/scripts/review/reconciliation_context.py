@@ -12,7 +12,7 @@ Usage:
         --changed-files src/a.py,src/b.py --change-purpose "Fix auth bug" --pr-id 42
 
 Exit codes:
-    0  Success — reconciliation-context.json written
+    0  Success — reconciliation context written
     1  Error — details on stderr
 
 Zero external dependencies (stdlib only).
@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
-    from .run_paths import REVIEWERS_SUBDIR
+    from .run_paths import REVIEWERS_SUBDIR, artifact_path
     from .reviewer_names import derive_reviewer_name
     from .verdict_rules import VALID_SEVERITIES
     from .review_document import coerce_text, load_review_document
@@ -36,7 +36,7 @@ except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
-    from review.run_paths import REVIEWERS_SUBDIR
+    from review.run_paths import REVIEWERS_SUBDIR, artifact_path
     from review.reviewer_names import derive_reviewer_name
     from review.verdict_rules import VALID_SEVERITIES
     from review.review_document import coerce_text, load_review_document
@@ -193,9 +193,8 @@ def load_agent_reviews(
         dispatched_agents: Optional list of agent names from the dispatch
             plan (e.g., ``["security-reviewer", "performance-reviewer"]``).
             When provided, only review files for these agents are loaded.
-            Agent names are mapped to file stems by replacing ``-reviewer``
-            with ``-review``. When ``None``, all review files are loaded
-            (the all-files mode).
+            Agent names are mapped to validated short reviewer-directory
+            identities. When ``None``, all review files are loaded.
 
     Returns:
         Dict keyed by agent name (e.g., "security-review") with the parsed
@@ -772,7 +771,7 @@ def main() -> int:
         "--host-banner-json", default="",
         help=(
             "The degraded-host banner as JSON, from the caller's own "
-            "review-context.json. Empty means no banner applies."
+            "review context. Empty means no banner applies."
         ),
     )
     parser.add_argument(
@@ -789,7 +788,7 @@ def main() -> int:
     changed_files = [f.strip() for f in args.changed_files.split(",") if f.strip()]
     change_purpose = args.change_purpose
     pr_id = args.pr_id
-    # The orchestrator holds review-context.json in memory when it calls
+    # The orchestrator holds review context in memory when it calls
     # this script, so it passes the banner rather than making this script
     # a second reader of a file it does not own. A malformed value is the
     # caller's bug, and the traceback names it.
@@ -881,8 +880,9 @@ def main() -> int:
             context["dispatched_agents"] = stems
 
         # Write to output directory
-        output_path = os.path.join(output_dir, "reconciliation-context.json")
+        output_path = artifact_path(output_dir, "reconciliation_context")
         os.makedirs(output_dir, exist_ok=True)
+        output_path.parent.mkdir(exist_ok=True)
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(context, f, indent=2, ensure_ascii=False)
 
@@ -893,7 +893,7 @@ def main() -> int:
         # reads the JSON.
         result = {
             "status": "ok",
-            "path": output_path,
+            "path": str(output_path),
         }
         print(json.dumps(result))
         return 0

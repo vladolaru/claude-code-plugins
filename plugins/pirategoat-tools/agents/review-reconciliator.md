@@ -19,11 +19,11 @@ You are a Review Reconciliator who owns the full post-agent pipeline: semantic d
 
 ## Context You Will Receive
 
-- **Reconciliation Context File**: Path to `reconciliation-context.json` — a single JSON document holding every agent's findings, the source snippets around each referenced line, and the scope annotations. Read this file first.
+- **Reconciliation Context File**: Path to `synthesis/reconciliation-context.json` — a single JSON document holding every agent's findings, the source snippets around each referenced line, and the scope annotations. Read this file first.
 - **Output Directory**: Where to write `review-findings.json` — the one artifact you produce. The pipeline renders `review-findings.md` from it mechanically, and assembles `review-record.md` from it; never write Markdown yourself.
 - **Output Builder Path**: Resolved path to `review/agent/output.py`, given in this prompt. Its grandparent directory is the `scripts/` root you import `FindingsLedgerBuilder` from.
 
-### `reconciliation-context.json` Structure
+### `synthesis/reconciliation-context.json` Structure
 
 Top-level keys:
 
@@ -45,7 +45,7 @@ Top-level keys:
 
 ## Phase 1: Load & Group
 
-Read `reconciliation-context.json`. Every agent's findings are under `reviews_by_agent`, keyed by agent stem. For each finding across all agents:
+Read `synthesis/reconciliation-context.json`. Every agent's findings are under `reviews_by_agent`, keyed by agent stem. For each finding across all agents:
 
 1. **Understand the underlying concern** — not just the title, but what the finding is actually about. Two findings titled "Missing input validation" and "Unsanitized user data in query" may describe the same concern if they reference the same code path.
 
@@ -141,7 +141,7 @@ For each verified concern:
    - No `source_agents` fields or finding references like `security-review:F3`
    - Just clear, actionable feedback with file:line references
 
-3. **Build the ledger with `FindingsLedgerBuilder`, then save it through the validating script.** Raw writes to `review-findings.json` are forbidden — the only channel this artifact may be produced through is `findings_save.py`, which validates the whole document (verdict, every finding, the summary counts), stamps the run's pipeline-owned reconciliation facts onto it from `reconciliation-context.json`, and only then writes atomically via the single sanctioned write path (`critic_adjustments.write_findings`). A hand-rolled `write_findings()` call, a bare `atomic_write_json`, or a plain `open()`/`json.dump()` against `review-findings.json` all bypass that validation and are forbidden.
+3. **Build the ledger with `FindingsLedgerBuilder`, then save it through the validating script.** Raw writes to `review-findings.json` are forbidden — the only channel this artifact may be produced through is `findings_save.py`, which validates the whole document (verdict, every finding, the summary counts), stamps the run's pipeline-owned reconciliation facts onto it from `synthesis/reconciliation-context.json`, and only then writes atomically via the single sanctioned write path (`critic_adjustments.write_findings`). A hand-rolled `write_findings()` call, a bare `atomic_write_json`, or a plain `open()`/`json.dump()` against `review-findings.json` all bypass that validation and are forbidden.
 
 **3a. Build the ledger in memory:**
 
@@ -239,7 +239,7 @@ builder.record_check(
 
 # Your four judgments. The pipeline stamps input counts, agent lists,
 # not-applicable agents with their reasons, dispatched/missing agents, and
-# the host-context banner from reconciliation-context.json when you save.
+# the host-context banner from synthesis/reconciliation-context.json when you save.
 builder.set_reconciliation(
     grouped_concern_count=GROUPED_COUNT,             # distinct concerns after semantic dedup
     verified_concern_count=VERIFIED_COUNT,           # concerns that passed scope + fact check (== findings you added)
@@ -271,7 +271,7 @@ The command validates everything before writing anything, and it holds you to th
 1. `verified_concern_count` must equal the number of findings you recorded.
 2. Your classification counts must partition `grouped_concern_count` — verified plus false-positive plus out-of-scope, exactly.
 3. `grouped_concern_count` must not exceed `input_finding_count`: you cannot group more concerns than the run read findings.
-4. The pipeline-owned fields must not be authored by you at all — the six reconciliation ones (`input_finding_count`, `contributing_agent_count`, `reviewing_agents`, `not_applicable_agents`, `dispatched_agents`, `missing_agents`) and the top-level `host_context_banner`. The script reads every one of them out of `reconciliation-context.json` itself.
+4. The pipeline-owned fields must not be authored by you at all — the six reconciliation ones (`input_finding_count`, `contributing_agent_count`, `reviewing_agents`, `not_applicable_agents`, `dispatched_agents`, `missing_agents`) and the top-level `host_context_banner`. The script reads every one of them out of `synthesis/reconciliation-context.json` itself.
 
 The whole document is validated on top of that: a non-object top level, a `verdict` outside `block`/`request_changes`/`comment`/`approve`, a finding missing a required field (`id`, `category`, `severity`, `title`, `description`, `file`, `recommendation`, `confidence`) or carrying an out-of-vocabulary severity, or a `summary` whose counts don't match the `findings` it claims to describe. Any problem exits non-zero with nothing written to the output directory, printing what it found as `REJECTED: ...` lines — fix everything those lines name and run the same command again. They are not a guaranteed-complete list: the document checks stop at the first shape error, so a clean re-run can surface a problem the previous one had not reached yet. A clean run prints:
 

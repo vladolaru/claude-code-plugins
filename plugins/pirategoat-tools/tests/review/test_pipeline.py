@@ -19,6 +19,13 @@ from helpers.review_fixtures import (
     canonical_review_document,
 )
 from conftest import PIPELINE_SCRIPT_PATH as SCRIPT_PATH
+from review import run_paths
+
+
+def _artifact(output_dir, key):
+    path = run_paths.artifact_path(output_dir, key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 @pytest.fixture(scope="module")
@@ -910,7 +917,7 @@ class TestStep6DispatchAgents:
                 {"name": "a11y-reviewer", "status": "SKIPPED", "reason": "no files"},
             ]
         }
-        (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
+        _artifact(tmp_path, "dispatch_plan").write_text(json.dumps(plan))
 
         state = {
             "resolved_params": {"git_range": "abc..HEAD"},
@@ -950,7 +957,7 @@ class TestStep6DispatchAgents:
                 },
             ]
         }
-        (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
+        _artifact(tmp_path, "dispatch_plan").write_text(json.dumps(plan))
         monkeypatch.setattr(
             orchestration_mod, "_run_subprocess", lambda *args, **kwargs: ("", True)
         )
@@ -1843,14 +1850,14 @@ class TestStep10DecisionCritic:
         assert "task name `decision_reviewer`" in text
 
 
-    def test_reviews_report_not_findings(self, mod, tmp_path):
-        """Critic should review review-report.md (all modes now)."""
+    def test_reviews_record_not_findings(self, mod, tmp_path):
+        """Critic should review the assembled review record in every mode."""
         for mode in ("pr", "full", "incremental"):
             state = {"completed_steps": []}
             ctx = {}
             g = mod.get_step_guidance(10, mode, state, ctx)
             text = "\n".join(g["actions"])
-            assert "review-report.md" in text
+            assert "review-record.md" in text
 
     def test_instructs_wait_for_critic(self, mod, tmp_path):
         """Critic must NOT run in background — LLM needs the verdict."""
@@ -3236,10 +3243,10 @@ class TestStep10WritesItsOwnSkipVerdict:
     def test_the_skip_verdict_lands_on_disk(self, mod, tmp_path, recon):
         state = self._run_step_10(mod, tmp_path, recon)
         proposal = json.loads(
-            (tmp_path / "decision-critic-adjustments.json").read_text()
+            _artifact(tmp_path, "critic_adjustments").read_text()
         )
         written = json.loads(
-            (tmp_path / "decision-critic-verdict.json").read_text()
+            _artifact(tmp_path, "critic_verdict").read_text()
         )
         from review import critic_adjustments
 
@@ -3257,7 +3264,7 @@ class TestStep10WritesItsOwnSkipVerdict:
         """The critic's own verdict is the critic's to report; the
         orchestrator transcribes it verbatim after the critic returns."""
         self._run_step_10(mod, tmp_path, "request_changes")
-        assert not (tmp_path / "decision-critic-verdict.json").exists()
+        assert not _artifact(tmp_path, "critic_verdict").exists()
 
     def test_the_skip_branch_writes_no_dispatch_marker(self, mod, tmp_path):
         """A critic that never ran has no duration, and the marker's

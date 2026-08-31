@@ -14,12 +14,10 @@ pipeline_contract.py, pure conversational briefings in briefings.py, and
 side-effecting per-step work in orchestration.py. Three command .md files are
 thin wrappers calling this facade with --mode flags.
 
-Split file-based state:
-  - run-config.json:     Caller config (mode, pr_number, interactive, output_instructions).
-                         Set before step 1 (or by the script at step 1 from CLI args).
-                         Read-only during the run.
-  - pipeline-state.json: Execution state. Owned exclusively by the script.
-                         The LLM never reads or writes it.
+Split file-based state keeps caller configuration at the run boundary and
+execution state in the pipeline group. The caller configuration is set before
+step 1 (or by this script at step 1) and is read-only during the run; execution
+state is owned exclusively by this script and never read or written by the LLM.
 
 Zero external dependencies (stdlib only).
 """
@@ -106,6 +104,7 @@ try:
     )
     from .user_settings import load_user_settings, refresh_dependencies_default
     from .atomic_io import atomic_write_json
+    from .run_paths import artifact_path
 except ImportError:
     _scripts_parent = str(Path(__file__).resolve().parent.parent)
     if _scripts_parent not in sys.path:
@@ -184,6 +183,7 @@ except ImportError:
         refresh_dependencies_default,
     )
     from review.atomic_io import atomic_write_json
+    from review.run_paths import artifact_path
 
 # ---------------------------------------------------------------------------
 # Condition Evaluation
@@ -282,7 +282,7 @@ _DEFAULT_STATE = {
         "expected": 0,
         "status": "not_run",
     },
-    # Step 9's and step 11's render of review-findings.md, recorded in the
+    # Step 9's and step 11's render of the findings Markdown, recorded in the
     # same shape as its per-reviewer sibling above so both report through
     # one status-line helper and read the same way in pipeline state.
     "findings_markdown": {
@@ -298,8 +298,8 @@ _DEFAULT_CONFIG = {}
 
 
 def read_state(output_dir):
-    """Read pipeline-state.json, return default if missing or corrupted."""
-    path = os.path.join(output_dir, "pipeline-state.json")
+    """Read pipeline state, returning the default when it is unusable."""
+    path = artifact_path(output_dir, "pipeline_state")
     try:
         with open(path) as f:
             return json.load(f)
@@ -308,15 +308,16 @@ def read_state(output_dir):
 
 
 def write_state(output_dir, state):
-    """Write pipeline-state.json."""
-    path = os.path.join(output_dir, "pipeline-state.json")
+    """Write pipeline state."""
+    path = artifact_path(output_dir, "pipeline_state")
+    path.parent.mkdir(exist_ok=True)
     with open(path, "w") as f:
         json.dump(state, f, indent=2)
 
 
 def read_config(output_dir):
-    """Read run-config.json, return empty dict if missing or corrupted."""
-    path = os.path.join(output_dir, "run-config.json")
+    """Read caller configuration, returning empty when it is unusable."""
+    path = artifact_path(output_dir, "run_config")
     try:
         with open(path) as f:
             return json.load(f)
@@ -325,8 +326,8 @@ def read_config(output_dir):
 
 
 def write_config(output_dir, config):
-    """Write run-config.json."""
-    path = os.path.join(output_dir, "run-config.json")
+    """Write caller configuration."""
+    path = artifact_path(output_dir, "run_config")
     with open(path, "w") as f:
         json.dump(config, f, indent=2)
 
@@ -334,14 +335,14 @@ def write_config(output_dir, config):
 def _reset_interactive_review_context(output_dir):
     """Atomically replace prior-run context with the current run seed."""
     context = {"output": {"directory": output_dir}}
-    path = os.path.join(output_dir, "review-context.json")
+    path = artifact_path(output_dir, "review_context")
     atomic_write_json(path, context)
     return context
 
 
 def read_review_context(output_dir):
-    """Read preserved review-context.json, or return an empty dict."""
-    path = os.path.join(output_dir, "review-context.json")
+    """Read preserved review context, or return an empty dict."""
+    path = artifact_path(output_dir, "review_context")
     try:
         with open(path) as f:
             context = json.load(f)
@@ -355,7 +356,7 @@ def read_review_context(output_dir):
 def resolve_params(output_dir, cli_mode=None, cli_pr_number=None,
                    cli_interactive=None, cli_output_instructions=None,
                    cli_git_range=None):
-    """Resolve parameters: run-config.json wins over CLI args."""
+    """Resolve parameters: persisted caller configuration wins over CLI args."""
     config = read_config(output_dir)
     # Config values take precedence; CLI fills in missing fields
     resolved = {}
@@ -457,7 +458,7 @@ def format_output(step, guidance):
         # them.
         #
         # An OUTSTANDING HANDOFF makes it premature. The last step of a bot
-        # run now asks the orchestrator for `review-report.md` — authored
+        # run now asks the orchestrator for the audience-facing report — authored
         # after the critic, from the settled record — so the gate demanding
         # that file sits one line above this footer. "PIPELINE COMPLETE"
         # underneath it contradicts the gate, and pirategoat-bot fails the
@@ -560,7 +561,7 @@ def _detect_plugin_commit(plugin_root=None):
 
 
 def _stamp_run_config(output_dir, config, field, value):
-    """Record one detected build-identity field in run-config.json.
+    """Record one detected build-identity field in caller configuration.
 
     Re-stamped on every step 1 so a resumed run under an upgraded plugin
     credits its artifacts to the build that actually produced them.
@@ -692,7 +693,7 @@ def main():
             print("ERROR: --mode is required on the first call", file=sys.stderr)
             sys.exit(2)
 
-        # Write/update run-config.json (seed from CLI on first call)
+        # Write/update caller configuration (seed from CLI on first call)
         if not existing_config.get("mode"):
             config = dict(existing_config)
             config.update({
@@ -728,7 +729,7 @@ def main():
             # Without this, a quick→normal rerun stays in quick mode,
             # and a normal→quick rerun was already handled.
             # In bot mode (interactive: false), the bot pre-writes the
-            # correct quick value in run-config.json and subsequent steps
+            # correct quick value in caller configuration and subsequent steps
             # may not pass --quick on the CLI (especially with custom
             # prompt overrides), so we must not overwrite the bot's value.
             if config.get("interactive", True) and config.get("quick") != args.quick:
@@ -746,7 +747,7 @@ def main():
                 write_config(output_dir, config)
             # Session identity follows the same interactive/bot split as
             # quick: on an interactive step-1 retry, the CLI is authoritative
-            # INCLUDING absence. Bot runs pre-seed the ID in run-config.json
+            # INCLUDING absence. Bot runs pre-seed the ID in caller configuration
             # and may omit the flag on retries.
             if config.get("interactive", True):
                 cli_session = args.session_id or ""
@@ -766,7 +767,7 @@ def main():
         # Trusted-branch dependency refresh executes reviewed-branch code
         # (package managers run configuration as code), so it is
         # interactive-only: a bot reviewing third-party PRs must never
-        # inherit it, whether from the CLI or a pre-seeded run-config.json.
+        # inherit it, whether from the CLI or pre-seeded caller configuration.
         if not config.get("interactive", True) and \
                 config.get("refresh_dependencies"):
             config["refresh_dependencies"] = False
@@ -872,7 +873,7 @@ def main():
         config = read_config(output_dir)
         mode = config.get("mode") or args.mode
         if not mode:
-            print("ERROR: No mode found in run-config.json and --mode not provided",
+            print("ERROR: No mode found in caller configuration and --mode not provided",
                   file=sys.stderr)
             sys.exit(2)
 
@@ -923,7 +924,7 @@ def main():
         git_ctx = context.get("git", {})
         if not git_ctx.get("merge_base") and step <= 2:
             print("PIPELINE STOPPED: Non-interactive PR mode requires pre-computed "
-                  "review-context.json with a valid merge_base.", file=sys.stderr)
+                  "review context with a valid merge_base.", file=sys.stderr)
             sys.exit(1)
 
     # --- Get guidance ---

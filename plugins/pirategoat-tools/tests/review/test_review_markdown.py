@@ -327,7 +327,7 @@ class TestReconciliationSectionsRender:
         one hint a reader has that more metrics exist."""
         rendered = render_markdown(canonical_findings_ledger(("high",)))
         assert (
-            "Full metrics in `review-findings.json` \u2192 "
+            "Full metrics in the findings ledger \u2192 "
             "`meta.reconciliation`." in rendered
         )
 

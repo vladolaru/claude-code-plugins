@@ -15,7 +15,11 @@ SCRIPT = SCRIPTS_DIR / "review" / "dependency_refresh.py"
 
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from review import dependency_refresh
+from review import dependency_refresh, run_paths
+
+
+def _canonical(output_dir):
+    return run_paths.artifact_path(output_dir, "dependency_refresh")
 
 
 @pytest.fixture
@@ -163,7 +167,7 @@ class TestSaveReport:
         )
 
         saved = json.loads(
-            (output_dir / "dependency-refresh.json").read_text(encoding="utf-8")
+            _canonical(output_dir).read_text(encoding="utf-8")
         )
         assert problems == []
         assert saved == {
@@ -198,7 +202,7 @@ class TestSaveReport:
         )
 
         saved = json.loads(
-            (output_dir / "dependency-refresh.json").read_text(encoding="utf-8")
+            _canonical(output_dir).read_text(encoding="utf-8")
         )
         assert problems == []
         assert saved["status"] == "failed"
@@ -251,7 +255,8 @@ class TestSaveReport:
     ):
         output_dir = tmp_path / "out"
         output_dir.mkdir()
-        canonical = output_dir / "dependency-refresh.json"
+        canonical = _canonical(output_dir)
+        canonical.parent.mkdir(parents=True)
         canonical.write_bytes(b'{"existing":true}\n')
         report_path = tmp_path / "request.json"
         _write_request(
@@ -271,7 +276,8 @@ class TestSaveReport:
     ):
         output_dir = tmp_path / "out"
         output_dir.mkdir()
-        canonical = output_dir / "dependency-refresh.json"
+        canonical = _canonical(output_dir)
+        canonical.parent.mkdir(parents=True)
         canonical.write_bytes(b'{"existing":true}\n')
         report_path = tmp_path / "request.json"
         _write_request(report_path, _request())
@@ -381,7 +387,7 @@ class TestRequestValidation:
         )
 
         assert any(expected_fragment in problem for problem in problems)
-        assert not (output_dir / "dependency-refresh.json").exists()
+        assert not _canonical(output_dir).exists()
 
 
 class TestCanonicalValidation:
@@ -422,7 +428,9 @@ class TestCanonicalValidation:
     def test_loader_rejects_incomplete_or_invalid_canonical_shapes(
         self, tmp_path, payload
     ):
-        (tmp_path / "dependency-refresh.json").write_text(
+        canonical = _canonical(tmp_path)
+        canonical.parent.mkdir(parents=True)
+        canonical.write_text(
             json.dumps(payload), encoding="utf-8"
         )
 
@@ -486,7 +494,7 @@ class TestSaveCli:
             "INVALID dependency refresh report: missing required field: 'commands'",
             "INVALID dependency refresh report: unknown top-level field: 'extra'",
         ]
-        assert not (output_dir / "dependency-refresh.json").exists()
+        assert not _canonical(output_dir).exists()
 
     def test_missing_input_is_an_io_failure_not_invalid_report(
         self, git_repo, tmp_path

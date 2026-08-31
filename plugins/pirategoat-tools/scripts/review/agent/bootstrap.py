@@ -45,6 +45,7 @@ if _SCRIPTS_DIR not in sys.path:
 from review.reviewer_names import derive_reviewer_name
 from review.agent.review_assignment import ASSIGNMENT_SCHEMA, derive_reviewed_files
 from review.atomic_io import atomic_write_json
+from review.run_paths import artifact_path
 from review.reviewer_lifecycle import (
     review_paths,
     scope_summary_path,
@@ -367,7 +368,7 @@ _SCOPE_FACT_LISTS = (
 
 
 def load_scope_facts(summary_paths: List[str]) -> Dict[str, Any]:
-    """Accumulate this agent's scope facts from its scope-summary sidecars.
+    """Accumulate this agent's scope facts from its summary sidecars.
 
     The sidecars are the producer's own dict, so their key names are used
     unchanged and handed straight to persist_review_assignment. Empty when no
@@ -428,14 +429,14 @@ def budget_was_capped(changed_lines: int) -> bool:
 
 
 def load_pr_intent(output_dir: str) -> Optional[str]:
-    """Load PR intent from review-context.json in the output directory.
+    """Load PR intent from the run's review context.
 
     Extracts PR title, body, and linked issues to build a concise intent
     block that helps specialist reviewers calibrate severity.
 
     Returns formatted intent string, or None if no context is available.
     """
-    ctx_path = os.path.join(output_dir, "review-context.json")
+    ctx_path = artifact_path(output_dir, "review_context")
     if not os.path.isfile(ctx_path):
         return None
 
@@ -471,11 +472,11 @@ def load_pr_intent(output_dir: str) -> Optional[str]:
 
 
 def load_pr_number_from_context(output_dir: str) -> Optional[str]:
-    """Load PR number from review-context.json in the output directory.
+    """Load PR number from the run's review context.
 
     Returns PR number as a string, or None if unavailable.
     """
-    ctx_path = os.path.join(output_dir, "review-context.json")
+    ctx_path = artifact_path(output_dir, "review_context")
     if not os.path.isfile(ctx_path):
         return None
     try:
@@ -488,12 +489,12 @@ def load_pr_number_from_context(output_dir: str) -> Optional[str]:
 
 
 def load_pr_size_from_context(output_dir: str) -> Optional[dict]:
-    """Load PR size metrics from review-context.json in the output directory.
+    """Load PR size metrics from the run's review context.
 
     Returns dict with 'lines', 'files', 'category' keys, or None if unavailable.
     Structured data — preferred over parsing scope output for budget computation.
     """
-    ctx_path = os.path.join(output_dir, "review-context.json")
+    ctx_path = artifact_path(output_dir, "review_context")
     if not os.path.isfile(ctx_path):
         return None
     try:
@@ -508,15 +509,15 @@ def load_pr_size_from_context(output_dir: str) -> Optional[dict]:
 
 
 def load_change_purpose(output_dir: str) -> Optional[str]:
-    """Load the main session's change-purpose synthesis from the output directory.
+    """Load the main session's change-purpose synthesis.
 
-    change-purpose.md is written by the main session at step 3/4 as a distilled
-    summary of what changed, why, and what to focus on during review. It provides
-    richer context than the raw PR metadata in review-context.json.
+    The pipeline artifact is written by the main session at step 3/4 as a
+    distilled summary of what changed, why, and what to focus on during review.
+    It provides richer context than the raw PR metadata.
 
     Returns the file content stripped, or None if not available.
     """
-    cp_path = os.path.join(output_dir, "change-purpose.md")
+    cp_path = artifact_path(output_dir, "change_purpose")
     if not os.path.isfile(cp_path):
         return None
 
@@ -529,11 +530,11 @@ def load_change_purpose(output_dir: str) -> Optional[str]:
 
 
 def load_additional_instructions(output_dir: str) -> Optional[str]:
-    """Load additional_instructions from run-config.json in the output directory.
+    """Load additional instructions from the run's caller configuration.
 
     Returns the instructions string, or None if not present.
     """
-    config_path = os.path.join(output_dir, "run-config.json")
+    config_path = artifact_path(output_dir, "run_config")
     if not os.path.isfile(config_path):
         return None
     try:
@@ -546,14 +547,14 @@ def load_additional_instructions(output_dir: str) -> Optional[str]:
 
 
 def load_plugin_version(output_dir: str) -> str:
-    """Read the run's plugin stamp from run-config.json, or "" if absent.
+    """Read the run's plugin stamp from caller configuration, or "" if absent.
 
     Forwarded into the builder envelope so every reviewer JSON names its
     producer. Deliberately a READ, never a detection: pipeline step 1 owns
     the one `_detect_plugin_version()` call, and re-deriving it here would
     let a reviewer artifact disagree with its own run manifest.
     """
-    config_path = os.path.join(output_dir, "run-config.json")
+    config_path = artifact_path(output_dir, "run_config")
     if not os.path.isfile(config_path):
         return ""
     try:
@@ -566,13 +567,13 @@ def load_plugin_version(output_dir: str) -> str:
 
 
 def load_host_context(output_dir: str) -> Optional[dict]:
-    """Load host_context from review-context.json if present.
+    """Load host context from the run's review context if present.
 
     Returns the host_context dict or None. Safe on missing/invalid files.
     """
     if not output_dir:
         return None
-    ctx_path = os.path.join(output_dir, "review-context.json")
+    ctx_path = artifact_path(output_dir, "review_context")
     if not os.path.isfile(ctx_path):
         return None
     try:
@@ -584,14 +585,14 @@ def load_host_context(output_dir: str) -> Optional[dict]:
 
 
 def load_repo_review_config(output_dir: str) -> Optional[dict]:
-    """Load review_config (repo rules + reviewers) from review-context.json.
+    """Load repository review configuration from the run's review context.
 
     Safe on missing/invalid files. Returns the normalized review_config dict
     (see review_config.py) or None.
     """
     if not output_dir:
         return None
-    ctx_path = os.path.join(output_dir, "review-context.json")
+    ctx_path = artifact_path(output_dir, "review_context")
     if not os.path.isfile(ctx_path):
         return None
     try:
@@ -906,7 +907,7 @@ def build_output(
       summary sidecars).
 
     This function does not parse scope_output for either fact, and neither
-    does main(): load_scope_facts() reads the scope-summary sidecars and
+    does main(): load_scope_facts() reads the summary sidecars and
     nothing else, and a run without a readable one stops with a structured
     error rather than re-deriving them from rendered prose. Neither
     parameter has a default, so an omitted caller fails loudly (TypeError)
@@ -1582,7 +1583,7 @@ def main():
 
         pr_number = extract_pr_number(scope_output)
 
-        # Fallback: read PR number from review-context.json
+        # Fallback: read PR number from review context
         if not pr_number:
             pr_number = load_pr_number_from_context(output_dir)
 
@@ -1628,7 +1629,7 @@ def main():
                 pr_number = stdout
                 break
 
-        # Fallback: read PR number from review-context.json
+        # Fallback: read PR number from review context
         if not pr_number:
             pr_number = load_pr_number_from_context(output_dir)
 
@@ -1810,16 +1811,16 @@ def main():
             reviewer_name=reviewer_name,
         )
 
-    # Load PR intent from review-context.json (if available)
+    # Load PR intent from review context (if available)
     pr_intent = load_pr_intent(output_dir)
 
-    # Load change-purpose.md (main session's distilled synthesis, if available)
+    # Load the main session's distilled change-purpose synthesis, if available
     change_purpose = load_change_purpose(output_dir)
 
-    # Load additional instructions from run-config.json (if provided by requester)
+    # Load additional instructions from caller configuration, if provided
     additional_instructions = load_additional_instructions(output_dir)
 
-    # Load host_context from review-context.json (populated in Phase 1 of
+    # Load host context from review context (populated in Phase 1 of
     # upstream host context). Absent / missing / invalid → None.
     host_context = load_host_context(output_dir)
 

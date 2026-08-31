@@ -20,6 +20,7 @@ from review.review_document import (  # noqa: E402
     validate_review_content,
 )
 from review.review_markdown import render_markdown  # noqa: E402
+from review import run_paths  # noqa: E402
 
 
 def _ledger(tmp_path):
@@ -111,9 +112,11 @@ def test_ledger_reads_plugin_version_from_the_bound_run(tmp_path, monkeypatch):
 def test_ledger_duration_spans_the_reconciliator_dispatch(tmp_path):
     """The marker is keyed on the dispatched agent name, not the actor."""
     started = datetime.now(timezone.utc) - timedelta(seconds=5)
-    (tmp_path / "review-reconciliator.synthesis-started").write_text(
-        started.isoformat()
+    marker = run_paths.synthesis_started_marker(
+        tmp_path, "review-reconciliator"
     )
+    marker.parent.mkdir(parents=True)
+    marker.write_text(started.isoformat())
     builder = FindingsLedgerBuilder(pr_id="42", output_dir=str(tmp_path))
     builder.set_reconciliation(
         grouped_concern_count=0, verified_concern_count=0,

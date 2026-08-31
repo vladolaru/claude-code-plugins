@@ -10,7 +10,7 @@ orchestrator then submits only verified IDs, refuted IDs with reasons, and an
 optional revised assessment through :func:`adjudicate`, which takes the output
 lock once and makes exactly one ledger write: verified and unchecked entries
 are applied with provenance, refuted entries are recorded with their reasons,
-and every entry's ``outcome`` lands in ``review-findings.json``.
+and every entry's ``outcome`` lands in the findings ledger.
 
 The ledger is therefore the one place adjudication is recorded, which is what
 makes a second adjudication of the same proposal detectable (its IDs are
@@ -51,6 +51,7 @@ try:
         SEVERITY_RANK,
         summary_for,
     )
+    from .run_paths import artifact_path
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
@@ -76,6 +77,7 @@ except ImportError:
         SEVERITY_RANK,
         summary_for,
     )
+    from review.run_paths import artifact_path
 
 atomic_write_json = atomic_io.atomic_write_json
 
@@ -117,9 +119,9 @@ OUTCOMES = (OUTCOME_VERIFIED, OUTCOME_REFUTED, OUTCOME_NOT_CHECKED)
 # record left intact beside it.
 REVISED_ASSESSMENT_KEY = "revised_assessment"
 
-ADJUSTMENTS_FILENAME = "decision-critic-adjustments.json"
-FINDINGS_FILENAME = "review-findings.json"
-CRITIC_VERDICT_FILENAME = "decision-critic-verdict.json"
+ADJUSTMENTS_FILENAME = artifact_path("", "critic_adjustments").name
+FINDINGS_FILENAME = artifact_path("", "review_findings_json").name
+CRITIC_VERDICT_FILENAME = artifact_path("", "critic_verdict").name
 # One record per applied adjustment: `{"adjustment_id": ..., "outcome": ...}`.
 # The id half is what makes a second adjudication of the same proposal
 # detectable; the outcome half is the orchestrator's verdict on that decision,
@@ -136,7 +138,7 @@ VERDICT_BEFORE_ADJUSTMENTS_KEY = "verdict_before_adjustments"
 # orchestrator refuted, carrying the refuted entry's action and target plus
 # the reason the probe disproved it. The proposal file is never consulted
 # downstream, so without this key a refuted decision would leave no trace in
-# review-findings.json — the artifact bot mode, baselines, and metrics
+# the findings ledger — the artifact bot mode, baselines, and metrics
 # actually read. The shared Markdown renderer projects it alongside the
 # applied decisions so the record accounts for every critic decision.
 REJECTED_ADJUSTMENTS_KEY = "rejected_critic_adjustments"
@@ -562,9 +564,12 @@ def write_critic_verdict(output_dir, verdict, proposal):
     if verdict != REVISE_VERDICT and proposal["adjustments"]:
         raise ValueError(f"{verdict} may not commit a non-empty proposal")
     digest = proposal_digest(proposal)
-    atomic_write_json(os.path.join(output_dir, ADJUSTMENTS_FILENAME), proposal)
+    adjustments_path = artifact_path(output_dir, "critic_adjustments")
+    verdict_path = artifact_path(output_dir, "critic_verdict")
+    adjustments_path.parent.mkdir(exist_ok=True)
+    atomic_write_json(adjustments_path, proposal)
     atomic_write_json(
-        os.path.join(output_dir, CRITIC_VERDICT_FILENAME),
+        verdict_path,
         {
             "schema": VERDICT_MARKER_SCHEMA,
             "verdict": verdict,
@@ -577,14 +582,14 @@ def write_critic_verdict(output_dir, verdict, proposal):
 def read_committed_proposal(output_dir):
     """Return (verdict, proposal) only when the marker binds the proposal."""
     marker = _read_json_object(
-        os.path.join(output_dir, CRITIC_VERDICT_FILENAME),
+        artifact_path(output_dir, "critic_verdict"),
         CRITIC_VERDICT_FILENAME,
     )
     problems = _validate_verdict_marker(marker)
     if problems:
         raise AdjustmentValidationError(problems)
     proposal = _read_json_object(
-        os.path.join(output_dir, ADJUSTMENTS_FILENAME), ADJUSTMENTS_FILENAME
+        artifact_path(output_dir, "critic_adjustments"), ADJUSTMENTS_FILENAME
     )
     problems = validate_adjustments_document(proposal)
     if problems:
@@ -856,7 +861,7 @@ def _validate_invalidated_assessments(value, applied_ids):
 def validate_findings_document(document):
     """Validate one exact canonical post-critic findings ledger.
 
-    This is the single reader-boundary authority for ``review-findings.json``.
+    This is the single reader-boundary authority for the findings ledger.
     The ledger is review content plus two things a reviewer document does not
     have: the reconciliation block and the critic applier's provenance. The
     content half is delegated to :func:`validate_review_content`; only those
@@ -988,7 +993,7 @@ def validate_findings_document(document):
 
 
 def read_findings_file(path):
-    """Read review-findings.json into a discriminated result.
+    """Read the findings ledger into a discriminated result.
 
     ONE spelling of open-parse-shape-check for the ledger, shared by every
     caller: before it existed the call sites opened this file with slightly
@@ -1032,7 +1037,7 @@ def _unreadable_ledger(read):
 
 
 def write_findings(output_dir, findings):
-    """The ONE sanctioned write path for review-findings.json.
+    """The ONE sanctioned write path for the findings ledger.
 
     Replaces the file atomically through the shared `atomic_write_json`.
 
@@ -1053,7 +1058,7 @@ def write_findings(output_dir, findings):
     """
     if not isinstance(findings, dict):
         raise ValueError(f"{FINDINGS_FILENAME} must be a JSON object")
-    atomic_write_json(os.path.join(output_dir, FINDINGS_FILENAME), findings)
+    atomic_write_json(artifact_path(output_dir, "review_findings_json"), findings)
 
 
 def _apply_scope_pairing(finding, line_is_null):
@@ -1463,7 +1468,9 @@ def adjudicate(output_dir, request):
         )
         if problems:
             raise AdjustmentValidationError(problems)
-        read = read_findings_file(os.path.join(output_dir, FINDINGS_FILENAME))
+        read = read_findings_file(
+            artifact_path(output_dir, "review_findings_json")
+        )
         if read.status != FINDINGS_READ_OK:
             raise ValueError(_unreadable_ledger(read))
         ledger = read.findings
@@ -1496,7 +1503,7 @@ def adjudication_state(output_dir):
     ids = {entry["adjustment_id"] for entry in proposal["adjustments"]}
     if not ids:
         return "empty"
-    read = read_findings_file(os.path.join(output_dir, FINDINGS_FILENAME))
+    read = read_findings_file(artifact_path(output_dir, "review_findings_json"))
     if read.status != FINDINGS_READ_OK:
         raise ValueError(_unreadable_ledger(read))
     return "adjudicated" if ids <= _recorded_ids(read.findings) else "pending"

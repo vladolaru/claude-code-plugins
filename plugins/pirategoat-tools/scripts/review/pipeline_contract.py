@@ -5,6 +5,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from .run_paths import artifact_path
+
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
 PLUGIN_ROOT = SCRIPTS_DIR.parents[1]
@@ -21,7 +23,7 @@ SUPPORTED_HOSTS = (HOST_CLAUDE, HOST_CODEX)
 # `briefings` (for the coverage renderer), so `briefings` cannot import back.
 # A hand-copied second spelling of an artifact filename is how the writer
 # and the briefing that names it come apart.
-REVIEW_RECORD_MD = "review-record.md"
+REVIEW_RECORD_MD = artifact_path("", "review_record").name
 
 
 def _host(config):

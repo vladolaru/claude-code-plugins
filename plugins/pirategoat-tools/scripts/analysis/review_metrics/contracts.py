@@ -119,7 +119,7 @@ _MAX_DEPENDENCY_REFRESH_COMMANDS = (
 )
 _MAX_DIRTY_FILES = _MANIFEST_SECTIONS_CONTRACT._MAX_DIRTY_FILES
 # Shared by reviewer_markdown (step 8's per-reviewer render) and
-# findings_markdown (steps 9/11's review-findings.md render) — one
+# findings_markdown (steps 9/11's ledger Markdown render) — one
 # producer-side validator (`_sanitize_derived_markdown_outcome`) covers
 # both, so one vocabulary covers both here too.
 _DERIVED_MARKDOWN_STATUSES = (

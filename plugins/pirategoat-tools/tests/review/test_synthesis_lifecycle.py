@@ -28,6 +28,9 @@ from helpers.review_fixtures import canonical_findings_ledger
 from review import critic_adjustments
 from review import synthesis_lifecycle as lifecycle
 from review.atomic_io import atomic_write_json
+from review import run_paths
+from review.reviewer_lifecycle import started_marker_path
+from review.reviewer_names import derive_reviewer_name
 
 
 T0 = datetime(2026, 8, 19, 12, 0, 0, tzinfo=timezone.utc)
@@ -49,7 +52,7 @@ def _set_mtime(path, when):
 
 
 def _read(out):
-    return json.loads((out / lifecycle.LIFECYCLE_FILENAME).read_text())
+    return json.loads(run_paths.artifact_path(out, "synthesis_agents").read_text())
 
 
 def _entry(payload, name):
@@ -64,13 +67,20 @@ def _critic_snapshot(out, verdict):
     critic_adjustments.write_critic_verdict(
         str(out), verdict, critic_adjustments.empty_proposal()
     )
-    return out / critic_adjustments.CRITIC_VERDICT_FILENAME
+    return run_paths.artifact_path(out, "critic_verdict")
 
 
 @pytest.fixture
 def out(tmp_path):
     directory = tmp_path / "out"
     directory.mkdir()
+    for subdir in (
+        run_paths.PIPELINE_SUBDIR,
+        run_paths.REVIEWERS_SUBDIR,
+        run_paths.SYNTHESIS_SUBDIR,
+        run_paths.SCRATCH_SUBDIR,
+    ):
+        (directory / subdir).mkdir()
     return directory
 
 
@@ -85,7 +95,9 @@ class TestDispatchMarker:
         lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
         assert lifecycle.MARKER_SUFFIX == ".synthesis-started"
         assert not list(out.glob("*.started"))
-        assert [path.name for path in out.glob(f"*{lifecycle.MARKER_SUFFIX}")] == [
+        assert not list(out.glob(f"*{lifecycle.MARKER_SUFFIX}"))
+        synthesis = out / "synthesis"
+        assert [path.name for path in synthesis.glob(f"*{lifecycle.MARKER_SUFFIX}")] == [
             f"{lifecycle.RECONCILIATOR}{lifecycle.MARKER_SUFFIX}"
         ]
 
@@ -129,8 +141,9 @@ class TestAvailability:
         """The critic is skipped in quick mode, so no marker is written.
         Its row is absent — not present with duration 0."""
         lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
-        (out / "review-findings.json").write_text("{}")
-        _set_mtime(out / "review-findings.json", T0 + timedelta(seconds=30))
+        findings = run_paths.artifact_path(out, "review_findings_json")
+        findings.write_text("{}")
+        _set_mtime(findings, T0 + timedelta(seconds=30))
         payload = lifecycle.observe(str(out), finalize=True)
         assert [entry["agent"] for entry in payload["agents"]] == [
             lifecycle.RECONCILIATOR
@@ -156,8 +169,8 @@ class TestCompletionObservation:
 
     def test_completion_artifacts_are_the_gated_ones(self, out):
         assert dict(lifecycle.SYNTHESIS_AGENTS) == {
-            lifecycle.RECONCILIATOR: "review-findings.json",
-            lifecycle.DECISION_CRITIC: "decision-critic-verdict.json",
+            lifecycle.RECONCILIATOR: "review_findings_json",
+            lifecycle.DECISION_CRITIC: "critic_verdict",
         }
 
     def test_critic_findings_doc_does_not_count_as_completion(self, out):
@@ -165,7 +178,7 @@ class TestCompletionObservation:
         produced a critique. Keying completion on it would report a
         crashed critic as still running, so it is not the key."""
         lifecycle.mark_dispatched(str(out), lifecycle.DECISION_CRITIC, now=T0)
-        (out / "decision-critic-findings.md").write_text("# findings")
+        run_paths.artifact_path(out, "critic_findings").write_text("# findings")
         payload = lifecycle.observe(str(out), finalize=True)
         assert _entry(payload, lifecycle.DECISION_CRITIC)["stalled"] is True
 
@@ -191,7 +204,7 @@ class TestStallDetection:
         """A file older than the dispatch cannot be that dispatch's
         output — reporting it as one would publish a borrowed duration."""
         lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
-        findings = out / "review-findings.json"
+        findings = run_paths.artifact_path(out, "review_findings_json")
         findings.write_text("{}")
         _set_mtime(findings, T0 - timedelta(minutes=5))
         payload = lifecycle.observe(str(out), finalize=True)
@@ -221,7 +234,7 @@ class TestIdempotence:
         """Step 9's observation of the reconciliator is the tightest bound
         the run will ever have. Finalize must not push it minutes later."""
         lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
-        findings = out / "review-findings.json"
+        findings = run_paths.artifact_path(out, "review_findings_json")
         findings.write_text("{}")
         _set_mtime(findings, T0 + timedelta(seconds=41))
         first = lifecycle.observe(str(out))
@@ -239,7 +252,7 @@ class TestIdempotence:
     def test_incomplete_entry_is_re_observed(self, out):
         lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
         lifecycle.observe(str(out))
-        findings = out / "review-findings.json"
+        findings = run_paths.artifact_path(out, "review_findings_json")
         findings.write_text("{}")
         _set_mtime(findings, T0 + timedelta(seconds=30))
         payload = lifecycle.observe(str(out), finalize=True)
@@ -247,8 +260,8 @@ class TestIdempotence:
 
     def test_corrupt_prior_artifact_is_re_derived(self, out):
         lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
-        (out / lifecycle.LIFECYCLE_FILENAME).write_text("{not json")
-        findings = out / "review-findings.json"
+        run_paths.artifact_path(out, "synthesis_agents").write_text("{not json")
+        findings = run_paths.artifact_path(out, "review_findings_json")
         findings.write_text("{}")
         _set_mtime(findings, T0 + timedelta(seconds=30))
         payload = lifecycle.observe(str(out))
@@ -256,7 +269,7 @@ class TestIdempotence:
 
     def test_prior_artifact_of_another_schema_is_ignored(self, out):
         lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
-        (out / lifecycle.LIFECYCLE_FILENAME).write_text(json.dumps({
+        run_paths.artifact_path(out, "synthesis_agents").write_text(json.dumps({
             "schema": 99,
             "agents": [{
                 "agent": lifecycle.RECONCILIATOR,
@@ -312,7 +325,7 @@ class TestVerdictCapture:
         if committed:
             verdict = _critic_snapshot(out, verdict_payload)
         else:
-            verdict = out / "decision-critic-verdict.json"
+            verdict = run_paths.artifact_path(out, "critic_verdict")
             verdict.write_text(verdict_payload)
         _set_mtime(verdict, T0 + timedelta(seconds=665))
         return lifecycle.observe(str(out), finalize=True)
@@ -340,7 +353,7 @@ class TestVerdictCapture:
         lifecycle.mark_dispatched(str(out), lifecycle.DECISION_CRITIC, now=T0)
         proposal = critic_adjustments.empty_proposal()
         critic_adjustments.write_critic_verdict(str(out), "STAND", proposal)
-        marker = out / critic_adjustments.CRITIC_VERDICT_FILENAME
+        marker = run_paths.artifact_path(out, "critic_verdict")
         atomic_write_json(str(marker), {
             "schema": 2,
             "verdict": "STAND",
@@ -359,7 +372,7 @@ class TestVerdictCapture:
 
     def test_the_reconciliators_verdict_rides_its_row_too(self, out):
         lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
-        findings = out / "review-findings.json"
+        findings = run_paths.artifact_path(out, "review_findings_json")
         findings.write_text(json.dumps(
             canonical_findings_ledger(["high"])
         ))
@@ -391,10 +404,12 @@ from review import orchestration as orchestration_mod
 
 def _step_8_harness(mod, out, monkeypatch):
     """Let step 8 reach its dispatch marker without real subprocesses."""
-    (out / "dispatch-plan.json").write_text(json.dumps({"agents": []}))
+    run_paths.artifact_path(out, "dispatch_plan").write_text(
+        json.dumps({"agents": []})
+    )
 
     def reconciliation_succeeds(*_args, **_kwargs):
-        (out / "reconciliation-context.json").write_text("{}")
+        run_paths.artifact_path(out, "reconciliation_context").write_text("{}")
         return "", True
 
     monkeypatch.setitem(
@@ -437,10 +452,14 @@ class TestStepEightDispatchMarker:
         """The waiting branch returns before the handoff. Stamping there
         would start the clock on a dispatch that has not happened."""
         mod = orchestration_mod
-        (out / "dispatch-plan.json").write_text(json.dumps({
+        run_paths.artifact_path(out, "dispatch_plan").write_text(json.dumps({
             "agents": [{"name": "code-reviewer", "status": "DISPATCH"}],
         }))
-        (out / "code-reviewer.started").write_text(
+        reviewer_marker = Path(started_marker_path(
+            str(out), derive_reviewer_name("code-reviewer")
+        ))
+        reviewer_marker.parent.mkdir(exist_ok=True)
+        reviewer_marker.write_text(
             datetime.now(timezone.utc).isoformat()
         )
         mod._orchestrate_step_8(
@@ -484,13 +503,13 @@ class TestStepTenRedispatchStartsFreshAttempt:
         dispatched = T0
         verdict = _critic_snapshot(out, "REVISE")
         _set_mtime(verdict, dispatched + timedelta(seconds=665))
-        critic_findings = out / "decision-critic-findings.md"
+        critic_findings = run_paths.artifact_path(out, "critic_findings")
         critic_findings.write_text("prior critic")
 
         # Step 10 is RE-ENTERED, but the replacement critic never saves.
         mod._orchestrate_step_10("full", {}, {}, {}, str(out))
         assert not verdict.exists()
-        assert not (out / critic_adjustments.ADJUSTMENTS_FILENAME).exists()
+        assert not run_paths.artifact_path(out, "critic_adjustments").exists()
         assert not critic_findings.exists()
 
         state = {}
@@ -510,14 +529,14 @@ class TestStepTenRedispatchStartsFreshAttempt:
         """The ordering that makes the re-stamp safe, pinned directly."""
         mod = orchestration_mod
         lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
-        findings = out / "review-findings.json"
+        findings = run_paths.artifact_path(out, "review_findings_json")
         findings.write_text('{"verdict": "request_changes"}')
         _set_mtime(findings, T0 + timedelta(seconds=41))
 
         mod._orchestrate_step_10("full", {}, {}, {}, str(out))
 
         # The observation ran during step 10, not at finalize.
-        assert (out / lifecycle.LIFECYCLE_FILENAME).is_file()
+        assert run_paths.artifact_path(out, "synthesis_agents").is_file()
         assert _entry(_read(out), lifecycle.RECONCILIATOR)["duration_ms"] == (
             41_000
         )
@@ -529,7 +548,10 @@ class TestStepTenRedispatchStartsFreshAttempt:
 
         lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
         write_findings(str(out), canonical_findings_ledger())
-        _set_mtime(out / "review-findings.json", T0 + timedelta(seconds=41))
+        _set_mtime(
+            run_paths.artifact_path(out, "review_findings_json"),
+            T0 + timedelta(seconds=41),
+        )
 
         state = {}
         orchestration_mod._orchestrate_step_10(
@@ -553,7 +575,10 @@ class TestStepTenRedispatchStartsFreshAttempt:
         write_findings(
             str(out), {"verdict": "request_changes", "findings": []}
         )
-        _set_mtime(out / "review-findings.json", T0 + timedelta(seconds=41))
+        _set_mtime(
+            run_paths.artifact_path(out, "review_findings_json"),
+            T0 + timedelta(seconds=41),
+        )
 
         orchestration_mod._orchestrate_step_10("full", {}, {}, {}, str(out))
 
@@ -583,7 +608,10 @@ class TestStepNineObservation:
 
         lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
         write_findings(str(out), canonical_findings_ledger())
-        _set_mtime(out / "review-findings.json", T0 + timedelta(seconds=41))
+        _set_mtime(
+            run_paths.artifact_path(out, "review_findings_json"),
+            T0 + timedelta(seconds=41),
+        )
 
         orchestration_mod._orchestrate_step_9("full", {}, {}, {}, str(out))
 
@@ -624,7 +652,10 @@ class TestStepElevenObservation:
 
         lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
         write_findings(str(out), canonical_findings_ledger())
-        _set_mtime(out / "review-findings.json", T0 + timedelta(seconds=41))
+        _set_mtime(
+            run_paths.artifact_path(out, "review_findings_json"),
+            T0 + timedelta(seconds=41),
+        )
 
         orchestration_mod._orchestrate_step_11("pr", {}, {}, {}, str(out))
 

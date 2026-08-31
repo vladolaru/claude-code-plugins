@@ -16,6 +16,7 @@ SCRIPT_PATH = PLUGIN_ROOT / "scripts" / "review" / "agents_status.py"
 sys.path.insert(0, str(TESTS_DIR))
 
 from review import dispatch_status
+from review import run_paths
 from review import synthesis_lifecycle
 from review.agent.output import ReviewOutputBuilder, finalize_review
 from review.reconciliation_context import load_agent_reviews
@@ -40,7 +41,9 @@ def mod():
 
 
 def _write_plan(tmp_path, agents):
-    (tmp_path / "dispatch-plan.json").write_text(json.dumps({"agents": agents}))
+    path = run_paths.artifact_path(tmp_path, "dispatch_plan")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"agents": agents}))
 
 
 def _start_agent(tmp_path, name, minutes_ago=0):
@@ -603,7 +606,7 @@ class TestFilenameConvention:
     def test_finds_review_file_with_reviewer_name(self, mod, tmp_path):
         """security-reviewer agent writes security-review.json — status should be FINISHED."""
         plan = {"agents": [{"name": "security-reviewer", "status": "DISPATCH"}]}
-        (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
+        _write_plan(tmp_path, plan["agents"])
 
         review = canonical_review_document("security")
         path = Path(review_paths(tmp_path, "security").final)
@@ -620,7 +623,7 @@ class TestFilenameConvention:
     def test_agent_without_reviewer_suffix(self, mod, tmp_path):
         """code-reviewer → code-review.json (same convention applies)."""
         plan = {"agents": [{"name": "code-reviewer", "status": "DISPATCH"}]}
-        (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
+        _write_plan(tmp_path, plan["agents"])
 
         review = canonical_review_document("code", ["high"])
         path = Path(review_paths(tmp_path, "code").final)
@@ -634,7 +637,7 @@ class TestFilenameConvention:
     def test_non_reviewer_agent_name_unchanged(self, mod, tmp_path):
         """Agent names not ending in -reviewer use the name as-is."""
         plan = {"agents": [{"name": "gemini-reviewer", "status": "DISPATCH"}]}
-        (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
+        _write_plan(tmp_path, plan["agents"])
 
         review = canonical_review_document("gemini")
         path = Path(review_paths(tmp_path, "gemini").final)
@@ -652,7 +655,7 @@ class TestFindingsKey:
     def test_reads_findings_key(self, mod, tmp_path):
         """ReviewOutputBuilder emits findings with canonical severities."""
         plan = {"agents": [{"name": "security-reviewer", "status": "DISPATCH"}]}
-        (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
+        _write_plan(tmp_path, plan["agents"])
 
         review = canonical_review_document("security", ["critical", "high"])
         path = Path(review_paths(tmp_path, "security").final)
@@ -1064,7 +1067,10 @@ class TestSynthesisMarkersAreInvisible:
     ):
         self._plant(tmp_path)
         assert not list(tmp_path.glob("*.started"))
-        assert len(list(tmp_path.glob("*.synthesis-started"))) == 2
+        assert {
+            run_paths.synthesis_started_marker(tmp_path, name)
+            for name in self.SYNTHESIS_MARKERS
+        } == set((tmp_path / "synthesis").glob("*.synthesis-started"))
 
     def test_dispatch_plan_iteration_holds_without_namespacing(
         self, mod, tmp_path

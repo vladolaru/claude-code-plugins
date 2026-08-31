@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The reconciliator's builder for review-findings.json (the findings ledger).
+"""The reconciliator's builder for the findings ledger.
 
 The ledger is review content — findings, checks, assessment, observations,
 recommendations, positives, id counters — plus reconciliation metrics. It has
@@ -13,12 +13,12 @@ import sys
 from typing import Dict
 
 try:
-    from .agent.output import ReviewOutputBuilder
+    from .agent.output import ReviewOutputBuilder, SYNTHESIS_MARKER_PREFIX
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
-    from review.agent.output import ReviewOutputBuilder
+    from review.agent.output import ReviewOutputBuilder, SYNTHESIS_MARKER_PREFIX
 
 LEDGER_SCHEMA = 3
 # The four judgments the reconciliator itself makes: every grouped concern is
@@ -58,13 +58,11 @@ RECONCILIATION_FIELDS = frozenset(
 # builder as `reconciliator`; the inherited id allocation is keyed on the
 # latter and the dispatch marker on the former.
 LEDGER_ACTOR = "reconciliator"
-# The dispatch identity and marker suffix this ledger's duration is measured
-# from. Spelled here rather than imported because synthesis_lifecycle imports
-# critic_adjustments, which imports this module — importing its RECONCILIATOR
-# back would close a cycle. Parity with both writers is pinned by
-# test_output.py::TestMetaIsNeverFakeZero::test_marker_names_match_their_writers.
+# The dispatch identity this ledger's duration is measured from. It is spelled
+# here rather than imported because synthesis_lifecycle imports
+# critic_adjustments, which imports this module; importing its RECONCILIATOR
+# back would close a cycle.
 LEDGER_AGENT_NAME = "review-reconciliator"
-SYNTHESIS_START_SUFFIX = ".synthesis-started"
 
 
 def _no_lifecycle(*_args, **_kwargs):
@@ -77,7 +75,7 @@ class FindingsLedgerBuilder(ReviewOutputBuilder):
     def __init__(self, pr_id: str, output_dir: str):
         super().__init__(pr_id, LEDGER_ACTOR)
         # Bound for the two facts the run's directory answers — the plugin
-        # version stamped in run-config.json and the dispatch marker the
+        # version stamped in caller configuration and the dispatch marker the
         # duration is measured from — and for nothing else: the ledger is
         # written by write_findings, not by the draft lifecycle.
         self._output_dir = str(output_dir)
@@ -94,7 +92,7 @@ class FindingsLedgerBuilder(ReviewOutputBuilder):
 
     def _marker_name(self) -> str:
         """The ledger has no assignment, so it names its own marker."""
-        return f"{LEDGER_AGENT_NAME}{SYNTHESIS_START_SUFFIX}"
+        return f"{SYNTHESIS_MARKER_PREFIX}{LEDGER_AGENT_NAME}"
 
     def set_reconciliation(
         self, *, grouped_concern_count: int, verified_concern_count: int,

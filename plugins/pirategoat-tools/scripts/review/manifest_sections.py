@@ -15,8 +15,8 @@ try:
     from .agent.review_assignment import ReviewAssignmentError, derive_reviewed_files
     from .review_document import load_review_document
     from .reviewer_names import derive_reviewer_name
-    from .reviewer_lifecycle import review_paths
-    from .run_paths import REVIEWERS_SUBDIR
+    from .reviewer_lifecycle import is_scope_summary_name, review_paths
+    from .run_paths import REVIEWERS_SUBDIR, artifact_path
     from .dependency_refresh import (
         EXIT_STATUSES,
         REPORT_STATUSES,
@@ -31,7 +31,6 @@ try:
         validate_dispatch_plan_agents,
     )
     from .synthesis_lifecycle import (
-        LIFECYCLE_FILENAME as _SYNTHESIS_LIFECYCLE_FILENAME,
         LIFECYCLE_SCHEMA as _SUPPORTED_SYNTHESIS_LIFECYCLE_SCHEMA,
         ROW_KEYS as _SYNTHESIS_ROW_KEYS,
     )
@@ -42,8 +41,8 @@ except ImportError:
     from review.agent.review_assignment import ReviewAssignmentError, derive_reviewed_files
     from review.review_document import load_review_document
     from review.reviewer_names import derive_reviewer_name
-    from review.reviewer_lifecycle import review_paths
-    from review.run_paths import REVIEWERS_SUBDIR
+    from review.reviewer_lifecycle import is_scope_summary_name, review_paths
+    from review.run_paths import REVIEWERS_SUBDIR, artifact_path
     from review.dependency_refresh import (
         EXIT_STATUSES,
         REPORT_STATUSES,
@@ -58,7 +57,6 @@ except ImportError:
         validate_dispatch_plan_agents,
     )
     from review.synthesis_lifecycle import (
-        LIFECYCLE_FILENAME as _SYNTHESIS_LIFECYCLE_FILENAME,
         LIFECYCLE_SCHEMA as _SUPPORTED_SYNTHESIS_LIFECYCLE_SCHEMA,
         ROW_KEYS as _SYNTHESIS_ROW_KEYS,
     )
@@ -114,7 +112,7 @@ _DEPENDENCY_REFRESH_STATUSES = frozenset(REPORT_STATUSES)
 _DEPENDENCY_REFRESH_EXIT_STATUSES = frozenset(EXIT_STATUSES)
 _MAX_DEPENDENCY_REFRESH_COMMANDS = _MAX_REPORTED_COMMANDS
 # Shared by both derived-Markdown families (reviewer_markdown, step 8's
-# per-reviewer render; findings_markdown, steps 9/11's review-findings.md
+# per-reviewer render; findings_markdown, steps 9/11's ledger Markdown
 # render) — the same vocabulary `briefings.py`'s
 # `_derived_markdown_status_line(key=..., label=...)` already treats as
 # one family for its human-facing status line.
@@ -159,6 +157,11 @@ def read_json_file(output_dir: str, name: str) -> Optional[dict]:
     return _read_json_path(os.path.join(output_dir, name))
 
 
+def read_artifact_file(output_dir: str, key: str) -> Optional[dict]:
+    """Read one registry-owned run artifact without letting failures escape."""
+    return _read_json_path(str(artifact_path(output_dir, key)))
+
+
 def safe_dispatch_string(value: Any) -> Optional[str]:
     """Return a dispatch scalar only when it is a string."""
     return value if isinstance(value, str) else None
@@ -194,7 +197,7 @@ def is_dispatched(status: Any) -> bool:
     return isinstance(status, str) and status in DISPATCHED_STATUSES
 
 
-def inspect_dispatch_plan(output_dir: str, filename: str) -> dict:
+def inspect_dispatch_plan(output_dir: str, artifact_key: str) -> dict:
     """Read a plan into safe list and index views with validity metadata."""
     result = {
         "available": False,
@@ -203,7 +206,7 @@ def inspect_dispatch_plan(output_dir: str, filename: str) -> dict:
         "index": {},
         "duplicates": [],
     }
-    plan = read_json_file(output_dir, filename)
+    plan = read_artifact_file(output_dir, artifact_key)
     if plan is None:
         return result
 
@@ -267,9 +270,7 @@ def planner_signals(plan: dict, name: str, agent: dict) -> List[str]:
 
 def build_dispatch_manifest(output_dir: str, final_info: dict) -> dict:
     """Compare the deterministic plan with main-orchestrator adjustments."""
-    initial_info = inspect_dispatch_plan(
-        output_dir, "dispatch-plan.initial.json"
-    )
+    initial_info = inspect_dispatch_plan(output_dir, "dispatch_plan_initial")
 
     initial_available = initial_info["available"]
     final_available = final_info["available"]
@@ -529,7 +530,7 @@ def _unscoped_files(
     An EMPTY changed-file list is unmeasured too, not measured-and-zero.
     A review of zero changed files does not exist, while a run whose file
     list never reached the builder very much does: orchestration.py always
-    passes ``--changed-files`` and passes ``""`` when review-context.json
+    passes ``--changed-files`` and passes ``""`` when the review context
     carries no CSV. One rule — no list means nothing was measured — is what
     keeps that failure from publishing ``unscoped_files: []``, a clean
     coverage bill for a population nothing looked at.
@@ -548,7 +549,7 @@ def aggregate_file_review(
 ) -> Optional[Dict[str, Any]]:
     """Aggregate per-agent scope summaries into the run-level file review.
 
-    Reads schema-3 ``reviewers/*/scope-summary*.json`` sidecars, carries inline-diff
+    Reads schema-3 scope sidecars under each reviewer directory, carries inline-diff
     receipt by file, and takes each reviewer's claimed and unclaimed files
     from its finalized review document. An agent that never finalized one
     keeps every review-claimable path its summary reported visible as
@@ -597,7 +598,7 @@ def aggregate_file_review(
             continue
         for entry in entries:
             name = entry.name
-            if not name.startswith("scope-summary") or not name.endswith(".json"):
+            if not is_scope_summary_name(name):
                 continue
             try:
                 with open(entry.path, "r", encoding="utf-8") as f:
@@ -818,7 +819,7 @@ def build_assignment_manifest(
             #     so noise-filtered files can never appear here — they are
             #     reported under `file_exclusions` instead.
             #   * there — population the full `changed_files` list,
-            #     evidence the runtime `reviewers/*/scope-summary*.json` sidecars an
+            #     evidence the runtime reviewer scope sidecars an
             #     agent writes when it actually runs. Noise-filtered and
             #     domain-unmatched files DO appear there, and an agent that
             #     was dispatched but died before writing a sidecar leaves
@@ -851,10 +852,10 @@ def build_assignment_manifest(
 
 def build_dependency_refresh_manifest(output_dir: str):
     """Project request state, precheck refusal, and the canonical report."""
-    config = read_json_file(output_dir, "run-config.json") or {}
+    config = read_artifact_file(output_dir, "run_config") or {}
     requested = config.get("refresh_dependencies") is True
     report = load_dependency_refresh_report(output_dir)
-    state = read_json_file(output_dir, "pipeline-state.json") or {}
+    state = read_artifact_file(output_dir, "pipeline_state") or {}
     precheck = state.get("dependency_refresh_precheck")
     if not requested and report is None and not isinstance(precheck, dict):
         return None
@@ -895,7 +896,7 @@ def _validated_derived_markdown_outcome(outcome: Any) -> Optional[dict]:
 
     Shared by `build_reviewer_markdown_manifest` (step 8's per-reviewer
     `reviewers/<reviewer>/review.md`) and `build_findings_markdown_manifest` (steps
-    9 and 11's `review-findings.md`) — both record the exact same
+    9 and 11's ledger Markdown) — both record the exact same
     ran/written/expected/status shape in pipeline state
     (`_record_findings_markdown` in orchestration.py mirrors the shape
     the reviewer-Markdown seam already used), so one validator covers
@@ -933,7 +934,7 @@ def _validated_derived_markdown_outcome(outcome: Any) -> Optional[dict]:
 
 def build_reviewer_markdown_manifest(output_dir: str) -> Optional[dict]:
     """Project the script-owned reviewer-Markdown outcome into the manifest."""
-    state = read_json_file(output_dir, "pipeline-state.json")
+    state = read_artifact_file(output_dir, "pipeline_state")
     outcome = state.get("reviewer_markdown") if state is not None else None
     return _validated_derived_markdown_outcome(outcome)
 
@@ -942,11 +943,11 @@ def build_findings_markdown_manifest(output_dir: str) -> Optional[dict]:
     """Project the script-owned findings-Markdown outcome into the manifest.
 
     `reviewer_markdown`'s sibling: `state["findings_markdown"]` records
-    steps 9 and 11's render of `review-findings.md`
+    steps 9 and 11's render of the ledger Markdown
     (`_record_findings_markdown` in orchestration.py), in the same shape
     this shares a validator with.
     """
-    state = read_json_file(output_dir, "pipeline-state.json")
+    state = read_artifact_file(output_dir, "pipeline_state")
     outcome = state.get("findings_markdown") if state is not None else None
     return _validated_derived_markdown_outcome(outcome)
 
@@ -965,7 +966,7 @@ def build_worktree_hygiene_manifest(output_dir: str) -> Optional[dict]:
     artifact's own absent-measurement values rather than to a fabricated
     one: an unrecognizable status reads as "unknown", never as "clean".
     """
-    data = read_json_file(output_dir, "worktree-hygiene.json")
+    data = read_artifact_file(output_dir, "worktree_hygiene")
     if data is None:
         return None
 
@@ -996,7 +997,7 @@ def build_synthesis_agents_manifest(output_dir: str) -> Optional[dict]:
     """Project the reconciliator/critic lifecycle into the manifest.
 
     A DISTINCT family from the reviewer lifecycle in `manifest["agents"]`,
-    deliberately: those two agents are never in `dispatch-plan.json`, never
+    deliberately: those two agents are never in the final dispatch plan, never
     run `agent/bootstrap.py`, and never write a reviewer-directory final, so
     folding them into the reviewer projection would corrupt every count
     downstream of it (the 19/19 completion ratio, the incomplete multiset,
@@ -1014,7 +1015,7 @@ def build_synthesis_agents_manifest(output_dir: str) -> Optional[dict]:
     True: a stall is an accusation against the run, and an unreadable flag
     does not license one.
     """
-    data = read_json_file(output_dir, _SYNTHESIS_LIFECYCLE_FILENAME)
+    data = read_artifact_file(output_dir, "synthesis_agents")
     if data is None:
         return None
     schema = data.get("schema")
@@ -1105,7 +1106,7 @@ def build_usage_manifest(output_dir: str) -> Optional[dict]:
     orchestrator half is still partial, from an unresolved tool call.
     Without the flag a reader cannot tell those two runs apart.
     """
-    data = read_json_file(output_dir, "usage-snapshot.json")
+    data = read_artifact_file(output_dir, "usage_snapshot")
     if data is None:
         return None
     schema = data.get("schema")
@@ -1201,7 +1202,7 @@ def build_skipped_steps_manifest(output_dir: str) -> Optional[list]:
     logged that step. Only on a complete manifest do recorded completions
     plus recorded skips account for every step in the contract.
     """
-    state = read_json_file(output_dir, "pipeline-state.json")
+    state = read_artifact_file(output_dir, "pipeline_state")
     # The explicit key check is behaviorally redundant with the isinstance
     # gate below (an absent key reads as None, which is not a list) and is
     # kept as intent: absence and malformation are different facts that

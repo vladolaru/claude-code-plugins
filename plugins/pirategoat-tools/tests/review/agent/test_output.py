@@ -43,7 +43,7 @@ from review.review_document import (
     validate_review_document,
 )
 from review.review_markdown import render_markdown
-from review import critic_adjustments
+from review import critic_adjustments, run_paths
 from review.reviewer_lifecycle import ReviewPaths, review_paths, started_marker_path
 
 sys.path.insert(0, str(TESTS_DIR))
@@ -2478,7 +2478,9 @@ class TestMetaIsNeverFakeZero:
 
         monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
         self._stamp(
-            tmp_path / "review-reconciliator.synthesis-started",
+            run_paths.synthesis_started_marker(
+                tmp_path, _ledger.LEDGER_AGENT_NAME
+            ),
             datetime.now(timezone.utc) - timedelta(seconds=211),
         )
         builder = _ledger.FindingsLedgerBuilder("1", str(tmp_path))
@@ -2523,8 +2525,12 @@ class TestMetaIsNeverFakeZero:
         those copies from silently unmeasuring a whole class of actor."""
         import review.synthesis_lifecycle as _lifecycle
         import review.findings_ledger as _ledger
-        assert _ledger.SYNTHESIS_START_SUFFIX == _lifecycle.MARKER_SUFFIX
         assert _ledger.LEDGER_AGENT_NAME == _lifecycle.RECONCILIATOR
+        assert _lifecycle.marker_path(
+            "/out", _ledger.LEDGER_AGENT_NAME
+        ) == str(run_paths.synthesis_started_marker(
+            "/out", _ledger.LEDGER_AGENT_NAME
+        ))
         assert Path(started_marker_path("/out", "security")) == Path(
             "/out/reviewers/security/started"
         )

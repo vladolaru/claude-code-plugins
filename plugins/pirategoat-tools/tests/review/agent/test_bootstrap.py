@@ -20,6 +20,7 @@ BOOTSTRAP_SCRIPT = SCRIPTS_DIR / "review" / "agent" / "bootstrap.py"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from review.agent.output import ReviewOutputBuilder
+from review import run_paths
 from review.reviewer_lifecycle import review_paths
 
 # Import functions under test via importlib (file-based loading)
@@ -729,22 +730,28 @@ class TestLoadPrIntent:
 
 
 class TestChangePurpose:
-    """load_change_purpose() reads change-purpose.md from output directory."""
+    """load_change_purpose() reads the grouped change-purpose artifact."""
+
+    @staticmethod
+    def _path(tmp_path):
+        path = run_paths.artifact_path(tmp_path, "change_purpose")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
 
     def test_returns_none_when_missing(self, tmp_path):
         assert load_change_purpose(str(tmp_path)) is None
 
     def test_returns_none_when_empty(self, tmp_path):
-        (tmp_path / "change-purpose.md").write_text("")
+        self._path(tmp_path).write_text("")
         assert load_change_purpose(str(tmp_path)) is None
 
     def test_returns_content_when_present(self, tmp_path):
-        (tmp_path / "change-purpose.md").write_text("Adds retry logic to payments.")
+        self._path(tmp_path).write_text("Adds retry logic to payments.")
         result = load_change_purpose(str(tmp_path))
         assert result == "Adds retry logic to payments."
 
     def test_strips_whitespace(self, tmp_path):
-        (tmp_path / "change-purpose.md").write_text("  Content with spaces.  \n\n")
+        self._path(tmp_path).write_text("  Content with spaces.  \n\n")
         result = load_change_purpose(str(tmp_path))
         assert result == "Content with spaces."
 

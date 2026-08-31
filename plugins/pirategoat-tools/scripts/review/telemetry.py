@@ -36,6 +36,7 @@ try:
     from .critic_adjustments import FINDINGS_READ_OK, read_findings_file
     from .reviewer_lifecycle import review_paths, started_marker_path
     from .reviewer_names import derive_reviewer_name
+    from .run_paths import artifact_path
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
@@ -55,12 +56,13 @@ except ImportError:
     from review.critic_adjustments import FINDINGS_READ_OK, read_findings_file
     from review.reviewer_lifecycle import review_paths, started_marker_path
     from review.reviewer_names import derive_reviewer_name
+    from review.run_paths import artifact_path
 
 from git_paths import normalize_repo_paths
 
 
 LOG_DIR = os.path.expanduser("~/.pirategoat-tools/logs/reviews")
-MARKER_FILE = ".telemetry-log-path"
+MARKER_FILE = artifact_path("", "telemetry_log_path").name
 # Schema 3 makes the reviewed-files projection mandatory and is
 # consumed in lockstep by review_metrics/contracts.py.
 EVENT_SCHEMA = 3
@@ -220,7 +222,7 @@ class ReviewTelemetry:
     def log_path(self) -> Optional[str]:
         """Current log file path. Reads marker file if needed."""
         if self._log_path is None:
-            marker = os.path.join(self.output_dir, MARKER_FILE)
+            marker = artifact_path(self.output_dir, "telemetry_log_path")
             if os.path.isfile(marker):
                 with open(marker) as f:
                     self._log_path = f.read().strip()
@@ -262,7 +264,8 @@ class ReviewTelemetry:
         self._log_path = self._allocate_log_path(prefix, run_num, timestamp)
 
         # Write marker so subsequent invocations can find the log
-        marker = os.path.join(self.output_dir, MARKER_FILE)
+        marker = artifact_path(self.output_dir, "telemetry_log_path")
+        marker.parent.mkdir(exist_ok=True)
         with open(marker, "w") as f:
             f.write(self._log_path)
 
@@ -557,9 +560,11 @@ class ReviewTelemetry:
             pass
         return events
 
-    def _read_json_file(self, name: str) -> Optional[dict]:
+    def _read_json_file(self, artifact_key: str) -> Optional[dict]:
         """Read an output JSON object without letting failures escape."""
-        return manifest_sections.read_json_file(self.output_dir, name)
+        return manifest_sections.read_artifact_file(
+            self.output_dir, artifact_key
+        )
 
     @staticmethod
     def _select_scalar_fields(event: dict, fields: tuple[str, ...]) -> dict:
@@ -701,7 +706,7 @@ class ReviewTelemetry:
         git = pipeline.get("git", {})
         git = dict(git) if isinstance(git, dict) else {}
 
-        context = self._read_json_file("review-context.json")
+        context = self._read_json_file("review_context")
         resolved_git = context.get("git", {}) if isinstance(context, dict) else {}
         if isinstance(resolved_git, dict):
             value = resolved_git.get("git_range")
@@ -731,7 +736,7 @@ class ReviewTelemetry:
         )
         incomplete = _incomplete_agent_executions(started, completed)
 
-        pipeline_result = self._read_json_file("pipeline-result.json") or {}
+        pipeline_result = self._read_json_file("pipeline_result") or {}
         settled = status == "complete"
         findings = None
         if settled:
@@ -779,7 +784,7 @@ class ReviewTelemetry:
             },
         }
         final_info = manifest_sections.inspect_dispatch_plan(
-            self.output_dir, "dispatch-plan.json"
+            self.output_dir, "dispatch_plan"
         )
         manifest["dispatch"] = manifest_sections.build_dispatch_manifest(
             self.output_dir, final_info
@@ -1064,8 +1069,8 @@ class ReviewTelemetry:
         return files
 
     def _extract_context(self) -> Optional[dict]:
-        """Extract key fields from review-context.json."""
-        path = os.path.join(self.output_dir, "review-context.json")
+        """Extract key fields from the canonical review context."""
+        path = artifact_path(self.output_dir, "review_context")
         if not os.path.isfile(path):
             return None
         try:
@@ -1100,7 +1105,7 @@ class ReviewTelemetry:
 
     def _extract_dispatch(self) -> Optional[dict]:
         """Extract dispatch plan summary."""
-        path = os.path.join(self.output_dir, "dispatch-plan.json")
+        path = artifact_path(self.output_dir, "dispatch_plan")
         if not os.path.isfile(path):
             return None
         try:
@@ -1136,12 +1141,12 @@ class ReviewTelemetry:
         consumer of these files. Scanning the run root for prefixed review JSON
         made the filename the identity, so a stray artifact from an earlier
         run in a reused output directory counted as a completed agent. That
-        scan also carried a by-name exclusion for `review-findings.json`
+        scan also carried a by-name exclusion for the findings ledger
         that never fired — the ledger used a different name — a guard against
         a collision the former suffix rule already prevented.
         """
         final_info = manifest_sections.inspect_dispatch_plan(
-            self.output_dir, "dispatch-plan.json"
+            self.output_dir, "dispatch_plan"
         )
         results = {}
         for name, agent in sorted(final_info["index"].items()):
@@ -1167,7 +1172,7 @@ class ReviewTelemetry:
 
     def _extract_findings(self) -> Optional[dict]:
         """Extract reconciled findings summary."""
-        path = os.path.join(self.output_dir, "review-findings.json")
+        path = artifact_path(self.output_dir, "review_findings_json")
         read = read_findings_file(path)
         if read.status != FINDINGS_READ_OK:
             return None

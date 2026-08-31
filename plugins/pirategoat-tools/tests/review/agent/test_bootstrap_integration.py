@@ -22,6 +22,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 from review.agent.output import ReviewOutputBuilder
 from review.agent.scope import format_text_output
+from review import run_paths
 from review.reviewer_lifecycle import (
     review_paths,
     scope_summary_path,
@@ -38,6 +39,12 @@ build_output = _mod.build_output
 derive_reviewer_name = _mod.derive_reviewer_name
 
 ALL_AGENTS = sorted(AGENT_CONFIG.keys())
+
+
+def _write_telemetry_marker(output_dir, telemetry_log):
+    marker = run_paths.artifact_path(output_dir, "telemetry_log_path")
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(str(telemetry_log))
 
 
 def test_reviewer_protocol_has_no_tmp_pr_review_fallback():
@@ -189,7 +196,7 @@ class TestCategoryRepresentatives:
             "event": "pipeline_start",
             "pipeline": {"repo_path": _get_fixture_repo()},
         }) + "\n")
-        (tmp_path / ".telemetry-log-path").write_text(str(telemetry_log))
+        _write_telemetry_marker(tmp_path, telemetry_log)
 
         result = run_bootstrap(
             "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
@@ -341,7 +348,7 @@ class TestCategoryRepresentatives:
             "event": "pipeline_start",
             "pipeline": {"repo_path": _get_fixture_repo()},
         }) + "\n")
-        (tmp_path / ".telemetry-log-path").write_text(str(telemetry_log))
+        _write_telemetry_marker(tmp_path, telemetry_log)
         ref = tmp_path / "renewals.md"
         ref.write_text("Review renewals logic end to end.")
 
@@ -375,7 +382,7 @@ class TestCategoryRepresentatives:
             "event": "pipeline_start",
             "pipeline": {"repo_path": _get_fixture_repo()},
         }) + "\n")
-        (tmp_path / ".telemetry-log-path").write_text(str(telemetry_log))
+        _write_telemetry_marker(tmp_path, telemetry_log)
 
         result = run_bootstrap(
             "--agent", "performance-reviewer",

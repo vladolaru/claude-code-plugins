@@ -111,8 +111,10 @@ uncommitted work.
 ## Step 3: Author Your Findings, Then Save Through the Script
 
 **Raw writes to the output directory are forbidden.** You do not write
-`decision-critic-findings.md`, `decision-critic-adjustments.json`, or
-`decision-critic-verdict.json` directly with the `Write` tool — every one of
+`synthesis/decision-critic-findings.md`,
+`synthesis/decision-critic-adjustments.json`, or
+`synthesis/decision-critic-verdict.json` directly with the `Write` tool — every
+one of
 those artifacts is produced by one validating, atomic save command, and a
 hand-written file bypasses the validation that command performs. Author your
 content in `$TMPDIR` first, then hand it to the script.
@@ -208,8 +210,10 @@ non-empty adjustments batch.
 Checks support only `correct` and `remove`. A check correction may change one or more of `question`, `method`, and `result`; it may never change `id` or `source_reviewers`. A check removal moves the complete entry into `checks_removed_by_critic`. There is no check `add`, `promote`, `demote`, or `rescope`, and no check severity field.
 
 **3c. Save through the script.** This is the only write path into your own
-`decision-critic-*` artifacts. Never write `decision-critic-findings.md`,
-`decision-critic-adjustments.json`, or `decision-critic-verdict.json` yourself,
+`synthesis/decision-critic-*` artifacts. Never write
+`synthesis/decision-critic-findings.md`,
+`synthesis/decision-critic-adjustments.json`, or
+`synthesis/decision-critic-verdict.json` yourself,
 and never ask the caller to hand-edit `review-findings.json`; the orchestrator
 adjudicates your proposal separately, and `adjudicate` records each entry's
 outcome in the ledger.
@@ -240,6 +244,6 @@ The command validates everything before writing anything: an unrecognized verdic
 DECISION CRITIC COMPLETE
 Verdict: <STAND | REVISE | ESCALATE>
 Key insight: <one-line summary>
-Findings: <Output Directory>/decision-critic-findings.md
-Adjustments: <Output Directory>/decision-critic-adjustments.json
+Findings: <Output Directory>/synthesis/decision-critic-findings.md
+Adjustments: <Output Directory>/synthesis/decision-critic-adjustments.json
 ```

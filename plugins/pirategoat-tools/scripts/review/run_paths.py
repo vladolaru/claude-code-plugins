@@ -116,12 +116,42 @@ def reviewer_dir(run_dir, reviewer: str) -> Path:
     return Path(run_dir) / REVIEWERS_SUBDIR / reviewer
 
 
-def pipeline_path(run_dir, name: str) -> Path:
-    return Path(run_dir) / PIPELINE_SUBDIR / name
+ARTIFACTS = {
+    # key -> (subdir or "" for root, filename). The ONLY place these
+    # filenames exist; every consumer resolves through artifact_path.
+    "run_config": ("", "run-config.json"),
+    "review_context": ("", "review-context.json"),
+    "pipeline_result": ("", "pipeline-result.json"),
+    "review_report": ("", "review-report.md"),
+    "review_record": ("", "review-record.md"),
+    "review_findings_json": ("", "review-findings.json"),
+    "review_findings_md": ("", "review-findings.md"),
+    "pipeline_state": (PIPELINE_SUBDIR, "pipeline-state.json"),
+    "review_intake": (PIPELINE_SUBDIR, "review-intake.json"),
+    "dispatch_plan": (PIPELINE_SUBDIR, "dispatch-plan.json"),
+    "dispatch_plan_initial": (PIPELINE_SUBDIR, "dispatch-plan.initial.json"),
+    "change_purpose": (PIPELINE_SUBDIR, "change-purpose.md"),
+    "dependency_refresh": (PIPELINE_SUBDIR, "dependency-refresh.json"),
+    "synthesis_agents": (PIPELINE_SUBDIR, "synthesis-agents.json"),
+    "usage_snapshot": (PIPELINE_SUBDIR, "usage-snapshot.json"),
+    "worktree_hygiene": (PIPELINE_SUBDIR, "worktree-hygiene.json"),
+    "telemetry_log_path": (PIPELINE_SUBDIR, ".telemetry-log-path"),
+    "worktree_baseline": (PIPELINE_SUBDIR, ".worktree-baseline.json"),
+    "reconciliation_context": (SYNTHESIS_SUBDIR, "reconciliation-context.json"),
+    "critic_adjustments": (SYNTHESIS_SUBDIR, "decision-critic-adjustments.json"),
+    "critic_findings": (SYNTHESIS_SUBDIR, "decision-critic-findings.md"),
+    "critic_verdict": (SYNTHESIS_SUBDIR, "decision-critic-verdict.json"),
+}
 
 
-def synthesis_path(run_dir, name: str) -> Path:
-    return Path(run_dir) / SYNTHESIS_SUBDIR / name
+def artifact_path(run_dir, key: str) -> Path:
+    subdir, name = ARTIFACTS[key]
+    base = Path(run_dir) / subdir if subdir else Path(run_dir)
+    return base / name
+
+
+def synthesis_started_marker(run_dir, agent: str) -> Path:
+    return Path(run_dir) / SYNTHESIS_SUBDIR / f"{agent}.synthesis-started"
 
 
 def scratch_dir(run_dir) -> Path:
@@ -132,7 +162,7 @@ def _cmd_allocate(args) -> int:
     target = target_dir(args.kind, args.repo_root, args.target)
     run_dir = allocate_run_dir(target)
     # The run dir is always freshly created — a directory is one run.
-    (run_dir / "run-config.json").write_text(
+    artifact_path(run_dir, "run_config").write_text(
         json.dumps({"target_dir": str(target)}, indent=2) + "\n"
     )
     print(run_dir)

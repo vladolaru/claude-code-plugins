@@ -106,7 +106,7 @@ class TestIncrementalAncestryValidation:
     def test_valid_ancestor_used_directly(self, mod, tmp_path):
         """When last_reviewed_sha IS an ancestor, use it as merge_base."""
         state = {"last_reviewed_sha": "abc123valid"}
-        (tmp_path / ".review-state.json").write_text(json.dumps(state))
+        (tmp_path / ".branch-review-baseline.json").write_text(json.dumps(state))
 
         def mock_run_cmd(cmd, cwd=None):
             cmd_str = " ".join(cmd)
@@ -119,14 +119,17 @@ class TestIncrementalAncestryValidation:
         ctx = {"output": {"directory": str(tmp_path)}}
         from unittest.mock import patch
         with patch.object(mod, '_run_cmd', side_effect=mock_run_cmd):
-            mod._fill_git_context(ctx, branch=True, incremental=True)
+            mod._fill_git_context(
+                ctx, branch=True, incremental=True,
+                config={"target_dir": str(tmp_path)},
+            )
 
         assert ctx["git"]["merge_base"] == "abc123valid"
 
     def test_invalid_ancestor_falls_back_to_full_range(self, mod, tmp_path):
         """When last_reviewed_sha is NOT an ancestor (e.g., after rebase), fall back."""
         state = {"last_reviewed_sha": "deadbeefdeadbeef"}
-        (tmp_path / ".review-state.json").write_text(json.dumps(state))
+        (tmp_path / ".branch-review-baseline.json").write_text(json.dumps(state))
 
         def mock_run_cmd(cmd, cwd=None):
             cmd_str = " ".join(cmd)
@@ -143,7 +146,10 @@ class TestIncrementalAncestryValidation:
         ctx = {"output": {"directory": str(tmp_path)}}
         from unittest.mock import patch
         with patch.object(mod, '_run_cmd', side_effect=mock_run_cmd):
-            mod._fill_git_context(ctx, branch=True, incremental=True)
+            mod._fill_git_context(
+                ctx, branch=True, incremental=True,
+                config={"target_dir": str(tmp_path)},
+            )
 
         assert ctx["git"]["merge_base"] != "deadbeefdeadbeef", (
             "Invalid ancestor SHA should NOT be used as merge_base"
@@ -165,7 +171,10 @@ class TestIncrementalAncestryValidation:
         ctx = {"output": {"directory": str(tmp_path)}}
         from unittest.mock import patch
         with patch.object(mod, '_run_cmd', side_effect=mock_run_cmd):
-            mod._fill_git_context(ctx, branch=True, incremental=True)
+            mod._fill_git_context(
+                ctx, branch=True, incremental=True,
+                config={"target_dir": str(tmp_path)},
+            )
 
         assert ctx["git"]["merge_base"] == "fullrange123"
 

@@ -7,7 +7,7 @@ logs `agent_complete`, and `agents_status.py` polls the pair. The two
 SYNTHESIS agents — the review-reconciliator (step 8) and the decision
 critic (step 10) — sit entirely outside that machinery: neither runs
 bootstrap, neither writes a reviewer-directory final, and neither is ever
-in `dispatch-plan.json`, which is the only list `agents_status.py`
+in the dispatch plan, which is the only list `agents_status.py`
 iterates. So the critic, the longest single phase of an audited
 2026-08-19 run at ~11 minutes, had no duration anywhere in the manifest,
 and a hung synthesis agent blocked the orchestrator's foreground Task
@@ -43,7 +43,7 @@ orchestrator's foreground, so nothing here can interrupt one. At
 finalize, a marker with no completion artifact records `stalled: true`.
 
 **Availability, not zero.** A run older than this feature writes no
-marker and no `synthesis-agents.json`, so the manifest section is absent
+marker and no synthesis lifecycle artifact, so the manifest section is absent
 and its family reads "missing". A never-measured phase must never
 project as a zero-duration one.
 
@@ -62,6 +62,7 @@ from datetime import datetime, timezone
 try:
     from . import critic_adjustments
     from .atomic_io import atomic_write_json
+    from .run_paths import artifact_path, synthesis_started_marker
 except ImportError:  # pragma: no cover - direct-path import fallback
     import sys
     from pathlib import Path
@@ -71,9 +72,10 @@ except ImportError:  # pragma: no cover - direct-path import fallback
         sys.path.insert(0, _scripts_parent)
     from review import critic_adjustments
     from review.atomic_io import atomic_write_json
+    from review.run_paths import artifact_path, synthesis_started_marker
 
 
-LIFECYCLE_FILENAME = "synthesis-agents.json"
+LIFECYCLE_FILENAME = artifact_path("", "synthesis_agents").name
 LIFECYCLE_SCHEMA = 1
 
 # The synthesis dispatch marker's suffix and its separation from reviewer markers.
@@ -98,7 +100,7 @@ LIFECYCLE_SCHEMA = 1
 # marker_path(). A writer that spelled its own suffix would produce a
 # marker its own reader could not find, which reads downstream as an
 # agent that never started.
-MARKER_SUFFIX = ".synthesis-started"
+MARKER_SUFFIX = synthesis_started_marker("", "").name
 
 # The row shape, declared ONCE. Three modules write it — this producer,
 # manifest_sections.build_synthesis_agents_manifest(), and the metrics
@@ -123,16 +125,16 @@ DECISION_CRITIC = "decision-reviewer"
 # The completion artifact is the one file the dispatching step's handoff
 # gate makes mandatory, NOT the richest thing the agent might write:
 #
-# - review-findings.json is the reconciliator's ONLY artifact (step 8's
+# - the findings ledger is the reconciliator's ONLY artifact (step 8's
 #   briefing says so in as many words, and its handoff verifies it).
-# - decision-critic-verdict.json is required by the branch that dispatches
+# - the critic verdict marker is required by the branch that dispatches
 #   the critic. Its mtime remains the completion signal, while the verdict
 #   recorded in the lifecycle row is accepted only from a complete,
 #   schema-versioned, proposal-digest-bound snapshot. The quick-skip branch
 #   commits SKIPPED but dispatches no critic and writes no lifecycle marker.
 SYNTHESIS_AGENTS = (
-    (RECONCILIATOR, "review-findings.json"),
-    (DECISION_CRITIC, "decision-critic-verdict.json"),
+    (RECONCILIATOR, "review_findings_json"),
+    (DECISION_CRITIC, "critic_verdict"),
 )
 
 
@@ -142,7 +144,7 @@ def marker_path(output_dir, name):
     The single place MARKER_SUFFIX is applied, so the writer and the
     reader cannot disagree about what file they are talking about.
     """
-    return os.path.join(output_dir, f"{name}{MARKER_SUFFIX}")
+    return str(synthesis_started_marker(output_dir, name))
 
 
 def mark_dispatched(output_dir, name, *, now=None):
@@ -159,7 +161,9 @@ def mark_dispatched(output_dir, name, *, now=None):
     """
     stamp = (now or datetime.now(timezone.utc)).isoformat()
     try:
-        with open(marker_path(output_dir, name), "w") as handle:
+        path = synthesis_started_marker(output_dir, name)
+        path.parent.mkdir(exist_ok=True)
+        with open(path, "w") as handle:
             handle.write(stamp)
     except OSError:
         return None
@@ -187,7 +191,7 @@ def _read_marker(output_dir, name):
     return True, parsed
 
 
-def _artifact_verdict(path):
+def _artifact_verdict(output_dir, artifact_key, path):
     """The completion artifact's own `verdict` string, or None.
 
     Read at observation because it changes what a duration means. For the
@@ -200,10 +204,8 @@ def _artifact_verdict(path):
     this one file, and the only one that would accept a document the
     pipeline itself rejects.
     """
-    if os.path.basename(path) == critic_adjustments.CRITIC_VERDICT_FILENAME:
-        return critic_adjustments.read_critic_verdict(
-            os.path.dirname(path) or "."
-        )
+    if artifact_key == "critic_verdict":
+        return critic_adjustments.read_critic_verdict(output_dir)
     read = critic_adjustments.read_findings_file(path)
     if read.status != critic_adjustments.FINDINGS_READ_OK:
         return None
@@ -247,7 +249,7 @@ def _prior_entries(output_dir):
     still-running agent is stale by definition, and carrying it would
     hide a stall that finalize is about to adjudicate.
     """
-    path = os.path.join(output_dir, LIFECYCLE_FILENAME)
+    path = artifact_path(output_dir, "synthesis_agents")
     try:
         with open(path) as handle:
             data = json.load(handle)
@@ -291,7 +293,7 @@ def observe(output_dir, *, finalize=False):
 
     An already-completed entry from the current dispatch is preserved
     verbatim. Re-deriving it is not merely wasted work: finalize writes
-    review-findings.json, so a later reading of that artifact's mtime would
+    the findings ledger, so a later reading of that artifact's mtime would
     report the reconciliator as having finished at finalize time. A newer
     dispatch marker makes the prior entry stale instead of carrying it into
     the replacement attempt.
@@ -301,7 +303,7 @@ def observe(output_dir, *, finalize=False):
     prior = _prior_entries(output_dir)
 
     entries = []
-    for name, artifact_name in SYNTHESIS_AGENTS:
+    for name, artifact_key in SYNTHESIS_AGENTS:
         dispatched, started_at = _read_marker(output_dir, name)
         if not dispatched:
             # No marker: this agent was never dispatched by a build that
@@ -313,8 +315,8 @@ def observe(output_dir, *, finalize=False):
         if carried is not None and _completed_after(carried, started_at):
             entries.append(carried)
             continue
-        artifact_path = os.path.join(output_dir, artifact_name)
-        completed_at = _artifact_mtime(artifact_path)
+        completion_path = artifact_path(output_dir, artifact_key)
+        completed_at = _artifact_mtime(completion_path)
         if (
             completed_at is not None
             and started_at is not None
@@ -331,7 +333,7 @@ def observe(output_dir, *, finalize=False):
             # from an artifact this dispatch can claim; a discarded one
             # would attach a stale conclusion to a live dispatch.
             "verdict": (
-                _artifact_verdict(artifact_path)
+                _artifact_verdict(output_dir, artifact_key, completion_path)
                 if completed_at is not None else None
             ),
             "started_at": started_at.isoformat() if started_at else None,
@@ -351,9 +353,9 @@ def observe(output_dir, *, finalize=False):
         "agents": entries,
     }
     try:
-        atomic_write_json(
-            os.path.join(output_dir, LIFECYCLE_FILENAME), payload
-        )
+        lifecycle_path = artifact_path(output_dir, "synthesis_agents")
+        lifecycle_path.parent.mkdir(exist_ok=True)
+        atomic_write_json(lifecycle_path, payload)
     except OSError:
         return None
     return payload

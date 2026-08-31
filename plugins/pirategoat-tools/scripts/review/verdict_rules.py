@@ -41,11 +41,11 @@ SEVERITY_RANK = {
 # The three verdict layers, narrowest first.
 #
 # LEDGER_VERDICTS is what `verdict_for_counts` computes and what a
-# reconciled `review-findings.json` may carry. REVIEW_VERDICTS adds the one
+# reconciled findings ledger may carry. REVIEW_VERDICTS adds the one
 # verdict no ladder produces: a reviewer with nothing in scope abstains,
 # and abstention is not a threshold outcome. PIPELINE_VERDICTS is the
 # uppercase layer a reviewer echoes in its return signal; `publish_verdict`
-# maps onto the three of them `pipeline-result.json` can carry, and BLOCK
+# maps onto the three of them the terminal result can carry, and BLOCK
 # is in the tuple for the return signal alone.
 LEDGER_VERDICTS = tuple(VERDICT_RANK)
 REVIEW_VERDICTS = LEDGER_VERDICTS + ("not_applicable",)
@@ -116,7 +116,7 @@ def verdict_for_counts(counts) -> str:
     Returns one of `block`, `request_changes`, `comment`, `approve` — the
     lowercase per-review vocabulary of `schemas/review-output.ts`, NOT the
     outer-pipeline `APPROVE`/`COMMENT`/`REQUEST_CHANGES` values
-    `pipeline-result.json` publishes. `orchestration.py` owns the mapping
+    the terminal pipeline result publishes. `orchestration.py` owns the mapping
     between the two layers.
     """
     critical = counts.get("critical", 0)

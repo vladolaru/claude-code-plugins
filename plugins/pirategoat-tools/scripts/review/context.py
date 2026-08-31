@@ -3,10 +3,10 @@
 Gather Review Context — unified Ring 1 context for all review entry points.
 
 Supports --pr-number (PR review) and --branch (branch review, with optional
---incremental). Gap-filling: reads whatever review-context.json already exists,
-fills in what's missing, writes the complete file.
+--incremental). Gap-filling: reads whatever review context already exists,
+fills in what is missing, and writes the complete artifact.
 
-Output: review-context.json in --output-dir with snake_case keys.
+Output: the review-context boundary artifact with snake_case keys.
 """
 
 import argparse
@@ -32,6 +32,7 @@ except ImportError:
     _HOSTS_CHAIN = None
 
 from review.orchestration import baseline_path
+from review.run_paths import artifact_path
 
 # Repo-contributed review-config reader (best-effort, same rationale as the host
 # chain above). Loaded from file so it works whether context.py runs as a script
@@ -141,7 +142,7 @@ def resolve_gh_cmd():
 def _read_run_config(output_dir):
     """Read the run config used to resolve target-level review state."""
     try:
-        with open(os.path.join(output_dir, "run-config.json")) as f:
+        with open(artifact_path(output_dir, "run_config")) as f:
             config = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return {}
@@ -401,7 +402,7 @@ def load_and_fill(ctx_path, pr_number=None, gh_cmd=None, branch=False,
     # Git context — recompute when explicit inputs are provided.
     # Skip recomputation when pre-computed context exists: merge_base is
     # present and no explicit git_range override. Caller-agnostic (rule 28):
-    # any caller that writes review-context.json with a valid merge_base
+    # any caller that writes review context with a valid merge_base
     # gets this optimization — no identity detection.
     git = ctx.setdefault("git", {})
     precomputed = (
@@ -562,7 +563,7 @@ def _fill_host_context(ctx, repo_path):
 
     Failure is soft: if the hosts package cannot be imported at module
     load, _HOSTS_CHAIN is None and we record host_context=None. Existing
-    values are overwritten because review-context.json may be reused across
+    values are overwritten because review context may be reused across
     runs and stale host paths are worse than no host context.
     """
     if _HOSTS_CHAIN is None:
@@ -609,14 +610,14 @@ def main():
     parser.add_argument("--git-range", type=str,
                         help="Explicit git range (e.g. abc123..HEAD)")
     parser.add_argument("--output-dir", type=str, required=True,
-                        help="Output directory for review-context.json")
+                        help="Review run output directory")
     parser.add_argument("--repo-path", type=str, default=None,
                         help="Path to the repo under review (for host-context "
                              "discovery). Defaults to the git root of the "
                              "current working directory when available.")
     parser.add_argument("--refresh-host-context", action="store_true",
                         help="Only re-run host-context discovery against the "
-                             "existing review-context.json and write it back. "
+                             "existing review context and write it back. "
                              "Used after a trusted-branch dependency refresh "
                              "so reviewers see the fresh installed state.")
 
@@ -627,7 +628,7 @@ def main():
         sys.exit(1)
 
     os.makedirs(args.output_dir, exist_ok=True)
-    ctx_path = os.path.join(args.output_dir, "review-context.json")
+    ctx_path = artifact_path(args.output_dir, "review_context")
 
     if args.refresh_host_context:
         # This runs mid-review after dependency refresh and updates only host
@@ -638,13 +639,13 @@ def main():
         except (FileNotFoundError, json.JSONDecodeError, OSError, UnicodeError):
             print(
                 "ERROR: --refresh-host-context requires an existing readable "
-                "review-context.json; refusing to overwrite run state.",
+                "review context; refusing to overwrite run state.",
                 file=sys.stderr,
             )
             sys.exit(1)
         if not isinstance(ctx, dict):
             print(
-                "ERROR: --refresh-host-context requires review-context.json "
+                "ERROR: --refresh-host-context requires review context "
                 "to contain a JSON object; refusing to overwrite run state.",
                 file=sys.stderr,
             )

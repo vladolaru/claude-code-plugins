@@ -44,7 +44,14 @@ from review.critic_adjustments import (
 from review import critic_adjustments as critic_adjustments_module
 from review import orchestration as orchestration_mod
 from review.orchestration import _orchestrate_step_11
+from review.run_paths import artifact_path
 from review.verdict_rules import derive_review_state
+
+
+def _artifact(output_dir, key):
+    path = artifact_path(output_dir, key)
+    path.parent.mkdir(exist_ok=True)
+    return path
 
 
 def _write_findings(output_dir, findings, **extra):
@@ -127,11 +134,11 @@ def _publish_raw_proposal(output_dir, document, verdict="REVISE"):
     Invalid-document tests need the production validator — rather than a
     digest mismatch — to be what rejects them.
     """
-    (Path(output_dir) / "decision-critic-adjustments.json").write_text(
+    _artifact(output_dir, "critic_adjustments").write_text(
         json.dumps(document)
     )
     atomic_write_json(
-        str(Path(output_dir) / "decision-critic-verdict.json"),
+        str(_artifact(output_dir, "critic_verdict")),
         {
             "schema": 2,
             "verdict": verdict,
@@ -199,6 +206,17 @@ def _check(id_, *, result="No matching callers."):
         "result": result,
         "source_reviewers": ["ecosystem-integration"],
     }
+
+
+class TestCriticArtifactLayout:
+    def test_proposal_and_verdict_publish_under_synthesis(self, tmp_path):
+        _publish_verdict(tmp_path, "STAND")
+
+        synthesis = tmp_path / "synthesis"
+        assert (synthesis / "decision-critic-adjustments.json").is_file()
+        assert (synthesis / "decision-critic-verdict.json").is_file()
+        assert not (tmp_path / "decision-critic-adjustments.json").exists()
+        assert not (tmp_path / "decision-critic-verdict.json").exists()
 
 
 class TestCanonicalFindingsReader:
@@ -410,8 +428,8 @@ class TestAdjudicateWritesTheLedgerOnce:
                         "description": "d", "recommendation": "r"},
              "rationale": "r3"},
         ])
-        proposal_before = (
-            tmp_path / "decision-critic-adjustments.json"
+        proposal_before = _artifact(
+            tmp_path, "critic_adjustments"
         ).read_bytes()
 
         result = adjudicate(str(tmp_path), {
@@ -427,8 +445,8 @@ class TestAdjudicateWritesTheLedgerOnce:
         assert result["counts"] == {
             "verified": 1, "refuted": 1, "not_checked": 1,
         }
-        assert (
-            tmp_path / "decision-critic-adjustments.json"
+        assert _artifact(
+            tmp_path, "critic_adjustments"
         ).read_bytes() == proposal_before, "the proposal is never rewritten"
         ledger = _ledger(tmp_path)
         assert [r["outcome"] for r in ledger[APPLIED_IDS_KEY]] == [
@@ -479,7 +497,7 @@ class TestAdjudicateWritesTheLedgerOnce:
             {"action": "demote", "target": {"kind": "finding", "id": "f1"},
              "fields": {"severity": "low"}, "rationale": "r"},
         ])
-        path = tmp_path / "decision-critic-adjustments.json"
+        path = _artifact(tmp_path, "critic_adjustments")
         proposal = json.loads(path.read_text())
         proposal["adjustments"][0]["fields"]["severity"] = "info"
         path.write_text(json.dumps(proposal))
@@ -1088,7 +1106,7 @@ class TestAdjustmentsSchemaValidation:
         missing or invalid schema."""
         _write_findings(tmp_path, [_finding("f1", "low")])
         _publish_verdict(tmp_path, "REVISE")
-        (tmp_path / "decision-critic-adjustments.json").write_text(
+        _artifact(tmp_path, "critic_adjustments").write_text(
             json.dumps(shape)
         )
         with pytest.raises(
@@ -1216,21 +1234,21 @@ class TestReadCriticVerdict:
         assert read_critic_verdict(str(tmp_path)) is None
 
     def test_malformed_json_returns_none(self, tmp_path):
-        (tmp_path / "decision-critic-verdict.json").write_text("{not json")
+        _artifact(tmp_path, "critic_verdict").write_text("{not json")
         assert read_critic_verdict(str(tmp_path)) is None
 
     def test_non_object_json_returns_none(self, tmp_path):
-        (tmp_path / "decision-critic-verdict.json").write_text('["REVISE"]')
+        _artifact(tmp_path, "critic_verdict").write_text('["REVISE"]')
         assert read_critic_verdict(str(tmp_path)) is None
 
     def test_non_string_verdict_field_returns_none(self, tmp_path):
-        (tmp_path / "decision-critic-verdict.json").write_text(
+        _artifact(tmp_path, "critic_verdict").write_text(
             json.dumps({"verdict": 1})
         )
         assert read_critic_verdict(str(tmp_path)) is None
 
     def test_missing_verdict_key_returns_none(self, tmp_path):
-        (tmp_path / "decision-critic-verdict.json").write_text(
+        _artifact(tmp_path, "critic_verdict").write_text(
             json.dumps({"reason": "no verdict field at all"})
         )
         assert read_critic_verdict(str(tmp_path)) is None
@@ -1265,7 +1283,7 @@ class TestReadCriticVerdict:
         })
         proposal["adjustments"][0]["outcome"] = "verified"
         _publish_raw_proposal(tmp_path, proposal)
-        adj_path = tmp_path / "decision-critic-adjustments.json"
+        adj_path = _artifact(tmp_path, "critic_adjustments")
         findings_path = tmp_path / "review-findings.json"
         before = (adj_path.read_bytes(), findings_path.read_bytes())
 
@@ -1499,7 +1517,7 @@ class TestCriticAbsenceHonesty:
         """Artifact-INDEPENDENT: a file exists, but no usable verdict came
         out of it, which is the same lost stress test."""
         self._seed(tmp_path, dispatched=True)
-        (tmp_path / "decision-critic-verdict.json").write_text("{not json")
+        _artifact(tmp_path, "critic_verdict").write_text("{not json")
         assert self._NOTE in self._finalize(tmp_path)["degradation_notes"]
 
 
@@ -1673,7 +1691,7 @@ class TestStepElevenReportsUnadjudicatedProposal:
             "action": "promote", "target": {"kind": "finding", "id": "f1"},
             "fields": {"severity": "critical"}, "rationale": "r",
         }])
-        (tmp_path / "decision-critic-adjustments.json").write_text("{not json")
+        _artifact(tmp_path, "critic_adjustments").write_text("{not json")
         synthesis_lifecycle.mark_dispatched(
             str(tmp_path), synthesis_lifecycle.DECISION_CRITIC
         )
@@ -2410,7 +2428,7 @@ class TestOutcomeRecordedInTheLedger:
     def test_the_record_still_carries_the_adjustment_id(self, tmp_path):
         data = self._adjudicate(tmp_path)
         adjustments = json.loads(
-            (tmp_path / "decision-critic-adjustments.json").read_text()
+            _artifact(tmp_path, "critic_adjustments").read_text()
         )
         assert data[APPLIED_IDS_KEY][0]["adjustment_id"] == (
             adjustments["adjustments"][0]["adjustment_id"]
@@ -2893,7 +2911,7 @@ class TestSchemaTwoTargetUnion:
             tmp_path, {"schema": 2, "adjustments": [entry]}
         )
         paths = (
-            tmp_path / "decision-critic-adjustments.json",
+            _artifact(tmp_path, "critic_adjustments"),
             tmp_path / "review-findings.json",
         )
         before = tuple(path.read_bytes() for path in paths)
@@ -3194,7 +3212,7 @@ class TestSchemaTwoTargetUnion:
             "remove", kind="check", id_="c9", fields={}
         )])
         paths = (
-            tmp_path / "decision-critic-adjustments.json",
+            _artifact(tmp_path, "critic_adjustments"),
             tmp_path / "review-findings.json",
         )
         before = tuple(path.read_bytes() for path in paths)
@@ -3422,7 +3440,7 @@ class TestAdjudicationRequest:
 
     def test_adjudication_derives_the_unchecked_complement(self, tmp_path):
         ids = self._seed(tmp_path)
-        before = (tmp_path / "decision-critic-adjustments.json").read_bytes()
+        before = _artifact(tmp_path, "critic_adjustments").read_bytes()
 
         result = _adjudicate(
             tmp_path, ids,
@@ -3435,7 +3453,7 @@ class TestAdjudicationRequest:
             "verified": 1, "refuted": 1, "not_checked": 1,
         }
         assert (
-            tmp_path / "decision-critic-adjustments.json"
+            _artifact(tmp_path, "critic_adjustments")
         ).read_bytes() == before
         ledger = _ledger(tmp_path)
         assert [record["outcome"] for record in ledger[APPLIED_IDS_KEY]] == [
@@ -3527,7 +3545,7 @@ class TestAdjudicationRequest:
         ids = self._seed(tmp_path)
         request = _request(ids, verified=(0,))
         mutate(request, ids)
-        adj_path = tmp_path / "decision-critic-adjustments.json"
+        adj_path = _artifact(tmp_path, "critic_adjustments")
         findings_path = tmp_path / "review-findings.json"
         before = (adj_path.read_bytes(), findings_path.read_bytes())
 
@@ -3546,7 +3564,7 @@ class TestAdjudicationRequest:
             "fields": {"severity": "high"},
             "rationale": "The proposal points at a missing finding.",
         }])
-        adj_path = tmp_path / "decision-critic-adjustments.json"
+        adj_path = _artifact(tmp_path, "critic_adjustments")
         findings_path = tmp_path / "review-findings.json"
         before = (adj_path.read_bytes(), findings_path.read_bytes())
 
@@ -3579,7 +3597,7 @@ class TestAdjudicationRequest:
             ],
         }
         _publish_raw_proposal(tmp_path, document)
-        adj_path = tmp_path / "decision-critic-adjustments.json"
+        adj_path = _artifact(tmp_path, "critic_adjustments")
         findings_path = tmp_path / "review-findings.json"
         before = (adj_path.read_bytes(), findings_path.read_bytes())
 
@@ -3593,7 +3611,7 @@ class TestAdjudicationRequest:
         ledger = _ledger(tmp_path)
         ledger[APPLIED_IDS_KEY] = "not-a-record-list"
         write_findings(str(tmp_path), ledger)
-        adj_path = tmp_path / "decision-critic-adjustments.json"
+        adj_path = _artifact(tmp_path, "critic_adjustments")
         findings_path = tmp_path / "review-findings.json"
         before = (adj_path.read_bytes(), findings_path.read_bytes())
 
@@ -3694,7 +3712,7 @@ class TestAdjudicationRequest:
             "fields": fields,
             "rationale": "This mutation is not coherent with the ledger.",
         }])
-        adj_path = tmp_path / "decision-critic-adjustments.json"
+        adj_path = _artifact(tmp_path, "critic_adjustments")
         findings_path = tmp_path / "review-findings.json"
         before = (adj_path.read_bytes(), findings_path.read_bytes())
 
@@ -3796,10 +3814,10 @@ class TestPublicationAndAdjudicationShareOneLock:
             "the superseded proposal's ids are not in the new one"
         )
         proposal = json.loads(
-            (tmp_path / "decision-critic-adjustments.json").read_text()
+            _artifact(tmp_path, "critic_adjustments").read_text()
         )
         marker = json.loads(
-            (tmp_path / "decision-critic-verdict.json").read_text()
+            _artifact(tmp_path, "critic_verdict").read_text()
         )
         assert marker["proposal_digest"] == (
             critic_adjustments_module.proposal_digest(proposal)

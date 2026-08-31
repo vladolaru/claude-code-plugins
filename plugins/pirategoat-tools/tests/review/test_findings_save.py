@@ -31,9 +31,12 @@ from helpers.review_fixtures import (
     canonical_findings_ledger,
     rejected_schema_values,
 )
+from review import run_paths
 from review.findings_save import run_save
 
-CONTEXT_FILENAME = "reconciliation-context.json"
+CONTEXT_FILENAME = run_paths.artifact_path(
+    "", "reconciliation_context"
+).name
 
 # The class below is about the ledger's own validity, not about the run it
 # reconciled, so every test in it saves against one default context: a single
@@ -56,7 +59,8 @@ def _write_context(
     }
     if dispatched is not None:
         context["dispatched_agents"] = dispatched
-    path = Path(output_dir) / CONTEXT_FILENAME
+    path = run_paths.artifact_path(output_dir, "reconciliation_context")
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(context))
     return path
 
@@ -313,9 +317,14 @@ class TestFindingsSave:
         assert result.returncode != 0
         assert "REJECTED" in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
-        assert sorted(p.name for p in tmp_path.iterdir()) == sorted(
-            [findings.name, CONTEXT_FILENAME]
-        )
+        assert {
+            path.relative_to(tmp_path)
+            for path in tmp_path.rglob("*")
+            if path.is_file()
+        } == {
+            Path(findings.name),
+            Path("synthesis") / CONTEXT_FILENAME,
+        }
 
     def test_rejects_bad_verdict(self, tmp_path):
         findings = self._write_findings(

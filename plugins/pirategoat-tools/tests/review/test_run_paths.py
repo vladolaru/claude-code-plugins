@@ -116,10 +116,66 @@ class TestInternalLayout:
         with pytest.raises(ValueError):
             run_paths.reviewer_dir(tmp_path, bad)
 
-    def test_pipeline_synthesis_and_scratch_helpers(self, tmp_path):
-        assert run_paths.pipeline_path(tmp_path, "pipeline-state.json") == tmp_path / "pipeline" / "pipeline-state.json"
-        assert run_paths.synthesis_path(tmp_path, "reconciliation-context.json") == tmp_path / "synthesis" / "reconciliation-context.json"
+    def test_artifact_path_resolves_each_group(self, tmp_path):
+        assert run_paths.artifact_path(tmp_path, "run_config") == tmp_path / "run-config.json"
+        assert run_paths.artifact_path(tmp_path, "pipeline_state") == tmp_path / "pipeline" / "pipeline-state.json"
+        assert run_paths.artifact_path(tmp_path, "reconciliation_context") == tmp_path / "synthesis" / "reconciliation-context.json"
+
+    def test_artifact_registry_is_the_exact_run_contract(self):
+        assert run_paths.ARTIFACTS == {
+            "run_config": ("", "run-config.json"),
+            "review_context": ("", "review-context.json"),
+            "pipeline_result": ("", "pipeline-result.json"),
+            "review_report": ("", "review-report.md"),
+            "review_record": ("", "review-record.md"),
+            "review_findings_json": ("", "review-findings.json"),
+            "review_findings_md": ("", "review-findings.md"),
+            "pipeline_state": ("pipeline", "pipeline-state.json"),
+            "review_intake": ("pipeline", "review-intake.json"),
+            "dispatch_plan": ("pipeline", "dispatch-plan.json"),
+            "dispatch_plan_initial": ("pipeline", "dispatch-plan.initial.json"),
+            "change_purpose": ("pipeline", "change-purpose.md"),
+            "dependency_refresh": ("pipeline", "dependency-refresh.json"),
+            "synthesis_agents": ("pipeline", "synthesis-agents.json"),
+            "usage_snapshot": ("pipeline", "usage-snapshot.json"),
+            "worktree_hygiene": ("pipeline", "worktree-hygiene.json"),
+            "telemetry_log_path": ("pipeline", ".telemetry-log-path"),
+            "worktree_baseline": ("pipeline", ".worktree-baseline.json"),
+            "reconciliation_context": ("synthesis", "reconciliation-context.json"),
+            "critic_adjustments": ("synthesis", "decision-critic-adjustments.json"),
+            "critic_findings": ("synthesis", "decision-critic-findings.md"),
+            "critic_verdict": ("synthesis", "decision-critic-verdict.json"),
+        }
+
+    def test_artifact_path_rejects_unknown_keys(self, tmp_path):
+        with pytest.raises(KeyError):
+            run_paths.artifact_path(tmp_path, "nope")
+
+    def test_synthesis_started_marker_and_scratch(self, tmp_path):
+        assert run_paths.synthesis_started_marker(tmp_path, "decision-reviewer") == tmp_path / "synthesis" / "decision-reviewer.synthesis-started"
         assert run_paths.scratch_dir(tmp_path) == tmp_path / "tmp"
+
+
+class TestArtifactLiteralAuthority:
+    def test_run_artifact_literals_exist_only_in_path_authorities(self):
+        scripts = Path(__file__).resolve().parents[2] / "scripts"
+        allowed = {
+            scripts / "review" / "run_paths.py",
+            scripts / "review" / "reviewer_lifecycle.py",
+        }
+        literals = {
+            filename for _subdir, filename in run_paths.ARTIFACTS.values()
+        } | {"scope-summary", "scoped-diff.patch", ".synthesis-started"}
+        violations = []
+        for root in (scripts / "review", scripts / "analysis"):
+            for path in root.rglob("*.py"):
+                if path in allowed:
+                    continue
+                text = path.read_text(encoding="utf-8")
+                for literal in sorted(literals):
+                    if literal in text:
+                        violations.append(f"{path.relative_to(scripts)}: {literal}")
+        assert violations == []
 
 
 class TestCli:

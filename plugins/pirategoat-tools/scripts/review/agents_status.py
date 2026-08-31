@@ -2,7 +2,7 @@
 """
 Check Reviewer Agent Status — deterministic status check.
 
-Reads dispatch-plan.json and checks each dispatch identity's reviewer directory.
+Reads the dispatch plan and checks each dispatch identity's reviewer directory.
 Five states per dispatched agent:
   FINISHED       — canonical schema-2 final review exists
   INVALID_OUTPUT — final filename exists but its contents are not canonical
@@ -50,6 +50,7 @@ try:
         started_marker_path,
     )
     from .review_document import load_review_document, review_summary
+    from .run_paths import artifact_path
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
@@ -65,6 +66,7 @@ except ImportError:
         started_marker_path,
     )
     from review.review_document import load_review_document, review_summary
+    from review.run_paths import artifact_path
 
 
 DEFAULT_TIMEOUT = 1200  # 20 minutes
@@ -116,15 +118,15 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
 
     The result carries `dispatched_names` — this plan's dispatched agent
     identities in plan order — so a caller that already ran the gate never
-    re-opens and re-validates `dispatch-plan.json` to recover them.
+    re-opens and re-validates the dispatch plan to recover them.
     """
-    plan_path = os.path.join(output_dir, "dispatch-plan.json")
+    plan_path = artifact_path(output_dir, "dispatch_plan")
     if not os.path.isfile(plan_path):
         raise FileNotFoundError(f"No dispatch plan at {plan_path}")
 
-    # Read timeout from review-context.json, fall back to default
+    # Read timeout from review context, falling back to the default.
     if timeout_seconds is None:
-        ctx_path = os.path.join(output_dir, "review-context.json")
+        ctx_path = artifact_path(output_dir, "review_context")
         if os.path.isfile(ctx_path):
             with open(ctx_path) as f:
                 ctx = json.load(f)

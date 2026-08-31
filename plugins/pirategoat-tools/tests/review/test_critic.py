@@ -16,7 +16,14 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 from review import critic as critic_module
 from review import critic_adjustments as critic_adjustments_module
+from review import run_paths
 from review.critic_adjustments import read_critic_verdict
+
+
+def _artifact(output_dir, key):
+    path = run_paths.artifact_path(output_dir, key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def run_critic(*args):
@@ -229,10 +236,10 @@ class TestCriticSave:
 
         assert result.returncode == 0
         proposal = json.loads(
-            (tmp_path / "decision-critic-adjustments.json").read_text()
+            _artifact(tmp_path, "critic_adjustments").read_text()
         )
         marker = json.loads(
-            (tmp_path / "decision-critic-verdict.json").read_text()
+            _artifact(tmp_path, "critic_verdict").read_text()
         )
         assert proposal["schema"] == marker["schema"] == 2
         assert proposal["adjustments"][0]["target"] == {
@@ -250,9 +257,9 @@ class TestCriticSave:
     @staticmethod
     def _write_complete_snapshot(tmp_path, verdict="REVISE"):
         paths = {
-            "findings": tmp_path / "decision-critic-findings.md",
-            "adjustments": tmp_path / "decision-critic-adjustments.json",
-            "verdict": tmp_path / "decision-critic-verdict.json",
+            "findings": _artifact(tmp_path, "critic_findings"),
+            "adjustments": _artifact(tmp_path, "critic_adjustments"),
+            "verdict": _artifact(tmp_path, "critic_verdict"),
         }
         paths["findings"].write_text("# Previous complete findings\n")
         entries = [{
@@ -377,13 +384,13 @@ class TestCriticSave:
         )
 
         assert result.returncode == 0, result.stdout + result.stderr
-        assert (tmp_path / "decision-critic-findings.md").is_file()
-        assert (tmp_path / "decision-critic-adjustments.json").is_file()
+        assert (_artifact(tmp_path, "critic_findings")).is_file()
+        assert (_artifact(tmp_path, "critic_adjustments")).is_file()
         verdict_doc = json.loads(
-            (tmp_path / "decision-critic-verdict.json").read_text()
+            (_artifact(tmp_path, "critic_verdict")).read_text()
         )
         proposal = json.loads(
-            (tmp_path / "decision-critic-adjustments.json").read_text()
+            (_artifact(tmp_path, "critic_adjustments")).read_text()
         )
         assert verdict_doc == {
             "schema": 2,
@@ -451,7 +458,7 @@ class TestCriticSave:
         """A successful verdict is the current snapshot, so a pending
         REVISE batch from an earlier attempt may not survive it."""
         findings = self._write_findings(tmp_path)
-        snapshot = tmp_path / "decision-critic-adjustments.json"
+        snapshot = _artifact(tmp_path, "critic_adjustments")
         snapshot.write_text(json.dumps({
             "schema": 2,
             "adjustments": [{
@@ -468,12 +475,12 @@ class TestCriticSave:
         )
 
         assert result.returncode == 0, result.stdout + result.stderr
-        assert (tmp_path / "decision-critic-findings.md").is_file()
+        assert (_artifact(tmp_path, "critic_findings")).is_file()
         assert json.loads(snapshot.read_text()) == {
             "schema": 2, "adjustments": [],
         }
         verdict_doc = json.loads(
-            (tmp_path / "decision-critic-verdict.json").read_text()
+            (_artifact(tmp_path, "critic_verdict")).read_text()
         )
         assert verdict_doc == {
             "schema": 2,
@@ -549,7 +556,7 @@ class TestCriticSave:
         assert result.returncode == 0, result.stdout + result.stderr
         assert "REVISE" in result.stdout
         proposal = json.loads(
-            (tmp_path / "decision-critic-adjustments.json").read_text()
+            (_artifact(tmp_path, "critic_adjustments")).read_text()
         )
         assert proposal["adjustments"][0]["adjustment_id"] in result.stdout
         assert "?" not in result.stdout
@@ -605,10 +612,10 @@ class TestSourceBoundCriticSave:
 
         assert result.returncode == 0, result.stdout + result.stderr
         proposal = json.loads(
-            (tmp_path / "decision-critic-adjustments.json").read_text()
+            (_artifact(tmp_path, "critic_adjustments")).read_text()
         )
         marker = json.loads(
-            (tmp_path / "decision-critic-verdict.json").read_text()
+            (_artifact(tmp_path, "critic_verdict")).read_text()
         )
         adjustment_id = proposal["adjustments"][0]["adjustment_id"]
         assert adjustment_id
@@ -633,10 +640,10 @@ class TestSourceBoundCriticSave:
 
         assert result.returncode == 0, result.stdout + result.stderr
         proposal = json.loads(
-            (tmp_path / "decision-critic-adjustments.json").read_text()
+            (_artifact(tmp_path, "critic_adjustments")).read_text()
         )
         marker = json.loads(
-            (tmp_path / "decision-critic-verdict.json").read_text()
+            (_artifact(tmp_path, "critic_verdict")).read_text()
         )
         assert proposal == {"schema": 2, "adjustments": []}
         assert marker == {
@@ -672,9 +679,9 @@ class TestSourceBoundCriticSave:
             "schema": 2,
             "adjustments": [entry],
         })
-        old_findings = tmp_path / "decision-critic-findings.md"
-        old_adjustments = tmp_path / "decision-critic-adjustments.json"
-        old_marker = tmp_path / "decision-critic-verdict.json"
+        old_findings = _artifact(tmp_path, "critic_findings")
+        old_adjustments = _artifact(tmp_path, "critic_adjustments")
+        old_marker = _artifact(tmp_path, "critic_verdict")
         old_findings.write_text("old findings")
         old_adjustments.write_text('{"old": "proposal"}')
         old_marker.write_text('{"old": "marker"}')
@@ -737,7 +744,7 @@ class TestSourceBoundCriticSave:
                 "rationale": "Narrower than stated.",
             }],
         })
-        old_marker = tmp_path / "decision-critic-verdict.json"
+        old_marker = _artifact(tmp_path, "critic_verdict")
         old_marker.write_text('{"old": "marker"}')
         real_write = critic_adjustments_module.write_critic_verdict
         calls = 0
@@ -765,7 +772,7 @@ class TestSourceBoundCriticSave:
 
         assert critic_module.run_save(args) == 0
         proposal = json.loads(
-            (tmp_path / "decision-critic-adjustments.json").read_text()
+            (_artifact(tmp_path, "critic_adjustments")).read_text()
         )
         marker = json.loads(old_marker.read_text())
         assert marker["proposal_digest"] == (
