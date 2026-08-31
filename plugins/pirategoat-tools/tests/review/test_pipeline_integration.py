@@ -657,11 +657,9 @@ class TestTelemetryIntegration:
     def _isolated_repo(self, tmp_path):
         """Every subprocess call in this class needs an isolated cwd — see
         run_pipeline's docstring. The repo lives at `tmp_path/repo`, never
-        at `tmp_path` itself: `tmp_path/out` is `--output-dir` for the rest
-        of the class, and the allowlist sweep deletes any subdirectory it
-        doesn't recognize (including a nested repo) — output-dir and repo
-        must be siblings, not ancestor/descendant. Tests that need a
-        specific git identity build their own `repo` subdir the same way."""
+        at `tmp_path` itself, and stays a sibling of `tmp_path/out` so run
+        artifacts cannot dirty it. Tests that need a specific git identity
+        build their own `repo` subdir the same way."""
         (tmp_path / "repo").mkdir()
         _init_git_repo(tmp_path / "repo")
         (tmp_path / "out").mkdir()
@@ -1776,6 +1774,23 @@ class TestBaselineInTargetDir:
                 {"git": {}},
                 str(tmp_path),
             )
+
+    def test_step_1_deletes_nothing_from_the_output_dir(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_git_repo(repo)
+        output_dir = tmp_path / "out"
+        output_dir.mkdir()
+        leftover = output_dir / "leftover-from-this-run.txt"
+        leftover.write_text("keep me")
+
+        result = run_pipeline(
+            "--step", "1", "--mode", "full",
+            "--output-dir", str(output_dir), cwd=repo,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert leftover.read_text() == "keep me"
 
 
 class TestStep8Orchestration:

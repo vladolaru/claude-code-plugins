@@ -28,7 +28,6 @@ import argparse
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import uuid
@@ -185,35 +184,6 @@ except ImportError:
         refresh_dependencies_default,
     )
     from review.atomic_io import atomic_write_json
-
-# Sweep survivors. Everything else in the output directory is per-run
-# and regenerated — including scratch nobody predicted, which is the
-# class the old 40-entry blocklist could never close (run12: a prior
-# run's reviewer .patch scratch survived it into telemetry).
-# AMENDED per adversarial review (B1, source-verified):
-#   .branch-review-baseline.json — cross-run incremental-review state.
-#   run-config.json    — pre-seeded by pirategoat-bot BEFORE step 1 runs:
-#                        this sweep is the first statement of step 1,
-#                        before this function's caller reads run-config.json.
-#   review-context.json — bot-owned, pre-seeded the same way; context.py
-#                        is gap-filling and reads whatever already exists.
-_SWEEP_ALLOWLIST = frozenset({
-    ".branch-review-baseline.json",
-    "run-config.json",
-    "review-context.json",
-})
-
-# The sweep is rm-everything-shaped, so it only runs in a directory that
-# proves it is pipeline-owned — same spirit as the worktree sweep's
-# repo-identity gate. A mistargeted --output-dir fails loudly instead of
-# being emptied. review-context.json is included: it is pre-seeded by the
-# bot in the same two-write sequence as run-config.json, and a crash
-# between those writes must not leave a directory that hard-exits forever.
-_PIPELINE_DIR_MARKERS = (
-    ".branch-review-baseline.json", "pipeline-state.json", "run-config.json",
-    "review-context.json",
-)
-
 
 # ---------------------------------------------------------------------------
 # Condition Evaluation
@@ -407,32 +377,6 @@ def resolve_params(output_dir, cli_mode=None, cli_pr_number=None,
 
 
 # ---------------------------------------------------------------------------
-# Stale Artifact Cleanup
-# ---------------------------------------------------------------------------
-
-def clean_stale_artifacts(output_dir):
-    """Allowlist sweep: delete every per-run artifact from prior runs."""
-    if not os.path.isdir(output_dir):
-        return
-    entries = os.listdir(output_dir)
-    if entries and not any(m in entries for m in _PIPELINE_DIR_MARKERS):
-        raise SystemExit(
-            f"Refusing to sweep {output_dir}: no pipeline identity marker "
-            "found in a non-empty directory — is --output-dir correct?")
-    for name in entries:
-        if name in _SWEEP_ALLOWLIST:
-            continue
-        path = os.path.join(output_dir, name)
-        try:
-            if os.path.isdir(path) and not os.path.islink(path):
-                shutil.rmtree(path)
-            else:
-                os.remove(path)
-        except OSError:
-            pass
-
-
-# ---------------------------------------------------------------------------
 # Output Formatting
 # ---------------------------------------------------------------------------
 
@@ -618,10 +562,8 @@ def _detect_plugin_commit(plugin_root=None):
 def _stamp_run_config(output_dir, config, field, value):
     """Record one detected build-identity field in run-config.json.
 
-    Re-stamped on every step 1, not seeded once: run-config.json survives
-    clean_stale_artifacts() and is reused across interactive reruns, so a
-    rerun under an upgraded plugin would otherwise credit its artifacts to
-    whatever ran last time.
+    Re-stamped on every step 1 so a resumed run under an upgraded plugin
+    credits its artifacts to the build that actually produced them.
 
     Writes on absence as well as on change, so the key is ALWAYS present.
     A `.get() != value` test alone would leave an undeterminable field
@@ -741,11 +683,8 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
     context = read_review_context(output_dir)
 
-    # --- Step 1: Special handling (seed config, clean artifacts) ---
+    # --- Step 1: Special handling (seed config) ---
     if step == 1:
-        # Clean stale artifacts first
-        clean_stale_artifacts(output_dir)
-
         # Resolve mode: config wins, then CLI, then error
         existing_config = read_config(output_dir)
         mode = existing_config.get("mode") or args.mode
@@ -806,12 +745,9 @@ def main():
             if config_changed:
                 write_config(output_dir, config)
             # Session identity follows the same interactive/bot split as
-            # quick: interactive reruns reuse output dirs and run-config.json
-            # survives cleanup, so the CLI is authoritative INCLUDING
-            # absence — an omitted --session-id means this run's session is
-            # unknown, and retaining the previous run's ID would correlate
-            # telemetry with the old Claude transcript. Bot runs pre-seed
-            # the ID in run-config.json and may omit the flag on reruns.
+            # quick: on an interactive step-1 retry, the CLI is authoritative
+            # INCLUDING absence. Bot runs pre-seed the ID in run-config.json
+            # and may omit the flag on retries.
             if config.get("interactive", True):
                 cli_session = args.session_id or ""
                 if config.get("session_id", "") != cli_session:

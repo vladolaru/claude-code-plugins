@@ -2098,10 +2098,7 @@ class TestCriticVerdictPersistence:
     @pytest.fixture(autouse=True)
     def _isolated_repo(self, tmp_path):
         """run_pipeline's cwd has no default — see its docstring. The repo
-        lives at tmp_path/repo, never at tmp_path itself: tmp_path/out is
-        --output-dir for the rest of the class, and the allowlist sweep
-        deletes any subdirectory it doesn't recognize (including a nested
-        repo) — repo and output-dir must be siblings."""
+        stays isolated from tmp_path/out so run artifacts cannot dirty it."""
         (tmp_path / "repo").mkdir()
         init_repo(tmp_path / "repo")
         (tmp_path / "out").mkdir()
@@ -2143,16 +2140,6 @@ class TestCriticVerdictPersistence:
         assert r.returncode == 0
         result = json.loads((out / "pipeline-result.json").read_text())
         assert result["critic_verdict"] == "unavailable"
-
-    def test_step_1_clears_stale_critic_verdict(self, tmp_path):
-        """Step 1 should clear decision-critic-verdict.json from previous runs."""
-        out = tmp_path / "out"
-        (out / "run-config.json").write_text('{"mode": "full"}')
-        (out / "decision-critic-verdict.json").write_text('{"verdict": "REVISE"}')
-        run_pipeline("--step", "1", "--mode", "full",
-                   "--output-dir", str(out), cwd=tmp_path / "repo")
-        assert not (out / "decision-critic-verdict.json").exists()
-
 
 class TestStep10CriticSource:
     """The critic's source is chosen by what EXISTS, not by a flag.

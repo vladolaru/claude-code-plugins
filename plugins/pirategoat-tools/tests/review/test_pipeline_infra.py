@@ -233,59 +233,6 @@ class TestStateManagement:
         assert resolved["mode"] == "pr"  # config wins over CLI
 
 
-class TestCleanStaleArtifacts:
-    """clean_stale_artifacts sweeps by allowlist, guarded by an identity marker."""
-
-    def test_sweep_removes_everything_but_baseline(self, mod, tmp_path):
-        """run12: run11's als.patch/coreLlm.patch/replay.patch survived the
-        40-entry blocklist into run12's telemetry snapshot. Allowlist inverts:
-        unpredicted scratch cannot survive."""
-        d = tmp_path / "out"
-        d.mkdir()
-        (d / ".branch-review-baseline.json").write_text("{}")
-        (d / "run-config.json").write_text("{}")  # bot pre-seeds this
-        (d / "review-context.json").write_text("{}")  # and this
-        (d / "als.patch").write_text("x")
-        (d / "unpredicted-scratch.txt").write_text("x")
-        (d / "review-intake.json").write_text(
-            json.dumps({"schema": 1, "status": "closed"})
-        )
-        (d / "code-review.draft.json").write_text("{}")
-        (d / "subdir").mkdir()
-        (d / "subdir" / "y").write_text("x")
-        mod.clean_stale_artifacts(str(d))
-        assert sorted(os.listdir(d)) == [
-            ".branch-review-baseline.json", "review-context.json",
-            "run-config.json",
-        ]
-
-    def test_sweep_refuses_unrecognized_directory(self, mod, tmp_path):
-        d = tmp_path / "notours"
-        d.mkdir()
-        (d / "important-user-file.txt").write_text("x")
-        with pytest.raises(SystemExit):
-            mod.clean_stale_artifacts(str(d))
-        assert (d / "important-user-file.txt").exists()
-
-    def test_sweep_recognizes_review_context_only_directory(self, mod, tmp_path):
-        """A bot crash between its two pre-seed writes (run-config.json,
-        then review-context.json) must not leave a directory that hard-exits
-        forever: review-context.json alone is a recognized marker, the
-        directory is swept, and the marker survives via the allowlist."""
-        d = tmp_path / "out"
-        d.mkdir()
-        (d / "review-context.json").write_text("{}")
-        (d / "unpredicted-scratch.txt").write_text("x")
-        mod.clean_stale_artifacts(str(d))
-        assert sorted(os.listdir(d)) == ["review-context.json"]
-
-    def test_sweep_accepts_empty_or_missing_dir(self, mod, tmp_path):
-        mod.clean_stale_artifacts(str(tmp_path / "missing"))  # no raise
-        e = tmp_path / "empty"
-        e.mkdir()
-        mod.clean_stale_artifacts(str(e))  # no raise
-
-
 class TestTelemetryIdentityHelpers:
     """Step 1 identity discovery is best-effort and release-aware."""
 
@@ -662,12 +609,8 @@ class TestCLIIntegration:
         """run_pipeline's cwd has no default — see its docstring. Isolate
         every subprocess call in this class to a throwaway repo at
         tmp_path/repo so none of them can touch the real checkout. The repo
-        lives in a subdirectory, never at tmp_path itself: tmp_path/out is
-        --output-dir for the rest of the class, and the allowlist sweep
-        deletes any subdirectory it doesn't recognize (including a nested
-        repo) — repo and output-dir must be siblings, or the sweep either
-        refuses the whole directory or deletes the repo out from under the
-        subprocess using it."""
+        lives in a subdirectory, never at tmp_path itself, and remains a
+        sibling of tmp_path/out so run artifacts cannot dirty the repo."""
         (tmp_path / "repo").mkdir()
         init_repo(tmp_path / "repo")
         (tmp_path / "out").mkdir()
@@ -765,7 +708,7 @@ class TestCLIIntegration:
         assert config["plugin_version"] == mod._detect_plugin_version()
 
     def test_stale_stamp_from_an_earlier_plugin_is_refreshed(self, mod, tmp_path):
-        """run-config.json survives cleanup across interactive reruns.
+        """A resumed run keeps its run-config.json.
 
         A rerun under an upgraded plugin must re-stamp, or the artifact
         would credit the run to the version that ran LAST time.
@@ -806,8 +749,7 @@ class TestCLIIntegration:
         assert (tmp_path / "run-config.json").stat().st_mtime_ns == mtime
 
     def test_stale_build_commit_is_refreshed_on_rerun(self, mod, tmp_path):
-        """run-config.json survives cleanup across interactive reruns, so a
-        rerun on a newer build must re-stamp."""
+        """A step-1 retry on a newer build must re-stamp run-config.json."""
         (tmp_path / "out" / "run-config.json").write_text(json.dumps({
             "mode": "pr", "pr_number": "42", "plugin_commit": "0000000",
         }))
@@ -823,132 +765,6 @@ class TestCLIIntegration:
         state = json.loads((tmp_path / "out" / "pipeline-state.json").read_text())
         assert state["workspace"]["original_branch"] == "develop"
         assert state["workspace"]["stash_ref"] == "abc123"
-
-    def test_step_1_clears_stale_artifacts(self, tmp_path):
-        """Step 1 should clear stale artifacts from previous runs."""
-        # Seed stale artifacts
-        (tmp_path / "out" / "pipeline-state.json").write_text('{"stale": true}')
-        (tmp_path / "out" / "dispatch-plan.json").write_text('{"stale": true}')
-        (tmp_path / "out" / "code-review.json").write_text('{"stale": true}')
-        (tmp_path / "out" / "review-findings.json").write_text('{"stale": true}')
-        (tmp_path / "out" / "review-findings.md").write_text("stale")
-        (tmp_path / "out" / "review-report.md").write_text("stale")
-        (tmp_path / "out" / "review-verdict.json").write_text('{"stale": true}')
-        (tmp_path / "out" / "pipeline-result.json").write_text('{"stale": true}')
-        (tmp_path / "out" / "decision-critic-findings.md").write_text("stale")
-        (tmp_path / "out" / "scoped-diff.patch").write_text("legacy")
-        (tmp_path / "out" / "security-reviewer-scoped-diff.patch").write_text("current")
-        # Seed files that should be PRESERVED
-        (tmp_path / "out" / "run-config.json").write_text('{"mode": "pr", "pr_number": "42"}')
-        (tmp_path / "out" / ".branch-review-baseline.json").write_text('{"preserved": true}')
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path / "out"), "--pr-number", "42", cwd=tmp_path / "repo")
-        # Stale artifacts should be gone
-        assert not (tmp_path / "out" / "dispatch-plan.json").exists()
-        assert not (tmp_path / "out" / "review-findings.json").exists()
-        assert not (tmp_path / "out" / "review-report.md").exists()
-        assert not (tmp_path / "out" / "review-verdict.json").exists()
-        assert not (tmp_path / "out" / "pipeline-result.json").exists()
-        assert not (tmp_path / "out" / "scoped-diff.patch").exists()
-        assert not (tmp_path / "out" / "security-reviewer-scoped-diff.patch").exists()
-        # Preserved files should still exist
-        assert (tmp_path / "out" / "run-config.json").is_file()
-        assert (tmp_path / "out" / ".branch-review-baseline.json").is_file()
-
-    def test_step_1_clears_synthesis_dispatch_markers(self, tmp_path):
-        """The namespaced suffix needs its own sweep pattern.
-
-        `*.started` does not match `*.synthesis-started` — the reviewer
-        glob stops at a literal `.started` ending — so the markers stopped
-        being swept the moment they were renamed out of the reviewer
-        contract. A surviving marker makes finalize report last run's
-        dispatch as this run's stall, with no completion artifact to
-        contradict it.
-        """
-        import fnmatch
-
-        assert not fnmatch.fnmatch(
-            "review-reconciliator.synthesis-started", "*.started"
-        ), "the reviewer glob must NOT be relied on to sweep these"
-
-        out = tmp_path / "out"
-        # A prior run's own step 1 always seeds run-config.json alongside
-        # whatever it leaves behind — this is what makes the directory
-        # recognizably the pipeline's own for the sweep's identity guard.
-        (out / "run-config.json").write_text('{"mode": "pr", "pr_number": "42"}')
-        for name in ("review-reconciliator", "decision-reviewer"):
-            (out / f"{name}.synthesis-started").write_text("2026-08-19T12:00:00+00:00")
-        (out / "synthesis-agents.json").write_text('{"schema": 1}')
-
-        run_pipeline("--step", "1", "--mode", "pr",
-                     "--output-dir", str(out), "--pr-number", "42",
-                     cwd=tmp_path / "repo")
-
-        assert not list(out.glob("*.synthesis-started"))
-        assert not (out / "synthesis-agents.json").exists()
-
-    def test_step_1_clears_worktree_hygiene_artifacts(self, tmp_path):
-        """Hygiene artifacts are per-run measurements, not run-dir state.
-
-        A surviving `.worktree-baseline.json` would let a run whose own
-        capture failed compare against a previous run's snapshot and
-        publish it as this run's measurement. It also has to be listed by
-        exact name: glob patterns never match a leading dot.
-        """
-        # A prior run's own step 1 always seeds run-config.json alongside
-        # whatever it leaves behind — this is what makes the directory
-        # recognizably the pipeline's own for the sweep's identity guard.
-        (tmp_path / "out" / "run-config.json").write_text('{"mode": "pr", "pr_number": "42"}')
-        (tmp_path / "out" / ".worktree-baseline.json").write_text(
-            '{"schema": 1, "repo_root": "/stale", "entries": []}'
-        )
-        (tmp_path / "out" / "worktree-hygiene.json").write_text('{"status": "clean"}')
-        run_pipeline("--step", "1", "--mode", "pr",
-                  "--output-dir", str(tmp_path / "out"), "--pr-number", "42", cwd=tmp_path / "repo")
-        assert not (tmp_path / "out" / ".worktree-baseline.json").exists()
-        assert not (tmp_path / "out" / "worktree-hygiene.json").exists()
-
-    def test_step_1_clears_the_usage_snapshot(self, tmp_path):
-        """A previous run's token usage must never stand in for this one.
-
-        The snapshot is a per-run measurement like the hygiene artifacts;
-        surviving it would let a rerun in the same output dir publish an
-        older run's cost as its own.
-        """
-        (tmp_path / "out" / "run-config.json").write_text('{"mode": "pr", "pr_number": "42"}')
-        (tmp_path / "out" / "usage-snapshot.json").write_text(
-            '{"schema": 1, "availability": {"subagents": "complete"}}'
-        )
-        run_pipeline("--step", "1", "--mode", "pr",
-                  "--output-dir", str(tmp_path / "out"), "--pr-number", "42", cwd=tmp_path / "repo")
-        assert not (tmp_path / "out" / "usage-snapshot.json").exists()
-
-    def test_step_1_clears_per_agent_and_reconciliation_artifacts(self, tmp_path):
-        """Agent sidecars, markers, and reconciliation context are per-run artifacts.
-
-        Stale copies caused real failures in a reused output dir: a leftover
-        <agent>-review.md made an agent's Write no-op, a leftover .started
-        marker turns a forgotten dispatch into TIMED_OUT instead of
-        NOT_DISPATCHED, and stale scope summaries would contaminate the
-        run-level inline-coverage map.
-        """
-        (tmp_path / "out" / "run-config.json").write_text('{"mode": "full"}')
-        (tmp_path / "out" / "security-review.md").write_text("stale agent markdown")
-        (tmp_path / "out" / "security-reviewer-scope-summary.json").write_text('{"stale": true}')
-        (tmp_path / "out" / "a11y-reviewer-scope-summary-config-ops.json").write_text('{"stale": true}')
-        (tmp_path / "out" / "security-reviewer.started").write_text("2026-07-20T00:00:00+00:00")
-        (tmp_path / "out" / "reconciliation-context.json").write_text('{"stale": true}')
-        (tmp_path / "out" / "reconciliation-context.md").write_text("stale")
-        (tmp_path / "out" / "critic-context.md").write_text("stale")
-        run_pipeline("--step", "1", "--mode", "full",
-                   "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
-        assert not (tmp_path / "out" / "security-review.md").exists()
-        assert not (tmp_path / "out" / "security-reviewer-scope-summary.json").exists()
-        assert not (tmp_path / "out" / "a11y-reviewer-scope-summary-config-ops.json").exists()
-        assert not (tmp_path / "out" / "security-reviewer.started").exists()
-        assert not (tmp_path / "out" / "reconciliation-context.json").exists()
-        assert not (tmp_path / "out" / "reconciliation-context.md").exists()
-        assert not (tmp_path / "out" / "critic-context.md").exists()
 
     def test_step_1_resets_interactive_review_context_to_current_output(self, tmp_path):
         """Interactive runs seed context without retaining prior-run fields."""
@@ -991,14 +807,6 @@ class TestCLIIntegration:
 
         assert result.returncode == 0
         assert json.loads((tmp_path / "out" / "review-context.json").read_text()) == context
-
-    def test_step_1_clears_change_purpose(self, tmp_path):
-        """Step 1 should clear stale change-purpose.md from previous runs."""
-        (tmp_path / "out" / "run-config.json").write_text('{"mode": "full"}')
-        (tmp_path / "out" / "change-purpose.md").write_text("Old change purpose from previous review.")
-        run_pipeline("--step", "1", "--mode", "full",
-                   "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
-        assert not (tmp_path / "out" / "change-purpose.md").exists(), "Stale change-purpose.md should be cleared"
 
     def test_step_1_writes_run_id(self, tmp_path):
         """Step 1 should write a run_id to pipeline-state.json."""
@@ -1081,10 +889,7 @@ class TestSkippedStepRecording:
 
     @pytest.fixture(autouse=True)
     def _isolated_repo(self, tmp_path):
-        """The repo lives at tmp_path/repo, never at tmp_path itself:
-        tmp_path/out is --output-dir for this class, and the allowlist
-        sweep deletes any subdirectory it doesn't recognize (including a
-        nested repo) — repo and output-dir must be siblings."""
+        """Keep the test repo isolated from the run output directory."""
         (tmp_path / "repo").mkdir()
         init_repo(tmp_path / "repo")
         (tmp_path / "out").mkdir()
@@ -1165,10 +970,7 @@ class TestQuickModeConfig:
 
     @pytest.fixture(autouse=True)
     def _isolated_repo(self, tmp_path):
-        """The repo lives at tmp_path/repo, never at tmp_path itself:
-        tmp_path/out is --output-dir for this class, and the allowlist
-        sweep deletes any subdirectory it doesn't recognize (including a
-        nested repo) — repo and output-dir must be siblings."""
+        """Keep the test repo isolated from the run output directory."""
         (tmp_path / "repo").mkdir()
         init_repo(tmp_path / "repo")
         (tmp_path / "out").mkdir()
@@ -1269,10 +1071,7 @@ class TestHostConfig:
 
     @pytest.fixture(autouse=True)
     def _isolated_repo(self, tmp_path):
-        """The repo lives at tmp_path/repo, never at tmp_path itself:
-        tmp_path/out is --output-dir for this class, and the allowlist
-        sweep deletes any subdirectory it doesn't recognize (including a
-        nested repo) — repo and output-dir must be siblings."""
+        """Keep the test repo isolated from the run output directory."""
         (tmp_path / "repo").mkdir()
         init_repo(tmp_path / "repo")
         (tmp_path / "out").mkdir()
@@ -1302,10 +1101,7 @@ class TestDependencyRefreshConfig:
 
     @pytest.fixture(autouse=True)
     def _isolated_repo(self, tmp_path):
-        """The repo lives at tmp_path/repo, never at tmp_path itself:
-        tmp_path/out is --output-dir for this class, and the allowlist
-        sweep deletes any subdirectory it doesn't recognize (including a
-        nested repo) — repo and output-dir must be siblings."""
+        """Keep the test repo isolated from the run output directory."""
         (tmp_path / "repo").mkdir()
         init_repo(tmp_path / "repo")
         (tmp_path / "out").mkdir()
@@ -1382,15 +1178,6 @@ class TestDependencyRefreshConfig:
                   cwd=tmp_path / "repo", env=hermetic_env())
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config["refresh_dependencies"] is False
-
-    def test_step_1_clears_stale_dependency_refresh_artifact(self, tmp_path):
-        (tmp_path / "out" / "run-config.json").write_text('{"mode": "pr", "pr_number": "42"}')
-        (tmp_path / "out" / "dependency-refresh.json").write_text("{}")
-        r = run_pipeline("--step", "1", "--mode", "pr",
-                      "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
-                      cwd=tmp_path / "repo", env=hermetic_env())
-        assert r.returncode == 0
-        assert not (tmp_path / "out" / "dependency-refresh.json").exists()
 
     def test_user_config_defaults_interactive_runs_on(self, tmp_path):
         # ~/.config/pirategoat/config.json declares interactive runs
