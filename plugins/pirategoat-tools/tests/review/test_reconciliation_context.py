@@ -25,6 +25,7 @@ sys.path.insert(0, str(TESTS_DIR))
 
 from review.verdict_rules import derive_review_state  # noqa: E402
 from review.reviewer_lifecycle import review_paths  # noqa: E402
+from review.run_paths import artifact_path  # noqa: E402
 
 
 def _load_module():
@@ -144,6 +145,12 @@ def _write_raw_review(output_dir, reviewer, text):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)
     return path
+
+
+def _read_reconciliation_context(output_dir):
+    return json.loads(
+        artifact_path(output_dir, "reconciliation_context").read_text()
+    )
 
 
 # ===========================================================================
@@ -1266,9 +1273,7 @@ class TestFullScript:
         assert result.returncode == 0, f"stderr: {result.stderr}"
         assert json.loads(result.stdout.strip())["status"] == "ok"
 
-        ctx = json.loads(
-            (tmp_path / "reconciliation-context.json").read_text()
-        )
+        ctx = _read_reconciliation_context(tmp_path)
         assert set(ctx) == {
             "schema",
             "reviews_by_agent",
@@ -1311,9 +1316,7 @@ class TestFullScript:
         )
 
         assert result.returncode == 0, f"stderr: {result.stderr}"
-        ctx = json.loads(
-            (tmp_path / "reconciliation-context.json").read_text()
-        )
+        ctx = _read_reconciliation_context(tmp_path)
         assert ctx["host_context_banner"] is None
 
     def test_empty_output_dir(self, tmp_path):
@@ -1325,7 +1328,7 @@ class TestFullScript:
         )
         assert result.returncode == 0
 
-        ctx = json.loads((tmp_path / "reconciliation-context.json").read_text())
+        ctx = _read_reconciliation_context(tmp_path)
         assert ctx["reviews_by_agent"] == {}
 
     def test_missing_required_args(self, tmp_path):
@@ -1351,7 +1354,7 @@ class TestFullScript:
         )
         assert result.returncode == 0
 
-        ctx = json.loads((tmp_path / "reconciliation-context.json").read_text())
+        ctx = _read_reconciliation_context(tmp_path)
         # git diff will fail in tmp_path (no real git repo), so files in
         # changed_files fall back to IN_SCOPE:in_hunk
         assert ctx["scope_annotations"]["src/auth.py:10"] == "IN_SCOPE:in_hunk"
@@ -1373,7 +1376,7 @@ class TestFullScript:
         )
         assert result.returncode == 0
 
-        ctx = json.loads((tmp_path / "reconciliation-context.json").read_text())
+        ctx = _read_reconciliation_context(tmp_path)
         assert len(ctx["reviews_by_agent"]) == 3
         assert "security-review" in ctx["reviews_by_agent"]
         assert "performance-review" in ctx["reviews_by_agent"]
@@ -1389,7 +1392,7 @@ class TestFullScript:
         )
         assert result.returncode == 0
 
-        ctx = json.loads((tmp_path / "reconciliation-context.json").read_text())
+        ctx = _read_reconciliation_context(tmp_path)
         # Key present with empty list — "0 agents dispatched"
         assert "dispatched_agents" in ctx
         assert ctx["dispatched_agents"] == []
@@ -1403,7 +1406,7 @@ class TestFullScript:
         )
         assert result.returncode == 0
 
-        ctx = json.loads((tmp_path / "reconciliation-context.json").read_text())
+        ctx = _read_reconciliation_context(tmp_path)
         assert "dispatched_agents" not in ctx
 
     def test_dispatched_agents_with_names_produces_list(self, tmp_path):
@@ -1422,7 +1425,7 @@ class TestFullScript:
         )
         assert result.returncode == 0
 
-        ctx = json.loads((tmp_path / "reconciliation-context.json").read_text())
+        ctx = _read_reconciliation_context(tmp_path)
         # Names are normalized: -reviewer → -review to match reviews_by_agent keys
         assert ctx["dispatched_agents"] == [
             "security-review", "performance-review"
@@ -1546,9 +1549,7 @@ class TestMissingAgentDetection:
         )
 
         assert result.returncode == 0, f"stderr: {result.stderr}"
-        ctx = json.loads(
-            (tmp_path / "reconciliation-context.json").read_text()
-        )
+        ctx = _read_reconciliation_context(tmp_path)
         assert ctx["missing_agents"] == ["a11y-review", "performance-review"]
         assert ctx["dispatched_agents"] == [
             "security-review", "performance-review", "a11y-review",
@@ -1567,9 +1568,7 @@ class TestMissingAgentDetection:
         )
 
         assert result.returncode == 0, f"stderr: {result.stderr}"
-        ctx = json.loads(
-            (tmp_path / "reconciliation-context.json").read_text()
-        )
+        ctx = _read_reconciliation_context(tmp_path)
         assert ctx["missing_agents"] is None
         assert "dispatched_agents" not in ctx
 
@@ -1606,9 +1605,7 @@ class TestPrefilterAnnotation:
         result = self._run(tmp_path, "--changed-files", "src/app.py")
         assert result.returncode == 0, f"stderr: {result.stderr}"
 
-        ctx = json.loads(
-            (tmp_path / "reconciliation-context.json").read_text()
-        )
+        ctx = _read_reconciliation_context(tmp_path)
         findings = ctx["reviews_by_agent"]["security-review"]["findings"]
         by_title = {i["title"]: i for i in findings}
         assert by_title["Out"]["prefiltered"] == (
@@ -1628,9 +1625,7 @@ class TestPrefilterAnnotation:
         result = self._run(tmp_path, "--changed-files", "src/app.py")
         assert result.returncode == 0, f"stderr: {result.stderr}"
 
-        ctx = json.loads(
-            (tmp_path / "reconciliation-context.json").read_text()
-        )
+        ctx = _read_reconciliation_context(tmp_path)
         assert len(ctx["reviews_by_agent"]["security-review"]["findings"]) == 1
 
     def test_a_checkable_count_travels_beside_the_annotations(
@@ -1648,9 +1643,7 @@ class TestPrefilterAnnotation:
         result = self._run(tmp_path, "--changed-files", "src/app.py")
         assert result.returncode == 0, f"stderr: {result.stderr}"
 
-        ctx = json.loads(
-            (tmp_path / "reconciliation-context.json").read_text()
-        )
+        ctx = _read_reconciliation_context(tmp_path)
         assert ctx["prefiltered_out_of_scope"] == {
             "count": 2, "by_agent": {"security-review": 2},
         }
@@ -1664,9 +1657,7 @@ class TestPrefilterAnnotation:
         result = self._run(tmp_path, "--changed-files", "src/app.py")
         assert result.returncode == 0, f"stderr: {result.stderr}"
 
-        ctx = json.loads(
-            (tmp_path / "reconciliation-context.json").read_text()
-        )
+        ctx = _read_reconciliation_context(tmp_path)
         assert ctx["prefiltered_out_of_scope"] == {"count": 0, "by_agent": {}}
 
     def test_not_in_hunk_is_never_prefiltered(self, mod, tmp_path):

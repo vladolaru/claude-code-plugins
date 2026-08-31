@@ -28,6 +28,7 @@ from review.reviewer_lifecycle import (
     scoped_diff_path,
     started_marker_path,
 )
+from review.run_paths import artifact_path
 from review.telemetry import ReviewTelemetry
 
 sys.path.insert(0, str(TESTS_DIR))
@@ -381,7 +382,7 @@ class TestFinalization:
             "error": "malformed final review JSON",
         }]
         persisted = json.loads(
-            Path(tmp_path, "review-intake.json").read_text()
+            artifact_path(tmp_path, "review_intake").read_text()
         )
         assert "invalid_final_reviews" not in persisted
 
