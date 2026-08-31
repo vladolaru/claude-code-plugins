@@ -2247,10 +2247,18 @@ def _step_11_present_results(mode, state, context, config, output_dir):
         "title": "Author Report + Present Results",
         "situation": situation,
         "actions": actions,
-        # The one artifact this step asks the orchestrator for, and the one
-        # the run's whole output rests on: pirategoat-bot reads this file
-        # and fails the delivery if it is absent, so the gate has to be
-        # here rather than left implicit.
+        # Two distinct gates live here, not one. While the report is
+        # unwritten, the gate is the file itself: pirategoat-bot reads it
+        # and fails the delivery if it is absent, so that check has to be
+        # here rather than left implicit. Once the report exists, an
+        # interactive run still owes a human the recap — "present a
+        # formatted summary" a few lines up was, before this, a loose
+        # ACTIONS bullet next to a `None` handoff, the only step in the
+        # pipeline whose actual deliverable (the thing a person reads) had
+        # no checklisted gate at all. An orchestrator that dutifully
+        # verified every other step's handoff file could run this step,
+        # see the report already on disk, and advance to step 12 having
+        # never posted the recap the step exists to produce.
         "handoff": (
             [(
                 f"Regenerate `{od}/review-report.md` from the newly settled "
@@ -2264,7 +2272,19 @@ def _step_11_present_results(mode, state, context, config, output_dir):
                      "step 11 before reporting the pipeline complete."
             )]
             if publication_pending
-            else None
+            else (
+                [
+                    "Before calling step 12, confirm you have already sent "
+                    "the formatted recap (verdict + key findings, read "
+                    f"from `{od}/review-report.md`) as a chat message to "
+                    "the user in this turn. Having written or read the "
+                    "report file does not satisfy this — the recap must "
+                    "actually be posted. If you have not posted it yet, "
+                    "do so now before proceeding."
+                ]
+                if is_interactive
+                else None
+            )
         ),
         "blocks_progress": publication_pending,
         # Read by pipeline.py's format_output for the completion footer: a
