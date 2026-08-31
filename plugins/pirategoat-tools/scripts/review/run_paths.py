@@ -17,12 +17,14 @@ Leaf module: stdlib only.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import secrets
 import shutil
 import sys
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -35,6 +37,8 @@ REVIEWERS_SUBDIR = "reviewers"
 SYNTHESIS_SUBDIR = "synthesis"
 SCRATCH_SUBDIR = "tmp"
 _RUN_SUBDIRS = (PIPELINE_SUBDIR, REVIEWERS_SUBDIR, SYNTHESIS_SUBDIR, SCRATCH_SUBDIR)
+_IDENTITY_DIGEST_LENGTH = 12
+_READABLE_SEGMENT_LENGTH = 80
 
 
 def state_root() -> Path:
@@ -45,14 +49,32 @@ def state_root() -> Path:
 
 
 def safe_segment(text: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9._-]", "-", text.replace("/", "-"))
+    if not isinstance(text, str) or not text or not text.strip("."):
+        raise ValueError("path identity must not be empty or dot-only")
+    identity = unicodedata.normalize("NFC", text)
+    readable = re.sub(r"[^a-zA-Z0-9._-]", "-", identity)
+    readable = re.sub(r"-+", "-", readable).strip("-")
+    readable = readable[:_READABLE_SEGMENT_LENGTH].rstrip("-") or "identity"
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[
+        :_IDENTITY_DIGEST_LENGTH
+    ]
+    return f"{readable}--{digest}"
 
 
 def target_dir(kind: str, repo_root: str, target: str) -> Path:
     if kind not in KINDS:
         raise ValueError(f"unknown review kind: {kind!r}")
-    repo_seg = safe_segment(str(repo_root).lstrip("/"))
-    return state_root() / "reviews" / kind / repo_seg / safe_segment(target)
+    repo_identity = str(repo_root)
+    if not repo_identity or not repo_identity.strip("."):
+        raise ValueError("path identity must not be empty or dot-only")
+    canonical_repo = str(Path(repo_identity).expanduser().resolve())
+    base = state_root() / "reviews" / kind
+    candidate = base / safe_segment(canonical_repo) / safe_segment(target)
+    try:
+        candidate.resolve().relative_to(base.resolve())
+    except ValueError as exc:
+        raise ValueError("review target escapes review state root") from exc
+    return candidate
 
 
 def allocate_run_dir(target: Path) -> Path:

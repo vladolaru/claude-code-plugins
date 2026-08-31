@@ -38,17 +38,72 @@ class TestStateRoot:
 
 
 class TestSafeSegment:
-    def test_slashes_and_forbidden_chars_become_hyphens(self):
-        assert run_paths.safe_segment("feat/x y") == "feat-x-y"
+    def test_keeps_a_readable_prefix_and_stable_digest(self):
+        segment = run_paths.safe_segment("feat/x y")
 
-    def test_allowed_chars_pass_through(self):
-        assert run_paths.safe_segment("a.B_c-1") == "a.B_c-1"
+        assert segment.startswith("feat-x-y--")
+        digest = segment.rsplit("--", 1)[1]
+        assert len(digest) == 12
+        assert set(digest) <= set("0123456789abcdef")
+
+    def test_same_identity_is_deterministic(self):
+        assert run_paths.safe_segment("a.B_c-1") == run_paths.safe_segment(
+            "a.B_c-1"
+        )
+
+    def test_sanitization_collisions_keep_distinct_digests(self):
+        assert run_paths.safe_segment("feature/foo") != run_paths.safe_segment(
+            "feature-foo"
+        )
+
+    @pytest.mark.parametrize("bad", ["", ".", "..", "..."])
+    def test_rejects_empty_and_dot_only_identities(self, bad):
+        with pytest.raises(ValueError, match="empty or dot-only"):
+            run_paths.safe_segment(bad)
 
 
 class TestTargetDir:
     def test_builds_kind_repo_target_hierarchy(self, home):
         d = run_paths.target_dir("pr", "/Users/x/work/repo", "123")
-        assert d == home / ".pirategoat-tools" / "reviews" / "pr" / "Users-x-work-repo" / "123"
+        base = home / ".pirategoat-tools" / "reviews" / "pr"
+        assert d.parent.parent == base
+        assert d.parent.name.startswith("Users-x-work-repo--")
+        assert d.name.startswith("123--")
+
+    def test_target_sanitization_collisions_resolve_to_distinct_paths(self, home):
+        slash = run_paths.target_dir("branch", "/repo", "feature/foo")
+        hyphen = run_paths.target_dir("branch", "/repo", "feature-foo")
+
+        assert slash != hyphen
+
+    def test_repo_sanitization_collisions_resolve_to_distinct_paths(self, home):
+        nested = run_paths.target_dir("branch", "/one/two-three", "main")
+        flattened = run_paths.target_dir("branch", "/one-two/three", "main")
+
+        assert nested != flattened
+
+    @pytest.mark.parametrize("bad", ["", ".", "..", "..."])
+    def test_rejects_dot_only_repo_or_target_components(self, home, bad):
+        with pytest.raises(ValueError, match="empty or dot-only"):
+            run_paths.target_dir("branch", bad, "main")
+        with pytest.raises(ValueError, match="empty or dot-only"):
+            run_paths.target_dir("branch", "/repo", bad)
+
+    def test_rejects_a_resolved_target_outside_the_kind_directory(
+        self, home, tmp_path
+    ):
+        repo_root = str(tmp_path / "repo")
+        base = home / ".pirategoat-tools" / "reviews" / "branch"
+        repo_dir = base / run_paths.safe_segment(str(Path(repo_root).resolve()))
+        repo_dir.mkdir(parents=True)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (repo_dir / run_paths.safe_segment("main")).symlink_to(
+            outside, target_is_directory=True
+        )
+
+        with pytest.raises(ValueError, match="escapes review state root"):
+            run_paths.target_dir("branch", repo_root, "main")
 
     def test_rejects_an_unknown_kind(self, home):
         with pytest.raises(ValueError):
@@ -199,6 +254,22 @@ class TestCli:
         latest = self._run(home, "latest", "--kind", "pr", "--repo-root", "/r", "--target", "42")
         assert latest.returncode == 0
         assert Path(latest.stdout.strip()).resolve() == Path(first.stdout.strip()).resolve()
+
+    @pytest.mark.parametrize("target", ["", ".", "..", "..."])
+    def test_allocate_rejects_dot_only_direct_cli_targets(self, home, target):
+        result = self._run(
+            home,
+            "allocate",
+            "--kind",
+            "branch",
+            "--repo-root",
+            "/r",
+            "--target",
+            target,
+        )
+
+        assert result.returncode != 0
+        assert not (home / ".pirategoat-tools" / "reviews").exists()
 
     def test_latest_on_an_empty_target_exits_1_with_no_runs(self, home):
         result = self._run(home, "latest", "--kind", "pr", "--repo-root", "/r", "--target", "99")
