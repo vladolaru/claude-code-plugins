@@ -4,6 +4,7 @@ import glob
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -254,7 +255,7 @@ class TestPrefixCapping:
         assert os.path.isfile(manifest_path)
         assert len(os.path.basename(manifest_path).encode("utf-8")) <= 255
 
-    def test_capping_is_deterministic_and_groups_run_numbers(
+    def test_capping_is_deterministic_for_repeated_prefixes(
         self, mod, tmp_path
     ):
         out = tmp_path / "output"
@@ -282,10 +283,10 @@ class TestPrefixCapping:
 
 
 class TestStructuredFilename:
-    """Telemetry log filenames use structured <mode>-<repo_slug>-<identifier>-run<N> format."""
+    """Telemetry log filenames use structured prefix--timestamp-nonce format."""
 
     def test_pr_mode_filename(self, mod, tmp_path):
-        """PR reviews use mode-repo_slug-pr_number-runN."""
+        """PR reviews use mode-repo_slug-pr_number--timestamp-nonce."""
         out = tmp_path / "output"
         out.mkdir()
         t = mod.ReviewTelemetry(str(out), log_dir=str(tmp_path / "logs"))
@@ -293,11 +294,14 @@ class TestStructuredFilename:
                        repo_path="/Users/vlad/Work/a8c/woocommerce-payments",
                        identifier="42")
         filename = os.path.basename(path)
-        assert filename.startswith("pr-Users-vlad-Work-a8c-woocommerce-payments-42-run1--")
+        assert re.match(
+            r"^pr-Users-vlad-Work-a8c-woocommerce-payments-42--\d{8}T\d{6}-[0-9a-f]{32}\.jsonl$",
+            filename,
+        )
         assert filename.endswith(".jsonl")
 
     def test_full_mode_with_branch(self, mod, tmp_path):
-        """Full reviews use mode-repo_slug-branch_slug-runN."""
+        """Full reviews use mode-repo_slug-branch_slug--timestamp-nonce."""
         out = tmp_path / "output"
         out.mkdir()
         t = mod.ReviewTelemetry(str(out), log_dir=str(tmp_path / "logs"))
@@ -305,7 +309,10 @@ class TestStructuredFilename:
                        repo_path="/Users/vlad/Work/a8c/ciab-admin",
                        identifier="fix/WOOPLUG-123-some-bug")
         filename = os.path.basename(path)
-        assert filename.startswith("full-Users-vlad-Work-a8c-ciab-admin-fix-WOOPLUG-123-some-bug-run1--")
+        assert re.match(
+            r"^full-Users-vlad-Work-a8c-ciab-admin-fix-WOOPLUG-123-some-bug--\d{8}T\d{6}-[0-9a-f]{32}\.jsonl$",
+            filename,
+        )
 
     def test_incremental_mode(self, mod, tmp_path):
         out = tmp_path / "output"
@@ -315,10 +322,13 @@ class TestStructuredFilename:
                        repo_path="/Users/vlad/Work/a8c/ciab-admin",
                        identifier="feat/add-settings")
         filename = os.path.basename(path)
-        assert filename.startswith("incremental-Users-vlad-Work-a8c-ciab-admin-feat-add-settings-run1--")
+        assert re.match(
+            r"^incremental-Users-vlad-Work-a8c-ciab-admin-feat-add-settings--\d{8}T\d{6}-[0-9a-f]{32}\.jsonl$",
+            filename,
+        )
 
-    def test_run_number_increments(self, mod, tmp_path):
-        """Subsequent runs of the same review get incrementing run numbers."""
+    def test_repeated_runs_use_the_same_filename_shape(self, mod, tmp_path):
+        """Subsequent runs use independent nonce-suffixed filenames."""
         log_dir = tmp_path / "logs"
         log_dir.mkdir()
 
@@ -326,15 +336,15 @@ class TestStructuredFilename:
         out1.mkdir()
         t1 = mod.ReviewTelemetry(str(out1), log_dir=str(log_dir))
         path1 = t1.start(mode="pr", repo_path="/repo", identifier="99")
-        assert "-run1--" in os.path.basename(path1)
+        assert re.match(r"^pr-repo-99--\d{8}T\d{6}-[0-9a-f]{32}\.jsonl$", os.path.basename(path1))
 
         out2 = tmp_path / "output2"
         out2.mkdir()
         t2 = mod.ReviewTelemetry(str(out2), log_dir=str(log_dir))
         path2 = t2.start(mode="pr", repo_path="/repo", identifier="99")
-        assert "-run2--" in os.path.basename(path2)
+        assert re.match(r"^pr-repo-99--\d{8}T\d{6}-[0-9a-f]{32}\.jsonl$", os.path.basename(path2))
 
-    def test_same_run_number_and_timestamp_allocate_distinct_logs(self, mod, tmp_path):
+    def test_same_timestamp_allocates_distinct_logs(self, mod, tmp_path):
         """Concurrent starts never share a JSONL file or durable run identity."""
         log_dir = tmp_path / "logs"
         out1 = tmp_path / "output1"
@@ -348,10 +358,7 @@ class TestStructuredFilename:
             def now(cls, tz=None):
                 return fixed_now
 
-        with (
-            patch.object(mod.ReviewTelemetry, "_next_run_number", return_value=1),
-            patch.object(mod, "datetime", FrozenDatetime),
-        ):
+        with patch.object(mod, "datetime", FrozenDatetime):
             first = mod.ReviewTelemetry(str(out1), log_dir=str(log_dir))
             second = mod.ReviewTelemetry(str(out2), log_dir=str(log_dir))
             first_path = first.start(
@@ -383,7 +390,7 @@ class TestStructuredFilename:
         t = mod.ReviewTelemetry(str(out), log_dir=str(tmp_path / "logs"))
         path = t.start(mode="full", repo_path="/repo", identifier="")
         filename = os.path.basename(path)
-        assert filename.startswith("full-repo-branch-run1--")
+        assert re.match(r"^full-repo-branch--\d{8}T\d{6}-[0-9a-f]{32}\.jsonl$", filename)
 
     def test_fallback_without_structured_params(self, mod, tmp_path):
         """Legacy callers that don't pass mode/repo_path get output_dir basename."""
@@ -392,7 +399,7 @@ class TestStructuredFilename:
         t = mod.ReviewTelemetry(str(out), log_dir=str(tmp_path / "logs"))
         path = t.start(pr_number="42")
         filename = os.path.basename(path)
-        assert filename.startswith("branch-review-some-repo-run1--")
+        assert re.match(r"^branch-review-some-repo--\d{8}T\d{6}-[0-9a-f]{32}\.jsonl$", filename)
 
 
 # ── log_step() ──────────────────────────────────────────────────────
@@ -2997,7 +3004,7 @@ class TestReReviews:
         assert os.path.isfile(path1)
         assert os.path.isfile(path2)
 
-    def test_glob_finds_all_runs(self, mod, tmp_path):
+    def test_glob_finds_all_run_logs(self, mod, tmp_path):
         output_dir = tmp_path / "pr-review-org-repo-42"
         output_dir.mkdir()
         log_dir = tmp_path / "logs"
@@ -3012,7 +3019,7 @@ class TestReReviews:
             t2 = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
             t2.start(pr_number="42")
 
-        pattern = str(log_dir / "pr-review-org-repo-42-run*--*.jsonl")
+        pattern = str(log_dir / "pr-review-org-repo-42--*.jsonl")
         matches = glob.glob(pattern)
         assert len(matches) == 2
 

@@ -9,7 +9,6 @@ Best-effort: failures never break the pipeline.
 Zero external dependencies (stdlib only).
 """
 
-import glob as glob_mod
 import hashlib
 import json
 import os
@@ -260,8 +259,7 @@ class ReviewTelemetry:
         now = datetime.now(timezone.utc)
         timestamp = now.strftime("%Y%m%dT%H%M%S")
         prefix = self._build_filename_prefix(mode, repo_path, identifier)
-        run_num = self._next_run_number(prefix)
-        self._log_path = self._allocate_log_path(prefix, run_num, timestamp)
+        self._log_path = self._allocate_log_path(prefix, timestamp)
 
         # Write marker so subsequent invocations can find the log
         marker = artifact_path(self.output_dir, "telemetry_log_path")
@@ -455,22 +453,21 @@ class ReviewTelemetry:
         return cls._UNSAFE_RE.sub("-", normalized).strip("-")
 
     # Longest sibling filename built from the prefix is the manifest:
-    # {prefix}-run{N}--{timestamp}-{nonce}.manifest.json — 74 bytes of fixed
-    # overhead at 6 run-number digits. Cap the prefix so every derived name
-    # stays under the common 255-byte filename component limit; an oversized
-    # prefix (deep worktree, long branch name) would otherwise make
-    # allocation raise ENAMETOOLONG, which the fail-open pipeline swallows
-    # into a run with no telemetry at all.
+    # {prefix}--{timestamp}-{nonce}.manifest.json — 64 bytes of fixed
+    # overhead. Cap the prefix so every derived name stays under the common
+    # 255-byte filename component limit; an oversized prefix (deep worktree,
+    # long branch name) would otherwise make allocation raise ENAMETOOLONG,
+    # which the fail-open pipeline swallows into a run with no telemetry at
+    # all.
     _PREFIX_MAX_BYTES = 180
 
     @classmethod
     def _cap_prefix(cls, prefix: str) -> str:
         """Deterministically shorten oversized prefixes, keeping distinctness.
 
-        Same input → same output (so run numbering keeps grouping a run's
-        retries), and distinct long prefixes stay distinct via a digest of
-        the full original. Byte-aware: the legacy fallback prefix is not
-        ASCII-sanitized.
+        Same input → same output, and distinct long prefixes stay distinct
+        via a digest of the full original. Byte-aware: the legacy fallback
+        prefix is not ASCII-sanitized.
         """
         raw = prefix.encode("utf-8")
         if len(raw) <= cls._PREFIX_MAX_BYTES:
@@ -502,17 +499,11 @@ class ReviewTelemetry:
             os.path.basename(os.path.normpath(self.output_dir)) or "review"
         )
 
-    def _next_run_number(self, prefix: str) -> int:
-        """Count existing log files with the same prefix and return the next run number."""
-        pattern = os.path.join(self.log_dir, f"{prefix}-run*--*.jsonl")
-        existing = glob_mod.glob(pattern)
-        return len(existing) + 1
-
-    def _allocate_log_path(self, prefix: str, run_num: int, timestamp: str) -> str:
+    def _allocate_log_path(self, prefix: str, timestamp: str) -> str:
         """Atomically allocate a nonce-suffixed log path unique to this run."""
         while True:
             nonce = uuid.uuid4().hex
-            filename = f"{prefix}-run{run_num}--{timestamp}-{nonce}.jsonl"
+            filename = f"{prefix}--{timestamp}-{nonce}.jsonl"
             path = os.path.join(self.log_dir, filename)
             try:
                 with open(path, "x"):
