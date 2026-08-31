@@ -140,20 +140,16 @@ def _actor_start_time(
     every artifact of a 19-agent run came to carry a duration of ~0ms,
     including a reconciliator that ran for 211 seconds.
 
-    ``marker_name`` is the exact filename its actor names for itself, never
-    a guess: a reviewer maps the agent name its assignment carries to a
-    short reviewer directory, and a synthesis actor names its own
-    synthesis dispatch marker. None everywhere the answer is not known —
-    no directory, no name, no marker, or an unreadable stamp. Absence is
-    reported as absence, never as zero.
+    ``marker_name`` carries the already-derived reviewer directory identity,
+    or the exact synthesis marker identity. None everywhere the answer is
+    not known — no directory, no name, no marker, or an unreadable stamp.
+    Absence is reported as absence, never as zero.
     """
     if not output_dir or not marker_name:
         return None
     if marker_name.startswith(_REVIEWER_MARKER_PREFIX):
-        agent_name = marker_name.removeprefix(_REVIEWER_MARKER_PREFIX)
-        path = started_marker_path(
-            output_dir, derive_reviewer_name(agent_name)
-        )
+        reviewer = marker_name.removeprefix(_REVIEWER_MARKER_PREFIX)
+        path = started_marker_path(output_dir, reviewer)
     elif marker_name.startswith(SYNTHESIS_MARKER_PREFIX):
         path = synthesis_started_marker(
             output_dir, marker_name.removeprefix(SYNTHESIS_MARKER_PREFIX)

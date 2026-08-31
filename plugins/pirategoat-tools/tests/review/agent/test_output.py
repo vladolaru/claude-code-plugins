@@ -2462,6 +2462,27 @@ class TestMetaIsNeverFakeZero:
         b = ReviewOutputBuilder.open(tmp_path, "1", "security")
         assert 29_000 <= b.to_dict()["meta"]["review_duration_ms"] <= 40_000
 
+    def test_dispatch_identity_ending_in_reviewer_is_derived_once(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        reviewer = "repo-foo-reviewer"
+        write_canonical_assignment(
+            tmp_path,
+            reviewer,
+            agent_name="repo-foo-reviewer-reviewer",
+        )
+        self._stamp(
+            Path(started_marker_path(tmp_path, reviewer)),
+            datetime.now(timezone.utc) - timedelta(seconds=30),
+        )
+
+        builder = ReviewOutputBuilder.open(tmp_path, "1", reviewer)
+
+        assert 29_000 <= (
+            builder.to_dict()["meta"]["review_duration_ms"]
+        ) <= 40_000
+
     def test_duration_is_null_without_an_assignment(self, tmp_path, monkeypatch):
         """An unbound or unassigned builder has no agent name, so it has no
         marker to name. Absence stays absence."""
