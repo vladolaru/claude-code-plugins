@@ -19,7 +19,8 @@ from review import dispatch_status
 from review import synthesis_lifecycle
 from review.agent.output import ReviewOutputBuilder, finalize_review
 from review.reconciliation_context import load_agent_reviews
-from review.reviewer_lifecycle import ReviewPaths
+from review.reviewer_lifecycle import ReviewPaths, review_paths, started_marker_path
+from review.reviewer_names import derive_reviewer_name
 from helpers.review_fixtures import (
     canonical_assignment,
     canonical_review_document,
@@ -44,29 +45,26 @@ def _write_plan(tmp_path, agents):
 
 def _start_agent(tmp_path, name, minutes_ago=0):
     ts = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
-    (tmp_path / f"{name}.started").write_text(ts.isoformat())
-
-
-def _reviewer_filename(agent_name: str) -> str:
-    """Mirror the production derive_reviewer_name convention."""
-    if agent_name.endswith("-reviewer"):
-        base = agent_name[: -len("-reviewer")]
-    else:
-        base = agent_name
-    return f"{base}-review.json"
+    marker = Path(started_marker_path(tmp_path, derive_reviewer_name(name)))
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(ts.isoformat())
 
 
 def _finish_agent(tmp_path, name, findings=None, verdict=None):
     severities = [finding["severity"] for finding in findings or []]
-    reviewer = _reviewer_filename(name)[: -len("-review.json")]
+    reviewer = derive_reviewer_name(name)
     review = canonical_review_document(reviewer, severities)
     if verdict is not None:
         assert review["verdict"] == verdict
-    (tmp_path / _reviewer_filename(name)).write_text(json.dumps(review))
+    path = Path(review_paths(tmp_path, reviewer).final)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(review))
 
 
 def _write_assignment(tmp_path, reviewer, agent_name, claimable_files):
-    (tmp_path / f"{reviewer}-assignment.json").write_text(json.dumps(
+    path = Path(review_paths(tmp_path, reviewer).assignment)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(
         canonical_assignment(
             reviewer,
             agent_name=agent_name,
@@ -301,7 +299,7 @@ class TestCheckStatus:
             {"name": "slow-reviewer", "status": "DISPATCH"},
         ])
         _start_agent(tmp_path, "slow-reviewer", minutes_ago=25)
-        draft = tmp_path / "slow-review.draft.json"
+        draft = Path(review_paths(tmp_path, "slow").draft)
         draft.write_bytes(b'{"snapshot":"late"}')
 
         result = mod.attach_draft_evidence(
@@ -608,7 +606,9 @@ class TestFilenameConvention:
         (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
 
         review = canonical_review_document("security")
-        (tmp_path / "security-review.json").write_text(json.dumps(review))
+        path = Path(review_paths(tmp_path, "security").final)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(review))
 
         result = mod.check_status(str(tmp_path))
         agent = result["agents"][0]
@@ -623,7 +623,9 @@ class TestFilenameConvention:
         (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
 
         review = canonical_review_document("code", ["high"])
-        (tmp_path / "code-review.json").write_text(json.dumps(review))
+        path = Path(review_paths(tmp_path, "code").final)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(review))
 
         result = mod.check_status(str(tmp_path))
         agent = result["agents"][0]
@@ -635,7 +637,9 @@ class TestFilenameConvention:
         (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
 
         review = canonical_review_document("gemini")
-        (tmp_path / "gemini-review.json").write_text(json.dumps(review))
+        path = Path(review_paths(tmp_path, "gemini").final)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(review))
 
         result = mod.check_status(str(tmp_path))
         agent = result["agents"][0]
@@ -651,7 +655,9 @@ class TestFindingsKey:
         (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
 
         review = canonical_review_document("security", ["critical", "high"])
-        (tmp_path / "security-review.json").write_text(json.dumps(review))
+        path = Path(review_paths(tmp_path, "security").final)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(review))
 
         result = mod.check_status(str(tmp_path))
         agent = result["agents"][0]
@@ -665,7 +671,9 @@ class TestFindingsKey:
         _write_plan(tmp_path, [
             {"name": "security-reviewer", "status": "DISPATCH"},
         ])
-        (tmp_path / "security-review.json").write_text(json.dumps({
+        path = Path(review_paths(tmp_path, "security").final)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
             "schema": 1,
             "reviewer": "security",
             "issues": [],

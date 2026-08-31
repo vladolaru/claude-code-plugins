@@ -29,7 +29,12 @@ from helpers.review_fixtures import (
 from review import dependency_refresh
 from review import synthesis_lifecycle as lifecycle_contract
 from review.manifest_sections import aggregate_file_review
-from review.reviewer_lifecycle import ReviewPaths
+from review.reviewer_lifecycle import (
+    ReviewPaths,
+    review_paths,
+    scope_summary_path,
+    started_marker_path,
+)
 
 
 def _load_module():
@@ -93,6 +98,27 @@ def _write_assignment_inputs(output_dir, changed, reviewable, agents):
         "changed_files": reviewable,
         "agents": agents,
     }))
+
+
+def _write_final_review(output_dir, reviewer, payload):
+    path = Path(review_paths(output_dir, reviewer).final)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload))
+    return path
+
+
+def _write_assignment(output_dir, reviewer, payload):
+    path = Path(review_paths(output_dir, reviewer).assignment)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload))
+    return path
+
+
+def _write_started(output_dir, reviewer):
+    path = Path(started_marker_path(output_dir, reviewer))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(datetime.now(timezone.utc).isoformat())
+    return path
 
 
 # ── start() ─────────────────────────────────────────────────────────
@@ -619,8 +645,8 @@ class TestRunManifest:
         no consumer reads until the run settles.
         """
         telemetry.start(run_id="run-1")
-        (output_dir / "code-review.json").write_text(
-            json.dumps(canonical_review_document("code", ["medium"]))
+        _write_final_review(
+            output_dir, "code", canonical_review_document("code", ["medium"])
         )
         (output_dir / "review-findings.json").write_text(
             json.dumps(canonical_findings_ledger(["medium"]))
@@ -638,7 +664,7 @@ class TestRunManifest:
 
         assert not [
             path for path in opened
-            if path.endswith("-review.json")
+            if path.endswith("/review.json")
             or path.endswith("review-findings.json")
         ]
 
@@ -1163,7 +1189,9 @@ class TestRunManifest:
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
         # The runtime sidecar the reviewer actually wrote, unquoted because
         # scope.py runs `-c core.quotepath=false`.
-        (output_dir / "security-reviewer-scope-summary.json").write_text(
+        scope_summary = Path(scope_summary_path(output_dir, "security"))
+        scope_summary.parent.mkdir(parents=True, exist_ok=True)
+        scope_summary.write_text(
             json.dumps({
                 "schema": 3,
                 "inline_diff_files": ["src/café.py"],
@@ -1646,10 +1674,9 @@ class TestRunManifest:
             reviewable=["a.py", "b.py", "c.py"],
             agents=[{"name": "security-reviewer", "status": "DISPATCH"}],
         )
-        (output_dir / "security-assignment.json").write_text(json.dumps(canonical_assignment(
-            "security",
-            review_claimable_files=["a.py", "b.py", "c.py"],
-        )))
+        _write_assignment(output_dir, "security", canonical_assignment(
+            "security", review_claimable_files=["a.py", "b.py", "c.py"],
+        ))
         telemetry.start(run_id="run-1")
         telemetry.log_agent_start(
             "security-reviewer", scope_paths=["a.py", "b.py", "c.py"]
@@ -1742,9 +1769,9 @@ class TestRunManifest:
             reviewable=["a.py"],
             agents=[{"name": "security-reviewer", "status": "DISPATCH"}],
         )
-        (output_dir / "security-assignment.json").write_text(json.dumps(canonical_assignment(
+        _write_assignment(output_dir, "security", canonical_assignment(
             "security", review_claimable_files=["a.py"],
-        )))
+        ))
         telemetry.start(run_id="run-1")
         telemetry.log_agent_start("security-reviewer", scope_paths=["a.py"])
         ReviewOutputBuilder.open(
@@ -2677,7 +2704,7 @@ class TestSnapshot:
         log_dir = tmp_path / "logs"
         review = canonical_review_document("security", ["high", "medium"])
         _write_dispatch_plan(output_dir, ["security-reviewer"])
-        (output_dir / "security-review.json").write_text(json.dumps(review))
+        _write_final_review(output_dir, "security", review)
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
         t.start(pr_number="42")
         t.finalize(step=15, phase="OUTPUT", title="Present Results")
@@ -2692,12 +2719,12 @@ class TestSnapshot:
         self, mod, output_dir, tmp_path
     ):
         _write_dispatch_plan(output_dir, ["security-reviewer"])
-        (output_dir / "security-review.json").write_text(json.dumps({
+        _write_final_review(output_dir, "security", {
             "schema": 1,
             "reviewer": "security",
             "issues": [],
             "verdict": "approve",
-        }))
+        })
         telemetry = mod.ReviewTelemetry(
             str(output_dir), log_dir=str(tmp_path / "logs")
         )
@@ -2716,7 +2743,7 @@ class TestSnapshot:
         review["summary"]["suppressed_advisory_finding_count"] = 2
         review["summary"]["verdict_without_advisory"] = "block"
         _write_dispatch_plan(output_dir, ["security-reviewer"])
-        (output_dir / "security-review.json").write_text(json.dumps(review))
+        _write_final_review(output_dir, "security", review)
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(tmp_path / "logs"))
 
         extracted = t._extract_agent_results()["security"]
@@ -2734,9 +2761,9 @@ class TestSnapshot:
         """
         log_dir = tmp_path / "logs"
         _write_dispatch_plan(output_dir, ["security-reviewer"])
-        (output_dir / "security-review.json").write_text(json.dumps(
-            canonical_review_document("security", ["medium"])
-        ))
+        _write_final_review(
+            output_dir, "security", canonical_review_document("security", ["medium"])
+        )
         (output_dir / "review-findings.json").write_text(json.dumps(
             canonical_findings_ledger(["medium"])
         ))
@@ -2774,9 +2801,9 @@ class TestSnapshot:
         vocabulary.
         """
         _write_dispatch_plan(output_dir, ["security-reviewer"])
-        (output_dir / "security-review.json").write_text(json.dumps(
-            canonical_review_document("security", ["high"])
-        ))
+        _write_final_review(
+            output_dir, "security", canonical_review_document("security", ["high"])
+        )
         (output_dir / "review-findings.json").write_text(json.dumps(
             canonical_findings_ledger(["high"])
         ))
@@ -2907,7 +2934,7 @@ class TestSnapshot:
         for the shared rationale — this is the sibling extractor.
         """
         _write_dispatch_plan(output_dir, ["security-reviewer"])
-        (output_dir / "security-review.json").write_text(json.dumps("oops"))
+        _write_final_review(output_dir, "security", "oops")
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(tmp_path / "logs"))
         t.start(pr_number="42")
 
@@ -3165,9 +3192,7 @@ class TestLogAgentComplete:
 
     def test_appends_agent_complete_event(self, telemetry, output_dir):
         telemetry.start(pr_number="42")
-        (output_dir / "security-reviewer.started").write_text(
-            datetime.now(timezone.utc).isoformat()
-        )
+        _write_started(output_dir, "security")
         time.sleep(0.05)
         telemetry.log_agent_complete(
             agent_name="security-reviewer", review_digest=FINAL_DIGEST,
@@ -3180,9 +3205,7 @@ class TestLogAgentComplete:
 
     def test_includes_verdict_and_issues(self, telemetry, output_dir):
         telemetry.start(pr_number="42")
-        (output_dir / "security-reviewer.started").write_text(
-            datetime.now(timezone.utc).isoformat()
-        )
+        _write_started(output_dir, "security")
         telemetry.log_agent_complete(
             agent_name="security-reviewer", review_digest=FINAL_DIGEST,
             verdict="comment",
@@ -3195,9 +3218,7 @@ class TestLogAgentComplete:
 
     def test_calculates_duration_from_started_file(self, telemetry, output_dir):
         telemetry.start(pr_number="42")
-        (output_dir / "security-reviewer.started").write_text(
-            datetime.now(timezone.utc).isoformat()
-        )
+        _write_started(output_dir, "security")
         time.sleep(0.05)
         telemetry.log_agent_complete(
             agent_name="security-reviewer", review_digest=FINAL_DIGEST,
@@ -3317,9 +3338,9 @@ class TestReviewVocabularyManifestProjection:
         self, mod, output_dir, tmp_path
     ):
         _write_dispatch_plan(output_dir, ["security-reviewer"])
-        (output_dir / "security-review.json").write_text(json.dumps(
-            canonical_review_document("security", ["medium"])
-        ))
+        _write_final_review(
+            output_dir, "security", canonical_review_document("security", ["medium"])
+        )
         reconciliation = {
             "input_finding_count": 3,
             "contributing_agent_count": 2,

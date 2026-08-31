@@ -23,13 +23,16 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from review import critic_adjustments
+from review import review_markdown as review_markdown_mod
 from review.agent.output import ReviewOutputBuilder, finalize_review
 from review.review_markdown import materialize_markdown, render_markdown
+from review.reviewer_lifecycle import review_paths, reviewer_markdown_path
 
 sys.path.insert(0, str(TESTS_DIR))
 from helpers.review_fixtures import (
     apply_schema,
     canonical_findings_ledger,
+    canonical_review_document,
     rejected_schema_values,
     write_canonical_assignment,
 )
@@ -145,12 +148,12 @@ class TestMaterializeMarkdown:
                 write_canonical_assignment(d, reviewer)
                 _save_and_finalize(b, d)
             written = materialize_markdown(d)
-            assert sorted(os.path.basename(p) for p in written) == [
-                "performance-review.md", "security-review.md",
+            assert sorted(Path(p).parent.name for p in written) == [
+                "performance", "security",
             ]
-            with open(os.path.join(d, "security-review.json")) as f:
+            with open(review_paths(d, "security").final) as f:
                 data = json.load(f)
-            md_text = Path(d, "security-review.md").read_text()
+            md_text = Path(reviewer_markdown_path(d, "security")).read_text()
             assert md_text == render_markdown(data)
 
     def test_is_idempotent(self):
@@ -161,26 +164,30 @@ class TestMaterializeMarkdown:
             first = materialize_markdown(d)
             second = materialize_markdown(d)
             assert first == second
-            assert Path(d, "security-review.md").is_file()
+            assert Path(reviewer_markdown_path(d, "security")).is_file()
 
     def test_skips_malformed_json_without_raising(self):
         with tempfile.TemporaryDirectory() as d:
-            Path(d, "broken-review.json").write_text("{ not json")
+            broken = Path(review_paths(d, "broken").final)
+            broken.parent.mkdir(parents=True, exist_ok=True)
+            broken.write_text("{ not json")
             write_canonical_assignment(d, "security")
             _save_and_finalize(
                 ReviewOutputBuilder(pr_id="1", reviewer="security"), d
             )
             written = materialize_markdown(d)
-            assert [os.path.basename(p) for p in written] == ["security-review.md"]
-            assert not Path(d, "broken-review.md").exists()
+            assert [Path(p).parent.name for p in written] == ["security"]
+            assert not Path(reviewer_markdown_path(d, "broken")).exists()
 
     def test_skips_valid_json_missing_required_keys(self, capsys):
         with tempfile.TemporaryDirectory() as d:
-            Path(d, "empty-review.json").write_text("{}")
+            empty = Path(review_paths(d, "empty").final)
+            empty.parent.mkdir(parents=True, exist_ok=True)
+            empty.write_text("{}")
             written = materialize_markdown(d)
             assert written == []
-            assert not Path(d, "empty-review.md").exists()
-            assert "skipped empty-review.json" in capsys.readouterr().err
+            assert not Path(reviewer_markdown_path(d, "empty")).exists()
+            assert "skipped review.json" in capsys.readouterr().err
 
     @pytest.mark.parametrize("schema", rejected_schema_values(2))
     def test_skips_a_final_review_at_any_other_schema(self, capsys, schema):
@@ -195,7 +202,7 @@ class TestMaterializeMarkdown:
             builder = ReviewOutputBuilder(pr_id="1", reviewer="security")
             write_canonical_assignment(d, "security")
             _save_and_finalize(builder, d)
-            path = Path(d, "security-review.json")
+            path = Path(review_paths(d, "security").final)
             path.write_text(json.dumps(
                 apply_schema(json.loads(path.read_text()), schema)
             ))
@@ -203,8 +210,8 @@ class TestMaterializeMarkdown:
             written = materialize_markdown(d)
 
             assert written == []
-            assert not Path(d, "security-review.md").exists()
-            assert "skipped security-review.json" in capsys.readouterr().err
+            assert not Path(reviewer_markdown_path(d, "security")).exists()
+            assert "skipped review.json" in capsys.readouterr().err
 
     def test_arbitrary_json_is_not_a_renderable_artifact_family(self, capsys):
         with tempfile.TemporaryDirectory() as d:
@@ -221,6 +228,30 @@ class TestMaterializeMarkdown:
             assert not Path(d, "arbitrary.md").exists()
             assert "unsupported review artifact" in capsys.readouterr().err
 
+    @pytest.mark.parametrize(
+        ("relative_path", "reviewer"),
+        [
+            pytest.param(
+                "other/security/review.json", "security",
+                id="non-reviewers-grandparent",
+            ),
+            pytest.param(
+                r"reviewers/security\escape/review.json",
+                r"security\escape",
+                id="unsafe-reviewer-component",
+            ),
+        ],
+    )
+    def test_direct_loader_rejects_noncanonical_reviewer_paths(
+        self, tmp_path, relative_path, reviewer
+    ):
+        path = tmp_path / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(canonical_review_document(reviewer)))
+
+        with pytest.raises(ValueError, match="unsupported review artifact"):
+            review_markdown_mod._load_renderable_review_artifact(path)
+
     def test_render_cli_prints_markdown(self):
         render_py = SCRIPTS_DIR / "review" / "review_markdown.py"
         assert render_py.is_file(), render_py  # layout guard
@@ -231,7 +262,7 @@ class TestMaterializeMarkdown:
             _save_and_finalize(b, d)
             result = subprocess.run(
                 [sys.executable, str(render_py), "render",
-                 os.path.join(d, "security-review.json")],
+                 review_paths(d, "security").final],
                 capture_output=True, text=True,
             )
             assert result.returncode == 0, result.stderr
@@ -245,7 +276,7 @@ class TestMaterializeMarkdown:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
             write_canonical_assignment(d, "security")
             _save_and_finalize(b, d)
-            md_path = Path(d, "security-review.md")
+            md_path = Path(reviewer_markdown_path(d, "security"))
             assert not md_path.exists()  # finalization publishes canonical JSON only
             result = subprocess.run(
                 [sys.executable, str(render_py), "materialize", d],
@@ -384,7 +415,7 @@ class TestMaterializeFindingsMarkdown:
             builder.save_draft()
 
             assert materialize_markdown(d) == []
-            assert not Path(d, "security-review.md").exists()
+            assert not Path(reviewer_markdown_path(d, "security")).exists()
 
     def test_suffix_selects_the_findings_artifact(self):
         with tempfile.TemporaryDirectory() as d:
@@ -415,9 +446,7 @@ class TestMaterializeFindingsMarkdown:
                 )
             )
             written = materialize_markdown(d)
-            assert [os.path.basename(p) for p in written] == [
-                "security-review.md",
-            ]
+            assert [Path(p).parent.name for p in written] == ["security"]
             assert not Path(d, "review-findings.md").exists()
 
     def test_missing_findings_json_writes_nothing_and_does_not_raise(self):
@@ -516,7 +545,7 @@ class TestMaterializeFindingsMarkdown:
                 capture_output=True, text=True,
             )
             assert result.returncode == 0, result.stderr
-            assert "security-review.md" in result.stdout
+            assert reviewer_markdown_path(d, "security") in result.stdout
             assert not Path(d, "review-findings.md").exists()
 
 

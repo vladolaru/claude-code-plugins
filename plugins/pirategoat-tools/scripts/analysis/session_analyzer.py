@@ -381,9 +381,17 @@ def find_agent_dispatches(
 
 def classify_dispatch(data: dict[str, Any]) -> str:
     """Classify whether this is a reviewer dispatch or a reconciliator dispatch."""
-    # Reconciliator dispatches: read many *-review.json files, write reconciled.*
+    def is_reviewer_render(path: str) -> bool:
+        parts = path.replace("\\", "/").split("/")
+        return (
+            len(parts) >= 3
+            and parts[-3] == "reviewers"
+            and parts[-1] in {"review.json", "review.md"}
+        )
+
+    # Reconciliator dispatches: read many reviewers/*/review.json files.
     review_json_reads = sum(
-        1 for f in data["files_read"] if f.endswith("-review.json") or f.endswith("-review.md")
+        1 for f in data["files_read"] if is_reviewer_render(f)
     )
     bash_count = len(data["bash_commands"])
 
@@ -617,7 +625,11 @@ def _parse_review_write_output(write_output: Any) -> dict[str, Any] | None:
         return None
 
     path = write_output.get("path")
-    if not isinstance(path, str) or not path.endswith("-review.json"):
+    if not isinstance(path, str):
+        return None
+    normalized_path = path.replace("\\", "/")
+    parts = normalized_path.rsplit("/", 3)
+    if len(parts) < 3 or parts[-1] != "review.json" or parts[-3] != "reviewers":
         return None
 
     try:
@@ -625,9 +637,9 @@ def _parse_review_write_output(write_output: Any) -> dict[str, Any] | None:
     except (json.JSONDecodeError, TypeError):
         return None
 
-    name = posixpath.basename(path.replace("\\", "/"))
+    reviewer = parts[-2]
     try:
-        validate_review_document(review_json, name[: -len("-review.json")])
+        validate_review_document(review_json, reviewer)
     except ValueError:
         return None
 

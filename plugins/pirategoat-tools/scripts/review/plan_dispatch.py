@@ -1825,7 +1825,8 @@ def expand_repo_reviewers(
 
     Each ``reviewers[]`` entry in the reviewed repo's ``.pirategoat/config.json``
     becomes one dispatch entry named ``repo-<id>-reviewer`` (the ``-reviewer``
-    suffix is load-bearing: reconciliation maps it to ``repo-<id>-review.json``).
+    suffix is load-bearing: reconciliation maps it to the short
+    ``reviewers/repo-<id>/`` directory identity).
     All such entries target the generic ``repo-reviewer-adapter`` body but carry a
     distinct ``ref``/``channel``/``execution``/``model``/``scope_domains``.
     Applicability gates dispatch like a conditional agent. Appended in place to

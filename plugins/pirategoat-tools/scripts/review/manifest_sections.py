@@ -16,6 +16,7 @@ try:
     from .review_document import load_review_document
     from .reviewer_names import derive_reviewer_name
     from .reviewer_lifecycle import review_paths
+    from .run_paths import REVIEWERS_SUBDIR
     from .dependency_refresh import (
         EXIT_STATUSES,
         REPORT_STATUSES,
@@ -42,6 +43,7 @@ except ImportError:
     from review.review_document import load_review_document
     from review.reviewer_names import derive_reviewer_name
     from review.reviewer_lifecycle import review_paths
+    from review.run_paths import REVIEWERS_SUBDIR
     from review.dependency_refresh import (
         EXIT_STATUSES,
         REPORT_STATUSES,
@@ -546,7 +548,7 @@ def aggregate_file_review(
 ) -> Optional[Dict[str, Any]]:
     """Aggregate per-agent scope summaries into the run-level file review.
 
-    Reads schema-3 ``*-scope-summary*.json`` sidecars, carries inline-diff
+    Reads schema-3 ``reviewers/*/scope-summary*.json`` sidecars, carries inline-diff
     receipt by file, and takes each reviewer's claimed and unclaimed files
     from its finalized review document. An agent that never finalized one
     keeps every review-claimable path its summary reported visible as
@@ -580,47 +582,49 @@ def aggregate_file_review(
     # agent's whole contribution, and dropping it can only over-report a
     # gap, never hide one.
     scoped_anywhere: set = set()
+    reviewers_root = os.path.join(output_dir, REVIEWERS_SUBDIR)
     try:
-        entries = sorted(os.scandir(output_dir), key=lambda e: e.name)
+        reviewer_entries = sorted(os.scandir(reviewers_root), key=lambda e: e.name)
     except OSError:
         return None
-    for entry in entries:
-        name = entry.name
-        if "-scope-summary" not in name or not name.endswith(".json"):
+    for reviewer_entry in reviewer_entries:
+        if not reviewer_entry.is_dir():
             continue
-        # Last occurrence is the delimiter: filenames always END with
-        # "-scope-summary[-<domain>].json" and no domain contains the
-        # marker, while adapter instance names are repo-authored kebab ids
-        # that legally may ("repo-payments-scope-summary-contract-reviewer").
-        # A first-occurrence split would truncate such an agent name and
-        # misattribute its scope.
-        agent = name.rsplit("-scope-summary", 1)[0]
+        agent = reviewer_entry.name
         try:
-            with open(entry.path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, json.JSONDecodeError):
+            entries = sorted(os.scandir(reviewer_entry.path), key=lambda e: e.name)
+        except OSError:
             continue
-        if not isinstance(data, dict) or data.get("schema") != 3:
-            continue
-        if any(
-            not isinstance(data.get(key), list)
-            for key in _REQUIRED_SCOPE_SUMMARY_LISTS
-        ):
-            continue
-        reporting_agents.add(agent)
-        # `routing_files` is the producer's own union of the other three
-        # plus `in_scope_files` (see `agent/scope.py`), so unioning it
-        # alone is the same set — the schema gate above already proved all
-        # four are lists.
-        scoped_anywhere.update(
-            normalize_repo_paths(data["routing_files"]) or []
-        )
-        for f_path in data["inline_diff_files"]:
-            if isinstance(f_path, str):
-                inline.setdefault(f_path, set()).add(agent)
-        for f_path in data["review_claimable_files"]:
-            if isinstance(f_path, str):
-                claimable_by_agent.setdefault(agent, set()).add(f_path)
+        for entry in entries:
+            name = entry.name
+            if not name.startswith("scope-summary") or not name.endswith(".json"):
+                continue
+            try:
+                with open(entry.path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(data, dict) or data.get("schema") != 3:
+                continue
+            if any(
+                not isinstance(data.get(key), list)
+                for key in _REQUIRED_SCOPE_SUMMARY_LISTS
+            ):
+                continue
+            reporting_agents.add(agent)
+            # `routing_files` is the producer's own union of the other three
+            # plus `in_scope_files` (see `agent/scope.py`), so unioning it
+            # alone is the same set — the schema gate above already proved all
+            # four are lists.
+            scoped_anywhere.update(
+                normalize_repo_paths(data["routing_files"]) or []
+            )
+            for f_path in data["inline_diff_files"]:
+                if isinstance(f_path, str):
+                    inline.setdefault(f_path, set()).add(agent)
+            for f_path in data["review_claimable_files"]:
+                if isinstance(f_path, str):
+                    claimable_by_agent.setdefault(agent, set()).add(f_path)
     if not reporting_agents:
         return None
 
@@ -814,7 +818,7 @@ def build_assignment_manifest(
             #     so noise-filtered files can never appear here — they are
             #     reported under `file_exclusions` instead.
             #   * there — population the full `changed_files` list,
-            #     evidence the runtime `*-scope-summary*.json` sidecars an
+            #     evidence the runtime `reviewers/*/scope-summary*.json` sidecars an
             #     agent writes when it actually runs. Noise-filtered and
             #     domain-unmatched files DO appear there, and an agent that
             #     was dispatched but died before writing a sidecar leaves
@@ -890,7 +894,7 @@ def _validated_derived_markdown_outcome(outcome: Any) -> Optional[dict]:
     """Validate one written/expected/status derived-Markdown outcome.
 
     Shared by `build_reviewer_markdown_manifest` (step 8's per-reviewer
-    `<reviewer>-review.md`) and `build_findings_markdown_manifest` (steps
+    `reviewers/<reviewer>/review.md`) and `build_findings_markdown_manifest` (steps
     9 and 11's `review-findings.md`) — both record the exact same
     ran/written/expected/status shape in pipeline state
     (`_record_findings_markdown` in orchestration.py mirrors the shape
@@ -993,7 +997,7 @@ def build_synthesis_agents_manifest(output_dir: str) -> Optional[dict]:
 
     A DISTINCT family from the reviewer lifecycle in `manifest["agents"]`,
     deliberately: those two agents are never in `dispatch-plan.json`, never
-    run `agent/bootstrap.py`, and never write a `<agent>-review.json`, so
+    run `agent/bootstrap.py`, and never write a reviewer-directory final, so
     folding them into the reviewer projection would corrupt every count
     downstream of it (the 19/19 completion ratio, the incomplete multiset,
     the per-agent dispatch comparison). They are measured beside it.

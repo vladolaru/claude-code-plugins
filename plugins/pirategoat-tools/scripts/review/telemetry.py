@@ -34,7 +34,7 @@ try:
     from .verdict_rules import VALID_SEVERITIES
     from .atomic_io import atomic_write_json
     from .critic_adjustments import FINDINGS_READ_OK, read_findings_file
-    from .reviewer_lifecycle import review_paths
+    from .reviewer_lifecycle import review_paths, started_marker_path
     from .reviewer_names import derive_reviewer_name
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -53,7 +53,7 @@ except ImportError:
     from review.verdict_rules import VALID_SEVERITIES
     from review.atomic_io import atomic_write_json
     from review.critic_adjustments import FINDINGS_READ_OK, read_findings_file
-    from review.reviewer_lifecycle import review_paths
+    from review.reviewer_lifecycle import review_paths, started_marker_path
     from review.reviewer_names import derive_reviewer_name
 
 from git_paths import normalize_repo_paths
@@ -386,8 +386,10 @@ class ReviewTelemetry:
         self._append(event)
 
     def _agent_duration(self, agent_name: str, now: datetime) -> Optional[int]:
-        """Calculate milliseconds since the agent's .started file timestamp."""
-        started_path = os.path.join(self.output_dir, f"{agent_name}.started")
+        """Calculate milliseconds since the reviewer's fixed `started` marker."""
+        started_path = started_marker_path(
+            self.output_dir, derive_reviewer_name(agent_name)
+        )
         if not os.path.isfile(started_path):
             return None
         try:
@@ -1131,12 +1133,12 @@ class ReviewTelemetry:
         """Project every dispatched agent's finalized review.
 
         Keyed and located through `review_paths()`, like every other
-        consumer of these files. Scanning the directory for `*-review.json`
+        consumer of these files. Scanning the run root for prefixed review JSON
         made the filename the identity, so a stray artifact from an earlier
         run in a reused output directory counted as a completed agent. That
         scan also carried a by-name exclusion for `review-findings.json`
-        that never fired — the ledger does not end in `-review.json` — a
-        guard against a collision the suffix rule already prevented.
+        that never fired — the ledger used a different name — a guard against
+        a collision the former suffix rule already prevented.
         """
         final_info = manifest_sections.inspect_dispatch_plan(
             self.output_dir, "dispatch-plan.json"

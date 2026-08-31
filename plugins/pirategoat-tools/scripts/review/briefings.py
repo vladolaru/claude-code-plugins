@@ -881,7 +881,7 @@ def _step_6_dispatch_agents(mode, state, context, config, output_dir):
 def _draft_finalization_guidance():
     return [
         "A saved review draft remains RUNNING; only final "
-        "`<reviewer>-review.json` that passes canonical validation is FINISHED; "
+        "`reviewers/<reviewer>/review.json` that passes canonical validation is FINISHED; "
         "an invalid final filename is terminal process evidence only.",
         "After a host subagent-completion notification, run agents_status. "
         "If that returned agent's status block contains a `DRAFT` line, "
@@ -1395,7 +1395,7 @@ def _step_9_review_record(mode, state, context, config, output_dir):
             "mode and works from raw agent output."
         )
         actions.append(
-            f"Read the individual `{od}/<agent>-review.md` files directly "
+            f"Read the individual `{od}/reviewers/<reviewer>/review.md` files directly "
             "(raw agent output) and build your own picture of the change."
         )
         actions.append(
@@ -1847,7 +1847,7 @@ fact; if the findings don't verify it, don't assert it.
 def _derived_markdown_status_line(state, output_dir, *, key, label, suffix=None):
     """Summarize one derived-Markdown outcome for a human.
 
-    Both derived families — the per-reviewer `<reviewer>-review.md` rendered
+    Both derived families — the per-reviewer `reviewers/<reviewer>/review.md` rendered
     at step 8 and `review-findings.md` rendered at steps 9 and 11 — are
     best-effort renders that record the same written/expected/status
     outcome, so they report through one helper rather than two that drift.
@@ -2002,7 +2002,7 @@ def _report_authoring_actions(mode, state, context, config, output_dir):
         actions.append(
             "⚠️ Reconciliation failed, so there is no ledger and no review "
             f"record. Synthesize the report manually from the raw "
-            f"`{od}/<agent>-review.md` files — this is the sanctioned "
+            f"`{od}/reviewers/<reviewer>/review.md` files — this is the sanctioned "
             "degraded path. Say plainly in the report that reconciliation "
             "failed and the findings are unreconciled."
         )
@@ -2010,7 +2010,7 @@ def _report_authoring_actions(mode, state, context, config, output_dir):
         actions.append(
             "⚠️ The canonical ledger is absent, so there is no usable review "
             f"record. Synthesize the report manually from the finalized "
-            f"`{od}/<agent>-review.md` files and say plainly that the "
+            f"`{od}/reviewers/<reviewer>/review.md` files and say plainly that the "
             "findings are unreconciled."
         )
     elif not ledger_usable:
@@ -2018,7 +2018,7 @@ def _report_authoring_actions(mode, state, context, config, output_dir):
             "⚠️ The canonical ledger was rejected at the pipeline boundary "
             f"(status: `{ledger_status or 'unavailable'}`), so it is "
             "not valid report source context. Synthesize the report manually "
-            f"from the finalized `{od}/<agent>-review.md` files and say "
+            f"from the finalized `{od}/reviewers/<reviewer>/review.md` files and say "
             "plainly that the findings are unreconciled."
         )
     elif record_usable:

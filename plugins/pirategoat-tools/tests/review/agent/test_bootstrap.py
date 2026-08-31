@@ -20,6 +20,7 @@ BOOTSTRAP_SCRIPT = SCRIPTS_DIR / "review" / "agent" / "bootstrap.py"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from review.agent.output import ReviewOutputBuilder
+from review.reviewer_lifecycle import review_paths
 
 # Import functions under test via importlib (file-based loading)
 import importlib
@@ -188,7 +189,7 @@ class TestPersistReviewedFilesInput:
         )
 
         payload = json.loads(
-            (tmp_path / "repo-renewals-assignment.json").read_text()
+            Path(review_paths(tmp_path, "repo-renewals").assignment).read_text()
         )
         assert payload == {
             "schema": 5,
@@ -210,7 +211,7 @@ class TestPersistReviewedFilesInput:
         )
 
         payload = json.loads(
-            (tmp_path / "security-assignment.json").read_text()
+            Path(review_paths(tmp_path, "security").assignment).read_text()
         )
         assert payload == {
             "schema": 5,
@@ -253,7 +254,7 @@ class TestPersistReviewedFilesInput:
         )
 
         payload = json.loads(
-            (tmp_path / "security-assignment.json").read_text()
+            Path(review_paths(tmp_path, "security").assignment).read_text()
         )
         assert payload == {
             "schema": 5,
@@ -386,7 +387,7 @@ class TestPartitionScopePaths:
         builder.save_draft()
 
         payload = json.loads(
-            (tmp_path / "security-assignment.json").read_text()
+            Path(review_paths(tmp_path, "security").assignment).read_text()
         )
         covered = len(payload["inline_diff_files"]) + len(builder.reviewed_file_claims)
         assert telemetry_starts[0]["scope_paths"] == [
@@ -531,6 +532,7 @@ class TestPartitionScopePaths:
         def fake_scope(*_args, **kwargs):
             path = kwargs["summary_json_out"]
             summary_paths.append(path)
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
             with open(path, "w") as f:
                 json.dump({
                     "schema": 3,
@@ -555,9 +557,11 @@ class TestPartitionScopePaths:
         with pytest.raises(SystemExit, match="0"):
             _mod.main()
 
-        assert os.path.dirname(summary_paths[0]) == str(tmp_path)
+        assert os.path.dirname(summary_paths[0]) == str(
+            tmp_path / "reviewers" / "security"
+        )
         payload = json.loads(
-            (tmp_path / "security-assignment.json").read_text()
+            Path(review_paths(tmp_path, "security").assignment).read_text()
         )
         assert payload["in_scope_review_file_count"] == 2
         assert len(payload["inline_diff_files"]) == 1

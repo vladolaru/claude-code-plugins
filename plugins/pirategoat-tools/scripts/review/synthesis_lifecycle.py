@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Lifecycle measurement for the two synthesis agents.
 
-The reviewers are measured end to end: `agent/bootstrap.py` writes
-`<agent>.started` when a reviewer boots, `ReviewOutputBuilder.save()`
+The reviewers are measured end to end: `agent/bootstrap.py` writes the fixed
+`reviewers/<reviewer>/started` marker when a reviewer boots, `ReviewOutputBuilder.save()`
 logs `agent_complete`, and `agents_status.py` polls the pair. The two
 SYNTHESIS agents — the review-reconciliator (step 8) and the decision
 critic (step 10) — sit entirely outside that machinery: neither runs
-bootstrap, neither writes a `<agent>-review.json`, and neither is ever
+bootstrap, neither writes a reviewer-directory final, and neither is ever
 in `dispatch-plan.json`, which is the only list `agents_status.py`
 iterates. So the critic, the longest single phase of an audited
 2026-08-19 run at ~11 minutes, had no duration anywhere in the manifest,
@@ -23,7 +23,7 @@ use, minus the polling:
    The marker's BODY is byte-compatible with bootstrap's — one UTC ISO
    timestamp — but its NAME deliberately is not. It carries
    MARKER_SUFFIX, which namespaces it away from the reviewer
-   `*.started` contract other tools scan; see that constant for why the
+   reviewer-directory `started` contract other tools scan; see that constant for why the
    separation has to be structural rather than a courtesy.
 
 2. **Completion.** Observed at the NEXT step the script re-enters —
@@ -76,11 +76,11 @@ except ImportError:  # pragma: no cover - direct-path import fallback
 LIFECYCLE_FILENAME = "synthesis-agents.json"
 LIFECYCLE_SCHEMA = 1
 
-# The dispatch marker's suffix, and the reason it is not `.started`.
+# The synthesis dispatch marker's suffix and its separation from reviewer markers.
 #
 # These markers used to share the reviewer suffix exactly, on the theory
 # that one format meant one reader. The opposite was true: pirategoat-bot's
-# resume path scans the run directory for `*.started` and treats every hit
+# resume path once scanned the run directory for reviewer start markers and treated every hit
 # as a REVIEWER, so it seeded both synthesis agents as permanently
 # NOT_DISPATCHED rows AND renamed their markers away as orphans — erasing
 # the stall signal inside the exact crash window this feature exists to
@@ -90,8 +90,9 @@ LIFECYCLE_SCHEMA = 1
 # The bot can filter two names defensively, but a hand-maintained mirror
 # of our names in another repo is a contract nobody enforces; a third
 # synthesis agent would reintroduce the collision silently. The suffix
-# makes it structural instead — anything ending `.started` is a reviewer,
-# anything ending here is not, and no name list has to stay in sync.
+# makes it structural instead — reviewer markers now live under `reviewers/`,
+# synthesis markers stay at their separate lifecycle path, and no name list
+# has to stay in sync.
 #
 # One constant, used by BOTH the writer and the reader through
 # marker_path(). A writer that spelled its own suffix would produce a

@@ -250,7 +250,7 @@ def test_accounting_vocabulary_is_retired():
 
 def test_assignment_sidecar_path():
     paths = review_paths("/out", "security")
-    assert paths.assignment == "/out/security-assignment.json"
+    assert paths.assignment == "/out/reviewers/security/assignment.json"
     assert not hasattr(paths, "accounting" + "_input")
 
 

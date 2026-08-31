@@ -58,7 +58,9 @@ try:
         require_not_finalized,
         require_review_intake_open,
         review_paths,
+        started_marker_path,
     )
+    from ..reviewer_names import derive_reviewer_name
     from ..review_document import (
         CHECK_TEXT_FIELDS,
         RECOMMENDATION_PRIORITIES,
@@ -77,7 +79,9 @@ except ImportError:
         require_not_finalized,
         require_review_intake_open,
         review_paths,
+        started_marker_path,
     )
+    from review.reviewer_names import derive_reviewer_name
     from review.review_document import (
         CHECK_TEXT_FIELDS,
         RECOMMENDATION_PRIORITIES,
@@ -116,12 +120,10 @@ except ImportError:
     )
 
 
-# The reviewer dispatch-marker suffix. Spelled here rather than imported
-# from review/synthesis_lifecycle.py so the `finalize-review` CLI needs no
-# import beyond the ones above to time an actor. Parity with the
-# bootstrap-written `<agent>.started` contract is pinned by tests, so a
-# rename fails loudly instead of silently unmeasuring a whole class of actor.
-_REVIEWER_START_SUFFIX = ".started"
+# Logical discriminator used only inside the builder. Reviewer markers have
+# fixed filenames, so the identity travels separately and resolves through
+# ``started_marker_path`` rather than being encoded in a filename.
+_REVIEWER_MARKER_PREFIX = "reviewer:"
 
 
 def _actor_start_time(
@@ -136,15 +138,21 @@ def _actor_start_time(
     including a reconciliator that ran for 211 seconds.
 
     ``marker_name`` is the exact filename its actor names for itself, never
-    a guess: a reviewer names ``<agent_name>.started`` from the agent name
-    its assignment carries, and a synthesis actor names its own
+    a guess: a reviewer maps the agent name its assignment carries to a
+    short reviewer directory, and a synthesis actor names its own
     ``.synthesis-started`` file. None everywhere the answer is not known —
     no directory, no name, no marker, or an unreadable stamp. Absence is
     reported as absence, never as zero.
     """
     if not output_dir or not marker_name:
         return None
-    path = os.path.join(output_dir, marker_name)
+    if marker_name.startswith(_REVIEWER_MARKER_PREFIX):
+        agent_name = marker_name.removeprefix(_REVIEWER_MARKER_PREFIX)
+        path = started_marker_path(
+            output_dir, derive_reviewer_name(agent_name)
+        )
+    else:
+        path = os.path.join(output_dir, marker_name)
     try:
         with open(path, "r", encoding="utf-8") as handle:
             return datetime.fromisoformat(handle.read().strip())
@@ -388,6 +396,7 @@ class ReviewOutputBuilder:
         output_dir = str(output_dir)
         os.makedirs(output_dir, exist_ok=True)
         paths = review_paths(output_dir, reviewer)
+        os.makedirs(os.path.dirname(paths.draft), exist_ok=True)
         with output_dir_lock(output_dir):
             require_review_intake_open(output_dir)
             require_not_finalized(paths)
@@ -825,7 +834,9 @@ class ReviewOutputBuilder:
         reviewed_files = self._bound_reviewed_files()
         if reviewed_files is None:
             return None
-        return f"{reviewed_files.agent_name}{_REVIEWER_START_SUFFIX}"
+        return _REVIEWER_MARKER_PREFIX + derive_reviewer_name(
+            reviewed_files.agent_name
+        )
 
     def _normalize_claim_batch(self, files, api_name: str):
         """Normalize one whole batch of claim paths; return paths and errors.
@@ -1078,6 +1089,7 @@ class ReviewOutputBuilder:
             current_digest = _optional_file_digest(self._paths.draft)
             if current_digest != self._base_digest:
                 raise ValueError("draft changed; reopen before saving")
+            os.makedirs(os.path.dirname(self._paths.draft), exist_ok=True)
             _atomic_replace_bytes(self._paths.draft, draft_bytes)
             try:
                 _log_agent_review_draft_saved_telemetry(

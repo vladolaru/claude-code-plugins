@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
+    from .run_paths import REVIEWERS_SUBDIR
     from .reviewer_names import derive_reviewer_name
     from .verdict_rules import VALID_SEVERITIES
     from .review_document import coerce_text, load_review_document
@@ -35,6 +36,7 @@ except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
+    from review.run_paths import REVIEWERS_SUBDIR
     from review.reviewer_names import derive_reviewer_name
     from review.verdict_rules import VALID_SEVERITIES
     from review.review_document import coerce_text, load_review_document
@@ -184,12 +186,7 @@ def load_agent_reviews(
     output_dir: str,
     dispatched_agents: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Load agent review JSON files from the output directory.
-
-    Reads ``*-review.json`` files. The suffix is what separates a review
-    from pipeline infrastructure: no artifact this pipeline writes beside
-    them ends that way. Malformed JSON files are skipped with a warning on
-    stderr.
+    """Load reviewer JSON files from ``reviewers/<reviewer>/review.json``.
 
     Args:
         output_dir: Directory containing agent review outputs.
@@ -211,21 +208,27 @@ def load_agent_reviews(
         print(f"WARNING: output directory does not exist: {output_dir}", file=sys.stderr)
         return reviews
 
-    # Build allowed file stems from dispatch plan agent names.
-    allowed_stems: Optional[frozenset] = None
+    # Build allowed short reviewer identities from dispatch plan agent names.
+    allowed_reviewers: Optional[frozenset] = None
     if dispatched_agents is not None:
-        allowed_stems = frozenset(
-            _review_stem(name) for name in dispatched_agents
+        allowed_reviewers = frozenset(
+            derive_reviewer_name(name) for name in dispatched_agents
         )
 
-    for entry in sorted(output_path.iterdir()):
-        if not entry.name.endswith("-review.json"):
+    reviewers_dir = output_path / REVIEWERS_SUBDIR
+    if not reviewers_dir.is_dir():
+        return reviews
+    for reviewer_dir in sorted(reviewers_dir.iterdir()):
+        if not reviewer_dir.is_dir():
             continue
-        if allowed_stems is not None and entry.stem not in allowed_stems:
+        reviewer = reviewer_dir.name
+        if allowed_reviewers is not None and reviewer not in allowed_reviewers:
+            continue
+        entry = reviewer_dir / "review.json"
+        if not entry.is_file():
             continue
 
         try:
-            reviewer = entry.stem.removesuffix("-review")
             data = load_review_document(entry, reviewer)
             review_findings = data.get("findings", [])
             if isinstance(review_findings, list):
@@ -237,11 +240,12 @@ def load_agent_reviews(
                         finding.pop("severity_floor", None)
                     else:
                         finding["severity_floor"] = floor
-            # Key by filename without .json extension (e.g., "security-review")
-            agent_name = entry.stem
+            # Preserve the reconciliation vocabulary while taking identity
+            # from the reviewer directory rather than parsing a filename.
+            agent_name = f"{reviewer}-review"
             reviews[agent_name] = data
         except ValueError as exc:
-            print(f"WARNING: skipping malformed file {entry.name}: {exc}", file=sys.stderr)
+            print(f"WARNING: skipping malformed file {entry}: {exc}", file=sys.stderr)
 
     return reviews
 

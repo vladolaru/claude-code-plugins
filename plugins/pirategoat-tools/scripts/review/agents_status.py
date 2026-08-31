@@ -2,12 +2,12 @@
 """
 Check Reviewer Agent Status — deterministic status check.
 
-Reads dispatch-plan.json + scans for {agent}.started and {agent}-review.json.
+Reads dispatch-plan.json and checks each dispatch identity's reviewer directory.
 Five states per dispatched agent:
   FINISHED       — canonical schema-2 final review exists
   INVALID_OUTPUT — final filename exists but its contents are not canonical
-  RUNNING        — .started marker exists, within timeout
-  TIMED_OUT      — .started marker exists, exceeded timeout
+  RUNNING        — fixed `started` marker exists, within timeout
+  TIMED_OUT      — fixed `started` marker exists, exceeded timeout
   NOT_DISPATCHED — neither marker nor review file (LLM forgot to dispatch)
 
 Exit codes:
@@ -47,6 +47,7 @@ try:
     from .reviewer_lifecycle import (
         finalize_review_command,
         review_paths,
+        started_marker_path,
     )
     from .review_document import load_review_document, review_summary
 except ImportError:
@@ -61,6 +62,7 @@ except ImportError:
     from review.reviewer_lifecycle import (
         finalize_review_command,
         review_paths,
+        started_marker_path,
     )
     from review.review_document import load_review_document, review_summary
 
@@ -154,7 +156,7 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
         dispatched_names.append(name)
         reviewer = derive_reviewer_name(name)
         review_path = review_paths(output_dir, reviewer).final
-        started_path = os.path.join(output_dir, f"{name}.started")
+        started_path = started_marker_path(output_dir, reviewer)
 
         if os.path.isfile(review_path):
             try:

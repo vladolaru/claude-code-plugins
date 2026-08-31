@@ -2,6 +2,8 @@
 
 Read this AFTER `reviewer-protocol.md`.
 
+Use `OUTPUT_DIR/tmp/` as the sanctioned scratch location for test probes, `.patch` experiments, and similar temporary work — never the reviewed repo worktree and never the run-directory root; durable reviewer artifacts remain under `OUTPUT_DIR/reviewers/<reviewer>/`.
+
 ## RULE 0 (MOST IMPORTANT): Tests Verify Behavior, Not Implementation
 
 A test has value only if it fails when code is broken and passes when code is correct. Fewer meaningful tests beat many overprescriptive tests.

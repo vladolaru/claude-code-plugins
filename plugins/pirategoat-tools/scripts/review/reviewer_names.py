@@ -18,7 +18,7 @@ still owning) it.
 def derive_reviewer_name(agent_name: str) -> str:
     """Derive the reviewer output name from agent name.
 
-    Removes a TRAILING '-reviewer' suffix for output file naming.
+    Removes a TRAILING '-reviewer' suffix for reviewer-directory naming.
     e.g. 'security-reviewer' -> 'security', 'code-reviewer' -> 'code'
 
     A blanket `.replace()` would corrupt names carrying "reviewer"
@@ -26,12 +26,9 @@ def derive_reviewer_name(agent_name: str) -> str:
     repo-authored (e.g. "api-reviewer-v2" must strip only the trailing
     occurrence, not the embedded one).
 
-    Per-agent artifacts in OUTPUT_DIR follow one of two naming conventions;
-    pick the matching one when adding a new per-agent artifact:
-    - Human/deliverable-facing artifacts use this short reviewer_name:
-      '<reviewer_name>-review.json'.
-    - Internal/orchestration-facing artifacts keyed on args.agent use the full
-      agent_name: '<agent_name>.started', '<agent_name>-scoped-diff.patch'.
+    Every per-reviewer artifact uses this short identity as the parent
+    directory: ``OUTPUT_DIR/reviewers/<reviewer_name>/``. Fixed filenames
+    inside that directory do not encode identity a second time.
     """
     if agent_name.endswith("-reviewer"):
         return agent_name[: -len("-reviewer")]

@@ -1448,7 +1448,7 @@ def _sanitize_derived_markdown_outcome(value: object) -> dict[str, Any] | None:
     None.
 
     Shared by `reviewer_markdown` (step 8's per-reviewer
-    `<reviewer>-review.md`) and `findings_markdown` (steps 9/11's
+    `reviewers/<reviewer>/review.md`) and `findings_markdown` (steps 9/11's
     `review-findings.md`) — the same written/expected/status vocabulary
     `manifest_sections._validated_derived_markdown_outcome` validates for
     both producer-side builders, reached here via

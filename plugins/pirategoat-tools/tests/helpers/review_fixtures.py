@@ -204,6 +204,7 @@ def write_canonical_assignment(path_or_dir, reviewer="code", **overrides):
         if hasattr(path_or_dir, "assignment")
         else review_paths(str(path_or_dir), reviewer).assignment
     )
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_text(
         json.dumps(canonical_assignment(reviewer, **overrides))
     )

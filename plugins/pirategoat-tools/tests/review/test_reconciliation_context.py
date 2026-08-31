@@ -24,6 +24,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 sys.path.insert(0, str(TESTS_DIR))
 
 from review.verdict_rules import derive_review_state  # noqa: E402
+from review.reviewer_lifecycle import review_paths  # noqa: E402
 
 
 def _load_module():
@@ -131,6 +132,20 @@ def _make_review_json(
     }
 
 
+def _write_review_json(output_dir, reviewer, payload):
+    path = Path(review_paths(output_dir, reviewer).final)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload))
+    return path
+
+
+def _write_raw_review(output_dir, reviewer, text):
+    path = Path(review_paths(output_dir, reviewer).final)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return path
+
+
 # ===========================================================================
 # TestLoadAgentReviews
 # ===========================================================================
@@ -139,12 +154,10 @@ class TestLoadAgentReviews:
     """Tests for load_agent_reviews()."""
 
     def test_loads_review_jsons(self, mod, tmp_path):
-        """Loads *-review.json files and keys by stem."""
+        """Loads reviewer-directory review.json files and keys by review stem."""
         review = _make_review_json(reviewer="security")
-        (tmp_path / "security-review.json").write_text(json.dumps(review))
-        (tmp_path / "code-review.json").write_text(
-            json.dumps(_make_review_json(reviewer="code"))
-        )
+        _write_review_json(tmp_path, "security", review)
+        _write_review_json(tmp_path, "code", _make_review_json(reviewer="code"))
 
         result = mod.load_agent_reviews(str(tmp_path))
         assert "security-review" in result
@@ -154,9 +167,7 @@ class TestLoadAgentReviews:
 
     def test_skips_non_review_files(self, mod, tmp_path):
         """Pipeline infrastructure files are not loaded."""
-        (tmp_path / "security-review.json").write_text(
-            json.dumps(_make_review_json())
-        )
+        _write_review_json(tmp_path, "security", _make_review_json())
         # These should all be skipped
         (tmp_path / "dispatch-plan.json").write_text('{"agents": []}')
         (tmp_path / "pipeline-state.json").write_text('{"step": 1}')
@@ -184,20 +195,16 @@ class TestLoadAgentReviews:
 
     def test_skips_malformed_json(self, mod, tmp_path):
         """Malformed JSON files are skipped gracefully."""
-        (tmp_path / "security-review.json").write_text(
-            json.dumps(_make_review_json())
-        )
-        (tmp_path / "broken-review.json").write_text("{ not valid json !!!")
+        _write_review_json(tmp_path, "security", _make_review_json())
+        _write_raw_review(tmp_path, "broken", "{ not valid json !!!")
 
         result = mod.load_agent_reviews(str(tmp_path))
         assert "security-review" in result
         assert "broken-review" not in result
 
     def test_skips_non_object_json(self, mod, tmp_path):
-        (tmp_path / "security-review.json").write_text(
-            json.dumps(_make_review_json())
-        )
-        (tmp_path / "broken-review.json").write_text("[]")
+        _write_review_json(tmp_path, "security", _make_review_json())
+        _write_raw_review(tmp_path, "broken", "[]")
 
         result = mod.load_agent_reviews(str(tmp_path))
 
@@ -224,27 +231,25 @@ class TestLoadAgentReviews:
     ):
         review = _make_review_json(reviewer="security")
         mutate(review)
-        (tmp_path / "security-review.json").write_text(json.dumps(review))
+        path = _write_review_json(tmp_path, "security", review)
 
         result = mod.load_agent_reviews(str(tmp_path))
 
         assert result == {}
-        assert "security-review.json" in capsys.readouterr().err
+        assert str(path) in capsys.readouterr().err
 
     def test_skips_review_whose_identity_disagrees_with_filename(
         self, mod, tmp_path
     ):
-        (tmp_path / "security-review.json").write_text(json.dumps(
-            _make_review_json(reviewer="performance")
-        ))
+        _write_review_json(
+            tmp_path, "security", _make_review_json(reviewer="performance")
+        )
 
         assert mod.load_agent_reviews(str(tmp_path)) == {}
 
     def test_skips_non_json_files(self, mod, tmp_path):
-        """Files not ending in -review.json are ignored."""
-        (tmp_path / "security-review.json").write_text(
-            json.dumps(_make_review_json())
-        )
+        """Non-reviewer files are ignored."""
+        _write_review_json(tmp_path, "security", _make_review_json())
         (tmp_path / "security-review.md").write_text("# Review")
         (tmp_path / "notes.txt").write_text("some notes")
 
@@ -254,15 +259,9 @@ class TestLoadAgentReviews:
 
     def test_filters_by_dispatched_agents(self, mod, tmp_path):
         """Only loads review files for agents in the dispatch plan."""
-        (tmp_path / "security-review.json").write_text(
-            json.dumps(_make_review_json(reviewer="security"))
-        )
-        (tmp_path / "performance-review.json").write_text(
-            json.dumps(_make_review_json(reviewer="performance"))
-        )
-        (tmp_path / "architecture-review.json").write_text(
-            json.dumps(_make_review_json(reviewer="architecture"))
-        )
+        _write_review_json(tmp_path, "security", _make_review_json(reviewer="security"))
+        _write_review_json(tmp_path, "performance", _make_review_json(reviewer="performance"))
+        _write_review_json(tmp_path, "architecture", _make_review_json(reviewer="architecture"))
 
         # Only security-reviewer and performance-reviewer are dispatched
         result = mod.load_agent_reviews(
@@ -276,21 +275,15 @@ class TestLoadAgentReviews:
 
     def test_dispatched_agents_none_loads_all(self, mod, tmp_path):
         """When dispatched_agents is None, all review files are loaded."""
-        (tmp_path / "security-review.json").write_text(
-            json.dumps(_make_review_json(reviewer="security"))
-        )
-        (tmp_path / "performance-review.json").write_text(
-            json.dumps(_make_review_json(reviewer="performance"))
-        )
+        _write_review_json(tmp_path, "security", _make_review_json(reviewer="security"))
+        _write_review_json(tmp_path, "performance", _make_review_json(reviewer="performance"))
 
         result = mod.load_agent_reviews(str(tmp_path), dispatched_agents=None)
         assert len(result) == 2
 
     def test_dispatched_agents_empty_list_loads_nothing(self, mod, tmp_path):
         """An empty dispatched_agents list loads no review files."""
-        (tmp_path / "security-review.json").write_text(
-            json.dumps(_make_review_json(reviewer="security"))
-        )
+        _write_review_json(tmp_path, "security", _make_review_json(reviewer="security"))
 
         result = mod.load_agent_reviews(str(tmp_path), dispatched_agents=[])
         assert len(result) == 0
@@ -339,9 +332,7 @@ class TestSeverityFloorNormalization:
                 ),
             )],
         )
-        (tmp_path / "woo-regression-review.json").write_text(
-            json.dumps(review)
-        )
+        _write_review_json(tmp_path, "woo-regression", review)
 
         loaded = mod.load_agent_reviews(str(tmp_path))
 
@@ -1258,7 +1249,7 @@ class TestFullScript:
             reviewer="security",
             findings=[_make_finding(file="src/auth.py", line=10)],
         )
-        (tmp_path / "security-review.json").write_text(json.dumps(review))
+        _write_review_json(tmp_path, "security", review)
 
         result = self._run(
             "--output-dir", str(tmp_path),
@@ -1350,7 +1341,7 @@ class TestFullScript:
                 _make_finding(file="src/other.py", line=20),
             ],
         )
-        (tmp_path / "security-review.json").write_text(json.dumps(review))
+        _write_review_json(tmp_path, "security", review)
 
         result = self._run(
             "--output-dir", str(tmp_path),
@@ -1373,7 +1364,7 @@ class TestFullScript:
                 reviewer=agent,
                 findings=[_make_finding(file=f"src/{agent}.py", line=10)],
             )
-            (tmp_path / f"{agent}-review.json").write_text(json.dumps(review))
+            _write_review_json(tmp_path, agent, review)
 
         result = self._run(
             "--output-dir", str(tmp_path),
@@ -1421,7 +1412,7 @@ class TestFullScript:
             reviewer="security",
             findings=[_make_finding(file="src/auth.py", line=10)],
         )
-        (tmp_path / "security-review.json").write_text(json.dumps(review))
+        _write_review_json(tmp_path, "security", review)
 
         result = self._run(
             "--output-dir", str(tmp_path),
@@ -1446,7 +1437,7 @@ class TestFullScript:
             reviewer="security",
             findings=[_make_finding(file="src/auth.py", line=10)],
         )
-        (tmp_path / "security-review.json").write_text(json.dumps(review))
+        _write_review_json(tmp_path, "security", review)
 
         result = self._run(
             "--output-dir", str(tmp_path),
@@ -1471,7 +1462,7 @@ class TestFullScript:
             reviewer="security",
             findings=[_make_finding(file="src/auth.py", line=10)],
         )
-        (tmp_path / "security-review.json").write_text(json.dumps(review))
+        _write_review_json(tmp_path, "security", review)
 
         result = self._run(
             "--output-dir", str(tmp_path),
@@ -1542,7 +1533,7 @@ class TestMissingAgentDetection:
 
     def test_json_carries_the_measurement(self, mod, tmp_path):
         review = _make_review_json(reviewer="security")
-        (tmp_path / "security-review.json").write_text(json.dumps(review))
+        _write_review_json(tmp_path, "security", review)
 
         result = subprocess.run(
             [sys.executable, str(SCRIPT_PATH),
@@ -1565,7 +1556,7 @@ class TestMissingAgentDetection:
 
     def test_json_carries_null_when_dispatch_is_unknown(self, mod, tmp_path):
         review = _make_review_json(reviewer="security")
-        (tmp_path / "security-review.json").write_text(json.dumps(review))
+        _write_review_json(tmp_path, "security", review)
 
         result = subprocess.run(
             [sys.executable, str(SCRIPT_PATH),
@@ -1610,7 +1601,7 @@ class TestPrefilterAnnotation:
             _make_finding(file="src/untouched.py", line=10, title="Out"),
             _make_finding(file="src/app.py", line=42, title="In"),
         ])
-        (tmp_path / "security-review.json").write_text(json.dumps(review))
+        _write_review_json(tmp_path, "security", review)
 
         result = self._run(tmp_path, "--changed-files", "src/app.py")
         assert result.returncode == 0, f"stderr: {result.stderr}"
@@ -1632,7 +1623,7 @@ class TestPrefilterAnnotation:
         review = _make_review_json(reviewer="security", findings=[
             _make_finding(file="src/untouched.py", line=10),
         ])
-        (tmp_path / "security-review.json").write_text(json.dumps(review))
+        _write_review_json(tmp_path, "security", review)
 
         result = self._run(tmp_path, "--changed-files", "src/app.py")
         assert result.returncode == 0, f"stderr: {result.stderr}"
@@ -1652,7 +1643,7 @@ class TestPrefilterAnnotation:
             _make_finding(file="src/other.py", line=1, title="B"),
             _make_finding(file="src/app.py", line=42, title="C"),
         ])
-        (tmp_path / "security-review.json").write_text(json.dumps(review))
+        _write_review_json(tmp_path, "security", review)
 
         result = self._run(tmp_path, "--changed-files", "src/app.py")
         assert result.returncode == 0, f"stderr: {result.stderr}"
@@ -1668,7 +1659,7 @@ class TestPrefilterAnnotation:
         review = _make_review_json(reviewer="security", findings=[
             _make_finding(file="src/app.py", line=42),
         ])
-        (tmp_path / "security-review.json").write_text(json.dumps(review))
+        _write_review_json(tmp_path, "security", review)
 
         result = self._run(tmp_path, "--changed-files", "src/app.py")
         assert result.returncode == 0, f"stderr: {result.stderr}"
@@ -1748,9 +1739,7 @@ class TestReviewStem:
         review = _make_review_json(
             reviewer="repo-api-reviewer-v2", findings=[]
         )
-        (tmp_path / "repo-api-reviewer-v2-review.json").write_text(
-            json.dumps(review)
-        )
+        _write_review_json(tmp_path, "repo-api-reviewer-v2", review)
         findings = mod.load_agent_reviews(
             str(tmp_path),
             dispatched_agents=["repo-api-reviewer-v2-reviewer"],

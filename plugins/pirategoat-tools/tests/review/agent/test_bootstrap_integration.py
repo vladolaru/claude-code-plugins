@@ -22,6 +22,12 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 from review.agent.output import ReviewOutputBuilder
 from review.agent.scope import format_text_output
+from review.reviewer_lifecycle import (
+    review_paths,
+    scope_summary_path,
+    scoped_diff_path,
+    started_marker_path,
+)
 
 # Import AGENT_CONFIG to derive ALL_AGENTS
 _spec = importlib.util.spec_from_file_location("bootstrap_reviewer", str(BOOTSTRAP_SCRIPT))
@@ -149,9 +155,15 @@ class TestCategoryRepresentatives:
 
         # Personalization
         assert "REVIEWER_NAME: performance" in stdout
-        assert f"{tmp_path}/performance-review.json" in stdout
-        assert f"{tmp_path}/performance-review.md" not in stdout
+        reviewer_dir = tmp_path / "reviewers" / "performance"
+        assert f"{reviewer_dir}/review.json" in stdout
+        assert f"{reviewer_dir}/review.md" not in stdout
         assert "PIRATEGOAT_REVIEWER_NAME=performance" in stdout
+
+        assert (reviewer_dir / "assignment.json").is_file()
+        assert (reviewer_dir / "scope-summary.json").is_file()
+        assert (reviewer_dir / "started").is_file()
+        assert not list(tmp_path.glob("performance-*"))
 
         # Budget present with hard ceiling
         assert "=== REVIEW BUDGET ===" in stdout
@@ -200,6 +212,53 @@ class TestCategoryRepresentatives:
         assert expected_scope
         assert agent_start["scope"]["paths"] == expected_scope
 
+    def test_large_end_to_end_bootstrap_keeps_every_artifact_in_reviewer_directory(
+        self, tmp_path
+    ):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=repo,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"], cwd=repo, check=True
+        )
+        source = repo / "large.py"
+        source.write_text("value = 1\n")
+        subprocess.run(["git", "add", "large.py"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+        source.write_text("".join(
+            f"def function_{index}():\n    return {index}\n"
+            for index in range(2500)
+        ))
+        subprocess.run(["git", "add", "large.py"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "change"], cwd=repo, check=True)
+        output_dir = tmp_path / "out"
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(BOOTSTRAP_SCRIPT),
+                "--agent", "performance-reviewer",
+                "--output-dir", str(output_dir),
+                "--range", "HEAD~1..HEAD",
+            ],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        assert result.returncode == 0, result.stderr
+        reviewer_dir = output_dir / "reviewers" / "performance"
+        assert {
+            "assignment.json", "scope-summary.json", "scoped-diff.patch", "started",
+        } <= {path.name for path in reviewer_dir.iterdir()}
+        assert not list(output_dir.glob("performance-*"))
+
     def test_ref_mode_instance_writes_scope_summaries_and_assignment(
         self, tmp_path
     ):
@@ -221,7 +280,7 @@ class TestCategoryRepresentatives:
         )
 
         assert result.returncode == 0
-        summary = tmp_path / "repo-renewals-reviewer-scope-summary-code.json"
+        summary = Path(scope_summary_path(tmp_path, "repo-renewals", "code"))
         assert summary.is_file()
         data = json.loads(summary.read_text())
         # The domain lives in the filename asserted above — the summary body
@@ -232,7 +291,7 @@ class TestCategoryRepresentatives:
         # the instance is taught to construct its builder with.
         assert "PIRATEGOAT_REVIEWER_NAME=repo-renewals" in result.stdout
         assignment = json.loads(
-            (tmp_path / "repo-renewals-assignment.json").read_text()
+            Path(review_paths(tmp_path, "repo-renewals").assignment).read_text()
         )
         assert assignment["channels"] == ["advisory"]
 
@@ -341,9 +400,7 @@ class TestCategoryRepresentatives:
             "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
         )
         assert result.returncode == 0
-        assignment = (
-            tmp_path / "performance-assignment.json"
-        )
+        assignment = Path(review_paths(tmp_path, "performance").assignment)
         assert assignment.is_file()
         data = json.loads(assignment.read_text())
         assert sorted(data["review_claimable_files"]) == sorted(
@@ -373,9 +430,7 @@ class TestCategoryRepresentatives:
         assert result.returncode == 0
         assert "Target: ~45 tool calls" in result.stdout
 
-        assignment = (
-            tmp_path / "history-insights-assignment.json"
-        )
+        assignment = Path(review_paths(tmp_path, "history-insights").assignment)
         assert assignment.is_file()
         data = json.loads(assignment.read_text())
         assert data["schema"] == 5
@@ -405,7 +460,7 @@ class TestCategoryRepresentatives:
         assert "=== REVIEW RULES ===" in stdout
         assert "=== REVIEW BUDGET ===" in stdout
         assert "REVIEWER_NAME: php-tests" in stdout
-        assert f"{tmp_path}/php-tests-review.json" in stdout
+        assert review_paths(tmp_path, "php-tests").final in stdout
         assert "PIRATEGOAT_REVIEWER_NAME=php-tests" in stdout
 
         # Other conditional sections absent
@@ -650,7 +705,7 @@ class TestCanonicalExecutableBuilderSource:
         assert "Only then return the FINISHED signal" in prompt
         assert "Return signal format:" in prompt
         assert "STATUS: FINISHED" in prompt
-        assert f"{tmp_path}/security-review.json" in prompt
+        assert review_paths(tmp_path, "security").final in prompt
         assert f"{tmp_path}/security-review.md" not in prompt
 
     def test_every_bootstrapped_reviewer_sees_only_the_canonical_contract(
@@ -802,8 +857,8 @@ class TestCanonicalExecutableBuilderSource:
 
         A field run had a reviewer awk-slice its scoped diff into three
         ad-hoc .patch files inside OUTPUT_DIR. The technique was sound; the
-        location was never taught, and the only $TMPDIR mention reaching a
-        reviewer was buried in a protocol probe example.
+        location was never taught. The run now reserves OUTPUT_DIR/tmp/ for
+        that scratch work while keeping the run root artifact-only.
         """
         prompt = build_output(
             agent_name="security-reviewer",
@@ -820,7 +875,7 @@ class TestCanonicalExecutableBuilderSource:
             has_php=False,
         )
         assert "OUTPUT_DIR accepts only your named artifacts" in prompt
-        assert "goes in $TMPDIR" in prompt
+        assert "goes in OUTPUT_DIR/tmp/" in prompt
 
     @pytest.mark.parametrize("review_budget", [80, None])
     def test_envelope_never_carries_a_budget_assignment(
@@ -963,7 +1018,9 @@ class TestNotApplicableCompletionContract:
         for agent_name in ("security-reviewer", "performance-reviewer"):
             reviewer_name = derive_reviewer_name(agent_name)
             output_dir.mkdir(parents=True, exist_ok=True)
-            (output_dir / f"{reviewer_name}-assignment.json").write_text(
+            assignment_path = Path(review_paths(output_dir, reviewer_name).assignment)
+            assignment_path.parent.mkdir(parents=True, exist_ok=True)
+            assignment_path.write_text(
                 json.dumps({
                     "schema": 5,
                     "agent_name": agent_name,
@@ -1029,7 +1086,7 @@ class TestNotApplicableCompletionContract:
         )
         for reviewer_name in ("security", "performance"):
             saved = json.loads(
-                (output_dir / f"{reviewer_name}-review.json").read_text()
+                Path(review_paths(output_dir, reviewer_name).final).read_text()
             )
             assert saved["reviewer"] == reviewer_name
             assert saved["pr_id"] == "42"
@@ -1041,7 +1098,9 @@ class TestNotApplicableCompletionContract:
         shutil.copytree(PLUGIN_ROOT / "scripts", plugin_root / "scripts")
         output_dir = tmp_path / "reviewer's output folder"
         output_dir.mkdir(parents=True)
-        (output_dir / "security-assignment.json").write_text(json.dumps({
+        assignment_path = Path(review_paths(output_dir, "security").assignment)
+        assignment_path.parent.mkdir(parents=True, exist_ok=True)
+        assignment_path.write_text(json.dumps({
             "schema": 5,
             "agent_name": "security-reviewer",
             "reviewer": "security",
@@ -1092,7 +1151,7 @@ class TestNotApplicableCompletionContract:
         )
         assert final.returncode == 0, final.stderr
         assert "REVIEW FINALIZED" in final.stdout
-        saved = json.loads((output_dir / "security-review.json").read_text())
+        saved = json.loads(Path(review_paths(output_dir, "security").final).read_text())
         assert saved["reviewed_file_count"] == 3
         assert set(tmp_path.rglob("*.py")) == python_files_before
 
@@ -1625,7 +1684,7 @@ class TestBootstrapOutputSizeCap:
     def test_large_scope_has_file_reference(self, tmp_path):
         """When scope is truncated, output tells agent where to read the full scope."""
         output = self._build_large_output(scope_size_kb=50, output_dir=str(tmp_path))
-        expected_path = tmp_path / "security-reviewer-scoped-diff.patch"
+        expected_path = Path(scoped_diff_path(tmp_path, "security"))
         assert str(expected_path) in output
 
     def test_large_scope_has_read_instructions(self):
@@ -1658,8 +1717,8 @@ class TestBootstrapOutputSizeCap:
         concurrency_output = build(
             "concurrency-reviewer", "concurrency", "concurrency"
         )
-        security_path = tmp_path / "security-reviewer-scoped-diff.patch"
-        concurrency_path = tmp_path / "concurrency-reviewer-scoped-diff.patch"
+        security_path = Path(scoped_diff_path(tmp_path, "security"))
+        concurrency_path = Path(scoped_diff_path(tmp_path, "concurrency"))
 
         assert str(security_path) in security_output
         assert str(concurrency_path) in concurrency_output
@@ -1964,7 +2023,7 @@ class TestRepoRuleAndRefModeSelection:
 
         # The assignment is the sole carrier of the reviewer's channels.
         assignment = json.loads(
-            (tmp_path / "performance-assignment.json").read_text()
+            Path(review_paths(tmp_path, "performance").assignment).read_text()
         )
         assert assignment["schema"] == 5
         assert assignment["channels"] == ["blocking", "advisory"]
@@ -1990,7 +2049,7 @@ class TestRepoRuleAndRefModeSelection:
         assert "CHANNEL CONTRACT" not in result.stdout
 
         assignment = json.loads(
-            (tmp_path / "performance-assignment.json").read_text()
+            Path(review_paths(tmp_path, "performance").assignment).read_text()
         )
         assert assignment["channels"] == ["blocking"]
 
@@ -2092,7 +2151,9 @@ class TestOutputFilenameConsistency:
         """save_draft() stages a draft; finalization publishes the review."""
         from review.agent.output import ReviewOutputBuilder, finalize_review
 
-        (tmp_path / "dead-code-assignment.json").write_text(json.dumps({
+        assignment_path = Path(review_paths(tmp_path, "dead-code").assignment)
+        assignment_path.parent.mkdir(parents=True, exist_ok=True)
+        assignment_path.write_text(json.dumps({
             "schema": 5,
             "agent_name": "dead-code-reviewer",
             "reviewer": "dead-code",
@@ -2108,9 +2169,9 @@ class TestOutputFilenameConsistency:
         assert set(result) == {
             "draft", "review_digest", "finalize_review_command"
         }
-        assert result["draft"].endswith("dead-code-review.draft.json")
+        assert result["draft"] == review_paths(tmp_path, "dead-code").draft
         draft = Path(result["draft"])
-        final = tmp_path / "dead-code-review.json"
+        final = Path(review_paths(tmp_path, "dead-code").final)
         assert draft.is_file()
         assert not final.exists()
 
@@ -2143,8 +2204,8 @@ class TestOutputFilenameConsistency:
             review_claimable_count=0,
             has_php=False,
         )
-        assert f"{tmp_path}/dead-code-review.json" in output
-        assert f"{tmp_path}/dead-code-review.draft.json" not in output
+        assert review_paths(tmp_path, "dead-code").final in output
+        assert review_paths(tmp_path, "dead-code").draft not in output
         assert "run the exact FINALIZE REVIEW command printed by" in output
         assert f"{tmp_path}/dead-code-review.md" not in output
 
@@ -2481,7 +2542,7 @@ class TestReviewClaimableOrderingEndToEnd:
         assignment = json.loads(
             (
                 output_dir
-                / "history-insights-assignment.json"
+                / "reviewers" / "history-insights" / "assignment.json"
             ).read_text()
         )
         # Both claimable (the regression this guards): a same-tier-only

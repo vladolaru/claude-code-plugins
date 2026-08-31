@@ -1716,7 +1716,7 @@ class TestStep9ReviewRecord:
         g = mod.get_step_guidance(9, "full", state, {}, output_dir=str(tmp_path))
         text = "\n".join(g["situation"] + g["actions"])
         assert "Reconciliation failed" in text
-        assert "-review.md" in text
+        assert "reviewers/<reviewer>/review.md" in text
         assert "at step 11" in text
         assert "Do not write it now" in text
 
@@ -2453,7 +2453,7 @@ class TestStep11ReportAuthoring:
             "review_record": None,
         })["actions"])
         assert "Reconciliation failed" in text
-        assert "-review.md" in text
+        assert "reviewers/<reviewer>/review.md" in text
         assert "unreconciled" in text
         assert "review-record.md" not in text
 
@@ -2483,7 +2483,7 @@ class TestStep11ReportAuthoring:
         })["actions"])
 
         assert "Source:** `<OUTPUT_DIR>/review-findings.json" not in text
-        assert "<OUTPUT_DIR>/<agent>-review.md" in text
+        assert "<OUTPUT_DIR>/reviewers/<reviewer>/review.md" in text
         assert "rejected" in text.lower()
 
     def test_absent_ledger_keeps_the_no_ledger_fallback(self, mod):
@@ -2493,7 +2493,7 @@ class TestStep11ReportAuthoring:
         })["actions"])
 
         assert "canonical ledger is absent" in text
-        assert "<OUTPUT_DIR>/<agent>-review.md" in text
+        assert "<OUTPUT_DIR>/reviewers/<reviewer>/review.md" in text
         assert "Source:** `<OUTPUT_DIR>/review-findings.json" not in text
 
     def test_missing_read_status_fails_closed(self, mod):
@@ -2503,7 +2503,7 @@ class TestStep11ReportAuthoring:
         })["actions"])
 
         assert "status: `unavailable`" in text
-        assert "<OUTPUT_DIR>/<agent>-review.md" in text
+        assert "<OUTPUT_DIR>/reviewers/<reviewer>/review.md" in text
         assert "Source:** `<OUTPUT_DIR>/review-findings.json" not in text
 
 

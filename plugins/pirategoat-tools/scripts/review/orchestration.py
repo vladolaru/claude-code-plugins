@@ -29,7 +29,11 @@ try:
     from . import agents_status
     from . import atomic_io
     from .atomic_io import atomic_write_json, atomic_write_text
-    from .reviewer_lifecycle import close_review_intake, review_paths
+    from .reviewer_lifecycle import (
+        close_review_intake,
+        review_paths,
+        reviewer_markdown_path,
+    )
     from .reviewer_names import derive_reviewer_name
     from .briefings import _render_file_review_section
     from .reconciliation_context import strip_severity_floor_markers
@@ -66,7 +70,11 @@ except ImportError:
     from review import agents_status
     from review import atomic_io
     from review.atomic_io import atomic_write_json, atomic_write_text
-    from review.reviewer_lifecycle import close_review_intake, review_paths
+    from review.reviewer_lifecycle import (
+        close_review_intake,
+        review_paths,
+        reviewer_markdown_path,
+    )
     from review.reviewer_names import derive_reviewer_name
     from review.briefings import _render_file_review_section
     from review.reconciliation_context import strip_severity_floor_markers
@@ -1174,9 +1182,9 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
         )
 
     expected_markdown = {
-        os.path.abspath(
-            review_paths(output_dir, derive_reviewer_name(name)).final
-        )[: -len(".json")] + ".md"
+        os.path.abspath(reviewer_markdown_path(
+            output_dir, derive_reviewer_name(name)
+        ))
         for name in dispatched_names
         if os.path.isfile(
             review_paths(output_dir, derive_reviewer_name(name)).final
@@ -1250,7 +1258,7 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
     # dispatch plan exists, so the set is known even when it is empty. An
     # empty value means the plan ran and selected 0 agents (e.g. a docs-only
     # change), and tells reconciliation_context.py to load nothing rather
-    # than scan for stale *-review.json files.
+    # than scan for stale reviewer-directory finals.
     recon_ctx_cmd.extend(["--dispatched-agents", ",".join(dispatched_names)])
     _, ctx_ok = _run_subprocess(recon_ctx_cmd, timeout=30)
     recon_ctx_path = os.path.join(output_dir, "reconciliation-context.json")

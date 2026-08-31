@@ -80,9 +80,11 @@ def _write_critic_snapshot(output_dir, adjustments):
 
 
 def _write_required_assignment(output_dir, reviewer, agent_name=None):
-    Path(
-        output_dir, f"{reviewer}-assignment.json"
-    ).write_text(json.dumps(canonical_assignment(
+    path = Path(reviewer_lifecycle.review_paths(
+        output_dir, reviewer
+    ).assignment)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(canonical_assignment(
         reviewer,
         agent_name=agent_name,
         inline_diff_file_count=1,
@@ -97,6 +99,22 @@ def _save_and_finalize(output_dir, reviewer, agent_name=None):
     return _output_mod.finalize_review(
         str(output_dir), reviewer, saved["review_digest"]
     )
+
+
+def _write_final_review(output_dir, reviewer, payload):
+    path = Path(reviewer_lifecycle.review_paths(output_dir, reviewer).final)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload))
+    return path
+
+
+def _write_scope_summary(output_dir, reviewer, payload, domain=None):
+    path = Path(reviewer_lifecycle.scope_summary_path(
+        output_dir, reviewer, domain
+    ))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload))
+    return path
 
 
 @pytest.fixture(scope="module")
@@ -148,7 +166,9 @@ class TestReviewerDraftFinalizationLifecycle:
             }],
             "git_range": "HEAD~1..HEAD",
         }))
-        (output_dir / "code-reviewer.started").write_text(
+        marker = Path(reviewer_lifecycle.started_marker_path(output_dir, "code"))
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(
             datetime.now(timezone.utc).isoformat()
         )
         assignment = canonical_assignment(
@@ -159,10 +179,10 @@ class TestReviewerDraftFinalizationLifecycle:
             ],
             inline_diff_file_count=1,
         )
-        (output_dir / "code-assignment.json").write_text(
+        Path(reviewer_lifecycle.review_paths(output_dir, "code").assignment).write_text(
             json.dumps(assignment)
         )
-        (output_dir / "code-reviewer-scope-summary.json").write_text(
+        Path(reviewer_lifecycle.scope_summary_path(output_dir, "code")).write_text(
             json.dumps({
                 "schema": 3,
                 "inline_diff_files": ["second.txt"],
@@ -210,7 +230,7 @@ class TestReviewerDraftFinalizationLifecycle:
             str(output_dir), "code", last["review_digest"]
         )
         assert agents_status.check_status(str(output_dir))["all_done"] is True
-        canonical_path = output_dir / "code-review.json"
+        canonical_path = Path(reviewer_lifecycle.review_paths(output_dir, "code").final)
         canonical_bytes = canonical_path.read_bytes()
         assert canonical_bytes == last_bytes
         assert hashlib.sha256(canonical_bytes).hexdigest() == (
@@ -222,7 +242,7 @@ class TestReviewerDraftFinalizationLifecycle:
         )
         assert intake["discarded_drafts"] == []
         written = _markdown_mod.materialize_markdown(str(output_dir))
-        assert written == [str(output_dir / "code-review.md")]
+        assert written == [reviewer_lifecycle.reviewer_markdown_path(output_dir, "code")]
 
         reconciliation = subprocess.run(
             [
@@ -279,12 +299,12 @@ class TestReviewerDraftFinalizationLifecycle:
             ],
         )
         assert run_file_review["agents_claiming_review_by_file"] == {
-            "claimable/read.py": ["code-reviewer"],
+            "claimable/read.py": ["code"],
         }
         assert run_file_review["agents_with_unclaimed_review_by_file"] == {
-            "claimable/unread.py": ["code-reviewer"],
+            "claimable/unread.py": ["code"],
         }
-        assert (output_dir / "code-review.md").read_text() == (
+        assert Path(reviewer_lifecycle.reviewer_markdown_path(output_dir, "code")).read_text() == (
             _render_markdown(canonical)
         )
         assert manifest["status"] == "complete"
@@ -292,6 +312,11 @@ class TestReviewerDraftFinalizationLifecycle:
             last["review_digest"]
         )
         assert list(output_dir.glob("*-review.draft.json")) == []
+        assert list(output_dir.glob("*-review.json")) == []
+        assert list(output_dir.glob("*-assignment.json")) == []
+        assert list(output_dir.glob("*-scope-summary*")) == []
+        assert list(output_dir.glob("*-scoped-diff*")) == []
+        assert list(output_dir.glob("*.started")) == []
         assert list(output_dir.glob("*.tmp")) == []
 
 
@@ -1678,10 +1703,12 @@ class TestStep7Orchestration:
                 {"name": "security-reviewer", "status": "DISPATCH"},
             ],
         }))
-        (tmp_path / "security-reviewer.started").write_text(
+        marker = Path(reviewer_lifecycle.started_marker_path(tmp_path, "security"))
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(
             datetime.now(timezone.utc).isoformat()
         )
-        (tmp_path / "security-review.draft.json").write_text("{}")
+        Path(reviewer_lifecycle.review_paths(tmp_path, "security").draft).write_text("{}")
         status_output = agents_status.format_output(
             agents_status.attach_draft_evidence(
                 str(tmp_path), agents_status.check_status(str(tmp_path))
@@ -1981,9 +2008,7 @@ class TestStep8Orchestration:
         (tmp_path / "dispatch-plan.json").write_text(json.dumps({
             "agents": [{"name": "code-reviewer", "status": "DISPATCH"}],
         }))
-        (tmp_path / "code-review.json").write_text(
-            json.dumps({"verdict": "approve"})
-        )
+        _write_final_review(tmp_path, "code", {"verdict": "approve"})
         loads = []
         monkeypatch.setattr(
             mod.subprocess,
@@ -2086,7 +2111,8 @@ class TestStep8Orchestration:
         (tmp_path / "dispatch-plan.json").write_text(json.dumps({
             "agents": [{"name": "code-reviewer", "status": "DISPATCH"}],
         }))
-        review_path = tmp_path / "code-review.json"
+        review_path = Path(reviewer_lifecycle.review_paths(tmp_path, "code").final)
+        review_path.parent.mkdir(parents=True, exist_ok=True)
         review = canonical_review_document("code")
         review["schema"] = 1
         review_path.write_text(json.dumps(review))
@@ -2100,7 +2126,7 @@ class TestStep8Orchestration:
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         assert state["agents"]["completed"] == []
         assert state["reviewer_markdown"]["status"] == "partial"
-        assert not (tmp_path / "code-review.md").exists()
+        assert not Path(reviewer_lifecycle.reviewer_markdown_path(tmp_path, "code")).exists()
         intake = json.loads((tmp_path / "review-intake.json").read_text())
         assert intake["status"] == "closed"
         context = json.loads(
@@ -2211,9 +2237,7 @@ class TestStep8Orchestration:
             ],
         }))
         for reviewer in ("code", "security"):
-            (tmp_path / f"{reviewer}-review.json").write_text(
-                json.dumps(_review_json(reviewer))
-            )
+            _write_final_review(tmp_path, reviewer, _review_json(reviewer))
 
         monkeypatch.setattr(
             mod.subprocess,
@@ -2244,8 +2268,8 @@ class TestStep8Orchestration:
         )
 
         assert result == {}
-        assert (tmp_path / "code-review.md").is_file()
-        assert (tmp_path / "security-review.md").is_file()
+        assert Path(reviewer_lifecycle.reviewer_markdown_path(tmp_path, "code")).is_file()
+        assert Path(reviewer_lifecycle.reviewer_markdown_path(tmp_path, "security")).is_file()
         assert state["reviewer_markdown"] == {
             "ran": True,
             "written": 2,
@@ -2430,9 +2454,7 @@ class TestStep8Orchestration:
                 {"name": "security-reviewer", "status": "DISPATCH"},
             ],
         }))
-        (tmp_path / "security-review.json").write_text(
-            json.dumps(_review_json("security"))
-        )
+        _write_final_review(tmp_path, "security", _review_json("security"))
         monkeypatch.setattr(
             mod.subprocess,
             "run",
@@ -2445,9 +2467,7 @@ class TestStep8Orchestration:
         ]
 
         def publish_then_materialize(output_dir):
-            (tmp_path / "code-review.json").write_text(
-                json.dumps(_review_json("code"))
-            )
+            _write_final_review(tmp_path, "code", _review_json("code"))
             return original_materialize(output_dir)
 
         monkeypatch.setitem(
@@ -2472,8 +2492,8 @@ class TestStep8Orchestration:
         )
 
         assert result == {}
-        assert (tmp_path / "code-review.md").is_file()
-        assert (tmp_path / "security-review.md").is_file()
+        assert Path(reviewer_lifecycle.reviewer_markdown_path(tmp_path, "code")).is_file()
+        assert Path(reviewer_lifecycle.reviewer_markdown_path(tmp_path, "security")).is_file()
         assert state["reviewer_markdown"] == {
             "ran": True,
             "written": 2,
@@ -2487,9 +2507,7 @@ class TestStep8Orchestration:
         (tmp_path / "dispatch-plan.json").write_text(json.dumps({
             "agents": [{"name": "security-reviewer", "status": "DISPATCH"}],
         }))
-        (tmp_path / "security-review.json").write_text(
-            json.dumps(_review_json("security"))
-        )
+        _write_final_review(tmp_path, "security", _review_json("security"))
         monkeypatch.setattr(
             mod.subprocess,
             "run",
@@ -2497,7 +2515,10 @@ class TestStep8Orchestration:
                 args=args[0], returncode=0, stdout="", stderr=""
             ),
         )
-        unrelated_markdown = tmp_path / "code-review.md"
+        unrelated_markdown = Path(
+            reviewer_lifecycle.reviewer_markdown_path(tmp_path, "code")
+        )
+        unrelated_markdown.parent.mkdir(parents=True, exist_ok=True)
         unrelated_markdown.write_text("# Different reviewer\n")
         monkeypatch.setitem(
             mod._orchestrate_step_8.__globals__,
@@ -2535,9 +2556,7 @@ class TestStep8Orchestration:
         (tmp_path / "dispatch-plan.json").write_text(json.dumps({
             "agents": [{"name": "security-reviewer", "status": "DISPATCH"}],
         }))
-        (tmp_path / "security-review.json").write_text(
-            json.dumps(_review_json("security"))
-        )
+        _write_final_review(tmp_path, "security", _review_json("security"))
         monkeypatch.setattr(
             mod.subprocess,
             "run",
@@ -2586,7 +2605,7 @@ class TestStep8Orchestration:
         (tmp_path / "dispatch-plan.json").write_text(json.dumps({
             "agents": [{"name": "security-reviewer", "status": "DISPATCH"}],
         }))
-        (tmp_path / "security-review.json").write_text("{}")
+        _write_final_review(tmp_path, "security", {})
         monkeypatch.setattr(
             mod.subprocess,
             "run",
@@ -2625,9 +2644,7 @@ class TestStep8Orchestration:
         (tmp_path / "dispatch-plan.json").write_text(json.dumps({
             "agents": [{"name": "security-reviewer", "status": "DISPATCH"}],
         }))
-        (tmp_path / "security-review.json").write_text(
-            json.dumps(_review_json("security"))
-        )
+        _write_final_review(tmp_path, "security", _review_json("security"))
         monkeypatch.setattr(
             mod.subprocess,
             "run",
@@ -2653,7 +2670,7 @@ class TestStep8Orchestration:
                 str(tmp_path),
             )
 
-        assert (tmp_path / "security-review.md").is_file()
+        assert Path(reviewer_lifecycle.reviewer_markdown_path(tmp_path, "security")).is_file()
 
     def test_step_8_invalid_hand_edited_status_names_the_agent(
         self, mod, tmp_path
@@ -2707,23 +2724,23 @@ class TestStep9CoverageMeasurement:
 
     @staticmethod
     def _summary(tmp_path, agent, *, inline=(), claimable=()):
-        (tmp_path / f"{agent}-scope-summary.json").write_text(json.dumps({
+        _write_scope_summary(tmp_path, agent.removesuffix("-reviewer"), {
             "schema": 3,
             "inline_diff_files": list(inline),
             "review_claimable_files": list(claimable),
             "list_only_files": [],
             "routing_files": sorted({*inline, *claimable}),
-        }))
+        })
 
     @staticmethod
     def _finalized(tmp_path, reviewer, *, claims=(), claimable=()):
-        (tmp_path / f"{reviewer}-review.json").write_text(json.dumps(
-            canonical_review_document(
+        _write_final_review(
+            tmp_path, reviewer, canonical_review_document(
                 reviewer,
                 reviewed_file_claims=list(claims),
                 review_claimable_files=list(claimable),
             )
-        ))
+        )
 
     @staticmethod
     def _run_step(mod, tmp_path, changed_csv=None, state=None):
@@ -2757,13 +2774,13 @@ class TestStep9CoverageMeasurement:
             "scope_reporting_agent_count": 2,
             "unscoped_files": ["package-lock.json"],
             "agents_receiving_inline_diff_by_file": {
-                "src/a.py": ["security-reviewer"]
+                "src/a.py": ["security"]
             },
             "agents_claiming_review_by_file": {
-                "src/big_module.py": ["security-reviewer"]
+                "src/big_module.py": ["security"]
             },
             "agents_with_unclaimed_review_by_file": {
-                "src/starved.php": ["code-reviewer"]
+                "src/starved.php": ["code"]
             },
         }
 
@@ -2823,8 +2840,8 @@ class TestStep9CoverageMeasurement:
         )
 
         record = (tmp_path / "review-record.md").read_text()
-        assert "`src/starved.php` (skipped by: `code-reviewer`)" in record
-        assert "`src/big.py` (claimed by: `security-reviewer`)" in record
+        assert "`src/starved.php` (skipped by: `code`)" in record
+        assert "`src/big.py` (claimed by: `security`)" in record
         assert "- `package-lock.json`" in record
 
 
@@ -2835,13 +2852,13 @@ class TestStep9Orchestration:
         run_pipeline("--step", "1", "--mode", "full",
                    "--output-dir", str(tmp_path), cwd=tmp_path)
         for agent in ("code-reviewer", "security-reviewer"):
-            (tmp_path / f"{agent}-scope-summary.json").write_text(json.dumps({
+            _write_scope_summary(tmp_path, agent.removesuffix("-reviewer"), {
                 "schema": 3,
                 "inline_diff_files": ["src/a.php"],
                 "review_claimable_files": ["src/starved.php"],
                 "list_only_files": [],
                 "routing_files": ["src/a.php", "src/starved.php"],
-            }))
+            })
         # The CSV step 8 hands the reconciliation-context builder is the
         # same one step 9 measures `unscoped_files` against.
         (tmp_path / "review-context.json").write_text(json.dumps({
@@ -2859,11 +2876,11 @@ class TestStep9Orchestration:
             "scope_reporting_agent_count": 2,
             "unscoped_files": [],
             "agents_receiving_inline_diff_by_file": {
-                "src/a.php": ["code-reviewer", "security-reviewer"]
+                "src/a.php": ["code", "security"]
             },
             "agents_claiming_review_by_file": {},
             "agents_with_unclaimed_review_by_file": {
-                "src/starved.php": ["code-reviewer", "security-reviewer"],
+                "src/starved.php": ["code", "security"],
             },
         }
         # The record the step assembles carries the measurement. The
@@ -3170,7 +3187,7 @@ class TestStep11Orchestration:
             f"Source:** `{tmp_path}/review-findings.json"
             not in prepared.stdout
         )
-        assert f"`{tmp_path}/<agent>-review.md`" in prepared.stdout
+        assert f"`{tmp_path}/reviewers/<reviewer>/review.md`" in prepared.stdout
 
     def test_step_11_prepares_then_publishes_after_report_handoff(
         self, tmp_path
@@ -3754,8 +3771,10 @@ class TestStep8ReviewFileStems:
             "reason": "repo reviewer applicable",
         }]}
         (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
-        (tmp_path / "repo-api-reviewer-v2-review.json").write_text(
-            json.dumps(canonical_review_document("repo-api-reviewer-v2"))
+        _write_final_review(
+            tmp_path,
+            "repo-api-reviewer-v2",
+            canonical_review_document("repo-api-reviewer-v2"),
         )
         fake_done = subprocess.CompletedProcess(
             [], returncode=0, stdout="", stderr=""

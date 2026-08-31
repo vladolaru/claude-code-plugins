@@ -179,7 +179,7 @@ git status --porcelain
 ```
 STATUS: FINISHED
 OUTPUT_FILES:
-  - {output_dir}/tests-mutation-review.json
+  - {output_dir}/reviewers/tests-mutation/review.json
 MUTATION_SCORE: X%
 COUNTS:
   mutations_total: N

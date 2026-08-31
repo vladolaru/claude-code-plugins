@@ -1768,6 +1768,7 @@ def write_scope_summary(scope: dict, path: str) -> None:
     reviewed_files = list(
         dict.fromkeys([*inline_diff_files, *review_claimable_files])
     )
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     summary = {
         "schema": 3,
         "inline_diff_files": inline_diff_files,

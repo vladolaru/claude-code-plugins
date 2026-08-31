@@ -20,7 +20,14 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 import review.agent.output as output_mod
 import review.reviewer_lifecycle as lifecycle_mod
 from review.agent.output import ReviewOutputBuilder, finalize_review
-from review.reviewer_lifecycle import close_review_intake, review_paths
+from review.reviewer_lifecycle import (
+    close_review_intake,
+    review_paths,
+    reviewer_markdown_path,
+    scope_summary_path,
+    scoped_diff_path,
+    started_marker_path,
+)
 from review.telemetry import ReviewTelemetry
 
 sys.path.insert(0, str(TESTS_DIR))
@@ -70,14 +77,31 @@ def _finalize_canonical_review(output_dir, reviewer="code"):
 
 
 class TestReviewPaths:
-    def test_names_exactly_one_draft_final_and_assignment(self, tmp_path):
+    def test_names_exactly_one_reviewer_directory_and_fixed_artifacts(self, tmp_path):
         paths = review_paths(str(tmp_path), "code")
 
-        assert Path(paths.draft).name == "code-review.draft.json"
-        assert Path(paths.final).name == "code-review.json"
-        assert Path(paths.assignment).name == (
-            "code-assignment.json"
-        )
+        reviewer_dir = tmp_path / "reviewers" / "code"
+        assert Path(paths.draft) == reviewer_dir / "review.draft.json"
+        assert Path(paths.final) == reviewer_dir / "review.json"
+        assert Path(paths.assignment) == reviewer_dir / "assignment.json"
+
+    def test_names_remaining_reviewer_artifacts_from_the_same_directory(self, tmp_path):
+        reviewer_dir = tmp_path / "reviewers" / "code"
+
+        assert Path(reviewer_markdown_path(tmp_path, "code")) == reviewer_dir / "review.md"
+        assert Path(scope_summary_path(tmp_path, "code")) == reviewer_dir / "scope-summary.json"
+        assert Path(scope_summary_path(tmp_path, "code", "php-tests")) == reviewer_dir / "scope-summary-php-tests.json"
+        assert Path(scoped_diff_path(tmp_path, "code")) == reviewer_dir / "scoped-diff.patch"
+        assert Path(started_marker_path(tmp_path, "code")) == reviewer_dir / "started"
+
+    @pytest.mark.parametrize(
+        "domain", ["", ".", "..", "php/tests", r"php\tests", "bad\x00name", 42]
+    )
+    def test_scope_summary_rejects_unsafe_domain_components(
+        self, tmp_path, domain
+    ):
+        with pytest.raises(ValueError, match="invalid scope domain"):
+            scope_summary_path(tmp_path, "code", domain)
 
 
 class TestDraftOpenAndReplacement:
@@ -93,7 +117,7 @@ class TestDraftOpenAndReplacement:
         assert set(saved) == {
             "draft", "review_digest", "finalize_review_command"
         }
-        assert saved["draft"].endswith("code-review.draft.json")
+        assert Path(saved["draft"]) == Path(review_paths(tmp_path, "code").draft)
         assert "DRAFT SAVED: verdict approve" in output
         assert "DRAFT TOTALS: findings 0" in output
         assert "FILES NOT YET CLAIMED AS REVIEWED (1): src/claimable.py" in output
@@ -150,7 +174,7 @@ class TestDraftOpenAndReplacement:
 
     def test_rejects_malformed_draft(self, tmp_path):
         _write_assignment(tmp_path)
-        Path(tmp_path, "code-review.draft.json").write_text("{not json")
+        Path(review_paths(tmp_path, "code").draft).write_text("{not json")
 
         with pytest.raises(ValueError, match="malformed review draft"):
             _open_builder(tmp_path)
@@ -193,7 +217,7 @@ class TestDraftOpenAndReplacement:
             second.save_draft()
 
         assert json.loads(
-            Path(tmp_path, "code-review.draft.json").read_text()
+            Path(review_paths(tmp_path, "code").draft).read_text()
         )["findings"][0]["title"] == "First"
 
     def test_winning_builder_can_save_repeated_replacements(self, tmp_path):
@@ -221,8 +245,8 @@ class TestDraftOpenAndReplacement:
         with pytest.raises(OSError, match="replace unavailable"):
             builder.save_draft()
 
-        assert not Path(tmp_path, "code-review.draft.json").exists()
-        assert not list(tmp_path.glob("code-review.draft.json.*.tmp"))
+        assert not Path(review_paths(tmp_path, "code").draft).exists()
+        assert not list(Path(review_paths(tmp_path, "code").draft).parent.glob("review.draft.json.*.tmp"))
 
 
 class TestFinalization:
@@ -235,7 +259,7 @@ class TestFinalization:
 
         assert retry == first
         assert set(first) == {"final", "review_digest"}
-        assert Path(first["final"]).name == "code-review.json"
+        assert Path(first["final"]) == Path(review_paths(tmp_path, "code").final)
         assert not Path(saved["draft"]).exists()
 
     def test_old_digest_cannot_finalize_replacement(self, tmp_path):
@@ -249,7 +273,7 @@ class TestFinalization:
             finalize_review(str(tmp_path), "code", old["review_digest"])
 
         assert Path(latest["draft"]).exists()
-        assert not Path(tmp_path, "code-review.json").exists()
+        assert not Path(review_paths(tmp_path, "code").final).exists()
 
     def test_cli_first_and_retry_print_the_same_one_line(self, tmp_path):
         _write_assignment(tmp_path)
@@ -266,7 +290,7 @@ class TestFinalization:
         first = subprocess.run(command, check=True, capture_output=True, text=True)
         retry = subprocess.run(command, check=True, capture_output=True, text=True)
 
-        assert first.stdout == "REVIEW FINALIZED: code-review.json\n"
+        assert first.stdout == "REVIEW FINALIZED: review.json\n"
         assert retry.stdout == first.stdout
         assert first.stderr == retry.stderr == ""
 
@@ -315,12 +339,13 @@ class TestFinalization:
             finalize_review(str(tmp_path), "code", saved["review_digest"])
 
         assert draft.exists()
-        assert not Path(tmp_path, "code-review.json").exists()
+        assert not Path(review_paths(tmp_path, "code").final).exists()
 
     def test_close_returns_the_completed_invalid_split(self, tmp_path):
         """Intake close already validates every final. It now says which."""
         _finalize_canonical_review(tmp_path, "code")
-        broken = Path(tmp_path, "security-review.json")
+        broken = Path(review_paths(tmp_path, "security").final)
+        broken.parent.mkdir(parents=True, exist_ok=True)
         broken.write_text(json.dumps({"verdict": "approve"}))
 
         result = close_review_intake(
@@ -341,7 +366,8 @@ class TestFinalization:
         assert result["invalid_final_reviews"] == []
 
     def test_close_classifies_invalid_final_without_telemetry(self, tmp_path):
-        final = Path(tmp_path, "security-review.json")
+        final = Path(review_paths(tmp_path, "security").final)
+        final.parent.mkdir(parents=True, exist_ok=True)
         final.write_text("not json")
 
         closed = close_review_intake(
@@ -379,9 +405,11 @@ class TestFinalization:
     def test_close_discards_only_recognized_dispatched_drafts(self, tmp_path):
         _write_assignment(tmp_path)
         saved = _open_builder(tmp_path).save_draft()
-        unrelated = Path(tmp_path, "foreign-review.draft.json")
+        unrelated = Path(review_paths(tmp_path, "foreign").draft)
+        unrelated.parent.mkdir(parents=True, exist_ok=True)
         unrelated.write_text("{}")
-        final = Path(tmp_path, "security-review.json")
+        final = Path(review_paths(tmp_path, "security").final)
+        final.parent.mkdir(parents=True, exist_ok=True)
         final.write_text("canonical")
 
         closed = close_review_intake(
@@ -434,7 +462,7 @@ class TestFinalization:
             with pytest.raises(ValueError, match="intake"):
                 save_future.result(timeout=5)
 
-        assert not Path(tmp_path, "code-review.draft.json").exists()
+        assert not Path(review_paths(tmp_path, "code").draft).exists()
 
     def test_close_keeps_an_undispatched_reviewers_draft_on_disk(
         self, tmp_path
@@ -458,7 +486,7 @@ class TestFinalization:
                 str(tmp_path), "security", saved["review_digest"]
             )
         assert Path(saved["draft"]).exists()
-        assert not Path(tmp_path, "security-review.json").exists()
+        assert not Path(review_paths(tmp_path, "security").final).exists()
 
 
 class TestFinalizationTelemetry:

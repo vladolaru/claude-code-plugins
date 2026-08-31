@@ -44,7 +44,7 @@ from review.review_document import (
 )
 from review.review_markdown import render_markdown
 from review import critic_adjustments
-from review.reviewer_lifecycle import ReviewPaths, review_paths
+from review.reviewer_lifecycle import ReviewPaths, review_paths, started_marker_path
 
 sys.path.insert(0, str(TESTS_DIR))
 from helpers.review_fixtures import (
@@ -1019,7 +1019,7 @@ class TestToDict:
         b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
         _write_required_assignment(tmp_path, "pr")
         _save_draft(b, tmp_path)
-        saved = json.loads((tmp_path / "pr-review.draft.json").read_text())
+        saved = json.loads(Path(review_paths(tmp_path, "pr").draft).read_text())
         assert saved["plugin_version"] == "1.114.0"
 
     def test_schema_is_the_documented_shape_number(self):
@@ -1174,11 +1174,11 @@ class TestSaveDraft:
             b.add_finding("high", "Title", "f.py", "desc", "rec", line=1)
             _write_required_assignment(d, "security")
             _save_draft(b, d)
-            assert os.path.isfile(
-                os.path.join(d, "security-review.draft.json")
-            )
-            assert not os.path.exists(os.path.join(d, "security-review.json"))
-            assert not os.path.exists(os.path.join(d, "security-review.md"))
+            reviewer_dir = Path(d, "reviewers", "security")
+            assert (reviewer_dir / "review.draft.json").is_file()
+            assert not (reviewer_dir / "review.json").exists()
+            assert not (reviewer_dir / "review.md").exists()
+            assert not list(Path(d).glob("*-review*"))
 
     def test_json_content_matches_to_dict(self, monkeypatch):
         with tempfile.TemporaryDirectory() as d:
@@ -1186,13 +1186,15 @@ class TestSaveDraft:
             # honest clock and the duration is null, which would make this
             # comparison pass for the wrong reason.
             monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", d)
-            with open(os.path.join(d, "security-reviewer.started"), "w") as f:
+            marker = Path(started_marker_path(d, "security"))
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            with open(marker, "w") as f:
                 f.write(datetime.now(timezone.utc).isoformat())
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
             b.add_finding("high", "Title", "f.py", "desc", "rec", line=1)
             _write_required_assignment(d, "security")
             _save_draft(b, d)
-            with open(os.path.join(d, "security-review.draft.json")) as f:
+            with open(review_paths(d, "security").draft) as f:
                 saved = json.load(f)
             live = b.to_dict()
 
@@ -1218,7 +1220,7 @@ class TestSaveDraft:
             _write_required_assignment(d, "arch")
             result = _save_draft(b, d)
             assert result["draft"] == os.path.join(
-                d, "arch-review.draft.json"
+                d, "reviewers", "arch", "review.draft.json"
             )
             assert re.fullmatch(r"[0-9a-f]{64}", result["review_digest"])
 
@@ -1370,11 +1372,9 @@ class TestSaveDraft:
                 _save_draft(
                     ReviewOutputBuilder(pr_id="1", reviewer="security"), d
                 )
-            assert not os.path.exists(os.path.join(d, "security-review.json"))
-            assert not os.path.exists(
-                os.path.join(d, "security-review.draft.json")
-            )
-            assert not list(Path(d).glob("*.tmp"))
+            assert not os.path.exists(review_paths(d, "security").final)
+            assert not os.path.exists(review_paths(d, "security").draft)
+            assert not list(Path(review_paths(d, "security").draft).parent.glob("*.tmp"))
 
     def test_saved_draft_embeds_the_derived_partition(self, tmp_path):
         """save_draft stitches reviewed_files_fields() onto to_dict()'s content —
@@ -1655,7 +1655,7 @@ class TestReviewedFileClaims:
         b.claim_files_reviewed("src/c.py")
         _save_draft(b, tmp_path)
         with open(
-            tmp_path / "sec-review.draft.json", encoding="utf-8"
+            review_paths(tmp_path, "sec").draft, encoding="utf-8"
         ) as f:
             data = json.load(f)
         assert data["reviewed_file_claims"] == ["src/c.py"]
@@ -1899,7 +1899,7 @@ class TestAdvisoryChannel:
             ValueError, match=r"channel\(s\) \['advisory'\] not among"
         ):
             _save_draft(b, tmp_path)
-        assert not (tmp_path / "reconciliator-review.draft.json").exists()
+        assert not Path(review_paths(tmp_path, "reconciliator").draft).exists()
 
     def test_advisory_critical_does_not_gate(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
@@ -2025,7 +2025,7 @@ class TestDerivedReviewedFiles:
         _save_draft(builder, tmp_path)
 
         saved = json.loads(
-            (tmp_path / "code-review.draft.json").read_text()
+            Path(review_paths(tmp_path, "code").draft).read_text()
         )
         assert saved["reviewed_file_claims"] == ["src/read.ts"]
         assert saved["unclaimed_review_files"] == ["src/unread.ts"]
@@ -2038,7 +2038,7 @@ class TestDerivedReviewedFiles:
         builder.claim_files_reviewed("src/a.ts")
         _save_draft(builder, tmp_path)
         first = json.loads(
-            (tmp_path / "code-review.draft.json").read_text()
+            Path(review_paths(tmp_path, "code").draft).read_text()
         )
         assert first["unclaimed_review_files"] == ["src/b.ts"]
 
@@ -2046,7 +2046,7 @@ class TestDerivedReviewedFiles:
         _save_draft(builder, tmp_path)
 
         second = json.loads(
-            (tmp_path / "code-review.draft.json").read_text()
+            Path(review_paths(tmp_path, "code").draft).read_text()
         )
         assert second["reviewed_file_claims"] == ["src/a.ts", "src/b.ts"]
         assert second["unclaimed_review_files"] == []
@@ -2062,7 +2062,7 @@ class TestDerivedReviewedFiles:
         saved = _save_draft(builder, tmp_path)
         finalize_review(str(tmp_path), "code", saved["review_digest"])
 
-        final = json.loads((tmp_path / "code-review.json").read_text())
+        final = json.loads(Path(review_paths(tmp_path, "code").final).read_text())
         assert final["reviewed_file_claims"] == ["src/read.ts"]
         assert final["unclaimed_review_files"] == ["src/unread.ts"]
         assert final["reviewed_file_count"] == 3
@@ -2071,7 +2071,7 @@ class TestDerivedReviewedFiles:
         self._write_assignment(tmp_path, ["src/read.ts"])
         builder = ReviewOutputBuilder("123", "code")
         saved = _save_draft(builder, tmp_path)
-        draft_path = tmp_path / "code-review.draft.json"
+        draft_path = Path(review_paths(tmp_path, "code").draft)
         draft = json.loads(draft_path.read_text())
         draft["reviewed_file_claims"] = "src/read.ts"
         draft_bytes = json.dumps(draft).encode()
@@ -2120,7 +2120,9 @@ class TestBudgetTargetEcho:
             "channels": ["blocking"],
         }
         payload.update(fields)
-        (tmp_path / f"{reviewer}-assignment.json").write_text(
+        assignment_path = Path(review_paths(tmp_path, reviewer).assignment)
+        assignment_path.parent.mkdir(parents=True, exist_ok=True)
+        assignment_path.write_text(
             json.dumps(payload)
         )
 
@@ -2171,7 +2173,9 @@ class TestBudgetTargetEcho:
         cannot slip past on a sidecar the final would have refused.
         """
         self._clean_env(monkeypatch)
-        Path(tmp_path, "code-assignment.json").write_text(
+        assignment_path = Path(review_paths(tmp_path, "code").assignment)
+        assignment_path.parent.mkdir(parents=True, exist_ok=True)
+        assignment_path.write_text(
             json.dumps(apply_schema(
                 canonical_assignment(
                     "code", review_claimable_files=["some/file.go"]
@@ -2250,7 +2254,9 @@ class TestDraftFileGapReceipt:
             "channels": ["blocking"],
         }
         payload.update(fields)
-        (tmp_path / f"{reviewer}-assignment.json").write_text(
+        assignment_path = Path(review_paths(tmp_path, reviewer).assignment)
+        assignment_path.parent.mkdir(parents=True, exist_ok=True)
+        assignment_path.write_text(
             json.dumps(payload)
         )
 
@@ -2268,7 +2274,7 @@ class TestDraftFileGapReceipt:
         builder.claim_files_reviewed("b.go")
 
         _save_draft(builder, tmp_path)
-        saved = json.loads((tmp_path / "code-review.draft.json").read_text())
+        saved = json.loads(Path(review_paths(tmp_path, "code").draft).read_text())
         assert saved["reviewed_file_claims"] == ["b.go"]
         assert saved["unclaimed_review_files"] == ["a.go"]
         assert saved["reviewed_file_count"] == 3
@@ -2429,6 +2435,7 @@ class TestMetaIsNeverFakeZero:
 
     @staticmethod
     def _stamp(path, moment=None):
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text((moment or datetime.now(timezone.utc)).isoformat())
 
     def test_duration_is_null_without_a_marker(self, tmp_path, monkeypatch):
@@ -2449,7 +2456,7 @@ class TestMetaIsNeverFakeZero:
         monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
         _write_required_assignment(tmp_path, "security")
         self._stamp(
-            tmp_path / "security-reviewer.started",
+            Path(started_marker_path(tmp_path, "security")),
             datetime.now(timezone.utc) - timedelta(seconds=30),
         )
         b = ReviewOutputBuilder.open(tmp_path, "1", "security")
@@ -2459,7 +2466,7 @@ class TestMetaIsNeverFakeZero:
         """An unbound or unassigned builder has no agent name, so it has no
         marker to name. Absence stays absence."""
         monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
-        self._stamp(tmp_path / "security-reviewer.started")
+        self._stamp(Path(started_marker_path(tmp_path, "security")))
         b = ReviewOutputBuilder(pr_id="1", reviewer="security")
         assert b.to_dict()["meta"]["review_duration_ms"] is None
 
@@ -2488,7 +2495,7 @@ class TestMetaIsNeverFakeZero:
     ):
         monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
         _write_required_assignment(tmp_path, "security")
-        (tmp_path / "security-reviewer.started").write_text(stamp)
+        Path(started_marker_path(tmp_path, "security")).write_text(stamp)
         b = ReviewOutputBuilder.open(tmp_path, "1", "security")
         assert b.to_dict()["meta"][
             "review_duration_ms"
@@ -2502,7 +2509,7 @@ class TestMetaIsNeverFakeZero:
         monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
         _write_required_assignment(tmp_path, "security")
         self._stamp(
-            tmp_path / "security-reviewer.started",
+            Path(started_marker_path(tmp_path, "security")),
             datetime.now(timezone.utc) + timedelta(minutes=5),
         )
         b = ReviewOutputBuilder.open(tmp_path, "1", "security")
@@ -2516,16 +2523,10 @@ class TestMetaIsNeverFakeZero:
         those copies from silently unmeasuring a whole class of actor."""
         import review.synthesis_lifecycle as _lifecycle
         import review.findings_ledger as _ledger
-        import review.agent.output as _output
-
-        bootstrap_src = (
-            PLUGIN_ROOT / "scripts" / "review" / "agent" / "bootstrap.py"
-        ).read_text()
         assert _ledger.SYNTHESIS_START_SUFFIX == _lifecycle.MARKER_SUFFIX
         assert _ledger.LEDGER_AGENT_NAME == _lifecycle.RECONCILIATOR
-        assert (
-            f'f"{{effective_agent_name}}{_output._REVIEWER_START_SUFFIX}"'
-            in bootstrap_src
+        assert Path(started_marker_path("/out", "security")) == Path(
+            "/out/reviewers/security/started"
         )
 
 
@@ -2554,7 +2555,7 @@ class TestTypeScriptContractLockstep:
     @classmethod
     def _review_document_interface(cls) -> str:
         """ReviewContent's body plus ReviewDocument's own extension body —
-        the flattened shape a per-reviewer <reviewer>-review.json actually
+        the flattened shape a per-reviewer review.json actually
         carries (`extends` means ReviewDocument's own text repeats none of
         ReviewContent's fields)."""
         return (

@@ -2,7 +2,7 @@
 """Markdown derived from a review artifact — never written by hand.
 
 Every human-readable review document in an output directory is a pure
-function of the JSON beside it: `<reviewer>-review.md` from the reviewer's
+function of the JSON beside it: `reviewers/<reviewer>/review.md` from the reviewer's
 final, `review-findings.md` from the reconciliation ledger, and the body
 of `review-record.md` from the same renderer, so a rendering can never
 disagree with the artifact it came from.
@@ -16,7 +16,7 @@ import would be cyclic. Here it is a module-level import, because nothing
 in this file is imported back.
 
 Usage:
-    python3 review_markdown.py render <path>-review.json
+    python3 review_markdown.py render <run>/reviewers/<reviewer>/review.json
     python3 review_markdown.py materialize <output_dir> [--suffix ...]
 """
 
@@ -31,6 +31,8 @@ try:
         coerce_text,
         load_review_document,
     )
+    from .reviewer_lifecycle import reviewer_markdown_path
+    from .run_paths import REVIEWERS_SUBDIR, reviewer_dir
     from .verdict_rules import VALID_SEVERITIES
 except ImportError:
     _scripts_parent = os.path.dirname(
@@ -44,6 +46,8 @@ except ImportError:
         coerce_text,
         load_review_document,
     )
+    from review.reviewer_lifecycle import reviewer_markdown_path
+    from review.run_paths import REVIEWERS_SUBDIR, reviewer_dir
     from review.verdict_rules import VALID_SEVERITIES
 
 
@@ -51,7 +55,7 @@ def render_markdown(data: Dict) -> str:
     """Human-readable Markdown rendered from a review's canonical dict.
 
     A pure function of the JSON representation — the dict save_draft()
-    writes and the *-review.json file holds (or a findings ledger) — so a
+    writes and the reviewer-directory `review.json` holds (or a findings ledger) — so a
     rendering can never disagree with the artifact it came from.
 
     Keys present in schema 2 are required (missing means KeyError — the
@@ -444,16 +448,24 @@ def _load_renderable_review_artifact(path):
                 f"({read.status})"
             )
         return read.findings
-    if name.endswith("-review.json"):
-        reviewer = name[: -len("-review.json")]
+    if name == "review.json":
+        reviewer_path = os.path.dirname(os.path.normpath(os.fspath(path)))
+        reviewers_path = os.path.dirname(reviewer_path)
+        reviewer = os.path.basename(reviewer_path)
+        if os.path.basename(reviewers_path) != REVIEWERS_SUBDIR:
+            raise ValueError(f"unsupported review artifact: {name}")
+        try:
+            reviewer_dir(os.path.dirname(reviewers_path), reviewer)
+        except ValueError as exc:
+            raise ValueError(f"unsupported review artifact: {name}") from exc
         return load_review_document(path, reviewer)
     raise ValueError(f"unsupported review artifact: {name}")
 
 
 def materialize_markdown(
-    output_dir: str, *, suffix: str = "-review.json"
+    output_dir: str, *, suffix: str = "review.json"
 ) -> List[str]:
-    """Render <name>.md beside every <name>.json matching `suffix`.
+    """Render fixed-name reviewer Markdown or the synthesis ledger.
 
     Derived artifacts for humans browsing the output directory: idempotent,
     regenerated from the settled canonical JSON, read by no pipeline
@@ -461,26 +473,45 @@ def materialize_markdown(
     key on the JSON). Malformed JSONs are skipped with a note on stderr —
     grading and reconciliation report those failures on their own channels.
 
-    `suffix` selects filenames only; the matched filename independently
-    chooses its validation boundary. Every `<reviewer>-review.json` uses
-    the canonical final-review loader, including when a caller supplies an
-    exact filename as the suffix. Only exact `review-findings.json` uses
-    the canonical reconciliation-ledger reader and validator. A second
-    copy of this loop is how the two would eventually disagree about what
-    a rendering means.
+    The default discovers ``reviewers/*/review.json``. The exact
+    ``review-findings.json`` selector retains the synthesis-ledger path.
     """
     written: List[str] = []
-    for name in sorted(os.listdir(output_dir)):
-        if not name.endswith(suffix):
+    if suffix == _RECONCILIATION_LEDGER_NAME:
+        candidates = [os.path.join(output_dir, suffix)]
+    elif suffix == "review.json":
+        reviewers_dir = os.path.join(output_dir, REVIEWERS_SUBDIR)
+        try:
+            reviewer_names = sorted(os.listdir(reviewers_dir))
+        except OSError:
+            reviewer_names = []
+        candidates = [
+            os.path.join(reviewers_dir, reviewer, "review.json")
+            for reviewer in reviewer_names
+            if os.path.isdir(os.path.join(reviewers_dir, reviewer))
+        ]
+    else:
+        candidates = [os.path.join(output_dir, suffix)]
+    for json_path in candidates:
+        name = os.path.basename(json_path)
+        if not os.path.isfile(json_path) and not (
+            name == _RECONCILIATION_LEDGER_NAME
+            and os.path.exists(json_path)
+        ):
             continue
-        json_path = os.path.join(output_dir, name)
         try:
             data = _load_renderable_review_artifact(json_path)
             md_text = render_markdown(data)
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as err:
             print(f"skipped {name}: {err}", file=sys.stderr)
             continue
-        md_path = json_path[: -len(".json")] + ".md"
+        md_path = (
+            json_path[: -len(".json")] + ".md"
+            if name == _RECONCILIATION_LEDGER_NAME
+            else reviewer_markdown_path(
+                output_dir, os.path.basename(os.path.dirname(json_path))
+            )
+        )
         with open(md_path, "w", encoding="utf-8") as handle:
             handle.write(md_text)
         written.append(md_path)
@@ -495,7 +526,7 @@ if __name__ == '__main__':
     )
     sub = parser.add_subparsers(dest="command", required=True)
     render_cmd = sub.add_parser(
-        "render", help="Print the Markdown for one *-review.json",
+        "render", help="Print the Markdown for one reviewers/*/review.json",
     )
     render_cmd.add_argument("json_path")
     mat_cmd = sub.add_parser(
@@ -505,10 +536,10 @@ if __name__ == '__main__':
     mat_cmd.add_argument("output_dir")
     mat_cmd.add_argument(
         "--suffix",
-        default="-review.json",
+        default="review.json",
         help=(
             "Which JSON family to render. Default renders every "
-            "<reviewer>-review.json; pass review-findings.json to render "
+            "reviewers/*/review.json; pass review-findings.json to render "
             "the reconciliation ledger — the recovery command step 11 "
             "prints when that render failed."
         ),

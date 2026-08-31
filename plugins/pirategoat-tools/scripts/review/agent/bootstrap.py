@@ -45,7 +45,12 @@ if _SCRIPTS_DIR not in sys.path:
 from review.reviewer_names import derive_reviewer_name
 from review.agent.review_assignment import ASSIGNMENT_SCHEMA, derive_reviewed_files
 from review.atomic_io import atomic_write_json
-from review.reviewer_lifecycle import review_paths
+from review.reviewer_lifecycle import (
+    review_paths,
+    scope_summary_path,
+    scoped_diff_path,
+    started_marker_path,
+)
 from review.verdict_rules import PIPELINE_VERDICTS
 
 
@@ -1051,10 +1056,10 @@ def build_output(
     # scope_output already starts with "=== REVIEW SCOPE ===" from scope.py
     if len(scope_output) > SCOPE_INLINE_CAP:
         # Write full scope to file to avoid output persistence cascade.
-        # Internal artifact — keyed on the full agent_name so parallel reviewers
-        # sharing OUTPUT_DIR never collide (see derive_reviewer_name for the rule).
-        os.makedirs(output_dir, exist_ok=True)
-        scope_file = os.path.join(output_dir, f"{agent_name}-scoped-diff.patch")
+        # Internal artifact — isolated by the validated short reviewer identity
+        # so parallel reviewers sharing OUTPUT_DIR never collide.
+        scope_file = scoped_diff_path(output_dir, reviewer_name)
+        os.makedirs(os.path.dirname(scope_file), exist_ok=True)
         with open(scope_file, 'w') as f:
             f.write(
                 "# WARNING: When you read this file, the Read tool adds display line numbers\n"
@@ -1123,16 +1128,13 @@ def build_output(
     # The namespace rule, taught once. A field run had a reviewer awk-slice
     # its scoped diff into three ad-hoc .patch files inside OUTPUT_DIR — a
     # sound technique in the wrong place, and nothing in what this function
-    # renders had ever said otherwise — the only $TMPDIR mention reaching a
-    # bootstrap-briefed reviewer was buried in a protocol probe example
-    # about running tests. (agents/codex-reviewer.md names it too, but that
-    # adapter does not receive this briefing.) OUTPUT_DIR is scanned by
+    # renders had ever said otherwise. OUTPUT_DIR is scanned by
     # readiness gates, swept for stale artifacts, and mined by the metrics
     # layer, all of which key on filenames the pipeline expects.
     lines.append(
         "OUTPUT_DIR accepts only your named artifacts (the files this "
         "briefing tells you to write). Scratch work — diff slices, notes, "
-        "intermediate files — goes in $TMPDIR."
+        "intermediate files — goes in OUTPUT_DIR/tmp/ (create it first)."
     )
     lines.append("")
     pr_id_str = pr_number if pr_number else "0"
@@ -1294,7 +1296,7 @@ def resolve_reviewer_identity(args):
                 "request.",
             ),
         )
-    # Identity used for per-instance artifacts (started marker, scoped-diff file,
+    # Identity used for the per-instance reviewer directory,
     # output file names). In ref-mode the adapter shares one registry key across
     # N instances, so uniqueness must come from --instance-name.
     effective_agent_name = args.instance_name if ref_mode else agent_name
@@ -1329,7 +1331,9 @@ def persist_review_assignment(
         "channels": list(channels),
     }
     derive_reviewed_files(payload, [], reviewer=reviewer)
-    atomic_write_json(review_paths(output_dir, reviewer).assignment, payload)
+    assignment_path = review_paths(output_dir, reviewer).assignment
+    os.makedirs(os.path.dirname(assignment_path), exist_ok=True)
+    atomic_write_json(assignment_path, payload)
 
 
 def main():
@@ -1469,10 +1473,6 @@ def main():
     exploration_scope = None
     secondary_with_content = []  # secondary domains that matched files
     scope_summary_paths = []  # machine-readable sidecars backing scope_output
-    def summary_dir() -> str:
-        """Return the durable run directory for scope sidecars."""
-        return output_dir
-
     if ref_mode:
         # Adapter ref-mode: the adapter has no registry domain. Scope by the
         # repo reviewer's declared domains so it reviews the right files.
@@ -1510,9 +1510,8 @@ def main():
             # would not count as covered. Instance-named so N instances
             # never collide and the aggregator attributes the scope to the
             # identity every other artifact uses.
-            dom_summary_out = os.path.join(
-                summary_dir(),
-                f"{effective_agent_name}-scope-summary-{dom}.json",
+            dom_summary_out = scope_summary_path(
+                output_dir, derive_reviewer_name(effective_agent_name), dom
             )
             dom_extra_flags, ref_include_flags = ref_include_flags, []
             dom_rc, dom_output = run_scope_discovery(
@@ -1562,8 +1561,8 @@ def main():
         # pinned the output dir it is also what the run level
         # (reconciliation coverage aggregation) reads to compute which
         # changed files no reviewer received inline.
-        primary_summary_out = os.path.join(
-            summary_dir(), f"{agent_name}-scope-summary.json"
+        primary_summary_out = scope_summary_path(
+            output_dir, derive_reviewer_name(effective_agent_name)
         )
         rc, scope_output = run_scope_discovery(
             plugin_root, config["domain"], scope_flags, args.range,
@@ -1600,8 +1599,10 @@ def main():
             sec_flags = list(config.get("scope_flags", []))
             if config.get("no_semantic_filter", False):
                 sec_flags.append("--no-semantic-filter")
-            sec_summary_out = os.path.join(
-                summary_dir(), f"{agent_name}-scope-summary-{sec_domain}.json"
+            sec_summary_out = scope_summary_path(
+                output_dir,
+                derive_reviewer_name(effective_agent_name),
+                sec_domain,
             )
             sec_rc, sec_output = run_scope_discovery(
                 plugin_root, sec_domain, sec_flags, args.range,
@@ -1794,7 +1795,7 @@ def main():
 
     # Step 5: Build and output the structured block. In ref-mode the reviewer
     # name (and thus output file names) derives from the per-instance name so N
-    # adapter instances never clobber a shared <adapter>-review.json.
+    # adapter instances never clobber a shared reviewer directory.
     reviewer_name = derive_reviewer_name(effective_agent_name)
 
     # Adapter ref-mode: hand the adapter the concrete repo reviewer prompt path,
@@ -1870,7 +1871,10 @@ def main():
     # started — leaving the marker would hold step 8 open until the timeout.
     # Keyed on the per-instance name so parallel adapter instances (same
     # registry key) don't collide.
-    started_path = os.path.join(output_dir, f"{effective_agent_name}.started")
+    started_path = started_marker_path(
+        output_dir, derive_reviewer_name(effective_agent_name)
+    )
+    os.makedirs(os.path.dirname(started_path), exist_ok=True)
     with open(started_path, "w") as f:
         from datetime import datetime, timezone
         f.write(datetime.now(timezone.utc).isoformat())

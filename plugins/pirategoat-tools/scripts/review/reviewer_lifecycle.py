@@ -9,10 +9,12 @@ from datetime import datetime, timezone
 
 try:
     from .atomic_io import atomic_write_json, output_dir_lock
+    from .run_paths import reviewer_dir
     from .reviewer_names import derive_reviewer_name
     from .review_document import load_review_document
 except ImportError:
     from review.atomic_io import atomic_write_json, output_dir_lock
+    from review.run_paths import reviewer_dir
     from review.reviewer_names import derive_reviewer_name
     from review.review_document import load_review_document
 
@@ -46,21 +48,42 @@ class ReviewPaths:
 
 def review_paths(output_dir: str, reviewer: str) -> ReviewPaths:
     """Return the three lifecycle paths for one safe reviewer identity."""
-    if (
-        not isinstance(reviewer, str)
-        or not reviewer
-        or reviewer in {".", ".."}
-        or "/" in reviewer
-        or "\\" in reviewer
-        or "\x00" in reviewer
-    ):
-        raise ValueError(f"invalid reviewer identity: {reviewer!r}")
-    stem = os.path.join(output_dir, f"{reviewer}-review")
+    directory = reviewer_dir(output_dir, reviewer)
     return ReviewPaths(
-        draft=f"{stem}.draft.json",
-        final=f"{stem}.json",
-        assignment=os.path.join(output_dir, f"{reviewer}-assignment.json"),
+        draft=str(directory / "review.draft.json"),
+        final=str(directory / "review.json"),
+        assignment=str(directory / "assignment.json"),
     )
+
+
+def reviewer_markdown_path(output_dir: str, reviewer: str) -> str:
+    """Return the derived Markdown path for one reviewer."""
+    return str(reviewer_dir(output_dir, reviewer) / "review.md")
+
+
+def scope_summary_path(
+    output_dir: str, reviewer: str, domain: str | None = None
+) -> str:
+    """Return one reviewer's primary or domain-specific scope summary."""
+    if domain is None:
+        name = "scope-summary.json"
+    else:
+        try:
+            reviewer_dir(output_dir, domain)
+        except ValueError as exc:
+            raise ValueError(f"invalid scope domain: {domain!r}") from exc
+        name = f"scope-summary-{domain}.json"
+    return str(reviewer_dir(output_dir, reviewer) / name)
+
+
+def scoped_diff_path(output_dir: str, reviewer: str) -> str:
+    """Return one reviewer's complete scoped diff path."""
+    return str(reviewer_dir(output_dir, reviewer) / "scoped-diff.patch")
+
+
+def started_marker_path(output_dir: str, reviewer: str) -> str:
+    """Return one reviewer's dispatch-start marker path."""
+    return str(reviewer_dir(output_dir, reviewer) / "started")
 
 
 def require_review_intake_open(output_dir: str) -> None:

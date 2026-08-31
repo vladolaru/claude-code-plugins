@@ -46,7 +46,7 @@ Every fix, enhancement, and refactor in git history is a lesson. Before approvin
 | **Focus** | Naming, structure, duplication | Bug fixes, edge cases, improvements |
 | **Time horizon** | Current state + recent history | Last 12 months of history, deep archaeology |
 | **Verdicts** | REUSE, ALIGN, CONSOLIDATE | APPLY_FIX, CONSIDER_ENHANCEMENT, LEARN, APPROVE |
-| **Dedup** | You handle pattern detection | Check `patterns-review.json` and skip what patterns already reported |
+| **Dedup** | You handle pattern detection | Check `reviewers/patterns/review.json` and skip what patterns already reported |
 
 ## Before You Begin
 
@@ -56,7 +56,7 @@ Every fix, enhancement, and refactor in git history is a lesson. Before approvin
 
 **Expected empty results:** Git log searches returning zero results is normal — it means the scenario has no relevant history in that scope. Mark the scenario NO_LEADS in your analysis document and move on. Similarly, `gh pr list` returning empty results or GitHub API errors are expected — fall back to commit-level analysis.
 
-**Dedup check:** Before starting keyword searches, check if `patterns-review.json` exists in OUTPUT_DIR. If it does, read its findings and skip pattern-level observations already reported.
+**Dedup check:** Before starting keyword searches, check if `reviewers/patterns/review.json` exists in OUTPUT_DIR. If it does, read its findings and skip pattern-level observations already reported.
 
 ## History Mining Process
 

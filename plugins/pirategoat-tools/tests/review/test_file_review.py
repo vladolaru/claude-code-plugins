@@ -25,7 +25,8 @@ from helpers.review_fixtures import (
 )
 from review import manifest_sections
 from review.manifest_sections import aggregate_file_review
-from review.reviewer_lifecycle import ReviewPaths
+from review.reviewer_lifecycle import ReviewPaths, review_paths, scope_summary_path
+from review.reviewer_names import derive_reviewer_name
 
 
 def _write_summary(
@@ -39,8 +40,9 @@ def _write_summary(
     `domain` appends the secondary-summary suffix that adapter and
     multi-domain agents emit.
     """
-    suffix = f"-{domain}" if domain else ""
-    path = os.path.join(output_dir, f"{agent}-scope-summary{suffix}.json")
+    reviewer = derive_reviewer_name(agent)
+    path = scope_summary_path(output_dir, reviewer, domain)
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         json.dump({
             "schema": 3,
@@ -73,12 +75,15 @@ def _write_review(output_dir, stem, claims, claimable=None):
     claims (nothing left unclaimed) and widens when a test needs unclaimed
     review files.
     """
+    reviewer = stem.removesuffix("-review")
     payload = canonical_review_document(
-        stem.removesuffix("-review"),
+        reviewer,
         review_claimable_files=list(claims if claimable is None else claimable),
         reviewed_file_claims=list(claims),
     )
-    with open(os.path.join(output_dir, f"{stem}.json"), "w") as f:
+    path = Path(review_paths(output_dir, reviewer).final)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
         json.dump(payload, f)
 
 
@@ -88,10 +93,9 @@ def _write_assignment(output_dir, reviewer, claimable, *, inline_count=0):
         review_claimable_files=claimable,
         inline_diff_file_count=inline_count,
     )
-    with open(
-        os.path.join(output_dir, f"{reviewer}-assignment.json"),
-        "w",
-    ) as f:
+    path = Path(review_paths(output_dir, reviewer).assignment)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
         json.dump(payload, f)
     return payload
 
@@ -145,13 +149,13 @@ class TestAggregateReviewedFiles:
         cov = aggregate_file_review(str(tmp_path))
         assert cov["scope_reporting_agent_count"] == 2
         assert cov["agents_receiving_inline_diff_by_file"] == {
-            "src/a.php": ["security-reviewer"],
-            "src/b.php": ["code-reviewer"],
+            "src/a.php": ["security"],
+            "src/b.php": ["code"],
         }
         assert cov["agents_with_unclaimed_review_by_file"] == {
-            "src/b.php": ["security-reviewer"],
+            "src/b.php": ["security"],
             "src/starved.php": [
-            "code-reviewer", "security-reviewer",
+            "code", "security",
             ],
         }
 
@@ -174,10 +178,10 @@ class TestAggregateReviewedFiles:
         )
         cov = aggregate_file_review(str(tmp_path))
         assert cov["agents_receiving_inline_diff_by_file"] == {
-            "src/shared.php": ["security-reviewer"],
+            "src/shared.php": ["security"],
         }
         assert cov["agents_with_unclaimed_review_by_file"] == {
-            "src/starved.php": ["security-reviewer"],
+            "src/starved.php": ["security"],
         }
 
     def test_inline_receipt_keeps_other_agents_unclaimed_work_from_becoming_a_run_gap(
@@ -195,16 +199,18 @@ class TestAggregateReviewedFiles:
         file_review = aggregate_file_review(str(tmp_path))
 
         assert file_review["agents_receiving_inline_diff_by_file"] == {
-            "src/shared.php": ["code-reviewer"]
+            "src/shared.php": ["code"]
         }
         assert file_review["agents_with_unclaimed_review_by_file"] == {
-            "src/shared.php": ["security-reviewer"]
+            "src/shared.php": ["security"]
         }
         from review.briefings import _has_file_review_gap
         assert not _has_file_review_gap(file_review)
 
     def test_malformed_summary_skipped(self, tmp_path):
-        (tmp_path / "broken-scope-summary.json").write_text("{not json")
+        broken = Path(scope_summary_path(tmp_path, "broken"))
+        broken.parent.mkdir(parents=True, exist_ok=True)
+        broken.write_text("{not json")
         _write_summary(
             str(tmp_path), "security-reviewer",
             ["src/a.php"], [],
@@ -218,7 +224,7 @@ class TestAggregateReviewedFiles:
             domain="config-ops",
         )
         cov = aggregate_file_review(str(tmp_path))
-        assert cov["agents_with_unclaimed_review_by_file"]["ci.yml"] == ["security-reviewer"]
+        assert cov["agents_with_unclaimed_review_by_file"]["ci.yml"] == ["security"]
 
     def test_claims_come_from_the_final_document_not_the_sidecar(
         self, tmp_path
@@ -237,10 +243,10 @@ class TestAggregateReviewedFiles:
         cov = aggregate_file_review(str(tmp_path))
 
         assert cov["agents_claiming_review_by_file"] == {
-            "src/a.py": ["security-reviewer"]
+            "src/a.py": ["security"]
         }
         assert cov["agents_with_unclaimed_review_by_file"] == {
-            "src/b.py": ["security-reviewer"]
+            "src/b.py": ["security"]
         }
 
     @pytest.mark.parametrize(
@@ -259,14 +265,16 @@ class TestAggregateReviewedFiles:
             reviewed_file_claims=["src/read.php"],
         )
         review["reviewed_file_claims"] = claims
-        (tmp_path / "security-review.json").write_text(json.dumps(review))
+        path = Path(review_paths(tmp_path, "security").final)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(review))
 
         cov = aggregate_file_review(str(tmp_path))
 
         assert cov["agents_claiming_review_by_file"] == {}
         assert cov["agents_with_unclaimed_review_by_file"] == {
-            "src/read.php": ["security-reviewer"],
-            "src/unread.php": ["security-reviewer"],
+            "src/read.php": ["security"],
+            "src/unread.php": ["security"],
         }
 
     def test_one_claim_covers_globally_while_other_reviewer_gap_stays_visible(
@@ -281,10 +289,10 @@ class TestAggregateReviewedFiles:
         cov = aggregate_file_review(str(tmp_path))
 
         assert cov["agents_claiming_review_by_file"] == {
-            "src/shared.php": ["security-reviewer"]
+            "src/shared.php": ["security"]
         }
         assert cov["agents_with_unclaimed_review_by_file"] == {
-            "src/shared.php": ["code-reviewer"]
+            "src/shared.php": ["code"]
         }
 
 
@@ -396,7 +404,8 @@ class TestUnscopedFiles:
     def test_schema_one_summary_is_rejected_without_compatibility_reading(
         self, tmp_path
     ):
-        path = tmp_path / "legacy-reviewer-scope-summary.json"
+        path = Path(scope_summary_path(tmp_path, "legacy"))
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({
             "schema": 1,
             "domain": "x",
@@ -494,11 +503,13 @@ class TestAgentsReportingCountsAgents:
 
         cov = aggregate_file_review(str(tmp_path))
 
-        assert len(list(tmp_path.glob("*-scope-summary*.json"))) == 6
+        assert len(list((tmp_path / "reviewers").glob("*/scope-summary*.json"))) == 6
         assert cov["scope_reporting_agent_count"] == 3
 
     def test_only_unreadable_summaries_still_reads_as_no_data(
         self, tmp_path
     ):
-        (tmp_path / "broken-scope-summary.json").write_text("{not json")
+        broken = Path(scope_summary_path(tmp_path, "broken"))
+        broken.parent.mkdir(parents=True, exist_ok=True)
+        broken.write_text("{not json")
         assert aggregate_file_review(str(tmp_path)) is None

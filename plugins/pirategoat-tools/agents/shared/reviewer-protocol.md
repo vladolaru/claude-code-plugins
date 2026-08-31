@@ -202,6 +202,10 @@ Rules for any "nothing depends on this" / "no blast radius" / "no consumers" cla
 
 The dispatch prompt always provides `--output-dir`. Use that durable run directory (`mkdir -p` if needed) for every review artifact.
 
+Per-reviewer artifacts live under `OUTPUT_DIR/reviewers/<reviewer>/` with fixed filenames: `assignment.json`, `scope-summary.json` (plus domain-specific `scope-summary-<domain>.json` files), `scoped-diff.patch`, `started`, `review.draft.json`, `review.json`, and derived `review.md`; use the short reviewer identity bootstrap provides, never a full agent-name filename prefix.
+
+Use `OUTPUT_DIR/tmp/` as the sanctioned scratch location for probes, `.patch` experiments, and similar temporary work — never the reviewed repo worktree and never the run-directory root.
+
 ## Canonical Draft Lifecycle
 
 Follow this order for every raw domain review. Bootstrap supplies the one executable command; this section explains the state transitions and ownership without offering a second command to copy.

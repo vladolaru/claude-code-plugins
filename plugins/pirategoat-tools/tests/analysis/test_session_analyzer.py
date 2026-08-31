@@ -66,8 +66,33 @@ def _real_bootstrap_builder_command(tmp_path, *, plugin_version=""):
     return prompt[start:end]
 
 
+def _review_artifact(output_dir, reviewer="security", suffix="json"):
+    """Return the canonical per-reviewer artifact path for one run."""
+    return Path(output_dir, "reviewers", reviewer, f"review.{suffix}")
+
+
+def _write_review_artifact(output_dir, content, reviewer="security"):
+    """Write a finalized review fixture at its canonical run-relative path."""
+    artifact = _review_artifact(output_dir, reviewer)
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text(content)
+    return artifact
+
+
 extract_agent_findings = _mod.extract_agent_findings
 detect_overlaps = _mod.detect_overlaps
+
+
+def test_reconciliator_classification_accepts_run_relative_reviewer_paths():
+    data = {
+        "files_read": [
+            f"reviewers/reviewer-{index}/review.json" for index in range(5)
+        ],
+        "bash_commands": [],
+        "final_texts": [],
+    }
+
+    assert _mod.classify_dispatch(data) == "reconciliator"
 
 
 # ---------------------------------------------------------------------------
@@ -306,7 +331,7 @@ class TestUnrelatedWritesInQualityReport:
                         "issues": [],
                         "verdict": "approve",
                     }),
-                    "path": "security-review.json",
+                    "path": "reviewers/security/review.json",
                 }],
                 "files_read": [],
                 "bash_commands": [],
@@ -366,10 +391,11 @@ class TestArtifactBackedReviews:
         )
 
     def test_real_bootstrap_envelope_reports_the_saved_artifact(self, tmp_path):
-        Path(tmp_path, "security-review.json").write_text(
+        artifact = _write_review_artifact(
+            tmp_path,
             json.dumps(
                 canonical_review_document("security", ["high", "medium"])
-            )
+            ),
         )
         log = tmp_path / "agent.jsonl"
         log.write_text(
@@ -381,7 +407,7 @@ class TestArtifactBackedReviews:
         report = self._quality_report(data)
 
         assert [record["path"] for record in data["write_outputs"]] == [
-            str(Path(tmp_path, "security-review.json"))
+            str(artifact)
         ]
         [agent_record] = report["per_agent"]
         assert agent_record["agent_name"] == "security"
@@ -395,8 +421,9 @@ class TestArtifactBackedReviews:
         The artifact may exist because a later dispatch retried into the
         same output directory; reading it for the failed call would count
         that reviewer's findings once per dispatch."""
-        Path(tmp_path, "security-review.json").write_text(
-            json.dumps(canonical_review_document("security", ["high"]))
+        _write_review_artifact(
+            tmp_path,
+            json.dumps(canonical_review_document("security", ["high"])),
         )
         log = tmp_path / "agent.jsonl"
         entries = [
@@ -445,8 +472,9 @@ class TestArtifactBackedReviews:
         rather than with a possibly foreign run's findings."""
         out = tmp_path / "out"
         out.mkdir()
-        Path(out, "security-review.json").write_text(
-            json.dumps(canonical_review_document("security", ["high"]))
+        _write_review_artifact(
+            out,
+            json.dumps(canonical_review_document("security", ["high"])),
         )
         if manifest_session is not None:
             # Telemetry keeps the log and manifest outside the output dir and
@@ -475,8 +503,8 @@ class TestArtifactBackedReviews:
         good = json.dumps(canonical_review_document("security", ["high"]))
         bad = json.dumps(canonical_review_document("security", ["low", "low"]))
         entries = [
-            _write_entry("/out/security-review.json", good, tool_id="w1"),
-            _write_entry("/out/security-review.json", bad, tool_id="w2"),
+            _write_entry("/out/reviewers/security/review.json", good, tool_id="w1"),
+            _write_entry("/out/reviewers/security/review.json", bad, tool_id="w2"),
             {
                 "type": "user",
                 "message": {"role": "user", "content": [{
@@ -495,12 +523,13 @@ class TestArtifactBackedReviews:
     def test_write_and_builder_spellings_of_one_artifact_count_once(
         self, tmp_path
     ):
-        Path(tmp_path, "security-review.json").write_text(
-            json.dumps(canonical_review_document("security", ["high"]))
+        artifact = _write_review_artifact(
+            tmp_path,
+            json.dumps(canonical_review_document("security", ["high"])),
         )
         entries = [
             _write_entry(
-                f"{tmp_path}/./security-review.json", "{}", tool_id="w1"
+                f"{tmp_path}/reviewers/security/./review.json", "{}", tool_id="w1"
             ),
             _bash_entry(_real_bootstrap_builder_command(tmp_path), tool_id="b1"),
         ]
@@ -510,7 +539,7 @@ class TestArtifactBackedReviews:
         data = _mod.parse_subagent_log(str(log))
 
         assert [r["path"] for r in data["write_outputs"]] == [
-            str(Path(tmp_path, "security-review.json"))
+            str(artifact)
         ]
 
     @pytest.mark.parametrize(
@@ -547,9 +576,7 @@ class TestArtifactBackedReviews:
         unsafe reviewer identity (review_paths' own ValueError) is
         unmeasured the same way as a missing or malformed artifact."""
         if artifact_content is not None:
-            Path(tmp_path, f"{reviewer}-review.json").write_text(
-                artifact_content
-            )
+            _write_review_artifact(tmp_path, artifact_content, reviewer)
         log = tmp_path / "agent.jsonl"
         log.write_text(
             json.dumps(
@@ -571,8 +598,9 @@ class TestArtifactBackedReviews:
     def test_non_straight_line_body_is_still_a_measured_builder_save(
         self, tmp_path
     ):
-        Path(tmp_path, "security-review.json").write_text(
-            json.dumps(canonical_review_document("security", ["low"]))
+        artifact = _write_review_artifact(
+            tmp_path,
+            json.dumps(canonical_review_document("security", ["low"])),
         )
         body = (
             "from review.agent.output import ReviewOutputBuilder\n"
@@ -590,17 +618,17 @@ class TestArtifactBackedReviews:
 
         assert detail["category"] == "builder-output"
         assert [record["path"] for record in data["write_outputs"]] == [
-            str(Path(tmp_path, "security-review.json"))
+            str(artifact)
         ]
         document = json.loads(data["write_outputs"][0]["content"])
         assert [finding["severity"] for finding in document["findings"]] == [
             "low"
         ]
 
-    def test_legacy_write_of_the_same_artifact_counts_once(self, tmp_path):
-        artifact = Path(tmp_path, "security-review.json")
-        artifact.write_text(
-            json.dumps(canonical_review_document("security", ["high"]))
+    def test_write_tool_save_of_the_same_artifact_counts_once(self, tmp_path):
+        artifact = _write_review_artifact(
+            tmp_path,
+            json.dumps(canonical_review_document("security", ["high"])),
         )
         log = tmp_path / "agent.jsonl"
         entries = [
@@ -663,10 +691,11 @@ class TestTextReportFindingCounts:
     payload that validates is counted directly."""
 
     def test_artifact_backed_save_counts_findings_exactly(self, tmp_path):
-        Path(tmp_path, "security-review.json").write_text(
+        _write_review_artifact(
+            tmp_path,
             json.dumps(
                 canonical_review_document("security", ["high", "medium"])
-            )
+            ),
         )
         log = tmp_path / "agent.jsonl"
         log.write_text(
@@ -679,7 +708,7 @@ class TestTextReportFindingCounts:
         # A prose save has no exact structure — it keeps the heuristic,
         # displayed as approximate.
         data["write_outputs"].append({
-            "path": str(Path(tmp_path, "security-review.md")),
+            "path": str(_review_artifact(tmp_path, suffix="md")),
             "content": "## Finding A\n",
         })
         meta = {"session_id": "session-1234", "date": "2026-07-29"}
@@ -747,12 +776,12 @@ class TestWriteRecordDeduplication:
         log = tmp_path / "agent.jsonl"
         entries = [
             _write_tool_entry(
-                "/out/security-review.json",
+                "/out/reviewers/security/review.json",
                 json.dumps({"reviewer": "security", "findings": []}),
                 tool_id="write-1",
             ),
             _write_tool_entry(
-                "/out/./security-review.json",
+                "/out/reviewers/security/./review.json",
                 json.dumps({"reviewer": "security", "findings": [], "v": 2}),
                 tool_id="write-2",
             ),
@@ -762,5 +791,5 @@ class TestWriteRecordDeduplication:
         data = _mod.parse_subagent_log(str(log))
 
         [record] = data["write_outputs"]
-        assert record["path"] == "/out/./security-review.json"
+        assert record["path"] == "/out/reviewers/security/./review.json"
         assert json.loads(record["content"])["v"] == 2
