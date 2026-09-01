@@ -1229,6 +1229,25 @@ class TestNotApplicableCompletionContract:
         # The dismissal this closes.
         assert '"Display-only" is not a reason to dismiss' in prompt
 
+    def test_woo_reviewer_audits_settings_write_surface(self):
+        """Invariant 13 (regression guard for woocommerce-subscriptions#4612 →
+        #5664): registering a settings page or group makes every field
+        REST/CLI-writable, so an invariant the settings form enforces at save
+        time has to hold where the value is read."""
+        prompt = (PLUGIN_ROOT / "agents/woo-regression-reviewer.md").read_text()
+
+        # Per-hunk audit row exists, so the self-audit can catch dismissals.
+        assert "Settings - form-only invariant vs. REST/CLI writers" in prompt
+        # Invariant section with the enumerate-the-writers rule.
+        assert "Settings screens are a write surface, not just a form" in prompt
+        assert "the form is one of at least three" in prompt
+        # The remedy that does not work, so reviewers stop recommending it.
+        assert "Do not repair it below the API" in prompt
+        # The corpus example.
+        assert "woocommerce-subscriptions#4612" in prompt
+        # Findings can carry the dedicated category.
+        assert "`settings-write-surface`" in prompt
+
     def test_downstream_prompts_preserve_explicit_floor_contract(self):
         reconciliator = (
             PLUGIN_ROOT / "agents/review-reconciliator.md"

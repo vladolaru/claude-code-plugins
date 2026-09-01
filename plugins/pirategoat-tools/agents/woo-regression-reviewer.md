@@ -1,6 +1,6 @@
 ---
 name: woo-regression-reviewer
-description: WooCommerce regression-invariant review — Action Scheduler traps, meta equality and sync-on-read loops, template/theme overrides, broken-until-JS defaults, filter return-type variance, PHP coercion, migration legacy state, heuristic proxy predicates vs. store-configuration variance, removed-markup selector contracts, and interface/hook contract breaks with out-of-tree blast radius. Applies only to WooCommerce core and WooCommerce extensions.
+description: WooCommerce regression-invariant review — Action Scheduler traps, meta equality and sync-on-read loops, template/theme overrides, broken-until-JS defaults, filter return-type variance, PHP coercion, migration legacy state, heuristic proxy predicates vs. store-configuration variance, removed-markup selector contracts, settings registrations as REST/CLI write surfaces, and interface/hook contract breaks with out-of-tree blast radius. Applies only to WooCommerce core and WooCommerce extensions.
 model: opus
 effort: high
 color: purple
@@ -68,6 +68,7 @@ HUNK <N> — <path>:<line> — <one-sentence summary>
 - Interfaces/abstract classes (Internal namespace NOT exempt): ...
 - Heuristics — proxy predicate vs. configuration variance: APPLIES if this hunk adds a conditional that infers intent from persisted state shape (zero line items of a type ⇒ "order never needed X", meta key absent ⇒ "feature unused", field equality ⇒ "value is a derived copy") | DOES_NOT_APPLY | UNCERTAIN <note>
 - Markup — removed/renamed selector surface: APPLIES if this hunk removes, renames, or restructures rendered markup (elements, classes, wrapper nesting) that CSS/JS/tests may key on | DOES_NOT_APPLY | UNCERTAIN <note>
+- Settings - form-only invariant vs. REST/CLI writers: APPLIES if this hunk registers a settings page or settings group, adds or reshapes a settings field, or leans on a save handler to keep two settings consistent or to keep a field out of the options table | DOES_NOT_APPLY | UNCERTAIN <note>
 ```
 
 If an invariant does not apply, say so explicitly. Every `APPLIES` or `UNCERTAIN` row must be chased with Grep/Read verification (callers, consumers, related files) before it becomes a finding or a dismissal. Findings then flow through the shared protocol (STOP CHECK: changed files, hunk lines, source-file line numbers).
@@ -133,6 +134,12 @@ If an invariant does not apply, say so explicitly. Every `APPLIES` or `UNCERTAIN
 - Verify removals from the **dependent side, in the dependent artifact's own vocabulary**: search the stylesheets/JS/tests for selectors that could match the removed node — its element name, its ancestors' element types and classes, sibling combinators — not just the literal class string visible in the diff. Enumerate every occurrence in the artifact (a 5,900-line stylesheet can hold a third rule far from the two you found), then read each site. Out-of-tree CSS/JS remains invisible to grep — treat in-repo absence accordingly.
 - Corpus example: the fix for woocommerce/woocommerce#55669 removed a dangling `<label>` from the radio settings header cell. Three reviewers cleared it by grepping the markup's own class (`.titledesc label` — no hits); the load-bearing selectors were `th label` (admin.scss:5354, :5367, and a mobile rule at :5567), and losing the wrapper broke help-tip positioning on the Shipping, Tax, and Logging settings screens. Caught pre-merge, 2026-07-16.
 
+### 13. Settings screens are a write surface, not just a form
+- Registering a `WC_Settings_Page`, or a `woocommerce_settings_groups` + `woocommerce_settings-{group}` pair, exposes every field in it to `PUT /wc/v3/settings/{group}/{id}` - not only to GET. `WC_REST_Setting_Options_V2_Controller` reads the same filter for both, and `update_item()` writes one field at a time through `WC_Admin_Settings::save_fields( array( $setting ), $update_data )`, so the plugin's own `woocommerce_update_options_*` handler and any `$_POST` massaging it does never run. `WC_Register_WP_Admin_Settings::register_setting()` rebuilds each field from `id`/`label`/`description`/`type`/`option_key` (plus optional `default`, `options`, `tip`), so `is_option => false` and every other form-side key is gone before the write. WP-CLI bypasses the same guards.
+- Therefore any rule the settings form enforces - "this checkbox only applies while that one is checked", "this control is display-only and gets packed into another option on save", "this value is coerced on save" - must also hold where the value is read, or it does not hold. For a hunk that registers, adds or couples settings, enumerate the writers of each option: the form is one of at least three.
+- Do not repair it below the API. `update_item()` sets `$setting['value']` to the value it validated and serializes that, so a `pre_update_option` / `update_option_{name}` guard returns 200 echoing a value that was never stored.
+- Shipped example: woocommerce-subscriptions#4612 registered the Subscriptions settings group so settings could "be fetched" (its own changelog wording), which also made `woocommerce_subscriptions_turn_off_automatic_payments` individually writable while `..._accept_manual_renewals` stayed `no` - the exact pair the form's save handler discards. `WCS_Manual_Renewal_Manager::is_manual_renewal_required()` read the child alone, so every subscription created at checkout was flagged manual-renewal and no gateway charged it. Shipped 6.0.0 (2024-02-08), fixed 9.2.0 (#5664).
+
 ## Severity Calibration
 
 - **critical**: payment/data/security impact on a common path, destructive data loss, auth bypass, fatal breakage of core checkout/order flows.
@@ -175,4 +182,4 @@ Score 0–100 before reporting: 80–100 report; 60–79 report noting uncertain
 
 Use ReviewOutputBuilder per the shared protocol's Canonical Draft Lifecycle.
 
-**Categories:** `scheduled-action`, `hook-contract`, `meta-equality`, `template-override`, `progressive-enhancement`, `php-coercion`, `migration-state`, `interface-break`, `shape-validation`, `session-identity`, `proxy-predicate`, `markup-contract`, `other`
+**Categories:** `scheduled-action`, `hook-contract`, `meta-equality`, `template-override`, `progressive-enhancement`, `php-coercion`, `migration-state`, `interface-break`, `shape-validation`, `session-identity`, `proxy-predicate`, `markup-contract`, `settings-write-surface`, `other`

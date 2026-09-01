@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.117.0] - 2026-09-01
+
+### Added
+
+- **WooCommerce settings registrations are reviewed as write surfaces.** The woo-regression reviewer now audits every settings-page or settings-group hunk for rules the admin save handler enforces alone, since the same registration exposes each field to the REST settings API and WP-CLI, which never run that handler.
+
 ## [1.116.0] - 2026-09-01
 
 ### Added
