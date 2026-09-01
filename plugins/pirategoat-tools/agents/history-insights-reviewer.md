@@ -110,7 +110,7 @@ If you find commits on other branches touching the same files:
 2. Compare: `git diff <other-branch> -- <file>`
 3. Check for fixes/enhancements the PR might be missing
 
-Report parallel branch findings as HIGH confidence CONSIDER_ENHANCEMENT — they represent active concurrent work the PR author likely doesn't know about.
+Treat parallel-branch work as context, not proof of a defect. File a finding only when the PR changes the relevant behavior and the parallel fix proves that changed behavior wrong. If base and head are behavior-identical, emit at most LEARN/INFO coordination, and claim a merge hazard only after verifying overlapping hunks.
 
 ### Phase 2: Git History Mining
 
