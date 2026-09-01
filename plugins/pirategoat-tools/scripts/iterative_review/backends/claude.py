@@ -268,7 +268,8 @@ def invoke_review(prompt_file, schema_file, timeout=TIMEOUT, effort=None,
                 Mapped via _EFFORT_MAP (xhigh -> high for Sonnet capping).
         **kwargs: output_dir= grants CC access to the workspace directory
                   via --add-dir (required when output_dir is outside the repo
-                  tree, e.g. /tmp/iterative-review-*). Other kwargs ignored.
+                  tree, e.g. a durable run dir under ~/.pirategoat-tools/reviews/).
+                  Other kwargs ignored.
 
     Returns:
         (raw_stdout_string, success_bool)
@@ -299,8 +300,8 @@ def invoke_review(prompt_file, schema_file, timeout=TIMEOUT, effort=None,
     ]
 
     # Grant access to the output directory if it's outside the repo tree.
-    # Without this, Read/Write to analysis files under /tmp/iterative-review-*
-    # are denied by --permission-mode dontAsk.
+    # Without this, Read/Write to analysis files in the durable run dir under
+    # ~/.pirategoat-tools/reviews/ are denied by --permission-mode dontAsk.
     output_dir = kwargs.get("output_dir")
     if output_dir:
         cmd.extend(["--add-dir", os.path.abspath(output_dir)])
