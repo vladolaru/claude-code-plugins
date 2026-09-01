@@ -1213,6 +1213,22 @@ class TestNotApplicableCompletionContract:
         # Findings can carry the dedicated category.
         assert "`markup-contract`" in prompt
 
+    def test_woo_reviewer_audits_late_transforms_over_foreign_entries(self):
+        """Invariant 4 addition (regression guard for the
+        woocommerce/woocommerce-subscriptions#5575 rework): a late-priority
+        callback on a collection filter post-processes every other plugin's
+        contributions, so a predicate-selected transform must be scoped to
+        entries the plugin owns."""
+        prompt = (PLUGIN_ROOT / "agents/woo-regression-reviewer.md").read_text()
+
+        # Per-hunk audit row exists, so the self-audit can catch dismissals.
+        assert "Hooks - late transform over foreign collection entries" in prompt
+        # Invariant text with the ownership-scoping rule.
+        assert "caller-side post-processing of every other plugin's contributions" in prompt
+        assert "rewrites entries the plugin does not own" in prompt
+        # The dismissal this closes.
+        assert '"Display-only" is not a reason to dismiss' in prompt
+
     def test_downstream_prompts_preserve_explicit_floor_contract(self):
         reconciliator = (
             PLUGIN_ROOT / "agents/review-reconciliator.md"
