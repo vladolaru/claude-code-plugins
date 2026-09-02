@@ -2566,6 +2566,36 @@ class TestStep11PresentResults:
         assert "PIPELINE WAITING" not in rendered
         assert "PIPELINE COMPLETE" in rendered
 
+    def test_interactive_publish_pass_still_gates_on_the_recap(
+        self, mod, tmp_path
+    ):
+        """Once the report exists, an interactive run still owes a human
+        the recap — this is the one thing step 11 exists to produce, and
+        it must not be the one step whose deliverable has no checklisted
+        gate. An orchestrator that only verifies handoff-listed files
+        could otherwise see the report on disk and advance to step 12
+        having never actually posted the recap in chat."""
+        state = {
+            "completed_steps": [],
+            "publication_pending": False,
+            "pipeline_status": "success",
+            "verdict": "APPROVE",
+            "verdict_source": "findings ledger",
+            "degradation_notes": [],
+        }
+
+        guidance = mod.get_step_guidance(
+            11, "pr", state, {},
+            config={"mode": "pr", "interactive": True},
+            output_dir=str(tmp_path),
+        )
+
+        assert guidance["handoff"] is not None
+        handoff_text = "\n".join(guidance["handoff"])
+        assert "review-report.md" in handoff_text
+        assert "chat message" in handoff_text.lower()
+        assert "step 12" in handoff_text
+
     def test_legacy_state_never_implies_publication(self, mod, tmp_path):
         """Only an explicit false pending flag proves the terminal marker
         was committed; older state with a settled verdict remains pending."""
