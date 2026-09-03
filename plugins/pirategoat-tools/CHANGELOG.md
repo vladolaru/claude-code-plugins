@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **WooCommerce settings registrations are reviewed as write surfaces.** The woo-regression reviewer now audits every settings-page or settings-group hunk for rules the admin save handler enforces alone, since the same registration exposes each field to the REST settings API and WP-CLI, which never run that handler.
+- **WooCommerce settings registrations are reviewed as write surfaces.** The woo-regression reviewer now audits every settings-page, settings-group, or settings-API hunk for rules the admin save handler enforces alone, since the same registration exposes each field to the REST settings API and WP-CLI through one of two write routes, neither of which runs that handler.
 
 ## [1.116.0] - 2026-09-01
 
