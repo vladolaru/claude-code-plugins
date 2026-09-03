@@ -2865,6 +2865,103 @@ class TestStep11PresentResults:
 
 
 class TestStep12Cleanup:
+    @staticmethod
+    def _telemetry_config(sharing, repo_consent="unset"):
+        return {
+            "interactive": True,
+            "_telemetry_consent": {
+                "sharing": sharing,
+                "repo": "acme/widget",
+                "repo_consent": repo_consent,
+            },
+        }
+
+    def test_unset_sharing_discloses_payload_and_records_both_choices(
+        self, mod, tmp_path
+    ):
+        guidance = mod.get_step_guidance(
+            12, "full", {"workspace": {}}, {},
+            config=self._telemetry_config("unset"),
+            output_dir=str(tmp_path),
+        )
+        text = "\n".join(guidance["actions"])
+
+        for phrase in (
+            "set-sharing", "repo names", "the PR number or branch",
+            "commit range and SHAs", "the run id", "content hash",
+            "GitHub login",
+            "filenames outside the reviewed change",
+            "per-agent", "model tier", "verdict", "which agents each file",
+            "changed-file paths", "never file contents",
+            "the plugin version", "skips, and status flags",
+            "triage checks", "token usage by model",
+            "PR titles or authors",
+            "vladolaru/pirategoat-tools-review-telemetry",
+            "~/.config/pirategoat/config.json",
+        ):
+            assert phrase in text
+        assert "set-repo --output-dir" in text
+        assert "set-repo --repo-path" not in text
+        assert guidance["actions"][-1].find("upload-run") != -1
+
+    def test_enabled_sharing_asks_about_an_unseen_repository(
+        self, mod, tmp_path
+    ):
+        guidance = mod.get_step_guidance(
+            12, "full", {"workspace": {}}, {},
+            config=self._telemetry_config("enabled", "unset"),
+            output_dir=str(tmp_path),
+        )
+        text = "\n".join(guidance["actions"])
+
+        assert "set-repo --output-dir" in text
+        assert "set-repo --repo-path" not in text
+        assert "acme/widget" in text
+        assert guidance["actions"][-1].find("upload-run") != -1
+
+    @pytest.mark.parametrize("repo_consent", ("include", "exclude"))
+    def test_recorded_repository_choice_asks_no_telemetry_question(
+        self, mod, tmp_path, repo_consent
+    ):
+        guidance = mod.get_step_guidance(
+            12, "full", {"workspace": {}}, {},
+            config=self._telemetry_config("enabled", repo_consent),
+            output_dir=str(tmp_path),
+        )
+        text = "\n".join(guidance["actions"])
+
+        assert "Ask whether" not in text
+        assert "set-repo" not in text
+        assert "upload-run" not in text
+
+    def test_noninteractive_run_asks_no_telemetry_question(self, mod, tmp_path):
+        config = self._telemetry_config("unset")
+        config["interactive"] = False
+
+        guidance = mod.get_step_guidance(
+            12, "full", {"workspace": {}}, {},
+            config=config,
+            output_dir=str(tmp_path),
+        )
+        text = "\n".join(guidance["actions"])
+
+        assert "Ask whether" not in text
+        assert "set-sharing" not in text
+        assert "set-repo" not in text
+        assert "upload-run" not in text
+
+    def test_disabled_sharing_has_no_telemetry_conversation(
+        self, mod, tmp_path
+    ):
+        guidance = mod.get_step_guidance(
+            12, "full", {"workspace": {}}, {},
+            config=self._telemetry_config("disabled"),
+            output_dir=str(tmp_path),
+        )
+        text = "\n".join(guidance["situation"] + guidance["actions"])
+
+        assert "telemetry" not in text.lower()
+
     def test_a_degraded_run_flags_the_footer(self, mod, tmp_path):
         """Step 12 is the LAST step of an INTERACTIVE run, so it — not step
         11 — is where the completion footer prints there. Setting the flag
@@ -2901,12 +2998,11 @@ class TestStep12Cleanup:
         assert "ask" in text.lower() or "confirm" in text.lower()
 
     def test_no_restore_when_no_workspace_state(self, mod, tmp_path):
-        """Should be a no-op when no workspace state."""
+        """Cleanup remains a no-op when the final consent step has no workspace state."""
         state = {"workspace": {"original_branch": None, "stash_ref": None},
                  "completed_steps": []}
         ctx = {}
         g = mod.get_step_guidance(12, "pr", state, ctx)
-        # This step shouldn't even run — but if called, should be minimal
         assert g is not None
 
 

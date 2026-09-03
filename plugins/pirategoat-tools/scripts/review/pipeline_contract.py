@@ -82,7 +82,7 @@ STEP_SEQUENCE = [
     {"step": 9,  "title": "Review Record",            "phase": "SYNTHESIS",  "condition": "always"},
     {"step": 10, "title": "Decision Critic",          "phase": "VALIDATION", "condition": "always"},
     {"step": 11, "title": "Author Report + Present Results", "phase": "OUTPUT", "condition": "always"},
-    {"step": 12, "title": "Cleanup",                  "phase": "OUTPUT",     "condition": "has_workspace_state_interactive"},
+    {"step": 12, "title": "Cleanup",                  "phase": "OUTPUT",     "condition": "interactive"},
 ]
 
 _STEP_MAP = {s["step"]: s for s in STEP_SEQUENCE}

@@ -34,10 +34,13 @@ from review.verdict_rules import verdict_for_counts
 sys.path.insert(0, str(TESTS_DIR))
 from helpers.pipeline_process import (
     add_commit as _add_commit,
+    add_origin,
     hermetic_env,
+    init_bare_repo,
     init_repo as _init_git_repo,
     run_pipeline,
 )
+from helpers.gh_shim import gh_call_argv, install_gh_shim, write_user_config
 from helpers.review_fixtures import (
     canonical_assignment,
     canonical_findings_ledger,
@@ -1024,6 +1027,103 @@ class TestTelemetryIntegration:
         assert context["git"]["merge_base"] == baseline_sha
         assert context["git"]["git_range"] == f"{baseline_sha}..HEAD"
         assert (repo / ".branch-review-baseline.json").is_file()
+
+
+class TestTelemetrySharingIntegration:
+    """The terminal pipeline invocation owns the scripted upload opportunity."""
+
+    @staticmethod
+    def _write_consent(config_home, sharing, repo_consent):
+        if sharing == "unset":
+            return
+        telemetry = {"sharing": sharing}
+        if repo_consent != "unset":
+            telemetry["repos"] = {"github.com/acme/widget": repo_consent}
+        write_user_config(config_home, {"telemetry": telemetry})
+
+    def _run_shared_review(self, tmp_path, *, sharing, repo_consent, **shim_options):
+        """Drive a run to its terminal step with consent and a gh shim in place.
+
+        Returns ``(completed process, gh call log)``; only the consent values
+        and the shim's failure mode vary between the sharing tests.
+        """
+        repo = add_origin(
+            _init_git_repo(tmp_path), "https://github.com/acme/widget.git"
+        )
+        output_dir = tmp_path / "out"
+        output_dir.mkdir()
+        config_home = tmp_path / "xdg"
+        self._write_consent(config_home, sharing, repo_consent)
+        call_log = tmp_path / "gh-calls.jsonl"
+        bin_dir = install_gh_shim(tmp_path / "bin", call_log, **shim_options)
+        env = hermetic_env(
+            XDG_CONFIG_HOME=str(config_home),
+            PIRATEGOAT_TELEMETRY_LOG_DIR=str(tmp_path / "telemetry"),
+            PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        )
+
+        started = run_pipeline(
+            "--step", "1", "--mode", "full",
+            "--output-dir", str(output_dir), cwd=repo, env=env,
+        )
+        assert started.returncode == 0, started.stderr
+        completed = run_pipeline(
+            "--step", "12", "--output-dir", str(output_dir), cwd=repo, env=env,
+        )
+        return completed, call_log
+
+    @pytest.mark.parametrize(
+        ("sharing", "repo_consent", "expected_line", "expected_puts"),
+        (
+            ("enabled", "include", "TELEMETRY: shared", 2),
+            ("disabled", "unset", None, 0),
+            ("unset", "unset", None, 0),
+            (
+                "enabled", "exclude",
+                "TELEMETRY: skipped: repo excluded", 0,
+            ),
+        ),
+    )
+    def test_terminal_step_honors_consent_before_uploading(
+        self, tmp_path, sharing, repo_consent, expected_line, expected_puts
+    ):
+        completed, call_log = self._run_shared_review(
+            tmp_path, sharing=sharing, repo_consent=repo_consent
+        )
+
+        assert completed.returncode == 0, completed.stderr
+        telemetry_lines = [
+            line for line in completed.stdout.splitlines()
+            if line.startswith("TELEMETRY:")
+        ]
+        if expected_line is None:
+            assert telemetry_lines == []
+        else:
+            assert len(telemetry_lines) == 1
+            assert telemetry_lines[0].startswith(expected_line)
+        calls = gh_call_argv(call_log)
+        assert len([argv for argv in calls if "PUT" in argv]) == expected_puts
+        if expected_puts == 0:
+            assert calls == []
+
+    def test_upload_failure_is_reported_without_failing_the_pipeline(self, tmp_path):
+        private_stderr = "permission denied for secret-account@example.test token=private"
+        completed, _call_log = self._run_shared_review(
+            tmp_path,
+            sharing="enabled",
+            repo_consent="include",
+            fail_code=17,
+            fail_stderr=private_stderr,
+        )
+
+        assert completed.returncode == 0, completed.stderr
+        assert completed.stdout.count("TELEMETRY:") == 1
+        assert (
+            "TELEMETRY: skipped: upload failed "
+            "(gh exited 17; ask Vlad for collaborator access)"
+        ) in completed.stdout
+        assert private_stderr not in completed.stdout
+        assert private_stderr not in completed.stderr
 
 
 
@@ -3433,30 +3533,51 @@ class TestStep11Orchestration:
         assert "stale_report_digest" not in state
         assert 11 in state["completed_steps"]
 
-    def test_interactive_publish_pass_routes_to_cleanup(self, tmp_path):
+    @pytest.mark.parametrize("mode", ("full", "incremental"))
+    def test_interactive_publish_pass_routes_to_final_consent_without_workspace_state(
+        self, tmp_path, mode
+    ):
+        env = hermetic_env(XDG_CONFIG_HOME=str(tmp_path / "xdg"))
+        # The consent conversation exists only for a run with a shareable
+        # repository identity, which requires an origin remote.
+        init_bare_repo(tmp_path, "https://github.com/acme/widget.git")
+        if mode == "incremental":
+            (tmp_path / "run-config.json").write_text(json.dumps({
+                "mode": mode,
+                "interactive": True,
+                "target_dir": str(tmp_path),
+            }))
         run_pipeline(
-            "--step", "1", "--mode", "full", "--original-branch", "main",
-            "--output-dir", str(tmp_path), cwd=tmp_path,
+            "--step", "1", "--mode", mode,
+            "--output-dir", str(tmp_path), cwd=tmp_path, env=env,
         )
         (tmp_path / "review-findings.json").write_text(
             '{"verdict": "approve", "findings": []}'
         )
 
         prepared = run_pipeline(
-            "--step", "11", "--mode", "full",
-            "--output-dir", str(tmp_path), cwd=tmp_path,
+            "--step", "11", "--mode", mode,
+            "--output-dir", str(tmp_path), cwd=tmp_path, env=env,
         )
         assert "PIPELINE WAITING" in prepared.stdout
 
         (tmp_path / "review-report.md").write_text("# Review")
         published = run_pipeline(
-            "--step", "11", "--mode", "full",
-            "--output-dir", str(tmp_path), cwd=tmp_path,
+            "--step", "11", "--mode", mode,
+            "--output-dir", str(tmp_path), cwd=tmp_path, env=env,
         )
 
         assert published.returncode == 0, published.stderr
         assert "Next: Step 12" in published.stdout
         assert "PIPELINE COMPLETE" not in published.stdout
+        consent = run_pipeline(
+            "--step", "12", "--mode", mode,
+            "--output-dir", str(tmp_path), cwd=tmp_path, env=env,
+        )
+        assert consent.returncode == 0, consent.stderr
+        assert "set-sharing" in consent.stdout
+        assert "No workspace changes to restore" in consent.stdout
+        assert "PIPELINE COMPLETE" in consent.stdout
 
     def test_step_11_writes_pipeline_result(self, tmp_path):
         """A pre-existing unbound report must be rewritten before publish."""
@@ -3542,7 +3663,11 @@ class TestTelemetryFinalize:
     def test_last_step_finalizes_telemetry(self, tmp_path):
         """The last active step should finalize telemetry and its manifest."""
         log_dir = tmp_path / "telemetry-logs"
-        with patch.dict(os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}):
+        env = {
+            "PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir),
+            "XDG_CONFIG_HOME": str(tmp_path / "xdg"),
+        }
+        with patch.dict(os.environ, env):
             run_pipeline("--step", "1", "--mode", "full",
                        "--output-dir", str(tmp_path), cwd=tmp_path)
             # The first pass prepares settled state and waits for the report
@@ -3550,9 +3675,11 @@ class TestTelemetryFinalize:
             run_pipeline("--step", "11", "--mode", "full",
                        "--output-dir", str(tmp_path), cwd=tmp_path)
             (tmp_path / "review-report.md").write_text("# Review")
-            # The second pass publishes the terminal marker and finalizes
-            # telemetry. Step 12 needs workspace + interactive.
+            # The second pass publishes the terminal marker and routes every
+            # interactive run through its final consent step.
             run_pipeline("--step", "11", "--mode", "full",
+                       "--output-dir", str(tmp_path), cwd=tmp_path)
+            run_pipeline("--step", "12", "--mode", "full",
                        "--output-dir", str(tmp_path), cwd=tmp_path)
         marker = _artifact(tmp_path, "telemetry_log_path")
         if marker.is_file():

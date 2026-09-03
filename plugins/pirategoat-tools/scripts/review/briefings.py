@@ -24,6 +24,7 @@ try:
         SKIPPED_STATUSES,
     )
     from .run_paths import artifact_path
+    from .telemetry_share import CONSENT_DISCLOSURE, REMOTE_REPO
 except ImportError:
     _scripts_parent = str(Path(__file__).resolve().parent.parent)
     if _scripts_parent not in sys.path:
@@ -45,6 +46,7 @@ except ImportError:
         SKIPPED_STATUSES,
     )
     from review.run_paths import artifact_path
+    from review.telemetry_share import CONSENT_DISCLOSURE, REMOTE_REPO
 
 
 def _artifact_display(output_dir, key):
@@ -2302,6 +2304,64 @@ def _step_11_present_results(mode, state, context, config, output_dir):
 # Step 12: Cleanup
 # ---------------------------------------------------------------------------
 
+def _telemetry_consent_actions(config, output_dir):
+    """Format an interactive consent conversation from requester-owned state."""
+    consent = config.get("_telemetry_consent")
+    if not config.get("interactive", True) or not isinstance(consent, dict):
+        return []
+
+    sharing = consent.get("sharing")
+    repo = consent.get("repo")
+    repo_choice = consent.get("repo_consent")
+    if not isinstance(repo, str) or not repo or sharing not in {"unset", "enabled"}:
+        return []
+    if sharing == "enabled" and repo_choice != "unset":
+        return []
+
+    script = shlex.quote(str(SCRIPTS_DIR / "telemetry_share.py"))
+    # Recording binds to the run's recorded identity (--output-dir), never a
+    # step-12 checkout path — the prompt and the stored choice must name the
+    # same repository even if the CWD or origin changed after step 1.
+    od = shlex.quote(str(output_dir or "<OUTPUT_DIR>"))
+    actions = [
+        CONSENT_DISCLOSURE,
+        f"The destination is the private `{REMOTE_REPO}` repository, readable "
+        "by contributors; uploads are filed under the requester's "
+        "authenticated GitHub login, which shared reports show as the "
+        "uploader.",
+        "The choice can be inspected or changed later with `telemetry_share.py "
+        "status`, `set-sharing`, or `set-repo`; its machine-local config is "
+        "`$XDG_CONFIG_HOME/pirategoat/config.json` (default "
+        "`~/.config/pirategoat/config.json`). If an upload reports permission "
+        "denied, ask Vlad for collaborator access.",
+    ]
+
+    if sharing == "unset":
+        actions.extend((
+            f"Ask whether to enable sharing and include repository identity `{repo}`.",
+            "If no, record the global choice: "
+            f"`python3 {script} set-sharing disabled`.",
+            "If yes, record both choices before uploading this current run: "
+            f"`python3 {script} set-sharing enabled`",
+            f"`python3 {script} set-repo --output-dir {od} include`",
+        ))
+    else:
+        actions.extend((
+            f"Global sharing is enabled. Ask whether to include repository identity `{repo}`.",
+            "If no, record the repository choice: "
+            f"`python3 {script} set-repo --output-dir {od} exclude`.",
+            "If yes, record the repository choice before uploading this current run: "
+            f"`python3 {script} set-repo --output-dir {od} include`",
+        ))
+
+    actions.append(
+        "The scripted upload opportunity for this run has already passed; on "
+        "the yes path, finish with "
+        f"`python3 {script} upload-run --output-dir {od}`."
+    )
+    return actions
+
+
 def _step_12_cleanup(mode, state, context, config, output_dir):
     """Step 12: Cleanup — restore workspace (interactive only)."""
     ws = state.get("workspace", {})
@@ -2321,6 +2381,8 @@ def _step_12_cleanup(mode, state, context, config, output_dir):
             actions.append("- `git stash pop`")
     else:
         actions.append("No workspace changes to restore.")
+
+    actions.extend(_telemetry_consent_actions(config, output_dir))
 
     return {
         "phase": "OUTPUT",
