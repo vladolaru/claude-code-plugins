@@ -22,6 +22,7 @@ SCRIPT_PATH = PLUGIN_ROOT / "scripts" / "review" / "telemetry.py"
 
 sys.path.insert(0, str(TESTS_DIR))
 from helpers.context_fixtures import COMPLETE_CONTEXT
+from helpers.pipeline_process import init_bare_repo
 from helpers.review_fixtures import (
     canonical_assignment,
     canonical_findings_ledger,
@@ -171,6 +172,7 @@ class TestStart:
     def test_start_records_versioned_run_identity(self, telemetry, mod):
         path = telemetry.start(
             pr_number="42",
+            identifier="42",
             run_id="run-1",
             session_id="session-123",
             plugin_version="1.108.0",
@@ -189,11 +191,35 @@ class TestStart:
         assert start["pipeline"]["plugin_version"] == "1.108.0"
         assert start["pipeline"]["mode"] == "pr"
         assert start["pipeline"]["repo_path"] == "/repo"
+        assert start["pipeline"]["repo"] == ""
+        assert start["pipeline"]["target"] == "42"
         assert start["pipeline"]["git"] == {
             "requested_range": "abc..def",
             "base_sha": "abc",
             "head_sha": "def",
         }
+
+    def test_start_records_origin_repo_identity_and_target(self, telemetry, tmp_path):
+        """A started run records the canonical repository and review target."""
+        repo = init_bare_repo(tmp_path / "checkout", "https://github.com/owner/repository.git")
+
+        path = telemetry.start(repo_path=str(repo), identifier="feature/telemetry")
+
+        pipeline = _read_events(path)[0]["pipeline"]
+        assert pipeline["repo"] == "github.com/owner/repository"
+        assert pipeline["target"] == "feature/telemetry"
+
+    def test_start_records_empty_repo_without_a_shareable_identity(self, telemetry):
+        """A run still starts when the path yields no repository identity.
+
+        `repo_identity` is total — it answers "" rather than raising — so
+        telemetry needs no guard of its own and records the empty identity.
+        """
+        path = telemetry.start(repo_path="/does-not-exist", identifier="branch")
+
+        pipeline = _read_events(path)[0]["pipeline"]
+        assert pipeline["repo"] == ""
+        assert pipeline["target"] == "branch"
 
     def test_every_event_inherits_schema_and_run_id(self, telemetry, mod, output_dir, tmp_path):
         telemetry.start(run_id="run-1")
@@ -623,6 +649,8 @@ class TestRunManifest:
         assert manifest["run"]["plugin_version"] == "1.108.0"
         assert manifest["run"]["mode"] == "pr"
         assert manifest["run"]["repo_path"] == "/repo"
+        assert manifest["run"]["repo"] is None
+        assert manifest["run"]["target"] is None
         assert manifest["run"]["started_at"] is not None
         assert manifest["run"]["ended_at"] is None
         assert manifest["availability"] == {
@@ -638,6 +666,32 @@ class TestRunManifest:
             "findings_markdown": False,
         }
         assert manifest["assignment"] is None
+
+    def test_manifest_rebuild_projects_missing_repo_and_target_as_none(self, telemetry):
+        """A JSONL log whose pipeline_start carries no repo or target still
+        rebuilds, projecting both as None rather than failing."""
+        telemetry.start(run_id="run-1")
+        log_path = Path(telemetry.log_path)
+        start = _read_events(log_path)[0]
+        start["pipeline"].pop("repo", None)
+        start["pipeline"].pop("target", None)
+        log_path.write_text(json.dumps(start) + "\n")
+
+        telemetry._materialize_manifest("running")
+
+        manifest = _read_manifest(telemetry)
+        assert manifest["run"]["repo"] is None
+        assert manifest["run"]["target"] is None
+
+    def test_finalize_materializes_repo_and_target(self, telemetry, tmp_path):
+        repo = init_bare_repo(tmp_path / "checkout", "git@github.com:owner/repository.git")
+        telemetry.start(repo_path=str(repo), identifier="42")
+
+        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
+
+        manifest = _read_manifest(telemetry)
+        assert manifest["run"]["repo"] == "github.com/owner/repository"
+        assert manifest["run"]["target"] == "42"
 
     def test_log_step_refreshes_running_manifest(self, telemetry):
         telemetry.start(run_id="run-1")

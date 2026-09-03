@@ -22,6 +22,13 @@ import json
 import os
 from pathlib import Path
 
+# The consent vocabulary, owned by the reader that decides what counts as
+# consent. The writer (``telemetry_share``) validates and offers exactly
+# these, so a value can never be accepted by the CLI and then silently
+# dropped here as malformed.
+SHARING_CHOICES = ("enabled", "disabled")
+REPO_CHOICES = ("include", "exclude")
+
 
 def user_config_path() -> Path:
     """Return $XDG_CONFIG_HOME/pirategoat/config.json or ~/.config/pirategoat/config.json."""
@@ -53,3 +60,32 @@ def refresh_dependencies_default(settings) -> bool:
     if not isinstance(review, dict):
         return False
     return review.get("refresh_dependencies") is True
+
+
+def telemetry_settings(settings) -> dict:
+    """Return strict, machine-local telemetry sharing settings.
+
+    Sharing needs an explicit ``enabled`` or ``disabled`` choice. Repository
+    selections are likewise limited to explicit ``include`` or ``exclude``
+    choices; malformed data never becomes consent.
+    """
+    result = {"sharing": "unset", "repos": {}}
+    if not isinstance(settings, dict):
+        return result
+    telemetry = settings.get("telemetry")
+    if not isinstance(telemetry, dict):
+        return result
+    sharing = telemetry.get("sharing")
+    if isinstance(sharing, str) and sharing in SHARING_CHOICES:
+        result["sharing"] = sharing
+    repos = telemetry.get("repos")
+    if not isinstance(repos, dict):
+        return result
+    result["repos"] = {
+        repo: choice
+        for repo, choice in repos.items()
+        if isinstance(repo, str)
+        and isinstance(choice, str)
+        and choice in REPO_CHOICES
+    }
+    return result

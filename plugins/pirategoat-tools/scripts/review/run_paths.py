@@ -32,7 +32,14 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+# The format this module allocates: a run id it minted itself.
 RUN_ID_RE = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{4}$")
+# The wider grammar a reader may accept as ONE safe path segment — used
+# wherever a run id becomes part of a path built from data another machine
+# produced (shared telemetry publication and loading). Deliberately looser
+# than RUN_ID_RE, which only describes ids this allocator mints, and
+# deliberately strict about traversal: no "..", no separators.
+SAFE_RUN_ID_SEGMENT_RE = re.compile(r"(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._-]{0,255}\Z")
 KEEP_RUNS = 10
 KINDS = ("pr", "branch", "iterative")
 
@@ -238,6 +245,35 @@ def artifact_path(run_dir, key: str) -> Path:
     subdir, name = ARTIFACTS[key]
     base = Path(run_dir) / subdir if subdir else Path(run_dir)
     return base / name
+
+
+def telemetry_manifest_path(log_path: str) -> str:
+    """Return the manifest that sits beside a telemetry JSONL log.
+
+    The one spelling of the ``.jsonl`` -> ``.manifest.json`` sibling rule,
+    shared by the producer (``telemetry.py``) and the uploader
+    (``telemetry_share.py``), which cannot import the producer.
+    """
+    if log_path.endswith(".jsonl"):
+        return f"{log_path[:-len('.jsonl')]}.manifest.json"
+    return f"{log_path}.manifest.json"
+
+
+def telemetry_log_path(run_dir) -> str:
+    """Return the telemetry JSONL path a run recorded in its marker, or "".
+
+    The one spelling of the marker's location and read, shared by the
+    producer (``telemetry.py``) and the uploader (``telemetry_share.py``),
+    which cannot import the producer.
+
+    A missing marker answers ""; an unreadable or non-UTF-8 one RAISES, so
+    callers can tell "this run recorded no log" from "this run's marker is
+    damaged" and choose their own failure policy.
+    """
+    marker = artifact_path(run_dir, "telemetry_log_path")
+    if not marker.is_file():
+        return ""
+    return marker.read_text(encoding="utf-8").strip()
 
 
 def synthesis_started_marker(run_dir, agent: str) -> Path:

@@ -5,6 +5,11 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.118.0] - UNRELEASED
+
+### Added
+
+- Opt-in telemetry sharing uploads a finished review run's redacted manifest and JSONL to the private `vladolaru/pirategoat-tools-review-telemetry` repository, gated on machine-local global and per-repository consent keyed to the run's `host[:port]/owner/name` identity. Findings, review documents, code excerpts, diffs, local paths, PR titles and authors, linked issues, branch names beyond the review target, session ids, and triage or skip reasoning never leave the machine.
 ## [1.117.0] - 2026-09-01
 
 ### Added
