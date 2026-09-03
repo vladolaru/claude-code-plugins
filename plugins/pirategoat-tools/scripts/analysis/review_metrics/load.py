@@ -6,11 +6,12 @@ import copy
 import hashlib
 import json
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from .contracts import (
+    SHARED_LAYOUT_PREFIX,
     _ASSIGNED_FILES_BY_AGENT_FIELD,
     _ASSIGNMENT_PATH_LIST_FIELDS,
     _FILE_EXCLUSIONS_FIELD,
@@ -33,7 +34,7 @@ from .sanitize import (
     _strict_lifecycle_agents,
     _strict_lifecycle_event,
     _supported_manifest_envelope,
-    _valid_manifest,
+    _validated_manifest,
 )
 
 
@@ -214,10 +215,15 @@ def _invalid_running_lifecycle_overlay(
 
 
 def _overlay_running_lifecycle(
-    manifest: dict[str, Any], sibling: Path
+    manifest: dict[str, Any], sibling: Path | None
 ) -> dict[str, Any]:
-    """Overlay append-only lifecycle suffixes onto a valid running sidecar."""
-    if manifest.get("status") != "running" or not sibling.is_file():
+    """Overlay append-only lifecycle suffixes onto a valid running sidecar.
+
+    ``sibling`` is the JSONL the caller discovered beside the manifest, or
+    None when no regular file was listed there — this function opens only
+    what discovery admitted, never a path reconstructed by name.
+    """
+    if manifest.get("status") != "running" or sibling is None or not sibling.is_file():
         return manifest
     availability = manifest.get("availability")
     if (
@@ -571,19 +577,55 @@ def _is_duplicate_conflict(manifest: object) -> bool:
     )
 
 
+def _sort_and_limit_runs(
+    resolved: list[tuple[str, dict[str, Any]]], last: int | None
+) -> list[tuple[str, dict[str, Any]]]:
+    """Sort loaded run records newest-first and apply the shared limit rule."""
+
+    def sort_key(item: tuple[str, dict[str, Any]]) -> tuple[int, float, str]:
+        _, manifest = item
+        started = _parse_time(manifest.get("run", {}).get("started_at"))
+        identifier = str(manifest.get("run", {}).get("id") or "")
+        if started is None:
+            return (1, 0.0, identifier)
+        return (0, -started.timestamp(), identifier)
+
+    resolved.sort(key=sort_key)
+    if isinstance(last, int) and not isinstance(last, bool) and last > 0:
+        remaining = last
+        limited: list[tuple[str, dict[str, Any]]] = []
+        for item in resolved:
+            if _is_duplicate_conflict(item[1]):
+                limited.append(item)
+            elif remaining > 0:
+                limited.append(item)
+                remaining -= 1
+        return limited
+    return resolved
+
+
+def _regular_entries(directory: Path) -> list[Path]:
+    """List a telemetry directory's non-symlink children; missing reads as empty.
+
+    Telemetry artifacts are regular files the producer wrote; a symlink never
+    is. In a shared clone a contributor-committed link could re-attribute
+    another uploader's run or read telemetry outside the checkout, so links
+    are never followed, wherever the directory is. Listing failures other
+    than absence propagate instead of producing a false clean zero cohort.
+    """
+    try:
+        return [entry for entry in directory.iterdir() if not entry.is_symlink()]
+    except FileNotFoundError:
+        return []
+
+
 def load_runs(
     log_dir: str | Path,
     last: int | None = None,
     run_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Load recent review manifests, with reduced legacy JSONL fallback."""
-    root = Path(log_dir).expanduser()
-    try:
-        entries = list(root.iterdir())
-    except FileNotFoundError:
-        # A missing directory means no runs; other listing failures must
-        # propagate instead of producing a false clean zero cohort.
-        return []
+    entries = _regular_entries(Path(log_dir).expanduser())
     manifests = sorted(
         entry for entry in entries if entry.name.endswith(".manifest.json")
     )
@@ -597,10 +639,16 @@ def load_runs(
     json_log_set = set(json_logs)
     for path in manifests:
         sibling = path.with_name(path.name[: -len(".manifest.json")] + ".jsonl")
+        # Resolve admission once, here: `sibling` is derived from a name and
+        # may be a symlink the listing excluded, so only the admitted form
+        # is ever handed onward. Downstream then cannot open an unadmitted
+        # path even by mistake — the guarantee stops being one a caller has
+        # to remember. `sibling` itself stays for bookkeeping only.
+        admitted_sibling = sibling if sibling in json_log_set else None
         value = _read_json(path)
-        if _valid_manifest(value):
-            manifest = _sanitize_manifest(value)
-            loaded.append(_overlay_running_lifecycle(manifest, sibling))
+        manifest = _validated_manifest(value)
+        if manifest is not None:
+            loaded.append(_overlay_running_lifecycle(manifest, admitted_sibling))
             handled_logs.add(sibling)
         else:
             invalid_sidecars.add(sibling)
@@ -614,45 +662,89 @@ def load_runs(
         if legacy is not None:
             loaded.append(legacy)
 
-    by_run_id: dict[str, list[dict[str, Any]]] = {}
-    for manifest in loaded:
-        identifier = manifest.get("run", {}).get("id")
-        if isinstance(identifier, str):
-            by_run_id.setdefault(identifier, []).append(manifest)
-
-    resolved: list[tuple[str, dict[str, Any]]] = []
-    for identifier, records in sorted(by_run_id.items()):
-        if len(records) == 1:
-            # The overwhelmingly common case — skip canonicalization, which
-            # exists only to compare same-run-id records against each other.
-            record = records[0]
-        else:
-            canonical = {_canonical_manifest(record) for record in records}
-            if len(canonical) == 1:
-                record = json.loads(next(iter(canonical)))
-            else:
-                record = _duplicate_conflict(identifier, records)
-        resolved.append((identifier, record))
+    resolved = [
+        (identifier, _resolve_same_run(identifier, records))
+        for identifier, records in _group_by_run_id(loaded)
+    ]
 
     if run_id is not None:
         resolved = [item for item in resolved if item[0] == run_id]
 
-    def sort_key(manifest: dict[str, Any]) -> tuple[int, float, str]:
-        started = _parse_time(manifest.get("run", {}).get("started_at"))
-        identifier = str(manifest.get("run", {}).get("id") or "")
-        if started is None:
-            return (1, 0.0, identifier)
-        return (0, -started.timestamp(), identifier)
-
-    resolved.sort(key=lambda item: sort_key(item[1]))
-    if isinstance(last, int) and not isinstance(last, bool) and last > 0:
-        remaining = last
-        limited: list[tuple[str, dict[str, Any]]] = []
-        for item in resolved:
-            if _is_duplicate_conflict(item[1]):
-                limited.append(item)
-            elif remaining > 0:
-                limited.append(item)
-                remaining -= 1
-        resolved = limited
+    resolved = _sort_and_limit_runs(resolved, last)
     return [record for _, record in resolved]
+
+
+def _group_by_run_id(
+    manifests: list[dict[str, Any]]
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    """Group loaded records by ``run.id``, sorted by id, dropping id-less ones."""
+    by_run_id: dict[str, list[dict[str, Any]]] = {}
+    for manifest in manifests:
+        identifier = manifest.get("run", {}).get("id")
+        if isinstance(identifier, str):
+            by_run_id.setdefault(identifier, []).append(manifest)
+    return sorted(by_run_id.items())
+
+
+def _resolve_same_run(
+    identifier: str, records: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Collapse every record carrying one run id into the single record reported.
+
+    Identical records (after canonicalization) are one run recorded twice;
+    differing records are a conflict the cohort must surface rather than
+    count. The same rule applies within one log directory and across the
+    uploader directories of a shared clone.
+    """
+    if len(records) == 1:
+        # The overwhelmingly common case — skip canonicalization, which
+        # exists only to compare same-run-id records against each other.
+        return records[0]
+    canonical = {_canonical_manifest(record) for record in records}
+    if len(canonical) == 1:
+        return json.loads(next(iter(canonical)))
+    return _duplicate_conflict(identifier, records)
+
+
+def load_shared_runs(
+    shared_dir: str | Path,
+    last: int | None = None,
+    run_id: str | None = None,
+) -> list[tuple[dict[str, Any], str]]:
+    """Load runs from ``v1/<user>/`` directories with uploader identity."""
+    version_root = Path(shared_dir).expanduser() / SHARED_LAYOUT_PREFIX
+    # Everything under the clone's layout root is contributor-committed
+    # content, and git recreates committed symlinks. No symlink is followed
+    # at any level — the layout root itself (checked here; a user's own
+    # local log directory may legitimately be a link, so `_regular_entries`
+    # does not reject its root), an uploader directory, an artifact, or the
+    # sibling JSONL an overlay reads — so every byte read is physically
+    # inside the clone.
+    if version_root.is_symlink():
+        return []
+
+    uploaded_by: dict[str, str] = {}
+    loaded: list[dict[str, Any]] = []
+    for user_dir in sorted(
+        entry for entry in _regular_entries(version_root) if entry.is_dir()
+    ):
+        for manifest in load_runs(user_dir, run_id=run_id):
+            identifier = manifest.get("run", {}).get("id")
+            if isinstance(identifier, str):
+                loaded.append(manifest)
+                # Directories are visited in sorted order, so the first
+                # login seen for a run id is the lexically first.
+                uploaded_by.setdefault(identifier, user_dir.name)
+
+    # One run id is one run, whichever directories it was uploaded under:
+    # the same local run re-uploaded from a second account is counted once
+    # and attributed to the lexically first login; differing records under
+    # one id surface as the same conflict record a single directory yields.
+    resolved = _sort_and_limit_runs(
+        [
+            (identifier, _resolve_same_run(identifier, records))
+            for identifier, records in _group_by_run_id(loaded)
+        ],
+        last,
+    )
+    return [(record, uploaded_by[identifier]) for identifier, record in resolved]

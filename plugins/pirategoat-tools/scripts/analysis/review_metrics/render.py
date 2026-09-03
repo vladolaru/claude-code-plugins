@@ -207,7 +207,9 @@ def format_table(runs: list[dict[str, Any]], aggregate: dict[str, Any]) -> str:
     """Render a compact, missing-aware cohort table."""
     if not runs:
         return "No review runs found.\n"
+    shared = any(run.get("uploaded_by") is not None for run in runs)
     headers = [
+        *(["Uploader"] if shared else []),
         "Run ID",
         "Version/Mode",
         "Planner→Actual",
@@ -222,7 +224,13 @@ def format_table(runs: list[dict[str, Any]], aggregate: dict[str, Any]) -> str:
     ]
     headers = [_table_cell(value) for value in headers]
     rows = [
-        [_table_cell(value) for value in _table_row(run)]
+        [
+            _table_cell(value)
+            for value in (
+                *([run.get("uploaded_by") or "?"] if shared else []),
+                *_table_row(run),
+            )
+        ]
         for run in runs
     ]
     widths = [
@@ -251,10 +259,14 @@ def format_table(runs: list[dict[str, Any]], aggregate: dict[str, Any]) -> str:
 
 def format_json(runs: list[dict[str, Any]], aggregate: dict[str, Any]) -> str:
     """Render the stable structured report."""
+    report_runs = [
+        {**run, "uploaded_by": run.get("uploaded_by")}
+        for run in runs
+    ]
     return json.dumps(
         {
             "schema": _REPORT_SCHEMA,
-            "runs": runs,
+            "runs": report_runs,
             "aggregate": aggregate,
         },
         allow_nan=False,

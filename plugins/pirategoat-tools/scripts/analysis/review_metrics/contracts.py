@@ -23,6 +23,11 @@ _TELEMETRY_CONTRACT = _load_exact_path_module(
     _REVIEW_DIR / "telemetry.py",
     "review telemetry contract unavailable",
 )
+_TELEMETRY_SHARE_CONTRACT = _load_exact_path_module(
+    "review.telemetry_share_contract",
+    _REVIEW_DIR / "telemetry_share.py",
+    "review telemetry sharing contract unavailable",
+)
 _FINDINGS_LEDGER_CONTRACT = _load_exact_path_module(
     "review_findings_ledger_contract",
     _REVIEW_DIR / "findings_ledger.py",
@@ -53,9 +58,15 @@ _MANIFEST_SECTIONS_CONTRACT = _load_exact_path_module(
     _REVIEW_DIR / "manifest_sections.py",
     "review manifest sections contract unavailable",
 )
+_RUN_PATHS_CONTRACT = _load_exact_path_module(
+    "review_run_paths_contract",
+    _REVIEW_DIR / "run_paths.py",
+    "review run paths contract unavailable",
+)
 DEFAULT_LOG_DIR = Path(_TELEMETRY_CONTRACT.LOG_DIR)
 DEFAULT_SESSIONS_ROOT = Path("~/.claude/projects").expanduser()
 DEFAULT_REGISTRY = _REVIEW_DIR / "agent_registry.json"
+SHARED_LAYOUT_PREFIX = _TELEMETRY_SHARE_CONTRACT.LAYOUT_PREFIX
 
 # The lifecycle projection and incomplete-multiset rule are the producer's
 # own implementations — the consumer must mirror them bit-exactly, so it
@@ -210,13 +221,16 @@ _SUPPORTED_MANIFEST_SCHEMA = 3
 _OBSERVED_READS_SCHEMA = 2
 # `reviewed_files` is the cohort's canonical aggregate of the per-agent
 # reviewed-file counts.
-_REPORT_SCHEMA = 3
+_REPORT_SCHEMA = 4
 _SUPPORTED_MANIFEST_STATUSES = {"running", "complete"}
 _DISPATCHED_STATUSES = _DISPATCH_STATUS_CONTRACT.DISPATCHED_STATUSES
 _SUPPORTED_DISPATCH_STATUSES = (
     _DISPATCH_STATUS_CONTRACT.SUPPORTED_DISPATCH_STATUSES
 )
-_SAFE_RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,255}\Z")
+# The path-segment grammar lives in run_paths, the sole authority for
+# durable review locations — not in the sharing module, which is only one
+# of its consumers.
+_SAFE_RUN_ID_RE = _RUN_PATHS_CONTRACT.SAFE_RUN_ID_SEGMENT_RE
 _PRODUCER_AGENT_NAME_RE = _DISPATCH_STATUS_CONTRACT.AGENT_NAME_RE
 _WINDOWS_DRIVE_RE = re.compile(r"[A-Za-z]:")
 _CRITIC_VERDICTS = frozenset(_CRITIC_CONTRACT.CRITIC_VERDICTS)

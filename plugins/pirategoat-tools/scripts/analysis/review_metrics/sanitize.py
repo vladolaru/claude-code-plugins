@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import unicodedata
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Iterable
 
 from .contracts import (
@@ -1831,15 +1831,21 @@ def _supported_manifest_envelope(value: object) -> bool:
     return availability["pipeline"] is True
 
 
-def _valid_manifest(value: object) -> bool:
+def _validated_manifest(value: object) -> dict[str, Any] | None:
+    """Return the sanitized manifest when it survives validation, else None.
+
+    Validation IS sanitization plus a comparison against the raw record, so
+    the sanitized result is returned rather than rebuilt: every caller wants
+    exactly the manifest that was just checked.
+    """
     if not _supported_manifest_envelope(value):
-        return False
+        return None
     assert isinstance(value, dict)
     sanitized = _sanitize_manifest(value)
     if sanitized.get("run", {}).get("id") != value["run"].get("id"):
-        return False
+        return None
     if len(sanitized.get("steps", [])) != len(value["steps"]):
-        return False
+        return None
     raw_dispatch = value.get("dispatch")
     if (
         raw_dispatch is not None
@@ -1847,10 +1853,10 @@ def _valid_manifest(value: object) -> bool:
         and not _producer_declared_unusable_dispatch(raw_dispatch)
         and not _dispatch_projection_family_failure(raw_dispatch)
     ):
-        return False
+        return None
     assignment_available = value["availability"]["assignment"]
     if assignment_available != isinstance(sanitized.get("assignment"), dict):
-        return False
+        return None
     if assignment_available is False and value.get("assignment") is not None:
-        return False
-    return True
+        return None
+    return sanitized
