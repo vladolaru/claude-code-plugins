@@ -536,6 +536,88 @@ class TestRedaction:
         expected_events[-1]["pipeline"]["output_dir"] = None
         assert [json.loads(line) for line in redacted_jsonl] == expected_events
 
+    def test_historical_agent_identity_redaction_canonicalizes_copied_payloads(
+        self, telemetry_run
+    ):
+        manifest, jsonl_lines = _payloads(telemetry_run)
+
+        def use_mixed_roster(reconciliation):
+            reconciliation["reviewing_agents"] = [
+                "security-review",
+                "performance-reviewer",
+            ]
+            reconciliation["dispatched_agents"] = [
+                "security-review",
+                "performance-reviewer",
+            ]
+            reconciliation["missing_agents"] = ["docs-review"]
+            reconciliation["not_applicable_agents"][0]["name"] = (
+                "php-tests-review"
+            )
+
+        use_mixed_roster(manifest["outcome"]["reconciliation"])
+        events = [json.loads(line) for line in jsonl_lines]
+        end = next(event for event in events if event["event"] == "pipeline_end")
+        snapshot = end["snapshot"]
+        use_mixed_roster(snapshot["findings"]["reconciliation"])
+        results = snapshot["agent_results"]
+        snapshot["agent_results"] = {
+            "security": results["security-reviewer"],
+            "performance-reviewer": results["performance-reviewer"],
+            "unmapped": {"verdict": "approve"},
+        }
+        historical_lines = [
+            json.dumps(event) + ("\n" if line.endswith("\n") else "")
+            for event, line in zip(events, jsonl_lines)
+        ]
+        manifest_before = copy.deepcopy(manifest)
+        lines_before = list(historical_lines)
+
+        redacted_manifest, redacted_lines = telemetry_share.redact_payloads(
+            manifest, historical_lines
+        )
+
+        expected_roster = {
+            "reviewing_agents": ["security-reviewer", "performance-reviewer"],
+            "dispatched_agents": ["security-reviewer", "performance-reviewer"],
+            "missing_agents": ["docs-reviewer"],
+            "not_applicable_name": "php-tests-reviewer",
+        }
+
+        def assert_canonical_roster(reconciliation):
+            for field in (
+                "reviewing_agents",
+                "dispatched_agents",
+                "missing_agents",
+            ):
+                assert reconciliation[field] == expected_roster[field]
+            assert reconciliation["not_applicable_agents"][0]["name"] == (
+                expected_roster["not_applicable_name"]
+            )
+
+        assert_canonical_roster(redacted_manifest["outcome"]["reconciliation"])
+        redacted_events = [json.loads(line) for line in redacted_lines]
+        redacted_snapshot = next(
+            event for event in redacted_events if event["event"] == "pipeline_end"
+        )["snapshot"]
+        assert_canonical_roster(
+            redacted_snapshot["findings"]["reconciliation"]
+        )
+        assert set(redacted_snapshot["agent_results"]) == {
+            "security-reviewer",
+            "performance-reviewer",
+            "unmapped",
+        }
+        assert manifest == manifest_before
+        assert historical_lines == lines_before
+
+        rerendered_manifest, rerendered_lines = telemetry_share.redact_payloads(
+            redacted_manifest, redacted_lines
+        )
+
+        assert rerendered_manifest == redacted_manifest
+        assert rerendered_lines == redacted_lines
+
     def test_every_recorded_undisclosed_value_is_absent_after_redaction(
         self, telemetry_run
     ):

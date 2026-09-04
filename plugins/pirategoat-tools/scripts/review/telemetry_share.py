@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 
 try:
     from .atomic_io import atomic_write_json, output_dir_lock
+    from .reviewer_names import agent_name_from_review_stem, derive_reviewer_name
     from .run_paths import (
         SAFE_RUN_ID_SEGMENT_RE,
         telemetry_log_path,
@@ -31,6 +32,10 @@ try:
     )
 except ImportError:  # Direct ``python telemetry_share.py`` invocation.
     from atomic_io import atomic_write_json, output_dir_lock  # type: ignore[no-redef]
+    from reviewer_names import (  # type: ignore[no-redef]
+        agent_name_from_review_stem,
+        derive_reviewer_name,
+    )
     from run_paths import (  # type: ignore[no-redef]
         SAFE_RUN_ID_SEGMENT_RE,
         telemetry_log_path,
@@ -274,6 +279,60 @@ def _strip_scoped(payload: object) -> None:
                     node.pop(key, None)
 
 
+def _normalize_reconciliation_agent_names(value: object) -> None:
+    """Project historical ledger stems to registry names in place."""
+    if not isinstance(value, dict):
+        return
+    for field in ("reviewing_agents", "dispatched_agents", "missing_agents"):
+        agents = value.get(field)
+        if isinstance(agents, list):
+            value[field] = [
+                agent_name_from_review_stem(agent)
+                if isinstance(agent, str)
+                else agent
+                for agent in agents
+            ]
+    not_applicable = value.get("not_applicable_agents")
+    if isinstance(not_applicable, list):
+        for entry in not_applicable:
+            if isinstance(entry, dict) and isinstance(entry.get("name"), str):
+                entry["name"] = agent_name_from_review_stem(entry["name"])
+
+
+def _normalize_snapshot_agent_results(snapshot: object) -> None:
+    """Map historical short result keys only from this snapshot's dispatch."""
+    if not isinstance(snapshot, dict):
+        return
+    results = snapshot.get("agent_results")
+    dispatch = snapshot.get("dispatch")
+    dispatch_agents = dispatch.get("agents") if isinstance(dispatch, dict) else None
+    if not isinstance(results, dict) or not isinstance(dispatch_agents, dict):
+        return
+
+    candidates: dict[str, list[str]] = {}
+    for agent_name in dispatch_agents:
+        if not isinstance(agent_name, str):
+            continue
+        review_stem = derive_reviewer_name(agent_name)
+        if review_stem != agent_name:
+            candidates.setdefault(review_stem, []).append(agent_name)
+    unique_names = {
+        review_stem: names[0]
+        for review_stem, names in candidates.items()
+        if len(names) == 1
+    }
+
+    normalized = {}
+    for result_name, result in results.items():
+        canonical = unique_names.get(result_name, result_name)
+        if canonical != result_name and (
+            canonical in results or canonical in normalized
+        ):
+            canonical = result_name
+        normalized[canonical] = result
+    snapshot["agent_results"] = normalized
+
+
 def redact_payloads(manifest: dict, jsonl_lines: list[str]) -> tuple[dict, list[str]]:
     """Create share-safe telemetry payloads without mutating their local inputs.
 
@@ -306,6 +365,9 @@ def redact_payloads(manifest: dict, jsonl_lines: list[str]) -> tuple[dict, list[
     if not isinstance(repo, str) or not repo:
         raise ValueError("manifest run.repo is missing")
 
+    outcome = redacted_manifest.get("outcome")
+    if isinstance(outcome, dict):
+        _normalize_reconciliation_agent_names(outcome.get("reconciliation"))
     if "repo_path" in run:
         run["repo_path"] = repo
     sha_range = _sha_range(run.get("git"))
@@ -328,6 +390,14 @@ def redact_payloads(manifest: dict, jsonl_lines: list[str]) -> tuple[dict, list[
         if event.get("event") == "pipeline_start" and isinstance(pipeline, dict):
             if "repo_path" in pipeline:
                 pipeline["repo_path"] = repo
+        if event.get("event") == "pipeline_end":
+            snapshot = event.get("snapshot")
+            _normalize_snapshot_agent_results(snapshot)
+            findings = snapshot.get("findings") if isinstance(snapshot, dict) else None
+            if isinstance(findings, dict):
+                _normalize_reconciliation_agent_names(
+                    findings.get("reconciliation")
+                )
         _rewrite_ranges(event, sha_range)
         _redact_tree(event, _UNDISCLOSED_KEYS, _REDACTED_VALUES)
         _strip_scoped(event)

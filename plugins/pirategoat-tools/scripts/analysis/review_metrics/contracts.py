@@ -63,6 +63,11 @@ _RUN_PATHS_CONTRACT = _load_exact_path_module(
     _REVIEW_DIR / "run_paths.py",
     "review run paths contract unavailable",
 )
+_REVIEWER_NAMES_CONTRACT = _load_exact_path_module(
+    "review_reviewer_names_contract",
+    _REVIEW_DIR / "reviewer_names.py",
+    "reviewer names contract unavailable",
+)
 DEFAULT_LOG_DIR = Path(_TELEMETRY_CONTRACT.LOG_DIR)
 DEFAULT_SESSIONS_ROOT = Path("~/.claude/projects").expanduser()
 DEFAULT_REGISTRY = _REVIEW_DIR / "agent_registry.json"
@@ -73,6 +78,10 @@ SHARED_LAYOUT_PREFIX = _TELEMETRY_SHARE_CONTRACT.LAYOUT_PREFIX
 # calls them instead of re-implementing them.
 _project_agent_lifecycle = _TELEMETRY_CONTRACT.project_agent_lifecycle
 _incomplete_agent_executions = _TELEMETRY_CONTRACT._incomplete_agent_executions
+_agent_name_from_review_stem = (
+    _REVIEWER_NAMES_CONTRACT.agent_name_from_review_stem
+)
+_derive_reviewer_name = _REVIEWER_NAMES_CONTRACT.derive_reviewer_name
 
 _USAGE_FIELDS = (
     "input_tokens",
@@ -204,8 +213,9 @@ _SUMMARY_FIELDS = (
     "final_finding_count",
 )
 _SEVERITIES = tuple(_TELEMETRY_CONTRACT._SEVERITY_FIELDS)
-# The ledger's producer owns the reconciliation block; telemetry projects it
-# verbatim. These come from that producer, not from the projection.
+# The ledger's producer owns the reconciliation shape. These fields come from
+# that producer; historical agent spelling is projected separately through the
+# canonical reviewer-names contract above.
 _RECONCILIATION_COUNT_FIELDS = tuple(
     _FINDINGS_LEDGER_CONTRACT.RECONCILIATION_COUNT_FIELDS
 )

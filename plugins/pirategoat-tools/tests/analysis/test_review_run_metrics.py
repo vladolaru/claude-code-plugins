@@ -646,6 +646,93 @@ class TestReviewVocabularyLifecycleMigration:
         ):
             assert retired not in serialized
 
+    def test_historical_agent_identity_cohort_normalizes_legacy_rosters(
+        self, tmp_path
+    ):
+        current = _task_5_manifest("current-roster")
+        current_reconciliation = current["outcome"]["reconciliation"]
+        current_reconciliation["missing_agents"] = ["docs-reviewer"]
+        legacy = _task_5_manifest("legacy-roster")
+        legacy_reconciliation = legacy["outcome"]["reconciliation"]
+        legacy_reconciliation["reviewing_agents"] = [
+            "code-review",
+            "security-review",
+        ]
+        legacy_reconciliation["dispatched_agents"] = [
+            "code-review",
+            "security-review",
+            "a11y-review",
+        ]
+        legacy_reconciliation["missing_agents"] = ["docs-review"]
+        legacy_reconciliation["not_applicable_agents"][0]["name"] = (
+            "a11y-review"
+        )
+        clone = tmp_path / "shared"
+        uploader_dir = clone / telemetry_share.LAYOUT_PREFIX / "alice"
+        uploader_dir.mkdir(parents=True)
+        _write_manifest(uploader_dir / "current.manifest.json", current)
+        _write_manifest(uploader_dir / "legacy.manifest.json", legacy)
+        output = tmp_path / "cohort.json"
+
+        result = main(
+            [
+                "--shared-dir",
+                str(clone),
+                "--format",
+                "json",
+                "--output",
+                str(output),
+                "--no-transcripts",
+            ]
+        )
+
+        assert result == 0
+        runs = {
+            run["run"]["id"]: run
+            for run in json.loads(output.read_text(encoding="utf-8"))["runs"]
+        }
+        for run_id in ("legacy-roster", "current-roster"):
+            reconciliation = runs[run_id]["outcome"]["reconciliation"]
+            assert reconciliation["reviewing_agents"] == [
+                "code-reviewer",
+                "security-reviewer",
+            ]
+            assert reconciliation["dispatched_agents"] == [
+                "code-reviewer",
+                "security-reviewer",
+                "a11y-reviewer",
+            ]
+            assert reconciliation["missing_agents"] == ["docs-reviewer"]
+            assert reconciliation["not_applicable_agents"] == [
+                {"name": "a11y-reviewer", "skip_reason": "no UI changed"},
+            ]
+        assert {run["uploaded_by"] for run in runs.values()} == {"alice"}
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            pytest.param(
+                "reviewing_agents",
+                ["code", "security-reviewer"],
+                id="roster",
+            ),
+            pytest.param(
+                "not_applicable_agents",
+                [{"name": "a11y", "skip_reason": "no UI changed"}],
+                id="not-applicable",
+            ),
+        ],
+    )
+    def test_historical_agent_identity_rejects_noncanonical_short_names(
+        self, tmp_path, field, value
+    ):
+        manifest = _task_5_manifest()
+        manifest["outcome"]["reconciliation"][field] = value
+
+        measured = measure_run(manifest, tmp_path, include_transcripts=False)
+
+        assert measured["outcome"]["reconciliation"] is None
+
     def test_retired_schema_three_coverage_keys_are_rejected(self, tmp_path):
         manifest = _task_5_manifest()
         manifest["assignment"] = {

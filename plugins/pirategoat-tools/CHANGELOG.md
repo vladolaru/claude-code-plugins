@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Shared telemetry never carries a branch name in a range: `run.git.requested_range` and the end snapshot's `git_range` upload as `<base_sha>..<head_sha>` or null, and an upload is refused if a symbolic range survives redaction.
-- The manifest and end snapshot spell every agent by its registry name (`security-reviewer`) in agent results and reconciliation rosters; PR-mode `pipeline_start` no longer records the pre-checkout HEAD as the reviewed head; the PR number is an int or null everywhere.
+- The manifest, end snapshot, and historical schema-3 re-upload path spell every joinable agent by its registry name (`security-reviewer`) in agent results and reconciliation rosters; cohort ingestion normalizes legacy `*-review` stems and rejects noncanonical short identities; PR-mode `pipeline_start` no longer records the pre-checkout HEAD as the reviewed head; the PR number is an int or null everywhere.
 
 ## [1.117.0] - 2026-09-01
 
