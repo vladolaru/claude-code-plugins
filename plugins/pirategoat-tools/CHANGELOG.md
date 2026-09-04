@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.119.0] - 2026-09-04
+
+### Added
+
+- **Half-deprecations** - `wp-architecture-reviewer` now treats a deprecation as two halves that must land together: the `@deprecated` tag and the runtime `_deprecated_function()` / `_deprecated_hook()` call. The existing Deprecation Rule only fires on removals, so a diff that tags a still-public symbol and never notifies its external callers passed clean. A stated reason for omitting the notice no longer settles it; provably internal symbols and a named landing version still do.
+
 ## [1.118.0] - 2026-09-04
 
 ### Added

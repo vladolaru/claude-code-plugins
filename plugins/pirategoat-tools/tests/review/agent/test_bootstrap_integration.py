@@ -1245,6 +1245,24 @@ class TestNotApplicableCompletionContract:
         # The dismissal this closes.
         assert '"Display-only" is not a reason to dismiss' in prompt
 
+    def test_wp_architecture_reviewer_audits_half_deprecations(self):
+        """Deprecation Rule addition (regression guard for the
+        woocommerce/woocommerce-subscriptions#5692 rework): a `@deprecated`
+        tag added without the runtime notice, or the reverse, is an
+        incomplete deprecation the removal-gated rule above never reaches."""
+        prompt = (PLUGIN_ROOT / "agents/wp-architecture-reviewer.md").read_text()
+
+        # The invariant, and why the removal-gated rule above does not reach it.
+        assert "**Half-deprecations count.**" in prompt
+        assert "the rule above does not cover it because nothing was removed" in prompt
+        # Both directions of the incompleteness.
+        assert "A tag with no notice means no consumer is ever told" in prompt
+        assert "a notice with no tag" in prompt
+        # The dismissal this closes.
+        assert "An author's stated reason for the omission does not settle it" in prompt
+        # False-positive gate, so genuinely internal symbols stay unflagged.
+        assert "provably unreachable from outside the codebase" in prompt
+
     def test_woo_reviewer_audits_settings_write_surface(self):
         """Invariant 13 (regression guard for woocommerce-subscriptions#4612 →
         #5664): registering a settings page, group, or settings-API object
