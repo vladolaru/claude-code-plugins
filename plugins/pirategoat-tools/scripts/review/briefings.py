@@ -2304,6 +2304,29 @@ def _step_11_present_results(mode, state, context, config, output_dir):
 # Step 12: Cleanup
 # ---------------------------------------------------------------------------
 
+def _consent_question(codex_host, question, options):
+    """Render one structured consent question as the host's input call.
+
+    Prose ("ask whether to enable sharing") let the orchestrator shape the
+    question differently on every run. A fixed option list keeps the answers
+    aligned with the two consent layers the gate actually reads.
+    """
+    tool = (
+        "the host's user-input mechanism" if codex_host else "`AskUserQuestion`"
+    )
+    lines = [
+        f"Ask with {tool}, after the disclosure above, offering exactly "
+        "these options:",
+        f'  question: "{question}"',
+        '  header: "Share telemetry"',
+        "  options:",
+    ]
+    for label, description in options:
+        lines.append(f'    - label: "{label}"')
+        lines.append(f'      description: "{description}"')
+    return "\n".join(lines)
+
+
 def _telemetry_consent_actions(config, output_dir):
     """Format an interactive consent conversation from requester-owned state."""
     consent = config.get("_telemetry_consent")
@@ -2315,7 +2338,10 @@ def _telemetry_consent_actions(config, output_dir):
     repo_choice = consent.get("repo_consent")
     if not isinstance(repo, str) or not repo or sharing not in {"unset", "enabled"}:
         return []
-    if sharing == "enabled" and repo_choice != "unset":
+    # A recorded repository answer settles this repository whatever the
+    # global state: "Not this repo" leaves the global choice unset on
+    # purpose, and re-asking here would take that answer back.
+    if repo_choice != "unset":
         return []
 
     script = shlex.quote(str(SCRIPTS_DIR / "telemetry_share.py"))
@@ -2323,6 +2349,12 @@ def _telemetry_consent_actions(config, output_dir):
     # step-12 checkout path — the prompt and the stored choice must name the
     # same repository even if the CWD or origin changed after step 1.
     od = shlex.quote(str(output_dir or "<OUTPUT_DIR>"))
+    codex_host = _host(config) == HOST_CODEX
+    include = f"`python3 {script} set-repo --output-dir {od} include`"
+    exclude = f"`python3 {script} set-repo --output-dir {od} exclude`"
+    # The scripted upload opportunity for this run passed at finalize, so a
+    # yes answer uploads this run explicitly.
+    upload = f"`python3 {script} upload-run --output-dir {od}`"
     actions = [
         CONSENT_DISCLOSURE,
         f"The destination is the private `{REMOTE_REPO}` repository, readable "
@@ -2337,28 +2369,47 @@ def _telemetry_consent_actions(config, output_dir):
     ]
 
     if sharing == "unset":
+        actions.append(_consent_question(
+            codex_host,
+            f"Share this review's redacted run metadata for `{repo}` with "
+            "the pirategoat telemetry cohort?",
+            (
+                ("Share", "Enable sharing on this machine and include "
+                          f"`{repo}`; each other repository is asked once "
+                          "on its first review."),
+                ("Not this repo", f"Exclude `{repo}` only; the sharing "
+                                  "question comes up again on the next "
+                                  "repository."),
+                ("Not now", "Record nothing; ask again on the next review "
+                            "here."),
+                ("Never", "Disable sharing on this machine; nothing is asked "
+                          "again anywhere."),
+            ),
+        ))
         actions.extend((
-            f"Ask whether to enable sharing and include repository identity `{repo}`.",
-            "If no, record the global choice: "
-            f"`python3 {script} set-sharing disabled`.",
-            "If yes, record both choices before uploading this current run: "
-            f"`python3 {script} set-sharing enabled`",
-            f"`python3 {script} set-repo --output-dir {od} include`",
+            "Then record the answer, in this order:",
+            f"Share → `python3 {script} set-sharing enabled`, then {include}, "
+            f"then {upload}.",
+            f"Not this repo → {exclude}.",
+            "Not now → record nothing.",
+            f"Never → `python3 {script} set-sharing disabled`.",
         ))
     else:
-        actions.extend((
-            f"Global sharing is enabled. Ask whether to include repository identity `{repo}`.",
-            "If no, record the repository choice: "
-            f"`python3 {script} set-repo --output-dir {od} exclude`.",
-            "If yes, record the repository choice before uploading this current run: "
-            f"`python3 {script} set-repo --output-dir {od} include`",
+        actions.append(_consent_question(
+            codex_host,
+            f"Sharing is enabled on this machine. Include `{repo}` in the "
+            "pirategoat telemetry cohort?",
+            (
+                ("Include", f"Upload this and future reviews of `{repo}`."),
+                ("Exclude", f"Never upload reviews of `{repo}`; other "
+                            "repositories keep their own answer."),
+            ),
         ))
-
-    actions.append(
-        "The scripted upload opportunity for this run has already passed; on "
-        "the yes path, finish with "
-        f"`python3 {script} upload-run --output-dir {od}`."
-    )
+        actions.extend((
+            "Then record the answer:",
+            f"Include → {include}, then {upload}.",
+            f"Exclude → {exclude}.",
+        ))
     return actions
 
 

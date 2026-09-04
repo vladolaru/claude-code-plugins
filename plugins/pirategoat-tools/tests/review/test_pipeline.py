@@ -2902,7 +2902,7 @@ class TestStep12Cleanup:
             assert phrase in text
         assert "set-repo --output-dir" in text
         assert "set-repo --repo-path" not in text
-        assert guidance["actions"][-1].find("upload-run") != -1
+        assert "upload-run --output-dir" in text
 
     def test_enabled_sharing_asks_about_an_unseen_repository(
         self, mod, tmp_path
@@ -2917,7 +2917,93 @@ class TestStep12Cleanup:
         assert "set-repo --output-dir" in text
         assert "set-repo --repo-path" not in text
         assert "acme/widget" in text
-        assert guidance["actions"][-1].find("upload-run") != -1
+        assert "upload-run --output-dir" in text
+
+    def test_unset_sharing_asks_one_structured_question_with_four_answers(
+        self, mod, tmp_path
+    ):
+        """The first ask is a structured question, not prose the orchestrator
+        shapes on its own each run. Its four answers map onto the two-layer
+        consent state without inventing a third layer: "Not this repo"
+        records only the per-repo exclude, because a requester who said no
+        here has not opted in to anything globally."""
+        guidance = mod.get_step_guidance(
+            12, "full", {"workspace": {}}, {},
+            config=self._telemetry_config("unset"),
+            output_dir=str(tmp_path),
+        )
+        text = "\n".join(guidance["actions"])
+        od = str(tmp_path)
+
+        assert "AskUserQuestion" in text
+        assert text.index("repo names") < text.index("AskUserQuestion")
+        for label in ("Share", "Not this repo", "Not now", "Never"):
+            assert f'label: "{label}"' in text
+        recordings = {
+            line.split("→")[0].strip(): line
+            for line in text.splitlines() if "→" in line
+        }
+        assert set(recordings) == {"Share", "Not this repo", "Not now", "Never"}
+        assert "set-sharing enabled" in recordings["Share"]
+        assert f"set-repo --output-dir {od} include" in recordings["Share"]
+        assert f"upload-run --output-dir {od}" in recordings["Share"]
+        assert f"set-repo --output-dir {od} exclude" in recordings["Not this repo"]
+        assert "set-sharing" not in recordings["Not this repo"]
+        assert "set-sharing disabled" in recordings["Never"]
+        assert "set-repo" not in recordings["Never"]
+        assert "set-" not in recordings["Not now"]
+        assert "upload-run" not in recordings["Not now"]
+
+    def test_enabled_sharing_offers_only_include_or_exclude(
+        self, mod, tmp_path
+    ):
+        guidance = mod.get_step_guidance(
+            12, "full", {"workspace": {}}, {},
+            config=self._telemetry_config("enabled", "unset"),
+            output_dir=str(tmp_path),
+        )
+        text = "\n".join(guidance["actions"])
+
+        assert "AskUserQuestion" in text
+        assert 'label: "Include"' in text
+        assert 'label: "Exclude"' in text
+        for label in ("Share", "Not this repo", "Not now", "Never"):
+            assert f'label: "{label}"' not in text
+        assert "set-sharing enabled" not in text
+        assert "set-sharing disabled" not in text
+
+    def test_codex_host_names_its_own_input_mechanism(self, mod, tmp_path):
+        config = self._telemetry_config("unset")
+        config["host"] = "codex"
+
+        guidance = mod.get_step_guidance(
+            12, "full", {"workspace": {}}, {},
+            config=config,
+            output_dir=str(tmp_path),
+        )
+        text = "\n".join(guidance["actions"])
+
+        assert "AskUserQuestion" not in text
+        assert "host's user-input mechanism" in text
+        assert 'label: "Not this repo"' in text
+
+    def test_excluded_repository_is_silent_even_with_sharing_unset(
+        self, mod, tmp_path
+    ):
+        """"Not this repo" records an exclude and leaves the global choice
+        unset. Without this gate the next review here would re-ask the
+        global question, and the answer would not have delivered what it
+        promised."""
+        guidance = mod.get_step_guidance(
+            12, "full", {"workspace": {}}, {},
+            config=self._telemetry_config("unset", "exclude"),
+            output_dir=str(tmp_path),
+        )
+        text = "\n".join(guidance["situation"] + guidance["actions"])
+
+        assert "telemetry" not in text.lower()
+        assert "set-sharing" not in text
+        assert "set-repo" not in text
 
     @pytest.mark.parametrize("repo_consent", ("include", "exclude"))
     def test_recorded_repository_choice_asks_no_telemetry_question(
