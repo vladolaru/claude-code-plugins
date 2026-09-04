@@ -2954,7 +2954,7 @@ class TestSnapshot:
             "critical": 0, "high": 1, "medium": 0, "low": 0, "info": 0,
         }
         snapshot = _read_events(t.log_path)[-1]["snapshot"]
-        assert snapshot["agent_results"]["security"]["severities"] == expected
+        assert snapshot["agent_results"]["security-reviewer"]["severities"] == expected
         assert snapshot["findings"]["severities"] == expected
         assert _read_manifest(t)["outcome"]["summary"][
             "final_severities"
@@ -3080,10 +3080,10 @@ class TestSnapshot:
 
         events = _read_events(t.log_path)
         assert events[-1]["event"] == "pipeline_end"
-        assert events[-1]["snapshot"]["agent_results"]["security"] == {
+        assert events[-1]["snapshot"]["agent_results"]["security-reviewer"] == {
             "error": "malformed"
         }
-        assert t._extract_agent_results()["security"] == {"error": "malformed"}
+        assert t._extract_agent_results()["security-reviewer"] == {"error": "malformed"}
 
 
 # ── Re-reviews ──────────────────────────────────────────────────────
