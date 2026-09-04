@@ -477,6 +477,17 @@ class TestLogStep:
         assert len(events) == 5  # 1 start + 4 steps
         assert [e["step"] for e in events] == [0, 1, 2, 3, 4]
 
+    def test_repeated_step_events_are_numbered(self, telemetry):
+        """Step 11 is logged twice by design (prepare, then publish); the two
+        events were indistinguishable in run 6e6a."""
+        telemetry.start(pr_number="42")
+        telemetry.log_step(step=11, phase="OUTPUT", title="Author Report")
+        telemetry.log_step(step=11, phase="OUTPUT", title="Author Report")
+        telemetry.log_step(step=12, phase="OUTPUT", title="Cleanup")
+        events = _read_events(telemetry.log_path)
+        attempts = [(e["step"], e["attempt"]) for e in events if e["event"] == "step"]
+        assert attempts == [(11, 1), (11, 2), (12, 1)]
+
     def test_reads_marker_across_instances(self, mod, output_dir, tmp_path):
         """A new ReviewTelemetry instance can find the log via marker file."""
         log_dir = tmp_path / "logs"
@@ -701,6 +712,14 @@ class TestRunManifest:
         assert manifest["status"] == "running"
         assert manifest["steps"][-1]["step"] == 3
         assert manifest["steps"][-1]["phase"] == "AWARENESS"
+
+    def test_manifest_steps_carry_attempt(self, telemetry, output_dir):
+        telemetry.start(pr_number="42")
+        telemetry.log_step(step=11, phase="OUTPUT", title="Author Report")
+        telemetry.log_step(step=11, phase="OUTPUT", title="Author Report")
+        manifest = _read_manifest(telemetry)
+        attempts = [(s["step"], s["attempt"]) for s in manifest["steps"]]
+        assert attempts == [(11, 1), (11, 2)]
 
     def test_log_step_opens_no_review_artifact(
         self, telemetry, output_dir, monkeypatch

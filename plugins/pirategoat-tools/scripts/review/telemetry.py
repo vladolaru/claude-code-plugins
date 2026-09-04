@@ -113,6 +113,7 @@ _STEP_MANIFEST_FIELDS = (
     "phase",
     "title",
     "duration_since_prev_ms",
+    "attempt",
 )
 _AGENT_START_MANIFEST_FIELDS = (
     "schema",
@@ -312,6 +313,13 @@ class ReviewTelemetry:
 
         now = datetime.now(timezone.utc)
         duration_ms = self._duration_since_prev(now)
+        # A step can be re-entered (step 11 is prepare-then-publish by
+        # design; step 10 re-runs after a ledger change). Number the events
+        # so a reader can tell the attempts apart without diffing payloads.
+        attempt = 1 + sum(
+            1 for prior in self._read_events()
+            if prior.get("event") == "step" and prior.get("step") == step
+        )
 
         event = {
             "event": "step",
@@ -320,6 +328,7 @@ class ReviewTelemetry:
             "phase": phase,
             "title": title,
             "duration_since_prev_ms": duration_ms,
+            "attempt": attempt,
             "args": {
                 "bot_mode": bot_mode,
             },
