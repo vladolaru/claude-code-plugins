@@ -243,7 +243,7 @@ class ReviewTelemetry:
             return None
         return telemetry_manifest_path(log_path)
 
-    def start(self, pr_number: str = "", total_steps: int = 15,
+    def start(self, pr_number: str | int = "", total_steps: int = 15,
               bot_mode: bool = False, quick_mode: bool = False,
               mode: str = "", repo_path: str = "",
               identifier: str = "", run_id: str = "",
@@ -275,6 +275,15 @@ class ReviewTelemetry:
         with open(marker, "w") as f:
             f.write(self._log_path)
 
+        # One type across the payload: review context records the PR number
+        # as an int, this event recorded the CLI string. Branch runs have no
+        # PR number and record null.
+        pr_number_value = (
+            int(pr_number)
+            if isinstance(pr_number, (int, str)) and str(pr_number).isdigit()
+            else None
+        )
+
         event = {
             "schema": EVENT_SCHEMA,
             "run_id": run_id,
@@ -282,7 +291,7 @@ class ReviewTelemetry:
             "timestamp": now.isoformat(),
             "step": 0,
             "pipeline": {
-                "pr_number": pr_number,
+                "pr_number": pr_number_value,
                 "output_dir": self.output_dir,
                 "total_steps": total_steps,
                 "bot_mode": bot_mode,

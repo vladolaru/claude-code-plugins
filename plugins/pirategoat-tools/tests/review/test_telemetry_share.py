@@ -290,7 +290,6 @@ DECLARED_STRING_PATHS = frozenset({
     "jsonl.pipeline_start.pipeline.git.head_sha",
     "jsonl.pipeline_start.pipeline.git.requested_range",
     "jsonl.pipeline_start.pipeline.plugin_version",
-    "jsonl.pipeline_start.pipeline.pr_number",
     "jsonl.pipeline_start.pipeline.repo",
     "jsonl.pipeline_start.pipeline.repo_path",
     "jsonl.pipeline_start.pipeline.target",

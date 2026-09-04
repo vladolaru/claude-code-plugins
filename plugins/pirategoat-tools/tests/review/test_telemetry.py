@@ -158,10 +158,20 @@ class TestStart:
         path = telemetry.start(pr_number="42", total_steps=15, bot_mode=False)
         events = _read_events(path)
         pipeline = events[0]["pipeline"]
-        assert pipeline["pr_number"] == "42"
+        assert pipeline["pr_number"] == 42
         assert pipeline["output_dir"] == str(output_dir)
         assert pipeline["total_steps"] == 15
         assert pipeline["bot_mode"] is False
+
+    def test_pr_number_is_null_outside_pr_mode(self, telemetry):
+        path = telemetry.start(pr_number="", identifier="feature-branch", mode="full")
+        events = _read_events(path)
+        assert events[0]["pipeline"]["pr_number"] is None
+
+    def test_pr_number_accepts_an_int(self, telemetry):
+        path = telemetry.start(pr_number=66900)
+        events = _read_events(path)
+        assert events[0]["pipeline"]["pr_number"] == 66900
 
     def test_writes_marker_file(self, telemetry, output_dir):
         path = telemetry.start(pr_number="42")
