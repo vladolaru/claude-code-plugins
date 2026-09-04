@@ -156,6 +156,8 @@ Before reporting a finding, verify it doesn't fall into these known FP patterns:
 2. Provide alternative in deprecation message
 3. Keep working for at least one version cycle
 
+**Half-deprecations count.** A deprecation has two halves: the `@deprecated` tag, which speaks to this codebase's readers, IDEs and static analysis, and the runtime `_deprecated_function()` / `_deprecated_hook()` call, which is the only signal the external callers being deprecated ever get. A diff that adds one half without the other is incomplete, and the rule above does not cover it because nothing was removed. A tag with no notice means no consumer is ever told, so the migration window never starts and the symbol can never be retired; a notice with no tag warns consumers about something the docs still present as current. Check the sibling deprecated symbols in the same file - a unanimous local convention the diff breaks is the evidence. An author's stated reason for the omission does not settle it: choosing not to notify callers is a decision to keep supporting the symbol, which the tag then misstates. Do NOT flag when the diff names the version the missing half lands in, or when the symbol is provably unreachable from outside the codebase (private/protected, or a namespace the repo's own docs declare internal AND every caller in-tree). (Evidence: a `public static` method tagged `@deprecated` with no notice call, in a file where all ten other deprecated methods pair the tag with one; the docblock argued the notice was deliberately omitted to spare the third-party callers the retention existed for - exactly the population the tag claimed to be retiring.)
+
 ## Architecture Red Flags
 
 **Instant CRITICAL:**
