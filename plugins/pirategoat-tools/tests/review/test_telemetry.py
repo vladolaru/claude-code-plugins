@@ -22,6 +22,7 @@ SCRIPT_PATH = PLUGIN_ROOT / "scripts" / "review" / "telemetry.py"
 
 sys.path.insert(0, str(TESTS_DIR))
 from helpers.context_fixtures import COMPLETE_CONTEXT
+from helpers.pipeline_process import init_bare_repo
 from helpers.review_fixtures import (
     canonical_assignment,
     canonical_findings_ledger,
@@ -129,6 +130,51 @@ def _write_started(output_dir, reviewer):
     return path
 
 
+def _telemetry_with_finalized_security_review(mod, output_dir, tmp_path):
+    """Create telemetry entitled to project one finalized security review."""
+    log_dir = tmp_path / "logs"
+    review = canonical_review_document("security", ["high", "medium"])
+    _write_dispatch_plan(output_dir, ["security-reviewer"])
+    _write_final_review(output_dir, "security", review)
+    return mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
+
+
+class TestAgentNameProjection:
+    """Events, the snapshot and the ledger spelled one agent three ways
+    (api-contract-reviewer / api-contract / api-contract-review). The
+    shared payload carries the registry name only."""
+
+    def test_agent_results_are_keyed_by_agent_name(self, mod, output_dir, tmp_path):
+        telemetry = _telemetry_with_finalized_security_review(mod, output_dir, tmp_path)
+        agents = telemetry._extract_agent_results()
+        assert "security-reviewer" in agents
+        assert "security" not in agents
+
+    def test_reconciliation_rosters_are_projected_to_agent_names(self, mod, output_dir, tmp_path):
+        ledger = {
+            "meta": {
+                "reconciliation": {
+                    "reviewing_agents": ["security-review", "performance-review"],
+                    "dispatched_agents": ["security-reviewer", "performance-reviewer"],
+                    "missing_agents": None,
+                    "not_applicable_agents": [
+                        {"name": "php-tests-review", "skip_reason": "no tests changed"}
+                    ],
+                }
+            }
+        }
+        projected = mod.ReviewTelemetry._extract_reconciliation(ledger)
+        assert projected["reviewing_agents"] == ["security-reviewer", "performance-reviewer"]
+        assert projected["dispatched_agents"] == ["security-reviewer", "performance-reviewer"]
+        assert projected["missing_agents"] is None
+        assert projected["not_applicable_agents"] == [
+            {"name": "php-tests-reviewer", "skip_reason": "no tests changed"}
+        ]
+        assert ledger["meta"]["reconciliation"]["reviewing_agents"] == [
+            "security-review", "performance-review"
+        ]
+
+
 # ── start() ─────────────────────────────────────────────────────────
 
 
@@ -157,10 +203,20 @@ class TestStart:
         path = telemetry.start(pr_number="42", total_steps=15, bot_mode=False)
         events = _read_events(path)
         pipeline = events[0]["pipeline"]
-        assert pipeline["pr_number"] == "42"
+        assert pipeline["pr_number"] == 42
         assert pipeline["output_dir"] == str(output_dir)
         assert pipeline["total_steps"] == 15
         assert pipeline["bot_mode"] is False
+
+    def test_pr_number_is_null_outside_pr_mode(self, telemetry):
+        path = telemetry.start(pr_number="", identifier="feature-branch", mode="full")
+        events = _read_events(path)
+        assert events[0]["pipeline"]["pr_number"] is None
+
+    def test_pr_number_accepts_an_int(self, telemetry):
+        path = telemetry.start(pr_number=66900)
+        events = _read_events(path)
+        assert events[0]["pipeline"]["pr_number"] == 66900
 
     def test_writes_marker_file(self, telemetry, output_dir):
         path = telemetry.start(pr_number="42")
@@ -171,6 +227,7 @@ class TestStart:
     def test_start_records_versioned_run_identity(self, telemetry, mod):
         path = telemetry.start(
             pr_number="42",
+            identifier="42",
             run_id="run-1",
             session_id="session-123",
             plugin_version="1.108.0",
@@ -189,11 +246,35 @@ class TestStart:
         assert start["pipeline"]["plugin_version"] == "1.108.0"
         assert start["pipeline"]["mode"] == "pr"
         assert start["pipeline"]["repo_path"] == "/repo"
+        assert start["pipeline"]["repo"] == ""
+        assert start["pipeline"]["target"] == "42"
         assert start["pipeline"]["git"] == {
             "requested_range": "abc..def",
             "base_sha": "abc",
             "head_sha": "def",
         }
+
+    def test_start_records_origin_repo_identity_and_target(self, telemetry, tmp_path):
+        """A started run records the canonical repository and review target."""
+        repo = init_bare_repo(tmp_path / "checkout", "https://github.com/owner/repository.git")
+
+        path = telemetry.start(repo_path=str(repo), identifier="feature/telemetry")
+
+        pipeline = _read_events(path)[0]["pipeline"]
+        assert pipeline["repo"] == "github.com/owner/repository"
+        assert pipeline["target"] == "feature/telemetry"
+
+    def test_start_records_empty_repo_without_a_shareable_identity(self, telemetry):
+        """A run still starts when the path yields no repository identity.
+
+        `repo_identity` is total — it answers "" rather than raising — so
+        telemetry needs no guard of its own and records the empty identity.
+        """
+        path = telemetry.start(repo_path="/does-not-exist", identifier="branch")
+
+        pipeline = _read_events(path)[0]["pipeline"]
+        assert pipeline["repo"] == ""
+        assert pipeline["target"] == "branch"
 
     def test_every_event_inherits_schema_and_run_id(self, telemetry, mod, output_dir, tmp_path):
         telemetry.start(run_id="run-1")
@@ -451,6 +532,17 @@ class TestLogStep:
         assert len(events) == 5  # 1 start + 4 steps
         assert [e["step"] for e in events] == [0, 1, 2, 3, 4]
 
+    def test_repeated_step_events_are_numbered(self, telemetry):
+        """Step 11 is logged twice by design (prepare, then publish); the two
+        events were indistinguishable in run 6e6a."""
+        telemetry.start(pr_number="42")
+        telemetry.log_step(step=11, phase="OUTPUT", title="Author Report")
+        telemetry.log_step(step=11, phase="OUTPUT", title="Author Report")
+        telemetry.log_step(step=12, phase="OUTPUT", title="Cleanup")
+        events = _read_events(telemetry.log_path)
+        attempts = [(e["step"], e["attempt"]) for e in events if e["event"] == "step"]
+        assert attempts == [(11, 1), (11, 2), (12, 1)]
+
     def test_reads_marker_across_instances(self, mod, output_dir, tmp_path):
         """A new ReviewTelemetry instance can find the log via marker file."""
         log_dir = tmp_path / "logs"
@@ -623,6 +715,8 @@ class TestRunManifest:
         assert manifest["run"]["plugin_version"] == "1.108.0"
         assert manifest["run"]["mode"] == "pr"
         assert manifest["run"]["repo_path"] == "/repo"
+        assert manifest["run"]["repo"] is None
+        assert manifest["run"]["target"] is None
         assert manifest["run"]["started_at"] is not None
         assert manifest["run"]["ended_at"] is None
         assert manifest["availability"] == {
@@ -639,6 +733,32 @@ class TestRunManifest:
         }
         assert manifest["assignment"] is None
 
+    def test_manifest_rebuild_projects_missing_repo_and_target_as_none(self, telemetry):
+        """A JSONL log whose pipeline_start carries no repo or target still
+        rebuilds, projecting both as None rather than failing."""
+        telemetry.start(run_id="run-1")
+        log_path = Path(telemetry.log_path)
+        start = _read_events(log_path)[0]
+        start["pipeline"].pop("repo", None)
+        start["pipeline"].pop("target", None)
+        log_path.write_text(json.dumps(start) + "\n")
+
+        telemetry._materialize_manifest("running")
+
+        manifest = _read_manifest(telemetry)
+        assert manifest["run"]["repo"] is None
+        assert manifest["run"]["target"] is None
+
+    def test_finalize_materializes_repo_and_target(self, telemetry, tmp_path):
+        repo = init_bare_repo(tmp_path / "checkout", "git@github.com:owner/repository.git")
+        telemetry.start(repo_path=str(repo), identifier="42")
+
+        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
+
+        manifest = _read_manifest(telemetry)
+        assert manifest["run"]["repo"] == "github.com/owner/repository"
+        assert manifest["run"]["target"] == "42"
+
     def test_log_step_refreshes_running_manifest(self, telemetry):
         telemetry.start(run_id="run-1")
         telemetry.log_step(step=3, phase="AWARENESS", title="Gather Context")
@@ -647,6 +767,14 @@ class TestRunManifest:
         assert manifest["status"] == "running"
         assert manifest["steps"][-1]["step"] == 3
         assert manifest["steps"][-1]["phase"] == "AWARENESS"
+
+    def test_manifest_steps_carry_attempt(self, telemetry, output_dir):
+        telemetry.start(pr_number="42")
+        telemetry.log_step(step=11, phase="OUTPUT", title="Author Report")
+        telemetry.log_step(step=11, phase="OUTPUT", title="Author Report")
+        manifest = _read_manifest(telemetry)
+        attempts = [(s["step"], s["attempt"]) for s in manifest["steps"]]
+        assert attempts == [(11, 1), (11, 2)]
 
     def test_log_step_opens_no_review_artifact(
         self, telemetry, output_dir, monkeypatch
@@ -2715,19 +2843,15 @@ class TestSnapshot:
         assert dispatch is None
 
     def test_extracts_agent_results(self, mod, output_dir, tmp_path):
-        log_dir = tmp_path / "logs"
-        review = canonical_review_document("security", ["high", "medium"])
-        _write_dispatch_plan(output_dir, ["security-reviewer"])
-        _write_final_review(output_dir, "security", review)
-        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
+        t = _telemetry_with_finalized_security_review(mod, output_dir, tmp_path)
         t.start(pr_number="42")
         t.finalize(step=15, phase="OUTPUT", title="Present Results")
         events = _read_events(t.log_path)
         agents = events[-1]["snapshot"]["agent_results"]
-        assert "security" in agents
-        assert agents["security"]["verdict"] == "request_changes"
-        assert agents["security"]["finding_count"] == 2
-        assert agents["security"]["severities"]["high"] == 1
+        assert "security-reviewer" in agents
+        assert agents["security-reviewer"]["verdict"] == "request_changes"
+        assert agents["security-reviewer"]["finding_count"] == 2
+        assert agents["security-reviewer"]["severities"]["high"] == 1
 
     def test_retired_agent_review_extracts_only_malformed_evidence(
         self, mod, output_dir, tmp_path
@@ -2743,7 +2867,7 @@ class TestSnapshot:
             str(output_dir), log_dir=str(tmp_path / "logs")
         )
 
-        assert telemetry._extract_agent_results()["security"] == {
+        assert telemetry._extract_agent_results()["security-reviewer"] == {
             "error": "malformed"
         }
 
@@ -2760,7 +2884,7 @@ class TestSnapshot:
         _write_final_review(output_dir, "security", review)
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(tmp_path / "logs"))
 
-        extracted = t._extract_agent_results()["security"]
+        extracted = t._extract_agent_results()["security-reviewer"]
 
         assert extracted["suppressed_advisory_finding_count"] == 2
         assert extracted["verdict_without_advisory"] == "block"
@@ -2786,7 +2910,7 @@ class TestSnapshot:
         t.finalize(step=15, phase="OUTPUT", title="Present Results")
         events = _read_events(t.log_path)
         snap = events[-1]["snapshot"]
-        assert set(snap["agent_results"]) == {"security"}
+        assert set(snap["agent_results"]) == {"security-reviewer"}
         assert snap["findings"]["final_finding_count"] == 1
 
     def test_extracts_findings(self, mod, output_dir, tmp_path):
@@ -2830,7 +2954,7 @@ class TestSnapshot:
             "critical": 0, "high": 1, "medium": 0, "low": 0, "info": 0,
         }
         snapshot = _read_events(t.log_path)[-1]["snapshot"]
-        assert snapshot["agent_results"]["security"]["severities"] == expected
+        assert snapshot["agent_results"]["security-reviewer"]["severities"] == expected
         assert snapshot["findings"]["severities"] == expected
         assert _read_manifest(t)["outcome"]["summary"][
             "final_severities"
@@ -2956,10 +3080,10 @@ class TestSnapshot:
 
         events = _read_events(t.log_path)
         assert events[-1]["event"] == "pipeline_end"
-        assert events[-1]["snapshot"]["agent_results"]["security"] == {
+        assert events[-1]["snapshot"]["agent_results"]["security-reviewer"] == {
             "error": "malformed"
         }
-        assert t._extract_agent_results()["security"] == {"error": "malformed"}
+        assert t._extract_agent_results()["security-reviewer"] == {"error": "malformed"}
 
 
 # ── Re-reviews ──────────────────────────────────────────────────────

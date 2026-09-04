@@ -85,16 +85,16 @@ class TestRouting:
         return config
 
     def test_pr_mode_active_steps(self, mod):
-        """PR mode with pre-computed context: 1,3,5,6,7,8,9,10,11."""
+        """Interactive PR mode includes the final consent step."""
         config = self._make_config("pr")
         state = self._make_state("pr")
         ctx = {"git": {"merge_base": "abc123"}}  # pre-computed
         active = mod.get_active_steps("pr", config, state, ctx)
-        # Step 2 skipped (context pre-computed), 4 skipped (no linear), 12 skipped (no workspace state)
+        # Step 2 skipped (context pre-computed), 4 skipped (no linear).
         assert 2 not in active
         assert 4 not in active
         assert 7 in active  # baseline written for ALL modes
-        assert 12 not in active
+        assert 12 in active
 
     def test_pr_mode_interactive_steps(self, mod):
         """PR mode interactive without pre-computed context: includes step 2."""
@@ -112,16 +112,17 @@ class TestRouting:
         # Step 2 should not be in active steps — it's a hard error, not a skip
         active = mod.get_active_steps("pr", config, state, ctx)
         assert 2 not in active
+        assert 12 not in active
 
     def test_full_mode_active_steps(self, mod):
-        """Full mode: 1,3,5,6,7,8,9,10,11."""
+        """Interactive full mode includes the final consent step."""
         config = self._make_config("full")
         state = self._make_state("full")
         ctx = {"git": {}}
         active = mod.get_active_steps("full", config, state, ctx)
         assert 2 not in active
         assert 7 in active  # baseline written for ALL modes
-        assert 12 not in active
+        assert 12 in active
 
     def test_incremental_mode_has_save_baseline(self, mod):
         """Incremental mode includes step 7 (as does every mode)."""
@@ -372,6 +373,38 @@ class TestTelemetryIdentityHelpers:
 
         assert base_sha == expected_base
         assert head_sha == expected_head
+
+    def test_pr_mode_leaves_head_unresolved_before_checkout(self, mod, monkeypatch):
+        """Step 1 runs before `gh pr checkout`; HEAD is the caller's own
+        branch, not the reviewed head (run 6e6a recorded 659d5750, the
+        pre-checkout HEAD, as pipeline_start.git.head_sha)."""
+        identities = {"HEAD^{commit}": "current-head"}
+
+        def fake_git_output(*args):
+            return identities.get(args[-1], "")
+
+        monkeypatch.setattr(mod, "_git_output", fake_git_output)
+
+        requested_range, base_sha, head_sha = mod._resolve_git_identity(
+            "", default_head=""
+        )
+
+        assert requested_range == ""
+        assert base_sha == ""
+        assert head_sha == ""
+
+    def test_supplied_head_sha_still_resolves_with_empty_default(self, mod, monkeypatch):
+        identities = {("f" * 40) + "^{commit}": "f" * 40}
+
+        def fake_git_output(*args):
+            return identities.get(args[-1], "")
+
+        monkeypatch.setattr(mod, "_git_output", fake_git_output)
+
+        _, _, head_sha = mod._resolve_git_identity(
+            "", head_sha="f" * 40, default_head=""
+        )
+        assert head_sha == "f" * 40
 
     def test_symbolic_supplied_endpoints_are_resolved_to_shas(
         self, mod, monkeypatch
@@ -936,8 +969,8 @@ class TestSkippedStepRecording:
         assert skipped[2]["title"] == "Repo Setup"
 
     def test_trailing_skip_recorded_at_last_active_step(self, tmp_path):
-        """Step 12 is skipped only after step 11 publishes terminally."""
-        run_pipeline("--step", "1", "--mode", "full",
+        """Non-interactive step 12 is skipped after step 11 publishes terminally."""
+        run_pipeline("--step", "1", "--mode", "full", "--interactive", "false",
                    "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
         self._prepare_step_11(tmp_path)
         self._publish_step_11(tmp_path)
@@ -946,12 +979,12 @@ class TestSkippedStepRecording:
         skipped = {s["step"]: s for s in state["skipped_steps"]}
         assert 11 in state["completed_steps"]
         assert 12 in skipped
-        assert skipped[12]["condition"] == "has_workspace_state_interactive"
+        assert skipped[12]["condition"] == "interactive"
         assert skipped[12]["title"] == "Cleanup"
 
     def test_skip_records_are_not_duplicated(self, tmp_path):
         """Re-invoking the same step records each passed-over step once."""
-        run_pipeline("--step", "1", "--mode", "full",
+        run_pipeline("--step", "1", "--mode", "full", "--interactive", "false",
                    "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
         self._prepare_step_11(tmp_path)
         self._publish_step_11(tmp_path)
@@ -969,7 +1002,7 @@ class TestSkippedStepRecording:
                    "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
         state = json.loads(_state_path(tmp_path / "out").read_text())
         recorded = {entry["step"] for entry in state["skipped_steps"]}
-        assert recorded.isdisjoint({1, 3, 5, 6, 7, 8, 9, 10, 11})
+        assert recorded.isdisjoint({1, 3, 5, 6, 7, 8, 9, 10, 11, 12})
 
 
 class TestQuickModeConfig:

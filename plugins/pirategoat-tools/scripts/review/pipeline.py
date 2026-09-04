@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 try:
+    from . import telemetry_share
     from .briefings import (
         _PIPELINE_MISSION,
         _PHASE_TRANSITIONS,
@@ -109,6 +110,7 @@ except ImportError:
     _scripts_parent = str(Path(__file__).resolve().parent.parent)
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
+    from review import telemetry_share
     from review.briefings import (
         _PIPELINE_MISSION,
         _PHASE_TRANSITIONS,
@@ -206,11 +208,8 @@ def _eval_condition(condition, mode, config, state, context):
     if condition == "has_unfetched_issues":
         return state.get("resolved_params", {}).get("has_unfetched_issues", False)
 
-    if condition == "has_workspace_state_interactive":
-        ws = state.get("workspace", {})
-        has_branch = ws.get("original_branch") is not None
-        is_interactive = config.get("interactive", True)
-        return has_branch and is_interactive
+    if condition == "interactive":
+        return config.get("interactive", True)
 
     return False
 
@@ -577,12 +576,18 @@ def _stamp_run_config(output_dir, config, field, value):
     write_config(output_dir, config)
 
 
-def _resolve_git_identity(git_range, base_sha="", head_sha=""):
+def _resolve_git_identity(git_range, base_sha="", head_sha="", default_head="HEAD"):
     """Resolve requested range endpoints without mutating Git.
 
     Omitted endpoints around ``..`` or ``...`` default to ``HEAD``. For a
     three-dot range, ``base_sha`` is the resolved left endpoint, not the Git
     merge base; later context or manifest collection can record that value.
+
+    ``default_head`` is the ref used when the range names no head and no
+    ``head_sha`` was supplied. PR mode passes "" because step 1 runs before
+    the PR checkout: HEAD is then the requester's own branch, and recording
+    it would stamp the wrong commit as the reviewed head. The manifest
+    patches the resolved head from review context once step 3 has it.
     """
     requested_range = git_range if isinstance(git_range, str) else ""
     base_ref = ""
@@ -624,7 +629,7 @@ def _resolve_git_identity(git_range, base_sha="", head_sha=""):
     return (
         requested_range,
         resolve_endpoint(base_sha, base_ref),
-        resolve_endpoint(head_sha, head_ref or "HEAD"),
+        resolve_endpoint(head_sha, head_ref or default_head),
     )
 
 
@@ -855,6 +860,7 @@ def main():
                 git_range, base_sha, head_sha = _resolve_git_identity(
                     git_range, base_sha=context_base_sha,
                     head_sha=context_head_sha,
+                    default_head="" if mode == "pr" else "HEAD",
                 )
                 telemetry.start(pr_number=pr_number, total_steps=12,
                                 bot_mode=bot_mode, quick_mode=quick_mode,
@@ -927,8 +933,26 @@ def main():
                   "review context with a valid merge_base.", file=sys.stderr)
             sys.exit(1)
 
+    # Step 12's consent conversation is interactive-only. Resolve its
+    # machine-local facts here so briefings.py remains a pure formatter and
+    # the reviewed repository never supplies its own consent state.
+    guidance_config = config
+    if step == 12:
+        # The run's recorded identity — the same value the manifest's
+        # run.repo is projected from — keys the prompt AND the upload gate,
+        # so consent can never authorize a different repository than the
+        # one the payload describes. Every read here fails closed to an
+        # empty value rather than raising.
+        repo = telemetry_share.recorded_repo(output_dir)
+        guidance_config = dict(config)
+        guidance_config["_telemetry_consent"] = {
+            "sharing": telemetry_share.sharing_state(),
+            "repo": repo,
+            "repo_consent": telemetry_share.repo_consent(repo),
+        }
+
     # --- Get guidance ---
-    guidance = get_step_guidance(step, mode, state, context, config=config,
+    guidance = get_step_guidance(step, mode, state, context, config=guidance_config,
                                 output_dir=output_dir)
     if guidance is None:
         print(f"ERROR: No guidance for step {step}", file=sys.stderr)
@@ -1004,6 +1028,12 @@ def main():
                 title=step_def.get("title", ""),
                 bot_mode=bot_mode,
             )
+            # maybe_upload applies both consent gates itself and never
+            # raises; the only decision left here is whether the outcome is
+            # worth a line. A run that never opted in reports nothing.
+            outcome = telemetry_share.maybe_upload(output_dir)
+            if outcome not in telemetry_share.UNOPTED_OUTCOMES:
+                print(f"TELEMETRY: {outcome}")
         except Exception:
             pass
 

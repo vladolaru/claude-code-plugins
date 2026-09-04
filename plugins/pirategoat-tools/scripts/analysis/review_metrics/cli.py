@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from .contracts import DEFAULT_LOG_DIR, DEFAULT_SESSIONS_ROOT
-from .load import load_runs
+from .load import load_runs, load_shared_runs
 from .measure import measure_run
 from .cohort import aggregate_cohort
 from .render import format_json, format_table
@@ -27,7 +27,9 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Measure review pipeline runs and recent cohorts."
     )
-    parser.add_argument("--log-dir", default=str(DEFAULT_LOG_DIR))
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--log-dir", default=str(DEFAULT_LOG_DIR))
+    source.add_argument("--shared-dir")
     parser.add_argument("--sessions-root", default=str(DEFAULT_SESSIONS_ROOT))
     parser.add_argument("--last", type=_positive_int)
     parser.add_argument("--run-id")
@@ -45,8 +47,14 @@ def _resolve_transcripts(args) -> bool:
     unbounded. Rather than silently truncating the cohort — full-history
     sweeps are the point of this tool — an unbounded query reports the
     transcript family as explicitly disabled and says how to enable it.
+
+    A shared clone is disabled outright: transcripts are local session
+    files located by the run's session id, and every shared upload nulls
+    that id before it leaves its machine (see ``telemetry_share``). Enriching
+    would only ever report the family as missing, which reads as lost
+    evidence rather than evidence the format never carries.
     """
-    if args.no_transcripts:
+    if args.no_transcripts or args.shared_dir is not None:
         return False
     if args.last is None and args.run_id is None:
         print(
@@ -63,14 +71,27 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         include_transcripts = _resolve_transcripts(args)
-        manifests = load_runs(args.log_dir, last=args.last, run_id=args.run_id)
-        runs = [
-            measure_run(
-                manifest,
-                args.sessions_root,
-                include_transcripts=include_transcripts,
+        if args.shared_dir is not None:
+            manifests = load_shared_runs(
+                args.shared_dir, last=args.last, run_id=args.run_id
             )
-            for manifest in manifests
+        else:
+            manifests = [
+                (manifest, None)
+                for manifest in load_runs(
+                    args.log_dir, last=args.last, run_id=args.run_id
+                )
+            ]
+        runs = [
+            {
+                **measure_run(
+                    manifest,
+                    args.sessions_root,
+                    include_transcripts=include_transcripts,
+                ),
+                "uploaded_by": uploaded_by,
+            }
+            for manifest, uploaded_by in manifests
         ]
         aggregate = aggregate_cohort(runs)
         rendered = (

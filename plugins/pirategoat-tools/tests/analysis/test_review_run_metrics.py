@@ -6,6 +6,7 @@ import copy
 import importlib.util
 import json
 import re
+import shutil
 import sys
 import types
 from pathlib import Path
@@ -26,9 +27,11 @@ MANIFEST_SECTIONS_SCRIPT_PATH = (
 
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts" / "analysis"))
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
+sys.path.insert(0, str(TESTS_DIR))
 
 import review_metrics as _mod  # noqa: E402
-from review import run_paths  # noqa: E402
+from review import run_paths, telemetry_share  # noqa: E402
+from helpers.pipeline_process import init_bare_repo  # noqa: E402
 from review_metrics import (  # noqa: E402
     cli,
     cohort,
@@ -75,6 +78,70 @@ def _load_manifest_sections_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.fixture
+def shared_telemetry_clone(tmp_path):
+    """Build local and shared telemetry trees through the real producers."""
+    telemetry_mod = _load_telemetry_module()
+    shared_clone = tmp_path / "shared-clone"
+    version_dir = shared_clone / telemetry_share.LAYOUT_PREFIX
+    local_logs = {}
+
+    def create_upload(user: str, run_id: str, destination: Path) -> None:
+        repo = init_bare_repo(
+            tmp_path / f"{user}-repo", f"https://github.com/{user}/project.git"
+        )
+        output_dir = tmp_path / f"{user}-output"
+        output_dir.mkdir()
+        log_dir = tmp_path / f"{user}-logs"
+        telemetry = telemetry_mod.ReviewTelemetry(
+            str(output_dir), log_dir=str(log_dir)
+        )
+        telemetry.start(
+            mode="pr",
+            repo_path=str(repo),
+            identifier=user,
+            run_id=run_id,
+        )
+        telemetry.finalize(step=12, phase="OUTPUT", title="Complete review")
+
+        log_path = Path(telemetry.log_path)
+        manifest_path = Path(telemetry.manifest_path)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        jsonl_lines = log_path.read_text(encoding="utf-8").splitlines(
+            keepends=True
+        )
+        redacted_manifest, redacted_jsonl = telemetry_share.redact_payloads(
+            manifest, jsonl_lines
+        )
+        destination.mkdir(parents=True, exist_ok=True)
+        (destination / f"{run_id}.manifest.json").write_text(
+            json.dumps(redacted_manifest), encoding="utf-8"
+        )
+        (destination / f"{run_id}.jsonl").write_text(
+            "".join(redacted_jsonl), encoding="utf-8"
+        )
+        local_logs[user] = log_dir
+
+    create_upload("alice", "shared-alice", version_dir / "alice")
+    create_upload("bob", "shared-bob", version_dir / "bob")
+    create_upload("ignored", "direct-v1", version_dir)
+    # A contributor-committed symlink that git would recreate on checkout,
+    # pointing at telemetry outside the clone: it must never be read.
+    outside = tmp_path / "outside-the-clone"
+    create_upload("mallory", "shared-mallory", outside)
+    (version_dir / "mallory").symlink_to(outside)
+    # Committed symlinks inside a real uploader directory: a relative one
+    # that would re-attribute alice's run to bob, and one escaping the clone.
+    for suffix in (".manifest.json", ".jsonl"):
+        (version_dir / "bob" / f"shared-alice{suffix}").symlink_to(
+            Path("..") / "alice" / f"shared-alice{suffix}"
+        )
+        (version_dir / "bob" / f"shared-mallory{suffix}").symlink_to(
+            outside / f"shared-mallory{suffix}"
+        )
+    return {"clone": shared_clone, "local_logs": local_logs}
 
 
 def test_metrics_uses_canonical_telemetry_contract():
@@ -204,6 +271,31 @@ def test_sanitize_steps_drops_thoughts_length_from_old_logs():
     assert "thoughts_length" not in json.dumps(projected)
 
 
+def test_sanitize_steps_preserves_positive_exact_integer_step_attempt():
+    [projected] = sanitize._sanitize_steps(
+        [{"event": "step", "step": 11, "attempt": 2}]
+    )
+
+    assert projected["attempt"] == 2
+
+
+@pytest.mark.parametrize(
+    "attempt",
+    [
+        pytest.param(0, id="zero"),
+        pytest.param(-1, id="negative"),
+        pytest.param(True, id="boolean"),
+        pytest.param(2.0, id="integral-float"),
+    ],
+)
+def test_sanitize_steps_drops_invalid_step_attempt(attempt):
+    [projected] = sanitize._sanitize_steps(
+        [{"event": "step", "step": 11, "attempt": attempt}]
+    )
+
+    assert "attempt" not in projected
+
+
 def _manifest(
     run_id: str = "run-1",
     *,
@@ -278,6 +370,53 @@ def _manifest(
         },
         "availability": {"pipeline": True, "transcript": False, "assignment": True},
     }
+
+
+@pytest.mark.parametrize("source_kind", ["local", "shared"])
+def test_step_attempt_round_trips_through_supported_report(
+    tmp_path, source_kind
+):
+    run_id = f"{source_kind}-attempts"
+    manifest = _manifest(run_id)
+    manifest["steps"] = [
+        {"run_id": run_id, "event": "step", "step": 11, "attempt": 1},
+        {"run_id": run_id, "event": "step", "step": 11, "attempt": 2},
+        {"run_id": run_id, "event": "step", "step": 5},
+    ]
+    if source_kind == "local":
+        source_root = tmp_path / "local"
+        source_dir = source_root
+        source_flag = "--log-dir"
+    else:
+        source_root = tmp_path / "shared"
+        source_dir = source_root / telemetry_share.LAYOUT_PREFIX / "alice"
+        source_flag = "--shared-dir"
+    source_dir.mkdir(parents=True)
+    (source_dir / f"{run_id}.manifest.json").write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+    output = tmp_path / f"{source_kind}-report.json"
+
+    result = main(
+        [
+            source_flag,
+            str(source_root),
+            "--format",
+            "json",
+            "--output",
+            str(output),
+            "--no-transcripts",
+        ]
+    )
+
+    assert result == 0
+    [run] = json.loads(output.read_text(encoding="utf-8"))["runs"]
+    assert [(step["step"], step.get("attempt")) for step in run["steps"]] == [
+        (11, 1),
+        (11, 2),
+        (5, None),
+    ]
+    assert "attempt" not in run["steps"][2]
 
 
 def _running_manifest(run_id: str = "run-1") -> dict:
@@ -491,7 +630,7 @@ class TestReviewVocabularyLifecycleMigration:
         rendered = json.loads(
             format_json([measured], aggregate_cohort([measured]))
         )
-        assert rendered["schema"] == 3
+        assert rendered["schema"] == 4
         assert rendered["runs"][0]["outcome"]["reconciliation"] == (
             _task_5_manifest()["outcome"]["reconciliation"]
         )
@@ -506,6 +645,93 @@ class TestReviewVocabularyLifecycleMigration:
             '"not_applicable_count"',
         ):
             assert retired not in serialized
+
+    def test_historical_agent_identity_cohort_normalizes_legacy_rosters(
+        self, tmp_path
+    ):
+        current = _task_5_manifest("current-roster")
+        current_reconciliation = current["outcome"]["reconciliation"]
+        current_reconciliation["missing_agents"] = ["docs-reviewer"]
+        legacy = _task_5_manifest("legacy-roster")
+        legacy_reconciliation = legacy["outcome"]["reconciliation"]
+        legacy_reconciliation["reviewing_agents"] = [
+            "code-review",
+            "security-review",
+        ]
+        legacy_reconciliation["dispatched_agents"] = [
+            "code-review",
+            "security-review",
+            "a11y-review",
+        ]
+        legacy_reconciliation["missing_agents"] = ["docs-review"]
+        legacy_reconciliation["not_applicable_agents"][0]["name"] = (
+            "a11y-review"
+        )
+        clone = tmp_path / "shared"
+        uploader_dir = clone / telemetry_share.LAYOUT_PREFIX / "alice"
+        uploader_dir.mkdir(parents=True)
+        _write_manifest(uploader_dir / "current.manifest.json", current)
+        _write_manifest(uploader_dir / "legacy.manifest.json", legacy)
+        output = tmp_path / "cohort.json"
+
+        result = main(
+            [
+                "--shared-dir",
+                str(clone),
+                "--format",
+                "json",
+                "--output",
+                str(output),
+                "--no-transcripts",
+            ]
+        )
+
+        assert result == 0
+        runs = {
+            run["run"]["id"]: run
+            for run in json.loads(output.read_text(encoding="utf-8"))["runs"]
+        }
+        for run_id in ("legacy-roster", "current-roster"):
+            reconciliation = runs[run_id]["outcome"]["reconciliation"]
+            assert reconciliation["reviewing_agents"] == [
+                "code-reviewer",
+                "security-reviewer",
+            ]
+            assert reconciliation["dispatched_agents"] == [
+                "code-reviewer",
+                "security-reviewer",
+                "a11y-reviewer",
+            ]
+            assert reconciliation["missing_agents"] == ["docs-reviewer"]
+            assert reconciliation["not_applicable_agents"] == [
+                {"name": "a11y-reviewer", "skip_reason": "no UI changed"},
+            ]
+        assert {run["uploaded_by"] for run in runs.values()} == {"alice"}
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            pytest.param(
+                "reviewing_agents",
+                ["code", "security-reviewer"],
+                id="roster",
+            ),
+            pytest.param(
+                "not_applicable_agents",
+                [{"name": "a11y", "skip_reason": "no UI changed"}],
+                id="not-applicable",
+            ),
+        ],
+    )
+    def test_historical_agent_identity_rejects_noncanonical_short_names(
+        self, tmp_path, field, value
+    ):
+        manifest = _task_5_manifest()
+        manifest["outcome"]["reconciliation"][field] = value
+
+        measured = measure_run(manifest, tmp_path, include_transcripts=False)
+
+        assert measured["outcome"]["reconciliation"] is None
 
     def test_retired_schema_three_coverage_keys_are_rejected(self, tmp_path):
         manifest = _task_5_manifest()
@@ -2515,11 +2741,19 @@ class TestLoadRuns:
         [
             "Users/person/private-repo",
             r"C:\Users\person\private-repo",
+            "safe..nested",
             "run|forged-column",
             "run<script>alert</script>",
             "run" + "x" * 254,
         ],
-        ids=["posix-path", "windows-path", "pipe", "markup", "too-long"],
+        ids=[
+            "posix-path",
+            "windows-path",
+            "double-dot",
+            "pipe",
+            "markup",
+            "too-long",
+        ],
     )
     def test_unsafe_sidecar_run_id_cannot_suppress_or_leak_over_legacy_fallback(
         self, tmp_path, unsafe_run_id
@@ -7104,6 +7338,21 @@ class TestBudgetUtilizationRendering:
 
         assert "—" in row
 
+    def test_table_attributes_shared_runs_to_their_uploader(self):
+        shared = {**self._run(None), "uploaded_by": "alice"}
+
+        table = format_table([shared], {"runs": 1, "transcript_runs": 0})
+
+        assert "Uploader" in table
+        assert "alice" in table
+
+    def test_local_tables_carry_no_uploader_column(self):
+        table = format_table(
+            [self._run(None)], {"runs": 1, "transcript_runs": 0}
+        )
+
+        assert "Uploader" not in table
+
     def test_format_table_header_includes_budget_util_column(self):
         table = format_table(
             [self._run({
@@ -7859,7 +8108,8 @@ class TestFormattingAndCli:
         payload = json.loads(format_json(runs, aggregate_cohort(runs)))
 
         assert set(payload) == {"schema", "runs", "aggregate"}
-        assert payload["schema"] == 3
+        assert payload["schema"] == 4
+        assert payload["runs"][0]["uploaded_by"] is None
 
     def test_json_exposes_lifecycle_and_partial_unknown_builder_evidence(
         self, monkeypatch, tmp_path
@@ -7923,11 +8173,247 @@ class TestFormattingAndCli:
 
         assert result == 0
         assert json.loads(output.read_text()) == {
-            "schema": 3,
+            "schema": 4,
             "runs": [],
             "aggregate": aggregate_cohort([]),
         }
         assert output.read_text() == format_json([], aggregate_cohort([]))
+
+    def test_cli_without_source_flags_reads_default_log_directory(
+        self, monkeypatch, capsys, tmp_path
+    ):
+        default_log_dir = tmp_path / "default-logs"
+        observed = {}
+
+        def load_default(path, *, last, run_id):
+            observed.update(path=path, last=last, run_id=run_id)
+            return []
+
+        monkeypatch.setattr(cli, "DEFAULT_LOG_DIR", default_log_dir)
+        monkeypatch.setattr(cli, "load_runs", load_default)
+
+        result = main(["--format", "json", "--no-transcripts"])
+
+        assert result == 0
+        assert observed == {
+            "path": str(default_log_dir),
+            "last": None,
+            "run_id": None,
+        }
+        assert json.loads(capsys.readouterr().out) == {
+            "schema": 4,
+            "runs": [],
+            "aggregate": aggregate_cohort([]),
+        }
+
+    def test_shared_clone_reports_each_user_and_ignores_direct_v1_files(
+        self, shared_telemetry_clone, tmp_path
+    ):
+        output = tmp_path / "shared-report.json"
+
+        result = main(
+            [
+                "--shared-dir",
+                str(shared_telemetry_clone["clone"]),
+                "--format",
+                "json",
+                "--output",
+                str(output),
+                "--no-transcripts",
+            ]
+        )
+
+        assert result == 0
+        payload = json.loads(output.read_text(encoding="utf-8"))
+        assert payload["schema"] == 4
+        assert {
+            run["run"]["id"]: run["uploaded_by"]
+            for run in payload["runs"]
+        } == {
+            "shared-alice": "alice",
+            "shared-bob": "bob",
+        }
+
+    def test_shared_clone_transcripts_are_disabled_not_missing(
+        self, shared_telemetry_clone, tmp_path, capsys
+    ):
+        # A bounded selector would enable enrichment on a local log dir,
+        # but every shared upload nulls its session id by contract, so no
+        # transcript can ever be located: the family is disabled, never
+        # reported as missing, and no hint claims a selector could enable it.
+        output = tmp_path / "shared-report.json"
+
+        result = main(
+            [
+                "--shared-dir",
+                str(shared_telemetry_clone["clone"]),
+                "--sessions-root",
+                str(tmp_path / "sessions"),
+                "--last",
+                "1",
+                "--format",
+                "json",
+                "--output",
+                str(output),
+            ]
+        )
+
+        assert result == 0
+        assert capsys.readouterr().err == ""
+        runs = json.loads(output.read_text(encoding="utf-8"))["runs"]
+        assert runs
+        for run in runs:
+            assert run["run"]["session_id"] is None
+            assert run["transcript"]["reason"] == "disabled"
+            assert run["metric_availability"]["transcript"] == "disabled"
+
+    def test_symlinked_uploader_directories_are_never_followed(
+        self, shared_telemetry_clone
+    ):
+        clone = shared_telemetry_clone["clone"]
+        symlinked = clone / telemetry_share.LAYOUT_PREFIX / "mallory"
+        assert symlinked.is_symlink() and symlinked.is_dir()
+
+        shared = load.load_shared_runs(clone)
+
+        assert {uploaded_by for _, uploaded_by in shared} == {"alice", "bob"}
+
+    def test_symlinked_artifacts_inside_uploader_directories_are_never_followed(
+        self, shared_telemetry_clone
+    ):
+        clone = shared_telemetry_clone["clone"]
+        bob = clone / telemetry_share.LAYOUT_PREFIX / "bob"
+        for name in ("shared-alice.manifest.json", "shared-mallory.jsonl"):
+            assert (bob / name).is_symlink() and (bob / name).is_file()
+
+        shared = load.load_shared_runs(clone)
+
+        assert sorted(
+            (record["run"]["id"], uploaded_by) for record, uploaded_by in shared
+        ) == [("shared-alice", "alice"), ("shared-bob", "bob")]
+
+    def test_symlinked_layout_root_is_never_followed(
+        self, shared_telemetry_clone, tmp_path
+    ):
+        # A contributor could commit v1 itself as a directory symlink; the
+        # root is checked before anything beneath it is enumerated.
+        other_clone = tmp_path / "other-clone"
+        other_clone.mkdir()
+        (other_clone / telemetry_share.LAYOUT_PREFIX).symlink_to(
+            shared_telemetry_clone["clone"] / telemetry_share.LAYOUT_PREFIX
+        )
+
+        assert load.load_shared_runs(other_clone) == []
+
+    def test_symlinked_running_sibling_is_never_overlaid(self, tmp_path):
+        # A regular running manifest beside a committed symlink named like
+        # its JSONL: discovery excludes the link, and the lifecycle overlay
+        # must open only what discovery admitted — never the name-derived
+        # sibling path.
+        telemetry_mod = _load_telemetry_module()
+        output_dir = tmp_path / "running-output"
+        output_dir.mkdir()
+        telemetry = telemetry_mod.ReviewTelemetry(
+            str(output_dir), log_dir=str(tmp_path / "running-logs")
+        )
+        telemetry.start(mode="pr", repo_path=str(tmp_path), identifier="7",
+                        run_id="running-run")
+        telemetry.log_agent_start("security-reviewer", domain="security")
+        manifest_path = Path(telemetry.manifest_path)
+        assert json.loads(manifest_path.read_text())["status"] == "running"
+
+        plain = tmp_path / "plain"
+        linked = tmp_path / "linked"
+        for directory in (plain, linked):
+            directory.mkdir()
+            shutil.copy(manifest_path, directory / manifest_path.name)
+        (linked / Path(telemetry.log_path).name).symlink_to(telemetry.log_path)
+
+        assert load.load_runs(linked) == load.load_runs(plain)
+
+    def test_one_run_id_across_uploaders_is_counted_once(
+        self, shared_telemetry_clone, tmp_path
+    ):
+        # The same local run re-uploaded from a second GitHub account is one
+        # run: identical records collapse to one attributed to the lexically
+        # first login; differing records under one id surface as the same
+        # conflict record a single directory would yield.
+        clone = shared_telemetry_clone["clone"]
+        version_dir = clone / telemetry_share.LAYOUT_PREFIX
+        alice = version_dir / "alice"
+        for name in ("shared-alice.manifest.json", "shared-alice.jsonl"):
+            for login in ("carol", "aaron"):
+                (version_dir / login).mkdir(exist_ok=True)
+                shutil.copy(alice / name, version_dir / login / name)
+        altered = json.loads((alice / "shared-alice.manifest.json").read_text())
+        altered["outcome"]["summary"]["final_finding_count"] = 99
+        (version_dir / "aaron" / "shared-alice.manifest.json").write_text(
+            json.dumps(altered)
+        )
+
+        shared = load.load_shared_runs(clone)
+
+        by_uploader = {
+            (record["run"]["id"], record["status"], uploader)
+            for record, uploader in shared
+        }
+        assert by_uploader == {
+            ("shared-bob", "complete", "bob"),
+            (load._duplicate_conflict("shared-alice", [])["run"]["id"],
+             "duplicate_run_id_conflict", "aaron"),
+        }
+
+        # Identical copies alone are one run, attributed to the first login.
+        shutil.rmtree(version_dir / "aaron")
+        assert sorted(
+            (record["run"]["id"], uploader) for record, uploader in load.load_shared_runs(clone)
+        ) == [("shared-alice", "alice"), ("shared-bob", "bob")]
+
+    def test_shared_uploads_read_as_manifests_not_legacy_fallback(
+        self, shared_telemetry_clone
+    ):
+        """A redacted upload must measure exactly as its run measures locally.
+
+        A manifest the validator rejects is not dropped — it silently falls
+        back to the reduced legacy JSONL reading, which carries only four
+        availability families and loses assignment, usage, lifecycle, and
+        every other manifest-only metric. Equality with the local reading
+        of the same producer run is the manifest-path proof.
+        """
+        local = {
+            user: load.load_runs(log_dir)
+            for user, log_dir in shared_telemetry_clone["local_logs"].items()
+        }
+
+        shared = load.load_shared_runs(shared_telemetry_clone["clone"])
+
+        assert len(shared) == 2
+        for record, uploaded_by in shared:
+            [original] = local[uploaded_by]
+            assert record["run"]["id"] == original["run"]["id"]
+            assert record["availability"] == original["availability"]
+            assert record["run"]["session_id"] is None
+
+    def test_local_log_dir_reports_null_uploader(
+        self, shared_telemetry_clone, tmp_path
+    ):
+        output = tmp_path / "local-report.json"
+
+        result = main(
+            [
+                "--log-dir",
+                str(shared_telemetry_clone["local_logs"]["alice"]),
+                "--format",
+                "json",
+                "--output",
+                str(output),
+                "--no-transcripts",
+            ]
+        )
+
+        assert result == 0
+        [run] = json.loads(output.read_text(encoding="utf-8"))["runs"]
+        assert run["uploaded_by"] is None
 
     def test_cli_reports_exception_type_and_message(
         self, monkeypatch, capsys, tmp_path
@@ -7952,6 +8438,7 @@ class TestFormattingAndCli:
             ["--last", "0"],
             ["--last", "not-an-int"],
             ["--format", "xml"],
+            ["--log-dir", "/local", "--shared-dir", "/shared"],
         ],
     )
     def test_invalid_cli_arguments_exit_two(self, args):

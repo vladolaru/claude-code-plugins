@@ -8,10 +8,11 @@ itself and load `telemetry.py` (which imports `manifest_sections.py`) as
 a top-level side effect; a second script importing `derive_reviewer_name`
 from `bootstrap` re-entered `bootstrap` mid-initialization and silently
 broke telemetry loading (`ReviewTelemetry` became `None`). Every consumer
-of the naming rule — `bootstrap.py`, `manifest_sections.py`,
-`agents_status.py`, `reconciliation_context.py` — now imports the one
-implementation here instead of restating (or, in `bootstrap.py`'s case,
-still owning) it.
+of the naming rule imports the one implementation here instead of
+restating (or, in `bootstrap.py`'s case, still owning) it.
+`agent_name_from_review_stem()` is the inverse rule for the ledger's
+review-file stems; telemetry and the shared-cohort reader use it to
+project one registry spelling.
 """
 
 
@@ -33,3 +34,19 @@ def derive_reviewer_name(agent_name: str) -> str:
     if agent_name.endswith("-reviewer"):
         return agent_name[: -len("-reviewer")]
     return agent_name
+
+
+def agent_name_from_review_stem(stem: str) -> str:
+    """Map a review-file stem back to the registry agent name.
+
+    The reconciliation context keys reviews by ``<reviewer>-review``
+    (``reconciliation_context._review_stem``) and the ledger copies those
+    stems into its rosters. Telemetry events and dispatch plans use the
+    registry name ``<reviewer>-reviewer``. The shared manifest carries one
+    spelling — the registry name — so a cohort reader can join rosters,
+    events and usage rows without knowing this history. Values that do not
+    end in ``-review`` (already registry names, or unrelated) pass through.
+    """
+    if stem.endswith("-review"):
+        return f"{stem[: -len('-review')]}-reviewer"
+    return stem

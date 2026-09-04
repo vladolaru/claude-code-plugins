@@ -34,8 +34,13 @@ try:
     from .atomic_io import atomic_write_json
     from .critic_adjustments import FINDINGS_READ_OK, read_findings_file
     from .reviewer_lifecycle import review_paths, started_marker_path
-    from .reviewer_names import derive_reviewer_name
-    from .run_paths import artifact_path
+    from .reviewer_names import agent_name_from_review_stem, derive_reviewer_name
+    from .run_paths import (
+        artifact_path,
+        telemetry_log_path,
+        telemetry_manifest_path,
+    )
+    from .telemetry_share import repo_identity
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
@@ -54,8 +59,13 @@ except ImportError:
     from review.atomic_io import atomic_write_json
     from review.critic_adjustments import FINDINGS_READ_OK, read_findings_file
     from review.reviewer_lifecycle import review_paths, started_marker_path
-    from review.reviewer_names import derive_reviewer_name
-    from review.run_paths import artifact_path
+    from review.reviewer_names import agent_name_from_review_stem, derive_reviewer_name
+    from review.run_paths import (
+        artifact_path,
+        telemetry_log_path,
+        telemetry_manifest_path,
+    )
+    from review.telemetry_share import repo_identity
 
 from git_paths import normalize_repo_paths
 
@@ -103,6 +113,7 @@ _STEP_MANIFEST_FIELDS = (
     "phase",
     "title",
     "duration_since_prev_ms",
+    "attempt",
 )
 _AGENT_START_MANIFEST_FIELDS = (
     "schema",
@@ -221,10 +232,7 @@ class ReviewTelemetry:
     def log_path(self) -> Optional[str]:
         """Current log file path. Reads marker file if needed."""
         if self._log_path is None:
-            marker = artifact_path(self.output_dir, "telemetry_log_path")
-            if os.path.isfile(marker):
-                with open(marker) as f:
-                    self._log_path = f.read().strip()
+            self._log_path = telemetry_log_path(self.output_dir) or None
         return self._log_path
 
     @property
@@ -233,11 +241,9 @@ class ReviewTelemetry:
         log_path = self.log_path
         if log_path is None:
             return None
-        if log_path.endswith(".jsonl"):
-            return f"{log_path[:-len('.jsonl')]}.manifest.json"
-        return f"{log_path}.manifest.json"
+        return telemetry_manifest_path(log_path)
 
-    def start(self, pr_number: str = "", total_steps: int = 15,
+    def start(self, pr_number: str | int = "", total_steps: int = 15,
               bot_mode: bool = False, quick_mode: bool = False,
               mode: str = "", repo_path: str = "",
               identifier: str = "", run_id: str = "",
@@ -260,12 +266,23 @@ class ReviewTelemetry:
         timestamp = now.strftime("%Y%m%dT%H%M%S")
         prefix = self._build_filename_prefix(mode, repo_path, identifier)
         self._log_path = self._allocate_log_path(prefix, timestamp)
+        # repo_identity is total: it returns "" rather than raising.
+        repo = repo_identity(repo_path)
 
         # Write marker so subsequent invocations can find the log
         marker = artifact_path(self.output_dir, "telemetry_log_path")
         marker.parent.mkdir(exist_ok=True)
         with open(marker, "w") as f:
             f.write(self._log_path)
+
+        # One type across the payload: review context records the PR number
+        # as an int, this event recorded the CLI string. Branch runs have no
+        # PR number and record null.
+        pr_number_value = (
+            int(pr_number)
+            if isinstance(pr_number, (int, str)) and str(pr_number).isdigit()
+            else None
+        )
 
         event = {
             "schema": EVENT_SCHEMA,
@@ -274,7 +291,7 @@ class ReviewTelemetry:
             "timestamp": now.isoformat(),
             "step": 0,
             "pipeline": {
-                "pr_number": pr_number,
+                "pr_number": pr_number_value,
                 "output_dir": self.output_dir,
                 "total_steps": total_steps,
                 "bot_mode": bot_mode,
@@ -283,6 +300,8 @@ class ReviewTelemetry:
                 "plugin_version": plugin_version,
                 "mode": mode,
                 "repo_path": repo_path,
+                "repo": repo,
+                "target": identifier,
                 "git": {
                     "requested_range": git_range,
                     "base_sha": base_sha,
@@ -303,6 +322,13 @@ class ReviewTelemetry:
 
         now = datetime.now(timezone.utc)
         duration_ms = self._duration_since_prev(now)
+        # A step can be re-entered (step 11 is prepare-then-publish by
+        # design; step 10 re-runs after a ledger change). Number the events
+        # so a reader can tell the attempts apart without diffing payloads.
+        attempt = 1 + sum(
+            1 for prior in self._read_events()
+            if prior.get("event") == "step" and prior.get("step") == step
+        )
 
         event = {
             "event": "step",
@@ -311,6 +337,7 @@ class ReviewTelemetry:
             "phase": phase,
             "title": title,
             "duration_since_prev_ms": duration_ms,
+            "attempt": attempt,
             "args": {
                 "bot_mode": bot_mode,
             },
@@ -748,6 +775,8 @@ class ReviewTelemetry:
                 "plugin_version": pipeline.get("plugin_version") or None,
                 "mode": pipeline.get("mode") or None,
                 "repo_path": pipeline.get("repo_path") or None,
+                "repo": pipeline.get("repo") or None,
+                "target": pipeline.get("target") or None,
                 "output_dir": pipeline.get("output_dir") or self.output_dir,
                 "started_at": start.get("timestamp"),
                 "ended_at": end.get("timestamp"),
@@ -1150,10 +1179,10 @@ class ReviewTelemetry:
             try:
                 document = load_review_document(path, reviewer)
             except ValueError:
-                results[reviewer] = {"error": "malformed"}
+                results[name] = {"error": "malformed"}
                 continue
             summary = review_summary(document)
-            results[reviewer] = {
+            results[name] = {
                 "verdict": summary["verdict"],
                 "finding_count": summary["finding_count"],
                 "severities": summary["severities"],
@@ -1178,7 +1207,7 @@ class ReviewTelemetry:
 
     @staticmethod
     def _extract_reconciliation(data: dict) -> Optional[dict]:
-        """Project the ledger's reconciliation block verbatim.
+        """Project the ledger's reconciliation block under registry agent names.
 
         The data reaching here already passed the ledger's reader boundary
         (``read_findings_file``), which is the one authority on this block's
@@ -1191,7 +1220,23 @@ class ReviewTelemetry:
         )
         if not isinstance(reconciliation, dict):
             return None
-        return dict(reconciliation)
+        projected = dict(reconciliation)
+        for field in ("reviewing_agents", "dispatched_agents", "missing_agents"):
+            roster = projected.get(field)
+            if isinstance(roster, list):
+                projected[field] = [
+                    agent_name_from_review_stem(agent) if isinstance(agent, str) else agent
+                    for agent in roster
+                ]
+        not_applicable = projected.get("not_applicable_agents")
+        if isinstance(not_applicable, list):
+            projected["not_applicable_agents"] = [
+                {**entry, "name": agent_name_from_review_stem(entry["name"])}
+                if isinstance(entry, dict) and isinstance(entry.get("name"), str)
+                else entry
+                for entry in not_applicable
+            ]
+        return projected
 
     def _build_summary(
         self,

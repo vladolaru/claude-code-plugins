@@ -17,6 +17,7 @@ repo. Every caller MUST supply an isolated tmp git repo — see `init_repo`.
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 from conftest import PIPELINE_SCRIPT_PATH
 
@@ -59,6 +60,33 @@ def init_repo(path):
         ["git", "commit", "-m", "Initial commit"],
         cwd=path, capture_output=True, check=True,
     )
+    return path
+
+
+def add_origin(path, url):
+    """Point a repo's `origin` at `url`.
+
+    Repository identity is derived from `origin`, so this is the one spelling
+    of that setup — six suites hand-rolled it before. Returns `path`.
+    """
+    subprocess.run(
+        ["git", "remote", "add", "origin", url],
+        cwd=str(path), capture_output=True, check=True,
+    )
+    return path
+
+
+def init_bare_repo(path, origin=None):
+    """Initialize an empty git repo (no commit) with an optional `origin`.
+
+    Identity tests only ever read `git remote get-url origin`, so they skip
+    `init_repo`'s commit and config work. Returns `path`.
+    """
+    path = Path(path)
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init"], cwd=str(path), capture_output=True, check=True)
+    if origin is not None:
+        add_origin(path, origin)
     return path
 
 

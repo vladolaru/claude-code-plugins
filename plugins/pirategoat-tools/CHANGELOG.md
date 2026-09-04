@@ -5,6 +5,22 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.118.0] - UNRELEASED
+
+### Added
+
+- Opt-in telemetry sharing uploads a finished review run's redacted manifest and JSONL to the private `vladolaru/pirategoat-tools-review-telemetry` repository, gated on machine-local global and per-repository consent keyed to the run's `host[:port]/owner/name` identity. Findings, review documents, code excerpts, diffs, local paths, PR titles and authors, linked issues, branch names beyond the review target, session ids, and triage or skip reasoning never leave the machine.
+- `review_run_metrics.py --shared-dir <clone>` measures uploaded telemetry as a per-engineer cohort attributed by `uploaded_by`, counting a run uploaded under two logins once; the JSON report schema is now 4 and transcript enrichment is always off for a shared source.
+- The step-12 sharing consent is one structured question through the host's user-input tool (`AskUserQuestion` on Claude Code) with fixed answers — Share, Not this repo, Not now, Never on the first ask, Include or Exclude once sharing is enabled — each mapped to the existing `set-sharing` and `set-repo` recordings. "Not this repo" records only the per-repository exclude and leaves the global choice open, and an excluded repository is never asked again whatever the global state.
+- Telemetry step events carry a validated positive `attempt` counter through manifests and local/shared cohort reports, so the two step-11 events (prepare, publish) and any re-run step are distinguishable while legacy rows remain readable without one.
+
+### Fixed
+
+- Shared telemetry never carries a branch name in a range: `run.git.requested_range` and the end snapshot's `git_range` upload as `<base_sha>..<head_sha>` or null, and an upload is refused if a symbolic range survives redaction.
+- The shared manifest and end snapshot spell every agent by its registry name (`security-reviewer`) in agent results and reconciliation rosters, and cohort ingestion normalizes the legacy `*-review` stems a historical re-upload still carries.
+- PR-mode `pipeline_start` no longer records the pre-checkout HEAD as the reviewed head; the head is left empty until step 3 resolves it from review context.
+- The PR number is recorded as an int, or null for a branch run, instead of a CLI string in one event and an int in another.
+
 ## [1.117.0] - 2026-09-01
 
 ### Added
