@@ -374,6 +374,38 @@ class TestTelemetryIdentityHelpers:
         assert base_sha == expected_base
         assert head_sha == expected_head
 
+    def test_pr_mode_leaves_head_unresolved_before_checkout(self, mod, monkeypatch):
+        """Step 1 runs before `gh pr checkout`; HEAD is the caller's own
+        branch, not the reviewed head (run 6e6a recorded 659d5750, the
+        pre-checkout HEAD, as pipeline_start.git.head_sha)."""
+        identities = {"HEAD^{commit}": "current-head"}
+
+        def fake_git_output(*args):
+            return identities.get(args[-1], "")
+
+        monkeypatch.setattr(mod, "_git_output", fake_git_output)
+
+        requested_range, base_sha, head_sha = mod._resolve_git_identity(
+            "", default_head=""
+        )
+
+        assert requested_range == ""
+        assert base_sha == ""
+        assert head_sha == ""
+
+    def test_supplied_head_sha_still_resolves_with_empty_default(self, mod, monkeypatch):
+        identities = {("f" * 40) + "^{commit}": "f" * 40}
+
+        def fake_git_output(*args):
+            return identities.get(args[-1], "")
+
+        monkeypatch.setattr(mod, "_git_output", fake_git_output)
+
+        _, _, head_sha = mod._resolve_git_identity(
+            "", head_sha="f" * 40, default_head=""
+        )
+        assert head_sha == "f" * 40
+
     def test_symbolic_supplied_endpoints_are_resolved_to_shas(
         self, mod, monkeypatch
     ):

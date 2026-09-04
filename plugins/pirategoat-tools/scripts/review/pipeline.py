@@ -576,12 +576,18 @@ def _stamp_run_config(output_dir, config, field, value):
     write_config(output_dir, config)
 
 
-def _resolve_git_identity(git_range, base_sha="", head_sha=""):
+def _resolve_git_identity(git_range, base_sha="", head_sha="", default_head="HEAD"):
     """Resolve requested range endpoints without mutating Git.
 
     Omitted endpoints around ``..`` or ``...`` default to ``HEAD``. For a
     three-dot range, ``base_sha`` is the resolved left endpoint, not the Git
     merge base; later context or manifest collection can record that value.
+
+    ``default_head`` is the ref used when the range names no head and no
+    ``head_sha`` was supplied. PR mode passes "" because step 1 runs before
+    the PR checkout: HEAD is then the requester's own branch, and recording
+    it would stamp the wrong commit as the reviewed head. The manifest
+    patches the resolved head from review context once step 3 has it.
     """
     requested_range = git_range if isinstance(git_range, str) else ""
     base_ref = ""
@@ -623,7 +629,7 @@ def _resolve_git_identity(git_range, base_sha="", head_sha=""):
     return (
         requested_range,
         resolve_endpoint(base_sha, base_ref),
-        resolve_endpoint(head_sha, head_ref or "HEAD"),
+        resolve_endpoint(head_sha, head_ref or default_head),
     )
 
 
@@ -854,6 +860,7 @@ def main():
                 git_range, base_sha, head_sha = _resolve_git_identity(
                     git_range, base_sha=context_base_sha,
                     head_sha=context_head_sha,
+                    default_head="" if mode == "pr" else "HEAD",
                 )
                 telemetry.start(pr_number=pr_number, total_steps=12,
                                 bot_mode=bot_mode, quick_mode=quick_mode,
