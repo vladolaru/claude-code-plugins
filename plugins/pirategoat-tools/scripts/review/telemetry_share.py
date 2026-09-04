@@ -176,6 +176,59 @@ _REDACTED_VALUES = {
 }
 
 
+# Range specs name refs ("main..fix/ACME-9-…"). The head ref is undisclosed
+# (see ``_UNDISCLOSED_KEYS``), so a range that carries it must not upload as
+# recorded. Both endpoints are already recorded as full SHAs in ``run.git``;
+# the shared reader only needs those, so every range is rewritten to the
+# SHA form, or nulled when a SHA is missing.
+_FULL_SHA_RE = re.compile(r"[0-9a-f]{40}")
+_SHA_RANGE_RE = re.compile(r"[0-9a-f]{40}\.\.\.?[0-9a-f]{40}")
+_SYMBOLIC_RANGE_KEYS = ("requested_range", "git_range")
+
+
+def _sha_range(git: object) -> str | None:
+    """Return ``<base_sha>..<head_sha>`` from a ``run.git`` block, else None."""
+    if not isinstance(git, dict):
+        return None
+    base = git.get("base_sha")
+    head = git.get("head_sha")
+    if (
+        isinstance(base, str) and _FULL_SHA_RE.fullmatch(base)
+        and isinstance(head, str) and _FULL_SHA_RE.fullmatch(head)
+    ):
+        return f"{base}..{head}"
+    return None
+
+
+def _rewrite_ranges(payload: object, sha_range: str | None) -> None:
+    """Replace every range spec in ``payload`` with ``sha_range`` in place."""
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if key in _SYMBOLIC_RANGE_KEYS and isinstance(value, str):
+                payload[key] = sha_range
+            else:
+                _rewrite_ranges(value, sha_range)
+    elif isinstance(payload, list):
+        for value in payload:
+            _rewrite_ranges(value, sha_range)
+
+
+def _assert_no_symbolic_range(payload: object) -> None:
+    """Refuse any payload where a ref-bearing range survived redaction."""
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if key in _SYMBOLIC_RANGE_KEYS:
+                if value is not None and not (
+                    isinstance(value, str) and _SHA_RANGE_RE.fullmatch(value)
+                ):
+                    raise ValueError("share-unsafe symbolic range survived redaction")
+            else:
+                _assert_no_symbolic_range(value)
+    elif isinstance(payload, (list, tuple)):
+        for value in payload:
+            _assert_no_symbolic_range(value)
+
+
 def _redact_tree(payload: object, strip: frozenset, rewrite: dict | None = None) -> None:
     """Walk ``payload`` once: delete fields in ``strip``, replace fields in ``rewrite``."""
     if rewrite is None:
@@ -237,7 +290,7 @@ def redact_payloads(manifest: dict, jsonl_lines: list[str]) -> tuple[dict, list[
 
     What survives is, by audit of a full real run: pipeline enumerations and
     constants, identifiers the step-12 prompt discloses (repository, target
-    branch or PR, commit range and SHAs, run id, agent names, model names),
+    branch or PR, the commit range as base and head SHAs, run id, agent names, model names),
     review-document content hashes, and repo-relative paths of the reviewed
     change. ``tests/review/test_telemetry_share.py`` pins the string-bearing
     key paths so a new producer field is a deliberate disclose-or-strip
@@ -255,9 +308,12 @@ def redact_payloads(manifest: dict, jsonl_lines: list[str]) -> tuple[dict, list[
 
     if "repo_path" in run:
         run["repo_path"] = repo
+    sha_range = _sha_range(run.get("git"))
+    _rewrite_ranges(redacted_manifest, sha_range)
     _redact_tree(redacted_manifest, _UNDISCLOSED_KEYS, _REDACTED_VALUES)
     _strip_scoped(redacted_manifest)
     _assert_share_safe(redacted_manifest)
+    _assert_no_symbolic_range(redacted_manifest)
 
     redacted_lines = []
     for line in jsonl_lines:
@@ -272,9 +328,11 @@ def redact_payloads(manifest: dict, jsonl_lines: list[str]) -> tuple[dict, list[
         if event.get("event") == "pipeline_start" and isinstance(pipeline, dict):
             if "repo_path" in pipeline:
                 pipeline["repo_path"] = repo
+        _rewrite_ranges(event, sha_range)
         _redact_tree(event, _UNDISCLOSED_KEYS, _REDACTED_VALUES)
         _strip_scoped(event)
         _assert_share_safe(event)
+        _assert_no_symbolic_range(event)
         # Text-mode reads translate every line ending to "\n"; only a final
         # line with no terminator varies.
         ending = "\n" if line.endswith("\n") else ""

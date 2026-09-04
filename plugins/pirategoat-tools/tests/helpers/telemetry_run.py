@@ -95,7 +95,7 @@ def write_complete_run(repo, output_dir, log_dir, *, run_id):
         },
         # Every field telemetry._extract_context() reads is present.
         "git": {
-            "git_range": "main..HEAD",
+            "git_range": "main..fix/ACME-9-enterprise-customer-rounding",
             "base_ref": "main",
             "head_ref": "fix/ACME-9-enterprise-customer-rounding",
             "changed_files": CHANGED_FILES,
@@ -150,6 +150,9 @@ def write_complete_run(repo, output_dir, log_dir, *, run_id):
         run_id=run_id,
         session_id="local-session-1234",
         plugin_version="1.116.0",
+        git_range="main..fix/ACME-9-enterprise-customer-rounding",
+        base_sha="a" * 40,
+        head_sha="b" * 40,
     )
     telemetry.log_step(step=3, phase="SETUP", title="Gather Context")
     _write_artifact(output_dir, "pipeline_state", {

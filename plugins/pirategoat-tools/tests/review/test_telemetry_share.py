@@ -430,6 +430,44 @@ def _redact_roster(reconciliation):
 
 
 class TestRedaction:
+    def test_symbolic_ranges_are_rewritten_to_sha_ranges(self, telemetry_run):
+        manifest, jsonl_lines = _payloads(telemetry_run)
+        assert manifest["run"]["git"]["requested_range"].endswith("customer-rounding")
+
+        redacted_manifest, redacted_jsonl = telemetry_share.redact_payloads(
+            manifest, jsonl_lines
+        )
+
+        sha_range = "a" * 40 + ".." + "b" * 40
+        assert redacted_manifest["run"]["git"]["requested_range"] == sha_range
+        events = [json.loads(line) for line in redacted_jsonl]
+        start = events[0]
+        assert start["pipeline"]["git"]["requested_range"] == sha_range
+        end = events[-1]
+        assert end["snapshot"]["context"]["git_range"] == sha_range
+
+    def test_range_without_full_shas_is_nulled_not_uploaded(self, telemetry_run):
+        manifest, jsonl_lines = _payloads(telemetry_run)
+        manifest["run"]["git"]["base_sha"] = ""
+        redacted_manifest, redacted_jsonl = telemetry_share.redact_payloads(
+            manifest, jsonl_lines
+        )
+        assert redacted_manifest["run"]["git"]["requested_range"] is None
+        events = [json.loads(line) for line in redacted_jsonl]
+        assert events[-1]["snapshot"]["context"]["git_range"] is None
+
+    def test_symbolic_range_surviving_redaction_is_refused(self):
+        with pytest.raises(ValueError, match="symbolic range"):
+            telemetry_share._assert_no_symbolic_range(
+                {"run": {"git": {"requested_range": "main..fix/topic"}}}
+            )
+        telemetry_share._assert_no_symbolic_range(
+            {"run": {"git": {"requested_range": "a" * 40 + ".." + "b" * 40}}}
+        )
+        telemetry_share._assert_no_symbolic_range(
+            {"run": {"git": {"requested_range": None}}}
+        )
+
     def test_redaction_is_exactly_the_declared_rewrites_and_strips(self, telemetry_run):
         # The whole redaction, as an exact diff against the complete run:
         # every pop below is unconditional, so a producer that stopped
@@ -455,6 +493,7 @@ class TestRedaction:
         expected_manifest = copy.deepcopy(manifest)
         run = expected_manifest["run"]
         run["repo_path"] = FIXTURE_REPO
+        run["git"]["requested_range"] = "a" * 40 + ".." + "b" * 40
         # Nulled, not popped: the shared reader requires both slots.
         run["output_dir"] = None
         run["session_id"] = None
@@ -478,11 +517,13 @@ class TestRedaction:
         expected_events = [json.loads(line) for line in jsonl_lines]
         start = expected_events[0]
         start["pipeline"]["repo_path"] = FIXTURE_REPO
+        start["pipeline"]["git"]["requested_range"] = "a" * 40 + ".." + "b" * 40
         start["pipeline"]["output_dir"] = None
         start["pipeline"]["session_id"] = None
         critic_step = next(e for e in expected_events if e.get("step") == 10)
         critic_step["decisions"].pop("reason")
         end = next(e for e in expected_events if e["event"] == "pipeline_end")
+        end["snapshot"]["context"]["git_range"] = "a" * 40 + ".." + "b" * 40
         for undisclosed in (
             "pr_title", "pr_author", "pr_url", "linked_issues", "base_ref", "head_ref",
         ):
