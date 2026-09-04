@@ -8,10 +8,11 @@ itself and load `telemetry.py` (which imports `manifest_sections.py`) as
 a top-level side effect; a second script importing `derive_reviewer_name`
 from `bootstrap` re-entered `bootstrap` mid-initialization and silently
 broke telemetry loading (`ReviewTelemetry` became `None`). Every consumer
-of the naming rule — `bootstrap.py`, `manifest_sections.py`,
-`agents_status.py`, `reconciliation_context.py` — now imports the one
-implementation here instead of restating (or, in `bootstrap.py`'s case,
-still owning) it.
+of the naming rule imports the one implementation here instead of
+restating (or, in `bootstrap.py`'s case, still owning) it.
+`agent_name_from_review_stem()` is the inverse rule for the ledger's
+review-file stems; telemetry and the shared-cohort reader use it to
+project one registry spelling.
 """
 
 
