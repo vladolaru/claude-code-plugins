@@ -40,6 +40,7 @@ tests/
 │   ├── test_reviewer_lifecycle.py    # Mutable draft, intake close, immutable finalization tests
 │   ├── test_synthesis_lifecycle.py   # Reconciliator/critic lifecycle measurement
 │   ├── test_telemetry.py             # Telemetry logging + manifest-section tests
+│   ├── test_telemetry_share.py       # Consent store, repository identity, redaction, upload tests
 │   ├── test_user_settings.py         # Requester-side machine-local settings tests
 │   ├── test_verdict_rules.py         # Shared finding-severity verdict ladder tests
 │   ├── test_workspace_setup.py       # Workspace setup tests
@@ -102,6 +103,8 @@ tests/
 │   ├── command_helpers.py            # Shared helpers for command tests
 │   ├── context_fixtures.py          # Review context fixture generators
 │   ├── pipeline_process.py           # Shared subprocess helper for invoking review/pipeline.py
+│   ├── gh_shim.py                    # `gh api` protocol double, its install, and the machine-local config writer
+│   ├── telemetry_run.py              # Drives ReviewTelemetry through one complete run for redaction fixtures
 │   └── review_fixtures.py            # Canonical finalized-review/ledger fixtures for consumer-boundary tests
 └── fixtures/
     ├── no-code-changes.diff          # Docs-only diff for NO_DOMAIN_FILES tests
@@ -133,6 +136,7 @@ The review pipeline tests load `scripts/review/pipeline.py` as the stable compat
 | `scripts/review/briefings.py` | Pure guidance and briefing formatting | `review/test_pipeline.py` |
 | `scripts/review/orchestration.py` | Side-effecting per-step subprocess and artifact work | `review/test_pipeline_integration.py` |
 | `scripts/review/manifest_sections.py` | Run-manifest section projections (reached through `telemetry.py`, not the facade) | `review/test_telemetry.py` |
+| `scripts/review/telemetry_share.py` | Repository identity, machine-local consent, payload redaction, and the consent-gated upload | `review/test_telemetry_share.py` |
 
 `pipeline_mod` preserves the facade's re-export contract for existing callers. Tests that patch a name resolved by orchestration use `orchestration_mod`, so the patch targets the caller's module globals.
 
