@@ -34,7 +34,7 @@ try:
     from .atomic_io import atomic_write_json
     from .critic_adjustments import FINDINGS_READ_OK, read_findings_file
     from .reviewer_lifecycle import review_paths, started_marker_path
-    from .reviewer_names import derive_reviewer_name
+    from .reviewer_names import agent_name_from_review_stem, derive_reviewer_name
     from .run_paths import (
         artifact_path,
         telemetry_log_path,
@@ -59,7 +59,7 @@ except ImportError:
     from review.atomic_io import atomic_write_json
     from review.critic_adjustments import FINDINGS_READ_OK, read_findings_file
     from review.reviewer_lifecycle import review_paths, started_marker_path
-    from review.reviewer_names import derive_reviewer_name
+    from review.reviewer_names import agent_name_from_review_stem, derive_reviewer_name
     from review.run_paths import (
         artifact_path,
         telemetry_log_path,
@@ -1179,10 +1179,10 @@ class ReviewTelemetry:
             try:
                 document = load_review_document(path, reviewer)
             except ValueError:
-                results[reviewer] = {"error": "malformed"}
+                results[name] = {"error": "malformed"}
                 continue
             summary = review_summary(document)
-            results[reviewer] = {
+            results[name] = {
                 "verdict": summary["verdict"],
                 "finding_count": summary["finding_count"],
                 "severities": summary["severities"],
@@ -1207,7 +1207,7 @@ class ReviewTelemetry:
 
     @staticmethod
     def _extract_reconciliation(data: dict) -> Optional[dict]:
-        """Project the ledger's reconciliation block verbatim.
+        """Project the ledger's reconciliation block under registry agent names.
 
         The data reaching here already passed the ledger's reader boundary
         (``read_findings_file``), which is the one authority on this block's
@@ -1220,7 +1220,23 @@ class ReviewTelemetry:
         )
         if not isinstance(reconciliation, dict):
             return None
-        return dict(reconciliation)
+        projected = dict(reconciliation)
+        for field in ("reviewing_agents", "dispatched_agents", "missing_agents"):
+            roster = projected.get(field)
+            if isinstance(roster, list):
+                projected[field] = [
+                    agent_name_from_review_stem(agent) if isinstance(agent, str) else agent
+                    for agent in roster
+                ]
+        not_applicable = projected.get("not_applicable_agents")
+        if isinstance(not_applicable, list):
+            projected["not_applicable_agents"] = [
+                {**entry, "name": agent_name_from_review_stem(entry["name"])}
+                if isinstance(entry, dict) and isinstance(entry.get("name"), str)
+                else entry
+                for entry in not_applicable
+            ]
+        return projected
 
     def _build_summary(
         self,

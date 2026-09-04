@@ -41,6 +41,22 @@ derive_reviewer_name = _mod.derive_reviewer_name
 ALL_AGENTS = sorted(AGENT_CONFIG.keys())
 
 
+class TestAgentNameFromReviewStem:
+    @pytest.mark.parametrize(
+        ("stem", "expected"),
+        [
+            ("security-review", "security-reviewer"),
+            ("repo-api-reviewer-v2-review", "repo-api-reviewer-v2-reviewer"),
+            ("security-reviewer", "security-reviewer"),
+            ("tests-mutation-reviewer", "tests-mutation-reviewer"),
+            ("review", "review"),
+        ],
+    )
+    def test_maps_stem_to_registry_name(self, stem, expected):
+        from review.reviewer_names import agent_name_from_review_stem
+        assert agent_name_from_review_stem(stem) == expected
+
+
 def _write_telemetry_marker(output_dir, telemetry_log):
     marker = run_paths.artifact_path(output_dir, "telemetry_log_path")
     marker.parent.mkdir(parents=True, exist_ok=True)

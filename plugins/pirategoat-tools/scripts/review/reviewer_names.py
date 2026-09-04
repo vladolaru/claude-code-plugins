@@ -33,3 +33,19 @@ def derive_reviewer_name(agent_name: str) -> str:
     if agent_name.endswith("-reviewer"):
         return agent_name[: -len("-reviewer")]
     return agent_name
+
+
+def agent_name_from_review_stem(stem: str) -> str:
+    """Map a review-file stem back to the registry agent name.
+
+    The reconciliation context keys reviews by ``<reviewer>-review``
+    (``reconciliation_context._review_stem``) and the ledger copies those
+    stems into its rosters. Telemetry events and dispatch plans use the
+    registry name ``<reviewer>-reviewer``. The shared manifest carries one
+    spelling — the registry name — so a cohort reader can join rosters,
+    events and usage rows without knowing this history. Values that do not
+    end in ``-review`` (already registry names, or unrelated) pass through.
+    """
+    if stem.endswith("-review"):
+        return f"{stem[: -len('-review')]}-reviewer"
+    return stem

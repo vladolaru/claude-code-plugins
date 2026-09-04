@@ -130,6 +130,51 @@ def _write_started(output_dir, reviewer):
     return path
 
 
+def _telemetry_with_finalized_security_review(mod, output_dir, tmp_path):
+    """Create telemetry entitled to project one finalized security review."""
+    log_dir = tmp_path / "logs"
+    review = canonical_review_document("security", ["high", "medium"])
+    _write_dispatch_plan(output_dir, ["security-reviewer"])
+    _write_final_review(output_dir, "security", review)
+    return mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
+
+
+class TestAgentNameProjection:
+    """Events, the snapshot and the ledger spelled one agent three ways
+    (api-contract-reviewer / api-contract / api-contract-review). The
+    shared payload carries the registry name only."""
+
+    def test_agent_results_are_keyed_by_agent_name(self, mod, output_dir, tmp_path):
+        telemetry = _telemetry_with_finalized_security_review(mod, output_dir, tmp_path)
+        agents = telemetry._extract_agent_results()
+        assert "security-reviewer" in agents
+        assert "security" not in agents
+
+    def test_reconciliation_rosters_are_projected_to_agent_names(self, mod, output_dir, tmp_path):
+        ledger = {
+            "meta": {
+                "reconciliation": {
+                    "reviewing_agents": ["security-review", "performance-review"],
+                    "dispatched_agents": ["security-reviewer", "performance-reviewer"],
+                    "missing_agents": None,
+                    "not_applicable_agents": [
+                        {"name": "php-tests-review", "skip_reason": "no tests changed"}
+                    ],
+                }
+            }
+        }
+        projected = mod.ReviewTelemetry._extract_reconciliation(ledger)
+        assert projected["reviewing_agents"] == ["security-reviewer", "performance-reviewer"]
+        assert projected["dispatched_agents"] == ["security-reviewer", "performance-reviewer"]
+        assert projected["missing_agents"] is None
+        assert projected["not_applicable_agents"] == [
+            {"name": "php-tests-reviewer", "skip_reason": "no tests changed"}
+        ]
+        assert ledger["meta"]["reconciliation"]["reviewing_agents"] == [
+            "security-review", "performance-review"
+        ]
+
+
 # ── start() ─────────────────────────────────────────────────────────
 
 
@@ -2798,19 +2843,15 @@ class TestSnapshot:
         assert dispatch is None
 
     def test_extracts_agent_results(self, mod, output_dir, tmp_path):
-        log_dir = tmp_path / "logs"
-        review = canonical_review_document("security", ["high", "medium"])
-        _write_dispatch_plan(output_dir, ["security-reviewer"])
-        _write_final_review(output_dir, "security", review)
-        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
+        t = _telemetry_with_finalized_security_review(mod, output_dir, tmp_path)
         t.start(pr_number="42")
         t.finalize(step=15, phase="OUTPUT", title="Present Results")
         events = _read_events(t.log_path)
         agents = events[-1]["snapshot"]["agent_results"]
-        assert "security" in agents
-        assert agents["security"]["verdict"] == "request_changes"
-        assert agents["security"]["finding_count"] == 2
-        assert agents["security"]["severities"]["high"] == 1
+        assert "security-reviewer" in agents
+        assert agents["security-reviewer"]["verdict"] == "request_changes"
+        assert agents["security-reviewer"]["finding_count"] == 2
+        assert agents["security-reviewer"]["severities"]["high"] == 1
 
     def test_retired_agent_review_extracts_only_malformed_evidence(
         self, mod, output_dir, tmp_path
@@ -2826,7 +2867,7 @@ class TestSnapshot:
             str(output_dir), log_dir=str(tmp_path / "logs")
         )
 
-        assert telemetry._extract_agent_results()["security"] == {
+        assert telemetry._extract_agent_results()["security-reviewer"] == {
             "error": "malformed"
         }
 
@@ -2843,7 +2884,7 @@ class TestSnapshot:
         _write_final_review(output_dir, "security", review)
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(tmp_path / "logs"))
 
-        extracted = t._extract_agent_results()["security"]
+        extracted = t._extract_agent_results()["security-reviewer"]
 
         assert extracted["suppressed_advisory_finding_count"] == 2
         assert extracted["verdict_without_advisory"] == "block"
@@ -2869,7 +2910,7 @@ class TestSnapshot:
         t.finalize(step=15, phase="OUTPUT", title="Present Results")
         events = _read_events(t.log_path)
         snap = events[-1]["snapshot"]
-        assert set(snap["agent_results"]) == {"security"}
+        assert set(snap["agent_results"]) == {"security-reviewer"}
         assert snap["findings"]["final_finding_count"] == 1
 
     def test_extracts_findings(self, mod, output_dir, tmp_path):
