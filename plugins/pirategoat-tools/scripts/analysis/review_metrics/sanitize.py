@@ -260,6 +260,13 @@ def _sanitize_steps(value: object) -> list[dict[str, Any]]:
             count = _nonnegative_int(item.get(name)) if isinstance(item, dict) else None
             if count is not None:
                 step[name] = count
+        attempt = (
+            _nonnegative_exact_int(item.get("attempt"))
+            if isinstance(item, dict)
+            else None
+        )
+        if attempt is not None and attempt > 0:
+            step["attempt"] = attempt
         if not step:
             continue
         raw_args = item.get("args") if isinstance(item, dict) else None

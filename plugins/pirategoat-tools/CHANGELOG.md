@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Opt-in telemetry sharing uploads a finished review run's redacted manifest and JSONL to the private `vladolaru/pirategoat-tools-review-telemetry` repository, gated on machine-local global and per-repository consent keyed to the run's `host[:port]/owner/name` identity. Findings, review documents, code excerpts, diffs, local paths, PR titles and authors, linked issues, branch names beyond the review target, session ids, and triage or skip reasoning never leave the machine.
 - `review_run_metrics.py --shared-dir <clone>` measures uploaded telemetry as a per-engineer cohort attributed by `uploaded_by`, counting a run uploaded under two logins once; the JSON report schema is now 4 and transcript enrichment is always off for a shared source.
-- Telemetry step events carry an `attempt` counter, so the two step-11 events (prepare, publish) and any re-run step are distinguishable in the manifest.
+- Telemetry step events carry a validated positive `attempt` counter through manifests and local/shared cohort reports, so the two step-11 events (prepare, publish) and any re-run step are distinguishable while legacy rows remain readable without one.
 
 ### Fixed
 

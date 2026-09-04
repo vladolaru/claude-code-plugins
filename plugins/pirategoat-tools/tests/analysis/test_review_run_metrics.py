@@ -271,6 +271,31 @@ def test_sanitize_steps_drops_thoughts_length_from_old_logs():
     assert "thoughts_length" not in json.dumps(projected)
 
 
+def test_sanitize_steps_preserves_positive_exact_integer_step_attempt():
+    [projected] = sanitize._sanitize_steps(
+        [{"event": "step", "step": 11, "attempt": 2}]
+    )
+
+    assert projected["attempt"] == 2
+
+
+@pytest.mark.parametrize(
+    "attempt",
+    [
+        pytest.param(0, id="zero"),
+        pytest.param(-1, id="negative"),
+        pytest.param(True, id="boolean"),
+        pytest.param(2.0, id="integral-float"),
+    ],
+)
+def test_sanitize_steps_drops_invalid_step_attempt(attempt):
+    [projected] = sanitize._sanitize_steps(
+        [{"event": "step", "step": 11, "attempt": attempt}]
+    )
+
+    assert "attempt" not in projected
+
+
 def _manifest(
     run_id: str = "run-1",
     *,
@@ -345,6 +370,53 @@ def _manifest(
         },
         "availability": {"pipeline": True, "transcript": False, "assignment": True},
     }
+
+
+@pytest.mark.parametrize("source_kind", ["local", "shared"])
+def test_step_attempt_round_trips_through_supported_report(
+    tmp_path, source_kind
+):
+    run_id = f"{source_kind}-attempts"
+    manifest = _manifest(run_id)
+    manifest["steps"] = [
+        {"run_id": run_id, "event": "step", "step": 11, "attempt": 1},
+        {"run_id": run_id, "event": "step", "step": 11, "attempt": 2},
+        {"run_id": run_id, "event": "step", "step": 5},
+    ]
+    if source_kind == "local":
+        source_root = tmp_path / "local"
+        source_dir = source_root
+        source_flag = "--log-dir"
+    else:
+        source_root = tmp_path / "shared"
+        source_dir = source_root / telemetry_share.LAYOUT_PREFIX / "alice"
+        source_flag = "--shared-dir"
+    source_dir.mkdir(parents=True)
+    (source_dir / f"{run_id}.manifest.json").write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+    output = tmp_path / f"{source_kind}-report.json"
+
+    result = main(
+        [
+            source_flag,
+            str(source_root),
+            "--format",
+            "json",
+            "--output",
+            str(output),
+            "--no-transcripts",
+        ]
+    )
+
+    assert result == 0
+    [run] = json.loads(output.read_text(encoding="utf-8"))["runs"]
+    assert [(step["step"], step.get("attempt")) for step in run["steps"]] == [
+        (11, 1),
+        (11, 2),
+        (5, None),
+    ]
+    assert "attempt" not in run["steps"][2]
 
 
 def _running_manifest(run_id: str = "run-1") -> dict:
