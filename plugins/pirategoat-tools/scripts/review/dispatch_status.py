@@ -2,13 +2,11 @@
 
 ``load_dispatch_plan(path)`` is the one reader of a dispatch plan: it
 requires JSON, requires an object, and validates the plan's agents, so
-every consumer — the orchestration steps, telemetry, the evidence manifest,
-dispatch_adjust and agents_status among them — sees the same plan shape and
-a plan-shape change stays one edit. ``validate_dispatch_plan_agents()``
-validates agent names and statuses only.
-``manifest_sections.safe_dispatch_signal()`` projects a missing or invalid
-signal as ``None``, so no consumer ever derives signal identity from the
-prose ``reason`` beside it.
+every consumer sees the same plan shape and a plan-shape change stays one
+edit. ``validate_dispatch_plan_agents()`` validates agent names and
+statuses only. ``manifest_sections.safe_dispatch_signal()`` projects a
+missing or invalid signal as ``None``, so no consumer ever derives signal
+identity from the prose ``reason`` beside it.
 """
 
 import json

@@ -1,30 +1,19 @@
 """Resolver chain — merges repository host signals and emits a manifest.
 
 Composes the repo-signaled advisory resolvers in priority order — explicit,
-wp-env, docker-compose, plugin-headers, vendor — and dedups the resolved
-entries by `kind:name`, the first (highest-priority) entry winning. The
-sibling resolver stays a standalone, non-default helper.
+wp-env, docker-compose, plugin-headers, vendor (the sibling resolver is not
+in it) — and dedups entries by `kind:name`, the first winning.
 
-Every resolved local runtime host is then stamped with the identity
-`hosts/identity.py` reads from its path: the declared version, the commit,
-the commit date, and whether that commit belongs to the checkout's own
-repository or to the repository enclosing it. Only facts the resolver left
-unknown are filled, and never the branch — no host projection carries a
-branch name, because a personal checkout's would reach the shared manifest.
-Stamping failures land in `diagnostics.identity_errors` rather than aborting
-a review.
+Every resolved local runtime host is stamped with the identity
+`hosts/identity.py` reads from its path. Only facts the resolver left
+unknown are filled, and never the branch — a personal checkout's branch
+would reach the shared manifest. Stamping failures land in
+`diagnostics.identity_errors` rather than aborting a review.
 
 Unresolved signals merge by host name, keeping one `declared_by` entry per
-signal and the strictest declared `version`. Hosts the repository itself
-provides are dropped before fulfillment, so a repository is never verified
-against a cache clone of itself; `plugin-headers` derives that `provides`
-list from the `Text Domain` header or the main file's stem, constrained to
-the known cache names. Ecosystem-cache fulfillment then runs for the
-remaining WordPress and WooCommerce signals, copying each declared minimum
-onto the fulfilled entry, and the degradation banner is generated last.
-
-Diagnostics record `scan_roots`, `config_errors` and `self_provided`
-alongside the per-resolver detail.
+signal and the strictest declared `version`. Hosts the repository provides
+are dropped before ecosystem-cache fulfillment, so a repository is never
+verified against a cache clone of itself.
 """
 
 import json

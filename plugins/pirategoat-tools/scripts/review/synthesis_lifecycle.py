@@ -1,77 +1,20 @@
 #!/usr/bin/env python3
 """Lifecycle measurement for the two synthesis agents.
 
-The reviewers are measured end to end: `agent/bootstrap.py` writes the fixed
-`reviewers/<reviewer>/started` marker when a reviewer boots,
-`ReviewOutputBuilder.save()` logs `agent_complete`, and `agents_status.py`
-polls the pair. The two SYNTHESIS agents — the review-reconciliator (step 8)
-and the decision critic (step 10) — sit entirely outside that machinery:
-neither runs `agent/bootstrap.py`, neither writes
-`reviewers/<agent>/review.json`, and neither is ever in
-the ``dispatch_plan`` artifact, the only list `agents_status.py` iterates, so that
-poller structurally cannot see them. Without the measurement here the
-critic's phase has no duration anywhere in the manifest, and a hung
-synthesis agent blocks the orchestrator's foreground Task call with no
-artifact recording why the run stalled.
+The reconciliator (step 8) and the critic (step 10) run outside the
+reviewer machinery — no bootstrap, no reviewer directory, never in the
+dispatch plan — so this is their only duration and stall record. Steps 8
+and 10 call `mark_dispatched()`; steps 9 and 11 call `observe()`, keying
+completion on the required artifact's mtime.
 
-This module closes that gap with the same two-fact shape the reviewers
-use, minus the polling:
-
-1. **Dispatch.** Steps 8 and 10 call `mark_dispatched()` when they
-   produce the briefing that hands the agent off. The script owns that
-   moment — the LLM performs the Task call, so the script cannot observe
-   the agent's own boot, but it CAN stamp the instant it asked for one.
-   The marker's BODY is byte-compatible with bootstrap's — one aware UTC
-   ISO timestamp — but its NAME deliberately is not. It carries
-   MARKER_SUFFIX, the single constant both the writer and the reader
-   resolve a marker name through, which namespaces it away from the
-   reviewer `started` contract other tools scan. The suffix is
-   namespacing, not decoration: a scanner that reads every start marker
-   as a reviewer's seeds both synthesis agents as permanently
-   NOT_DISPATCHED and renames their markers away as orphans, erasing the
-   stall signal in the one window where the marker is the only record of
-   a dispatch. A hand-maintained name list in another repository is a
-   contract nobody enforces; the suffix is one nobody has to, and a third
-   synthesis agent cannot reintroduce the collision.
-
-2. **Completion.** Steps 9 and 11 call `observe()`, which keys completion
-   on the artifact each dispatching step's handoff gate makes mandatory:
-   the ``review_findings_json`` artifact for the reconciliator and
-   the ``critic_verdict`` artifact for the critic. `completed_at` is that
-   artifact's mtime and `duration_ms` is the span from dispatch to it. No
-   polling daemon, no background process.
-
-   Every row carries ONE clock. When the script looked is deliberately
-   not recorded — the run's own step cadence already bounds the
-   observation lag.
-
-**Every step that re-enters after a handoff observes BEFORE it does
-anything else**, including before step 10 retires the prior critic attempt
-and re-stamps its marker. Step 10 is genuinely re-entered after a completed
-critic, and a bare re-stamp there would publish a finished critique as a
-zero-length stall.
-
-**Timeout policy is report, never kill.** Both agents run in the
-orchestrator's foreground, so nothing here can interrupt one, and lifecycle
-measurement never interrupts an agent under any circumstance. At finalize, a
-marker with no completion artifact records `stalled: true`.
-
-**Availability, not zero.** A run that wrote no dispatch marker leaves no
-synthesis lifecycle artifact, so the manifest section is absent and its
-family reads "missing". A never-measured phase must never project as a
-zero-duration one.
-
-Quick mode commits the pipeline's own `SKIPPED` verdict without writing a
-critic dispatch marker, so it produces no critic lifecycle row. Once a
-critic marker exists, a missing or unusable verdict is a dispatched failure:
-finalize records it as stalled, and the pipeline reports the critic as
-unavailable and degrades the run. `SKIPPED` rows stay readable for metrics
-compatibility, but current crash handling never manufactures one.
-
-`ROW_KEYS` is the single declaration of the row shape. Both projections —
-`manifest_sections.build_synthesis_agents_manifest()` and the metrics
-consumer's sanitizer — assert parity against it, so a key taught to only one
-of the three writers fails loudly instead of passing green.
+A marker name carries MARKER_SUFFIX, so a scan of reviewer `started`
+markers can never claim one. A step re-entered after a handoff observes
+BEFORE anything else: step 10 re-stamps its marker, and would otherwise
+publish a finished critique as a zero-length stall. Timeout policy is
+report, never kill — at finalize, a marker with no completion artifact
+records `stalled: true`. A run that wrote no marker leaves no artifact: a
+never-measured phase must never project as zero. `ROW_KEYS` is the single
+declaration of the row shape; both projections assert parity against it.
 """
 
 import json

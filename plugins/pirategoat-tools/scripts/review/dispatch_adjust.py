@@ -1,46 +1,19 @@
 #!/usr/bin/env python3
 """Record the orchestrator's dispatch-plan adjustments.
 
-The step-5 briefing asks the orchestrator to skip planner-dispatched
-reviewers whose focus the diff makes irrelevant, and to force-dispatch a
-skipped one it is confident will find something. This module is the
-orchestrator's one channel for those adjustments; the plan file is never
-edited by hand or by a per-run script.
-
-`--skip NAME REASON` moves a dispatched agent to SKIPPED_OVERRIDE and
-`--dispatch NAME REASON` moves a skipped one to DISPATCH_OVERRIDE. Both are
-repeatable. Every name is validated against the ``dispatch_plan`` artifact before
-anything is written, the read and the single atomic write happen under the
-same run-directory lock, `--dry-run` validates and prints without writing,
-and one line per adjustment is printed — the same lines the step-6 briefing
-repeats. An unknown name, an empty reason, or a malformed or missing plan
-exits 1 naming the fix, and writes nothing. An agent already in the requested
-family (a `--skip` of a planner-skipped agent, a `--dispatch` of a dispatched
-one, a repeat of the same override) is a reported `UNCHANGED` no-op rather
-than a refusal, so a re-run after the planner changed its mind is idempotent.
-A refused call names the agent, its current status and the transition the
-flag allows.
+This is the orchestrator's one channel for the step-5 adjustments; the plan
+is never edited by hand or by a per-run script. `--skip NAME REASON` moves a
+dispatched agent to SKIPPED_OVERRIDE and `--dispatch NAME REASON` moves a
+skipped one to DISPATCH_OVERRIDE; both repeatable. Every name is validated
+against the plan first, and the read and the single atomic write happen
+under the run-directory lock. An unknown name, an empty reason or a
+malformed plan exits 1 and writes nothing; an agent already in the requested
+family is a reported `UNCHANGED` no-op, so a re-run is idempotent.
 
 `dispatch_status.OVERRIDE_REASON_KEY`, `PLANNER_STATUS_KEY` and
-`ORPHANED_FILES_KEY` are the one spelling of the three fields written here —
-the reason, the status the planner gave before the first override, and the
-files the skip orphaned — and the orchestration and manifest builders read
-them under those names.
-
-Every call recomputes, for each override-skipped agent, the changed files its
-scope alone covered. The scope is read from the plan row (`scope_domains`,
-the primary plus secondary domains the planner stamps on each row, and a repo
-reviewer's `include_paths`) through `plan_dispatch.scope_files`, the same
-derivation the planner's own triage uses, so no plan reader has to open the
-agent registry. Those files print beside the skip under
-`ORPHANED_FILES_LEAD`, the lead the step-6 briefing prints too.
-
-Step 6 lists the overrides from the final plan alone
-(`state["dispatch_adjustments"]`) and its briefing repeats them with those
-files, so a skip the orchestrator made, and what it left unreviewed, is
-visible in the session. Step 9 carries them into
-`file_review.override_orphaned_files`, and the coverage section names those
-files as skipped by override.
+`ORPHANED_FILES_KEY` are the one spelling of the fields written here. Each
+skip's orphaned files come from `plan_dispatch.scope_files`, the derivation
+the planner's own triage uses.
 
 Usage:
     dispatch_adjust.py --output-dir DIR --skip a11y-reviewer "no markup in the diff"

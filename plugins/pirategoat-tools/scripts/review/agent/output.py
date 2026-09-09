@@ -1,38 +1,26 @@
 """
 Review Output Builder — build one review, then publish it.
 
-`ReviewOutputBuilder.open()` binds a reviewer's output directory; from
-there the builder mutates stable `fN` findings and `cN` checks, records
-observations, positives, recommendations and reviewed-file claims, holds
-the synthesis-only assessment, and writes the whole bound state through
-`save_draft()`. `finalize_review()` and the `finalize-review` CLI publish
-it. Plain Python and stdlib only — no Pydantic, no external dependencies.
+`ReviewOutputBuilder.open()` binds a reviewer's output directory; the
+builder mutates stable `fN` findings and `cN` checks and writes the whole
+bound state through `save_draft()`. Stdlib only — no Pydantic.
 
-Every draft replacement derives the six canonical top-level reviewed-file
-fields through `derive_reviewed_files()` and the reviewer's required
-`assignment.json`; a caller serializing by hand via `to_dict()` knowingly
-opts out, because publication is the enforcing seam. A draft becomes
-immutable final output only through the exact printed `FINALIZE REVIEW`
-command, digest-bound to the draft it observed, and only the printed
-`REVIEW FINALIZED` line marks completion. `review_duration_ms` is derived
-from the actor's dispatch marker and is null when no marker is readable.
+Every draft replacement derives the canonical reviewed-file fields itself;
+a caller serializing by hand via `to_dict()` opts out, because publication
+is the enforcing seam. A draft becomes immutable final output only through
+the exact printed `FINALIZE REVIEW` command, digest-bound to the draft it
+observed, and only the printed `REVIEW FINALIZED` line marks completion.
 
 Validation lives in `review_document.py` and rendering in
-`review_markdown.py`: this module builds and publishes, and imports
-neither of those responsibilities back.
+`review_markdown.py`; this module imports neither back.
 
 Usage:
     from review.agent.output import ReviewOutputBuilder
 
     builder = ReviewOutputBuilder.open(output_dir, "123", "security")
-    builder.add_finding(
-        severity="critical",
-        title="SQL Injection",
-        file="src/User.php",
-        line=42,
-        description="...",
-        recommendation="..."
-    )
+    builder.add_finding(severity="critical", title="SQL Injection",
+                        file="src/User.php", line=42,
+                        description="...", recommendation="...")
     saved = builder.save_draft()
     finalize_review(output_dir, "security", saved["review_digest"])
 """

@@ -1,36 +1,25 @@
 #!/usr/bin/env python3
-"""
-Dispatch Planner — Centralized review agent dispatch decisions.
+"""Dispatch Planner — centralized review agent dispatch decisions.
 
 Reads the agent registry and changed files to produce a deterministic
-dispatch plan: which agents to run, which to skip, and why. One script
-owns triage, so command files never restate it; review/orchestration.py
-runs it and consumes the plan.
-
-Each decision is produced as `(status, reason, signal)`, so `reason` stays
-explanatory prose while `signal` is the stable dispatch identity consumers
-match on. `LOW_SIGNAL_DISPATCH_SIGNALS` is the canonical quick-mode
-blocklist: an excluded agent dispatched only by one of those signals
-becomes `SKIPPED_QUICK_MODE`, while a dispatch backed by positive evidence
-survives quick mode.
-
-`detect_unrecognized_source()` is the safety net: when a changed source
-language no reviewer domain covers, the plan gains a `warnings[]` entry, so
-a coverage gap fails loudly instead of producing a clean review.
+dispatch plan: which agents run, which are skipped, and why. Each decision is
+`(status, reason, signal)` — `reason` is prose, `signal` the stable identity
+consumers match on. An agent dispatched only by a signal in
+`LOW_SIGNAL_DISPATCH_SIGNALS`, the canonical quick-mode blocklist, becomes
+`SKIPPED_QUICK_MODE`. `detect_unrecognized_source()` adds a `warnings[]` entry
+when a changed source language no reviewer domain covers, so a coverage gap
+fails loudly.
 
 Usage:
-    python3 plan_dispatch.py --mode full --git-range "main..HEAD" --output-dir /tmp/review
-    python3 plan_dispatch.py --mode incremental --git-range "abc123..HEAD" --output-dir /tmp/review
-    python3 plan_dispatch.py --mode pr --git-range "main..HEAD" --output-dir <run-dir>
-    python3 plan_dispatch.py --mode full --git-range "main..HEAD" --output-dir /tmp/review --changed-files-list "a.py,b.ts"
+    python3 plan_dispatch.py --mode <full|incremental|pr>
+        --git-range "main..HEAD" --output-dir <run-dir>
+        [--changed-files-list "a.py,b.ts"]
 
 Output: JSON dispatch plan on stdout.
 
 Exit codes:
     0  Success — dispatch plan generated
     1  Error — details on stderr
-
-Zero external dependencies (stdlib only).
 """
 
 import argparse

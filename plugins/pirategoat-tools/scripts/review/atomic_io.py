@@ -1,37 +1,19 @@
 #!/usr/bin/env python3
 """Single implementation of the pipeline's atomic-JSON-write convention.
 
-Every artifact this function touches replaces the old file in one step or
-leaves it untouched: write to a temp file in the SAME directory as the
-target, then ``os.replace`` it over the target. ``os.replace`` never
-copies — it is a same-filesystem rename, and raises ``OSError`` (EXDEV)
-if the temp file and target are on different filesystems, so pinning the
-temp file to the target directory is what keeps that rename possible in
-the first place. A half-written JSON file must never be observable on
-disk.
+Write to a temp file in the SAME directory as the target, then
+``os.replace`` it over the target: a half-written JSON file must never be
+observable on disk. The shared directory keeps that replace a
+same-filesystem rename, the only kind ``os.replace`` can do.
 
-Five call sites share this one implementation instead of each spelling the
-same nine lines: critic_adjustments.py's decision-critic ledger,
-orchestration.py's dispatch-plan baseline, pipeline.py's review-context
-reset, telemetry.py's run manifest, and analysis/usage_snapshot.py's token
-snapshot. One copy drifting eventually drifts them all.
-
-The canonical findings ledger may NOT use this function directly: it is
-never written with a bare ``atomic_write_json``. It goes through
-``critic_adjustments.write_findings(output_dir, findings)``, which owns
-the ledger's filename and calls this underneath. That artifact has exactly
-ONE write path and exactly two writers going through it — the
-reconciliator's first write via ``findings_save.py``, and the critic
-adjustments applier — so a bare write here would be a SECOND write path
+The findings ledger may NOT use this function directly. It goes through
+``critic_adjustments.write_findings()``, which owns the ledger's filename
+and calls this underneath, so that artifact keeps exactly ONE write path
 (see the one-write-path rule in the plugin's AGENTS.md).
 
-``output_dir_lock()`` below is the pipeline's one directory-lock
-convention. ``critic.py --save`` and ``critic_adjustments.adjudicate()``
-share it, so publication and adjudication never observe one another
-halfway through; reviewer draft replacement and finalization take it
-alongside staged nonce files. Critic code reuses this primitive and never
-imports reviewer lifecycle concepts, and this module deliberately knows
-nothing about reviewer filenames or lifecycle states.
+``output_dir_lock()`` is the pipeline's one directory-lock convention,
+shared by publication, adjudication and reviewer finalization. This module
+deliberately knows nothing about reviewer filenames or lifecycle states.
 """
 
 import contextlib

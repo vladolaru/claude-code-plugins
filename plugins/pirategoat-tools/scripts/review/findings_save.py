@@ -1,43 +1,21 @@
 #!/usr/bin/env python3
 """Findings Save — the reconciliator's validating ledger save channel.
 
-Sibling to critic.py's ``--save`` mode: this is the ONLY channel the
-review-reconciliator agent is allowed to write the findings ledger through
-(see agents/review-reconciliator.md). A raw write — a hand-rolled
-``json.dump`` or the shared ``atomic_write_json`` used directly — closes the
-gap this module exists to close, because nothing downstream validates a
-hand-written ledger after the fact.
+The ONLY channel the review-reconciliator may write the findings ledger
+through (see agents/review-reconciliator.md), because nothing downstream
+validates a hand-written ledger. The agent authors the review content and
+its four reconciliation judgments, nothing about the run it read: this
+module stamps the pipeline-owned facts and the degraded-host banner from
+the reconciliation context itself.
 
-The agent authors the review content and its four reconciliation judgments;
-it authors nothing about the run it read. This module reads
-the reconciliation context — the very artifact the agent was briefed from —
-and stamps the six pipeline-owned ``meta.reconciliation`` facts and the
-degraded-host banner onto the ledger itself. A measurement the pipeline
-already made is never retyped by an agent, so it cannot be mistyped, and the
-ledger agrees with its own inputs by construction.
-
-What it accepts is the exact schema-3 findings/checks/assessment contract.
-It rejects malformed shapes, retired fields, critic-owned fields,
-agent-authored pipeline fields, bad verdicts, and a summary whose counts
-disagree with the findings. Actor-ownership violations are collected before
-the canonical document validator runs. On ANY problem, nothing is written,
-and every problem is echoed as its own ``REJECTED: <problem>`` line — this
-module's failure mode is silence on disk, never a partial ledger.
-
-It also enforces the evidence trail. Every source finding and check in the
-reconciliation context is either merged — named in a ledger entry's
-``sources`` — or dropped, through ``dropped_findings`` / ``dropped_checks``
-with a reason and evidence. A merged check carries each source's method
-verbatim and keeps the union of its sources' ``verifies`` items. A reconciled
-severity matching no source carries a ``severity_note``. And every
-orchestrator note registered through ``reconciliation_notes.py`` is answered.
-
-The write itself goes through ``critic_adjustments.write_findings()`` — the
-ONE sanctioned write path for the findings ledger, shared by both of its
-writers (the reconciliator's first write via this module, and the critic
-adjustments applier). This module adds no new writer; it only gates what
-reaches the existing one, and on success echoes the recorded verdict, the
-finding count and the check count.
+It accepts the exact schema-3 findings/checks/assessment contract and
+enforces the evidence trail: every source finding and check is merged into
+an entry's ``sources`` or dropped with a reason, a merged check keeps its
+sources' ``verifies`` union, and every registered note is answered. On ANY
+problem nothing is written and every problem is echoed as its own
+``REJECTED: <problem>`` line — the failure mode is silence on disk, never a
+partial ledger. The write goes through
+``critic_adjustments.write_findings()``, the one sanctioned write path.
 """
 
 import argparse

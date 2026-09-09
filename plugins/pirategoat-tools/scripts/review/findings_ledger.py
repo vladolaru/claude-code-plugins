@@ -2,29 +2,18 @@
 """The reconciliator's builder for the findings ledger.
 
 The ledger is review content — findings, checks, assessment, observations,
-recommendations, positives, id counters — plus reconciliation metrics: the
-four concern counts this builder judges and the pipeline facts stitched
-onto them. It has no reviewer identity and no reviewed files: those belong
-to one reviewer's draft/final lifecycle, which a synthesized cross-review
-artifact does not have. This is the one deliberate subclass of
+recommendations, positives, id counters — plus reconciliation metrics. It has
+no reviewer identity and no reviewed files: those belong to one reviewer's
+draft/final lifecycle. This is the one deliberate subclass of
 ReviewOutputBuilder; do not grow a hierarchy under it.
 
 `read_reconciliation_context(output_dir)` is the one reader of the run's
-the ``reconciliation_context`` artifact. Four callers open the file through it — the
-save gate (`findings_save.py`), the notes CLI (`reconciliation_notes.py`),
-this builder, and the context builder's own note-preserving read — and the
-schema check stays with the callers that own the schema constant.
-
-Two builder methods carry pipeline contracts rather than leaving them to
-the agent. `record_check(..., sources=[...])` reads each merged source
-check from that context, appends its `method` verbatim as a
-`[<stem>:<id>] …` line and unions its `verifies`, so the save gate's
-verbatim-method rule is satisfied by construction. `resolve_note(...,
-verifies=[...])` lets a confirmed note settle Verify items;
-`review_document.normalize_verifies` is that grammar — the one reviewer
-checks use — and `critic_adjustments.py` validates a saved note's citation
-with it. The pipeline-owned reconciliation facts are never authored here:
-`findings_save.py` stamps them from the context at save time.
+``reconciliation_context`` artifact. `record_check(..., sources=[...])`
+appends each merged source check's `method` verbatim and unions its
+`verifies`, so the save gate's verbatim-method rule holds by construction;
+`resolve_note(verifies=[...])` settles Verify items through
+`review_document.normalize_verifies`. The pipeline-owned reconciliation facts
+are never authored here — `findings_save.py` stamps them at save time.
 """
 import json
 import os

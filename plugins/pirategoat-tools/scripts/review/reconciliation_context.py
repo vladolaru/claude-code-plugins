@@ -2,50 +2,19 @@
 """
 Reconciliation Context Builder — the reconciliator agent's single input.
 
-Instead of the reconciliator making ~40 individual file reads, this script
-pre-gathers every agent's findings, the referenced source snippets, scope
-annotations, and metadata into the ``reconciliation_context`` artifact, which the agent
-consumes immediately. The artifact carries only the keys the agent or
-`findings_save.py` reads.
+Pre-gathers every agent's findings, the referenced source snippets, scope
+annotations and metadata into one artifact, so the agent makes no reads of
+its own. It writes no Markdown: `compute_missing_agents()` and
+`annotate_prefiltered_findings()` travel in the JSON, and the reconciliator
+obeys both rather than recomputing either. Severity floors come from the
+structured field alone; no description prose is parsed. The complete local
+host map is read from the run's own context snapshot, so host-qualified
+citations are verifiable without pushing paths through argv or telemetry.
 
-Host context travels by reference, not by value. `load_host_context()` reads
-the complete local ``review_context`` host map and its degraded-host
-banner from one snapshot through `manifest_sections.read_artifact_file`, so
-malformed optional data is simply unavailable and host-qualified
-`source_cited` values can be verified without pushing a large payload through
-argv or leaking local paths into telemetry or shared artifacts.
-
-This module writes no Markdown. Two deterministic facts travel in the JSON
-instead, and the reconciliator carries and obeys both rather than recomputing
-either:
-
-* `compute_missing_agents()` — dispatched minus reporting, `None` when
-  dispatch is unknown — seeds `meta.reconciliation.missing_agents`.
-* `annotate_prefiltered_findings()` marks every structurally-certain
-  out-of-scope finding in place with `prefiltered`, plus a checkable count.
-
-Severity floors are STRUCTURED only. `resolve_structured_severity_floor()`
-reads the field and nothing here parses description prose, while
-`strip_severity_floor_markers()` removes prose restatements before the
-review-record assembler renders them for the critic.
-
-This module also owns `validate_orchestrator_notes()`, the schema-4 claim
-grammar `reconciliation_notes.py` appends under and `findings_save.py`
-requires an outcome for, beside the `RECONCILIATION_CONTEXT_SCHEMA` constant
-both import. The grammar lives here rather than in the notes CLI because the
-builder cannot import from that CLI without closing an import cycle.
-
-A rebuild preserves the claims already registered. Step 8 rebuilds this
-artifact every time it is entered, including a same-run retry after an
-interrupted reconciliator dispatch, and `registered_orchestrator_notes()`
-carries the existing collection forward. The read and the atomic write happen
-under the same `atomic_io.output_dir_lock` the notes CLI holds, so a rebuild
-and a concurrent `add_note` cannot each write from a state the other has
-moved past. Resetting the collection would release the save gate's
-requirement that every note be answered — the gate derives that requirement
-from this collection — and would hand the next note an id already spent.
-Malformed notes in a schema-4 context fail the rebuild rather than being
-dropped.
+It owns `validate_orchestrator_notes()` and `RECONCILIATION_CONTEXT_SCHEMA`,
+which the notes CLI and the save gate import. A rebuild carries the already
+registered notes forward, under the same lock the notes CLI holds; resetting
+them would release the save gate's requirement that every note be answered.
 
 Usage:
     python3 reconciliation_context.py --output-dir <run-dir> --git-range abc123..HEAD

@@ -2,32 +2,17 @@
 """
 Review Scope - Efficient diff scoping for review agents.
 
-Single source of truth for all filtering logic. Agents call this script
-instead of running 5+ ad-hoc git/grep commands to determine their review
-scope. It filters the changed files by domain and prints structured STATUS,
-DIFFSTAT, FILES and DIFFS sections.
+Single source of truth for all filtering logic: agents call this instead of
+5+ ad-hoc git/grep commands, and it prints structured STATUS, DIFFSTAT,
+FILES and DIFFS sections.
 
-Language recognition lives in one place: the `_PROG_LANGS`, `_STYLE_LANGS`,
-`_QUERY_LANGS`, `_DOC_LANGS`, `_DATA_LANGS` and `_FRONTEND_LANGS` groups,
-plus `_MIXED_MARKUP_LANGS`, `_TEMPLATE_LANGS` and `_TEMPLATE_SUFFIXES` for
-rendered UI. Domains compose their extensions out of those groups through
-`_ext_re(...)`, and `is_template_file()` distinguishes pure from compound
-templates for a11y dispatch and budget priority. Add a new format to these
-sources once; never edit a per-domain regex.
+Language recognition lives in the `_*_LANGS` groups that every domain
+composes through `_ext_re(...)`. Add a new format there once; never edit a
+per-domain regex.
 
-One domain looks past the extension. The a11y scope runs
-`filter_a11y_ui_evidence()` over bare `.js`, `.mjs`, `.cjs` and `.ts` files —
-never `.tsx`, `.jsx`, `.vue` or `.svelte`, whose extension IS the evidence —
-and keeps one only when the change's own hunk, or a bounded read of the file,
-shows UI evidence. A backend-only server module in a full-stack monorepo is
-otherwise pure budget waste. This is deliberately a11y-specific rather than a
-per-domain config key; generalize it when a second domain has the same
-problem. Triage is untouched by it.
-
-Budget priority tiers (`production_first`, `markup_evidence`) order files
-before largest-first budgeting, and one oversized leading diff is protected
-outside the ordinary pool. `--summary-json-out` persists the per-agent scope
-summary that the run-level file review reads.
+The a11y scope alone looks past the extension: `filter_a11y_ui_evidence()`
+keeps a bare `.js` or `.ts` file only when the change shows UI evidence.
+Triage is untouched by it.
 
 Usage:
     python3 scope.py --domain code --output-dir <output-dir>

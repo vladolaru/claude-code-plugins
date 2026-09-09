@@ -1,28 +1,18 @@
 #!/usr/bin/env python3
 """The review document contract: what a review is, and whether one is valid.
 
-One trust boundary, read by everything that opens a review artifact —
-reviewer drafts and finals, the reconciliation ledger, the analysis
-harness, the graders. It answers only shape questions, so it depends on
-nothing but the vocabulary in `verdict_rules.py`: no file layout, no
-lifecycle, no telemetry, no rendering. That is what lets `agent/output.py`
-(the builder) and `critic_adjustments.py` (the post-critic ledger) both
-validate through it without importing each other, and what keeps this
-module a leaf of the package's import graph.
-
-The document's shape authority owns `REVIEW_CONTENT_FIELDS`,
-`REVIEWER_FIELDS`, `REVIEW_OUTPUT_SCHEMA`, `coerce_text()`,
-`validate_finding_content_field()`, `validate_ledger_ids()`,
-`validate_review_content()`, `validate_review_document()`,
-`load_review_document()` and `review_summary()`. `coerce_text()` lives here
-rather than beside either caller because both ends of the document's life
-need the same answer for a model-authored field that should have been a
-string: the builder coerces at write time, the renderers at read time.
-
+One trust boundary, read by everything that opens a review artifact. It
+answers only shape questions and depends on nothing but the vocabulary in
+`verdict_rules.py`: no file layout, no lifecycle, no telemetry, no rendering.
+That keeps it a leaf of the package's import graph, and lets the builder and
+the post-critic ledger both validate through it without importing each other.
 Every reader of a final review's contents goes through
-`load_review_document(path, reviewer)`. A scan that only checks for a
-file's existence may observe process evidence, but it cannot project
-findings, verdicts, reviewed files, or semantic completion.
+`load_review_document(path, reviewer)`.
+
+It owns the document's shape — `REVIEW_CONTENT_FIELDS`, `REVIEWER_FIELDS`,
+`REVIEW_OUTPUT_SCHEMA` and the `validate_*` functions. `coerce_text()` lives
+here because both ends of a document's life need the same answer for a
+model-authored field that should have been a string.
 """
 
 import json

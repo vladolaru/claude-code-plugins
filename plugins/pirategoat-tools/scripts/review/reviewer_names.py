@@ -3,23 +3,13 @@
 
 Sole implementation of `derive_reviewer_name()` — the trailing-`-reviewer`
 stripping rule every per-agent artifact name is built from — and of its
-inverse `agent_name_from_review_stem()`, which maps the ledger's
-`<reviewer>-review` stems back to registry names so telemetry and the
-shared-cohort reader project one spelling.
+inverse `agent_name_from_review_stem()`. Every consumer imports these
+instead of restating the rule.
 
-Leaf module: stdlib only, no imports from anywhere else in `review/` —
-deliberately, so any script can import the naming rule without re-entering
-a module that is still initializing (defining the rule beside code that
-loads `telemetry.py` as an import side effect does exactly that, and the
-re-entry leaves `ReviewTelemetry` as `None` with no error). Every consumer
-imports the one implementation here instead of restating it. Importers:
-`agent/bootstrap.py`, `agent/output.py`, `agent/review_assignment.py`,
-`agents_status.py`, `evidence_manifest.py`, `manifest_sections.py`,
-`orchestration.py`, `reconciliation_context.py`, `review_markdown.py`,
-`reviewer_lifecycle.py`, `telemetry.py`, `telemetry_share.py`, and
-`analysis/review_metrics/contracts.py`;
-`tests/review/agent/test_bootstrap_integration.py` pins both derivations
-directly.
+Leaf module: stdlib only, never imports from anywhere else in `review/`,
+so any script can import the naming rule without re-entering a module that
+is still initializing. `tests/review/agent/test_bootstrap_integration.py`
+pins both derivations.
 """
 
 

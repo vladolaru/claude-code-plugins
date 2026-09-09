@@ -1,22 +1,15 @@
 #!/usr/bin/env python3
 """The prose sources keyword triage reads, reduced to the author's words.
 
-The PR body and the commit log carry text nobody meant as a review
-signal — the repository's PR template (HTML comments, checklist lines),
-commit trailers (`Co-Authored-By`, `Claude-Session`) and labels — and a
-keyword planner that reads them dispatches `auth` from a trailer and
-`security` from a checklist. This module strips what the author did not
-write; plan_dispatch.py matches what remains.
+The PR body and the commit log carry text nobody meant as a review signal
+— template lines, commit trailers, labels. This module strips what the
+author did not write; plan_dispatch.py matches what remains.
 
-The PR body loses its HTML comments and every line the repository's own
-template also carries — every template location GitHub would offer,
-concatenated — compared as whole normalized lines, so author prose written
-under a template heading survives. Commit trailers are dropped per commit:
-git's `Token: value` rule plus bare `Refs`/`Fixes`/`Closes` reference
-lines, applied to the final paragraph of each commit body. Labels never
-enter the text at all.
-
-Stdlib only; a leaf of the review package's import graph.
+The body loses its HTML comments and every line the repository's own
+template also carries, compared as whole normalized lines so author prose
+under a template heading survives. Commit trailers are dropped from each
+commit body's final paragraph. Labels never enter the text at all. Stdlib
+only; a leaf of the review package's import graph.
 """
 
 import os

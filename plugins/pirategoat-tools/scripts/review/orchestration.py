@@ -1,15 +1,13 @@
 """Side-effecting step orchestration for the review pipeline.
 
 This module owns the per-step work that touches the world: subprocess
-execution, the dependency-refresh safety precheck and the adaptive briefing
-built from it, dispatch-plan persistence, and readiness-gated
-materialization of the derived Markdown together with its outcome state —
-per-reviewer at step 8, the ``review_findings_md`` artifact at steps 9 and 11.
+execution, the dependency-refresh safety precheck and the adaptive
+briefing built from it, dispatch-plan persistence, and readiness-gated
+materialization of the derived Markdown together with its outcome state.
 
 ``assemble_review_record()`` is the machine projection of the findings
-ledger, written at steps 9 and 11. Step 11 closes the run through a
-two-pass terminal publication gate: settlement on the first pass, terminal
-publication on the second.
+ledger. Step 11 closes the run through a two-pass terminal publication
+gate: settlement on the first pass, terminal publication on the second.
 """
 
 import hashlib

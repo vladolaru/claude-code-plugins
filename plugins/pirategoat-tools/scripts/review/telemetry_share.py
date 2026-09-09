@@ -1,70 +1,21 @@
 #!/usr/bin/env python3
 """Machine-local telemetry sharing consent and repository identity.
 
-Findings, review documents, code excerpts, diffs, and the complete local
-host map never leave the machine. Only what the step-12 consent disclosure
-names is ever uploaded.
+Findings, review documents, code excerpts, diffs and the complete local
+host map never leave the machine. ``CONSENT_DISCLOSURE`` is the contract
+the redaction implements: only what it names is ever uploaded.
 
-This module owns the one repository-identity derivation:
-``host[:port]/owner/name`` from the origin remote. Callers pass a
-repository path rather than compute an identity themselves. An origin the
-derivation does not recognize — local-path and Windows-drive origins
-included — yields no shareable identity, which fails consent and every
-upload closed.
+This module owns the one repository-identity derivation,
+``host[:port]/owner/name`` from the origin remote, so callers pass a
+repository path rather than compute an identity. An unrecognized origin
+yields none, which fails consent and closes every upload.
 
-Consent is machine-local and has two layers, a global sharing switch and a
-per-repository choice, both recorded through the shared lock and
-atomic-write primitives. Cross-process exclusion is flock-based and so
-POSIX-only — the whole pipeline's posture, reviewer finalization and critic
-adjudication included — while the write itself stays atomic on every
-platform.
-
-Redaction runs in memory over a copy of the payload. ``repo_path`` is
-rewritten to the identity; the undisclosed slots the shared reader's schema
-still requires are rewritten in place rather than stripped (the session id
-and the output directory nulled, a not-applicable reviewer's skip reason
-replaced by a constant), because dropping them would push the manifest onto
-the reader's reduced legacy fallback or lose the reconciliation block; and
-undisclosed metadata is removed outright — PR titles, authors and links,
-linked issues, branch refs beyond the disclosed review target, triage and
-step-decision reasoning, the run-root file listing, and the workspace-state
-lists (hygiene file names, dirty files, command records), of which only
-status and flags upload. ``tests/review/test_telemetry_share.py`` pins every
-string-bearing key path of one complete run's redacted payload, driven by
-``tests/helpers/telemetry_run.py`` across every producer section and
-lifecycle event, so the pin covers the producer's whole string surface
-rather than a start-plus-finalize skeleton's, and a new text field is a
-deliberate disclose-or-strip decision.
-
-``CONSENT_DISCLOSURE`` is the contract the redaction implements. It names
-the sanitized, path-free host-context projection — resolved host names,
-kinds, sources, versions, commits, refresh dates and declared minima;
-unresolved names, reasons and versions; the banner reason; self-provided
-names; the scan-root count — plus range-truth state, dispatch signals,
-usage tool-call and repository-read counts, and evidence metadata (finding
-ids, severities, sources and actions, drop reasons, Verify and check counts,
-critic outcomes, and host citations). Never finding prose, and never paths.
-
-A share-safety guard refuses any payload where a local path survived:
-POSIX, Windows drive, UNC, or ``file:`` URL, whether leading, embedded, or
-colon-delimited. It recognizes a path structurally, by where one starts,
-never by a substring such as ``/home/`` that a disclosed repo-relative path
-may legitimately contain.
-
-Uploading is best effort and publishes only a completed telemetry manifest
-and its sibling JSONL to the shared private repository. The run id must be
-one safe path segment under the grammar ``run_paths.py`` owns and the shared
-reader repeats. Every request is pinned to ``github.com`` regardless of
-``GH_HOST``, and its body streams over stdin rather than argv. The manifest
-is the unit of publication and goes first; a JSONL failure after it is
-reported as a manifest-only share, never a skip, because the shared reader
-measures a complete manifest fully on its own.
-
-The consent gate, the step-12 prompt, the recorded choice
-(``set-repo --output-dir``), and the uploaded payload all read the run's own
-recorded identity, and an upload refuses a manifest whose ``run.repo``
-differs from the consented identity — so consent can never authorize, or be
-stored for, a repository other than the one the payload describes.
+A share-safety guard refuses any payload where a local path survived,
+recognized structurally rather than by substring. Consent, the step-12
+prompt, the recorded choice and the payload all read the run's own recorded
+identity, so consent can never authorize another repository.
+``tests/review/test_telemetry_share.py`` pins every string-bearing key path
+of one redacted run.
 """
 
 import argparse

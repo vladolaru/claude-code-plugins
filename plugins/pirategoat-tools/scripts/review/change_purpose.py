@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 """The change purpose's structure: the orchestrator's judgement, parsed.
 
-The `change_purpose` artifact is written by the orchestrator at step 3 or
-4 by judgement and read by every reviewer briefing (REVIEW FOCUS), the
-reconciliation context and the review record. A free-form focus list
-mixes claims with givens and inferences with sourced statements, so no
-script can say which check settled which claim; this module reads the
-three headings the step-3 handoff requires instead:
+The `change_purpose` artifact is written by the orchestrator by judgement
+and read by every reviewer briefing, the reconciliation context and the
+review record. This module is its one parser, and reads three headings:
 
     ## Verify
     V1. claim — where: file:line — settled by: evidence — source: PR description
@@ -15,33 +12,15 @@ three headings the step-3 handoff requires instead:
     ## Author's description (extracted)
     quoted prose
 
-It interprets nothing: ids are explicit in the text, the source is the
-text after the last `— source:`, and a trailing `(carried over)` marks an
-item brought forward from an earlier review of the same branch. A purpose
-without the headings is unstructured — a fact every consumer degrades on,
-never a failure.
+It interprets nothing and repairs nothing: a missing heading, an unsourced
+item, an item inferred from the diff under Context, a duplicate id or more
+than eight Verify items is reported as a parse problem. A purpose without
+the headings is unstructured — a fact every consumer degrades on.
 
-Its rules are recorded doctrine, and every one of them is reported as a
-parse problem rather than repaired: a missing heading; an item that names
-no source; an item `inferred from the diff` under Context; a duplicate id;
-an id listed under the other tier's heading; a tier body that parses to no
-item without reading `None.`; and more than eight Verify items.
-
-Who may cite a Verify item is read here too:
-
-* `ledger_citations()` is the one reader of the entries in a saved ledger
-  that may cite a Verify item — every check under its source reviewers, and
-  every confirmed orchestrator note carrying `verifies`, labelled
-  `RECONCILIATOR_LABEL`.
-* `checks_settling()` groups those entries by the item cited. It is the one
-  function behind the reconciliation context's `verify_items` and the
-  record's `## Verify items` table.
-* `undeclared_citations()` names every citation of an id the purpose does
-  not declare, which the record lists under that same table.
-
-Stdlib only; a leaf of the review package's import graph.
-`review_document.py` owns `VERIFY_ITEM_ID_RE`, the Verify-item id grammar a
-check's `verifies` list must satisfy.
+`ledger_citations()` is the one reader of the ledger entries that may cite a
+Verify item, and `checks_settling()` groups them behind the reconciliation
+context's `verify_items` and the record's table. Stdlib only, and a leaf of
+the import graph; `review_document.py` owns the Verify-item id grammar.
 """
 
 import re

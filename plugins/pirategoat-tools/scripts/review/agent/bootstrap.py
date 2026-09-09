@@ -3,13 +3,8 @@
 Bootstrap Reviewer — Single-command setup for all reviewer agents.
 
 Consolidates plugin root discovery, protocol extraction, scope discovery,
-and output instructions into one structured prompt block. Agents run this
-script as their first action and get everything they need.
-
-When an agent's primary domain matches no files but a secondary domain
-does, ``resolve_overall_status`` flips the status to a scoped ``OK`` and the
-prompt carries a ``COVERAGE NOTE``, so the agent reviews the secondary
-files with an honestly-scoped verdict instead of silently masking the gap.
+and output instructions into one structured prompt block. Every reviewer
+agent runs this as its first action. Stdlib only.
 
 Usage:
     python3 bootstrap.py --agent security-reviewer --output-dir <output-dir>
@@ -19,8 +14,6 @@ Usage:
 Exit codes:
     0  Success (scope may be OK or NO_DOMAIN_FILES)
     1  Error (plugin root not found, unknown agent, scope discovery failed)
-
-Zero external dependencies (stdlib only).
 """
 
 import argparse
