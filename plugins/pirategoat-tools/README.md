@@ -201,6 +201,11 @@ Final review output is dual-format — canonical `reviewers/<reviewer>/review.js
 |-----|-------------|
 | [Changelog](./CHANGELOG.md) | Detailed version history |
 | [Guides](./docs/guides/) | User guides and tutorials |
+| [Review pipeline](./docs/review-pipeline.md) | How the 12-step pipeline is built: steps, gates, briefing design, protocols, run layout, output contract |
+| [Artifact schemas](./docs/artifact-schemas.md) | The `schema` field rule, its carve-out, and every artifact that carries one |
+| [Repo-contributed reviewers](./docs/repo-reviewers.md) | How a reviewed repository adds its own rules and reviewers, and the invariants behind it |
+| [Analysis tools](./docs/analysis-tools.md) | Run metrics, transcript enrichment, usage snapshots, session analyzers, and the measurement contract |
+| [Dev wrapper](./docs/dev-wrapper.md) | Running the unreleased plugin against a real repository |
 
 ## Structure
 
