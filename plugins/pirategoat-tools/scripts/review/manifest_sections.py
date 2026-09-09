@@ -1,8 +1,33 @@
 """Manifest section builders — pure functions over the run's output dir.
 
-Extracted from ReviewTelemetry so the telemetry class stays an event
-logger; these read completed artifacts and build manifest sections.
-Behavior-preserving move (2026-08-03); see test_telemetry.py.
+Extracted from ReviewTelemetry so the telemetry class stays an event logger;
+these read completed artifacts and build manifest sections. They cover the
+dispatch, assignment, dependency-refresh, reviewer-Markdown outcome,
+findings-Markdown outcome, worktree-hygiene, synthesis-agent lifecycle,
+token-usage and skipped-steps sections — `build_skipped_steps_manifest()`
+sits alongside the rest. Dispatch projections retain each agent's
+`initial_signal` and `final_signal`; usage rows retain `tool_calls` and
+`repository_reads` beside the token counts.
+
+Several projections here are the single one of their kind:
+
+* `summarize_host_context()` and `build_host_context_manifest()` are the one
+  path-free projection from local Host Context into run state, the review
+  record and telemetry.
+* `read_change_purpose()` is the one reader of the parsed change purpose,
+  shared by step 5, step 8 and the evidence manifest.
+* `describe_reconciliation_verification()` is the one sentence the review
+  record, the step-9 situation and the critic prompt all carry for the
+  step-9 measurement.
+
+`aggregate_file_review()` also lives here — the run-level file review that
+pipeline step 9 publishes into `state["file_review"]` for the review record.
+It belongs beside `build_assignment_manifest()` because it answers that
+builder's question — which changed files no agent's scope contained — from
+runtime sidecars over a different population. Read that builder's DIVERGENCE
+NOTE before reconciling the two unscoped/unassigned numbers.
+
+See test_telemetry.py.
 """
 
 import json

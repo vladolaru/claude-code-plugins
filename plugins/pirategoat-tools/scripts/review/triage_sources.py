@@ -8,6 +8,14 @@ keyword planner that reads them dispatches `auth` from a trailer and
 `security` from a checklist. This module strips what the author did not
 write; plan_dispatch.py matches what remains.
 
+The PR body loses its HTML comments and every line the repository's own
+template also carries — every template location GitHub would offer,
+concatenated — compared as whole normalized lines, so author prose written
+under a template heading survives. Commit trailers are dropped per commit:
+git's `Token: value` rule plus bare `Refs`/`Fixes`/`Closes` reference
+lines, applied to the final paragraph of each commit body. Labels never
+enter the text at all.
+
 Stdlib only; a leaf of the review package's import graph.
 """
 

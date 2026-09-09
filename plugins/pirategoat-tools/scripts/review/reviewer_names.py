@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
 """Canonical reviewer-name derivation.
 
+Sole implementation of `derive_reviewer_name()` — the trailing-`-reviewer`
+stripping rule every per-agent artifact name is built from — and of its
+inverse `agent_name_from_review_stem()`, which maps the ledger's
+`<reviewer>-review` stems back to registry names so telemetry and the
+shared-cohort reader project one spelling.
+
 Leaf module: stdlib only, no imports from anywhere else in `review/` —
-deliberately, so any script can import this without risking an import
-cycle. `agent/bootstrap.py` used to define `derive_reviewer_name()`
-itself and load `telemetry.py` (which imports `manifest_sections.py`) as
-a top-level side effect; a second script importing `derive_reviewer_name`
-from `bootstrap` re-entered `bootstrap` mid-initialization and silently
-broke telemetry loading (`ReviewTelemetry` became `None`). Every consumer
-of the naming rule imports the one implementation here instead of
-restating (or, in `bootstrap.py`'s case, still owning) it.
-`agent_name_from_review_stem()` is the inverse rule for the ledger's
-review-file stems; telemetry and the shared-cohort reader use it to
-project one registry spelling.
+deliberately, so any script can import the naming rule without re-entering
+a module that is still initializing (defining the rule beside code that
+loads `telemetry.py` as an import side effect does exactly that, and the
+re-entry leaves `ReviewTelemetry` as `None` with no error). Every consumer
+imports the one implementation here instead of restating it. Importers:
+`agent/bootstrap.py`, `agent/output.py`, `agent/review_assignment.py`,
+`agents_status.py`, `evidence_manifest.py`, `manifest_sections.py`,
+`orchestration.py`, `reconciliation_context.py`, `review_markdown.py`,
+`reviewer_lifecycle.py`, `telemetry.py`, `telemetry_share.py`, and
+`analysis/review_metrics/contracts.py`;
+`tests/review/agent/test_bootstrap_integration.py` pins both derivations
+directly.
 """
 
 

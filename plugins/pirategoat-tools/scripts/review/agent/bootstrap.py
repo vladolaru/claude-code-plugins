@@ -6,6 +6,11 @@ Consolidates plugin root discovery, protocol extraction, scope discovery,
 and output instructions into one structured prompt block. Agents run this
 script as their first action and get everything they need.
 
+When an agent's primary domain matches no files but a secondary domain
+does, ``resolve_overall_status`` flips the status to a scoped ``OK`` and the
+prompt carries a ``COVERAGE NOTE``, so the agent reviews the secondary
+files with an honestly-scoped verdict instead of silently masking the gap.
+
 Usage:
     python3 bootstrap.py --agent security-reviewer --output-dir <output-dir>
     python3 bootstrap.py --agent php-tests-reviewer --output-dir <output-dir> --range main..feature

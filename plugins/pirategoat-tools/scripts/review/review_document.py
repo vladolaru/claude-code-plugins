@@ -7,7 +7,22 @@ harness, the graders. It answers only shape questions, so it depends on
 nothing but the vocabulary in `verdict_rules.py`: no file layout, no
 lifecycle, no telemetry, no rendering. That is what lets `agent/output.py`
 (the builder) and `critic_adjustments.py` (the post-critic ledger) both
-validate through it without importing each other.
+validate through it without importing each other, and what keeps this
+module a leaf of the package's import graph.
+
+The document's shape authority owns `REVIEW_CONTENT_FIELDS`,
+`REVIEWER_FIELDS`, `REVIEW_OUTPUT_SCHEMA`, `coerce_text()`,
+`validate_finding_content_field()`, `validate_ledger_ids()`,
+`validate_review_content()`, `validate_review_document()`,
+`load_review_document()` and `review_summary()`. `coerce_text()` lives here
+rather than beside either caller because both ends of the document's life
+need the same answer for a model-authored field that should have been a
+string: the builder coerces at write time, the renderers at read time.
+
+Every reader of a final review's contents goes through
+`load_review_document(path, reviewer)`. A scan that only checks for a
+file's existence may observe process evidence, but it cannot project
+findings, verdicts, reviewed files, or semantic completion.
 """
 
 import json

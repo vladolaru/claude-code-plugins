@@ -16,12 +16,32 @@ three headings the step-3 handoff requires instead:
     quoted prose
 
 It interprets nothing: ids are explicit in the text, the source is the
-text after the last `— source:`, and its rules are recorded doctrine
-(every item names a source; an item inferred from the diff may never be
-Context). A purpose without the headings is unstructured — a fact every
-consumer degrades on, not a malformed file. Stdlib only; a leaf of the
-review package's import graph. `review_document.py` owns the Verify-item
-id grammar a check's `verifies` list must satisfy.
+text after the last `— source:`, and a trailing `(carried over)` marks an
+item brought forward from an earlier review of the same branch. A purpose
+without the headings is unstructured — a fact every consumer degrades on,
+never a failure.
+
+Its rules are recorded doctrine, and every one of them is reported as a
+parse problem rather than repaired: a missing heading; an item that names
+no source; an item `inferred from the diff` under Context; a duplicate id;
+an id listed under the other tier's heading; a tier body that parses to no
+item without reading `None.`; and more than eight Verify items.
+
+Who may cite a Verify item is read here too:
+
+* `ledger_citations()` is the one reader of the entries in a saved ledger
+  that may cite a Verify item — every check under its source reviewers, and
+  every confirmed orchestrator note carrying `verifies`, labelled
+  `RECONCILIATOR_LABEL`.
+* `checks_settling()` groups those entries by the item cited. It is the one
+  function behind the reconciliation context's `verify_items` and the
+  record's `## Verify items` table.
+* `undeclared_citations()` names every citation of an id the purpose does
+  not declare, which the record lists under that same table.
+
+Stdlib only; a leaf of the review package's import graph.
+`review_document.py` owns `VERIFY_ITEM_ID_RE`, the Verify-item id grammar a
+check's `verifies` list must satisfy.
 """
 
 import re

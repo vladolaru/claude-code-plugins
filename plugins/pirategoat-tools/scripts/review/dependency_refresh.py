@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """Validate and atomically publish one dependency-refresh report.
 
+The validating save channel for trusted-branch dependency refresh: one
+bounded observation of final tracked Git state, a strict schema-1 request
+checked by canonical validators, and atomic publication of
+the ``dependency_refresh`` artifact.
+
 The interactive orchestrator decides whether dependency work is needed and
-what commands to run. This module owns only the closed report schema, a
-bounded observation of final tracked Git state, and canonical publication.
-Reported command strings are evidence, not execution attestation.
+what commands to run. This module owns only the closed report schema, that
+observation, and canonical publication. Reported command strings are
+evidence, not execution attestation.
 """
 
 import argparse

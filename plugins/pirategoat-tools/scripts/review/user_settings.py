@@ -4,18 +4,28 @@
 ``~/.config/pirategoat/config.json`` (or ``$XDG_CONFIG_HOME/pirategoat/
 config.json``) holds settings owned by the human running reviews on this
 machine — unlike the reviewed repo's ``.pirategoat/config.json``, which is
-repo-owned and PR-exposed. Trust declarations belong here precisely because
-the reviewed repo must never be able to assert them about itself.
+repo-owned and PR-exposed. Trust and consent declarations belong here
+precisely because the reviewed repo must never be able to assert them about
+itself: what a run is trusted to do, and what may be shared about it, are
+the requester's to declare, never the repo's.
 
 Current settings::
 
     {"review": {"refresh_dependencies": true}}
 
-``review.refresh_dependencies: true`` declares every interactive run the
-requester starts dependency-trusted: trusted-branch dependency refresh
-defaults on without a per-run ``--refresh-deps``, overridable per run with
-``--no-refresh-deps``. Non-interactive (bot) runs ignore this file entirely —
-the pipeline's interactive-only hard-off stays authoritative.
+``review.refresh_dependencies: true`` is a standing trust declaration: it
+makes every interactive run the requester starts dependency-trusted, so
+trusted-branch dependency refresh defaults on without a per-run
+``--refresh-deps`` and is overridable per run with ``--no-refresh-deps``.
+Non-interactive (bot) runs ignore this file entirely — the pipeline's
+interactive-only hard-off stays authoritative.
+
+This module also owns the telemetry-sharing consent vocabulary
+(``SHARING_CHOICES``, ``REPO_CHOICES``) and the strict read-side parsing
+that decides what counts as consent. The writer (``telemetry_share``)
+validates and offers exactly these values, so a choice the CLI accepts can
+never be dropped here as malformed, and malformed data never becomes
+consent.
 """
 
 import json

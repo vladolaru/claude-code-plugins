@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
 """Markdown derived from a review artifact — never written by hand.
 
-Every human-readable review document in an output directory is a pure
+The one JSON-to-Markdown projection: `render_markdown`,
+`render_review_body`, `materialize_markdown`, and the `render`/`materialize`
+CLI. Every human-readable review document in an output directory is a pure
 function of the JSON beside it: reviewer Markdown from the reviewer's final,
 findings Markdown from the reconciliation ledger, and the body of the review
-record from the same renderer, so a rendering can never
-disagree with the artifact it came from.
+record from the same renderer, so a rendering can never disagree with the
+artifact it came from. The ``review_findings_md`` artifact and `reviewers/<reviewer>/review.md`
+share this one path, and a render failure is a degradation note on stderr —
+never an exception, and never a file that disagrees with its JSON.
 
-This module exists so that ownership can be stated once. Rendering a
-ledger needs `critic_adjustments`' reader; `critic_adjustments` needs the
-document validators; the validators used to live beside the renderer in
-`agent/output.py`, so the renderer reached for its ledger reader from
-inside a function body with a comment explaining that a module-level
-import would be cyclic. Here it is a module-level import, because nothing
-in this file is imported back.
+This module exists so that ownership can be stated once. Rendering a ledger
+needs `critic_adjustments`' reader and `critic_adjustments` needs the
+document validators, so rendering is the only thing that legitimately knows
+about both a reviewer's draft and a critic's adjustments. Both are
+module-level imports here, and nothing in this file is imported back — in
+particular it does not import the builder at all, which is what keeps the
+pair out of an import cycle.
 
 Usage:
     python3 review_markdown.py render <run>/reviewers/<reviewer>/review.json

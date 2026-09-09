@@ -3,9 +3,20 @@
 Dispatch Planner — Centralized review agent dispatch decisions.
 
 Reads the agent registry and changed files to produce a deterministic
-dispatch plan: which agents to run, which to skip, and why.
+dispatch plan: which agents to run, which to skip, and why. One script
+owns triage, so command files never restate it; review/orchestration.py
+runs it and consumes the plan.
 
-Replaces duplicated triage logic in command files with a single script.
+Each decision is produced as `(status, reason, signal)`, so `reason` stays
+explanatory prose while `signal` is the stable dispatch identity consumers
+match on. `LOW_SIGNAL_DISPATCH_SIGNALS` is the canonical quick-mode
+blocklist: an excluded agent dispatched only by one of those signals
+becomes `SKIPPED_QUICK_MODE`, while a dispatch backed by positive evidence
+survives quick mode.
+
+`detect_unrecognized_source()` is the safety net: when a changed source
+language no reviewer domain covers, the plan gains a `warnings[]` entry, so
+a coverage gap fails loudly instead of producing a clean review.
 
 Usage:
     python3 plan_dispatch.py --mode full --git-range "main..HEAD" --output-dir /tmp/review
@@ -1768,8 +1779,8 @@ def decide_agent_dispatch(
         commit_messages: Combined commit messages in ORIGINAL case
             (keyword matching normalizes per-source).
         diffstat: Diffstat summary dict.
-        pr_text: PR title + body + labels + branch + issue titles, in
-            ORIGINAL case.
+        pr_text: PR title + author-written body + branch + issue titles,
+            in ORIGINAL case (labels are excluded; see _build_pr_text).
         diff_text: Patch text in ORIGINAL case (None = not scanned/fetch failed).
         repository_text: Lowercased repository origin/name.
         git_range: Git range used to fetch domain-specific patch text.

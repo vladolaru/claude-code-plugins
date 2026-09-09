@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """Channel-aware review verdict derivation, in one place.
 
-Two modules answer "what verdict do these findings carry": `agent/output.py`
-when a reviewer or the reconciliator publishes a review, and
-`critic_adjustments.py` when an applying critic batch changes the severities
-under an already-published ledger. Before this module existed only the first
-one did — `_recount_summary()` rebuilt `summary.by_severity` and left
-`verdict` exactly as the reconciliator had written it — so a REVISE batch
-that demoted the last high finding published a `request_changes` ledger over
-a finding list that no longer justified one. Step 11's verdict sync used to
-paper over that by copying the orchestrator's transcribed verdict into the
-ledger; with the verdict now DERIVED from the ledger, a stale ledger verdict
-is machine authority for a wrong published verdict, so the thresholds have to
-be a shared rule rather than one module's private ladder.
+``verdict_for_counts()`` is the ONE place the severity-to-verdict thresholds
+live: a critical finding blocks, so do three or more highs; any high, or
+five or more mediums, requests changes; a medium comments; anything else
+approves. Two modules ask what verdict a set of findings carries —
+`agent/output.py` when a reviewer or the reconciliator publishes a review,
+and `critic_adjustments.py` when an applying critic batch changes the
+severities under an already-published ledger — and both read the ladder
+from here, so it can never drift into two copies. The published verdict is
+DERIVED from the ledger, which makes a stale ledger verdict machine
+authority for a wrong published verdict; that is why the thresholds are a
+shared rule rather than one module's private ladder.
 
 The threshold ladder remains available for count-based consumers, while
 ``derive_review_state()`` owns the finding-population policy shared by both
