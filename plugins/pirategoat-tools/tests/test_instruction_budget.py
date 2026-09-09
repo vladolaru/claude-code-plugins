@@ -45,13 +45,12 @@ PLUGIN_AGENTS_MDS = sorted(PLUGINS_DIR.glob("*/AGENTS.md"))
 # across the root-to-cwd AGENTS.md chain before it stops reading.
 CODEX_PROJECT_DOC_MAX_BYTES = 32 * 1024
 
-# Interim ceilings: today's sizes, so the restructure that moves the files
-# under Codex's budget cannot regress while it is in progress. The final
-# commit of that restructure lowers them to the targets in the comments.
-ROOT_BUDGET_BYTES = 46_000  # target: 10 * 1024
-PLUGIN_BUDGET_BYTES = 122_000  # target: 18 * 1024
-CHAIN_BUDGET_BYTES = 168_000  # target: CODEX_PROJECT_DOC_MAX_BYTES - 4 * 1024
-MAX_LINE_CHARS = 3_500  # target: 600
+# Ceilings. The chain ceiling leaves 4 KiB under Codex's budget so a routine
+# edit cannot push the chain over the line between two test runs.
+ROOT_BUDGET_BYTES = 10 * 1024
+PLUGIN_BUDGET_BYTES = 18 * 1024
+CHAIN_BUDGET_BYTES = CODEX_PROJECT_DOC_MAX_BYTES - 4 * 1024
+MAX_LINE_CHARS = 600
 
 RELOCATION_HINT = (
     "Move content down a layer instead of compressing it: module facts to "
