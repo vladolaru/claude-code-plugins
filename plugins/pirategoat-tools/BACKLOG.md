@@ -99,14 +99,6 @@ Task 1 pinned "run the printed command unfiltered" to the review pipeline's step
 **Deferred because:** out of Task 1's scope (review pipeline only); no field evidence yet that the Linear pipeline's briefings get truncated the same way.
 **Do when:** a Linear-issue run shows truncated next-step guidance, or the next time `scripts/linear/pipeline.py`'s footer rendering is edited.
 
-### 10. `require_php_source_file` is an undocumented registry gate
-
-Three registry entries (`wp-architecture-reviewer`, `ecosystem-integration-reviewer`, `woo-regression-reviewer`) carry `require_php_source_file: true`, but the field has no row in AGENTS.md's Agent Registry field table (only `require_triage_keyword_match` does), and only `woo-regression-reviewer.md`'s own prompt explains the gate to the agent it applies to — `wp-architecture-reviewer.md` and `ecosystem-integration-reviewer.md` say nothing about it, so an agent reading either prompt cold has no way to learn why it was skipped on a PHP-less diff.
-
-**Evidence:** run12 audit, Task 14 review of `scripts/review/agent_registry.json` (three carriers) against `AGENTS.md`'s registry field table and the three agents' `.md` prompts.
-**Deferred because:** the gate behaves correctly; this is a discovery gap for future agents extending the registry, not a dispatch bug.
-**Do when:** the next time `agent_registry.json`'s field table in AGENTS.md is edited, or a fourth agent adopts `require_php_source_file` and needs the same explanation copied a third time.
-
 ### 11. Weak triage keywords dispatch reviewers that find nothing
 
 On run 4 (PR #12095, 9 JS/TS files) four `keyword` dispatches rested on words that were in the author's text but carried no signal: concurrency (`await` from `awaiting_response`, `transaction*` from a route path, `cach*` from a type name), data-flow-privacy (`merchant*` in prose, `charge*` from `charge_id`, `address` from a commit subject), docs-drift (`hook`/`hooks` from `hooks.ts`) and devils-advocate (`cach*`, `fallback*`, `table*`). The orchestrator removed the first two with correct reasons; the other two ran and declared themselves not applicable at 3.3 % of subagent tokens. Plan E removed template and trailer matches; these are real words that are weak in JavaScript codebases.

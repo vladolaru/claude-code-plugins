@@ -1,827 +1,147 @@
 # pirategoat-tools — Agent Instructions
 
-You are the maintainer of pirategoat-tools, a code review orchestration plugin. You dispatch domain-specific reviewer agents in parallel, reconcile their findings through semantic deduplication and verification, then stress-test conclusions via an independent decision critic.
+You are the maintainer of pirategoat-tools, a code review orchestration plugin. You dispatch domain-specific reviewer agents in parallel, reconcile their findings through semantic deduplication and verification, then stress-test conclusions through an independent decision critic.
+
+This file holds the rules and the map. A fact about one module lives in that module's docstring; how a subsystem is built lives in `docs/`; which tests a change runs lives in `tests/TESTING.md`. The root `AGENTS.md` says what belongs where.
+
+## Read When
+
+| Before you | Read |
+|---|---|
+| Change a step's briefing, handoff, readiness gate, output artifact, or the shared reviewer protocols | `docs/review-pipeline.md` |
+| Change the shape of any JSON artifact, or add one | `docs/artifact-schemas.md` |
+| Touch `review_config.py`, the `repo-reviewer-adapter`, bootstrap ref-mode, or the advisory channel | `docs/repo-reviewers.md` |
+| Change or use anything under `scripts/analysis/` | `docs/analysis-tools.md` |
+| Exercise unreleased plugin changes against a real repository | `docs/dev-wrapper.md` |
+| Change a briefing's prose or structure | `../../docs/patterns/curated-context-pipeline.md` (the design it follows) |
+| Decide which tests to run for a change | `tests/TESTING.md` § Which tests to run |
+| Defer a real finding instead of fixing it | `BACKLOG.md` (the committed place of record; `.claude/docs/` is gitignored) |
 
 ## Key Files
 
-**IMPORTANT: `scripts/review/agent_registry.json` is the single source of truth for all reviewer agent configuration.** Every agent change starts and ends here.
+`scripts/review/agent_registry.json` is the single source of truth for reviewer configuration; every agent change starts and ends there. Each module below documents its own contract in its docstring.
 
 | File | Role |
-|------|------|
-| `scripts/review/pipeline.py` | Executable facade for the unified 12-step review pipeline. Owns conditions, routing, state I/O, output formatting, telemetry/Git identity, and the CLI while re-exporting the split pipeline modules. Called by all three review commands with `--mode pr\|full\|incremental` and generated Codex adapters with `--host codex`. |
-| `scripts/review/pipeline_contract.py` | Shared path, host, step-sequence, timeout, and Git vocabulary used across the pipeline modules. |
-| `scripts/review/run_paths.py` | Sole authority for durable review locations, fresh run allocation, newest-10 retention, target-vs-run boundaries, and the grouped run layout. Its `ARTIFACTS` registry owns shared filenames; `reviewer_lifecycle.py` owns fixed per-reviewer filenames on top of its validated reviewer directories. Also owns two spellings the producer and the uploader must agree on but cannot share through each other, since `telemetry_share.py` cannot import `telemetry.py`: `telemetry_log_path()`, the run's log-marker read (a missing marker answers empty, an unreadable one raises, so each caller picks its own failure policy), and `SAFE_RUN_ID_SEGMENT_RE`, the path-segment grammar for a run id that arrives as data — deliberately looser than the `RUN_ID_RE` this allocator mints, and strict about traversal. |
-| `scripts/review/briefings.py` | Pure curated-context guidance, formatters, mission text, and output templates for the 12 review steps. |
-| `scripts/review/orchestration.py` | Side-effecting per-step work, subprocess execution, the dependency-refresh safety precheck and adaptive briefing, dispatch-plan persistence, readiness-gated derived-Markdown materialization with outcome state (per-reviewer at step 8, `review-findings.md` at steps 9 and 11), `assemble_review_record()` — the machine projection of the ledger written at steps 9 and 11 — and step 11's two-pass terminal publication gate. |
-| `../../scripts/generate_codex_compat.py` | Repository-level generator that converts canonical Claude Code commands into Codex command-skill adapters and emits this plugin's `.codex-plugin/plugin.json`. |
-| `scripts/review/agent_registry.json` | Agent registry — domain, protocols, dispatch class, triage criteria, model tier. |
-| `scripts/review/agent/bootstrap.py` | Builds the structured prompt each agent receives. Handles plugin root discovery, protocol extraction, scope discovery, and output instructions. When a primary domain matches nothing but a secondary domain does, `resolve_overall_status` flips the status to a scoped `OK` and injects a `COVERAGE NOTE` so the agent reviews the secondary files with an honestly-scoped verdict instead of silently masking the gap. |
-| `scripts/review/reviewer_names.py` | Sole implementation of `derive_reviewer_name()` — the trailing-`-reviewer` stripping rule every per-agent artifact name is built from. A leaf module (stdlib only, no imports from elsewhere in `review/`) so any script can import it without risking the import cycle bootstrap used to cause: an earlier version defined this function inside `agent/bootstrap.py` itself, and a second script importing it from there re-entered `bootstrap.py` mid-initialization and silently broke `telemetry.py` loading. Also owns `agent_name_from_review_stem()`, the inverse for the ledger's `<reviewer>-review` stems, so telemetry projects one registry spelling. Importers: `agent/bootstrap.py`, `agent/output.py`, `agent/review_assignment.py`, `agents_status.py`, `manifest_sections.py`, `orchestration.py`, `reconciliation_context.py`, `review_markdown.py`, `reviewer_lifecycle.py`, `telemetry.py`, `telemetry_share.py`, `analysis/review_metrics/contracts.py`, and `tests/review/agent/test_bootstrap_integration.py`. |
-| `scripts/review/agent/scope.py` | Efficient diff scoping. Filters changes by domain (security, performance, php-tests, etc.) and outputs structured STATUS/FILES/STATS/DIFFS sections. **Language recognition lives in one place:** the `_PROG_LANGS`/`_STYLE_LANGS`/`_QUERY_LANGS`/`_DOC_LANGS`/`_DATA_LANGS`/`_FRONTEND_LANGS` groups, plus `_MIXED_MARKUP_LANGS`, `_TEMPLATE_LANGS`, and `_TEMPLATE_SUFFIXES` for rendered UI. Domains compose extensions via `_ext_re(...)`; `is_template_file()` distinguishes pure and compound templates for a11y dispatch and budget priority. **One domain looks past the extension:** a11y scope runs `filter_a11y_ui_evidence()` on bare `.js`/`.mjs`/`.cjs`/`.ts` files (never `.tsx`/`.jsx`/`.vue`/`.svelte`, whose extension IS the evidence), keeping them only when the change's own hunk or a bounded read of the file shows UI evidence — a backend-only server module in a full-stack monorepo is otherwise pure budget waste. Deliberately a11y-specific, not a per-domain config key; generalize when a second domain has the problem. Triage is untouched. Add formats to these sources once — never edit per-domain regexes. Budget priority tiers (`production_first`, `markup_evidence`) order files before largest-first budgeting; one oversized leading diff is protected outside the ordinary pool, and `--summary-json-out` persists per-agent scope summaries for the run-level file review. |
-| `scripts/review/plan_dispatch.py` | Deterministic dispatch planning. Reads agent registry + changed files → produces each decision as `(status, reason, signal)`, so `reason` remains explanatory while `signal` is the stable dispatch identity. `LOW_SIGNAL_DISPATCH_SIGNALS` is the canonical quick-mode blocklist: excluded agents dispatched only by one of those signals become `SKIPPED_QUICK_MODE`; positive-evidence dispatches remain. Called internally by review/orchestration.py. Also runs the unrecognized-source safety net (`detect_unrecognized_source`) that emits a `warnings[]` entry when a changed source language no domain covers — so coverage gaps fail loudly instead of producing a clean review. |
-| `scripts/review/triage_sources.py` | The prose sources keyword triage reads, reduced to the author's words: HTML comments and the repository's own PR template (every GitHub location, concatenated) are subtracted from the PR body by normalized whole-line comparison, commit trailers are dropped per commit (git's `Token: value` rule plus bare `Refs`/`Fixes`/`Closes` reference lines), and labels never enter the text. Stdlib-only leaf. |
-| `scripts/review/change_purpose.py` | The change purpose's structure, parsed: the three headings the step-3 handoff requires (`## Verify`, `## Context`, `## Author's description (extracted)`), items by their explicit `V1.`/`C1.` ids with a `— source:` provenance, the `(carried over)` marker, and the parse facts as problems (a missing heading; an item without a source; an item `inferred from the diff` under Context; a duplicate id; an id under the other tier's heading; a tier body that parses to no item without reading `None.`; more than eight Verify items). `ledger_citations()` is the one reader of who may cite a Verify item in a saved ledger — every check under its source reviewers, every confirmed orchestrator note that carries `verifies` under `RECONCILIATOR_LABEL` — and `checks_settling()` groups those entries by the item cited — the one function behind the reconciliation context's `verify_items` and the record's `## Verify items` table — and `undeclared_citations()` names every citation of an id the purpose does not declare, which the record lists under that table. A purpose without the headings is `structured: False`, never a failure. Stdlib-only leaf; `review_document.py` separately owns `VERIFY_ITEM_ID_RE`, the grammar a check's `verifies` list must satisfy. |
-| `scripts/review/dispatch_adjust.py` | The orchestrator's one channel for step-5 dispatch adjustments: repeatable `--skip NAME REASON` (a dispatched agent → `SKIPPED_OVERRIDE`) and `--dispatch NAME REASON` (a skipped agent → `DISPATCH_OVERRIDE`), every name validated against `dispatch-plan.json` before anything is written, one atomic write with the read under the same run-directory lock, `--dry-run`, and one printed line per adjustment; an unknown name, an empty reason or a malformed or missing plan exits 1 naming the fix, while an agent already in the requested family (a `--skip` of a planner-skipped agent, a `--dispatch` of a dispatched one, a repeated override) is a reported `UNCHANGED` no-op so re-runs are idempotent. `dispatch_status.OVERRIDE_REASON_KEY`, `PLANNER_STATUS_KEY` and `ORPHANED_FILES_KEY` are the one spelling of the three fields it writes (the reason, the status the planner gave before the first override, and the files the skip orphaned) and the orchestration and manifest builders read. On every call it recomputes, for each override-skipped agent, the changed files its scope alone covered, reading the scope from the plan row — `scope_domains`, which the planner stamps on every row as the primary plus secondary domains, and a repo reviewer's `include_paths` — through `plan_dispatch.scope_files`, the derivation the planner's own triage uses, so no plan reader opens the registry; it prints them beside the skip under `ORPHANED_FILES_LEAD`, the lead the step-6 briefing prints too. Step 6 lists the overrides from the final plan alone (`state["dispatch_adjustments"]`) and its briefing repeats them with those files, so a skip the orchestrator made, and what it left unreviewed, is visible in the session; step 9 carries them into `file_review.override_orphaned_files` and the coverage section names them as skipped by override. The plan file is never edited by hand or by a per-run script. |
-| `scripts/review/dispatch_status.py` | Canonical producer/consumer dispatch-status and signal vocabulary. `load_dispatch_plan(path)` is the one reader of a dispatch plan (JSON, object, agents validated — every consumer from the orchestration steps to telemetry and the evidence manifest goes through it); `validate_dispatch_plan_agents()` validates agent names and statuses only; `manifest_sections.safe_dispatch_signal()` projects a missing or invalid signal as `None`, so consumers never derive signal identity from reason prose. |
-| `scripts/review/evidence_manifest.py` | The path- and prose-free evidence projection telemetry shares: every final finding's id, severity, source reviewers and critic action (a critic-added finding's sources are a measured empty list); findings the critic removed, with their sources, so survival accounting sees every source's end; dropped findings by reason; check counts; Verify items and how many checks settled each; the critic's verdict and adjustments by action × outcome; orchestrator-note outcomes; upstream citations per reviewer by host, from findings' `source_cited` and from the protocol's citation form in check methods and results. Missing historical lineage, dropped-check and orchestrator-note producers project `None`, distinct from measured empty collections. Reads the ledger through `critic_adjustments.read_findings_file`, the committed proposal through `read_committed_proposal`, and the change purpose through `change_purpose`. Never a title, description, method, rationale, evidence text or path. |
-| `scripts/review/context.py` | Unified Ring 1 context collection. Fills git context, PR metadata, reviews, linked issues, staleness, and author name. `--refresh-host-context` re-runs only host-context discovery against the existing review-context.json (used after a trusted-branch dependency refresh). |
-| `scripts/review/dependency_refresh.py` | The validating save channel for trusted-branch dependency refresh: one bounded tracked-Git observation, strict schema-1 request and canonical validators, and atomic publication of `dependency-refresh.json`. The interactive orchestrator decides whether refresh work is needed and what commands to run; reported commands are evidence, not execution attestation. |
-| `scripts/review/user_settings.py` | Requester-side machine-local settings (`~/.config/pirategoat/config.json` / `$XDG_CONFIG_HOME`). Owns the standing trust declaration `review.refresh_dependencies: true` that defaults trusted-branch refresh on for every interactive run, plus the telemetry-sharing consent vocabulary (`SHARING_CHOICES`, `REPO_CHOICES`) and the strict read-side parsing that decides what counts as consent, so a value the writer accepts can never be dropped here as malformed. Deliberately separate from the reviewed repo's `.pirategoat/config.json`: trust and consent are the requester's to declare, never the repo's. |
-| `scripts/review/agent/output.py` | ReviewOutputBuilder — `open()`, stable `fN` finding and `cN` check mutation, observations, positives, recommendations, reviewed-file claims, synthesis-only assessment, whole-state `save_draft()`, `finalize_review()`, and the `finalize-review` CLI. Every draft replacement derives the six canonical top-level reviewed-file fields through `derive_reviewed_files()` and the required `<reviewer>-assignment.json`; the draft becomes immutable final output only through the exact printed `FINALIZE REVIEW` command, and only `REVIEW FINALIZED` marks completion. Validation lives in `review_document.py` and rendering in `review_markdown.py` — this module builds and publishes, and imports neither of its former responsibilities back. `review_duration_ms` is derived from the actor's dispatch marker, null when no marker is readable. |
-| `scripts/review/review_document.py` | The review document's shape authority, and a leaf: it imports nothing from `review/` except `verdict_rules`. Owns `REVIEW_CONTENT_FIELDS`, `REVIEWER_FIELDS`, `REVIEW_OUTPUT_SCHEMA`, `coerce_text()`, `validate_finding_content_field()`, `validate_ledger_ids()`, `validate_review_content()`, `validate_review_document()`, `load_review_document()`, and `review_summary()`. `coerce_text()` is here rather than beside either caller because both ends of the document's life need the same answer for a model-authored field that should have been a string: the builder coerces at write time, the renderers at read time. Every reader of a final review's contents goes through `load_review_document(path, reviewer)`; existence-only scans may observe process evidence but cannot project findings, verdicts, reviewed files, or semantic completion. |
-| `scripts/review/review_markdown.py` | The one JSON-to-Markdown projection: `render_markdown`, `render_review_body`, `materialize_markdown`, and the `render`/`materialize` CLI. It imports `review_document.py` and `critic_adjustments.py`, which is what ended the lazy import cycle the builder and the ledger reader used to need — rendering is the only thing that legitimately knows about both a reviewer's draft and a critic's adjustments. It does not import the builder at all. `review-findings.md` and `reviewers/<reviewer>/review.md` share this one path; a render failure is a degradation note, never an exception, and never a file that disagrees with its JSON. |
-| `scripts/review/critic.py` | The decision critic's validating `--save` channel. Accepts proposal-only fields, delegates normalization and stable ID allocation to `critic_adjustments.prepare_proposal()`, and commits findings plus the proposal under the shared output-directory lock by writing the schema-versioned, proposal-digest-bound verdict marker last. |
-| `scripts/review/critic_adjustments.py` | Owns the critic lifecycle after proposal authorship: `write_critic_verdict()` is the one writer of the proposal and its digest-bound marker; `adjudicate()` validates the orchestrator's verified/refuted ids under the output lock, applies the proposal to the ledger once, and records each outcome in `applied_critic_adjustments` / `rejected_critic_adjustments`; `adjudication_state()` tells step 11 whether a REVISE proposal landed. Also owns `validate_findings_document()`, `read_findings_file()`, and `write_findings()` for the ledger. |
-| `scripts/review/findings_ledger.py` | `FindingsLedgerBuilder` — the reconciliator's builder: review content plus its four concern counts; no reviewer identity and no reviewed files. `resolve_note(..., verifies=[...])` lets a confirmed note settle Verify items; `review_document.normalize_verifies` is that grammar, the one reviewer checks use, and `critic_adjustments.py` validates a saved note's citation with it. `read_reconciliation_context(output_dir)` is the one reader of `reconciliation-context.json` (the save gate, the notes CLI, this builder and the context builder's own note-preserving read use it; the schema check stays with the callers that own the constant). `record_check(..., sources=[...])` reads each merged source check from that context and appends its `method` verbatim (as a `[<stem>:<id>] …` line) and unions its `verifies`, so the save gate's verbatim-method rule is satisfied by construction rather than assembled by the agent. `findings_save.py` stamps the pipeline-owned reconciliation facts from `reconciliation-context.json` at save. |
-| `scripts/review/verdict_rules.py` | `verdict_for_counts()` — the ONE place the severity-to-verdict thresholds live (critical → `block`; 3+ high → `block`; high or 5+ medium → `request_changes`; medium → `comment`; else `approve`). Shared by `agent/output.py` (publishing any reviewer's or the reconciliator's verdict) and `critic_adjustments.py` (recomputing the ledger verdict after an applying critic batch changes severities), so the ladder can never drift into two copies. |
-| `scripts/review/findings_save.py` | The reconciliator's validating save channel for `review-findings.json` — the sibling of `critic.py --save`. It reads the run's `reconciliation-context.json` and stamps every pipeline-owned `meta.reconciliation` fact (plus the degraded-host banner) onto the ledger, leaving the agent only its four judgment counts; it accepts the exact schema-3 findings/checks/assessment contract, rejects malformed shapes, retired fields, critic-owned fields, agent-authored pipeline fields, bad verdicts, and summary/finding-count mismatches with nothing written; on success it calls `critic_adjustments.write_findings()` itself (adding no new writer) and echoes the recorded verdict, finding count, and check count. This is the ONLY channel `agents/review-reconciliator.md` is allowed to write the ledger through — a raw `json.dump` or direct `atomic_write_json` closes the gap this module exists to guard. It also enforces the evidence trail: every source finding and check in the reconciliation context is merged (named in a ledger entry's `sources`) or dropped (`dropped_findings` / `dropped_checks` with reason and evidence), a merged check carries each source method verbatim, a severity matching no source carries a `severity_note`, and every orchestrator note registered through `reconciliation_notes.py` is answered. |
-| `scripts/review/atomic_io.py` | Single implementation of the pipeline's atomic-JSON-write convention and `output_dir_lock()` convention. `critic.py --save` and `critic_adjustments.adjudicate()` share this directory lock so publication and adjudication never observe one another halfway through; critic code reuses this primitive and never imports reviewer lifecycle concepts. One forbidden direct use: `review-findings.json` may never be written with a bare `atomic_write_json` — it goes through `critic_adjustments.write_findings(output_dir, findings)`. |
-| `scripts/review/reconciliation_context.py` | Pre-gathers agent findings, source snippets, and scope annotations into `reconciliation-context.json` — the reconciliator's single input, carrying only keys that agent or `findings_save.py` reads. It reads the complete local `review-context.json.host_context` map and its degraded-host banner from one snapshot through `manifest_sections.read_artifact_file`, so malformed optional data is unavailable and host-qualified `source_cited` values can be verified without sending large payloads through argv or leaking paths into telemetry or shared artifacts. It writes no Markdown: the two projections it used to render each had exactly one reader, and that reader was an agent. **Retiring those renderers must not demote what they computed.** Two deterministic facts travel in the JSON instead: `compute_missing_agents()` (dispatched minus reporting, `null` when dispatch is unknown) seeds `meta.reconciliation.missing_agents`, and `annotate_prefiltered_findings()` marks every structurally-certain out-of-scope finding in place with `prefiltered` plus a checkable count. The reconciliator carries and obeys both; it recomputes neither. Severity floors are STRUCTURED only — `resolve_structured_severity_floor()` reads the field and nothing parses description prose; `strip_severity_floor_markers()` removes prose restatements before the review-record assembler renders them for the critic. It owns `validate_orchestrator_notes()`, the schema-4 claim grammar `reconciliation_notes.py` appends under and `findings_save.py` requires an outcome for, beside the schema constant both import — the builder cannot import it from the notes CLI without closing a cycle. **A rebuild preserves the claims already registered.** Step 8 rebuilds this artifact every time it is entered, including a same-run retry after an interrupted reconciliator dispatch, and `registered_orchestrator_notes()` carries the existing collection forward; the read and the atomic write happen under the same `atomic_io.output_dir_lock` the notes CLI holds, so a rebuild and a concurrent `add_note` cannot each write from a state the other has moved past. Resetting them would release the save gate's requirement that every note be answered — it derives that requirement from this collection — and hand the next note an id already spent. Malformed notes in a schema-4 context fail the rebuild rather than being dropped. |
-| `scripts/review/telemetry.py` | JSONL telemetry logging. `ReviewTelemetry` captures pipeline timing, agent start/complete lifecycle, snapshots, summaries, and canonical repository/target identity in events and the manifest; its manifest also carries the path-free `host_context` projection, `run.git.base_fetch` / `run.git.scope_check` range-truth evidence, the prose-free `evidence` projection, and `run.plugin_commit`, the build identity beside `run.plugin_version`. |
-| `scripts/review/telemetry_share.py` | Owns the one repository-identity derivation (`host[:port]/owner/name` from the origin remote; no recognized origin — including local-path and Windows drive origins — means no shareable identity, failing consent and uploads closed), two-layer machine-local consent recorded through the shared lock and atomic-write primitives (cross-process exclusion is flock-based and POSIX-only — the whole pipeline's posture, reviewer finalization and critic adjudication included; the write itself stays atomic on every platform), in-memory redaction — `repo_path` rewritten to the identity, schema-required undisclosed slots rewritten in place (the session id and the output directory nulled, a not-applicable reviewer's skip reason replaced by a constant; the shared reader requires these slots, so stripping them would push the manifest onto its reduced legacy fallback or drop the reconciliation block), undisclosed metadata removed (PR titles/authors/links, linked issues, branch refs beyond the disclosed review target, triage and step-decision reasoning, the run-root file listing, and the workspace-state lists — hygiene file names, dirty files, command records — of which only status and flags upload), and a test pinning every string-bearing key path of one complete run's redacted payload (`tests/helpers/telemetry_run.py` drives every producer section and lifecycle event, so the pin is the producer's whole string surface, not a start-plus-finalize skeleton's) so a new text field is a deliberate disclose-or-strip decision. The consent disclosure names the sanitized, path-free host-context projection's resolved names, kinds, sources, versions, commits, refresh dates and declared minima; unresolved names, reasons and versions; banner reason; self-provided names; scan-root count; range-truth state; dispatch signals; usage tool-call and repository-read counts; and evidence metadata (finding ids/severities/sources/actions, drop reasons, Verify/check counts, critic outcomes, and host citations), never finding prose or paths. A share-safety guard refuses any payload where a local path survives (POSIX, Windows drive, UNC, or `file:` URL; leading, embedded, or colon-delimited — detected structurally by where a path starts, never by a substring such as `/home/`, which a disclosed repo-relative path may legitimately contain). It best-effort uploads only a completed telemetry manifest, whose run id must be one safe path segment by the grammar `run_paths.py` owns and the reader shares, and its sibling JSONL to the shared private repository, every request pinned to `github.com` regardless of `GH_HOST` and its body streamed over stdin rather than argv. The manifest is the unit of publication and goes first; a JSONL failure after it is reported as a manifest-only share, never a skip, because the shared reader measures a complete manifest fully on its own. The consent gate, the step-12 prompt, the recorded choice (`set-repo --output-dir`), and the uploaded payload all read the run's recorded identity, and the upload refuses a manifest whose `run.repo` differs from the consented identity, so consent can never authorize — or be stored for — a different repository than the one the payload describes. Findings, review documents, code excerpts, diffs, and the complete local host map never cross this boundary, and only what the step-12 disclosure names does. |
-| `scripts/review/synthesis_lifecycle.py` | Lifecycle measurement for the two SYNTHESIS agents — the review-reconciliator (step 8) and the decision critic (step 10). They never run `agent/bootstrap.py`, never write `reviewers/<agent>/review.json`, and are never in `dispatch-plan.json`, so `agents_status.py` structurally cannot see them. Steps 8 and 10 call `mark_dispatched()` at handoff, writing `<agent>.synthesis-started` — bootstrap's marker BODY (one aware UTC ISO timestamp) under a deliberately different NAME, derived from the single `MARKER_SUFFIX` constant that both the writer and the reader resolve through. The suffix is namespacing, not decoration: the reviewer `*.started` suffix is a contract other tools scan, and pirategoat-bot's resume path treated every hit as a reviewer — seeding both synthesis agents as permanently NOT_DISPATCHED and renaming their markers away as orphans, erasing the stall signal in the one window where the marker is the only record of a dispatch. A hand-maintained name list in another repo is a contract nobody enforces; the suffix is one nobody has to, and a third synthesis agent cannot reintroduce the collision. Steps 9 and 11 call `observe()`, which keys completion on the artifact each step's handoff gate makes mandatory — `review-findings.json` and `decision-critic-verdict.json`. Every row carries ONE clock: `completed_at` is the artifact's mtime and `duration_ms` the span from dispatch to it. The observation time is deliberately not recorded — the run's own step cadence bounds the lag, and a second number nobody queried was trimmed before release. Quick mode commits the pipeline's own `SKIPPED` verdict without a dispatch marker, so it creates no lifecycle row; a dispatched critic with no usable verdict retains its marker, records `stalled: true` at finalize, and makes the run unavailable/degraded. Report, never kill: lifecycle measurement never interrupts an agent. **Every step that re-enters after a handoff observes BEFORE it does anything else**, including before step 10 re-stamps its marker — step 10 is genuinely re-entered after a completed critic, and a bare re-stamp there publishes a finished critique as a zero-length stall. `ROW_KEYS` is the single declaration of the row shape; the manifest builder and the metrics sanitizer both assert parity against it. **Resume timing:** a resumed run that re-dispatches a synthesis agent keeps the FIRST dispatch's carried-forward timing, because an observation preserves a completed row verbatim and the earliest evidence is the tightest bound. That is the earliest-evidence design working as intended, and it is deliberate pending field evidence — if resumed runs turn out to need the re-dispatch's own span, the fix is a per-attempt record, not a looser carry-forward. |
-| `scripts/review/manifest_sections.py` | Pure builders for dispatch, assignment, dependency-refresh, reviewer-Markdown outcome, findings-Markdown outcome, worktree-hygiene, synthesis-agent lifecycle, token-usage, and skipped-steps sections in durable review manifests (`build_skipped_steps_manifest` alongside the rest). Dispatch projections retain each agent's `initial_signal` and `final_signal`; usage rows retain `tool_calls` and `repository_reads` beside token counts. `summarize_host_context()` and `build_host_context_manifest()` are the one path-free projection from local Host Context into state, the review record, and telemetry; `read_change_purpose()` is the one reader of the parsed change purpose (step 5, step 8 and the evidence manifest) and `describe_reconciliation_verification()` the one sentence the record, the step-9 situation and the critic prompt carry for the step-9 measurement. Also owns `aggregate_file_review()` — the run-level file review pipeline step 9 publishes into `state["file_review"]` for the review record — because it answers the same question as `build_assignment_manifest` — which changed files no agent's scope contained — from runtime sidecars over a different population. Read that builder's DIVERGENCE NOTE before reconciling the two unscoped/unassigned numbers. |
-| `scripts/containment.py` | Single implementation for pipeline repo-boundary decisions. Filesystem-resolved callers and telemetry's POSIX-only lexical caller keep their own failure policy while sharing the containment decision. |
-| `scripts/git_paths.py` | Single grammar implementation for Git C-quoted paths, and `FULL_SHA_RE` — the one "full object name" (SHA-1 or SHA-256) every git-identity check uses, from the range producer to the shared reader. Review-config provenance, telemetry, and scoped-diff parsing keep their caller-specific failure policies while sharing escape and octal decoding. |
-| `agents/shared/reviewer-protocol.md` | Shared behavioral rules for all reviewer agents. Bootstrap extracts sections via skip-list. |
-| `agents/shared/tests-reviewer-protocol.md` | Additional rules for test reviewer agents (test quality principles, anti-patterns). |
-| `schemas/review-output.ts` | TypeScript type definitions for structured review output (`Finding`, `ReviewCheck`, `ReviewDocument`, `FindingsLedger`, `FindingCriticAdjustment`, `CheckCriticAdjustment`, `HostContextBanner`). |
-| `scripts/iterative_review/` | Iterative review loop sub-module. Multi-round independent review (Codex primary, Claude Code fallback) with pushback tracking, convergence detection, noise-filtered diff sizing, and telemetry. CLI entry point: `python3 -m iterative_review --action review\|advance [--autonomous]`. |
-| `scripts/linear/pipeline.py` | 15-step curated-context pipeline for investigating and fixing Linear issues. Owns step sequence, routing, state management, and curated briefings. Called by pirategoat-bot via `--step N --mode investigate\|fix`. |
-| `scripts/linear/events.py` | Best-effort JSONL event emission for pipeline progress (step_started, milestone, deliverable, pipeline_complete). Used by both review and linear issue pipelines. |
-| `scripts/hosts/host_context.py` | CLI entrypoint for upstream-host discovery. Runs the resolver chain and writes `host-context.json` under `--output-dir`. Invoked standalone or via `review/context.py`. |
-| `scripts/hosts/chain.py` | Composes repo-signaled advisory resolvers in priority order (explicit → wp-env → docker-compose → plugin-headers → vendor), dedups resolved entries by `kind:name`, stamps every resolved local runtime host with the identity `hosts/identity.py` reads from its path (declared version, commit, commit date and whether the commit is the checkout's own or its enclosing repository's — only where the resolver left them unknown, never the branch, since no host projection carries a branch name — a personal checkout's would reach the shared manifest; failures land in `diagnostics.identity_errors`), merges unresolved signals by host name (`declared_by` per signal, strictest declared `version`), drops hosts the repository itself provides before fulfilment so a repository is never verified against a cache clone of itself (`plugin-headers` derives `provides` from `Text Domain` or the main-file stem, constrained to known cache names), invokes ecosystem-cache fulfillment for the remaining WordPress/WooCommerce signals and copies the declared minimum onto the fulfilled entry, and generates the degradation banner. Diagnostics record `scan_roots`, `config_errors` and `self_provided`. The sibling resolver remains a standalone non-default helper. |
-| `scripts/hosts/resolvers/` | Individual resolver implementations. Plugin headers, wp-env, and docker-compose read their local signals at every scan root (the chain scans once with `scan_roots.py` and hands each resolver the result); explicit reads repository configuration, vendor inspection reads repository-root dependency directories, and ecosystem-cache fulfillment refreshes its machine cache and reads slot identity. Each emits `HostEntry` records without side effects except that documented cache fulfillment. WordPress.org zip URLs in wp-env files are host signals. |
-| `scripts/hosts/scan_roots.py` | The one list of places the repo-signal resolvers read: the repository root, every depth-1 and depth-2 directory (dot-directories, `node_modules`, `vendor` and symlinks skipped; `MAX_DIRS_PER_LEVEL`/`MAX_ROOTS` caps), and the repo-relative directories `hosts.roots` names in `.pirategoat/config.json`. No directory-name heuristics. |
-| `scripts/hosts/repo_config.py` | The one reader of `.pirategoat/config.json`'s `hosts` section (`hosts.runtime` for the explicit resolver, `hosts.roots` for the scan). `review/review_config.py` reads the file's `review` section as a deliberate sibling. |
-| `scripts/hosts/ecosystem_cache.py` | Machine-wide ecosystem source cache management (WordPress + WooCommerce). `--update` / `--list` / `--verify`. |
-| `scripts/hosts/cache/` | Internal ecosystem-cache manager (`manager.py`): clone / git-pull / verify-staleness for WordPress + WooCommerce, `KNOWN_ECOSYSTEM_NAMES` (the one spelling of the cache's hosts), and `slot_identity()` — the slot's commit and commit date (through `hosts/identity.py`'s `git_identity`), the version read at that commit through the same text readers `declared_version` uses, and the refresh time, which the resolver puts on every cache entry. |
-| `scripts/hosts/identity.py` | `path_identity(path)` — the identity of any local host checkout: the version it declares (`Version:` in its plugin header or theme `style.css`, or `$wp_version` in `wp-includes/version.php`) and, through `git_identity(target)` (one `git log -1` read), the commit, commit date and `scope` (`checkout` or `enclosing-repository`) of the repository that contains it (`git -C`, so a plugin inside a monorepo reports the monorepo's HEAD and says so). The branch is never read: no host projection carries a branch name. Unknown facts are `None`, never a directory name. The chain stamps it on every resolved local runtime host so reviewer briefings, the record and telemetry say "version 11.2.0-dev, commit …" instead of "version unknown, commit unknown" for a checkout one file read away. |
-| `scripts/hosts/headers.py` | Stdlib-only leaf that parses WordPress plugin and theme header blocks (`parse_header_lines` on text, `parse_header_block` on a file, `find_plugin_headers`, `find_theme_headers`); the plugin-headers resolver and `identity.py` both read through it and neither imports the other. |
+|---|---|
+| `scripts/review/pipeline.py` | Executable facade for the 12-step review pipeline: conditions, routing, state I/O, CLI. All three review commands call it with `--mode pr\|full\|incremental`; Codex adapters add `--host codex`. |
+| `scripts/review/pipeline_contract.py` | Shared path, host, step-sequence, timeout, and Git vocabulary. |
+| `scripts/review/run_paths.py` | Sole authority for durable review locations, run allocation and retention, and the shared artifact filename registry. |
+| `scripts/review/reviewer_lifecycle.py` | Per-reviewer artifact filenames and the review-intake lifecycle. |
+| `scripts/review/briefings.py` | Pure step guidance, mission text, and output templates for the 12 steps. |
+| `scripts/review/orchestration.py` | Side-effecting per-step work: subprocesses, dispatch-plan persistence, derived-Markdown materialization, `assemble_review_record()`, step 11's publication gate. |
+| `scripts/review/context.py` | Step 3 context collection into `review-context.json`, including host-context discovery. |
+| `scripts/review/plan_dispatch.py` | Deterministic dispatch planning from the registry and the changed files; each decision is `(status, reason, signal)`. |
+| `scripts/review/triage_sources.py` | The prose the keyword triage reads, reduced to the author's words. Stdlib-only leaf. |
+| `scripts/review/change_purpose.py` | Parser of the step-3 change purpose (Verify and Context items) and of who may cite a Verify item. Stdlib-only leaf. |
+| `scripts/review/dispatch_adjust.py` | The orchestrator's one channel for step-5 dispatch overrides (`--skip`, `--dispatch`). |
+| `scripts/review/dispatch_status.py` | Dispatch-status and signal vocabulary; `load_dispatch_plan()` is the one plan reader. |
+| `scripts/review/agent/bootstrap.py` | Builds each reviewer's structured prompt: protocol extraction, scope, output instructions. |
+| `scripts/review/agent/scope.py` | Domain-filtered diff scoping; language recognition lives in its `_*_LANGS` groups only. |
+| `scripts/review/agent/output.py` | `ReviewOutputBuilder`: draft, finalize, and the `finalize-review` CLI. |
+| `scripts/review/review_document.py` | The review document's shape authority and validators. Leaf. |
+| `scripts/review/review_markdown.py` | The one JSON-to-Markdown projection (`render`, `materialize`). |
+| `scripts/review/reviewer_names.py` | `derive_reviewer_name()` and its inverse. Stdlib-only leaf every artifact name is built from. |
+| `scripts/review/reconciliation_context.py` | Builds `reconciliation-context.json`, the reconciliator's single input. |
+| `scripts/review/reconciliation_notes.py` | Registers orchestrator notes the reconciliator must answer. |
+| `scripts/review/findings_ledger.py` | `FindingsLedgerBuilder`, the reconciliator's builder. |
+| `scripts/review/findings_save.py` | The ledger's only write channel; validates and stamps pipeline-owned facts. |
+| `scripts/review/verdict_rules.py` | `verdict_for_counts()`, the one severity-to-verdict ladder. |
+| `scripts/review/critic.py` | The decision critic's validating `--save` channel. |
+| `scripts/review/critic_adjustments.py` | Critic lifecycle after authorship: proposal writer, `adjudicate()`, ledger read/write. |
+| `scripts/review/atomic_io.py` | Atomic JSON writes and the output-directory lock. |
+| `scripts/review/evidence_manifest.py` | The path- and prose-free evidence projection telemetry shares. |
+| `scripts/review/manifest_sections.py` | Pure builders for every manifest section, `aggregate_file_review()`, and the host-context projection. |
+| `scripts/review/synthesis_lifecycle.py` | Dispatch and completion measurement for the reconciliator and the critic. |
+| `scripts/review/telemetry.py` | JSONL telemetry and the run manifest. |
+| `scripts/review/telemetry_share.py` | Repository identity, sharing consent, redaction, and upload of a completed manifest. |
+| `scripts/review/user_settings.py` | Requester-side machine-local settings (`~/.config/pirategoat/config.json`). |
+| `scripts/review/dependency_refresh.py` | Validating save channel for the opt-in dependency refresh report. |
+| `scripts/review/workspace_setup.py` | Worktree preparation for a review. |
+| `scripts/containment.py` | The single repo-boundary decision; no inline containment checks anywhere else. |
+| `scripts/git_paths.py` | Git C-quoted path grammar and `FULL_SHA_RE`. |
+| `scripts/hosts/` | Upstream-host discovery: `host_context.py` CLI, `chain.py` resolver chain, `resolvers/`, `scan_roots.py`, `repo_config.py`, `identity.py`, `headers.py` (leaf), `cache/` ecosystem source cache. |
+| `scripts/analysis/` | Run metrics, transcript enrichment, usage snapshots, session analyzers. See `docs/analysis-tools.md`. |
+| `scripts/iterative_review/` | Multi-round independent review (Codex primary, Claude Code fallback): `python3 -m iterative_review --action review\|advance`. |
+| `scripts/linear/pipeline.py`, `events.py` | The 15-step Linear issue pipeline and best-effort JSONL progress events. |
+| `agents/shared/reviewer-protocol.md`, `tests-reviewer-protocol.md` | Behavioral rules for all reviewers, and the extra rules for test reviewers. |
+| `schemas/review-output.ts` | Types for the structured review output and ledger. |
+| `../../scripts/generate_codex_compat.py` | Generates the Codex command adapters and `.codex-plugin/plugin.json`. |
 
-## Architecture
+## Rules
 
-### Dual-Host Contract
+Each rule names the test that holds it where one exists. One clause of why; the docstring or doc has the rest.
 
-The command files under `commands/` are canonical. Their generated Codex
-adapters live in same-named directories under `codex-skills/` and are marked
-`GENERATED FILE - DO NOT EDIT`. Never edit those adapters directly. Keeping
-them outside the top-level `skills/` directory prevents Claude Code from
-discovering each canonical command a second time.
+**Dual host.** `commands/*.md` are canonical; `codex-skills/` adapters are generated and marked `GENERATED FILE - DO NOT EDIT`. The generator also surfaces shared skills a command references (copied to `codex-skills/<name>/` with their `references/`), so fix a skill in `skills/`, never in the copy. Canonical commands use `${CLAUDE_PLUGIN_ROOT}`; the generator prepends the Codex assignment. Shared skills use `$SKILL_DIR`, never `${CLAUDE_SKILL_DIR}`. Codex briefings dispatch native subagents that read the canonical `agents/*.md`; Claude model labels never map to another host.
 
-The generator also surfaces **shared skills that a command depends on**. When a
-command body references a `skills/<name>` skill by name, the generator emits a
-host-translated copy at `codex-skills/<name>/SKILL.md` (source-marked
-`./skills/<name>`) plus verbatim copies of the skill's sibling assets (e.g.
-`references/`) it reads via `$SKILL_DIR`, because Codex only loads
-`codex-skills/`, not the canonical `skills/` tree. Skills no command references
-(e.g. pirategoat's reference library) are not surfaced. Fix such skills in
-`skills/`, never in the generated copy.
+**Artifact schemas.** An artifact with a `schema` field bumps it in the same commit as any shape change (key added, removed, or re-typed), updating `schemas/review-output.ts` and the changelog. The key is the integer `schema`, never `schema_version` or a `version` string. One carve-out (a change inside the same unreleased window that introduced the number) and the `version: 1` the bot owns in `review-context.json` and `issue-context.json` are in `docs/artifact-schemas.md`.
 
-Because Codex does not export `CODEX_PLUGIN_ROOT` into the shell, the generator
-prepends an explicit `CODEX_PLUGIN_ROOT="…"` assignment to any generated `bash`
-block that references it. Keep canonical commands using `${CLAUDE_PLUGIN_ROOT}`
-(which Claude Code exports) and let the generator handle the Codex form; do not
-hand-assign it in canonical commands.
+**Shared protocols.** Bootstrap includes `reviewer-protocol.md` by a skip-list of the sections it replaces with concrete values (`## Step 0`, `## Scope Discovery`, `## Output Directory`, `## ReviewOutputBuilder API`, `## File-Based Output`). Text in a skipped section reaches no reviewer, so behavioral policy never goes there; policy about what an agent does with a scope result belongs in `bootstrap.build_output()`. `TestNotDiffedContractIsDelivered` guards this.
 
-The review pipeline defaults to Claude Code behavior and persists
-`--host codex` when selected by a generated adapter. Codex briefings dispatch native
-parallel subagents and tell each one to read the canonical `agents/*.md`
-definition before running bootstrap. This intentionally shares reviewer
-prompts without mapping Claude model labels to a different host.
+**Bootstrap facts arrive as parameters.** `build_output()` never re-derives a fact from the rendered `scope_output` text; every fact it needs (`review_claimable_count`, `has_php`, and whatever comes next) is a required parameter computed from a structured source, so a reformat of scope.py's text cannot flip a reviewer's briefing. `TestDynamicDispatchRisk` guards this.
 
-Shared skills use `$SKILL_DIR` for their own resource paths. Define it as the
-absolute directory containing the loaded `SKILL.md`; do not introduce
-`${CLAUDE_SKILL_DIR}` in shared skill prose.
+**Prompt order.** Bootstrap's prompt is REVIEW RULES, context sections, REVIEW CONTENT, OUTPUT INSTRUCTIONS, in that order (primacy for rules, recency for output). Keep it when editing `bootstrap.py` or the protocols.
 
-### Review Pipeline
+**The ledger has one write path.** `review-findings.json` is written only through `findings_save.py` (the reconciliator) and `critic_adjustments.write_findings()` (adjudication), never with a bare `atomic_write_json`. The critic never authors ids or adjudication state, and the orchestrator never edits the committed proposal.
 
-```
-Command (thin wrapper: pr-review.md, full-code-review.md, code-review.md)
-  │
-  └─ review/pipeline.py --step N --mode pr|full|incremental
-      │
-      ├─ pipeline_contract.py ← shared host, step, timeout, path, Git vocabulary
-      ├─ briefings.py         ← pure get_step_guidance() + step text
-      ├─ orchestration.py     ← side-effecting _orchestrate_step() dispatch
-      │
-      ├─ Step 3: review/context.py → review-context.json
-      ├─ Step 5: review/plan_dispatch.py → dispatch-plan.json (+ dispatch-plan.initial.json);
-      │          the orchestrator adjusts it only through review/dispatch_adjust.py
-      │
-      ├─ Step 6: For each agent (parallel):
-  │   │
-  │   └─ review/agent/bootstrap.py
-  │       ├─ Extracts protocol sections (skip-list)
-  │       ├─ Runs review/agent/scope.py (domain-filtered diff)
-  │       └─ Builds structured prompt:
-  │           Section 1: REVIEW RULES    (top — primacy effect)
-  │           Section 2: REVIEW CONTENT  (middle — processing zone)
-  │           Section 3: OUTPUT          (bottom — recency effect)
-  │
-  ├─ Step 8: review/orchestration.py readiness gate
-  │   ├─ Materializes derived reviewers/<reviewer>/review.md from settled JSONs
-  │   └─ review/reconciliation_context.py gathers agent JSONs + source
-  │       snippets + scope annotations
-  │       → reconciliation-context.json
-  │
-  ├─ review-reconciliator agent (semantic dedup + scope check + fact verification)
-  │   └─ Reads reconciliation-context.json → findings_save.py validates and writes
-  │      review-findings.json (the findings ledger)
-  │
-  ├─ Step 9: the pipeline renders `review-findings.md` from the JSON (same materializer
-  │   as step 8), aggregates the run's file review via `aggregate_file_review()`, and
-  │   assembles `review-record.md` — its own machine projection of the ledger plus this
-  │   run's coverage and run notes. The orchestrator reads the record; it writes nothing
-  │   here. The record also tables the change purpose's Verify items against the ledger's
-  │   surviving checks, and the coverage block separates reviewable files no domain owns
-  │   from files the planner excluded by design.
-  │
-  ├─ decision-reviewer agent (independent stress test)
-  │   └─ Reads review-record.md + review-findings.json → critic.py --save
-  │      commits findings + proposal + digest-bound STAND/REVISE/ESCALATE marker
-  │
-  ├─ Step 10 REVISE: the orchestrator probes each proposal entry, then submits its
-  │   verified/refuted ids and any revised assessment to `critic_adjustments.py adjudicate`,
-  │   which applies the proposal to the ledger in one locked write and records each
-  │   entry's outcome (verified/refuted/not_checked) in the ledger itself
-  │
-  └─ Step 11, pass 1: reads `adjudication_state()` — a REVISE proposal never adjudicated
-     is recorded as a degradation rather than applied on the orchestrator's behalf —
-     re-renders review-findings.md, re-assembles review-record.md, derives the final
-     verdict, and persists prepared state WITHOUT pipeline-result.json; the blocking
-     briefing has the orchestrator author review-report.md once from the settled record
-     and re-run step 11
-      └─ Step 11, pass 2: repeats settlement idempotently, verifies review-report.md,
-         atomically publishes pipeline-result.json with that exact report_path, closes
-         the handoff, and only then completes the step (bot mode ends; interactive mode
-         routes to step 12 as before)
-```
+**The verdict ladder lives once.** `verdict_rules.verdict_for_counts()` is shared by `agent/output.py` and `critic_adjustments.py`; step 11 derives the published pipeline verdict from the ledger, so a second copy that drifts reaches GitHub.
 
-Step 9 measures the reconciliator's repository reads from its transcript and records `reconciliation_verification` (verified / unverified / unmeasured) in state; the record, the critic prompt, `pipeline-result.json` and the manifest carry it. The read detector (`review_transcript._bash_read_paths`) recognises the Read tool and literal `cat`/`head`/`tail`/`wc`/`sed`/`grep` (also `rg`/`egrep`/`fgrep`)/`nl`/`git show`/`git diff --` commands, including inside `cd …`, `&&`, `;` and newline compounds — never a reader whose success the call's exit status does not certify (any list but the last, a `||` chain, a backgrounded list, a reader piped into another stage, anything after an `exit`, `exec` or `return` that may have ended the shell, in the same list or a later one; a quoted argument, even one spanning lines, is text, never a separator or a command, and a quote the command never closes leaves the rest of it uncounted), a search's pattern operand (before or after `--`), a directory a search walks, or a read after a `cd` to something that is not a directory (a backgrounded list is a subshell, so a `cd` there moves nothing) — and nothing else, so a measured zero is worded "no read observed" and never "read nothing".
+**Derived Markdown is never hand-written.** `reviewers/<reviewer>/review.md`, `review-findings.md`, and `review-record.md` are rendered from their JSON by the pipeline. A render failure is a degradation note, never a file that disagrees with its JSON.
 
-### Pipeline-Wide Containment
+**Briefing prose is test-pinned.** Tests check keywords in briefing text (`"review-reconciliator"`, `"STAND"`); preserve them when rewriting and run the relevant `TestStep*` class. `handoff` is the only gate mechanism for an artifact the next step needs.
 
-`scripts/containment.py` is the single enforcement point for repo-boundary
-decisions across the plugin. Advisory host resolvers use `contains()` to avoid
-presenting first-party code as an independent runtime host. Repo-contributed
-review configuration uses the same resolved-path primitive before reading rule
-or reviewer instructions that may execute with real tools.
+**Containment.** `tests/test_containment_contract.py` fails on any `commonpath`, `is_relative_to`, or `commonprefix` outside `scripts/containment.py`. Do not add inline checks or an allowlist.
 
-Telemetry is the deliberate lexical caller: `contains_posix_lexically()`
-canonicalizes recorded measurement paths with POSIX grammar, without resolving
-symlinks or touching paths that may no longer exist. The OS-native
-`contains_lexically()` remains available only for bounding walks. Neither
-lexical primitive may authorize a filesystem read or an execution.
+**Registry `focus` and agent `description` stay aligned.** `focus` (5 to 10 keywords, shown in the step-5 dispatch summary) and the agent `.md` frontmatter `description` (a sentence, shown in the host's agent catalog) must cover the same capabilities whenever an agent's specialization changes.
 
-`tests/test_containment_contract.py` preserves the symlink and prefix behavior
-and scans every Python file under `scripts/` for the unambiguous containment
-spellings (`commonpath`, `is_relative_to`, `commonprefix`). Only the exact shared
-module is exempt — do not add inline containment checks or an allowlist.
+**Subprocess tests isolate from the real repo.** A test that runs a pipeline script through `subprocess.run()` passes `cwd=tmp_path` with a temp git repo, so a git-mutating script cannot stash, checkout, or reset the working tree.
 
-### Artifact Schemas
-
-**RULE: an artifact that carries a `schema` field gets that field bumped in the same commit as any change to its shape.** A shape change is a key added, removed, or re-typed. When you make one: bump the producing constant, update `schemas/review-output.ts` if the artifact is declared there, and note the bump in the changelog.
-
-**One carve-out:** a shape change made within the same UNRELEASED version that introduced the current schema number updates the contract in the same commit but does NOT bump — UNLESS a reader must be able to distinguish the old shape from the new one. The number states a compatibility guarantee only once released, so bumping before release publishes a shape no artifact ever had; but a reader that would otherwise silently accept the old shape as if it were the new one (missing required keys, a field whose meaning changed) needs the bump to fail closed instead. Check `git tag` for the plugin's last released version before deciding — if the number's introducing version is already tagged, the carve-out does not apply and you bump regardless. The `<reviewer>-assignment.json` schema went 3 → 4 within 1.114.0's own unreleased window because the new `review_budget`/`channels` keys are required and a schema-3 reader could not tell an old input from a truncated new one; it went 4 → 5 in the same window when the required `inline_diff_files` list replaced `inline_diff_file_count`, for the same reason. By contrast, telemetry's `EVENT_SCHEMA` and the cohort report's `_REPORT_SCHEMA` stayed at 3 across the same window's key renames: nothing needs to distinguish the renamed keys from what they replaced, so the carve-out's default (update without bumping) applied. The released telemetry schema 3 is the corresponding additive-key precedent: `run.repo` and `run.target` read as unavailable when absent, while the only requiring consumer, `telemetry_share.py`, refuses an identity-less manifest, so a bump that would make local schema-3 history unreadable buys no safety. A consequence of that default: an in-window manifest key rename (e.g. `reviewed_files_by_agent` replacing `review_claim_accounting_by_agent`) intentionally reads as unavailable on a manifest written before the rename landed rather than resolving to the old key's value, since no schema bump marks the boundary a reader could check against.
-
-The key is always the integer `schema` — never `schema_version`, never a `version` string. Both of those existed and were retired in 1.114.0.
-
-Not every JSON file in a run directory carries one, and this rule does not ask you to add it to them. `pipeline-state.json` and `dispatch-plan.json` carry no `schema` and are read only by this plugin within a single run; the critic's proposal and verdict artifacts do carry schema 2 and appear below. `dependency-refresh.json` and `reconciliation-context.json` cross validating producer/consumer boundaries, so they carry schemas 1 and 4 respectively. `pipeline-result.json` and `run-config.json` carry no `schema` even though pirategoat-bot parses the former and writes the latter (see Cross-Repo Dependency: pirategoat-bot below) — that cross-repo contract is tracked by reading the bot's source before changing either file, not by the schema mechanism. The field earns its place where an artifact **outlives the run that wrote it, or crosses a validating producer/consumer boundary whose reader did not write it** — that is the criterion for deciding whether a new artifact needs one. The families that meet it today:
-
-| Artifact | Schema | Producing authority |
-|---|---:|---|
-| `reviewers/<agent>/review.draft.json`, `reviewers/<agent>/review.json` | 2 | `REVIEW_OUTPUT_SCHEMA` — `scripts/review/agent/output.py` (schema 2 unchanged by the additive optional `verifies` check field — an absent key reads as "cites nothing") |
-| `review-findings.json` (the findings ledger) | 3 | `LEDGER_SCHEMA` — `scripts/review/findings_ledger.py` |
-| `review-intake.json` | 2 | `close_review_intake()` — `scripts/review/reviewer_lifecycle.py` |
-| Telemetry JSONL events + `<log>.manifest.json` | 3 | `EVENT_SCHEMA` — `scripts/review/telemetry.py` |
-| `synthesis-agents.json` | 1 | `LIFECYCLE_SCHEMA` — `scripts/review/synthesis_lifecycle.py` |
-| `usage-snapshot.json` | 1 | `SNAPSHOT_SCHEMA` — `scripts/analysis/usage_snapshot.py` |
-| `dependency-refresh.json` | 1 | `REPORT_SCHEMA` — `scripts/review/dependency_refresh.py` |
-| `observed_reads` payload in transcript enrichment | 2 | `_OBSERVED_READS_SCHEMA` — `scripts/analysis/review_transcript.py`. The same-named constant in `review_metrics/contracts.py` is the *consumer's* expected value, and must be bumped in lockstep |
-| `review_run_metrics.py --format json` report | 5 | `_REPORT_SCHEMA` — `scripts/analysis/review_metrics/contracts.py` |
-| `<reviewer>-assignment.json` | 5 | `persist_review_assignment()` — `scripts/review/agent/bootstrap.py` |
-| `reconciliation-context.json` | 4 | `main()` — `scripts/review/reconciliation_context.py`; includes the `orchestrator_notes` claims registered through `scripts/review/reconciliation_notes.py`; carries `verify_items`, `context_items` and `change_purpose_problems` parsed by `scripts/review/change_purpose.py` (added within the same unreleased window as schema 4, so the number did not move) |
-| `decision-critic-adjustments.json`, `decision-critic-verdict.json` | 2 | `ADJUSTMENTS_SCHEMA`, `VERDICT_MARKER_SCHEMA` — `scripts/review/critic_adjustments.py`. The orchestrator's adjudication request to `adjudicate()` (stdin only, never persisted) validates at the same `ADJUDICATION_SCHEMA` value. |
-| Per-agent sidecars: worktree baseline / hygiene | 1 | Literal at the write site |
-| Per-agent scope summaries | 3 | `write_scope_summary()` — `scripts/review/agent/scope.py` |
-
-**Exception — `review-context.json` and `issue-context.json` carry `version: 1`, and that key is not ours.** pirategoat-bot writes both files and asserts on that field (`src/orchestrator-review.test.js`, `src/orchestrator-linear.test.js`). Renaming it to `schema` would break the bot. Leave it alone.
-
-Readers accept exactly the schema they were written against and route anything else down their unsupported path — never a crash, and never a silent read of fields whose meaning the producer did not vouch for. At validating boundaries, tests pin the exact integer and exercise prior/future integers, numeric strings, missing keys, booleans, and non-object payloads where that boundary accepts external input. Dropping support for an old schema is allowed; reporting a *wrong measurement* for artifacts written under it is not (see `_BUILDER_ENV_REQUIRED` in `scripts/analysis/review_transcript.py` for the shape this takes when the artifact is a transcript).
-
-This rule exists because the review JSONs shipped a `version: "1.0.0"` string that survived six format changes unbumped: a schema number that lags the shape is worse than none, because it states a compatibility guarantee the producer is not honoring.
-
-### Pipeline Briefing Design
-
-The step briefings in `review/briefings.py` follow deliberate design patterns. These are inline rules — see `docs/patterns/curated-context-pipeline.md` for the general principles and rationale behind them.
-
-**Identity anchoring.** `_PIPELINE_MISSION` constant holds the orchestrator's mission statement. Step 1 prepends it to `situation`. Do not modify the mission text without reviewing the pattern doc's "Pipeline Identity Anchoring" principle — it was designed to anchor the LLM on dedication, precision, and artifact discipline.
-
-**Phase transitions.** `_PHASE_TRANSITIONS` dict maps phase names to contextual reminders injected at phase-entry steps:
-
-| Phase | Injected at | Focus |
-|-------|------------|-------|
-| EXECUTION | Step 5 | Precision in dispatch |
-| SYNTHESIS | Step 8 | Faithful synthesis, no bias |
-| VALIDATION | Step 10 | Stress-test before it reaches a human |
-| OUTPUT | Step 11 | Complete delivery, nothing missing |
-
-These are variations on the mission, not repetitions. Each connects the mission to what's about to happen.
-
-**Artifact discipline.** File-producing steps follow Write → Verify → Proceed:
-- `handoff` is the sole gate mechanism. If a step requires an artifact before the next step can proceed, it goes in `handoff`, not buried in `actions`.
-- JSON examples use schema format: `{"verdict": "<APPROVE | REQUEST_CHANGES | COMMENT>"}` — never copyable placeholder values.
-- Steps 3/4, 8, 10, and 11 have `handoff` gates on their output files. Step 9 has none on purpose: it asks the orchestrator for no artifact, and gating on a file the pipeline itself just wrote would be theatre.
-
-Step 11 is intentionally re-entrant. Its first pass records `publication_pending: true`, fingerprints the exact record/ledger bytes plus terminal presentation facts, blocks progress, leaves step 11 out of `completed_steps`, and writes no `pipeline-result.json`; missing `review-report.md` is the expected handoff state, not a degradation. A later pass publishes atomically only when settlement still matches that prepared fingerprint and the report is not byte-identical to one already rejected as stale; a changed source, unchanged stale report, or pre-existing unbound report regenerates the handoff instead of exposing a terminal marker. Prepared guidance may say state is prepared; only the publication pass may call it published or complete. Settlement work repeats idempotently, while step-11-owned degradation records carry stable producer codes across the handoff in first-seen order, retain the first ordinary diagnostic for audit, and project back to the public string-list contract; fingerprints use the ordered identities rather than volatile prose. Malformed or legacy private state is ignored, and generic presentation notes are never an inheritance source. The one mutating measurement, the probe-residue sweep, accumulates removed paths in `worktree-hygiene.json`; its single aggregate record and public note report the cumulative count, while a private hash of the sorted unique path set makes any newly swept path invalidate the prepared report without exposing path provenance.
-
-**Voice.** Senior reviewer briefing the orchestrator — authority on process, trust on execution. The voice lives within the structural section headers (SITUATION / ACTIONS / HANDOFF). The headers themselves stay rigid as machine-readable landmarks.
-
-**Modifying briefings.** Tests check for keywords in briefing text (e.g., `"review-reconciliator" in text`, `"STAND" in text`). When rewriting briefing prose, preserve these keywords. Run the relevant `TestStep*` class after any text change.
-
-### Step 8 Readiness Gate
-
-Before reconciliation, step 8 checks dispatched agents via `review/agents_status.py`. A canonical schema-2 final review is `FINISHED`; an invalid final filename is terminal process evidence (`INVALID_OUTPUT`) but never contributes semantic completion, verdict, finding counts, or reviewed files. `ALL_DONE` means only that nothing remains to wait for, so invalid output does not hang the gate. If agents are still running, step 8 returns a WAITING briefing. Once the gate proceeds, orchestration materializes human-facing `reviewers/<reviewer>/review.md` files from every settled canonical JSON before building reconciliation context and records the complete/partial/failed outcome in pipeline state and the run manifest. Tracks `first_waiting_at` in pipeline state. If elapsed wait exceeds `agent_timeout_seconds + 60s`, escalates: clears the waiting state and proceeds with reconciliation using available results, instructing the LLM to TaskStop stuck agents first.
-
-### Trusted-Branch Dependency Refresh (opt-in)
-
-The pipeline never installs dependencies itself (1.113.0 removed manifest-driven installation because package managers execute configuration as code). When the requester opts in — per run with `--refresh-deps`, or as a standing machine-local declaration in `~/.config/pirategoat/config.json` (`{"review": {"refresh_dependencies": true}}`, resolved by `user_settings.py`) — the pipeline lets the **main orchestrator** inspect the trusted worktree and refresh dependencies adaptively. An explicit `--refresh-deps`/`--no-refresh-deps` wins; an omitted flag falls back to the machine-local default; the effective value lands in `run-config.json` as `refresh_dependencies`. The standing declaration covers every interactive run the requester starts — all modes, all clones — including interactive PR reviews of third-party branches; that is the requester's explicit trust decision, made in a file the reviewed repo can never touch.
-
-Split of responsibilities:
-
-- **Pipeline config + tracked Git precheck → whether refresh actions may be offered.** Step 3 observes tracked state with `git status --porcelain --untracked-files=no --ignore-submodules=untracked`; untracked files do not make the baseline dirty. A dirty or unknown observation fails closed and offers no dependency commands or save handoff. A clean result allows the adaptive briefing. This gate is separate from the whole-run hygiene baseline and never takes custody of the requester's tracked changes.
-- **Main orchestrator → whether and what to run, plus the reported outcome.** After a clean precheck, the orchestrator inspects the repository and reviewed change, decides whether refresh work is needed, chooses appropriate lockfile-preserving commands without a manager or flag allowlist, and refreshes host context after any installation. It writes a schema-1 request under `$TMPDIR`; `not_needed` with an empty command list is the required outcome when inspection finds no work.
-- **`dependency_refresh.py save` → schema validation, final Git observation, and atomic publication.** The save command accepts exactly the request schema, records bounded final tracked-state evidence, and publishes the sole canonical `dependency-refresh.json` through `atomic_write_json()`. `completed`, `partial`, `failed`, and dirty or unknown final state are valid evidence. Only invalid request input blocks publication; reported command strings are not parsed and do not attest that execution occurred.
-
-At step 5, the pipeline reads the canonical artifact through `load_dependency_refresh_report()`. A missing or malformed report after a clean precheck, or a report whose final tracked state is dirty or unknown, becomes explicit degraded evidence before dispatch; no verification sidecar or command-policy state exists. The manifest preserves `requested`, `reported`, optional unsafe-precheck evidence, and the validated canonical report fields.
-
-**Hard-off for bots.** `refresh_dependencies` is interactive-only: step 1 forces it off (with a stderr warning) for `interactive: false` runs whether it arrived via CLI or a pre-seeded `run-config.json`. A bot reviewing third-party PRs must never execute reviewed-branch code. The adaptive orchestrator solves the variability problem; the opt-in gate is the execution trust boundary, and the clean tracked-worktree precheck is the custody boundary.
-
-### Shared Protocols
-
-**reviewer-protocol.md** provides behavioral rules for all agents. Bootstrap extracts it via a **skip-list** — sections the bootstrap already handles are excluded, everything else is included automatically. New sections added to the protocol are picked up without code changes.
-
-Skip-list (sections bootstrap replaces with concrete values):
-- `## Step 0` (plugin root — bootstrap resolved it)
-- `## Scope Discovery` (bootstrap ran review/agent/scope.py)
-- `## Output Directory` (bootstrap resolved to concrete path)
-- `## ReviewOutputBuilder API` (bootstrap provides pre-filled snippet)
-- `## File-Based Output` (bootstrap provides concrete file paths)
-
-**RULE: Never put behavioral policy in a skipped section.** These sections are stripped before any reviewer sees them, so text added there is inert — it will pass review, ship, and appear in the changelog while reaching zero agents. 1.108.0 made NOT DIFFED handling mandatory by writing the rule into `## Scope Discovery`; no reviewer ever received it.
-
-The skip-list is for *mechanics bootstrap performs* (running scope.py, resolving paths). Policy about what the agent must do with the result belongs in `build_output()`, which also knows the concrete budget and file paths. `TestNotDiffedContractIsDelivered` in `tests/review/agent/test_bootstrap_integration.py` guards this for the NOT DIFFED contract — extend it when you add a comparable contract.
-
-**RULE: `build_output()` never re-derives a fact from the `scope_output` text it just rendered.** Every fact it needs (review-claimable-file count, PHP-in-scope, and whatever comes next) must arrive as a required parameter the caller computed from a structured source — `main()`'s scope-facts/telemetry-path machinery, not a regex or string split over rendered output. A rename or reformat of scope.py's rendered text should never be able to silently flip a decision a reviewer's briefing depends on; see `review_claimable_count` and `has_php` for the pattern, and `TestNotDiffedContractIsDelivered`/`TestDynamicDispatchRisk` for the executable contracts.
-
-**tests-reviewer-protocol.md** is appended for agents with `"tests-reviewer"` in their `protocols` list. It adds test quality principles (RULE 0: tests verify behavior, not implementation) and common anti-patterns.
-
-### Bootstrap Output Positioning
-
-The prompt bootstrap builds uses deliberate section ordering. Preserve this order when modifying `review/agent/bootstrap.py` or protocol files:
-
-1. **REVIEW RULES** (top) — behavioral steering via primacy effect. Agent reads rules first, anchoring behavior.
-2. **Context sections** — PR INTENT (title, author, linked issues, and a pointer when the change purpose carries a non-empty extracted author description — otherwise the whole HTML-comment-stripped body), REVIEW FOCUS (pipeline synthesis from change-purpose.md; only a structured purpose adds the two-tier instruction and the `verifies=` citation call), REVIEWER-REQUESTED FOCUS (requester's additional instructions from `run-config.json`, present only when steering keywords were provided), HOST CONTEXT (advisory discovery availability and degradation, plus resolved upstream runtime-host and library-dep entries with version, commit, refresh date, and declared minimum from `review-context.json.host_context`; a resolved entry is authoritative for its covered upstream surface), and REVIEW BUDGET (scope-proportionate tool call calibration).
-3. **REVIEW CONTENT** (middle) — the actual diff/scope. Processing zone where the agent does its work.
-4. **OUTPUT INSTRUCTIONS** (bottom) — format and file paths. Recency effect ensures the agent remembers how to produce output.
+**Run tests from the repository root** after modifying scripts, agents, or commands: `pytest plugins/pirategoat-tools/tests/ -q` (about two minutes for the whole tree).
 
 ## Agent Registry
 
-`scripts/review/agent_registry.json` configures all reviewer agents. Each entry:
+`scripts/review/agent_registry.json` configures every reviewer. Fields per entry:
 
 | Field | Required | Description |
-|-------|----------|-------------|
-| `domain` | yes | Scope domain for `review/agent/scope.py` filtering. `null` for agents that don't use scope (e.g., tests-mutation-reviewer). |
-| `protocols` | yes | List of protocol files to include: `"reviewer"` (all agents), `"tests-reviewer"` (test agents). |
-| `scope_flags` | yes | Extra flags passed to `review/agent/scope.py` (e.g., `["--max-lines", "500"]`). Empty list `[]` for defaults. |
-| `dispatch_class` | yes | When agent runs — see dispatch classes below. |
-| `focus` | yes | One-line description of the agent's review focus. Surfaced in the step 5 dispatch summary for override decisions — see sync rule below. |
-| `model_tier` | yes | `"inherit"` (caller's model), `"sonnet"`, `"opus"`, or `"haiku"`. Match reasoning depth needed. `tests/review/test_registry_docs.py` pins this vocabulary to the registry's actual values in both directions. |
-| `triage_criteria` | conditional | Required for `dispatch_class: "conditional"`. List of conditions that trigger dispatch. **Every bullet is an executable contract**: `tests/review/test_criteria_coverage.py` requires a minimal probe diff per criterion that MUST dispatch through the real pipeline. Adding or rewording a criterion without a matching probe fails CI. If no keyword/check can back a criterion, give the agent one (prefer structural `triage_checks` for structural criteria) or reword the criterion — never write criteria the machinery can't honor. **One signal-able clause per bullet**: a compound bullet ("queries, API calls, fetching hooks") hides unprobed branches — the meta-test sees one probe quoting the bullet and cannot tell the other clauses have no signal. Split compounds so each clause gets its own probe. **Probes must be text-neutral**: `TestProbeNeutrality` re-runs every probe with commit/PR text blanked — unless the criterion is explicitly about commit/PR text, the signal must live in the probe's diff, files, or diffstat, or the clause is silently unsignaled for real diffs with neutral wording. |
-| `triage_keywords` | optional | Change-local keywords matched against commit messages (subjects and bodies, trailers removed), changed paths, the PR title and the author's own body text (template lines and HTML comments subtracted; labels excluded), the branch slug, linked-issue titles, and scoped patch text. A keyword is a **whole word** bounded by identifier separators on both sides (`move` ≠ `remove`, `auth` ≠ `authored`, `register_rest` matches `register_rest_route`, `screen reader` matches `screen-reader`); a trailing `*` declares a prefix (`sanitiz*`), and the star is kept in the dispatch reason. Repo-structural directory segments (`plugins/`, `src/`, …) are excluded from path matching. Never use language-structural terms (`function`, `class`, `remove`, …) — a registry test bans them; use `triage_checks` for structural signals. The three audited runs replay in `tests/review/test_triage_run_regressions.py`; a list change must keep its contract or update it deliberately. |
-| `require_triage_keyword_match` | optional | Blanket evidence gate: skip unless a keyword OR a `triage_checks` entry fired (checks run before the gate). Used by woo-regression-reviewer (WC-signal requirement). |
-| `triage_repository_keywords` | optional | Ambient repository-identity keywords matched against all fetch remote URLs plus the checkout basename. Opt in only when repository membership is itself sufficient for applicability. |
-| `secondary_domains` | optional | Additional scope domains to include (e.g., `["config-ops"]`). |
-| `extra_scope` | optional | Additional scope invocations (e.g., `["--base-ref-only"]` for patterns-reviewer). |
-| `budget_override` | optional | Fixed tool-call budget, bypassing scope-proportional computation. Use for agents whose workload doesn't correlate with diff size (e.g., history-insights explores git history). |
-| `file_history` | optional | If `true`, bootstrap includes git history per changed file. |
-| `max_history_commits` | optional | How many commits of history per file (default: 5). |
-
-### Dispatch Classes
-
-| Class | Behavior |
-|-------|----------|
-| `always` | Auto-dispatched on every review |
-| `conditional` | Dispatched when triage criteria match the diff. Dispatch-by-default when the domain has files and no explicit evidence gate fires; detector silence and diff size never prove irrelevance. Skips remain visible in `agent_signals` for orchestrator override. |
-| `manual` | Only on explicit user request |
-| `special` | Orchestration/synthesis agents, not dispatched by triage |
-
-Commands handle triage at the "Adaptive Agent Triage" step — they check each conditional agent's `triage_criteria` against diffstat, changed paths and patch text, commit messages without trailers, and the PR title and author-written body. Repository identity participates only when the agent explicitly declares `triage_repository_keywords`.
-
-### Agent Name and Focus Sync
-
-The registry `focus` field is surfaced to the main session at step 5 so the LLM can make informed dispatch override decisions. The agent `.md` `description` field is loaded by Claude Code into the system prompt. These must stay aligned:
-
-| Source | Field | Purpose | Audience |
-|--------|-------|---------|----------|
-| `agent_registry.json` | `focus` | Dispatch summary in step 5 briefing | Main session LLM (during pipeline) |
-| `agents/<name>.md` | `description` (frontmatter) | Agent catalog in CC system prompt | Any session using the Agent tool |
-
-**Rule: When updating an agent's specialization, update both the registry `focus` and the agent `.md` `description` to reflect the same scope.** They don't need identical wording — `focus` is a concise keyword list, `description` is a full sentence — but they must cover the same capabilities. A `focus` that lists "XSS, SQL injection" while the `description` says "sanitization, escaping, nonces, auth" creates a misleading dispatch summary.
-
-**Calibration:** `focus` should be specific enough to inform override decisions (not just "test quality") but concise enough to scan in a list (not a full sentence). Aim for 5-10 keywords/phrases that distinguish this agent from others.
-
-## Repo-Contributed Reviewers and Rules
-
-The repository **under review** can extend a review with its own regression-seeded
-knowledge and domain-expert lenses, declared in an optional `review` section of its
-`.pirategoat/config.json` (the same repo-owned file `ExplicitResolver` reads for
-`hosts.runtime`, and `scan_roots.py` reads for `hosts.roots` — repo-relative directories to scan for plugin headers, wp-env and compose files when a monorepo nests them deeper than two levels). `scripts/review/review_config.py` is the single source of truth —
-it parses/validates the section and owns the shared applicability primitives
-(`glob_match`, `rule_applies_to_agent`, `reviewer_applies_to_diff`). `context.py`
-carries the normalized result into `review-context.json` under `review_config`
-(recomputed each run, like `host_context`).
-
-**Two capabilities:**
-
-1. **Repo rules** (`review.rules[]`) — markdown checklists the repo authors. `bootstrap.py`
-   selects the rules applicable to each agent (by agent name, domain, or a changed file
-   matching a path glob) and injects a `=== REPO REVIEW RULES ===` block after DOMAIN RULES
-   (project standards override generic patterns). Repo bodies are SEMI-TRUSTED: rendered
-   inside a dynamic backtick fence with a provenance/demotion banner so they cannot override
-   the reviewer's output contract.
-
-2. **Repo reviewers** (`review.reviewers[]`) — self-contained, pirategoat-agnostic reviewer
-   prompts. `plan_dispatch.py::expand_repo_reviewers` turns each into a synthetic dispatch
-   entry named `repo-<id>-reviewer` targeting the generic `repo-reviewer-adapter` agent,
-   gated by applicability like a conditional agent. The adapter (registry `special`,
-   `domain: null`) runs in bootstrap **ref-mode** (`--repo-agent-ref/--instance-name/
-   --execution/--channel/--scope-domains`): it reads the repo prompt, runs it against the
-   scoped diff, and normalizes findings via `ReviewOutputBuilder`.
-
-**Load-bearing invariants** (break these and findings silently vanish or collide):
-- The synthetic name MUST end in `-reviewer`, and every downstream site maps agent names to
-  review-file stems through `reviewer_names.derive_reviewer_name()` — the one implementation
-  of that stripping rule everything imports, never a blanket `.replace()` restated inline
-  (repo ids may carry "reviewer" mid-string, e.g. `api-reviewer-v2`, and only the trailing
-  occurrence may go).
-- Ref-mode derives the reviewer name and `.started` marker from `--instance-name`, not the
-  shared adapter key, so N adapter instances never clobber one output file.
-- **Advisory channel:** `add_finding()` accepts only `"blocking"` or `"advisory"`; blocking is
-  the default and is normalized to an absent field. Native agents set advisory only for a
-  finding caused by a selected advisory repo rule—their own-domain findings omit `channel`.
-  The assignment's `channels` field (schema 5) is the authoritative record of which
-  channels an effective reviewer identity may use: `["blocking"]` normally, `["blocking",
-  "advisory"]` when that reviewer selected any advisory rule, or `["advisory"]` only when
-  ref-mode dispatched the instance with `--channel advisory`. `ReviewOutputBuilder` enforces
-  it from the assignment in the output directory it is bound to: `add_finding()` and
-  `update_finding()` reject a channel outside `channels`, and `save_draft()` rejects the
-  whole draft when any finding carries one — an unbound or unreadable input fails open at
-  add time to vocabulary-only validation, never at publication. Advisory findings remain
-  listed but never gate the verdict; the summary records how many were suppressed and, only
-  when stricter, the verdict over all findings.
-- **Provenance gate (security boundary):** the adapter EXECUTES repo prompt text with real
-  tools, so `load_review_config` excludes any rule/reviewer whose defining file — or
-  `.pirategoat/config.json` itself — is added or modified within the reviewed range
-  (PR-controlled text is not repo-owner-approved content). The changed-file match covers
-  both spellings of Git-C-quoted names AND each declaration's symlink-resolved target,
-  compares canonical identities (casefolded, NFC — case-insensitive/normalization-
-  insensitive filesystems open the same file through either spelling), and treats a
-  changed path as tainting everything beneath it (a submodule update is reported as its
-  gitlink root, not the files inside), so neither encoding, an in-repo symlink, a case
-  variant, nor an updated submodule can slip PR text past the gate. Exclusions
-  are hard (never dispatchable, reported under `untrusted` and carried in the plan's
-  `warnings` — the only channel the step-5 briefing renders), and an unknown changed-file
-  set fails closed. To test an unmerged reviewer deliberately, dispatch the adapter
-  manually via bootstrap ref-mode.
-- **Path scoping:** a reviewer whose `applies_to.paths` matched dispatches AND receives
-  those files in scope — bootstrap ref-mode passes the declared globs to scope.py as
-  `--include-path` so the dispatch gate and the scope never disagree.
-
-**Execution:** inline only in v1 (the adapter reads and runs the repo prompt in-context).
-`isolated` is NOT implemented: plan_dispatch refuses to dispatch it and bootstrap exits
-with an error — an explicit isolation request must never silently widen into inline
-execution.
-
-## Review Run Data Locations
-
-Interactive reviews keep durable state under `~/.pirategoat-tools/reviews/` by default. An absolute `$PIRATEGOAT_TOOLS_HOME` overrides `~/.pirategoat-tools`; a relative override is ignored.
-
-```text
-~/.pirategoat-tools/reviews/<kind>/<safe-repo>/<safe-target>/   # target directory: cross-run state
-├── .branch-review-baseline.json                               # incremental reviews only
-└── runs/
-    └── <run-id>/                                              # one fresh directory per run; newest 10 kept
-        ├── run-config.json                                    # seven root boundary files
-        ├── review-context.json
-        ├── pipeline-result.json
-        ├── review-report.md
-        ├── review-record.md
-        ├── review-findings.json
-        ├── review-findings.md
-        ├── pipeline/                                          # orchestration state and measurements
-        │   ├── pipeline-state.json
-        │   ├── review-intake.json
-        │   ├── dispatch-plan.json
-        │   ├── dispatch-plan.initial.json
-        │   ├── change-purpose.md
-        │   ├── dependency-refresh.json
-        │   ├── synthesis-agents.json
-        │   ├── usage-snapshot.json
-        │   ├── worktree-hygiene.json
-        │   ├── .telemetry-log-path
-        │   └── .worktree-baseline.json
-        ├── reviewers/<reviewer>/                              # short reviewer identity
-        │   ├── assignment.json
-        │   ├── review.draft.json
-        │   ├── review.json
-        │   ├── review.md
-        │   ├── scope-summary.json                             # plus scope-summary-<domain>.json
-        │   ├── scoped-diff.patch
-        │   └── started
-        ├── synthesis/
-        │   ├── reconciliation-context.json                    # schema 4; carries orchestrator_notes
-        │   ├── decision-critic-adjustments.json
-        │   ├── decision-critic-findings.md
-        │   ├── decision-critic-verdict.json
-        │   └── <agent>.synthesis-started
-        └── tmp/                                               # sanctioned reviewer probe scratch
-```
-
-The target directory groups runs for one PR or branch and owns only cross-run state. A run directory is immutable in identity and never reused: its UTC run id sorts lexically, `latest` resolves the newest valid name without a symlink, and the allocator prunes older runs after keeping 10.
-
-Inside a run, `pipeline/` holds `pipeline-state.json`, `review-intake.json`, dispatch plans, change purpose, dependency refresh, lifecycle and usage measurements, and worktree hygiene state. `reviewers/<reviewer>/` holds `assignment.json`, `review.draft.json`, `review.json`, `review.md`, scope summaries, `scoped-diff.patch`, and `started`. `synthesis/` holds reconciliation context, decision-critic artifacts, and synthesis-started markers. The seven boundary files stay at the root because interactive commands and pirategoat-bot exchange them there.
-
-`scripts/review/run_paths.py` resolves shared artifacts; `scripts/review/reviewer_lifecycle.py` resolves per-reviewer artifacts. Callers never reconstruct these paths or spell artifact filenames themselves.
-
-## Output Contract
-
-Each reviewer agent publishes canonical state in `OUTPUT_DIR/reviewers/<reviewer>/`:
-
-- `review.draft.json` — the mutable, rehydratable artifact replaced via `builder.save_draft()` until the exact receipt command finalizes it
-- `review.json` — the immutable final artifact published via `finalize_review()` (see `schemas/review-output.ts` for types)
-
-The human-readable `review.md` beside the final JSON is derived from the canonical JSON, not written by reviewers — the step 8 readiness gate materializes it before reconciliation begins through `review_markdown.materialize_markdown()`, and it remains renderable on demand via `python3 scripts/review/review_markdown.py render|materialize` — the recovery command step 11 prints. `scripts/review/agent/output.py` is the builder; its only CLI subcommand is `finalize-review`. Every live reader of final-review contents calls `load_review_document(path, reviewer)`, which delegates to the exact schema-2 `validate_review_document()` authority; existence-only scans may observe process evidence but cannot project findings, verdicts, reviewed files, or semantic completion.
-
-`review-findings.md` follows the same rule one level up: the review-reconciliator publishes `review-findings.json` and nothing else, and the pipeline renders the Markdown from it through the SAME materializer (`materialize_markdown(output_dir, suffix="review-findings.json")`) at step 9 and again at step 11 — after the critic adjustments apply, so the rendering describes the ledger the run actually publishes. Every section the old hand-written report carried has a structured home: `assessment` (the overall conclusion), `checks` (material verification results), `meta.reconciliation` (pipeline metrics and not-applicable agents), `recommendations`, `observations` (verified tradeoffs), and `host_context_banner`. Both `review-findings.md` and `review-record.md` show source and severity annotations, dropped findings and checks with their reasons and evidence, and answered orchestrator notes. A render failure is a degradation note, never an exception — and never a file that disagrees with its JSON.
-
-**The critic lifecycle has exactly three owners** — see `scripts/review/critic_adjustments.py`'s module docstring. The critic never authors IDs or adjudication state, and the orchestrator never edits the committed proposal.
-
-**The findings ledger has exactly one write path** — see `scripts/review/findings_save.py`'s module docstring. **Never add a third ledger writer or a second path to either artifact — no bare `atomic_write_json`.**
-
-**ReviewOutputBuilder API** — `agents/shared/reviewer-protocol.md` §Canonical Draft Lifecycle and §ReviewOutputBuilder API state the reviewer-facing contract once; `scripts/review/agent/output.py`'s docstrings state the implementation contract once. Neither is restated here. What matters for maintenance: `open()` is the only raw-reviewer entry point, a save derives the six top-level reviewed-file fields and prints a digest-bound finalization command, and `reviewers/<reviewer>/review.json` is self-validating — `_validate_reviewer_envelope()` re-checks the claimed/unclaimed/count partition, so downstream readers read those fields rather than re-deriving them.
-
-Findings use stable `fN` IDs and checks use stable `cN` IDs. A check has exactly `id`, `question`, `method`, `result`, and `source_reviewers`, plus an optional `verifies` list of the change purpose's Verify item ids it settles; it records material verification evidence and never affects verdict counts. Raw reviewers own findings, checks, observations, positives, recommendations, confidence, and reviewed-file claims. Only the reconciliator authors the initial nullable `assessment`; a real critic mutation invalidates it unless the orchestrator's `adjudicate` request carries a revised assessment, while a no-op leaves it untouched.
-
-Verdict is auto-calculated from finding severities by `verdict_for_counts()` in `scripts/review/verdict_rules.py` — the ONE place the thresholds live, shared with `critic_adjustments.py`, which recomputes the ledger verdict after every applying critic batch. Never re-inline the ladder: step 11 derives the published pipeline verdict from that ledger, so a second copy that drifts reaches GitHub.
-- Any critical → `block`
-- 3+ highs → `block`
-- Any high (or 5+ mediums) → `request_changes`
-- Any medium → `comment`
-- Otherwise → `approve`
-
-The outer-pipeline verdict (`APPROVE`/`COMMENT`/`REQUEST_CHANGES` in `pipeline-result.json`) is DERIVED from the reconciled ledger's verdict at step 11 — `orchestration.py` owns the mapping between the two layers, and `block` maps to `REQUEST_CHANGES`. A critic `ESCALATE` overrides it to `COMMENT`. Nothing transcribes a verdict by hand any more; `review-verdict.json` is gone. Derivation settles on the prepare pass, but it is not published until the report handoff completes.
-
-### Cross-Repo Dependency: pirategoat-bot
-
-The `pirategoat-bot` Slack bot (at `~/Work/a8c/pirategoat-bot`) wraps this plugin's review pipeline. The two repos share integration contracts that must stay in sync:
-
-- **`review-context.json`** — The bot writes this file (orchestrator.js) before spawning the `claude` CLI. This plugin reads and enriches it (review/context.py). Field names, nesting, and required paths must match across both repos.
-- **Outer-pipeline verdict values** — The bot's `pr-review.py` defines outer-pipeline verdicts (`APPROVE`/`COMMENT`/`REQUEST_CHANGES`) and `github.js` maps them to GitHub actions. This plugin has its own per-agent verdict system (`block`/`request_changes`/`comment`/`approve` in `review/agent/output.py`). These are distinct layers — changes to one may need corresponding changes in the other.
-- **Prompt template variables** — The bot's `prompts/pr-review.md` injects variables (`{{MERGE_BASE}}`, `{{GIT_RANGE}}`, etc.) that this plugin's scripts consume via the review context.
-- **Terminal publication marker** — Resume discovery treats any `pipeline-result.json` as already complete, while delivery reads `review-report.md` immediately afterward. Therefore step 11 may create `pipeline-result.json` only after that exact report exists, and `report_path` must name `review-report.md`; `review-record.md` and `review-findings.md` are never terminal report fallbacks.
-
-**Rule: Before changing any integration surface in this plugin, read the corresponding code in pirategoat-bot first.** Do not assume the bot's expectations from this plugin's code alone — check the bot's actual implementation. When in doubt, read:
-- `pirategoat-bot/src/orchestrator.js` (writes review-context.json, reads review output)
-- `pirategoat-bot/src/github.js` (maps verdicts to GitHub actions)
-- `pirategoat-bot/scripts/pr-review.py` (outer-pipeline prompt and verdict logic)
-
-### Linear Issue Pipeline
-
-`scripts/linear/pipeline.py` is a 15-step curated-context pipeline for investigating and fixing Linear issues. The pirategoat-bot spawns a Claude CLI session with `prompts/linear-issue.md`, which calls the pipeline step by step.
-
-**Phases:** SETUP (1-3) → INVESTIGATION (4-8) → IMPLEMENTATION (9-10) → VALIDATION (11-13) → OUTPUT (14-15)
-
-**Clarity gate (step 8).** After investigation completes, step 8 assesses whether the issue has sufficient clarity for implementation. Evaluates 3 hard gates (problem statement, reproduction/scope, success criteria) and 3 soft signals (conflicting signals, missing technical context, implicit assumptions). Produces `clarity-assessment.json`. If any hard gate fails, sets `clarity_blocked` in state → implementation steps 9-14 are skipped → result has `status: "blocked"` and `verdict: "needs_clarification"`.
-
-**Override:** Bot can resume at step 9 by setting `skip_clarity_gate: true` in `run-config.json`. The pipeline checks this flag in `_eval_condition("fix_mode_and_unresolved")`. Step 9 briefing incorporates flagged ambiguities as documented risks when overridden.
-
-**Verdict distinction:** `needs_more_info` = investigation inconclusive. `needs_clarification` = investigation succeeded but issue lacks implementation clarity.
-
-**Cross-repo dependency:** The bot reads `pipeline-result.json` (status, verdict, clarity_gate, clarity_gate_overridden) and `clarity-assessment.json` (summary, questions_for_author) to construct Slack messages. Changes to these schemas must be synced with `pirategoat-bot/src/orchestrator-linear.js` and `pirategoat-bot/src/messages-linear.js`.
-
-### Agent Analysis & Observability
-
-Use the analysis scripts when you need to understand reviewer-agent behavior from raw Claude Code session logs.
-
-**Path convention:** Paths in this section are relative to `plugins/pirategoat-tools/`. If your shell CWD is the repository root, prefix them with `plugins/pirategoat-tools/`.
-
-#### `scripts/analysis/review_run_metrics.py`
-
-The supported review-pipeline run/cohort interface. It prefers durable `*.manifest.json` telemetry sidecars, falls back to privacy-reduced legacy JSONL records, and can enrich an exact run from Claude transcripts without weakening the pipeline-native measurements when transcripts are unavailable.
-
-This path is a thin CLI entry point; the implementation lives in the `scripts/analysis/review_metrics/` package. Imports flow one way only — edit within this layering, never against it:
-
-```text
-contracts -> sanitize -> usage -> load -> {measure, cohort} -> render -> cli
-```
-
-| Module | Owns |
-|---|---|
-| `contracts.py` | External contract loading (telemetry, dispatch_status), shared constants, `_parse_time` |
-| `sanitize.py` | Field-level sanitizers and strict validators |
-| `usage.py` | Token-usage accumulation primitives |
-| `load.py` | Manifest/JSONL discovery, lifecycle overlay, `load_runs`, and `load_shared_runs` — the `v1/<login>/` shared-clone reader, which reuses the local path's grouping, conflict-resolution and limit rules and follows no symlink at any level |
-| `measure.py` | Per-run measurement and transcript enrichment |
-| `cohort.py` | Cross-run aggregation |
-| `render.py` | Table and JSON rendering |
-| `cli.py` | Argument parsing and `main` |
-
-```bash
-python3 scripts/analysis/review_run_metrics.py --last 30
-python3 scripts/analysis/review_run_metrics.py --last 30 --format json --output "$TMPDIR/review-runs.json"
-python3 scripts/analysis/review_run_metrics.py --run-id <run-id> --no-transcripts
-python3 scripts/analysis/review_run_metrics.py --shared-dir <clone-of-the-telemetry-repo>
-```
-
-`--log-dir` and `--shared-dir` are mutually exclusive: the first reads this
-machine's own runs (defaulting to the standard log directory), the second reads
-a clone of the shared telemetry repository as a per-engineer cohort, attributing
-each run to the uploader login its `v1/<login>/` path carries and counting a run
-uploaded under two logins once. Transcript enrichment is always off for a shared
-source — uploads null the session id, so the family would only ever read as
-missing.
-
-**Transcript enrichment is bounded to explicit queries.** Enrichment costs one session discovery plus a full transcript parse *per run*, so an unbounded sweep would pay it across all history. A query without `--last` or `--run-id` reports the transcript family as explicitly `disabled` and prints how to enable it. The cohort itself is never silently truncated — full-history sweeps remain the tool's contract.
-
-**Local-output warning:** The stable JSON report is local operational output, not an anonymized or share-safe export. It intentionally retains `repo_path`, `output_dir`, `session_id`, Git range/SHA identifiers, and free-form main-orchestrator adjustment reasons because they are measurement evidence. Sanitize or redact generated JSON before sharing it outside the local trusted context.
-
-**Measurement contract:**
-
-- Telemetry/manifest fields are authoritative for run identity, deterministic planner versus main-orchestrator adjustments, the generated-scope assignment, lifecycle, outcomes, critic verdict, and wall time.
-- The `synthesis_agents` family measures the reconciliator and decision critic and is deliberately SEPARATE from `lifecycle`, which projects reviewer `agent_start`/`agent_complete` events. Neither synthesis agent produces those events or appears in a dispatch plan, so folding them in would corrupt every reviewer count downstream. Its durations come from the completion artifact's mtime, the closest available proxy for true completion; the observation time is not recorded. A run predating the family reports `missing`, never a zero-duration synthesis phase. Quick mode commits the pipeline's own `SKIPPED` verdict without a dispatch marker and therefore creates no row; a dispatched critic whose usable verdict never appears records `stalled` with no duration, reads `unavailable`, and degrades the run. Historical `SKIPPED` rows remain reader-compatible but are counted separately as `skipped_runs` and excluded from `total_ms`/`mean_ms`.
-- **Two DISTINCT `usage` keys**, deliberately SEPARATE the same way `synthesis_agents`/`lifecycle` are: `measured["usage"]` (`availability.usage`) is the durable PER-RUN SNAPSHOT — `manifest_sections.build_usage_manifest` projecting `usage-snapshot.json`, sanitized by `review_metrics/sanitize.py`'s `_sanitize_usage_snapshot` — while `measured["transcript"]["usage"]` (`metric_availability.usage`) is the live TRANSCRIPT-derived family `measure_run()` computes fresh from session transcripts on every call. `usage_snapshot.py` is the bridge between them: its `_capture()` calls `measure_run()` to get the transcript family, then `_build_snapshot()` reads `measured_run["transcript"]["usage"]` to WRITE the durable snapshot that later becomes `measured["usage"]` on subsequent runs. Since `_sanitize_manifest` now always produces a top-level `usage` key, `measure_run()`'s return value at that call site carries BOTH keys side by side — `measured_run["usage"]` (near-always `None`/stale, since no snapshot exists yet at first capture) beside the correct `measured_run["transcript"]["usage"]` — so a future edit to `usage_snapshot.py` reading the former instead of the latter would silently capture nothing while looking plausible.
-- There are no human overrides in this flow. Deterministic planning runs first; the main orchestrator may then add or skip agents and supplies the adjustment reasons.
-- Lifecycle `agents.incomplete` is a deterministic sorted multiset with one repeated agent name per unmatched start execution. `incomplete_count` measures executions, `incomplete_identities` contains unique sorted names, and `incomplete_by_agent` preserves per-agent multiplicity. Complete manifests require the exact start-minus-completion multiset and suppress sibling overlays. Running manifests remain partial; the consumer may overlay only a strictly validated same-run JSONL lifecycle suffix after proving the sidecar arrays are exact causal prefixes, and must reduce fresh events without retaining raw prose or scope paths. Malformed, foreign, prefix-inconsistent, or chronologically invalid siblings fail closed for lifecycle only.
-- Dispatch `adjustment_rate` measures changed agents over the full compared-agent union; `planner_removal_rate` measures removed agents over planner-dispatched candidates for comparable runs. Wall durations above one year are treated as implausible missing data.
-- Valid plans with different agent identity sets disable adjustment comparison and carry only sorted identity-to-status projections. Ingestion must rederive both dispatch counts from those projections, require exact mismatch metadata, and fail malformed or unexpected projections closed for the dispatch family without retaining plan prose.
-- Transcript correlation is optional and exact: session ID + output directory + recognized reviewer/reconciler/critic identity.
-- Every metric family distinguishes complete, partial, missing, and disabled data. Missing data is never reported as a measured zero, and partial observations never enter complete denominators.
-- **Legacy reconstruction is frozen.** Review-run legacy segments and identityless-segment recovery are best-effort overall; their independent availability families remain the reporting boundary and may be complete, partial, missing, or disabled per family. `session_analyzer.py` no longer infers review content from heredoc source: it reads the finalized `reviewers/<reviewer>/review.json` the builder envelope names, and an artifact belongs to its directory's run because a directory is one run, so an artifact it cannot read is unmeasured rather than approximated and its local ad hoc quality output still has no availability-family labels. A new inference-precision edge is a known limitation, not another hardening round; crashes, privacy/safety failures, or contamination through foreign run, agent, or artifact identity confusion remain bugs, and new precision belongs in producers—manifests, sidecars, and shared contracts—where durable fixes land.
-- Stable review-run metrics reports use schema 5. Transcript-derived observed reads remain their exact schema-2 payload; legacy, missing, boolean, or future versions fail closed instead of being interpreted as empty measurements.
-- Generated scope is descriptive, not proof of model reads. Observed reads are always non-exhaustive. Only scope-bearing regular reviewer reads enter the `all`/`in_scope`/`out_of_scope` partition; exact `review-reconciliator`, `decision-reviewer`, and `critic` identities — plus scope-exempt domainless reviewers (`tests-mutation-reviewer`), which discover their own scope — route to the separate `non_scope_comparable` bucket. Scope-exempt reviewers stay regular reviewers for builder metrics, while their read-family completeness follows the read routing: damaged scope-exempt evidence degrades the `non_scope_comparable` family it feeds, never the scope-comparable one. Near-match names are regular reviewers.
-- Reviewer and synthesis read families carry independent completeness, availability, and cohort denominators. The combined `observed_reads` state is conservative and complete only when both families are complete.
-- Every observed-read entry must be one canonical repository-relative path. Absolute, traversal, dot-segment, empty-segment, backslash-separated, drive-prefixed, empty, and control-character paths invalidate the full read payload; normalized Unicode and spaces are preserved.
-- Transcript privacy reduction excludes raw prompt bodies, source/finding prose, commands, and tool-result bodies. It does not make the report path-free or identifier-free.
-
-Run `pytest plugins/pirategoat-tools/tests/analysis/test_review_run_metrics.py -v` after changing this interface.
-
-#### `scripts/analysis/review_transcript.py`
-
-Lower-level privacy-preserving transcript enrichment used by `review_run_metrics.py`. It correlates the exact main session and run-specific subagents, measures cache-aware usage, safe tool failure/recovery categories, first pipeline-owned Bash attempts, and emits a versioned observed-read payload with independent regular-reviewer and exact synthesis-identity completeness. `usage_summary_for_transcript()` is the public token-count wrapper: all callers use the one parser so a streamed response is counted once. Reviewer output evidence paired with `builder_attempted: false` means only that the required Bash path was not observed; it does not identify the alternative output mechanism. It must keep completion-notification usage out of totals and must never expose raw prompts, commands, source, findings, or tool-result bodies.
-
-Run `pytest plugins/pirategoat-tools/tests/analysis/test_review_transcript.py -v` after changing its correlation or parsing contract.
-
-**Two settled design questions.** Both have been raised in review and decided; re-open them only with new evidence.
-
-*Why reconstruct identity from transcripts instead of using `SubagentStop` / `PostToolUse` hooks?* The hooks do emit `agent_id`, `agent_type`, `resolvedModel`, and `totalToolUseCount` directly, which would replace the correlation layer (session discovery, run-window bounding, dispatch-prompt parsing, and its four warning codes). They would **not** replace transcript parsing itself: `observed_reads` still requires reading each subagent transcript, so this is roughly a quarter of the module, not all of it. The deciding tradeoff is that hooks only measure runs after install, while the parser reads history — including the historical cohort the budget-utilisation baseline is built on. Correlation failure is already reported explicitly rather than silently dropping agents from denominators, so the current design degrades honestly.
-
-*Why does this module parse session JSONL when `session_analyzer.py` already does?* Their contracts are deliberately different: `session_analyzer.py` retains prose (prompts, commands, categorized text) for human-facing ad-hoc reports, while this module must never expose those bodies. The 2026-08-03 census found that the prior three-reader tally was not a full census: JSONL is read by `review_metrics/load.py::_read_jsonl` (plus its strict variant), `review_transcript.py::_read_jsonl` and `_bounded_jsonl_entries`, `session_analyzer.py`, three sites in `session_metrics.py` (`extract_triage_decisions`, `identify_agent_type`, and `extract_subagent_metrics`), and `telemetry.py::_read_events`, which now counts skipped gaps. Keep these readers separate because their contracts differ across binary/text input, strict/tolerant failure, and report/skip behavior, while the genuinely shared surface remains about 15 lines. Reopen this decision only if a malformed-line-handling fix has to be re-discovered per copy.
-
-#### `scripts/analysis/usage_snapshot.py`
-
-Captures one review run's token usage into its own run directory as `usage-snapshot.json`. Invoked by pipeline step 11 as a subprocess; also runnable by hand over a finished run.
-
-```bash
-python3 scripts/analysis/usage_snapshot.py --output-dir <run dir> [--sessions-root ~/.claude/projects]
-```
-
-It is a thin projection over `review_metrics.measure_run` (which drives `review_transcript.py`), never a second correlation implementation. It resolves the run manifest through `ReviewTelemetry.manifest_path` — the producer's own marker-file derivation — and falls back to `run-config.json` for a `session_id` the manifest lacks.
-
-**Why a subprocess seam, not an import.** `scripts/analysis/` already loads `scripts/review/`'s telemetry, dispatch-status, and critic contracts by exact path. Importing the analysis package back into `orchestration.py` would close that loop and make finalize depend on the analysis import graph; the CLI keeps the dependency one-way.
-
-**The two halves are labelled independently, and that is the point.** At finalize every subagent transcript is closed — reviewers, reconciliator, and critic have all returned — so subagent usage is complete evidence. The orchestrator is measuring its own still-open session, so its number is partial by construction. The enrichment's own `completeness.agent_data` cannot express this: it is ANDed with the orchestrator's `main_data_complete`, so one unresolved tool call in the main session reports every closed reviewer transcript as incomplete. The subagent label is therefore derived from subagent-scoped facts (correlated-vs-expected executions plus the agent-scoped warning codes), and the orchestrator label is gated on `window.closed` so a capture-time snapshot can never read `complete`.
-
-**Window substitution.** A running manifest has no `ended_at`, and an unbounded window closes at the first human turn after it opens — the requester's next message in an interactive review. The capture substitutes its own instant as the window end, in its private view only; the manifest on disk is untouched, and `window.closed` records which kind of window the numbers cover. Re-running over a settled manifest is what upgrades a partial orchestrator half — and both a manual re-run and the manifest it feeds are now first-class parts of that upgrade, not just the snapshot file:
-
-* **MONOTONIC, scoped to the artifact.** A re-run's candidate is compared, half by half (subagents, orchestrator), against whatever `usage-snapshot.json` is already on disk. A candidate that would downgrade either half — evidence that used to correlate and no longer does, most often rotated-out transcripts — is discarded wholesale: the existing artifact is left byte-for-byte untouched rather than overwritten with weaker evidence. The guarantee protects the FILE, not the run: deleting `usage-snapshot.json` is an explicit act, and the next capture over an empty slate re-measures from scratch and records whatever it finds — including a fresh `missing` — per the same recorded-absence doctrine as every other unmeasured state here. The CLI's one-line stdout summary carries `written`/`downgrade_avoided` so a caller can tell a genuine upgrade apart from a preserved prior measurement.
-* **The manifest follows, through `ReviewTelemetry.reproject_usage()`.** `ReviewTelemetry` projects this artifact into the manifest's `usage` section wholesale exactly once, at finalize; nothing else revisits that section afterward, so a manual re-run over an already-finalized run used to upgrade `usage-snapshot.json` while the manifest kept reporting the finalize-time partial number forever. The manifest keeps ONE owning module even with two entry points into it — the same shape `critic_adjustments.write_findings` gives the findings ledger: `reproject_usage()` is a `ReviewTelemetry` method (it already imports `manifest_sections` and `atomic_write_json`, so this needed no new imports), and the CLI's call site is `_TELEMETRY_CONTRACT.ReviewTelemetry(str(output_dir)).reproject_usage()` — the CLI itself carries no reference to `manifest_sections` at all. The method patches ONLY the manifest's `usage` key and its `availability.usage` companion flag, through the same `atomic_write_json` primitive `_materialize_manifest` uses, and never reconstructs `run`/`dispatch`/`assignment`/etc. from the pipeline's own JSONL events, which stay telemetry's alone to rebuild. Two gates keep the patch narrow, both fail closed (no write): `status == "complete"` — a still-running manifest is `finalize()`'s territory alone, so the in-pipeline step-11 call into this method is a no-op every time (status still reads "running" at that point; `finalize()`'s own full rebuild, moments later in the same run, is what actually settles `usage` for a normal pipeline run) — and `schema == EVENT_SCHEMA`, so an unsupported-schema manifest is never interpreted. Reprojection is best-effort like every other manifest write telemetry performs: its outcome surfaces on the CLI's stdout summary as `manifest_reprojection` — a reason string (`written`/`absent`/`not_settled`/`unsupported_schema`/`io_failure`) rather than a bool, so the one anomalous outcome on a settled current-schema manifest (`io_failure`) stays distinguishable from the everyday no-ops — and no non-written reason ever turns into a nonzero exit or a stderr line — deliberately diverging from `usage-snapshot.json`'s own write path, which DOES fail loudly, because that write IS this CLI's sole reason for existing while the manifest is a derived surface it can always regenerate on the next re-run.
-
-**Availability doctrine.** An unreadable, absent, or transcript-less run (Codex writes no Claude-format transcripts) still writes the artifact with `missing` and null payloads — a recorded absence, distinct from a run that never attempted the capture and has no artifact. This Codex-host gap is known and permanently unsolved: no re-run of this CLI can measure a host that never wrote a Claude-format transcript in the first place. Per-model buckets key on the DISPATCHED model (`claude-opus-5[1m]`), not the per-message model inside the transcript (`claude-opus-5`), because the bracketed variant is separately priced.
-
-The snapshot reaches two durable surfaces: the run manifest's `usage` section beside `availability.usage`, and a compact `usage` block in `pipeline-result.json` (a pirategoat-bot consumer surface). Both project through `manifest_sections.build_usage_manifest()`, so they cannot disagree about what a usable measurement is. Step 11 may capture twice because its settlement pass is idempotently re-entered, but only the post-report pass publishes the compact block; only the manifest is reprojected by a manual re-run, and `pipeline-result.json` is not revisited outside the pipeline.
-
-Run `pytest plugins/pirategoat-tools/tests/analysis/test_usage_snapshot.py plugins/pirategoat-tools/tests/review/test_orchestration_hygiene.py plugins/pirategoat-tools/tests/review/test_telemetry.py -v` after changing the CLI, its step-11 seam, or `ReviewTelemetry.reproject_usage()`.
-
-#### `scripts/analysis/session_analyzer.py`
-
-Parses subagent JSONL logs from Claude Code sessions to extract tool call sequences, categorize behavior patterns, and generate efficiency metrics.
-
-**Usage:**
-
-```bash
-# The --sessions-dir value is your project's absolute path with "/" replaced by "-":
-# e.g. /Users/alice/code/myproject -> ~/.claude/projects/-Users-alice-code-myproject
-
-# Analyze all patterns-reviewer dispatches from the last 20 sessions
-python3 scripts/analysis/session_analyzer.py \
-    --sessions-dir ~/.claude/projects/<encoded-project-path> \
-    --agent patterns-reviewer \
-    --limit 20
-
-# JSON output for programmatic analysis
-python3 scripts/analysis/session_analyzer.py \
-    --sessions-dir ~/.claude/projects/<encoded-project-path> \
-    --agent security-reviewer \
-    --format json
-
-# Analyze all agents (no --agent filter)
-python3 scripts/analysis/session_analyzer.py \
-    --sessions-dir ~/.claude/projects/<encoded-project-path> \
-    --limit 5
-
-# Write to file
-python3 scripts/analysis/session_analyzer.py \
-    --sessions-dir ~/.claude/projects/<encoded-project-path> \
-    --agent patterns-reviewer \
-    --output "$TMPDIR/patterns-analysis.txt"
-```
-
-**What it extracts per dispatch:**
-- Tool call sequence with categorization (git-grep, git-show, git-log, git-diff, bootstrap, file-read-bash, file-list, other)
-- Dispatch classification (reviewer vs reconciliator vs crashed)
-- File read patterns (unique files, duplicates, most-read files)
-- Output file details (Write tool usage plus the canonical Bash builder heredoc — recognized by its envelope, with the review read from the `reviewers/<reviewer>/review.json` that envelope names — content size, finding counts)
-- Aggregate statistics (tool call breakdown, cross-dispatch patterns)
-
-**Output formats:**
-- `text` (default) — human-readable report with full tool sequences
-- `json` — structured data for downstream analysis
-
-#### `scripts/analysis/session_metrics.py`
-
-General-purpose tool for extracting operational metrics (runtime, model, cache tokens, verdict) from session transcripts. Agent type is read from the host's `agent-<id>.meta.json` before transcript inference, and token counts use `review_transcript.usage_summary_for_transcript()` rather than a second per-record parser. Documented in-file.
-
-#### `scripts/analysis/codex_rollout.py`
-
-Shared primitives for reading Codex CLI rollout files: thread metadata parsing, date-windowed discovery, single-pass thread scan, and tree building. The only module that knows the Codex rollout schema — both Codex CLIs build on it.
-
-Deliberately separate from the Claude Code readers. Consistent with the 2026-08-03 JSONL reader census: the contracts differ (different schema, different discovery model), and the genuinely shared surface is small.
-
-Run `pytest plugins/pirategoat-tools/tests/analysis/test_codex_rollout.py -v` after changing this module.
-
-#### `scripts/analysis/codex_session_analyzer.py`
-
-Traces one Codex thread tree in depth — per-thread model, duration, tokens, commands with exit codes, and file changes.
-
-**Usage:**
-
-```bash
-# Newest thread tree for one project
-python3 scripts/analysis/codex_session_analyzer.py --cwd /path/to/project
-
-# A specific thread as JSON
-python3 scripts/analysis/codex_session_analyzer.py --thread-id <thread-id> --format json
-```
-
-#### `scripts/analysis/codex_session_metrics.py`
-
-One row per Codex thread plus a roll-up by agent role. Metric names match `session_metrics.py` so Codex and Claude Code figures can share a table.
-
-**Usage:**
-
-```bash
-python3 scripts/analysis/codex_session_metrics.py --agent code-reviewer --since 30 --format markdown
-```
-
-Run `pytest plugins/pirategoat-tools/tests/analysis/test_codex_session_scripts.py -v` after changing these scripts.
-
-#### Codex Session Data Locations
-
-```text
-~/.codex/sessions/YYYY/MM/DD/
-└── rollout-{ISO-timestamp}-{thread-id}.jsonl   # one thread per file
-```
-
-There is no per-project partitioning — `cwd` is a field on line 1 — and subagents are sibling rollouts linked by `agent_path`, not files in a subdirectory. Only finished sessions are analyzed; a live rollout grows while being read.
-
-#### Claude Code Session Data Locations
-
-Claude Code stores session transcripts separately from the durable review run directories:
-
-```text
-~/.claude/projects/<encoded-project-path>/   # absolute path with "/" replaced by "-"
-├── {session-uuid}.jsonl           # Main session transcript
-├── {session-uuid}/
-│   ├── subagents/
-│   │   └── agent-{id}.jsonl       # Subagent logs (one per dispatched agent)
-│   └── tool-results/
-│       └── {hash}.txt             # Cached tool results
-```
-
-Each subagent JSONL file contains one JSON object per line, with the first line being the dispatch message (containing the prompt). Subsequent lines alternate between assistant tool calls and tool results.
-
-## Backlog
-
-Deferred-but-valid work lives in [`BACKLOG.md`](BACKLOG.md) — the committed,
-canonical home. When an audit, review, or field run defers a real finding
-instead of fixing it, record it there with evidence and a do-when condition;
-session analysis docs under `.claude/docs/` are gitignored and do not survive
-as a place of record. Remove entries when done or dead.
-
-## Development Workflows
-
-### Running the Dev Version (`scripts/claude-pirategoat-tools-dev`)
-
-To exercise unreleased plugin changes against a real repository before release, start Claude Code through the wrapper at the repo root:
-
-```bash
-scripts/claude-pirategoat-tools-dev                          # interactive
-scripts/claude-pirategoat-tools-dev -p "review this branch"  # headless; args pass through
-```
-
-Symlink it onto your `PATH` if you want it available everywhere — it resolves the worktree from its own location, following symlinks, so it works from any directory.
-
-**What it does.** Two flags that must always travel together:
-
-```bash
-claude --plugin-dir <worktree>/plugins/pirategoat-tools \
-       --settings '{"enabledPlugins":{"pirategoat-tools@<marketplace>":false}}'
-```
-
-`--plugin-dir` loads the worktree **in place** — the plugin is not copied into `~/.claude/plugins/cache/`, so edits apply to the next session with no sync step. The `--settings` override is not optional: `--plugin-dir` alone loads the worktree *alongside* the installed release, and both then register the same commands and agents. The release's plugin id is derived from `.claude-plugin/marketplace.json` rather than hardcoded, so renaming the marketplace cannot leave the wrapper disabling a plugin that no longer exists.
-
-**Nothing is installed, cached, or written to disk.** `claude plugin list` reports the worktree copy as `pirategoat-tools@inline` with `Status: loaded` and no installed record; the release keeps its own entry, disabled only inside that process. A plain `claude` is always the released version — dev is opt-in and never sticky. This is the opposite failure direction from a global switch: forgetting the wrapper means you are on the safe version.
-
-**Which version actually ran** is recorded durably. `_detect_plugin_version()` falls back to the CHANGELOG's top version when the plugin root's directory name is not a semver, so a run under the wrapper records the worktree version (e.g. `1.114.0`) in `plugin_version` in the run manifest, even though `claude plugin list` shows `Version: unknown` for an inline load. Check it with:
-
-```bash
-python3 scripts/analysis/review_run_metrics.py --last 1 --format json | grep plugin_version
-```
-
-**Which BUILD ran** is a different question, and the one that matters under the wrapper: `plugin_version` only moves when a release is cut, so every dev-mount commit between two releases stamps the same number. `_detect_plugin_commit()` records the checkout's short HEAD as `plugin_commit` in `run-config.json` — deliberately there and nowhere else, since run-config is the artifact that could not answer it. It resolves for ordinary installs too — Claude Code installs a marketplace by cloning it, so an installed plugin usually sits in a repository — and is `null` only where there is no repository to ask (no Git binary, a distribution that arrived some other way). Read it straight from the run directory:
-
-```bash
-python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["plugin_commit"])' <run dir>/run-config.json
-```
-
-**Permission prompts are skipped.** The wrapper passes `--dangerously-skip-permissions`, because these sessions exist to exercise the review pipeline end to end and prompting on every tool call defeats that. It is scoped to the wrapper rather than aliased onto `claude`, so ordinary sessions keep their prompts. Once prompts are gone the remaining backstop is the `yoloing-safe` PreToolUse hook on `Bash|Write|Edit|Read` — if that plugin is disabled, these sessions have neither. Check with `claude plugin list | grep -A3 yoloing-safe`.
-
-**Caveats.**
-
-- The mount is the live working tree, uncommitted edits included. A half-finished edit is what reviews your PR. Check `git status` before starting a session you intend to trust.
-- Edits made *during* a session do not affect the already-loaded plugin; restart the wrapper to pick them up.
-- `/tmp/.pirategoat-tools-root` is repopulated from `$CLAUDE_PLUGIN_ROOT` by the PreToolUse hook, which under the wrapper is the worktree, so the fallback cache self-corrects. Its `find`-based fallback sorts on the full path and would otherwise favor the released install.
-
-### Adding a Reviewer Agent
-
-1. Read existing agent `.md` files in `agents/` to understand the format and conventions
-2. Create `agents/<agent-name>.md` with the agent definition, opening with the `## MANDATORY SETUP — Run Bootstrap Before Reviewing` section copied from any existing reviewer with the `--agent` name changed; the heading is asserted verbatim by `tests/review/agent/test_bootstrap_integration.py`, and a variant heading fails there rather than being tolerated
-3. Add entry to `scripts/review/agent_registry.json` — choose domain, protocols, dispatch class, model tier, and (if conditional) triage criteria
-4. For conditional agents: add one probe per `triage_criteria` bullet to `tests/review/test_criteria_coverage.py` (the completeness meta-test fails until you do) and make each probe dispatch — this is where you discover whether your keywords/checks actually back your criteria
-5. Add agent to `.claude-plugin/marketplace.json` in the `agents` array
-6. Run tests: `pytest plugins/pirategoat-tools/tests/ -v` (parameterized tests auto-include new agents)
-
-### Adding a Command
-
-1. Read existing commands in `commands/` to understand the dispatch pattern
-2. Create `commands/<command-name>.md` — commands are orchestrators that invoke agents via the `/Agent` tool
-3. Use `review/plan_dispatch.py` for triage decisions (don't duplicate triage logic)
-4. Add command to `.claude-plugin/marketplace.json` in the `commands` array
-5. Add structural tests in `tests/commands/test_commands.py` (new `TestXxx` class)
-6. Run `python3 scripts/generate_codex_compat.py` from the repository root and commit the generated command-skill adapter
-7. Run tests: `pytest plugins/pirategoat-tools/tests/commands/test_commands.py plugins/pirategoat-tools/tests/test_codex_marketplace.py -v`
-8. **Update all docs** - see [Doc Update Checklist](#doc-update-checklist-for-new-commands-skills-or-agents) below
-
-### Adding a Skill
-
-1. Create `skills/<skill-name>/SKILL.md` with YAML frontmatter (`name`, `description`) and Markdown body
-2. Add skill to `.claude-plugin/marketplace.json` in the `skills` array
-3. **Update all docs** — see [Doc Update Checklist](#doc-update-checklist-for-new-commands-skills-or-agents) below
-
-### Expected Failures
-
-These are normal — handle them, do not stop or apologize:
-
-- **`review/agent/scope.py` returns empty scope**: The diff has no files matching this agent's domain. Skip the agent — this is correct triage behavior.
-- **Tests fail after your changes**: Read the failure output, fix the root cause, and re-run. Test failures are feedback, not errors.
-- **`review/agent/bootstrap.py` can't find plugin root**: Ensure you are running from within the repository. The script walks up from CWD looking for `.claude-plugin/`.
-
-### Testing
-
-**Always run tests after modifying scripts, agents, or commands.** See the root `AGENTS.md` [Testing > pirategoat-tools](#pirategoat-tools) section for the full test lookup table, test principles, and agent compliance eval commands.
-
-**Subprocess tests must isolate from the real repo.** Tests that invoke pipeline scripts via `subprocess.run()` MUST pass `cwd=tmp_path` (with a temp git repo) so git-mutating scripts can't stash, checkout, or reset the real working tree. See [learning](../../.claude/docs/learnings/2026-03-19-isolate-subprocess-tests-from-real-repo.md).
-
-### Doc Update Checklist for New Commands, Skills, or Agents
-
-**Every new command, skill, or agent requires updates in all five locations below.** Do not skip - stale counts and missing entries make the plugin inventory unreliable.
-
-| # | File | What to update |
-|---|------|----------------|
-| 1 | `.claude-plugin/marketplace.json` | Add entry to the plugin's `commands`, `skills`, or `agents` array |
-| 2 | `plugins/pirategoat-tools/README.md` | Update count in directory tree + add row to the relevant table |
-| 3 | Root `AGENTS.md` → Plugin Inventory → pirategoat-tools | Update summary count + add to the `commands/`/`skills/`/`agents/` contents row |
-| 4 | Root `README.md` | Update count in directory tree (e.g., "34 agents, 22 skills, 7 commands") |
-| 5 | Generated Codex outputs | Run `python3 scripts/generate_codex_compat.py` and commit the result |
+|---|---|---|
+| `domain` | yes | Scope domain for `agent/scope.py` filtering; `null` for agents that discover their own scope (tests-mutation-reviewer). |
+| `protocols` | yes | Protocol files to include: `"reviewer"` (all agents), `"tests-reviewer"` (test agents). |
+| `scope_flags` | yes | Extra flags for `agent/scope.py` (for example `["--max-lines", "500"]`); `[]` for defaults. |
+| `dispatch_class` | yes | `always` (every review), `conditional` (triage criteria match; dispatch-by-default when the domain has files and no evidence gate fires; skips stay visible in `agent_signals` for override), `manual` (explicit request only), `special` (synthesis agents, never triaged). |
+| `focus` | yes | One-line keyword focus surfaced in the step-5 dispatch summary. Keep aligned with the agent's `description`. |
+| `model_tier` | yes | `"inherit"` (caller's model), `"sonnet"`, `"opus"`, or `"haiku"`, matched to the reasoning depth needed. `tests/review/test_registry_docs.py` pins this vocabulary to the registry in both directions. |
+| `triage_criteria` | conditional | Required for `conditional`. Every bullet is an executable contract: `tests/review/test_criteria_coverage.py` needs one probe diff per criterion that dispatches through the real pipeline, so a criterion without a keyword or check to back it is reworded or given one. One signal-able clause per bullet, and probes are text-neutral (`TestProbeNeutrality` blanks commit and PR text) unless the criterion is about that text. |
+| `triage_keywords` | optional | Whole-word keywords (a trailing `*` declares a prefix) matched against commit messages without trailers, changed paths without repo-structural segments, the PR title and author-written body, the branch slug, linked-issue titles, and scoped patch text. Language-structural terms (`function`, `class`, `remove`) are banned by a registry test; use `triage_checks` for structure. The audited runs replay in `tests/review/test_triage_run_regressions.py`. |
+| `triage_checks` | optional | Structural signals evaluated over the diff, for criteria a keyword cannot express. |
+| `require_triage_keyword_match` | optional | Evidence gate: skip unless a keyword or a `triage_checks` entry fired. |
+| `require_php_source_file` | optional | Evidence gate: skip unless the domain's scope holds at least one non-test `.php` file (`plan_dispatch.py` layer 2). Used by the WordPress and WooCommerce reviewers. |
+| `triage_repository_keywords` | optional | Ambient repository-identity keywords matched against fetch remotes and the checkout basename. Opt in only when repository membership alone is sufficient for applicability. |
+| `min_added_lines` | optional | Skip when the non-test in-scope additions fall below this count. |
+| `secondary_domains`, `extra_scope`, `budget_override`, `file_history`, `max_history_commits` | optional | Extra scope domains; extra scope invocations (`["--base-ref-only"]`); a fixed tool-call budget for agents whose work does not scale with the diff; per-file git history in the prompt, and how many commits (default 5). |
+
+Adding a reviewer:
+
+1. Create `agents/<name>.md`, opening with the `## MANDATORY SETUP — Run Bootstrap Before Reviewing` section copied from an existing reviewer with the `--agent` name changed; `tests/review/agent/test_bootstrap_integration.py` asserts that heading verbatim.
+2. Add the registry entry: domain, protocols, dispatch class, model tier, focus, and (if conditional) criteria.
+3. For a conditional agent, add one probe per criterion to `tests/review/test_criteria_coverage.py`; the meta-test fails until every criterion dispatches.
+4. Add the agent to `.claude-plugin/marketplace.json`, update the README table, run the generator, and run `pytest plugins/pirategoat-tools/tests/ -q` (parameterized tests include new agents automatically).
+
+Adding a command: create `commands/<name>.md` (an orchestrator that dispatches agents; use `plan_dispatch.py` for triage decisions), add it to `marketplace.json`, add a `TestXxx` class in `tests/commands/test_commands.py`, run `python3 scripts/generate_codex_compat.py` from the repository root and commit the adapter, and update the README table. Adding a skill: `skills/<name>/SKILL.md` with `name` and `description` frontmatter, registered the same way.
+
+## Cross-Repo Contracts: pirategoat-bot
+
+The `pirategoat-bot` Slack bot (`~/Work/a8c/pirategoat-bot`) wraps this plugin's review and Linear pipelines. **Before changing any integration surface here, read the bot's code first**: `src/orchestrator.js` (writes `review-context.json`, reads review output), `src/github.js` (maps verdicts to GitHub actions), `scripts/pr-review.py` (outer-pipeline prompt and verdict), `src/orchestrator-linear.js` and `src/messages-linear.js` (Linear results). The shared surfaces:
+
+- `review-context.json` and `issue-context.json`: the bot writes them; this plugin reads and enriches them. Field names, nesting, required paths, and the bot-owned `version: 1` key must match.
+- Outer-pipeline verdicts (`APPROVE`/`COMMENT`/`REQUEST_CHANGES`) are the bot's layer; this plugin's `block`/`request_changes`/`comment`/`approve` are the ledger's. `orchestration.py` maps between them at step 11.
+- Prompt template variables (`{{MERGE_BASE}}`, `{{GIT_RANGE}}`, and others in the bot's `prompts/`) reach this plugin through the review context.
+- Terminal marker: the bot treats any `pipeline-result.json` as complete and then reads `review-report.md`, so step 11 creates `pipeline-result.json` only after that exact report exists, with `report_path` naming it; `review-record.md` and `review-findings.md` are never terminal fallbacks.
+- Linear: the bot reads `pipeline-result.json` (`status`, `verdict`, `clarity_gate`, `clarity_gate_overridden`) and `clarity-assessment.json` (`summary`, `questions_for_author`). Step 8's clarity gate blocks implementation (`status: "blocked"`, `verdict: "needs_clarification"`) when a hard gate fails; the bot can override with `skip_clarity_gate: true` in `run-config.json`. `needs_more_info` means the investigation was inconclusive; `needs_clarification` means it succeeded but the issue lacks implementation clarity.
+- Reviewer `*.started` markers are a contract the bot's resume path scans; synthesis agents use a different suffix (`synthesis_lifecycle.MARKER_SUFFIX`) so they are never mistaken for reviewers.
+
+## Expected Failures
+
+These are normal; handle them, do not stop or apologize:
+
+- `agent/scope.py` returns an empty scope: no files match this agent's domain. Skip the agent; that is correct triage.
+- Tests fail after your change: read the output, fix the root cause, re-run. Failures are feedback.
+- `agent/bootstrap.py` cannot find the plugin root: run from inside the repository; it walks up from CWD looking for `.claude-plugin/`.

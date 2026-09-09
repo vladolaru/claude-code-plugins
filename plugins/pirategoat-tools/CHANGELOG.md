@@ -5,6 +5,13 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- `AGENTS.md` now holds only the plugin's rules, a one-line key-file map, the agent-registry reference, and a read-when table; the subsystem guides it used to inline live in `docs/` (`review-pipeline.md`, `artifact-schemas.md`, `repo-reviewers.md`, `analysis-tools.md`, `dev-wrapper.md`), module contracts in the module docstrings, and the file-to-test lookup in `tests/TESTING.md`. A byte-budget test keeps the root and plugin `AGENTS.md` chain under Codex's 32 KiB instruction limit, which the old files exceeded.
+- The agent-registry reference documents the `require_php_source_file`, `triage_checks`, and `min_added_lines` fields.
+
 ## [1.119.2] - 2026-09-09
 
 ### Fixed
