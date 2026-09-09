@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.119.2] - 2026-09-09
+
+### Fixed
+
+- In an interactive review, step 11 now gates advancing to step 12 on the recap (verdict and key findings) having been posted in chat, not only on `review-report.md` existing; non-interactive runs are unchanged.
+
 ## [1.119.1] - 2026-09-09
 
 ### Fixed

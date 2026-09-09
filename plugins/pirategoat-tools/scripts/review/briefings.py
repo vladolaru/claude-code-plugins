@@ -2737,10 +2737,13 @@ def _step_11_present_results(mode, state, context, config, output_dir):
         "title": "Author Report + Present Results",
         "situation": situation,
         "actions": actions,
-        # The one artifact this step asks the orchestrator for, and the one
-        # the run's whole output rests on: pirategoat-bot reads this file
-        # and fails the delivery if it is absent, so the gate has to be
-        # here rather than left implicit.
+        # Two gates live here. While the report is unwritten, the gate is
+        # the file itself: pirategoat-bot reads it and fails the delivery
+        # if it is absent. Once the report exists, an interactive run still
+        # owes a human the recap — kept as a loose action bullet beside a
+        # `None` handoff, it was the one deliverable an orchestrator that
+        # verifies only handoff-listed files could skip on its way to
+        # step 12.
         "handoff": (
             [(
                 f"Regenerate `{_artifact_display(od, 'review_report')}` from the newly settled "
@@ -2754,7 +2757,19 @@ def _step_11_present_results(mode, state, context, config, output_dir):
                      "step 11 before reporting the pipeline complete."
             )]
             if publication_pending
-            else None
+            else (
+                [
+                    "Before calling step 12, confirm you have already sent "
+                    "the formatted recap (verdict + key findings, read "
+                    f"from `{_artifact_display(od, 'review_report')}`) as a chat message to "
+                    "the user in this turn. Having written or read the "
+                    "report file does not satisfy this — the recap must "
+                    "actually be posted. If you have not posted it yet, "
+                    "do so now before proceeding."
+                ]
+                if is_interactive
+                else None
+            )
         ),
         "blocks_progress": publication_pending,
         # Read by pipeline.py's format_output for the completion footer: a
