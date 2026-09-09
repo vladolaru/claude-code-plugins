@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- `AGENTS.md` is cut to the plugin's rules and a read-when map, with the subsystem guides now in `docs/` and a byte-budget test keeping the root-plus-plugin chain under Codex's 32 KiB instruction limit, which the old files exceeded so Codex never read the plugin file.
+
 ## [1.119.2] - 2026-09-09
 
 ### Fixed

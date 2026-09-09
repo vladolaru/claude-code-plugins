@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
-"""
-Dispatch Planner — Centralized review agent dispatch decisions.
+"""Dispatch Planner — centralized review agent dispatch decisions.
 
 Reads the agent registry and changed files to produce a deterministic
-dispatch plan: which agents to run, which to skip, and why.
-
-Replaces duplicated triage logic in command files with a single script.
+dispatch plan: which agents run, which are skipped, and why. Each decision is
+`(status, reason, signal)` — `reason` is prose, `signal` the stable identity
+consumers match on. An agent dispatched only by a signal in
+`LOW_SIGNAL_DISPATCH_SIGNALS`, the canonical quick-mode blocklist, becomes
+`SKIPPED_QUICK_MODE`. `detect_unrecognized_source()` adds a `warnings[]` entry
+when a changed source language no reviewer domain covers, so a coverage gap
+fails loudly.
 
 Usage:
-    python3 plan_dispatch.py --mode full --git-range "main..HEAD" --output-dir /tmp/review
-    python3 plan_dispatch.py --mode incremental --git-range "abc123..HEAD" --output-dir /tmp/review
-    python3 plan_dispatch.py --mode pr --git-range "main..HEAD" --output-dir <run-dir>
-    python3 plan_dispatch.py --mode full --git-range "main..HEAD" --output-dir /tmp/review --changed-files-list "a.py,b.ts"
+    python3 plan_dispatch.py --mode <full|incremental|pr>
+        --git-range "main..HEAD" --output-dir <run-dir>
+        [--changed-files-list "a.py,b.ts"]
 
 Output: JSON dispatch plan on stdout.
 
 Exit codes:
     0  Success — dispatch plan generated
     1  Error — details on stderr
-
-Zero external dependencies (stdlib only).
 """
 
 import argparse
@@ -1768,8 +1768,8 @@ def decide_agent_dispatch(
         commit_messages: Combined commit messages in ORIGINAL case
             (keyword matching normalizes per-source).
         diffstat: Diffstat summary dict.
-        pr_text: PR title + body + labels + branch + issue titles, in
-            ORIGINAL case.
+        pr_text: PR title + author-written body + branch + issue titles,
+            in ORIGINAL case (labels are excluded; see _build_pr_text).
         diff_text: Patch text in ORIGINAL case (None = not scanned/fetch failed).
         repository_text: Lowercased repository origin/name.
         git_range: Git range used to fetch domain-specific patch text.

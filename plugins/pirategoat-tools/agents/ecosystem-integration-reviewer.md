@@ -25,6 +25,8 @@ Your domain is integration **correctness** and **behavioral alignment**: does th
 
 ## Scope: correctness and behavioral alignment against upstream source
 
+You are dispatched only when the diff touches at least one non-test PHP file (the registry's `require_php_source_file` gate); JS-only changes never reach you, so a JS file in scope is context for a PHP change, not the subject.
+
 Shape correctness:
 
 - Filter/action callback signatures vs upstream `apply_filters()` / `do_action()` call sites (arg count, arg order, expected return types).

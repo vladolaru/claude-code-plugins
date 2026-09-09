@@ -1,9 +1,21 @@
 #!/usr/bin/env python3
 """Machine-local telemetry sharing consent and repository identity.
 
-Findings, review documents, code excerpts, and diffs never leave the machine.
-This module is the one canonical derivation of a repository identity, so
-callers must provide a repository path rather than compute an identity.
+Findings, review documents, code excerpts, diffs and the complete local
+host map never leave the machine. ``CONSENT_DISCLOSURE`` is the contract
+the redaction implements: only what it names is ever uploaded.
+
+This module owns the one repository-identity derivation,
+``host[:port]/owner/name`` from the origin remote, so callers pass a
+repository path rather than compute an identity. An unrecognized origin
+yields none, which fails consent and closes every upload.
+
+A share-safety guard refuses any payload where a local path survived,
+recognized structurally rather than by substring. Consent, the step-12
+prompt, the recorded choice and the payload all read the run's own recorded
+identity, so consent can never authorize another repository.
+``tests/review/test_telemetry_share.py`` pins every string-bearing key path
+of one redacted run.
 """
 
 import argparse

@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
 """Markdown derived from a review artifact — never written by hand.
 
-Every human-readable review document in an output directory is a pure
-function of the JSON beside it: reviewer Markdown from the reviewer's final,
-findings Markdown from the reconciliation ledger, and the body of the review
-record from the same renderer, so a rendering can never
-disagree with the artifact it came from.
+The one JSON-to-Markdown projection: `render_markdown`, `render_review_body`,
+`materialize_markdown`, and the `render`/`materialize` CLI. Every
+human-readable review document in an output directory is a pure function of
+the JSON beside it, so a rendering can never disagree with the artifact it
+came from. A render failure is a degradation note on stderr — never an
+exception, and never a file that disagrees with its JSON.
 
-This module exists so that ownership can be stated once. Rendering a
-ledger needs `critic_adjustments`' reader; `critic_adjustments` needs the
-document validators; the validators used to live beside the renderer in
-`agent/output.py`, so the renderer reached for its ledger reader from
-inside a function body with a comment explaining that a module-level
-import would be cyclic. Here it is a module-level import, because nothing
-in this file is imported back.
+Rendering legitimately knows both a reviewer's draft and a critic's
+adjustments, so `critic_adjustments` and the document validators are
+module-level imports here. Nothing imports this module back and it never
+imports the builder — that is what keeps the pair acyclic.
 
 Usage:
     python3 review_markdown.py render <run>/reviewers/<reviewer>/review.json

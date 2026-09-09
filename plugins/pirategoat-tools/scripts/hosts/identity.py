@@ -1,12 +1,14 @@
 """Identity of a local checkout, with unknown facts as ``None``.
 
-The version is what the checkout declares about itself: the plugin header
-(``Version:`` in the main plugin file), a theme's ``style.css``, or
-WordPress core's ``wp-includes/version.php``. The commit and its date come
-from the git repository that contains the path (``git -C <dir>`` resolves
-the enclosing repository, so a plugin inside a monorepo reports the
-monorepo's HEAD). The branch is never read: no host projection carries a
-branch name, and the commit identifies a checkout on its own.
+``path_identity(path)`` answers the identity of any local host checkout:
+the version it declares plus, through ``git_identity(target)`` and its one
+``git log -1`` read, the commit, the commit date and the ``scope`` of the
+repository that contains it. The version is the checkout's own
+declaration — plugin header, theme ``style.css``, or core's
+``wp-includes/version.php``. The commit comes from the enclosing git
+repository, which ``scope`` names. The branch is never read: no host
+projection carries one. An unknown fact is ``None``, never a directory
+name.
 """
 
 import os

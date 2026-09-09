@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """The review document contract: what a review is, and whether one is valid.
 
-One trust boundary, read by everything that opens a review artifact —
-reviewer drafts and finals, the reconciliation ledger, the analysis
-harness, the graders. It answers only shape questions, so it depends on
-nothing but the vocabulary in `verdict_rules.py`: no file layout, no
-lifecycle, no telemetry, no rendering. That is what lets `agent/output.py`
-(the builder) and `critic_adjustments.py` (the post-critic ledger) both
-validate through it without importing each other.
+One trust boundary, read by everything that opens a review artifact. It
+answers only shape questions and depends on nothing but the vocabulary in
+`verdict_rules.py`: no file layout, no lifecycle, no telemetry, no rendering.
+That keeps it a leaf of the package's import graph, and lets the builder and
+the post-critic ledger both validate through it without importing each other.
+Every reader of a final review's contents goes through
+`load_review_document(path, reviewer)`.
+
+It owns the document's shape — `REVIEW_CONTENT_FIELDS`, `REVIEWER_FIELDS`,
+`REVIEW_OUTPUT_SCHEMA` and the `validate_*` functions. `coerce_text()` lives
+here because both ends of a document's life need the same answer for a
+model-authored field that should have been a string.
 """
 
 import json

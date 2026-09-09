@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 """The change purpose's structure: the orchestrator's judgement, parsed.
 
-The `change_purpose` artifact is written by the orchestrator at step 3 or
-4 by judgement and read by every reviewer briefing (REVIEW FOCUS), the
-reconciliation context and the review record. A free-form focus list
-mixes claims with givens and inferences with sourced statements, so no
-script can say which check settled which claim; this module reads the
-three headings the step-3 handoff requires instead:
+The `change_purpose` artifact is written by the orchestrator by judgement
+and read by every reviewer briefing, the reconciliation context and the
+review record. This module is its one parser, and reads three headings:
 
     ## Verify
     V1. claim — where: file:line — settled by: evidence — source: PR description
@@ -15,13 +12,15 @@ three headings the step-3 handoff requires instead:
     ## Author's description (extracted)
     quoted prose
 
-It interprets nothing: ids are explicit in the text, the source is the
-text after the last `— source:`, and its rules are recorded doctrine
-(every item names a source; an item inferred from the diff may never be
-Context). A purpose without the headings is unstructured — a fact every
-consumer degrades on, not a malformed file. Stdlib only; a leaf of the
-review package's import graph. `review_document.py` owns the Verify-item
-id grammar a check's `verifies` list must satisfy.
+It interprets nothing and repairs nothing: a missing heading, an unsourced
+item, an item inferred from the diff under Context, a duplicate id or more
+than eight Verify items is reported as a parse problem. A purpose without
+the headings is unstructured — a fact every consumer degrades on.
+
+`ledger_citations()` is the one reader of the ledger entries that may cite a
+Verify item, and `checks_settling()` groups them behind the reconciliation
+context's `verify_items` and the record's table. Stdlib only, and a leaf of
+the import graph; `review_document.py` owns the Verify-item id grammar.
 """
 
 import re

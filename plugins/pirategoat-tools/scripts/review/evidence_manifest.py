@@ -1,7 +1,16 @@
 """Project settled review evidence into ids, enumerated facts and counts.
 
-No finding prose, citation paths or host identity suffixes cross this boundary.
-The ledger remains the authority; an unreadable ledger is unmeasured.
+No finding prose, citation paths or host identity suffixes cross this boundary
+— never a title, description, method, rationale, evidence text or path. The
+ledger remains the authority; an unreadable ledger is unmeasured.
+
+The projection telemetry shares: every final finding's id, severity, source
+reviewers and critic action; the findings the critic removed, with their
+sources; dropped findings by reason; check counts; Verify items and how many
+checks settled each; the critic's verdict and its adjustments by action ×
+outcome; orchestrator-note outcomes; and upstream citations per reviewer by
+host. A producer that recorded nothing projects `None`, which stays distinct
+from a measured empty collection.
 """
 
 from collections import Counter

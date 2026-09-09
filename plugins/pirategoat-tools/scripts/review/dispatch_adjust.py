@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """Record the orchestrator's dispatch-plan adjustments.
 
-The step-5 briefing asks the orchestrator to skip planner-dispatched
-reviewers whose focus the diff makes irrelevant, and to force-dispatch a
-skipped one it is confident will find something. Before this entry point
-existed the briefing said "edit the dispatch plan file", and every run wrote
-its own throwaway script for it: run 4's flipped four statuses with a
-non-atomic `json.dump(d, open(p, "w"))` and printed nothing, so the
-maintainer watching the session believed no triage had happened.
+This is the orchestrator's one channel for the step-5 adjustments; the plan
+is never edited by hand or by a per-run script. `--skip NAME REASON` moves a
+dispatched agent to SKIPPED_OVERRIDE and `--dispatch NAME REASON` moves a
+skipped one to DISPATCH_OVERRIDE; both repeatable. Every name is validated
+against the plan first, and the read and the single atomic write happen
+under the run-directory lock. An unknown name, an empty reason or a
+malformed plan exits 1 and writes nothing; an agent already in the requested
+family is a reported `UNCHANGED` no-op, so a re-run is idempotent.
 
-One call validates every adjustment against the plan, applies them
-together, writes atomically under the run directory's lock, and prints
-one line per adjustment that the step-6 briefing repeats. A refused call
-names the agent, its current status and the transition the flag allows,
-and writes nothing.
+`dispatch_status.OVERRIDE_REASON_KEY`, `PLANNER_STATUS_KEY` and
+`ORPHANED_FILES_KEY` are the one spelling of the fields written here. Each
+skip's orphaned files come from `plan_dispatch.scope_files`, the derivation
+the planner's own triage uses.
 
 Usage:
     dispatch_adjust.py --output-dir DIR --skip a11y-reviewer "no markup in the diff"

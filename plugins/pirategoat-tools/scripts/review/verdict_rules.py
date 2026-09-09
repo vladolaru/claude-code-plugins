@@ -1,23 +1,15 @@
 #!/usr/bin/env python3
 """Channel-aware review verdict derivation, in one place.
 
-Two modules answer "what verdict do these findings carry": `agent/output.py`
-when a reviewer or the reconciliator publishes a review, and
-`critic_adjustments.py` when an applying critic batch changes the severities
-under an already-published ledger. Before this module existed only the first
-one did — `_recount_summary()` rebuilt `summary.by_severity` and left
-`verdict` exactly as the reconciliator had written it — so a REVISE batch
-that demoted the last high finding published a `request_changes` ledger over
-a finding list that no longer justified one. Step 11's verdict sync used to
-paper over that by copying the orchestrator's transcribed verdict into the
-ledger; with the verdict now DERIVED from the ledger, a stale ledger verdict
-is machine authority for a wrong published verdict, so the thresholds have to
-be a shared rule rather than one module's private ladder.
+``verdict_for_counts()`` is the ONE place the severity-to-verdict
+thresholds live, and ``derive_review_state()`` owns the finding-population
+policy shared by both writers: complete counts, advisory exclusion from
+gating, and advisory suppression measurement. Both callers —
+`agent/output.py` publishing a review and `critic_adjustments.py`
+recomputing an already-published ledger — read the ladder from here, so it
+can never drift into two copies.
 
-The threshold ladder remains available for count-based consumers, while
-``derive_review_state()`` owns the finding-population policy shared by both
-writers: complete counts, advisory exclusion from gating, and advisory
-suppression measurement. No file access or write-boundary policy lives here.
+No file access or write-boundary policy lives here.
 """
 
 VALID_SEVERITIES = ("critical", "high", "medium", "low", "info")

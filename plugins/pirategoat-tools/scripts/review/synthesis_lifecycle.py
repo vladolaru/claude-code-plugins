@@ -1,58 +1,20 @@
 #!/usr/bin/env python3
 """Lifecycle measurement for the two synthesis agents.
 
-The reviewers are measured end to end: `agent/bootstrap.py` writes the fixed
-`reviewers/<reviewer>/started` marker when a reviewer boots, `ReviewOutputBuilder.save()`
-logs `agent_complete`, and `agents_status.py` polls the pair. The two
-SYNTHESIS agents — the review-reconciliator (step 8) and the decision
-critic (step 10) — sit entirely outside that machinery: neither runs
-bootstrap, neither writes a reviewer-directory final, and neither is ever
-in the dispatch plan, which is the only list `agents_status.py`
-iterates. So the critic, the longest single phase of an audited
-2026-08-19 run at ~11 minutes, had no duration anywhere in the manifest,
-and a hung synthesis agent blocked the orchestrator's foreground Task
-call with no artifact recording why the run stalled.
+The reconciliator (step 8) and the critic (step 10) run outside the
+reviewer machinery — no bootstrap, no reviewer directory, never in the
+dispatch plan — so this is their only duration and stall record. Steps 8
+and 10 call `mark_dispatched()`; steps 9 and 11 call `observe()`, keying
+completion on the required artifact's mtime.
 
-This module closes that gap with the same two-fact shape the reviewers
-use, minus the polling:
-
-1. **Dispatch.** Steps 8 and 10 call `mark_dispatched()` when they
-   produce the briefing that hands the agent off. The script owns that
-   moment — the LLM performs the Task call, so the script cannot observe
-   the agent's own boot, but it CAN stamp the instant it asked for one.
-   The marker's BODY is byte-compatible with bootstrap's — one UTC ISO
-   timestamp — but its NAME deliberately is not. It carries
-   MARKER_SUFFIX, which namespaces it away from the reviewer
-   reviewer-directory `started` contract other tools scan; see that constant for why the
-   separation has to be structural rather than a courtesy.
-
-2. **Completion.** Observed at the NEXT step the script re-enters —
-   step 9 for the reconciliator, step 11 (finalize) for both — by the
-   existence of the artifact that agent is contractually required to
-   leave behind. `completed_at` is that artifact's mtime and
-   `duration_ms` is the span from dispatch to it. No polling daemon, no
-   background process.
-
-   One clock, deliberately. An earlier version also recorded when the
-   script looked, so a reader could bound the observation lag; the run's
-   own step cadence already bounds it, and the second number answered a
-   question nobody asked.
-
-**Timeout policy is report, never kill.** Both agents run in the
-orchestrator's foreground, so nothing here can interrupt one. At
-finalize, a marker with no completion artifact records `stalled: true`.
-
-**Availability, not zero.** A run older than this feature writes no
-marker and no synthesis lifecycle artifact, so the manifest section is absent
-and its family reads "missing". A never-measured phase must never
-project as a zero-duration one.
-
-Quick mode commits the pipeline's own `SKIPPED` verdict without writing a
-critic dispatch marker, so it produces no critic lifecycle row. Once a
-critic marker exists, a missing or unusable verdict is a dispatched failure:
-finalize records it as stalled, and the pipeline reports the critic as
-unavailable and degrades the run. Historical `SKIPPED` rows remain readable
-for metrics compatibility, but current crash handling never manufactures one.
+A marker name carries MARKER_SUFFIX, so a scan of reviewer `started`
+markers can never claim one. A step re-entered after a handoff observes
+BEFORE anything else: step 10 re-stamps its marker, and would otherwise
+publish a finished critique as a zero-length stall. Timeout policy is
+report, never kill — at finalize, a marker with no completion artifact
+records `stalled: true`. A run that wrote no marker leaves no artifact: a
+never-measured phase must never project as zero. `ROW_KEYS` is the single
+declaration of the row shape; both projections assert parity against it.
 """
 
 import json

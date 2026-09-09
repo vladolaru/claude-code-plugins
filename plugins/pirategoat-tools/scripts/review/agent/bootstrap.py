@@ -3,8 +3,8 @@
 Bootstrap Reviewer — Single-command setup for all reviewer agents.
 
 Consolidates plugin root discovery, protocol extraction, scope discovery,
-and output instructions into one structured prompt block. Agents run this
-script as their first action and get everything they need.
+and output instructions into one structured prompt block. Every reviewer
+agent runs this as its first action. Stdlib only.
 
 Usage:
     python3 bootstrap.py --agent security-reviewer --output-dir <output-dir>
@@ -14,8 +14,6 @@ Usage:
 Exit codes:
     0  Success (scope may be OK or NO_DOMAIN_FILES)
     1  Error (plugin root not found, unknown agent, scope discovery failed)
-
-Zero external dependencies (stdlib only).
 """
 
 import argparse

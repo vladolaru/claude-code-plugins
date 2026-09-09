@@ -2,11 +2,12 @@
 """
 Review Telemetry — JSONL telemetry for PR review pipelines.
 
-Captures timing, decisions, and outcomes at each pipeline step.
+``ReviewTelemetry`` captures pipeline timing and decisions, the agent
+start/complete lifecycle, snapshots, summaries, and the canonical
+repository and target identity, in both the events and the run manifest.
 Logs to ~/.pirategoat-tools/logs/reviews/.
 
-Best-effort: failures never break the pipeline.
-Zero external dependencies (stdlib only).
+Best-effort: failures never break the pipeline. Stdlib only.
 """
 
 import hashlib

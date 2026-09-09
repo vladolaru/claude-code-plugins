@@ -3,10 +3,17 @@
 
 The ledger is review content — findings, checks, assessment, observations,
 recommendations, positives, id counters — plus reconciliation metrics. It has
-no reviewer identity and no reviewed files: those belong to one
-reviewer's draft/final lifecycle, which a synthesized cross-review artifact
-does not have. This is the one deliberate subclass of ReviewOutputBuilder;
-do not grow a hierarchy under it.
+no reviewer identity and no reviewed files: those belong to one reviewer's
+draft/final lifecycle. This is the one deliberate subclass of
+ReviewOutputBuilder; do not grow a hierarchy under it.
+
+`read_reconciliation_context(output_dir)` is the one reader of the run's
+``reconciliation_context`` artifact. `record_check(..., sources=[...])`
+appends each merged source check's `method` verbatim and unions its
+`verifies`, so the save gate's verbatim-method rule holds by construction;
+`resolve_note(verifies=[...])` settles Verify items through
+`review_document.normalize_verifies`. The pipeline-owned reconciliation facts
+are never authored here — `findings_save.py` stamps them at save time.
 """
 import json
 import os

@@ -1,27 +1,28 @@
 """
-Simple Review Output Builder (No Dependencies)
+Review Output Builder — build one review, then publish it.
 
-Lightweight version without Pydantic for immediate use.
-Provides structure and basic validation using plain Python.
+`ReviewOutputBuilder.open()` binds a reviewer's output directory; the
+builder mutates stable `fN` findings and `cN` checks and writes the whole
+bound state through `save_draft()`. Stdlib only — no Pydantic.
+
+Every draft replacement derives the canonical reviewed-file fields itself;
+a caller serializing by hand via `to_dict()` opts out, because publication
+is the enforcing seam. A draft becomes immutable final output only through
+the exact printed `FINALIZE REVIEW` command, digest-bound to the draft it
+observed, and only the printed `REVIEW FINALIZED` line marks completion.
+
+Validation lives in `review_document.py` and rendering in
+`review_markdown.py`; this module imports neither back.
 
 Usage:
     from review.agent.output import ReviewOutputBuilder
 
     builder = ReviewOutputBuilder.open(output_dir, "123", "security")
-    builder.add_finding(
-        severity="critical",
-        title="SQL Injection",
-        file="src/User.php",
-        line=42,
-        description="...",
-        recommendation="..."
-    )
+    builder.add_finding(severity="critical", title="SQL Injection",
+                        file="src/User.php", line=42,
+                        description="...", recommendation="...")
     saved = builder.save_draft()
     finalize_review(output_dir, "security", saved["review_digest"])
-
-    Markdown is derived from the final JSON by review_markdown.py; the
-    document contract every reader validates through lives in
-    review_document.py.
 """
 
 import hashlib

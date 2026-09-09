@@ -1,434 +1,112 @@
 # AGENTS.md
 
-You maintain a dual-host Claude Code and Codex plugin marketplace. This file is your operating manual - follow it when working on any plugin in this repo.
-
-## Repository Overview
-
-This is **vladolaru-claude-code-plugins** - Vlad Olaru's personal Claude Code and Codex plugin marketplace featuring specialized plugins for development workflows, WordPress backend development, and AI-powered tools.
+You maintain **vladolaru-claude-code-plugins**, Vlad Olaru's dual-host (Claude Code and Codex) plugin marketplace. This file holds the repository-wide rules. A plugin with its own `AGENTS.md` holds that plugin's rules; read it before changing anything under that plugin.
 
 ## Development Model
 
-This project is AI-written and AI-maintained. The human (Vlad) sets direction, makes architectural decisions, and reviews work. Claude Code agents do the implementation, testing, analysis, and maintenance. "Single maintainer" does not mean capacity-constrained — it means single human decision-maker with AI execution capacity. Do not assume limited implementation bandwidth when reasoning about priorities or feasibility.
+This project is AI-written and AI-maintained. The human (Vlad) sets direction, makes architectural decisions, and reviews work. Claude Code agents do the implementation, testing, analysis, and maintenance. "Single maintainer" means a single human decision-maker with AI execution capacity, not limited implementation bandwidth.
 
-No agent carries context between sessions — every agent reads the code cold. This has practical implications:
+No agent carries context between sessions; every agent reads the code cold. So:
 
-- **Prefer single canonical implementations** over duplicated patterns. An agent will copy whichever pattern it encounters first; if two conventions exist for the same thing, drift is inevitable.
-- **Constants, types, and named helpers are discovery mechanisms.** They are more valuable here than in a human-authored codebase — they are the primary way agents find the "right" way to do something.
-- **Consolidating duplicated logic is drift prevention**, not polish. Treat it accordingly when prioritizing work.
+- **Prefer single canonical implementations** over duplicated patterns. An agent copies whichever pattern it meets first, and two conventions for one thing guarantee drift.
+- **Constants, types, named helpers, and docstrings are the discovery mechanisms.** A fact about one module belongs in that module, where an agent reads it for free when the file is open.
+- **Consolidating duplicated logic is drift prevention**, not polish.
 
-## Architecture
+## What Belongs in an AGENTS.md
 
-### Plugin Structure
+These files are the always-on cost of every session, and the longer they get the less of them an agent follows. Codex reads at most 32 KiB across the root-to-cwd `AGENTS.md` chain and drops the rest; `plugins/pirategoat-tools/tests/test_instruction_budget.py` enforces ceilings under that line. Keep the test green by moving content, not by compressing wording:
+
+| Content | Lives in |
+|---|---|
+| A rule an agent would otherwise violate, with one clause of why | `AGENTS.md` (root for repo-wide, plugin for plugin-wide) |
+| A fact about one module: contract, invariants, importers, history | that module's docstring |
+| A procedure longer than a few steps, a design record, a CLI manual, a directory layout | `plugins/<plugin>/docs/`, pointed at from `AGENTS.md` with the trigger for reading it |
+| Which tests a change should run | the plugin's `tests/TESTING.md` |
+| Counts and inventories of commands, skills, agents | `.claude-plugin/marketplace.json` and the plugin README, never restated here |
+| An incident or a lesson | `.claude/docs/learnings/` |
+
+A pointer states when to follow it ("read `docs/review-pipeline.md` before changing a step's handoff"), and a pointer is the only summary: never inline the content it points at.
+
+## Repository Layout
 
 ```text
-vladolaru-claude-code-plugins/
-├── .agents/
-│   └── plugins/
-│       └── marketplace.json      # Generated Codex marketplace
-├── .claude-plugin/
-│   └── marketplace.json          # Canonical marketplace registry
-├── CLAUDE.md                     # Claude Code shim -> @AGENTS.md
-├── AGENTS.md                     # Canonical shared instructions
-├── plugins/
-│   └── plugin-name/
-│       ├── .codex-plugin/
-│       │   └── plugin.json       # Generated Codex manifest
-│       ├── codex-skills/         # Generated command adapters (optional)
-│       ├── CHANGELOG.md          # Version history
-│       ├── agents/               # Subagent definitions (optional)
-│       │   └── agent-name.md
-│       ├── commands/             # Slash commands (optional)
-│       │   └── command.md
-│       ├── skills/               # Skills with SKILL.md files (optional)
-│       │   └── skill-name/
-│       │       └── SKILL.md
-│       └── scripts/              # Helper scripts (optional)
-├── scripts/
-│   └── generate_codex_compat.py  # Deterministic host adapter generator
-├── LICENSE
-└── README.md
+.claude-plugin/marketplace.json   # canonical plugin registry (versions, commands, skills, agents)
+.agents/plugins/marketplace.json  # GENERATED Codex marketplace
+plugins/<name>/
+├── .codex-plugin/plugin.json     # GENERATED Codex manifest
+├── codex-skills/                 # GENERATED Codex command adapters
+├── agents/ commands/ skills/ scripts/ hooks/ docs/ tests/   # as needed
+├── AGENTS.md + CLAUDE.md shim    # plugin rules (pirategoat-tools, yoloing-safe)
+└── CHANGELOG.md
+scripts/generate_codex_compat.py  # deterministic Codex adapter generator
+docs/                             # committed references and design patterns
+.claude/docs/                     # AI session artifacts (gitignored except learnings/)
 ```
 
 ### Dual-Host Source Policy
 
-Claude Code marketplace entries and command files are the canonical source.
-Codex packaging is generated deterministically:
-
-| Canonical source | Generated Codex output |
-|---|---|
-| `.claude-plugin/marketplace.json` | `.agents/plugins/marketplace.json` and each `.codex-plugin/plugin.json` |
-| `plugins/*/commands/*.md` | `plugins/*/codex-skills/<command>/SKILL.md` and `agents/openai.yaml` |
-
-Never hand-edit files marked `GENERATED FILE - DO NOT EDIT`. After changing a
-plugin entry or command, run:
+Claude Code marketplace entries and command files are canonical; Codex packaging is generated from them. Never hand-edit a file marked `GENERATED FILE - DO NOT EDIT`. After changing a plugin entry or a command:
 
 ```bash
 python3 scripts/generate_codex_compat.py
 python3 scripts/generate_codex_compat.py --check
 ```
 
-Shared skills, scripts, hooks, and agent definitions remain canonical files
-used directly by both hosts. Use `$SKILL_DIR` in shared skill prose and define
-it as the directory containing the current `SKILL.md`. Host adapters resolve
-the actual absolute path.
+Shared skills, scripts, hooks, and agent definitions are used directly by both hosts. In shared skill prose use `$SKILL_DIR` (the directory containing the current `SKILL.md`); host adapters resolve the path. Do not copy Claude model names into Codex configuration; a subagent's `model:` frontmatter is Claude Code routing metadata (`inherit`, `sonnet`, `opus`, `haiku`), and the Codex adapters omit it.
 
-Codex command adapters use explicit invocation by default. Do not copy Claude
-model names into Codex configuration. The pirategoat review pipeline passes
-canonical reviewer definitions to native Codex subagents at runtime.
+## Plugins
 
-### Skills Specification
+| Plugin | Purpose | Before changing it, read |
+|---|---|---|
+| `pirategoat-tools` | Code review orchestration: reviewer agents, the 12-step review pipeline, shared skills, analysis tooling | `plugins/pirategoat-tools/AGENTS.md` |
+| `yoloing-safe` | PreToolUse hook that blocks destructive commands in YOLO mode, dual-host | `plugins/yoloing-safe/AGENTS.md` |
+| `dex` | Knowledge capture into agent-first docs; enforces a 550-line budget on host instruction files | `plugins/dex/README.md` |
+| `prompt-engineer` | Evidence-grounded prompt optimization with human gates | `plugins/prompt-engineer/README.md` |
+| `image-optimizer` | Lossless image optimization; needs `imageoptim-cli` or `svgo` | `plugins/image-optimizer/README.md` |
+| `caffeinate-claude` | Keeps macOS awake during sessions via hooks | `plugins/caffeinate-claude/README.md` |
 
-All skills must have a `SKILL.md` file with YAML frontmatter:
+## Creating or Extending a Plugin
 
-- **Required frontmatter fields**:
-  - `name` - hyphen-case, lowercase alphanumeric + hyphens
-  - `description` - when the host should use this skill
-- **Optional frontmatter fields**:
-  - `license`
-  - `metadata` - custom key-value pairs
-- **Body**: Markdown instructions, examples, and guidelines
+New plugin: create `plugins/<name>/` with a `CHANGELOG.md` (Keep a Changelog format), register it in `.claude-plugin/marketplace.json` following an existing entry, add a row to the table above and to `README.md`, then run the generator.
 
-### Claude Code Agent Model Routing
-
-Subagents can run on a different model than the parent session. A Sonnet parent can dispatch Opus subagents (and vice versa) — there is no restriction on upgrading or downgrading.
-
-**Precedence order** (highest wins):
-
-1. `model` parameter on the `Agent` tool call (e.g., `model: "opus"`)
-2. `model` field in the agent definition frontmatter (e.g., `model: sonnet`)
-3. `inherit` — use the parent session's model (this is the default)
-
-**Practical implications:**
-
-- Use `model: opus` in agent definitions or Agent calls when the task requires deep reasoning (judgment-heavy synthesis, complex architectural analysis)
-- Use `model: sonnet` for standard analytical work (most review agents, pattern matching)
-- Use `model: haiku` for mechanical tasks (shell command dispatch, template generation)
-- Use `inherit` when the agent should match whatever the user chose for their session
-- Billing reflects the actual model used per subagent, not the parent session model
-
-**Built-in examples:** Claude Code's own `claude-code-guide` agent is hardcoded to Haiku; `statusline-setup` to Sonnet — these run at their specified model regardless of the parent.
-
-**Full reference:** See the [Claude Code subagents documentation](https://code.claude.com/docs/en/sub-agents) for the complete specification — all frontmatter fields, tool restrictions, permission modes, hooks, MCP server scoping, persistent memory, and example subagents.
-
-These model labels are Claude Code routing metadata. Codex review adapters
-intentionally omit them and use the current Codex subagent configuration.
-
-### Accessing Claude Code Documentation
-
-Claude Code docs live at `https://code.claude.com/docs/en/`. Every page has a `.md` variant that returns raw markdown — much more efficient for agent consumption via `WebFetch` than the HTML page.
-
-**Pattern:** append `.md` to the URL path.
-
-| HTML page | Raw markdown |
-|---|---|
-| `https://code.claude.com/docs/en/sub-agents` | `https://code.claude.com/docs/en/sub-agents.md` |
-| `https://code.claude.com/docs/en/skills` | `https://code.claude.com/docs/en/skills.md` |
-| `https://code.claude.com/docs/en/hooks` | `https://code.claude.com/docs/en/hooks.md` |
-
-**Full index:** Fetch `https://code.claude.com/docs/llms.txt` to discover all available documentation pages.
-
-## Plugin Inventory
-
-### pirategoat-tools
-
-Code review orchestration with 34 agents (28 domain reviewers, 2 pipeline, 2 cross-validators, 2 utility), 22 shared skills, 7 commands, and 7 generated Codex command adapters covering security, architecture, testing, WordPress, WooCommerce regression invariants, accessibility, API contracts, data privacy, concurrency, code clarity, documentation drift, reference integrity, and more. Has its own `CLAUDE.md` and `AGENTS.md` with pipeline architecture, agent registry reference, and development workflows.
-
-| Directory | Contents |
-|---|---|
-| `agents/` | 34 agent definitions (28 reviewers, 2 pipeline, 2 cross-validators, 2 utility) + 2 shared protocols in `agents/shared/` |
-| `skills/` | 22 shared reference skills |
-| `codex-skills/` | 7 generated Codex command adapters |
-| `commands/` | 7 slash commands (`/pr-review`, `/full-code-review`, `/code-review`, `/iterative-review`, `/pr-update`, `/copy-as`, `/switch-to`) |
-| `scripts/` | Domain packages: `review/` (pipeline facade, pipeline_contract, briefings, orchestration, plan_dispatch, dispatch_adjust, dispatch_status, evidence_manifest, context, telemetry, synthesis_lifecycle, agents_status, critic, critic_adjustments, verdict_rules, findings_save, findings_ledger, atomic_io, reviewer_names, triage_sources, change_purpose, workspace_setup, dependency_refresh, user_settings, telemetry_share, agent_registry.json + `agent/` bootstrap, scope, output, diff_noise_filter), `hosts/` (host_context CLI, repo-signaled advisory chain for upstream runtime-hosts/library-deps, scan roots, repo config, the path identity reader and header-parsing leaf, standalone resolver helpers, ecosystem_cache CLI for machine-wide WordPress/WooCommerce source cache management), `linear/` (pipeline, events), `figma/` (spec extraction, node parsing), `analysis/` (supported review-run/cohort metrics over local runs or a shared-telemetry clone, privacy-preserving transcript enrichment, durable per-run token-usage snapshot, session analyzer, general metrics), `iterative_review/` (multi-round independent review — Codex primary, Claude Code fallback) |
-| `schemas/` | TypeScript type definitions for structured review output |
-| `tests/` | Deterministic eval suite — see [Testing](#pirategoat-tools-1) section |
-| `AGENTS.md` | Full development instructions, architecture, agent registry reference |
-
-**Dev notes:** Agents run in parallel by default. Model tier assignment matters (`inherit`/`sonnet`/`haiku` based on reasoning depth).
-
-### dex
-
-Knowledge capture system — turns lessons, patterns, decisions, and research into agent-first documents that compound engineering work.
-
-| Directory | Contents |
-|---|---|
-| `commands/` | 7 commands: `/dex:grok`, `/dex:learn`, `/dex:pattern`, `/dex:research`, `/dex:sharpen`, `/dex:init`, `/dex:status` |
-| `skills/` | 1 shared skill (`knowledge-capture`) |
-| `codex-skills/` | 7 generated Codex command adapters + the surfaced `knowledge-capture` skill |
-| `scripts/` | `analyze-subagents.py` — subagent dispatch analysis tool |
-| `tests/` | Plugin structure tests, subagent analyzer tests, fixtures |
-
-**Dev notes:** Adapts to host project automatically (`CLAUDE.md` + `.claude/docs/` or `AGENTS.md` + `.ai/docs/`). Instructions file has a 550-line budget enforced; promotes rules as one-liners with links to full docs. No external dependencies.
-
-### prompt-engineer
-
-Systematic prompt optimization with evidence-grounded technique recommendations from a 50+ technique reference library. Human-in-the-loop gates between phases.
-
-| Directory | Contents |
-|---|---|
-| `skills/` | 1 shared skill (`prompt-engineer`) |
-| `codex-skills/` | 1 generated Codex command adapter + the surfaced `prompt-engineer` skill |
-| `commands/` | 1 command (`/optimize-prompt`) |
-
-**Dev notes:** Simple prompts stay simple (triage filters out low-complexity cases). Works on any prompt format (SKILL.md, agent definitions, slash commands, CLAUDE.md, API prompts). No external dependencies.
-
-### image-optimizer
-
-Lossless image optimization for PNG, JPEG, GIF, SVG with before/after review and confirmation gate.
-
-| Directory | Contents |
-|---|---|
-| `commands/` | 1 command (`/optimize-images`) |
-| `codex-skills/` | 1 generated Codex command adapter |
-
-**Dev notes:** Requires `imageoptim-cli` (macOS only, via npm) for raster images and/or `svgo` (cross-platform, via npm) for SVGs. At least one must be installed.
-
-### yoloing-safe
-
-YOLO mode safety net - PreToolUse hook that blocks destructive commands and
-gates risky operations with host-aware behavior. Has its own `CLAUDE.md` and
-`AGENTS.md` with detailed development instructions.
-
-| File/Directory | Contents |
-|---|---|
-| `scripts/pre-tool-use-safety.py` | Runtime entrypoint — compatibility shim re-exporting from the internal package |
-| `scripts/yoloing_safe/` | Internal implementation package: config, shell parsing, path handling, registry, runtime, and domain rule modules (`rules/filesystem.py`, `rules/git.py`, `rules/network.py`, `rules/system.py`) |
-| `hooks/hooks.json` | Hook registration for PreToolUse event |
-| `tests/` | Unit, integration, meta, and e2e tests |
-| `AGENTS.md` | Full development instructions, rule workflows, testing |
-
-**Dev notes:** Four tiers, first-match-wins: allowlist → block (exit 2) → ask (JSON permission prompt) → allow (silent). Self-protection: blocks its own config from modification (hardcoded, undisableable). Fails open — if the hook errors, the tool call proceeds. 5-second timeout. See [Testing](#yoloing-safe-1) section. Python stdlib only.
-
-### caffeinate-claude
-
-Keeps your Mac awake during Claude Code and Codex sessions using macOS
-`caffeinate`. Supports multiple tabs and handles crashes gracefully.
-
-| File/Directory | Contents |
-|---|---|
-| `hooks/` | `UserPromptSubmit` (starts caffeinate), `Stop` (kills when no sessions remain) |
-
-**Dev notes:** Multi-tab support via session markers (`$PPID` per tab). Auto-prunes markers for dead processes. 1-hour safety timeout as failsafe. macOS-only. No external dependencies.
-
-## Creating New Plugins
-
-1. Create directory: `plugins/<name>/` with subdirs as needed (`skills/`, `commands/`, `agents/`, `scripts/`)
-2. Add a `CHANGELOG.md` following [Keep a Changelog](https://keepachangelog.com/) format
-3. Register in `.claude-plugin/marketplace.json` — follow the structure of existing entries
-4. Update the [Plugin Inventory](#plugin-inventory) section in this file with counts and contents
-5. Update `README.md` directory tree with the new plugin entry
-6. Run `python3 scripts/generate_codex_compat.py` to create the Codex manifest and marketplace entry
-
-## Adding Commands, Skills, or Agents to Existing Plugins
-
-**Every new command, skill, or agent requires doc updates in multiple locations.** Plugins with their own `AGENTS.md` (like pirategoat-tools) document the full checklist there. The common locations are:
-
-| # | File | What to update |
-|---|------|----------------|
-| 1 | `.claude-plugin/marketplace.json` | Add entry to the plugin's `commands`, `skills`, or `agents` array |
-| 2 | Plugin's `README.md` | Update count + add to the relevant table |
-| 3 | This file → [Plugin Inventory](#plugin-inventory) | Update summary count + contents row for the plugin |
-| 4 | Root `README.md` | Update count in directory tree |
-| 5 | Generated Codex adapters | Run `python3 scripts/generate_codex_compat.py` and commit the output |
-
-Skipping these updates causes stale counts that mislead future agents and humans.
+New command, skill, or agent in an existing plugin: add it to the plugin's array in `marketplace.json`, update the plugin's `README.md` table, run the generator, and commit the generated output. A skill is a `skills/<name>/SKILL.md` with `name` and `description` frontmatter. pirategoat-tools has its own checklist for reviewer agents.
 
 ## Testing
 
-### pirategoat-tools
+Run from the repository root. `pytest.ini` pins `--import-mode=importlib`, and no `tests/` tree may contain an `__init__.py` (`plugins/pirategoat-tools/tests/test_pytest_layout.py` guards this), which is what lets every plugin's suite run in one session.
 
-The `plugins/pirategoat-tools/tests/` directory contains deterministic evals (no model calls) for plugin scripts. See `tests/TESTING.md` for the full framework documentation: architecture, design principles, how to add tests/graders/scenarios, and conventions.
-
-**When to run tests:** After modifying any of these files, run the relevant test suite:
-
-| Changed file | Run |
-|---|---|
-| `scripts/review/agent/bootstrap.py` | `pytest plugins/pirategoat-tools/tests/review/agent/test_bootstrap.py plugins/pirategoat-tools/tests/review/agent/test_bootstrap_integration.py -v` |
-| `agents/shared/reviewer-protocol.md` | `pytest plugins/pirategoat-tools/tests/review/agent/test_bootstrap_integration.py -v` |
-| `agents/shared/tests-reviewer-protocol.md` | `pytest plugins/pirategoat-tools/tests/review/agent/test_bootstrap_integration.py -v` |
-| `scripts/review/pipeline.py` | `pytest plugins/pirategoat-tools/tests/review/test_pipeline_infra.py plugins/pirategoat-tools/tests/review/test_pipeline.py -v` (the facade's two mirrored import blocks re-export briefing names such as `DISPATCH_PROMPT_LEAD` that `test_pipeline.py` pins through it; a briefing constant a test needs must be added to both blocks) |
-| `scripts/review/pipeline_contract.py` | `pytest plugins/pirategoat-tools/tests/review/test_pipeline.py plugins/pirategoat-tools/tests/review/test_pipeline_infra.py plugins/pirategoat-tools/tests/review/test_pipeline_integration.py -v` |
-| `scripts/review/run_paths.py` | `pytest plugins/pirategoat-tools/tests/review/test_run_paths.py plugins/pirategoat-tools/tests/review/test_telemetry.py plugins/pirategoat-tools/tests/review/test_telemetry_share.py plugins/pirategoat-tools/tests/analysis/test_review_run_metrics.py -v` (`telemetry_log_path` is shared by the telemetry producer and the uploader; `SAFE_RUN_ID_SEGMENT_RE` by the uploader and the shared-clone reader) |
-| `scripts/review/briefings.py` | `pytest plugins/pirategoat-tools/tests/review/test_pipeline.py -v` |
-| `scripts/review/orchestration.py` | `pytest plugins/pirategoat-tools/tests/review/test_pipeline_integration.py plugins/pirategoat-tools/tests/review/test_orchestration_hygiene.py plugins/pirategoat-tools/tests/review/test_critic_adjustments.py plugins/pirategoat-tools/tests/review/test_synthesis_lifecycle.py plugins/pirategoat-tools/tests/review/test_report_assembly.py -v` (hygiene covers the step-3 baseline / step-11 sweep and the step-11 usage capture; critic-adjustments covers step 11's adjudication-state inspection and verdict sync; synthesis-lifecycle covers the step-8/10 dispatch markers and the step-9/11 observations; report-assembly covers the step-9/11 `review-record.md` assembly seams; hygiene also covers the step-9 reconciliation verification and the step-11 critic-prose path listing) |
-| `scripts/review/orchestration.py` review-record assembler (`assemble_review_record`, `_render_run_notes`, `_render_record_verdict_line`) or `render_review_body` in `scripts/review/review_markdown.py` | `pytest plugins/pirategoat-tools/tests/review/test_report_assembly.py plugins/pirategoat-tools/tests/review/test_review_markdown.py -v` (the record's shared body IS `render_review_body`, so a change to either lands in both) |
-| `scripts/review/dispatch_adjust.py` | `pytest plugins/pirategoat-tools/tests/review/test_dispatch_adjust.py plugins/pirategoat-tools/tests/review/test_pipeline.py plugins/pirategoat-tools/tests/review/test_import_graph.py -v` (the step-5 briefing names the command and the step-6 briefing repeats what it recorded, reading the `planner_status` the CLI stamps) |
-| `scripts/review/dispatch_status.py` | `pytest plugins/pirategoat-tools/tests/review/test_agents_status.py plugins/pirategoat-tools/tests/review/test_pipeline.py plugins/pirategoat-tools/tests/review/test_pipeline_infra.py plugins/pirategoat-tools/tests/review/test_pipeline_integration.py plugins/pirategoat-tools/tests/review/test_plan_dispatch.py plugins/pirategoat-tools/tests/review/test_telemetry.py plugins/pirategoat-tools/tests/analysis/test_review_run_metrics.py plugins/pirategoat-tools/tests/review/test_review_run_fixtures.py plugins/pirategoat-tools/tests/review/test_evidence_manifest.py plugins/pirategoat-tools/tests/review/test_dispatch_adjust.py plugins/pirategoat-tools/tests/review/test_orchestration_hygiene.py -v` (`load_dispatch_plan` is the one plan reader: orchestration, agents_status, telemetry, the evidence manifest and dispatch_adjust all open the plan through it) |
-| `scripts/review/evidence_manifest.py` | `pytest plugins/pirategoat-tools/tests/review/test_evidence_manifest.py plugins/pirategoat-tools/tests/review/test_telemetry.py plugins/pirategoat-tools/tests/review/test_telemetry_share.py plugins/pirategoat-tools/tests/analysis/test_review_run_metrics.py plugins/pirategoat-tools/tests/review/test_review_run_fixtures.py plugins/pirategoat-tools/tests/review/test_import_graph.py -v` |
-| `scripts/containment.py` | `pytest plugins/pirategoat-tools/tests/test_containment_contract.py plugins/pirategoat-tools/tests/hosts/ plugins/pirategoat-tools/tests/review/test_review_config.py plugins/pirategoat-tools/tests/review/test_telemetry.py -v` |
-| `scripts/hosts/**/*.py` | `pytest plugins/pirategoat-tools/tests/hosts/ plugins/pirategoat-tools/tests/review/test_context.py plugins/pirategoat-tools/tests/review/test_bootstrap_host_injection.py -v` (the chain, its resolvers, the scan roots, the cache manager, the header leaf and the path identity reader; `context.py` runs the chain in-process and bootstrap renders its manifest) |
-| `scripts/hosts/cache/manager.py` (`KNOWN_ECOSYSTEM_REPOS`, `slot_identity`) | `pytest plugins/pirategoat-tools/tests/hosts/cache/ plugins/pirategoat-tools/tests/hosts/resolvers/test_ecosystem_cache.py plugins/pirategoat-tools/tests/hosts/resolvers/test_plugin_headers.py plugins/pirategoat-tools/tests/hosts/test_ecosystem_cache_cli.py -v` (`KNOWN_ECOSYSTEM_NAMES` is read by the plugin-headers and cache resolvers; the identity is what every consumer renders) |
-| `scripts/review/atomic_io.py` | `pytest plugins/pirategoat-tools/tests/review/test_atomic_io.py -v` |
-| `scripts/review/plan_dispatch.py` | `pytest plugins/pirategoat-tools/tests/review/test_plan_dispatch.py plugins/pirategoat-tools/tests/review/test_criteria_coverage.py plugins/pirategoat-tools/tests/review/test_triage_run_regressions.py -v` (the regressions file replays the three audited runs, so a keyword or hygiene change shows its effect on real PRs before an audit has to find it) |
-| `scripts/review/triage_sources.py` | `pytest plugins/pirategoat-tools/tests/review/test_triage_sources.py plugins/pirategoat-tools/tests/review/test_plan_dispatch.py plugins/pirategoat-tools/tests/review/test_triage_run_regressions.py plugins/pirategoat-tools/tests/review/test_import_graph.py -v` (the planner's only prose-cleaning seam: `get_commit_messages` and `_build_pr_text` call it, the three audited-run fixtures replay through it, and it is a documented leaf of the import graph) |
-| `scripts/review/change_purpose.py` | `pytest plugins/pirategoat-tools/tests/review/test_change_purpose.py plugins/pirategoat-tools/tests/review/test_pipeline.py plugins/pirategoat-tools/tests/review/test_pipeline_integration.py plugins/pirategoat-tools/tests/review/agent/test_bootstrap.py plugins/pirategoat-tools/tests/review/test_reconciliation_context.py plugins/pirategoat-tools/tests/review/test_report_assembly.py plugins/pirategoat-tools/tests/review/test_evidence_manifest.py plugins/pirategoat-tools/tests/review/test_import_graph.py -v` (the one parser behind the step-5 warnings, bootstrap's REVIEW FOCUS tiers and PR INTENT pointer, the reconciliation context's `verify_items`, and the record's Verify-items table; `ledger_citations` is the record's and the evidence manifest's one reader of checks and confirmed notes that cite an item; a documented leaf of the import graph) |
-| `scripts/review/agent_registry.json` (triage criteria/keywords/checks) | `pytest plugins/pirategoat-tools/tests/review/test_criteria_coverage.py plugins/pirategoat-tools/tests/review/test_plan_dispatch.py plugins/pirategoat-tools/tests/review/test_triage_run_regressions.py -v` (every criterion bullet needs a dispatching probe; a keyword is a whole word unless it ends in *) |
-| `plugins/pirategoat-tools/AGENTS.md` agent-registry reference (`model_tier` row) or `scripts/review/agent_registry.json` `model_tier` values | `pytest plugins/pirategoat-tools/tests/review/test_registry_docs.py -v` |
-| `scripts/review/context.py` | `pytest plugins/pirategoat-tools/tests/review/test_context.py -v` |
-| `scripts/review/dependency_refresh.py` | `pytest plugins/pirategoat-tools/tests/review/test_dependency_refresh.py -v` |
-| `scripts/review/user_settings.py` | `pytest plugins/pirategoat-tools/tests/review/test_user_settings.py plugins/pirategoat-tools/tests/review/test_telemetry_share.py plugins/pirategoat-tools/tests/review/test_pipeline_infra.py plugins/pirategoat-tools/tests/review/test_import_graph.py -v` |
-| `scripts/review/telemetry_share.py` | `pytest plugins/pirategoat-tools/tests/review/test_telemetry_share.py plugins/pirategoat-tools/tests/review/test_telemetry.py plugins/pirategoat-tools/tests/review/test_pipeline.py plugins/pirategoat-tools/tests/review/test_pipeline_integration.py plugins/pirategoat-tools/tests/analysis/test_review_run_metrics.py -v` (four importers: `telemetry.py` takes `repo_identity`, `pipeline.py` the upload seam and `UNOPTED_OUTCOMES`, `briefings.py` the consent disclosure, and the metrics contracts `LAYOUT_PREFIX`; the consent disclosure names the path-free host-context data) |
-| `scripts/review/reconciliation_context.py` | `pytest plugins/pirategoat-tools/tests/review/test_reconciliation_context.py plugins/pirategoat-tools/tests/review/test_reconciliation_notes.py plugins/pirategoat-tools/tests/review/test_findings_save.py plugins/pirategoat-tools/tests/review/test_report_assembly.py plugins/pirategoat-tools/tests/review/test_pipeline_integration.py plugins/pirategoat-tools/tests/review/test_file_review.py -v` (reconciliation_notes.py and findings_save.py share `RECONCILIATION_CONTEXT_SCHEMA` and `validate_orchestrator_notes`, and a rebuild must preserve the claims already registered — `TestRegisteredNotesSurviveARebuild`; report-assembly covers `strip_severity_floor_markers`; pipeline-integration's `TestStep9CoverageMeasurement`/`TestStep9Orchestration` and file-review cover `manifest_sections.aggregate_file_review`, which this module's callers still cross. The reconciliation context reads the complete local host map from `review-context.json` so host-qualified citations can be verified without argv transport or telemetry exposure). Changing `compute_missing_agents` or `annotate_prefiltered_findings` also means re-reading `agents/review-reconciliator.md`: the agent carries those measurements rather than recomputing them, so the contract and the computation are one change. |
-| `scripts/review/reconciliation_notes.py` | `pytest plugins/pirategoat-tools/tests/review/test_reconciliation_notes.py plugins/pirategoat-tools/tests/review/test_findings_save.py -v` (the notes it writes are what the save gate requires outcomes for) |
-| `scripts/review/agent/review_assignment.py` | `pytest plugins/pirategoat-tools/tests/review/agent/test_review_assignment.py plugins/pirategoat-tools/tests/review/agent/test_bootstrap_integration.py -v` |
-| `scripts/review/findings_ledger.py` | `pytest plugins/pirategoat-tools/tests/review/test_findings_ledger.py plugins/pirategoat-tools/tests/review/test_critic_adjustments.py plugins/pirategoat-tools/tests/review/test_findings_save.py plugins/pirategoat-tools/tests/review/test_reconciliation_notes.py -v` (`read_reconciliation_context` is the one reader of the context for the save gate, the notes CLI and the builder; findings_save.py imports `RECONCILIATION_PIPELINE_FIELDS`, `DROP_REASONS_FINDING` and `DROP_REASONS_CHECK`, and names an unknown drop reason in its own rejection; the reader-boundary validators in critic_adjustments.py import the provenance constants; the ledger's `sources` grammar — `normalized_sources` — is what critic_adjustments.py validates ledger provenance with) |
-| `scripts/review/reviewer_names.py` | `pytest plugins/pirategoat-tools/tests/review/agent/test_bootstrap_integration.py plugins/pirategoat-tools/tests/review/test_agents_status.py plugins/pirategoat-tools/tests/review/test_telemetry.py plugins/pirategoat-tools/tests/review/test_telemetry_share.py plugins/pirategoat-tools/tests/analysis/test_review_run_metrics.py -v` (bootstrap pins both derivations directly; `telemetry.py`, `telemetry_share.py`, and the metrics contracts import `agent_name_from_review_stem` to project ledger stems to registry names, and agents-status exercises `derive_reviewer_name` through `agents_status.py` and `manifest_sections.py`'s assignment builders) |
-| `scripts/review/agents_status.py` | `pytest plugins/pirategoat-tools/tests/review/test_agents_status.py -v` |
-| `scripts/review/agent/scope.py` | `pytest plugins/pirategoat-tools/tests/review/agent/test_scope.py plugins/pirategoat-tools/tests/review/agent/test_scope_routing.py plugins/pirategoat-tools/tests/review/test_plan_dispatch.py plugins/pirategoat-tools/tests/review/test_criteria_coverage.py -v` (`CHANGELOG_FRAGMENT_PATTERN` is shared with `plan_dispatch._has_documentation_files`, so run `test_plan_dispatch.py` and `test_criteria_coverage.py` too) |
-| `scripts/review/agent/diff_noise_filter.py` | `pytest plugins/pirategoat-tools/tests/review/agent/test_diff_noise_filter.py -v` |
-| `scripts/review/agent/output.py` | `pytest plugins/pirategoat-tools/tests/review/agent/test_output.py plugins/pirategoat-tools/tests/grading/test_graders.py -v` |
-| `scripts/review/review_document.py` | `pytest plugins/pirategoat-tools/tests/review/agent/test_output.py plugins/pirategoat-tools/tests/review/test_critic_adjustments.py plugins/pirategoat-tools/tests/grading/test_graders.py plugins/pirategoat-tools/tests/review/test_change_purpose.py -v` (the validators plus both of their consumer boundaries — reviewer publication and ledger adjudication; owns `VERIFY_ITEM_ID_RE`, the grammar of a check's optional `verifies` list, `HOST_CITATION_RE` and `cited_hosts`, the one parser of a host citation that the evidence manifest counts with, and `normalize_bounded_text`, the bounded-prose rule every ledger evidence, orchestrator note and dispatch-adjustment reason passes through — `dispatch_adjust.py` and `reconciliation_notes.py` import it, so `test_dispatch_adjust.py`'s and `test_reconciliation_notes.py`'s refusal fragments pin its message) |
-| `scripts/review/review_markdown.py` | `pytest plugins/pirategoat-tools/tests/review/test_review_markdown.py plugins/pirategoat-tools/tests/review/test_report_assembly.py -v` (the renderer's own suite plus the review-record assembler that shares `render_review_body`; rendered findings preserve `source_cited` upstream evidence) |
-| Any `scripts/review/**/*.py` import block, module-level or inside a function body | `pytest plugins/pirategoat-tools/tests/review/test_import_graph.py -v` (asserts the package's whole import graph — a depth-first walk of every module-level edge finds no cycle, the five documented leaf modules stay leaves, two layering directions an acyclic graph cannot expose stay one-way, and no undocumented function-body import exists; `review_document.py`'s, `review_markdown.py`'s, `critic_adjustments.py`'s, and `agent/output.py`'s rows above rely on this test for their import-graph invariants. `importlib.util.spec_from_file_location` loaders are invisible to it — `pipeline.py`, `agent/scope.py`, and `context.py` load modules that way, so those three are untracked here) |
-| `scripts/review/telemetry.py` | `pytest plugins/pirategoat-tools/tests/review/test_telemetry.py plugins/pirategoat-tools/tests/review/test_telemetry_share.py plugins/pirategoat-tools/tests/analysis/test_review_run_metrics.py plugins/pirategoat-tools/tests/review/test_review_run_fixtures.py -v` |
-| `scripts/review/synthesis_lifecycle.py` | `pytest plugins/pirategoat-tools/tests/review/test_synthesis_lifecycle.py -v` (the module plus its four orchestration seams) |
-| `scripts/review/manifest_sections.py` | `pytest plugins/pirategoat-tools/tests/review/test_telemetry.py plugins/pirategoat-tools/tests/review/test_file_review.py plugins/pirategoat-tools/tests/review/test_report_assembly.py plugins/pirategoat-tools/tests/review/test_pipeline_integration.py plugins/pirategoat-tools/tests/review/test_review_run_fixtures.py -v` (`aggregate_file_review` also measures `noise_filtered_files` from the dispatch plan's reviewable list; `summarize_host_context` is the one projection behind the record's host line and telemetry's `host_context` section; `describe_reconciliation_verification` is pinned through the step-9/10 briefings in `test_pipeline.py` and the record in `test_report_assembly.py`) |
-| `scripts/review/critic.py` | `pytest plugins/pirategoat-tools/tests/review/test_critic.py -v` |
-| `scripts/review/critic_adjustments.py` | `pytest plugins/pirategoat-tools/tests/review/test_critic_adjustments.py plugins/pirategoat-tools/tests/review/test_review_markdown.py plugins/pirategoat-tools/tests/review/test_findings_ledger.py -v` (the renderer shows `invalidated_recommendations`; the ledger tests round-trip provenance through the reader) |
-| `scripts/review/verdict_rules.py` | `pytest plugins/pirategoat-tools/tests/review/test_verdict_rules.py plugins/pirategoat-tools/tests/review/agent/test_output.py plugins/pirategoat-tools/tests/review/test_critic_adjustments.py -v` (the shared ladder plus both callers — output.py publishing a review and critic_adjustments recomputing the ledger verdict) |
-| `scripts/review/findings_save.py` | `pytest plugins/pirategoat-tools/tests/review/test_findings_save.py plugins/pirategoat-tools/tests/review/test_findings_ledger.py -v` (the accounting gate compares against the ledger builder's provenance vocabulary — `DROP_REASONS_*`, `NOTE_OUTCOMES`, `SOURCE_ENTRY_FIELDS` — and against reconciliation_context.py's schema constant, and enforces a merged check's `verifies` union) |
-| `scripts/review/workspace_setup.py` | `pytest plugins/pirategoat-tools/tests/review/test_workspace_setup.py -v` |
-| `scripts/linear/pipeline.py` (routing, state, CLI) | `pytest plugins/pirategoat-tools/tests/linear/test_pipeline.py -v` |
-| `scripts/linear/pipeline.py` (briefing text) | `pytest plugins/pirategoat-tools/tests/linear/test_pipeline_guidance.py -v` |
-| `scripts/linear/events.py` | `pytest plugins/pirategoat-tools/tests/linear/test_events.py -v` |
-| `scripts/iterative_review/__main__.py` | `pytest plugins/pirategoat-tools/tests/iterative_review/test_cli.py -v` |
-| `scripts/iterative_review/briefing.py` | `pytest plugins/pirategoat-tools/tests/iterative_review/test_briefing.py -v` |
-| `scripts/iterative_review/backends/codex.py` | `pytest plugins/pirategoat-tools/tests/iterative_review/test_codex.py -v` |
-| `scripts/iterative_review/backends/claude.py` | `pytest plugins/pirategoat-tools/tests/iterative_review/test_claude.py -v` |
-| `scripts/iterative_review/loop.py` | `pytest plugins/pirategoat-tools/tests/iterative_review/test_loop.py -v` |
-| `scripts/iterative_review/effort.py` | `pytest plugins/pirategoat-tools/tests/iterative_review/test_effort.py -v` |
-| `scripts/iterative_review/*.py` (other / multiple) | `pytest plugins/pirategoat-tools/tests/iterative_review/ -v` |
-| `scripts/analysis/session_metrics.py` | `pytest plugins/pirategoat-tools/tests/analysis/test_session_metrics.py plugins/pirategoat-tools/tests/analysis/test_review_transcript.py -v` (agent metadata is authoritative before transcript inference, and both callers use the public one-parser usage wrapper) |
-| `scripts/analysis/session_analyzer.py` | `pytest plugins/pirategoat-tools/tests/analysis/test_session_analyzer.py -v` |
-| `scripts/analysis/review_transcript.py` | `pytest plugins/pirategoat-tools/tests/analysis/test_review_transcript.py plugins/pirategoat-tools/tests/analysis/test_session_metrics.py -v` (`usage_summary_for_transcript()` is the public one-parser token wrapper; agent_usage rows carry `repository_reads`, which usage_snapshot.py and step 9 consume) |
-| `scripts/analysis/review_run_metrics.py` or `scripts/analysis/review_metrics/*.py` | `pytest plugins/pirategoat-tools/tests/analysis/test_review_run_metrics.py plugins/pirategoat-tools/tests/review/test_review_run_fixtures.py -v` |
-| `scripts/analysis/codex_rollout.py` | `pytest plugins/pirategoat-tools/tests/analysis/test_codex_rollout.py -v` |
-| `scripts/analysis/codex_session_analyzer.py` or `scripts/analysis/codex_session_metrics.py` | `pytest plugins/pirategoat-tools/tests/analysis/test_codex_session_scripts.py -v` |
-| `scripts/analysis/usage_snapshot.py` | `pytest plugins/pirategoat-tools/tests/analysis/test_usage_snapshot.py plugins/pirategoat-tools/tests/review/test_orchestration_hygiene.py plugins/pirategoat-tools/tests/review/test_telemetry.py -v` (the CLI, the step-11 seam that invokes it, and `ReviewTelemetry.reproject_usage()` — the manifest's own out-of-band `usage` patch a manual re-run calls into; step 9's reconciliation-verification seam calls it with `--stdout`) |
-| `tests/helpers/graders.py` | `pytest plugins/pirategoat-tools/tests/grading/test_graders.py -v` |
-| `tests/helpers/triage_run_fixture.py` or `tests/fixtures/triage-runs/*.json` | `pytest plugins/pirategoat-tools/tests/review/test_triage_run_regressions.py -v` (never edit a fixture by hand — re-capture it with the helper's CLI from a clone that holds the range; the integrity tests pin file counts, patch coverage and the absence of session URLs) |
-| `tests/helpers/review_run_fixture.py` or `tests/fixtures/review-runs/**` | `pytest plugins/pirategoat-tools/tests/review/test_review_run_fixtures.py -v` (never edit a fixture by hand — re-capture it through the helper from the source run; capture output is generated-only, privacy-redacted, and digest-bound) |
-| `agents/history-insights-reviewer.md` | `pytest plugins/pirategoat-tools/tests/review/agent/test_history_insights_reviewer.py -v` |
-| `tests/grading/eval_agent_compliance.py` | `pytest plugins/pirategoat-tools/tests/grading/test_eval_agent_compliance.py -v` |
-| Any `SCENARIOS` answer key or `tests/fixtures/*.diff` | `pytest plugins/pirategoat-tools/tests/grading/test_answer_keys.py -v` |
-| Any reviewer agent `.md` | `pytest plugins/pirategoat-tools/tests/review/agent/test_bootstrap_integration.py -v` (verifies agent config still works, and `TestEveryReviewerMandatesBootstrap` asserts the exact heading `## MANDATORY SETUP — Run Bootstrap Before Reviewing` plus a `bootstrap.py --agent <name>` line in every registry reviewer except those in `BOOTSTRAP_EXEMPT_AGENTS`; `agents/review-reconciliator.md` is also pinned by `tests/review/test_findings_ledger.py`'s snippet tests and `tests/review/test_critic_adjustments.py`) |
-| New agent added to `AGENT_CONFIG` | `pytest plugins/pirategoat-tools/tests/review/agent/test_bootstrap_integration.py -v` (auto-included in all parameterized tests, including the mandatory-bootstrap heading check above) |
-| Any review command `.md` | `pytest plugins/pirategoat-tools/tests/commands/test_commands.py -v` (validates structure, agent refs, script refs) |
-| `commands/pr-update.md` | `pytest plugins/pirategoat-tools/tests/commands/test_commands.py -v` |
-| `commands/switch-to.md` | `pytest plugins/pirategoat-tools/tests/commands/test_commands.py -v` |
-| `.claude-plugin/marketplace.json` | `pytest plugins/pirategoat-tools/tests/commands/test_commands.py -v` (validates command registration, agent cross-refs) |
-| Any marketplace entry, command, or dual-host adapter | `pytest plugins/pirategoat-tools/tests/test_codex_marketplace.py -v` |
-| `scripts/generate_codex_compat.py` | `pytest plugins/pirategoat-tools/tests/test_codex_marketplace.py -v` |
-
-**Run all tests:** `pytest plugins/pirategoat-tools/tests/ -v 2>&1 | tail -30`
-
-**Run every plugin's tests in one session:** `pytest plugins/ 2>&1 | tail -5` — this works because the root `pytest.ini` pins `--import-mode=importlib` and test trees carry no `__init__.py` (guarded by `plugins/pirategoat-tools/tests/test_pytest_layout.py`; see it before adding an `__init__.py` under any `tests/` tree).
-
-**Test principles:**
-- Code-based graders only (fast, deterministic, no model calls)
-- Grade outcomes not paths
-- Test both positive and negative cases
-- Parameterize on the axis of variation — ALL_AGENTS only for smoke tests (see `tests/TESTING.md` §6-7)
-- Test pure functions directly; use subprocess only for orchestration that unit tests can't cover
-
-**Offline compliance grading** (no model calls):
 ```bash
-# Grade finalized output in one durable review run
-python3 plugins/pirategoat-tools/tests/grading/eval_agent_compliance.py --grade-only <run-dir>
+pytest plugins/<name>/tests/ -q        # the plugin you changed; the whole tree takes about two minutes
+pytest plugins/ -q 2>&1 | tail -5      # everything
 ```
 
-### yoloing-safe
+For the suites a specific file change should run, and the couplings behind them, read `plugins/pirategoat-tools/tests/TESTING.md` § Which tests to run, or `plugins/yoloing-safe/tests/TESTING.md` § Which Tests to Run After Changes. `TESTING.md` also holds the test-design principles (code-based graders, outcomes not paths, parameterize on the axis of variation) and the offline compliance grader: `python3 plugins/pirategoat-tools/tests/grading/eval_agent_compliance.py --grade-only <run-dir>`.
 
-See `plugins/yoloing-safe/AGENTS.md` for testing instructions, rule workflows (add/remove/rename/retier), and the full RULES dict specification.
+## Versioning and Releases
 
-**Quick reference:** `pytest plugins/yoloing-safe/tests/ -v`
+**RULE 0: every commit that changes plugin behavior (feature, fix, refactor, performance) updates the plugin's `CHANGELOG.md` and bumps its `version` in `.claude-plugin/marketplace.json`** (`feat` = minor, `fix`/`refactor`/`perf` = patch, `BREAKING CHANGE` = major). If the latest bump is not pushed yet, fold a change of similar impact into that entry instead of bumping again; a higher-impact change upgrades the version. `docs`, `test`, `ci`, `style`, and `chore` commits that leave runtime behavior alone need no bump, and a changelog bullet only when a user would notice.
 
-## Versioning & Releases
+Changelog entries are for a plugin user deciding whether a change affects them; the why, the evidence, and the mechanism tour belong in the commit body, which git archives.
 
-### RULE 0: Every Change Gets Documented
+- One bullet per user-visible behavior, not per commit; a follow-up fix to an unreleased behavior edits its bullet rather than appending a correction.
+- One sentence per bullet, two at most; no test counts, no file tours. A bullet that needs more is several behaviors (split it) or commit-body detail (cut it).
+- Purely internal changes get no bullet.
 
-Every commit that modifies plugin behavior (features, fixes, refactors, performance) **must** include:
-
-1. **CHANGELOG.md update** — Add an entry under the appropriate version section in the plugin's `CHANGELOG.md`
-2. **Version bump in marketplace.json** — Update the plugin's `version` field following semver (`feat` = minor, `fix`/`refactor`/`perf` = patch, `BREAKING CHANGE` = major)
-
-**Coalescing rule:** If the latest version bump has not been pushed to the remote yet, fold new changes into the same version entry rather than bumping again — provided they are of similar impact (e.g., two fixes, or a feature and a closely related fix). If the new change is a higher semver impact (e.g., existing unpushed patch + new feature), upgrade the version to match.
-
-**Exempt from version bumps:** `docs`, `test`, `ci`, `style`, `chore` commits that don't change runtime behavior. Still add a changelog entry if the change is notable.
-
-### Changelog Entry Style
-
-The changelog's audience is a plugin user deciding whether a change affects
-them. The why-narrative, evidence, field-run numbers, and mechanism tour live
-in the commit body — git is the archive; never duplicate it into the changelog.
-
-- **One bullet per user-visible behavior, not per commit.** A follow-up fix to
-  an UNRELEASED entry folds into the bullet that introduced the behavior —
-  edit that bullet; never append a correction trail beneath it.
-- **One sentence per bullet; two at most**, and only when the second states a
-  consequence the first cannot carry. No bold-lead paragraph essays, no test
-  counts, no file-by-file tours.
-- **Purely internal changes** (refactors, test estate, doc wording, analysis
-  tooling performance) get no bullet unless a consumer would notice.
-- **The two-sentence test:** if a bullet cannot be written in two sentences,
-  it is either several behaviors (split it) or commit-body detail (cut it).
-
-Why this is a rule and not taste: the unreleased 1.114.0 entry twice grew past
-20KB of essay bullets and had to be distilled (121.6KB → 9.3KB → regrown to
-24KB → distilled again). Agents copy whichever pattern the file already shows,
-so the entry style is load-bearing — a single essay bullet re-seeds the drift.
-
-### Plugin-Prefixed Tags
-
-Since this repository may contain multiple plugins with independent version cycles, use **plugin-prefixed tags**:
-
-**Tag Format:** `<plugin-name>/v<semver>`
-
-**Examples:**
-- `pirategoat-tools/v1.0.0`
-- `pirategoat-tools/v1.1.0`
-
-### Release Process
-
-1. Update the plugin's `CHANGELOG.md` (Keep a Changelog format)
-2. Bump `version` in `.claude-plugin/marketplace.json`
-3. Run `python3 scripts/generate_codex_compat.py` to synchronize the Codex manifest
-4. Commit, then tag: `<plugin-name>/vX.Y.Z`
-5. Optionally create a GitHub Release with `gh release create`
+Tags are plugin-prefixed: `<plugin-name>/v<semver>` (for example `pirategoat-tools/v1.119.2`). Release: update the changelog, bump the version, run the generator, commit, tag, optionally `gh release create`.
 
 ## AI Artifacts
 
-All AI-generated artifacts (plans, analysis, research, decisions, learnings) go under `.claude/docs/`:
+Session artifacts (plans, analysis, research, decisions, learnings) go under `.claude/docs/` in `analysis/`, `decisions/`, `learnings/`, `patterns/`, `plans/`, or `research/`. Never put them under `docs/` at the repo root or under `plugins/*/docs/`; those hold committed documentation that ships with the plugin. After a significant debugging session or a non-obvious discovery, suggest `/dex:grok` to capture it.
 
-```text
-.claude/docs/
-├── analysis/     # Research findings, investigations, session analysis
-├── decisions/    # Architecture Decision Records
-├── learnings/    # Debugging insights, gotchas, fixes
-├── patterns/     # Reusable workflows, conventions, anti-patterns
-├── plans/        # Implementation plans
-└── research/     # Deep-dive research (e.g., a11y/, figma/)
-```
+## Read When
 
-**RULE:** Never create AI artifacts under `docs/` at the repo root or under `plugins/*/docs/`. Those locations are for committed documentation that ships with the plugin (guides, READMEs). Working artifacts from agent sessions go in `.claude/docs/`.
-
-## Reference
-
-**Design patterns** live in `docs/patterns/`. Consult them before implementing similar functionality:
-
-| Pattern | When to use |
+| Situation | Read |
 |---|---|
-| [step-by-step-prompt-injection](docs/patterns/step-by-step-prompt-injection.md) | Multi-phase analytical workflows where later steps must be independent of earlier conclusions — e.g., verify before judge, gather before synthesize. Includes script template, skill file structure, testing checklist, and two reference implementations. |
-| [curated-context-pipeline](docs/patterns/curated-context-pipeline.md) | Multi-mode LLM pipelines where a script acts as context curator — reads all state, presents pre-digested briefings, controls flow via condition-driven step routing, and manages split file-based state. Covers pipeline identity anchoring, artifact discipline, and conversational output. Evolves step-by-step prompt injection for operational workflows with shared logic across modes. |
+| Designing a multi-phase analytical workflow where later steps must not see earlier conclusions | `docs/patterns/step-by-step-prompt-injection.md` |
+| Building a script-curated, multi-mode LLM pipeline with file-based state | `docs/patterns/curated-context-pipeline.md` |
+| Integrating with the OpenAI Codex CLI (prompting, structured output, sandbox, headless review) | `docs/codex-cli-reference.md` |
+| Spawning Claude Code as a subprocess (nesting guard, isolation flags, `--json-schema`) | `docs/claude-code-cli-reference.md` |
+| Using `CLAUDE_PLUGIN_ROOT`, `CLAUDE_SKILL_DIR`, or `CLAUDE_PLUGIN_DATA` in a plugin | `docs/plugin-env-vars-reference.md` |
+| Any Claude Code behavior (subagents, hooks, skills, memory, plugins) | `https://code.claude.com/docs/en/<page>.md`; append `.md` to a docs URL for raw markdown, index at `https://code.claude.com/docs/llms.txt` |
 
-**External tool references** live in `docs/`. Consult them when integrating with external CLIs:
-
-| Reference | When to use |
-|---|---|
-| [codex-cli-reference](docs/codex-cli-reference.md) | Integrating with the OpenAI Codex CLI — prompting contracts, structured output, headless review invocation, cross-CLI comparison with Claude Code, sandbox behavior, and Structured Outputs schema constraints. Based on source analysis + runtime testing. |
-| [claude-code-cli-reference](docs/claude-code-cli-reference.md) | Spawning Claude Code CLI as a subprocess — nesting guard status, isolation flags, structured output via `--json-schema`, settings hierarchy, Python integration pattern, and cross-CLI comparison with Codex. Based on v2.1.81 source analysis + runtime testing. |
-| [plugin-env-vars-reference](docs/plugin-env-vars-reference.md) | Plugin environment variables — `CLAUDE_PLUGIN_ROOT`, `CLAUDE_SKILL_DIR`, `CLAUDE_PLUGIN_DATA`: substitution matrix (what works where), substitution order, decision guide, known bugs, and source code function references. Based on v2.1.87 source analysis. |
-
-**Knowledge capture:** After significant debugging sessions, architectural decisions, or discovering non-obvious behavior, suggest using `/dex:grok` to capture the knowledge.
-
-**License:** MIT — see LICENSE file.
+License: MIT.

@@ -49,21 +49,7 @@ patch target to the canonical Write rules.
 
 ## Public Testing Contract
 
-The shim (`scripts/pre-tool-use-safety.py`) must export these names for tests, e2e, and benchmark to work. `TestShimCompatContract` in `test_meta.py` enforces this — if a refactor removes any of them, the test fails before downstream tooling breaks silently.
-
-| Name | Type | Consumers |
-|------|------|-----------|
-| `RULES` | `dict` | All test suites, e2e generator, benchmark |
-| `RULES_BY_TOOL` | `dict` | Runtime, benchmark |
-| `ALLOWLIST_PATTERNS` | `list` | Test suites, runtime |
-| `DEFAULTS` | `dict` | Config tests |
-| `NON_DISABLEABLE_RULES` | `set`/`frozenset` | Config tests |
-| `normalize_command` | callable | Unit tests |
-| `load_config` | callable | Config tests, runtime |
-| `is_allowlisted` | callable | Allowlist tests, runtime |
-| `strip_writer_heredocs` | callable | Unit tests |
-
-The e2e generator (`tests/e2e/generate-test-cases.py`) imports `RULES` directly from the package (`from yoloing_safe.rules import RULES`) rather than going through the shim, so it depends only on the canonical registry.
+The shim (`scripts/pre-tool-use-safety.py`) re-exports `RULES`, `RULES_BY_TOOL`, `ALLOWLIST_PATTERNS`, `DEFAULTS`, `NON_DISABLEABLE_RULES`, `normalize_command`, `load_config`, `is_allowlisted`, and `strip_writer_heredocs` for the test suites, the e2e generator, the benchmark, and the runtime. `TestShimCompatContract` in `tests/test_meta.py` is the authority on that list and fails before downstream tooling breaks silently. The e2e generator imports `RULES` from the package (`from yoloing_safe.rules import RULES`), so it depends only on the canonical registry.
 
 ## Rule Structure
 
@@ -153,13 +139,7 @@ Agents cannot run `make auth` or `make run` — they require an interactive term
 
 ## Which Tests to Run
 
-| What changed | Run |
-|---|---|
-| Any runtime code under `scripts/` | `pytest plugins/yoloing-safe/tests/ -v` and `pytest plugins/yoloing-safe/tests/benchmark_hook.py -v` |
-| `RULES` assembly or rule metadata | `pytest plugins/yoloing-safe/tests/test_meta.py -v` then `cd plugins/yoloing-safe/tests/e2e && make generate` |
-| `ALLOWLIST_PATTERNS` | `pytest plugins/yoloing-safe/tests/test_meta.py -v` and the affected rule suites |
-| `tests/scenarios/*.json` | `pytest plugins/yoloing-safe/tests/test_scenarios.py -v` |
-| `tests/e2e/test-fixtures.json` or `Dockerfile` | `cd plugins/yoloing-safe/tests/e2e && make generate && make build` then tell user to run `make run` manually |
+`tests/TESTING.md` § Which Tests to Run After Changes maps each kind of change to its suites. Any change under `scripts/` runs the whole suite plus `benchmark_hook.py`; a rule or allowlist change also runs `make generate` in `tests/e2e/` (see After Any Rule Change below).
 
 ## Rule Workflows
 

@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
 """Canonical reviewer-name derivation.
 
-Leaf module: stdlib only, no imports from anywhere else in `review/` —
-deliberately, so any script can import this without risking an import
-cycle. `agent/bootstrap.py` used to define `derive_reviewer_name()`
-itself and load `telemetry.py` (which imports `manifest_sections.py`) as
-a top-level side effect; a second script importing `derive_reviewer_name`
-from `bootstrap` re-entered `bootstrap` mid-initialization and silently
-broke telemetry loading (`ReviewTelemetry` became `None`). Every consumer
-of the naming rule imports the one implementation here instead of
-restating (or, in `bootstrap.py`'s case, still owning) it.
-`agent_name_from_review_stem()` is the inverse rule for the ledger's
-review-file stems; telemetry and the shared-cohort reader use it to
-project one registry spelling.
+Sole implementation of `derive_reviewer_name()` — the trailing-`-reviewer`
+stripping rule every per-agent artifact name is built from — and of its
+inverse `agent_name_from_review_stem()`. Every consumer imports these
+instead of restating the rule.
+
+Leaf module: stdlib only, never imports from anywhere else in `review/`,
+so any script can import the naming rule without re-entering a module that
+is still initializing. `tests/review/agent/test_bootstrap_integration.py`
+pins both derivations.
 """
 
 

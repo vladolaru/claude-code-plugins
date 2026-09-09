@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """Validate and adjudicate source-bound decision-critic proposals.
 
-The lifecycle has three steps and one writer each. The critic authors
-proposal-only fields through ``critic.py --save``, which calls
-:func:`prepare_proposal` to assign stable adjustment IDs and
-:func:`write_critic_verdict` to publish the proposal beside a digest-bound
-verdict marker. **The proposal is never rewritten afterwards.** The
-orchestrator then submits only verified IDs, refuted IDs with reasons, and an
-optional revised assessment and recommendations through :func:`adjudicate`,
-which takes the output lock once and makes exactly one ledger write: verified and unchecked entries
-are applied with provenance, refuted entries are recorded with their reasons,
-and every entry's ``outcome`` lands in the findings ledger.
+The critic authors proposal-only fields through ``critic.py --save``, which
+calls :func:`prepare_proposal` for stable adjustment IDs and
+:func:`write_critic_verdict`, the one writer of the proposal and of its
+digest-bound verdict marker. **The proposal is never rewritten afterwards.**
 
-The ledger is therefore the one place adjudication is recorded, which is what
-makes a second adjudication of the same proposal detectable (its IDs are
-already there) and a partial one impossible (one write, or none).
+The orchestrator then submits verified IDs, refuted IDs with reasons and an
+optional revised assessment through :func:`adjudicate`, which takes the output
+lock once and makes exactly one ledger write — so a second adjudication is
+detectable and a partial one impossible. :func:`adjudication_state` reads that
+record back for step 11.
+
+This module owns the ledger's read and validation surface —
+:func:`validate_findings_document`, :func:`read_findings_file` and
+:func:`write_findings`, the one write path for the findings ledger.
 """
 
 import argparse

@@ -2,8 +2,17 @@
 """
 Review Scope - Efficient diff scoping for review agents.
 
-Single source of truth for all filtering logic. Agents call this script
-instead of running 5+ ad-hoc git/grep commands to determine their review scope.
+Single source of truth for all filtering logic: agents call this instead of
+5+ ad-hoc git/grep commands, and it prints structured STATUS, DIFFSTAT,
+FILES and DIFFS sections.
+
+Language recognition lives in the `_*_LANGS` groups that every domain
+composes through `_ext_re(...)`. Add a new format there once; never edit a
+per-domain regex.
+
+The a11y scope alone looks past the extension: `filter_a11y_ui_evidence()`
+keeps a bare `.js` or `.ts` file only when the change shows UI evidence.
+Triage is untouched by it.
 
 Usage:
     python3 scope.py --domain code --output-dir <output-dir>

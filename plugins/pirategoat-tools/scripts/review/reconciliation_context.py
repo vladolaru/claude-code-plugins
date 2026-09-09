@@ -1,10 +1,20 @@
 #!/usr/bin/env python3
 """
-Reconciliation Context Builder — pre-gathers all context for the reconciliator agent.
+Reconciliation Context Builder — the reconciliator agent's single input.
 
-Performance optimization: instead of the reconciliator making ~40 individual file reads,
-this script collects all agent findings, referenced source snippets, scope annotations,
-and metadata into a single JSON file the agent can consume immediately.
+Pre-gathers every agent's findings, the referenced source snippets, scope
+annotations and metadata into one artifact, so the agent makes no reads of
+its own. It writes no Markdown: `compute_missing_agents()` and
+`annotate_prefiltered_findings()` travel in the JSON, and the reconciliator
+obeys both rather than recomputing either. Severity floors come from the
+structured field alone; no description prose is parsed. The complete local
+host map is read from the run's own context snapshot, so host-qualified
+citations are verifiable without pushing paths through argv or telemetry.
+
+It owns `validate_orchestrator_notes()` and `RECONCILIATION_CONTEXT_SCHEMA`,
+which the notes CLI and the save gate import. A rebuild carries the already
+registered notes forward, under the same lock the notes CLI holds; resetting
+them would release the save gate's requirement that every note be answered.
 
 Usage:
     python3 reconciliation_context.py --output-dir <run-dir> --git-range abc123..HEAD

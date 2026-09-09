@@ -1,8 +1,19 @@
 """Manifest section builders — pure functions over the run's output dir.
 
-Extracted from ReviewTelemetry so the telemetry class stays an event
-logger; these read completed artifacts and build manifest sections.
-Behavior-preserving move (2026-08-03); see test_telemetry.py.
+They read completed artifacts and build manifest sections, so the
+telemetry class stays an event logger. Three projections are the single
+one of their kind:
+
+* `summarize_host_context()` and `build_host_context_manifest()` are the
+  one path-free projection from local Host Context into run state, the
+  review record and telemetry.
+* `read_change_purpose()` is the one reader of the parsed change purpose.
+* `describe_reconciliation_verification()` is the one sentence the review
+  record, the step-9 situation and the critic prompt all carry.
+
+`aggregate_file_review()` answers `build_assignment_manifest()`'s question
+over a different population; read that builder's DIVERGENCE NOTE before
+reconciling the two unscoped/unassigned numbers. See test_telemetry.py.
 """
 
 import json

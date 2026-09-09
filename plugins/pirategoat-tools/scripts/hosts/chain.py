@@ -1,4 +1,20 @@
-"""Resolver chain — merges repository host signals and emits a manifest."""
+"""Resolver chain — merges repository host signals and emits a manifest.
+
+Composes the repo-signaled advisory resolvers in priority order — explicit,
+wp-env, docker-compose, plugin-headers, vendor (the sibling resolver is not
+in it) — and dedups entries by `kind:name`, the first winning.
+
+Every resolved local runtime host is stamped with the identity
+`hosts/identity.py` reads from its path. Only facts the resolver left
+unknown are filled, and never the branch — a personal checkout's branch
+would reach the shared manifest. Stamping failures land in
+`diagnostics.identity_errors` rather than aborting a review.
+
+Unresolved signals merge by host name, keeping one `declared_by` entry per
+signal and the strictest declared `version`. Hosts the repository provides
+are dropped before ecosystem-cache fulfillment, so a repository is never
+verified against a cache clone of itself.
+"""
 
 import json
 import re

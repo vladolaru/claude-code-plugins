@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """One authority for review run directories: location, allocation, layout.
 
+Sole authority for durable review locations, fresh run allocation, the
+retention sweep and the target-versus-run boundary. Its `ARTIFACTS` registry
+owns every shared filename; `reviewer_lifecycle.py` owns the fixed
+per-reviewer filenames.
+
 External layout (under state_root()):
     reviews/<kind>/<safe-repo>/<safe-target>/     the *target dir*, cross-run state:
         .branch-review-baseline.json              incremental baseline
@@ -12,6 +17,10 @@ Internal layout (inside a run dir): boundary files at the root, plus
 pipeline/ (orchestration state), reviewers/<reviewer>/ (per-reviewer
 artifacts, fixed filenames), synthesis/ (reconciliation + critic), tmp/
 (sanctioned scratch).
+
+`telemetry_log_path()` and `SAFE_RUN_ID_SEGMENT_RE` live here because the
+telemetry producer and the uploader must agree on them and cannot import
+each other.
 
 Leaf module: stdlib only.
 """
