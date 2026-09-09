@@ -139,7 +139,7 @@ Agents cannot run `make auth` or `make run` — they require an interactive term
 
 ## Which Tests to Run
 
-`tests/TESTING.md` § Which Tests to Run After Changes maps each kind of change to its suites. Any change under `scripts/` runs the whole suite plus `benchmark_hook.py`; a rule or allowlist change also runs `make generate` in `tests/e2e/`.
+`tests/TESTING.md` § Which Tests to Run After Changes maps each kind of change to its suites. Any change under `scripts/` runs the whole suite plus `benchmark_hook.py`; a rule or allowlist change also runs `make generate` in `tests/e2e/` (see After Any Rule Change below).
 
 ## Rule Workflows
 

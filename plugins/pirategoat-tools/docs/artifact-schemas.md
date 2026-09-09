@@ -14,7 +14,11 @@ A shape change made within the same UNRELEASED version that introduced the curre
 
 Check `git tag` for the plugin's last released version before deciding. If the number's introducing version is already tagged, the carve-out does not apply and you bump regardless.
 
-Precedent, both directions: `reviewers/<reviewer>/assignment.json` bumped twice inside one unreleased window because each change added required keys a reader of the old shape could not distinguish from a truncated new one; the telemetry `EVENT_SCHEMA` did not bump for in-window key renames because nothing needed to distinguish the renamed keys from what they replaced. A consequence of the default: an in-window manifest key rename reads as unavailable on a manifest written before the rename, rather than resolving to the old key, since no bump marks the boundary.
+A consequence of the default: an in-window key rename reads as unavailable on an artifact written before the rename, rather than resolving to the old key, since no bump marks the boundary.
+
+## The second carve-out: additive optional keys
+
+A released schema does not bump for a purely additive optional key whose absence reads as a defined default, because no reader can misread an old artifact and a bump would only make history unreadable. Telemetry schema 3 is the precedent: `run.repo` and `run.target` read as unavailable when absent, and the one consumer that requires them (`telemetry_share.py`) refuses an identity-less manifest on its own. A key a reader would silently treat as present, or a field whose meaning changed, is not additive and bumps.
 
 ## Which artifacts carry a schema
 

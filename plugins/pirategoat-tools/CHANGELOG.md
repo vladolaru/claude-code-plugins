@@ -9,8 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `AGENTS.md` now holds only the plugin's rules, a one-line key-file map, the agent-registry reference, and a read-when table; the subsystem guides it used to inline live in `docs/` (`review-pipeline.md`, `artifact-schemas.md`, `repo-reviewers.md`, `analysis-tools.md`, `dev-wrapper.md`), module contracts in the module docstrings, and the file-to-test lookup in `tests/TESTING.md`. A byte-budget test keeps the root and plugin `AGENTS.md` chain under Codex's 32 KiB instruction limit, which the old files exceeded.
-- The agent-registry reference documents the `require_php_source_file`, `triage_checks`, and `min_added_lines` fields.
+- `AGENTS.md` is cut to the plugin's rules and a read-when map, with the subsystem guides now in `docs/` and a byte-budget test keeping the root-plus-plugin chain under Codex's 32 KiB instruction limit, which the old files exceeded so Codex never read the plugin file.
 
 ## [1.119.2] - 2026-09-09
 

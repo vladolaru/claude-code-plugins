@@ -20,7 +20,7 @@ These files are the always-on cost of every session, and the longer they get the
 |---|---|
 | A rule an agent would otherwise violate, with one clause of why | `AGENTS.md` (root for repo-wide, plugin for plugin-wide) |
 | A fact about one module: contract, invariants, importers, history | that module's docstring |
-| A procedure, a design record, a CLI manual, a directory layout | `plugins/<plugin>/docs/`, pointed at from `AGENTS.md` with the trigger for reading it |
+| A procedure longer than a few steps, a design record, a CLI manual, a directory layout | `plugins/<plugin>/docs/`, pointed at from `AGENTS.md` with the trigger for reading it |
 | Which tests a change should run | the plugin's `tests/TESTING.md` |
 | Counts and inventories of commands, skills, agents | `.claude-plugin/marketplace.json` and the plugin README, never restated here |
 | An incident or a lesson | `.claude/docs/learnings/` |
@@ -80,7 +80,7 @@ pytest plugins/<name>/tests/ -q        # the plugin you changed; the whole tree 
 pytest plugins/ -q 2>&1 | tail -5      # everything
 ```
 
-For the suites a specific file change should run, and the couplings behind them, read `plugins/pirategoat-tools/tests/TESTING.md` § Which tests to run, or `plugins/yoloing-safe/AGENTS.md` § Which Tests to Run. `TESTING.md` also holds the test-design principles (code-based graders, outcomes not paths, parameterize on the axis of variation) and the offline compliance grader: `python3 plugins/pirategoat-tools/tests/grading/eval_agent_compliance.py --grade-only <run-dir>`.
+For the suites a specific file change should run, and the couplings behind them, read `plugins/pirategoat-tools/tests/TESTING.md` § Which tests to run, or `plugins/yoloing-safe/tests/TESTING.md` § Which Tests to Run After Changes. `TESTING.md` also holds the test-design principles (code-based graders, outcomes not paths, parameterize on the axis of variation) and the offline compliance grader: `python3 plugins/pirategoat-tools/tests/grading/eval_agent_compliance.py --grade-only <run-dir>`.
 
 ## Versioning and Releases
 

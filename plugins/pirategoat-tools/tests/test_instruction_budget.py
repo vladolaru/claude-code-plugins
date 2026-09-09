@@ -115,12 +115,15 @@ def test_no_essay_lines(agents_md: Path):
 
 
 @pytest.mark.parametrize(
-    "claude_md",
-    [REPO_ROOT / "CLAUDE.md", *sorted(PLUGINS_DIR.glob("*/CLAUDE.md"))],
-    ids=_rel,
+    "agents_md", [ROOT_AGENTS_MD, *PLUGIN_AGENTS_MDS], ids=_rel
 )
-def test_claude_md_is_a_shim(claude_md: Path):
+def test_every_agents_md_has_a_claude_md_shim(agents_md: Path):
     """CLAUDE.md only imports AGENTS.md, so both hosts read one canonical file."""
+    claude_md = agents_md.with_name("CLAUDE.md")
+    assert claude_md.is_file(), (
+        f"{_rel(agents_md)} has no sibling CLAUDE.md; Claude Code reads "
+        "CLAUDE.md, so add one containing exactly '@AGENTS.md'."
+    )
     assert claude_md.read_text(encoding="utf-8").strip() == "@AGENTS.md", (
         f"{_rel(claude_md)} must contain exactly '@AGENTS.md'; instructions "
         "belong in the sibling AGENTS.md so Codex reads them too."

@@ -13,6 +13,7 @@ tests/
 ├── test_annotation_evaluation.py     # Deferred-annotation (PEP 649) drift guard for every scripts/ module
 ├── test_codex_marketplace.py         # Generated Codex marketplace/plugin.json compatibility tests
 ├── test_containment_contract.py      # scripts/containment.py repo-boundary contract tests
+├── test_instruction_budget.py        # Byte budgets for every AGENTS.md and the CLAUDE.md shims (Codex 32 KiB chain)
 ├── test_git_paths.py                 # Shared Git C-quoted path grammar tests
 ├── test_pytest_layout.py             # Repo-wide guard: no __init__.py under any plugin's tests/
 ├── review/                           # Tests for scripts/review/
@@ -670,6 +671,7 @@ The full plugin suite runs in about two minutes (`pytest plugins/pirategoat-tool
 
 | Changed file | Run |
 |---|---|
+| Any `AGENTS.md` or `CLAUDE.md` in the repository | `pytest plugins/pirategoat-tools/tests/test_instruction_budget.py -v` (byte ceilings per file and for the root-plus-plugin chain, and the `@AGENTS.md` shim contract) |
 | `scripts/review/agent/bootstrap.py` | `pytest plugins/pirategoat-tools/tests/review/agent/test_bootstrap.py plugins/pirategoat-tools/tests/review/agent/test_bootstrap_integration.py -v` |
 | `agents/shared/reviewer-protocol.md` | `pytest plugins/pirategoat-tools/tests/review/agent/test_bootstrap_integration.py -v` |
 | `agents/shared/tests-reviewer-protocol.md` | `pytest plugins/pirategoat-tools/tests/review/agent/test_bootstrap_integration.py -v` |

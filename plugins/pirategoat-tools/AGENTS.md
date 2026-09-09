@@ -13,6 +13,7 @@ This file holds the rules and the map. A fact about one module lives in that mod
 | Touch `review_config.py`, the `repo-reviewer-adapter`, bootstrap ref-mode, or the advisory channel | `docs/repo-reviewers.md` |
 | Change or use anything under `scripts/analysis/` | `docs/analysis-tools.md` |
 | Exercise unreleased plugin changes against a real repository | `docs/dev-wrapper.md` |
+| Change anything pirategoat-bot reads or writes | `docs/pirategoat-bot.md`, after the bot's own source |
 | Change a briefing's prose or structure | `../../docs/patterns/curated-context-pipeline.md` (the design it follows) |
 | Decide which tests to run for a change | `tests/TESTING.md` § Which tests to run |
 | Defer a real finding instead of fixing it | `BACKLOG.md` (the committed place of record; `.claude/docs/` is gitignored) |
@@ -45,7 +46,7 @@ This file holds the rules and the map. A fact about one module lives in that mod
 | `scripts/review/reconciliation_notes.py` | Registers orchestrator notes the reconciliator must answer. |
 | `scripts/review/findings_ledger.py` | `FindingsLedgerBuilder`, the reconciliator's builder. |
 | `scripts/review/findings_save.py` | The ledger's only write channel; validates and stamps pipeline-owned facts. |
-| `scripts/review/verdict_rules.py` | `verdict_for_counts()`, the one severity-to-verdict ladder. |
+| `scripts/review/verdict_rules.py` | `verdict_for_counts()`, the one severity-to-verdict ladder, and `publish_verdict()`, the one ledger-to-published mapping. |
 | `scripts/review/critic.py` | The decision critic's validating `--save` channel. |
 | `scripts/review/critic_adjustments.py` | Critic lifecycle after authorship: proposal writer, `adjudicate()`, ledger read/write. |
 | `scripts/review/atomic_io.py` | Atomic JSON writes and the output-directory lock. |
@@ -83,19 +84,15 @@ Each rule names the test that holds it where one exists. One clause of why; the 
 
 **The ledger has one write path.** `review-findings.json` is written only through `findings_save.py` (the reconciliator) and `critic_adjustments.write_findings()` (adjudication), never with a bare `atomic_write_json`. The critic never authors ids or adjudication state, and the orchestrator never edits the committed proposal.
 
-**The verdict ladder lives once.** `verdict_rules.verdict_for_counts()` is shared by `agent/output.py` and `critic_adjustments.py`; step 11 derives the published pipeline verdict from the ledger, so a second copy that drifts reaches GitHub.
+**The verdict ladder lives once.** `verdict_rules.verdict_for_counts()` is shared by `agent/output.py` and `critic_adjustments.py`, and `verdict_rules.publish_verdict()` maps the ledger verdict to the published one at step 11, so a second copy that drifts reaches GitHub.
 
 **Derived Markdown is never hand-written.** `reviewers/<reviewer>/review.md`, `review-findings.md`, and `review-record.md` are rendered from their JSON by the pipeline. A render failure is a degradation note, never a file that disagrees with its JSON.
 
 **Briefing prose is test-pinned.** Tests check keywords in briefing text (`"review-reconciliator"`, `"STAND"`); preserve them when rewriting and run the relevant `TestStep*` class. `handoff` is the only gate mechanism for an artifact the next step needs.
 
-**Containment.** `tests/test_containment_contract.py` fails on any `commonpath`, `is_relative_to`, or `commonprefix` outside `scripts/containment.py`. Do not add inline checks or an allowlist.
-
-**Registry `focus` and agent `description` stay aligned.** `focus` (5 to 10 keywords, shown in the step-5 dispatch summary) and the agent `.md` frontmatter `description` (a sentence, shown in the host's agent catalog) must cover the same capabilities whenever an agent's specialization changes.
+**Containment.** Repo-boundary checks live only in `scripts/containment.py`; `tests/test_containment_contract.py` fails on any `commonpath`, `is_relative_to`, or `commonprefix` elsewhere.
 
 **Subprocess tests isolate from the real repo.** A test that runs a pipeline script through `subprocess.run()` passes `cwd=tmp_path` with a temp git repo, so a git-mutating script cannot stash, checkout, or reset the working tree.
-
-**Run tests from the repository root** after modifying scripts, agents, or commands: `pytest plugins/pirategoat-tools/tests/ -q` (about two minutes for the whole tree).
 
 ## Agent Registry
 
@@ -103,11 +100,11 @@ Each rule names the test that holds it where one exists. One clause of why; the 
 
 | Field | Required | Description |
 |---|---|---|
-| `domain` | yes | Scope domain for `agent/scope.py` filtering; `null` for agents that discover their own scope (tests-mutation-reviewer). |
+| `domain` | yes | Scope domain for `agent/scope.py` filtering; `null` for agents that discover their own scope or take no diff (tests-mutation-reviewer, decision-reviewer, repo-reviewer-adapter). |
 | `protocols` | yes | Protocol files to include: `"reviewer"` (all agents), `"tests-reviewer"` (test agents). |
 | `scope_flags` | yes | Extra flags for `agent/scope.py` (for example `["--max-lines", "500"]`); `[]` for defaults. |
-| `dispatch_class` | yes | `always` (every review), `conditional` (triage criteria match; dispatch-by-default when the domain has files and no evidence gate fires; skips stay visible in `agent_signals` for override), `manual` (explicit request only), `special` (synthesis agents, never triaged). |
-| `focus` | yes | One-line keyword focus surfaced in the step-5 dispatch summary. Keep aligned with the agent's `description`. |
+| `dispatch_class` | yes | `always` (every review), `conditional` (triage criteria match; dispatch-by-default when the domain has files and no evidence gate fires; skips stay visible in `agent_signals` for override), `manual` (explicit request only), `special` (orchestration and synthesis agents, not dispatched by triage). |
+| `focus` | yes | 5 to 10 keywords shown in the step-5 dispatch summary; must cover the same capabilities as the agent `.md` frontmatter `description` (the host's agent catalog), and both change together. |
 | `model_tier` | yes | `"inherit"` (caller's model), `"sonnet"`, `"opus"`, or `"haiku"`, matched to the reasoning depth needed. `tests/review/test_registry_docs.py` pins this vocabulary to the registry in both directions. |
 | `triage_criteria` | conditional | Required for `conditional`. Every bullet is an executable contract: `tests/review/test_criteria_coverage.py` needs one probe diff per criterion that dispatches through the real pipeline, so a criterion without a keyword or check to back it is reworded or given one. One signal-able clause per bullet, and probes are text-neutral (`TestProbeNeutrality` blanks commit and PR text) unless the criterion is about that text. |
 | `triage_keywords` | optional | Whole-word keywords (a trailing `*` declares a prefix) matched against commit messages without trailers, changed paths without repo-structural segments, the PR title and author-written body, the branch slug, linked-issue titles, and scoped patch text. Language-structural terms (`function`, `class`, `remove`) are banned by a registry test; use `triage_checks` for structure. The audited runs replay in `tests/review/test_triage_run_regressions.py`. |
@@ -116,7 +113,8 @@ Each rule names the test that holds it where one exists. One clause of why; the 
 | `require_php_source_file` | optional | Evidence gate: skip unless the domain's scope holds at least one non-test `.php` file (`plan_dispatch.py` layer 2). Used by the WordPress and WooCommerce reviewers. |
 | `triage_repository_keywords` | optional | Ambient repository-identity keywords matched against fetch remotes and the checkout basename. Opt in only when repository membership alone is sufficient for applicability. |
 | `min_added_lines` | optional | Skip when the non-test in-scope additions fall below this count. |
-| `secondary_domains`, `extra_scope`, `budget_override`, `file_history`, `max_history_commits` | optional | Extra scope domains; extra scope invocations (`["--base-ref-only"]`); a fixed tool-call budget for agents whose work does not scale with the diff; per-file git history in the prompt, and how many commits (default 5). |
+| `no_semantic_filter` | optional | Disable the semantic diff-noise filter for this agent's scope, so it sees every hunk. |
+| `secondary_domains`, `extra_scope`, `budget_override`, `file_history`, `max_history_commits` | optional | Extra scope domains; extra scope invocations (`["--base-ref-only"]`); a fixed tool-call budget for agents whose work does not scale with the diff; per-file git history in the prompt, and how many commits (default 15). |
 
 Adding a reviewer:
 
@@ -127,16 +125,9 @@ Adding a reviewer:
 
 Adding a command: create `commands/<name>.md` (an orchestrator that dispatches agents; use `plan_dispatch.py` for triage decisions), add it to `marketplace.json`, add a `TestXxx` class in `tests/commands/test_commands.py`, run `python3 scripts/generate_codex_compat.py` from the repository root and commit the adapter, and update the README table. Adding a skill: `skills/<name>/SKILL.md` with `name` and `description` frontmatter, registered the same way.
 
-## Cross-Repo Contracts: pirategoat-bot
+## Cross-Repo Contract: pirategoat-bot
 
-The `pirategoat-bot` Slack bot (`~/Work/a8c/pirategoat-bot`) wraps this plugin's review and Linear pipelines. **Before changing any integration surface here, read the bot's code first**: `src/orchestrator.js` (writes `review-context.json`, reads review output), `src/github.js` (maps verdicts to GitHub actions), `scripts/pr-review.py` (outer-pipeline prompt and verdict), `src/orchestrator-linear.js` and `src/messages-linear.js` (Linear results). The shared surfaces:
-
-- `review-context.json` and `issue-context.json`: the bot writes them; this plugin reads and enriches them. Field names, nesting, required paths, and the bot-owned `version: 1` key must match.
-- Outer-pipeline verdicts (`APPROVE`/`COMMENT`/`REQUEST_CHANGES`) are the bot's layer; this plugin's `block`/`request_changes`/`comment`/`approve` are the ledger's. `orchestration.py` maps between them at step 11.
-- Prompt template variables (`{{MERGE_BASE}}`, `{{GIT_RANGE}}`, and others in the bot's `prompts/`) reach this plugin through the review context.
-- Terminal marker: the bot treats any `pipeline-result.json` as complete and then reads `review-report.md`, so step 11 creates `pipeline-result.json` only after that exact report exists, with `report_path` naming it; `review-record.md` and `review-findings.md` are never terminal fallbacks.
-- Linear: the bot reads `pipeline-result.json` (`status`, `verdict`, `clarity_gate`, `clarity_gate_overridden`) and `clarity-assessment.json` (`summary`, `questions_for_author`). Step 8's clarity gate blocks implementation (`status: "blocked"`, `verdict: "needs_clarification"`) when a hard gate fails; the bot can override with `skip_clarity_gate: true` in `run-config.json`. `needs_more_info` means the investigation was inconclusive; `needs_clarification` means it succeeded but the issue lacks implementation clarity.
-- Reviewer `*.started` markers are a contract the bot's resume path scans; synthesis agents use a different suffix (`synthesis_lifecycle.MARKER_SUFFIX`) so they are never mistaken for reviewers.
+The `pirategoat-bot` Slack bot (`~/Work/a8c/pirategoat-bot`) wraps the review and Linear pipelines and shares files, verdict layers, prompt variables, and marker names with this plugin. Before changing any integration surface (`review-context.json`, `issue-context.json`, `pipeline-result.json`, `run-config.json`, `review-report.md`, reviewer markers, verdict values), read the bot's code first and `docs/pirategoat-bot.md` for what must stay in sync.
 
 ## Expected Failures
 

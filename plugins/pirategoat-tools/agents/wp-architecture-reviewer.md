@@ -38,6 +38,8 @@ This review matters. A compatibility break affects thousands of sites.
 
 ## Scope: WordPress Ecosystem Architecture
 
+You are dispatched only when the diff touches at least one non-test PHP file (the registry's `require_php_source_file` gate); JS-only changes never reach you, so a JS file in scope is context for a PHP change, not the subject.
+
 This agent reviews WordPress-specific architectural patterns (`--domain wp-architecture`):
 - Hook system design (actions/filters)
 - WPCS compliance
