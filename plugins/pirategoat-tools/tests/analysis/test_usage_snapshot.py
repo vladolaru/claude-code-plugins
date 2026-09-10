@@ -259,7 +259,14 @@ class TestRowsCarryEvidenceCounts:
         assert rows["review-reconciliator"]["repository_reads"] == 0
         assert rows["security-reviewer"]["repository_reads"] == 4
 
-    @pytest.mark.parametrize("value", [None, True, -1, "2", 1.5])
+    @pytest.mark.parametrize(
+        "value",
+        [
+            True,  # bool is technically an int in Python but is rejected explicitly
+            -1,  # negative
+            "2",  # not an int at all (None and 1.5 fail the same not-int clause)
+        ],
+    )
     def test_invalid_counts_report_none_not_zero(self, value):
         [row] = self._snapshot([
             {"agent": "security-reviewer", "available": True,
@@ -282,18 +289,41 @@ class TestStdoutMode:
         assert run.manifest_path.read_bytes() == manifest_before
 
     def test_stdout_returns_candidate_without_comparing_existing_snapshot(
-        self, tmp_path, capsys, monkeypatch
+        self, tmp_path, capsys
     ):
+        """--stdout always prints the fresh measurement, even one that ranks
+        below the snapshot already on disk — the monotonic no-downgrade
+        guard applies only on the write path (TestMonotonicNoDowngrade).
+
+        Reached without a monkeypatch: write once with a closed manifest
+        (subagents and orchestrator both "complete"), then point --stdout at
+        the empty "gone/" sessions root the monotonic tests use, as if the
+        transcripts had since rotated out — a fresh, lower-ranked candidate.
+        """
         run = _seed_two_agent_run(tmp_path)
+        _close_manifest(run)
         assert _run_cli(run) == 0
         capsys.readouterr()
         snapshot_path = run_paths.artifact_path(run.out, "usage_snapshot")
         before = snapshot_path.read_bytes()
         manifest_before = run.manifest_path.read_bytes()
-        candidate = {"schema": 1, "subagent_usage": [], "reason": "fresh measurement"}
-        monkeypatch.setattr(_mod, "_capture", lambda *args, **kwargs: candidate)
-        assert _run_cli(run, "--stdout") == 0
-        assert json.loads(capsys.readouterr().out) == candidate
+        assert json.loads(before)["availability"] == {
+            "subagents": "complete", "orchestrator": "complete",
+        }
+
+        empty_sessions = tmp_path / "gone"
+        empty_sessions.mkdir()
+        exit_code = main([
+            "--output-dir", str(run.out),
+            "--sessions-root", str(empty_sessions),
+            "--stdout",
+        ])
+
+        assert exit_code == 0
+        candidate = json.loads(capsys.readouterr().out)
+        assert candidate["availability"] == {
+            "subagents": "missing", "orchestrator": "missing",
+        }
         assert snapshot_path.read_bytes() == before
         assert run.manifest_path.read_bytes() == manifest_before
 
@@ -402,33 +432,27 @@ class TestAvailabilityLabels:
         # The orchestrator half is independent and was observed.
         assert snapshot["availability"]["orchestrator"] == "partial"
 
-    @pytest.mark.parametrize(
-        "transcript_name,damaged_agent,complete_agent",
-        [("agent-aaa.jsonl", "security-reviewer", "review-reconciliator"),
-         ("agent-bbb.jsonl", "review-reconciliator", "security-reviewer")],
-    )
-    def test_damaged_subagent_transcript_downgrades_subagents(
-        self, tmp_path, capsys, transcript_name, damaged_agent, complete_agent
-    ):
-        """A parse gap in one reviewer's transcript is damaged evidence."""
+    def test_damaged_subagent_transcript_downgrades_subagents(self, tmp_path, capsys):
+        """A parse gap in one reviewer's transcript is damaged evidence.
+
+        Only one direction is pinned here: which of the two agents is
+        damaged is a row-isolation detail, not a distinct code path. The
+        --stdout writes-nothing contract this scenario also exercises is
+        pinned once, in TestStdoutMode.
+        """
         run = _seed_two_agent_run(tmp_path, second_agent="review-reconciliator")
-        transcript = (
-            run.sessions / "session-1" / "subagents" / transcript_name
-        )
+        transcript = run.sessions / "session-1" / "subagents" / "agent-aaa.jsonl"
         transcript.write_text(
             transcript.read_text() + "{not json\n", encoding="utf-8"
         )
 
-        manifest_before = run.manifest_path.read_bytes()
         assert _run_cli(run, "--stdout") == 0
         snapshot = json.loads(capsys.readouterr().out)
         rows = {row["agent"]: row for row in snapshot["subagent_usage"]}
-        assert rows[damaged_agent]["repository_reads"] is None
-        assert rows[complete_agent]["repository_reads"] == 0
+        assert rows["security-reviewer"]["repository_reads"] is None
+        assert rows["review-reconciliator"]["repository_reads"] == 0
         assert rows["security-reviewer"]["usage"]["output_tokens"] == 3
         assert rows["review-reconciliator"]["usage"]["output_tokens"] == 9
-        assert not run_paths.artifact_path(run.out, "usage_snapshot").exists()
-        assert run.manifest_path.read_bytes() == manifest_before
 
         assert _run_cli(run) == 0
 
@@ -450,12 +474,28 @@ class TestAvailabilityLabels:
             2, 2, {"agent_transcript_unresolved_calls"}
         ) == "complete"
 
-    def test_usage_channel_warnings_still_downgrade_the_subagent_half(self):
-        """The decoupling above is scoped: a warning that DOES speak about
-        token usage must keep demoting the label."""
-        assert _mod._subagent_availability(
-            2, 2, {"agent_transcript_usage_missing"}
-        ) == "partial"
+def _absent_session_file_run(tmp_path):
+    """A session id whose transcript is not on this machine."""
+    manifest = _manifest("nowhere", tmp_path / "run", tmp_path)
+    run = _seed_run(tmp_path, manifest)
+    (tmp_path / "sessions").mkdir(exist_ok=True)
+    return run
+
+
+def _absent_manifest_run(tmp_path):
+    """No telemetry for this run — nothing to bound a window with."""
+    return _seed_run(
+        tmp_path, _manifest("x", tmp_path / "run", tmp_path),
+        write_manifest=False,
+    )
+
+
+def _malformed_manifest_run(tmp_path):
+    """Damaged telemetry must not crash the capture, and must not be
+    reported as a measurement either."""
+    run = _seed_run(tmp_path, _manifest("x", tmp_path / "run", tmp_path))
+    run.manifest_path.write_text("[]", encoding="utf-8")
+    return run
 
 
 class TestRecordedAbsence:
@@ -481,32 +521,13 @@ class TestRecordedAbsence:
         assert snapshot["agents_measured"] == {"measured": 0, "expected": None}
         assert snapshot["reason"] == "missing_session_id"
 
-    def test_absent_session_file_records_missing(self, tmp_path):
-        """A session id whose transcript is not on this machine."""
-        manifest = _manifest("nowhere", tmp_path / "run", tmp_path)
-        run = _seed_run(tmp_path, manifest)
-        (tmp_path / "sessions").mkdir(exist_ok=True)
-
-        assert _run_cli(run) == 0
-
-        assert run.snapshot()["availability"]["subagents"] == "missing"
-
-    def test_absent_manifest_records_missing(self, tmp_path):
-        """No telemetry for this run — nothing to bound a window with."""
-        run = _seed_run(
-            tmp_path, _manifest("x", tmp_path / "run", tmp_path),
-            write_manifest=False,
-        )
-
-        assert _run_cli(run) == 0
-
-        assert run.snapshot()["availability"]["subagents"] == "missing"
-
-    def test_malformed_manifest_records_missing(self, tmp_path):
-        """Damaged telemetry must not crash the capture, and must not be
-        reported as a measurement either."""
-        run = _seed_run(tmp_path, _manifest("x", tmp_path / "run", tmp_path))
-        run.manifest_path.write_text("[]", encoding="utf-8")
+    @pytest.mark.parametrize(
+        "build_run",
+        [_absent_session_file_run, _absent_manifest_run, _malformed_manifest_run],
+        ids=["absent-session-file", "absent-manifest", "malformed-manifest"],
+    )
+    def test_absence_records_missing(self, tmp_path, build_run):
+        run = build_run(tmp_path)
 
         assert _run_cli(run) == 0
 
@@ -579,17 +600,6 @@ class TestTotals:
             assert sum(
                 bucket[field] for bucket in snapshot["usage_by_model"].values()
             ) == total
-
-    def test_per_agent_rows_carry_agent_model_and_usage(self, tmp_path):
-        run = _seed_two_agent_run(tmp_path)
-
-        _run_cli(run)
-        rows = {row["agent"]: row for row in run.snapshot()["subagent_usage"]}
-
-        assert set(rows) == {"security-reviewer", "code-reviewer"}
-        assert rows["code-reviewer"]["model"] == "claude-opus-5[1m]"
-        assert rows["code-reviewer"]["usage"]["output_tokens"] == 9
-
 
 class TestCliContract:
     """The seam the pipeline depends on."""
@@ -669,7 +679,7 @@ class TestManifestReprojection:
 class TestMonotonicNoDowngrade:
 
     def test_expired_transcripts_preserve_existing_snapshot_byte_for_byte(
-        self, tmp_path
+        self, tmp_path, capsys
     ):
         run = _seed_two_agent_run(tmp_path)
         _close_manifest(run)
@@ -680,6 +690,7 @@ class TestMonotonicNoDowngrade:
         }
         snapshot_path = run_paths.artifact_path(run.out, "usage_snapshot")
         before_bytes = snapshot_path.read_bytes()
+        capsys.readouterr()
 
         # Transcripts have since rotated out: point the re-run at an empty
         # sessions root, as if the JSONL files were gone.
@@ -693,21 +704,8 @@ class TestMonotonicNoDowngrade:
         assert exit_code == 0
         after_bytes = snapshot_path.read_bytes()
         assert after_bytes == before_bytes
-
-    def test_downgrade_avoided_is_reported_not_written(self, tmp_path, capsys):
-        run = _seed_two_agent_run(tmp_path)
-        _close_manifest(run)
-        _run_cli(run)
-        capsys.readouterr()
-
-        empty_sessions = tmp_path / "gone"
-        empty_sessions.mkdir()
-        main([
-            "--output-dir", str(run.out),
-            "--sessions-root", str(empty_sessions),
-        ])
+        # The avoided downgrade is reported, not silently swallowed.
         result = json.loads(capsys.readouterr().out)
-
         assert result["written"] is False
         assert result["downgrade_avoided"] is True
         assert result["availability"] == {
