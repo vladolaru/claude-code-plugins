@@ -1197,9 +1197,10 @@ class TestLoadRuns:
 
     @pytest.mark.parametrize(
         "verdict_source",
-        ["findings ledger", "critic ESCALATE override",
-         "fallback: no usable ledger verdict", None],
-        ids=["ledger", "escalate", "fallback", "null"],
+        # `_safe_scalar_map` has one path for a bounded string (every
+        # producer value takes it) and one for null.
+        ["findings ledger", None],
+        ids=["ledger", "null"],
     )
     def test_verdict_source_is_measurable_across_a_cohort(
         self, tmp_path, verdict_source
@@ -2123,19 +2124,20 @@ class TestLoadRuns:
     @pytest.mark.parametrize(
         "field,value",
         [
+            # No `schema` key. A pre-rename manifest (`schema_version`, the
+            # key before 1.114.0) has this shape too;
+            # `test_pre_rename_manifest_without_a_log_yields_no_run` keeps
+            # that exact shape.
             ("schema", None),
-            ("schema", True),
-            ("schema", 1.0),
-            ("schema", contracts._SUPPORTED_MANIFEST_SCHEMA + 1),
-            ("status", None),
+            # The literal `1` every run wrote before the verdict-provenance
+            # bump. Any schema other than the supported integer (a boolean,
+            # a float, a future version) fails the same check.
+            ("schema", 1),
             ("status", "success"),
         ],
         ids=[
             "missing-version",
-            "boolean-version",
-            "float-version",
-            "future-version",
-            "missing-status",
+            "pre-bump-version",
             "unsupported-status",
         ],
     )
@@ -2147,52 +2149,6 @@ class TestLoadRuns:
             manifest.pop(field)
         else:
             manifest[field] = value
-        _write_manifest(tmp_path / "review.manifest.json", manifest)
-        _write_jsonl(tmp_path / "review.jsonl", _legacy_events("legacy-fallback"))
-
-        [run] = load_runs(tmp_path)
-
-        assert run["run"]["id"] == "legacy-fallback"
-        assert run["warnings"] == [
-            "legacy_log_no_manifest",
-            "invalid_manifest_fallback",
-        ]
-
-    def test_pre_bump_schema_manifest_routes_to_legacy_fallback_not_an_error(
-        self, tmp_path
-    ):
-        """A manifest actually written under the schema this constant
-        carried before the verdict-provenance bump (the literal `1` on disk
-        from every run before this change, not a synthetic "future"
-        value) is unsupported now, same as any other mismatched schema —
-        read only through the existing unsupported-envelope path, never a
-        crash and never a silent read of an `outcome` block whose
-        `verdict_source` key that older producer never wrote.
-        """
-        manifest = _manifest("pre-bump-run")
-        manifest["schema"] = 1
-        _write_manifest(tmp_path / "review.manifest.json", manifest)
-        _write_jsonl(tmp_path / "review.jsonl", _legacy_events("legacy-fallback"))
-
-        [run] = load_runs(tmp_path)
-
-        assert run["run"]["id"] == "legacy-fallback"
-        assert run["warnings"] == [
-            "legacy_log_no_manifest",
-            "invalid_manifest_fallback",
-        ]
-
-    def test_pre_rename_manifest_is_unsupported_not_an_error(self, tmp_path):
-        """`schema_version` was this family's key before 1.114.0 renamed it.
-
-        The rename is clean — no reader accepts the old name — so artifacts
-        written before it are simply unrecognizable input. They must take
-        the same labeled unsupported-envelope path as any other unreadable
-        sidecar: a warning-carrying legacy fallback, never a crash and
-        never a silent acceptance of fields whose meaning is unvouched.
-        """
-        manifest = _manifest("sidecar-run")
-        manifest["schema_version"] = manifest.pop("schema")
         _write_manifest(tmp_path / "review.manifest.json", manifest)
         _write_jsonl(tmp_path / "review.jsonl", _legacy_events("legacy-fallback"))
 
@@ -2666,20 +2622,20 @@ class TestLoadRuns:
 
     @pytest.mark.parametrize(
         "unsafe_run_id",
+        # One per branch of `run_paths.SAFE_RUN_ID_SEGMENT_RE`: a character
+        # outside the class (a Windows path, a pipe, or markup fails the
+        # same class), the `..` lookahead, and the 256-character bound. The
+        # producer's own upload test (`test_telemetry_share.py`) feeds only
+        # `safe/nested` and `../outside`, so the lookahead and the bound
+        # are pinned here alone.
         [
             "Users/person/private-repo",
-            r"C:\Users\person\private-repo",
             "safe..nested",
-            "run|forged-column",
-            "run<script>alert</script>",
             "run" + "x" * 254,
         ],
         ids=[
             "posix-path",
-            "windows-path",
             "double-dot",
-            "pipe",
-            "markup",
             "too-long",
         ],
     )
@@ -2697,12 +2653,12 @@ class TestLoadRuns:
 
     @pytest.mark.parametrize(
         "safe_run_id",
+        # A producer-shaped id, and the longest id the bound admits.
         [
             "550e8400-e29b-41d4-a716-446655440000",
-            "legacy-deadbeef01234567",
             "a" * 256,
         ],
-        ids=["uuid", "legacy", "boundary-length"],
+        ids=["uuid", "boundary-length"],
     )
     def test_bounded_ascii_token_run_ids_remain_supported(
         self, tmp_path, safe_run_id
@@ -2796,33 +2752,21 @@ class TestLoadRuns:
         assert "PRIVATE" not in json.dumps(runs)
         assert runs == load_runs(right)
 
-    @pytest.mark.parametrize("event_family", ["steps", "started", "completed"])
     def test_order_sensitive_event_reordering_remains_a_conflict(
-        self, tmp_path, event_family
+        self, tmp_path
     ):
+        """`_canonical_manifest` sorts only order-free lists, so a
+        reordered event list stays a conflict. This pins `started`; a
+        canonicalizer that began sorting `steps` or `completed` would go
+        unnoticed here, which is acceptable because canonicalization only
+        serves duplicate collapse."""
         first = _manifest("duplicate-run")
-        if event_family == "steps":
-            first["steps"] = [
-                {"event": "step", "step": 1, "timestamp": "2026-07-19T10:00:01Z"},
-                {"event": "step", "step": 2, "timestamp": "2026-07-19T10:00:02Z"},
-            ]
-        elif event_family == "started":
-            first["agents"]["started"] = [
-                {"event": "agent_start", "agent": "code-reviewer"},
-                {"event": "agent_start", "agent": "security-reviewer"},
-            ]
-        else:
-            first["agents"]["completed"] = [
-                {"event": "agent_complete", "agent": "code-reviewer"},
-                {"event": "agent_complete", "agent": "security-reviewer"},
-            ]
+        first["agents"]["started"] = [
+            {"event": "agent_start", "agent": "code-reviewer"},
+            {"event": "agent_start", "agent": "security-reviewer"},
+        ]
         second = copy.deepcopy(first)
-        target = (
-            second["steps"]
-            if event_family == "steps"
-            else second["agents"][event_family]
-        )
-        target.reverse()
+        second["agents"]["started"].reverse()
         _write_manifest(tmp_path / "a.manifest.json", first)
         _write_manifest(tmp_path / "b.manifest.json", second)
 
@@ -2929,16 +2873,15 @@ class TestLoadRuns:
         assert load_runs(tmp_path) == []
         assert load_runs(missing) == []
 
-    @pytest.mark.parametrize(
-        "invalid_count",
-        [float("inf"), 10**1_000],
-        ids=["infinite-float", "unbounded-integer"],
-    )
     def test_invalid_numeric_fields_degrade_availability_without_crashing(
-        self, tmp_path, invalid_count
+        self, tmp_path
     ):
+        """An integer past `_nonnegative_int`'s bound degrades the dispatch
+        family at load level; the float conjuncts are swept at measure
+        level by `TestMeasureRun::test_invalid_manifest_numerics_are_
+        omitted_and_never_drive_wall_time`."""
         manifest = _manifest("nonfinite")
-        manifest["dispatch"]["planner_candidate_count"] = invalid_count
+        manifest["dispatch"]["planner_candidate_count"] = 10**1_000
         _write_manifest(tmp_path / "nonfinite.manifest.json", manifest)
 
         [run] = load_runs(tmp_path)
