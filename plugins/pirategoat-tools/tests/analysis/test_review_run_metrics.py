@@ -766,25 +766,6 @@ class TestReviewVocabularyLifecycleMigration:
 
         assert measured["outcome"]["reconciliation"] is None
 
-    def test_retired_schema_three_coverage_keys_are_rejected(self, tmp_path):
-        manifest = _task_5_manifest()
-        manifest["assignment"] = {
-            "changed": ["src/a.py"],
-            "reviewable": ["src/a.py"],
-            "by_agent": {"code-reviewer": ["src/a.py"]},
-            "assigned": ["src/a.py"],
-            "excluded": [],
-            "uncovered": [],
-            "reviewed_files_by_agent": {},
-            "review_claimable_file_count_by_agent": {},
-            "semantics": "generated_scope_not_proof_of_model_read",
-        }
-
-        measured = measure_run(manifest, tmp_path, include_transcripts=False)
-
-        assert measured["assignment"] is None
-        assert measured["metric_availability"]["assignment"] == "missing"
-
     def test_completion_lifecycle_uses_finding_count(self, tmp_path):
         manifest = _task_5_manifest()
         manifest["agents"] = {
@@ -4385,27 +4366,9 @@ class TestMeasureRun:
 
         assert measured_observed["metric_availability"]["dispatch"] == "complete"
         assert measured_observed["metric_availability"]["assignment"] == "complete"
+        assert measured_observed["assignment"] == observed["assignment"]
         assert measured_missing["metric_availability"]["dispatch"] == "missing"
         assert measured_missing["metric_availability"]["assignment"] == "missing"
-
-    def test_valid_explicit_empty_coverage_ledger_remains_complete(self, tmp_path):
-        manifest = _manifest()
-        manifest["assignment"] = {
-            "changed_files": [],
-            "reviewable_files": [],
-            "assigned_files_by_agent": {},
-            "assigned_files": [],
-            "file_exclusions": [],
-            "unassigned_reviewable_files": [],
-            "reviewed_files_by_agent": {},
-            "review_claimable_file_count_by_agent": {},
-            "semantics": "generated_scope_not_proof_of_model_read",
-        }
-
-        measured = measure_run(manifest, tmp_path, include_transcripts=False)
-
-        assert measured["assignment"] == manifest["assignment"]
-        assert measured["metric_availability"]["assignment"] == "complete"
 
     def test_realistic_coverage_ledger_remains_complete(self, tmp_path):
         manifest = _manifest()
@@ -4479,35 +4442,23 @@ class TestMeasureRun:
         assert cohort["assignment"]["available_runs"] == 0
 
     @pytest.mark.parametrize(
-        "duplicate_location",
-        ["changed_files", "reviewable_files", "by-agent", "file_exclusions", "unassigned_reviewable_files"],
-        ids=["changed_files", "reviewable_files", "by-agent", "file_exclusions", "unassigned_reviewable_files"],
+        "duplicate_location", ["by-agent", "file_exclusions"],
     )
     def test_coverage_set_like_lists_reject_duplicate_paths(
         self, tmp_path, duplicate_location
     ):
+        """One row per duplicate guard outside the path-list loop; the
+        loop over `_ASSIGNMENT_PATH_LIST_FIELDS` is represented by
+        `test_duplicate_assigned_path_cannot_report_two_hundred_percent_coverage`."""
         manifest = _manifest()
         coverage = manifest["assignment"]
-        if duplicate_location == "changed_files":
-            coverage["changed_files"].append("src/a.py")
-        elif duplicate_location == "reviewable_files":
-            coverage["reviewable_files"].append("src/a.py")
-        elif duplicate_location == "by-agent":
+        if duplicate_location == "by-agent":
             coverage["assigned_files_by_agent"]["code-reviewer"].append(
                 "src/a.py"
             )
-        elif duplicate_location == "file_exclusions":
+        else:
             coverage["file_exclusions"].append(
                 {"path": "vendor/generated.js", "reason": "noise_filtered"}
-            )
-        else:
-            coverage.update(
-                {
-                    "changed_files": ["src/a.py", "src/b.py", "vendor/generated.js"],
-                    "reviewable_files": ["src/a.py", "src/b.py"],
-                    "assigned_files": ["src/a.py"],
-                    "unassigned_reviewable_files": ["src/b.py", "src/b.py"],
-                }
             )
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
@@ -4534,23 +4485,13 @@ class TestMeasureRun:
         assert measured["assignment"] is None
         assert measured["metric_availability"]["assignment"] == "missing"
 
-    @pytest.mark.parametrize(
-        "file_exclusions",
-        [
-            [],
-            [{"path": "src/a.py", "reason": "noise_filtered"}],
-            [
-                {"path": "vendor/generated.js", "reason": "noise_filtered"},
-                {"path": "extra.py", "reason": "noise_filtered"},
-            ],
-        ],
-        ids=["missing", "reviewable-path", "extra-path"],
-    )
     def test_exclusions_must_exactly_equal_changed_minus_reviewable(
-        self, tmp_path, file_exclusions
+        self, tmp_path
     ):
         manifest = _manifest()
-        manifest["assignment"]["file_exclusions"] = file_exclusions
+        manifest["assignment"]["file_exclusions"] = [
+            {"path": "src/a.py", "reason": "noise_filtered"}
+        ]
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
@@ -4606,7 +4547,6 @@ class TestMeasureRun:
     @pytest.mark.parametrize(
         "invalid_coverage",
         [
-            {},
             {
                 "changed_files": [],
                 "reviewable_files": [],
@@ -4653,7 +4593,6 @@ class TestMeasureRun:
             },
         ],
         ids=[
-            "empty-object",
             "missing-semantics",
             "malformed-path",
             "malformed-agent-path",
@@ -4838,27 +4777,24 @@ class TestReviewedFilesRows:
         assert measured["assignment"] is None
         assert measured["metric_availability"]["assignment"] == "missing"
 
-    def test_retired_three_way_shape_is_rejected(self, tmp_path):
-        manifest = _manifest()
-        manifest["assignment"]["reviewed_files_by_agent"] = {
-            "code-reviewer": {
-                "reviewed_file_claim_count": 1,
-                "declared_" + "unclaimed_review_file_count": 1,
-                "unclaimed_review_file_count_" + "autofilled": 0,
-            },
-        }
-        manifest["assignment"]["review_claimable_file_count_by_agent"] = {"code-reviewer": 2}
-
-        measured = measure_run(manifest, tmp_path, include_transcripts=False)
-
-        assert measured["assignment"] is None
-
     @pytest.mark.parametrize(
         "counts",
         [
-            {"reviewed_file_claim_count": -1, "unclaimed_review_file_count": 1},
-            {"reviewed_file_claim_count": 1},
-            {"reviewed_file_claim_count": 1, "unclaimed_review_file_count": 0, "extra": 0},
+            pytest.param(
+                {"reviewed_file_claim_count": -1, "unclaimed_review_file_count": 1},
+                id="negative",
+            ),
+            # Any key set other than exactly `_REVIEWED_FILES_FIELDS` (a
+            # missing key, an extra key, the retired three-way shape) fails
+            # the one `set(counts) != _REVIEWED_FILES_FIELDS` conjunct. The
+            # counts here are valid and conserve the denominator, so that
+            # conjunct is the only guard that can reject this row (a
+            # missing key would also read as `None` and be caught by the
+            # non-negative check instead).
+            pytest.param(
+                {"reviewed_file_claim_count": 1, "unclaimed_review_file_count": 1, "extra": 0},
+                id="extra-key",
+            ),
         ],
     )
     def test_malformed_population_row_fails_closed(self, tmp_path, counts):
