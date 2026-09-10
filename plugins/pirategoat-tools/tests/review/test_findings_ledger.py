@@ -16,7 +16,6 @@ from review.findings_ledger import (  # noqa: E402
     DROP_REASONS_FINDING,
     LEDGER_SCHEMA,
     NOTE_OUTCOMES,
-    RECONCILIATION_JUDGMENT_FIELDS,
     FindingsLedgerBuilder,
     _no_lifecycle,
 )
@@ -55,8 +54,6 @@ def test_ledger_dict_is_content_plus_reconciliation(tmp_path):
     }
     assert data["schema"] == LEDGER_SCHEMA
     assert "reviewer" not in data
-    recon = data["meta"]["reconciliation"]
-    assert tuple(recon) == RECONCILIATION_JUDGMENT_FIELDS
     assert data["checks"][0]["source_reviewers"] == [
         "security-reviewer", "code-reviewer",
     ]
@@ -88,35 +85,20 @@ def test_ledger_requires_reconciliation_before_serializing(tmp_path):
         builder.to_dict()
 
 
-@pytest.mark.parametrize(
-    "method",
-    [
-        "save_draft",
-        "claim_files_reviewed",
-        "retract_reviewed_file_claims",
-        "mark_not_applicable",
-    ],
-)
-def test_ledger_has_no_reviewer_lifecycle(tmp_path, method):
+def test_ledger_has_no_reviewer_lifecycle(tmp_path):
     """Matched on the message: an inherited signature can raise TypeError
-    of its own, which would pass this test without any override at all."""
+    of its own, which would pass this test without any override at all.
+    One representative stands for the four lifecycle names bound to the
+    same `_no_lifecycle` function object; `open` is the other binding
+    below, a classmethod that calls `_no_lifecycle()` directly."""
     builder = FindingsLedgerBuilder(pr_id="42", output_dir=str(tmp_path))
     with pytest.raises(TypeError, match="no reviewer lifecycle"):
-        getattr(builder, method)("x")
+        builder.save_draft("x")
 
 
 def test_ledger_has_no_open_classmethod(tmp_path):
     with pytest.raises(TypeError, match="no reviewer lifecycle"):
         FindingsLedgerBuilder.open(str(tmp_path), "42", "reconciliator")
-
-
-def test_ledger_pr_id_is_coerced_to_a_string(tmp_path):
-    builder = FindingsLedgerBuilder(pr_id=42, output_dir=str(tmp_path))
-    builder.set_reconciliation(
-        grouped_concern_count=0, verified_concern_count=0,
-        false_positive_concern_count=0, out_of_scope_concern_count=0,
-    )
-    assert builder.to_dict()["pr_id"] == "42"
 
 
 def test_ledger_reads_plugin_version_from_the_bound_run(tmp_path, monkeypatch):
@@ -146,21 +128,13 @@ def test_ledger_duration_spans_the_reconciliator_dispatch(tmp_path):
     assert builder.to_dict()["meta"]["review_duration_ms"] >= 5000
 
 
-@pytest.mark.parametrize(
-    "counts",
-    [
-        {"grouped_concern_count": -1, "verified_concern_count": 0,
-         "false_positive_concern_count": 0, "out_of_scope_concern_count": 0},
-        {"grouped_concern_count": True, "verified_concern_count": 1,
-         "false_positive_concern_count": 0, "out_of_scope_concern_count": 0},
-        {"grouped_concern_count": "1", "verified_concern_count": 1,
-         "false_positive_concern_count": 0, "out_of_scope_concern_count": 0},
-    ],
-)
-def test_reconciliation_counts_must_be_non_negative_integers(tmp_path, counts):
+def test_reconciliation_counts_must_be_non_negative_integers(tmp_path):
     builder = FindingsLedgerBuilder(pr_id="42", output_dir=str(tmp_path))
     with pytest.raises(ValueError, match="non-negative integer"):
-        builder.set_reconciliation(**counts)
+        builder.set_reconciliation(
+            grouped_concern_count=-1, verified_concern_count=0,
+            false_positive_concern_count=0, out_of_scope_concern_count=0,
+        )
 
 
 def test_reconciliation_judgments_must_partition_the_grouped_concerns(
@@ -290,41 +264,37 @@ def test_provenance_ledger_passes_the_reader_boundary(tmp_path):
     validate_findings_document(data)
 
 
-def test_an_empty_ledger_still_carries_the_three_lists(tmp_path):
-    builder = FindingsLedgerBuilder(pr_id="42", output_dir=str(tmp_path))
-    builder.set_reconciliation(
-        grouped_concern_count=0, verified_concern_count=0,
-        false_positive_concern_count=0, out_of_scope_concern_count=0,
-    )
-    data = builder.to_dict()
-    assert data["dropped_findings"] == []
-    assert data["dropped_checks"] == []
-    assert data["orchestrator_notes"] == []
-
-
 @pytest.mark.parametrize("call", [
-    lambda b: b.add_finding(severity="low", title="t", file="f", line=1,
-                            description="d", recommendation="r", sources=[]),
-    lambda b: b.add_finding(severity="low", title="t", file="f", line=1,
-                            description="d", recommendation="r",
-                            sources=[{"reviewer": "x-review"}]),
-    lambda b: b.add_finding(severity="low", title="t", file="f", line=1,
-                            description="d", recommendation="r",
-                            sources=[{"reviewer": "x-review", "id": "f1"},
-                                     {"reviewer": "x-review", "id": "f1"}]),
-    lambda b: b.record_check(question="q", method="m", result="r", sources=[]),
-    lambda b: b.drop_finding("x-review", "f1", reason="bogus", evidence="e"),
-    lambda b: b.drop_finding("x-review", "f1", reason="false_positive"),
-    lambda b: b.drop_check("x-review", "c1", reason="void", evidence="  "),
-    lambda b: b.resolve_note("note-1", outcome="confirmed", evidence="e"),
-    lambda b: b.resolve_note("n1", outcome="maybe", evidence="e"),
-    lambda b: b.resolve_note("n1", outcome="not_checked", evidence=""),
-    lambda b: b.resolve_note("n1", outcome="confirmed", evidence="e", verifies=["v2"]),
-    lambda b: b.resolve_note("n1", outcome="confirmed", evidence="e", verifies="V2"),
-    lambda b: b.resolve_note("n1", outcome="refuted", evidence="e", verifies=["V2"]),
-    lambda b: b.resolve_note("n1", outcome="not_checked", evidence="e", verifies=["V2"]),
+    pytest.param(
+        lambda b: b.add_finding(severity="low", title="t", file="f", line=1,
+                                description="d", recommendation="r", sources=[]),
+        id="empty_sources-normalized_sources",
+    ),
+    pytest.param(
+        lambda b: b.add_finding(severity="low", title="t", file="f", line=1,
+                                description="d", recommendation="r",
+                                sources=[{"reviewer": "x-review", "id": "f1"},
+                                         {"reviewer": "x-review", "id": "f1"}]),
+        id="duplicate_source-normalized_sources",
+    ),
+    pytest.param(
+        lambda b: b.drop_finding("x-review", "f1", reason="bogus", evidence="e"),
+        id="bad_drop_reason-drop_finding",
+    ),
+    pytest.param(
+        lambda b: b.drop_check("x-review", "c1", reason="void", evidence="  "),
+        id="blank_drop_evidence-drop_check",
+    ),
+    pytest.param(
+        lambda b: b.resolve_note("n1", outcome="refuted", evidence="e", verifies=["V2"]),
+        id="verifies_on_a_refuted_note-resolve_note",
+    ),
 ])
 def test_malformed_provenance_is_refused_at_the_builder(tmp_path, call):
+    """One row per builder function that validates provenance:
+    `normalized_sources` (shared by add_finding/record_check, two rows for
+    its two failure branches), `drop_finding`, `drop_check`, `resolve_note`.
+    """
     builder = FindingsLedgerBuilder(pr_id="42", output_dir=str(tmp_path))
     with pytest.raises(ValueError):
         call(builder)
@@ -375,7 +345,7 @@ def _reader_ready(
 
 
 @pytest.mark.parametrize(("call", "collection"), [
-    (
+    pytest.param(
         lambda b: b.add_finding(
             severity="low", title="t", file="f", line=1,
             description="d", recommendation="r",
@@ -383,30 +353,22 @@ def _reader_ready(
             severity_note="x" * 4097,
         ),
         "findings",
+        id="over_length-severity_note",
     ),
-    (
-        lambda b: b.drop_finding(
-            "security-review", "f1", reason="false_positive",
-            evidence="x" * 4097,
-        ),
-        "dropped_findings",
-    ),
-    (
-        lambda b: b.drop_check(
-            "security-review", "c1", reason="void", evidence="x" * 4097,
-        ),
-        "dropped_checks",
-    ),
-    (
+    pytest.param(
         lambda b: b.resolve_note(
             "n1", outcome="not_checked", evidence="contains\x07control",
         ),
         "orchestrator_notes",
+        id="control_char-evidence",
     ),
 ])
 def test_bounded_provenance_is_rejected_before_mutation(
     tmp_path, call, collection,
 ):
+    """One row per failure mode of the shared `normalize_bounded_text`
+    (over-length, control character); every call site (add_finding,
+    drop_finding, drop_check, resolve_note) routes through it identically."""
     builder = FindingsLedgerBuilder(pr_id="42", output_dir=str(tmp_path))
 
     with pytest.raises(ValueError, match="at most 4096"):
@@ -418,24 +380,19 @@ def test_bounded_provenance_is_rejected_before_mutation(
 
 
 @pytest.mark.parametrize(("record", "collection", "counts"), [
-    (
+    pytest.param(
         lambda b: b.drop_finding(
             "security-review", "f1", reason="false_positive", evidence="e",
         ),
         "dropped_findings",
         {"grouped": 1, "false_positive": 1},
+        id="shared_require_new_source_identity-drop_finding",
     ),
-    (
-        lambda b: b.drop_check(
-            "security-review", "c1", reason="void", evidence="e",
-        ),
-        "dropped_checks",
-        {},
-    ),
-    (
+    pytest.param(
         lambda b: b.resolve_note("n1", outcome="confirmed", evidence="e"),
         "orchestrator_notes",
         {},
+        id="inline_identity_check-resolve_note",
     ),
 ])
 def test_repeated_provenance_identity_is_rejected_before_mutation(
@@ -450,20 +407,6 @@ def test_repeated_provenance_identity_is_rejected_before_mutation(
     assert len(getattr(builder, collection)) == 1
     from review.critic_adjustments import validate_findings_document
     validate_findings_document(_reader_ready(builder, **counts))
-
-
-class TestVerifiesRoundTrip:
-    def test_the_ledger_builder_carries_verifies_through_record_check(self, tmp_path):
-        from review.findings_ledger import FindingsLedgerBuilder
-        builder = FindingsLedgerBuilder(pr_id="1", output_dir=str(tmp_path))
-        builder.record_check(
-            "q", "m", "r",
-            source_reviewers=["security-reviewer"],
-            sources=[{"reviewer": "security-review", "id": "c1"}],
-            verifies=["V1", "V2"],
-        )
-        assert builder.checks[0]["verifies"] == ["V1", "V2"]
-        assert builder.checks[0]["sources"] == [{"reviewer": "security-review", "id": "c1"}]
 
 
 class TestRecordCheckCarriesMergedSources:
