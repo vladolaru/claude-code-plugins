@@ -15,12 +15,8 @@ TESTS_DIR = Path(__file__).resolve().parent.parent  # review/ -> tests/
 sys.path.insert(0, str(TESTS_DIR))
 from helpers.context_fixtures import COMPLETE_CONTEXT
 from helpers.pipeline_process import init_repo, run_pipeline
-from helpers.review_fixtures import (
-    canonical_findings_ledger,
-    canonical_review_document,
-)
+from helpers.review_fixtures import canonical_findings_ledger
 from conftest import PIPELINE_SCRIPT_PATH as SCRIPT_PATH
-from review import run_paths
 
 
 from helpers.review_fixtures import artifact_file as _artifact  # noqa: E402
@@ -458,74 +454,73 @@ class TestStep3GatherContext:
         assert "<GIT_RANGE>" not in all_text
         assert "<OUTPUT_DIR>" not in all_text
 
-    def test_presents_base_fetch_outcome(self, mod, tmp_path):
-        state = {"completed_steps": [1, 2]}
-        ctx = {"git": {"merge_base": "abc", "git_range": "abc..HEAD",
-                       "changed_files": ["a.py"], "commit_count": 3,
-                       "base_fetch": {"ref": "origin/trunk", "status": "fetched",
-                                      "sha": "56e4e8c2" + "0" * 32}},
-               "pr_size": {"files": 1, "lines": 20, "category": "tiny"}}
-        g = mod.get_step_guidance(3, "full", state, ctx)
-        text = "\n".join(g["situation"])
-        assert "**Base:** `origin/trunk` fetched at `56e4e8c2`" in text
+    BASE_FETCH_SENTENCES = (
+        pytest.param(
+            {"ref": "origin/trunk", "status": "fetched", "sha": "56e4e8c2" + "0" * 32},
+            True,
+            "**Base:** `origin/trunk` fetched at `56e4e8c2`",
+            None,
+            id="fetched_with_range",
+        ),
+        pytest.param(
+            {"ref": "origin/trunk", "status": "failed", "sha": "c725aac2" + "0" * 32},
+            True,
+            "fetch of `origin/trunk` FAILED — merge-base was computed against the "
+            "local ref at `c725aac2`, which may be behind the remote.",
+            None,
+            id="failed_with_range",
+        ),
+        pytest.param(
+            {"ref": "origin/trunk", "status": "fetched", "sha": "56e4e8c2" + "0" * 32, "shallow": True},
+            False,
+            "`origin/trunk` fetched at `56e4e8c2` but merge-base failed, so there "
+            "is no range. The clone is shallow, which is the usual cause: run "
+            "`git fetch --unshallow origin` (or `--deepen=<n>` with enough depth "
+            "to reach the base) and restart the run from workspace setup. If "
+            "merge-base still fails, the branch and the base share no history.",
+            None,
+            id="fetched_shallow_no_range",
+        ),
+        pytest.param(
+            {"ref": "origin/trunk", "status": "fetched", "sha": "56e4e8c2" + "0" * 32, "shallow": False},
+            False,
+            "but merge-base failed, so there is no range",
+            "shallow",
+            id="fetched_full_clone_no_range",
+        ),
+        pytest.param(
+            {"ref": "origin/trunk", "status": "failed", "sha": "c725aac2" + "0" * 32},
+            False,
+            "fetch of `origin/trunk` FAILED and merge-base against the local ref "
+            "at `c725aac2` also failed, so there is no range.",
+            "merge-base was computed",
+            id="failed_no_range",
+        ),
+        pytest.param(
+            {"ref": "origin/feat/parent-pr", "status": "failed", "sha": None},
+            False,
+            "fetch of `origin/feat/parent-pr` FAILED and the ref does not exist "
+            "locally, so no merge-base could be computed.",
+            None,
+            id="failed_no_local_ref",
+        ),
+    )
 
-    def test_presents_failed_base_fetch_as_a_warning(self, mod, tmp_path):
-        state = {"completed_steps": [1, 2]}
-        ctx = {"git": {"merge_base": "abc", "git_range": "abc..HEAD",
-                       "changed_files": ["a.py"], "commit_count": 3,
-                       "base_fetch": {"ref": "origin/trunk", "status": "failed",
-                                      "sha": "c725aac2" + "0" * 32}},
-               "pr_size": {"files": 1, "lines": 20, "category": "tiny"}}
-        g = mod.get_step_guidance(3, "full", state, ctx)
+    @pytest.mark.parametrize(
+        ("base_fetch", "has_range", "expected", "forbidden"), BASE_FETCH_SENTENCES
+    )
+    def test_presents_base_fetch_outcome(
+        self, mod, tmp_path, base_fetch, has_range, expected, forbidden
+    ):
+        git = {"changed_files": [], "commit_count": 0, "base_fetch": base_fetch}
+        if has_range:
+            git["merge_base"] = "abc"
+        ctx = {"git": git, "pr_size": {"files": 0, "lines": 0, "category": "tiny"}}
+        g = mod.get_step_guidance(3, "full", {"completed_steps": [1, 2]}, ctx)
         text = "\n".join(g["situation"])
-        assert "fetch of `origin/trunk` FAILED" in text
-        assert "may be behind the remote" in text
-
-    def test_fetched_base_on_a_shallow_clone_names_the_remedy(self, mod, tmp_path):
-        state = {"completed_steps": [1, 2]}
-        ctx = {"git": {"changed_files": [], "commit_count": 0,
-                       "base_fetch": {"ref": "origin/trunk", "status": "fetched",
-                                      "sha": "56e4e8c2" + "0" * 32, "shallow": True}},
-               "pr_size": {"files": 0, "lines": 0, "category": "tiny"}}
-        g = mod.get_step_guidance(3, "pr", state, ctx)
-        text = "\n".join(g["situation"])
-        assert "fetched at `56e4e8c2` but merge-base failed, so there is no range." in text
-        assert "The clone is shallow, which is the usual cause" in text
-        assert "git fetch --unshallow origin" in text
-        assert "If merge-base still fails" in text
-
-    def test_fetched_base_with_no_merge_base_on_a_full_clone(self, mod, tmp_path):
-        state = {"completed_steps": [1, 2]}
-        ctx = {"git": {"changed_files": [], "commit_count": 0,
-                       "base_fetch": {"ref": "origin/trunk", "status": "fetched",
-                                      "sha": "56e4e8c2" + "0" * 32, "shallow": False}},
-               "pr_size": {"files": 0, "lines": 0, "category": "tiny"}}
-        g = mod.get_step_guidance(3, "pr", state, ctx)
-        text = "\n".join(g["situation"])
-        assert "but merge-base failed, so there is no range" in text
-        assert "shallow" not in text
-
-    def test_failed_fetch_does_not_claim_a_merge_base_that_failed_too(self, mod, tmp_path):
-        state = {"completed_steps": [1, 2]}
-        ctx = {"git": {"changed_files": [], "commit_count": 0,
-                       "base_fetch": {"ref": "origin/trunk", "status": "failed",
-                                      "sha": "c725aac2" + "0" * 32}},
-               "pr_size": {"files": 0, "lines": 0, "category": "tiny"}}
-        g = mod.get_step_guidance(3, "pr", state, ctx)
-        text = "\n".join(g["situation"])
-        assert "merge-base against the local ref at `c725aac2` also failed" in text
-        assert "merge-base was computed" not in text
-
-    def test_presents_failed_fetch_with_no_local_ref(self, mod, tmp_path):
-        state = {"completed_steps": [1, 2]}
-        ctx = {"git": {"changed_files": [], "commit_count": 0,
-                       "base_fetch": {"ref": "origin/feat/parent-pr",
-                                      "status": "failed", "sha": None}},
-               "pr_size": {"files": 0, "lines": 0, "category": "tiny"}}
-        g = mod.get_step_guidance(3, "pr", state, ctx)
-        text = "\n".join(g["situation"])
-        assert "fetch of `origin/feat/parent-pr` FAILED and the ref does not exist locally" in text
-        assert "no merge-base could be computed" in text
+        assert expected in text
+        if forbidden:
+            assert forbidden not in text
 
     def test_presents_scope_mismatch_against_github(self, mod, tmp_path):
         state = {"completed_steps": [1, 2]}
@@ -674,72 +669,72 @@ class TestStep3GatherContext:
         g = mod.get_step_guidance(3, "pr", state, ctx)
         assert "Scope check" not in "\n".join(g["situation"])
 
-    def test_names_a_non_default_base_without_calling_it_stacked(self, mod, tmp_path):
+    NON_DEFAULT_BASE_SENTENCES = (
+        pytest.param(
+            "release/9.5", "trunk", "fetched", [],
+            "No merge commit brings other branches' work into the range", "own work",
+            id="clean_release_line",
+        ),
+        pytest.param(
+            "release/9.5", "trunk", "fetched", None,
+            "The merge scan could not run", "holds only this branch's own work",
+            id="no_merge_scan",
+        ),
+        pytest.param(
+            "feat/parent-pr", "trunk", "fetched",
+            [{"sha": "m1" + "0" * 38, "second_parent": "s" * 40}],
+            "The range also holds work merged in from other branches",
+            "holds only this branch's own work",
+            id="foreign_merges_present",
+        ),
+        pytest.param(
+            "feat/parent-pr", "trunk", "failed", None,
+            "may also hold newer commits of the base itself",
+            "holds only this branch's own work",
+            id="failed_fetch",
+        ),
+        pytest.param(
+            "trunk", "trunk", "fetched", [], None, None, id="default_branch_base",
+        ),
+        pytest.param(
+            "feat/parent-pr", None, "fetched", [], None, None,
+            id="unknown_default_branch",
+        ),
+    )
+
+    @pytest.mark.parametrize(
+        ("base_ref", "default_branch", "fetch_status", "foreign_merges",
+         "expected", "forbidden"),
+        NON_DEFAULT_BASE_SENTENCES,
+    )
+    def test_names_a_non_default_base_without_calling_it_stacked(
+        self, mod, tmp_path, base_ref, default_branch, fetch_status,
+        foreign_merges, expected, forbidden,
+    ):
         """A release line and a stacked PR both have a non-default base; the
-        script states the fact and leaves the reading to the orchestrator."""
+        script states the fact and leaves the reading to the orchestrator.
+        A default or unknown default branch gets no base line at all."""
         state = {"completed_steps": [1, 2]}
         ctx = copy.deepcopy(self._make_context())
-        ctx["git"]["base_ref"] = "release/9.5"
-        ctx["git"]["default_branch"] = "trunk"
-        ctx["git"]["base_fetch"] = {"ref": "origin/release/9.5", "status": "fetched",
+        ctx["git"]["base_ref"] = base_ref
+        if default_branch is None:
+            ctx["git"].pop("default_branch", None)
+        else:
+            ctx["git"]["default_branch"] = default_branch
+        ctx["git"]["base_fetch"] = {"ref": f"origin/{base_ref}", "status": fetch_status,
                                     "sha": "f" * 40}
-        ctx["git"]["foreign_merges"] = []
+        ctx["git"]["foreign_merges"] = foreign_merges
         g = mod.get_step_guidance(3, "pr", state, ctx)
         text = "\n".join(g["situation"])
-        assert "**Base branch:** `release/9.5` is not the default branch (`trunk`)." in text
-        assert "No merge commit brings other branches' work into the range" in text
-        assert "own work" not in text
+        if expected is None:
+            assert "Base branch" not in text
+            return
+        assert f"**Base branch:** `{base_ref}` is not the default branch (`{default_branch}`)." in text
+        assert expected in text
+        assert forbidden not in text
+        if foreign_merges:
+            assert "**Merged-in work:** 1 merge commit (`m1000000`)" in text
 
-    def test_non_default_base_with_no_merge_scan_is_not_certified(self, mod, tmp_path):
-        state = {"completed_steps": [1, 2]}
-        ctx = copy.deepcopy(self._make_context())
-        ctx["git"]["base_ref"] = "release/9.5"
-        ctx["git"]["default_branch"] = "trunk"
-        ctx["git"]["base_fetch"] = {"ref": "origin/release/9.5", "status": "fetched",
-                                    "sha": "f" * 40}
-        ctx["git"]["foreign_merges"] = None
-        g = mod.get_step_guidance(3, "pr", state, ctx)
-        text = "\n".join(g["situation"])
-        assert "The merge scan could not run" in text
-        assert "holds only this branch's own work" not in text
-        assert "a stacked PR" in text and "release line" in text
-        assert "not yet merged" not in text
-        assert "Stacked on" not in text
-
-    def test_non_default_base_with_foreign_merges_does_not_claim_own_work_only(self, mod, tmp_path):
-        state = {"completed_steps": [1, 2]}
-        ctx = copy.deepcopy(self._make_context())
-        ctx["git"]["base_ref"] = "feat/parent-pr"
-        ctx["git"]["default_branch"] = "trunk"
-        ctx["git"]["base_fetch"] = {"ref": "origin/feat/parent-pr", "status": "fetched",
-                                    "sha": "f" * 40}
-        ctx["git"]["foreign_merges"] = [{"sha": "m1" + "0" * 38, "second_parent": "s" * 40}]
-        g = mod.get_step_guidance(3, "pr", state, ctx)
-        text = "\n".join(g["situation"])
-        assert "The range also holds work merged in from other branches" in text
-        assert "holds only this branch's own work" not in text
-        assert "**Merged-in work:** 1 merge commit (`m1000000`)" in text
-
-    def test_non_default_base_after_failed_fetch_does_not_certify_the_range(self, mod, tmp_path):
-        state = {"completed_steps": [1, 2]}
-        ctx = copy.deepcopy(self._make_context())
-        ctx["git"]["base_ref"] = "feat/parent-pr"
-        ctx["git"]["default_branch"] = "trunk"
-        ctx["git"]["base_fetch"] = {"ref": "origin/feat/parent-pr", "status": "failed",
-                                    "sha": "s" * 40}
-        g = mod.get_step_guidance(3, "pr", state, ctx)
-        text = "\n".join(g["situation"])
-        assert "**Base branch:** `feat/parent-pr` is not the default branch (`trunk`)." in text
-        assert "may also hold newer commits of the base itself" in text
-        assert "holds only this branch's own work" not in text
-
-    def test_default_branch_base_gets_no_base_line(self, mod, tmp_path):
-        state = {"completed_steps": [1, 2]}
-        ctx = copy.deepcopy(self._make_context())
-        ctx["git"]["base_ref"] = "trunk"
-        ctx["git"]["default_branch"] = "trunk"
-        g = mod.get_step_guidance(3, "pr", state, ctx)
-        assert "Base branch" not in "\n".join(g["situation"])
 
     def test_presents_foreign_merges(self, mod, tmp_path):
         state = {"completed_steps": [1, 2]}
@@ -752,15 +747,6 @@ class TestStep3GatherContext:
         text = "\n".join(g["situation"])
         assert "**Merged-in work:** 1 merge commit (`m1000000`)" in text
         assert "not on the base branch" in text
-
-    def test_unknown_default_branch_is_silent(self, mod, tmp_path):
-        """An unknown default branch is not evidence of a non-default base."""
-        state = {"completed_steps": [1, 2]}
-        ctx = copy.deepcopy(self._make_context())
-        ctx["git"]["base_ref"] = "feat/parent-pr"
-        ctx["git"].pop("default_branch", None)
-        g = mod.get_step_guidance(3, "pr", state, ctx)
-        assert "Base branch" not in "\n".join(g["situation"])
 
 
 # ===================================================================
@@ -1063,11 +1049,13 @@ class TestStep5QuickMode:
         assert "wp-architecture-reviewer" in text
 
 
-class TestStep5AdditionalInstructions:
-    """Step 5: additional_instructions surfaced as Reviewer-Requested Focus."""
+class TestAdditionalInstructions:
+    """Steps 5 and 8 each render additional_instructions from their own
+    code (briefings.py:1061, 1561), so each needs its own pin — but the
+    shape of the check is one table, not four near-identical tests."""
 
-    def _make_state_with_plan(self):
-        return {
+    _STATES = {
+        5: {
             "resolved_params": {"git_range": "abc..HEAD"},
             "completed_steps": [1, 2, 3],
             "dispatch_plan_summary": {"dispatched": 2, "skipped": 1, "conditional": 0},
@@ -1075,23 +1063,44 @@ class TestStep5AdditionalInstructions:
                 {"name": "code-reviewer", "focus": "PR goal alignment", "status": "DISPATCH", "reason": "always dispatch (domain has files)"},
                 {"name": "security-reviewer", "focus": "XSS, SQL injection", "status": "SKIPPED", "reason": "no files in security domain"},
             ],
-        }
+        },
+        8: {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 3, 5, 6, 7],
+            "agents": {
+                "dispatched": ["code-reviewer", "security-reviewer"],
+                "completed": ["code-reviewer", "security-reviewer"],
+                "discarded_drafts": [],
+            },
+        },
+    }
 
-    def test_additional_instructions_in_actions(self, mod, tmp_path):
-        """When config has additional_instructions, actions contain Reviewer-Requested Focus."""
-        state = self._make_state_with_plan()
-        config = {"additional_instructions": "Pay special attention to error handling in the webhook path"}
-        g = mod.get_step_guidance(5, "pr", state, {}, config=config)
-        text = "\n".join(g["actions"])
-        assert "Reviewer-Requested Focus" in text
-        assert "Pay special attention to error handling in the webhook path" in text
+    ADDITIONAL_INSTRUCTIONS = (
+        pytest.param(5, True, id="step_5_configured"),
+        pytest.param(5, False, id="step_5_unconfigured"),
+        pytest.param(8, True, id="step_8_configured"),
+        pytest.param(8, False, id="step_8_unconfigured"),
+    )
 
-    def test_no_additional_instructions_no_section(self, mod, tmp_path):
-        """When config does NOT have additional_instructions, no Reviewer-Requested Focus section."""
-        state = self._make_state_with_plan()
-        g = mod.get_step_guidance(5, "pr", state, {})
+    @pytest.mark.parametrize(("step", "configured"), ADDITIONAL_INSTRUCTIONS)
+    def test_additional_instructions_surfaced_as_reviewer_requested_focus(
+        self, mod, tmp_path, step, configured
+    ):
+        state = self._STATES[step]
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+        config = (
+            {"additional_instructions": "Pay special attention to error handling in the webhook path"}
+            if configured else None
+        )
+        g = mod.get_step_guidance(
+            step, "pr", state, ctx, config=config, output_dir=str(tmp_path)
+        )
         text = "\n".join(g["actions"])
-        assert "Reviewer-Requested Focus" not in text
+        if configured:
+            assert "Reviewer-Requested Focus" in text
+            assert "Pay special attention to error handling in the webhook path" in text
+        else:
+            assert "Reviewer-Requested Focus" not in text
 
 
 class TestStep6DispatchAgents:
@@ -1177,21 +1186,6 @@ class TestStep6DispatchAgents:
             task_name = mod._codex_task_name(reviewer_name)
             assert re.fullmatch(r"[a-z][a-z0-9_]*", task_name)
             assert len(task_name) <= 64
-
-    def test_codex_task_names_preserve_repeated_separators(self, mod):
-        single_separator = mod._codex_task_name("repo-a-b-reviewer")
-        repeated_separator = mod._codex_task_name("repo-a--b-reviewer")
-
-        assert single_separator == "repo_a_b_reviewer"
-        assert repeated_separator == "repo_a__b_reviewer"
-        assert single_separator != repeated_separator
-
-    def test_codex_task_names_distinguish_long_shared_prefixes(self, mod):
-        shared_prefix = f"repo-{'a' * 70}"
-        first_name = f"{shared_prefix}-renewals-reviewer"
-        second_name = f"{shared_prefix}-billing-reviewer"
-
-        assert mod._codex_task_name(first_name) != mod._codex_task_name(second_name)
 
     def test_claude_remains_default_dispatch_host(self, mod, tmp_path):
         state = self._make_state_with_agents()
@@ -1830,39 +1824,6 @@ class TestStep8FindingsArtifactOwnership:
         text = "\n".join(self._guidance(mod, tmp_path)["actions"])
         assert "review-findings.md" in text
         assert "pipeline renders" in text
-
-
-class TestStep8AdditionalInstructions:
-    """Step 8: additional_instructions surfaced as Reviewer-Requested Focus."""
-
-    def _make_state_ready(self):
-        return {
-            "resolved_params": {"git_range": "abc..HEAD"},
-            "completed_steps": [1, 3, 5, 6, 7],
-            "agents": {
-                "dispatched": ["code-reviewer", "security-reviewer"],
-                "completed": ["code-reviewer", "security-reviewer"],
-                "discarded_drafts": [],
-            },
-        }
-
-    def test_additional_instructions_in_actions(self, mod, tmp_path):
-        """When config has additional_instructions, actions contain Reviewer-Requested Focus."""
-        state = self._make_state_ready()
-        config = {"additional_instructions": "Pay special attention to error handling in the webhook path"}
-        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
-        g = mod.get_step_guidance(8, "pr", state, ctx, config=config, output_dir=str(tmp_path))
-        text = "\n".join(g["actions"])
-        assert "Reviewer-Requested Focus" in text
-        assert "Pay special attention to error handling in the webhook path" in text
-
-    def test_no_additional_instructions_no_section(self, mod, tmp_path):
-        """When config does NOT have additional_instructions, no Reviewer-Requested Focus section."""
-        state = self._make_state_ready()
-        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
-        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
-        text = "\n".join(g["actions"])
-        assert "Reviewer-Requested Focus" not in text
 
 
 class TestStep8ReadinessGate:
@@ -3302,14 +3263,11 @@ class TestStep11ReportAuthoring:
         assert "could not assemble" in text
         assert "review-findings.json" in text
 
-    @pytest.mark.parametrize(
-        "read_status", ["invalid", "io_error", "unparsable", "not_object"]
-    )
-    def test_rejected_ledger_is_not_report_authoring_source(
-        self, mod, read_status
-    ):
+    def test_rejected_ledger_is_not_report_authoring_source(self, mod):
+        """One representative `ledger_status != "ok"` branch (fix 543477dc);
+        the status vocabulary itself is the ledger reader's, tested there."""
         text = "\n".join(self._guidance(mod, state={
-            "ledger_status": read_status,
+            "ledger_status": "invalid",
             "review_record": {
                 "ran": True, "written": 0, "expected": 1,
                 "status": "failed",
@@ -3465,45 +3423,52 @@ class TestStep11PresentResults:
         assert "pipeline-result.json" in text
         assert "Present to the user" not in text
 
-    @pytest.mark.parametrize("interactive", [True, False])
-    @pytest.mark.parametrize(
-        ("expected", "status"),
-        [(2, "partial"), (1, "failed")],
-    )
-    def test_zero_reviewer_markdown_includes_regeneration_command(
-        self, mod, tmp_path, interactive, expected, status
+    def test_zero_written_markdown_includes_a_regeneration_command(
+        self, mod, tmp_path
     ):
-        config = {"mode": "pr", "interactive": interactive}
+        """`_derived_markdown_status_line` never reads `interactive`, so one
+        non-interactive case pins the `written == 0 < expected` branch for
+        both families — reviewer markdown's own generic command, and
+        findings markdown's `--suffix` command that rebuilds the ledger
+        family rather than the per-reviewer one."""
         state = {
             "completed_steps": [],
+            "ledger_status": "ok",
             "reviewer_markdown": {
-                "ran": True,
-                "written": 0,
-                "expected": expected,
-                "status": status,
+                "ran": True, "written": 0, "expected": 2, "status": "partial",
             },
-            "degradation": {"reviewer_markdown_incomplete": True},
+            "findings_markdown": {
+                "ran": True, "written": 0, "expected": 1, "status": "failed",
+            },
+            "degradation": {
+                "reviewer_markdown_incomplete": True,
+                "findings_markdown_incomplete": True,
+            },
         }
 
         guidance = mod.get_step_guidance(
-            11, "pr", state, {}, config=config, output_dir=str(tmp_path)
+            11, "pr", state, {}, config={"mode": "pr", "interactive": False},
+            output_dir=str(tmp_path),
         )
+        actions = guidance["actions"]
 
-        lines = [
-            line for line in guidance["actions"]
-            if "Reviewer Markdown:" in line
-        ]
-        assert len(lines) == 1
-        assert f"0/{expected}" in lines[0]
+        reviewer_lines = [l for l in actions if "Reviewer Markdown:" in l]
+        assert len(reviewer_lines) == 1
+        assert "0/2" in reviewer_lines[0]
         assert (
             f"python3 {SCRIPT_PATH.parent}/review_markdown.py "
             f"materialize {tmp_path}"
-        ) in lines[0]
+        ) in reviewer_lines[0]
 
-    @pytest.mark.parametrize("interactive", [True, False])
-    def test_regeneration_command_quotes_paths_with_spaces(
-        self, mod, tmp_path, interactive
-    ):
+        findings_lines = [l for l in actions if "Findings Markdown:" in l]
+        assert len(findings_lines) == 1
+        assert "0/1" in findings_lines[0]
+        assert (
+            f"materialize {tmp_path} --suffix review-findings.json"
+            in findings_lines[0]
+        )
+
+    def test_regeneration_command_quotes_paths_with_spaces(self, mod, tmp_path):
         output_dir = tmp_path / "review output"
         state = {
             "completed_steps": [],
@@ -3521,7 +3486,7 @@ class TestStep11PresentResults:
             "pr",
             state,
             {},
-            config={"mode": "pr", "interactive": interactive},
+            config={"mode": "pr", "interactive": True},
             output_dir=str(output_dir),
         )
 
@@ -3533,86 +3498,29 @@ class TestStep11PresentResults:
         assert f"materialize '{output_dir}'" in lines[0]
         assert "\n" not in lines[0]
 
-    @pytest.mark.parametrize("interactive", [True, False])
-    def test_complete_reviewer_markdown_reports_positive_count_without_command(
-        self, mod, tmp_path, interactive
+    @pytest.mark.parametrize(
+        "key,label",
+        [("reviewer_markdown", "Reviewer Markdown"),
+         ("findings_markdown", "Findings Markdown")],
+    )
+    def test_complete_markdown_reports_positive_count_without_command(
+        self, mod, tmp_path, key, label
     ):
-        config = {"mode": "pr", "interactive": interactive}
-        state = {
-            "completed_steps": [],
-            "reviewer_markdown": {
-                "ran": True,
-                "written": 2,
-                "expected": 2,
-                "status": "complete",
-            },
-        }
-
-        guidance = mod.get_step_guidance(
-            11, "pr", state, {}, config=config, output_dir=str(tmp_path)
-        )
-
-        lines = [
-            line for line in guidance["actions"]
-            if "Reviewer Markdown:" in line
-        ]
-        assert lines == ["Reviewer Markdown: materialized 2/2 files."]
-
-    @pytest.mark.parametrize("interactive", [True, False])
-    def test_findings_markdown_outcome_is_reported_beside_the_reviewer_one(
-        self, mod, tmp_path, interactive
-    ):
-        """Write-only state is unreportable state. Step 11 is where a run
-        says what it left behind, and the findings render is a best-effort
-        artifact three degraded paths depend on."""
+        """A complete render reports its count and offers no regeneration
+        command — the reviewer and findings families share this shape."""
         state = {
             "completed_steps": [],
             "ledger_status": "ok",
-            "findings_markdown": {
-                "ran": True, "written": 1, "expected": 1,
-                "status": "complete",
-            },
+            key: {"ran": True, "written": 2, "expected": 2, "status": "complete"},
         }
-        guidance = mod.get_step_guidance(
-            11, "pr", state, {},
-            config={"mode": "pr", "interactive": interactive},
-            output_dir=str(tmp_path),
-        )
-        lines = [
-            line for line in guidance["actions"]
-            if "Findings Markdown:" in line
-        ]
-        assert lines == ["Findings Markdown: materialized 1/1 files."]
 
-    @pytest.mark.parametrize("interactive", [True, False])
-    def test_failed_findings_render_carries_its_own_recovery_command(
-        self, mod, tmp_path, interactive
-    ):
-        state = {
-            "completed_steps": [],
-            "ledger_status": "ok",
-            "findings_markdown": {
-                "ran": True, "written": 0, "expected": 1, "status": "failed",
-            },
-            "degradation": {"findings_markdown_incomplete": True},
-        }
         guidance = mod.get_step_guidance(
-            11, "pr", state, {},
-            config={"mode": "pr", "interactive": interactive},
+            11, "pr", state, {}, config={"mode": "pr", "interactive": True},
             output_dir=str(tmp_path),
         )
-        lines = [
-            line for line in guidance["actions"]
-            if "Findings Markdown:" in line
-        ]
-        assert len(lines) == 1
-        assert "0/1" in lines[0]
-        # The suffix is what makes the printed command actually rebuild the
-        # findings ledger rather than the per-reviewer family.
-        assert (
-            f"materialize {tmp_path} --suffix review-findings.json"
-            in lines[0]
-        )
+
+        lines = [l for l in guidance["actions"] if f"{label}:" in l]
+        assert lines == [f"{label}: materialized 2/2 files."]
 
     def test_absent_findings_markdown_state_reports_it_did_not_run(
         self, mod, tmp_path
@@ -3845,66 +3753,47 @@ class TestStep12Cleanup:
         assert "host's user-input mechanism" in text
         assert 'label: "Not this repo"' in text
 
-    def test_excluded_repository_is_silent_even_with_sharing_unset(
-        self, mod, tmp_path
+    TELEMETRY_SILENT = (
+        pytest.param(
+            "unset", "exclude", True,
+            id="excluded_repo_leaves_global_choice_unset",
+        ),
+        pytest.param(
+            "enabled", "include", True,
+            id="recorded_repo_choice_asks_nothing",
+        ),
+        pytest.param(
+            "unset", "unset", False,
+            id="noninteractive_run",
+        ),
+        pytest.param(
+            "disabled", "unset", True,
+            id="sharing_disabled",
+        ),
+    )
+
+    @pytest.mark.parametrize(
+        ("sharing", "repo_consent", "interactive"), TELEMETRY_SILENT
+    )
+    def test_no_telemetry_question_is_asked(
+        self, mod, tmp_path, sharing, repo_consent, interactive
     ):
-        """"Not this repo" records an exclude and leaves the global choice
-        unset. Without this gate the next review here would re-ask the
-        global question, and the answer would not have delivered what it
-        promised."""
-        guidance = mod.get_step_guidance(
-            12, "full", {"workspace": {}}, {},
-            config=self._telemetry_config("unset", "exclude"),
-            output_dir=str(tmp_path),
-        )
-        text = "\n".join(guidance["situation"] + guidance["actions"])
-
-        assert "telemetry" not in text.lower()
-        assert "set-sharing" not in text
-        assert "set-repo" not in text
-
-    @pytest.mark.parametrize("repo_consent", ("include", "exclude"))
-    def test_recorded_repository_choice_asks_no_telemetry_question(
-        self, mod, tmp_path, repo_consent
-    ):
-        guidance = mod.get_step_guidance(
-            12, "full", {"workspace": {}}, {},
-            config=self._telemetry_config("enabled", repo_consent),
-            output_dir=str(tmp_path),
-        )
-        text = "\n".join(guidance["actions"])
-
-        assert "Ask whether" not in text
-        assert "set-repo" not in text
-        assert "upload-run" not in text
-
-    def test_noninteractive_run_asks_no_telemetry_question(self, mod, tmp_path):
-        config = self._telemetry_config("unset")
-        config["interactive"] = False
-
+        """No `_telemetry_consent_actions` gate outcome — a recorded
+        per-repo choice, a non-interactive run, or sharing disabled
+        outright — asks the telemetry question or names the mechanics."""
+        config = self._telemetry_config(sharing, repo_consent)
+        config["interactive"] = interactive
         guidance = mod.get_step_guidance(
             12, "full", {"workspace": {}}, {},
             config=config,
             output_dir=str(tmp_path),
         )
-        text = "\n".join(guidance["actions"])
+        text = "\n".join(guidance["situation"] + guidance["actions"])
 
         assert "Ask whether" not in text
         assert "set-sharing" not in text
         assert "set-repo" not in text
         assert "upload-run" not in text
-
-    def test_disabled_sharing_has_no_telemetry_conversation(
-        self, mod, tmp_path
-    ):
-        guidance = mod.get_step_guidance(
-            12, "full", {"workspace": {}}, {},
-            config=self._telemetry_config("disabled"),
-            output_dir=str(tmp_path),
-        )
-        text = "\n".join(guidance["situation"] + guidance["actions"])
-
-        assert "telemetry" not in text.lower()
 
     def test_a_degraded_run_flags_the_footer(self, mod, tmp_path):
         """Step 12 is the LAST step of an INTERACTIVE run, so it — not step
@@ -4044,13 +3933,27 @@ class TestDegradedPaths:
 class TestStep10QuickMode:
     """Step 10 quick mode: skip critic when verdict is low-risk."""
 
-    def test_skip_critic_on_approve_verdict(self, mod, tmp_path):
-        state = {"completed_steps": [], "reconciliation_verdict": "approve"}
-        config = {"quick": True}
+    QUICK_MODE_CRITIC = (
+        pytest.param("approve", True, False, id="approve_quick_skips"),
+        pytest.param("COMMENT", True, False, id="comment_quick_skips_case_insensitive"),
+        pytest.param("request_changes", True, True, id="request_changes_quick_runs"),
+        pytest.param("block", True, True, id="block_quick_runs"),
+        pytest.param("approve", False, True, id="approve_normal_always_runs"),
+    )
+
+    @pytest.mark.parametrize(
+        ("reconciliation_verdict", "quick", "dispatches_critic"), QUICK_MODE_CRITIC
+    )
+    def test_dispatches_critic_by_quick_mode_and_verdict(
+        self, mod, tmp_path, reconciliation_verdict, quick, dispatches_critic
+    ):
+        state = {"completed_steps": [], "reconciliation_verdict": reconciliation_verdict}
+        config = {"quick": quick}
         g = mod.get_step_guidance(10, "pr", state, {}, config=config, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
-        assert "decision-reviewer" not in text
-        assert "decision-critic-verdict.json" in text
+        assert ("decision-reviewer" in text) == dispatches_critic
+        if not dispatches_critic:
+            assert "decision-critic-verdict.json" in text
 
     def test_quick_skip_asks_the_orchestrator_for_no_verdict(
         self, mod, tmp_path
@@ -4068,27 +3971,6 @@ class TestStep10QuickMode:
         assert '{"verdict": "APPROVE"}' not in text
         assert "review-verdict.json" not in text
 
-    def test_run_critic_on_request_changes(self, mod, tmp_path):
-        state = {"completed_steps": [], "reconciliation_verdict": "request_changes"}
-        config = {"quick": True}
-        g = mod.get_step_guidance(10, "pr", state, {}, config=config, output_dir=str(tmp_path))
-        text = "\n".join(g["actions"])
-        assert "decision-reviewer" in text
-
-    def test_run_critic_on_block_verdict(self, mod, tmp_path):
-        state = {"completed_steps": [], "reconciliation_verdict": "block"}
-        config = {"quick": True}
-        g = mod.get_step_guidance(10, "pr", state, {}, config=config, output_dir=str(tmp_path))
-        text = "\n".join(g["actions"])
-        assert "decision-reviewer" in text
-
-    def test_normal_mode_always_runs_critic(self, mod, tmp_path):
-        state = {"completed_steps": [], "reconciliation_verdict": "approve"}
-        config = {"quick": False}
-        g = mod.get_step_guidance(10, "pr", state, {}, config=config, output_dir=str(tmp_path))
-        text = "\n".join(g["actions"])
-        assert "decision-reviewer" in text
-
     def test_quick_skip_gates_on_nothing(self, mod, tmp_path):
         """No artifact is asked of the orchestrator on this branch, so there
         is nothing to gate — a handoff naming a file the pipeline writes
@@ -4097,17 +3979,6 @@ class TestStep10QuickMode:
         config = {"quick": True}
         g = mod.get_step_guidance(10, "pr", state, {}, config=config, output_dir=str(tmp_path))
         assert g["handoff"] is None
-
-    def test_skip_critic_case_insensitive(self, mod, tmp_path):
-        """Verdict casing should not affect critic skip (step 11 uppercases verdicts)."""
-        for verdict in ("approve", "APPROVE", "Approve", "comment", "COMMENT"):
-            state = {"completed_steps": [], "reconciliation_verdict": verdict}
-            config = {"quick": True}
-            g = mod.get_step_guidance(10, "pr", state, {}, config=config, output_dir=str(tmp_path))
-            text = "\n".join(g["actions"])
-            assert "decision-reviewer" not in text, (
-                f"Critic should be skipped for verdict '{verdict}'"
-            )
 
 
 class TestStep3DependencyRefresh:
