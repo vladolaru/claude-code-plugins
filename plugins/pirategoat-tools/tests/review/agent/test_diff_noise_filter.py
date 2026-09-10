@@ -83,24 +83,45 @@ class TestFilterDiffIntegration:
 class TestBasicFiltering:
     """Verify existing filtering behavior is preserved.
 
-    One row per guard branch in `should_filter`; where multiple concrete
-    lines exercise the same branch (for example "+" vs "+   " for the
-    blank-line check, or the two code-line examples for the default
-    keep-everything-else path), only one representative is kept.
+    One row per guard branch in `should_filter` that can independently fail
+    (a mutation removing that branch turns its own row red). Two branches
+    are named in `should_filter`/`is_docblock_line` but do not meet that bar
+    today, so they get one representative row each rather than one per
+    branch — see the "not independently discriminating" note below:
+
+    - The diff-header guard (`if line.startswith('---') or line.startswith('+++')
+      or line.startswith('@@'): return False`) is one `if`, not a guard
+      chain — one row, not three. Verified by mutation: removing the whole
+      guard (or any one of its three disjuncts) leaves the row green, since
+      a header line also fails the "must start with + or -" check further
+      down and reaches the same default `return False`. The row stays as
+      the named representative for this guard; it does not independently
+      pin the guard's existence (see `code_line_kept` below, which pins the
+      same default path with a line that DOES start with "+").
+    - `is_docblock_line`'s `stripped.startswith('*/')` disjunct (the
+      "docblock end" case) is dead in practice: anything starting with
+      `*/` also starts with `*`, which the very next `if` already returns
+      True for. Verified by mutation: removing just the `*/` disjunct
+      leaves the row green, because `docblock_content`'s `startswith('*')`
+      branch catches it too. There is one row for that shared branch
+      (`docblock_content`), not a separate one for the unreachable `*/`
+      alternative.
+
+    A context line with no `+`/`-` prefix (the old `context_line_kept` row)
+    was removed for the same reason: mutating its guard also leaves it
+    green (it falls through to the identical default `return False` that
+    `code_line_kept` already pins), so it duplicated `code_line_kept`
+    rather than exercising a distinct branch.
     """
 
     @pytest.mark.parametrize("line, filtered", [
         pytest.param("+", True, id="blank_line"),
         pytest.param("+/**", True, id="docblock_start"),
         pytest.param("+ * Some docblock text", True, id="docblock_content"),
-        pytest.param("+ */", True, id="docblock_end"),
         pytest.param("+{", True, id="formatting_open_brace"),
         pytest.param("+}", True, id="formatting_close_brace"),
-        pytest.param("--- a/file.py", False, id="diff_header_removed_file"),
-        pytest.param("+++ b/file.py", False, id="diff_header_added_file"),
-        pytest.param("@@ -1,5 +1,5 @@", False, id="diff_header_hunk"),
+        pytest.param("--- a/file.py", False, id="diff_header"),
         pytest.param("+return $result;", False, id="code_line_kept"),
-        pytest.param(" unchanged code", False, id="context_line_kept"),
     ])
     def test_filtering(self, line, filtered):
         assert semantic_filter.should_filter(line) is filtered
