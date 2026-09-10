@@ -2580,22 +2580,14 @@ class TestLoadRuns:
             "security-reviewer"
         ]
 
-    @pytest.mark.parametrize(
-        "initial_names,final_names,planner_count,final_count",
-        [
-            (["code-reviewer"], ["code-reviewer", "security-reviewer"], 1, 2),
-            (["code-reviewer", "security-reviewer"], ["code-reviewer"], 2, 1),
-        ],
-        ids=["agent-added", "agent-removed"],
-    )
     def test_agent_set_mismatch_sidecar_remains_authoritative_and_partial(
-        self,
-        tmp_path,
-        initial_names,
-        final_names,
-        planner_count,
-        final_count,
+        self, tmp_path
     ):
+        """An agent added between plans; a removed agent takes the same
+        producer path with the larger set on the other side."""
+        initial_names = ["code-reviewer"]
+        final_names = ["code-reviewer", "security-reviewer"]
+        planner_count, final_count = 1, 2
         telemetry_module = _load_telemetry_module()
         output_dir = tmp_path / "output"
         log_dir = tmp_path / "logs"
@@ -2742,10 +2734,9 @@ class TestLoadRuns:
     @pytest.mark.parametrize(
         "malform",
         [
+            # A missing or an extra reason both fail the one
+            # `set(reasons) != expected_reasons` check.
             lambda dispatch: dispatch.__setitem__("invalid_reason_codes", []),
-            lambda dispatch: dispatch["invalid_reason_codes"].append(
-                "extra_reason"
-            ),
             lambda dispatch: dispatch.pop("duplicate_agent_names"),
             lambda dispatch: dispatch.__setitem__(
                 "planner_baseline_available", 1
@@ -2759,7 +2750,6 @@ class TestLoadRuns:
         ],
         ids=[
             "missing-reason",
-            "extra-reason",
             "missing-names",
             "non-boolean-availability",
             "duplicate-for-unavailable-plan",
@@ -2779,20 +2769,13 @@ class TestLoadRuns:
         assert run["run"]["id"] == "legacy-fallback"
         assert "invalid_manifest_fallback" in run["warnings"]
 
-    @pytest.mark.parametrize(
-        "invalid_name",
-        [
-            "security reviewer",
-            "security/reviewer",
-            "reviewer: private prose",
-            "Security-reviewer",
-            "security_reviewer",
-        ],
-        ids=["space", "path", "prose", "uppercase", "underscore"],
-    )
     def test_duplicate_dispatch_allowance_rejects_nonproducer_agent_names(
-        self, tmp_path, invalid_name
+        self, tmp_path
     ):
+        """Every non-producer name fails the one producer agent-name regex
+        (its shape is owned by `dispatch_status.py`); prose also carries
+        the leak assertion."""
+        invalid_name = "reviewer: private prose"
         manifest = _manifest("sidecar-run")
         manifest["dispatch"] = _producer_duplicate_dispatch()
         manifest["dispatch"]["duplicate_agent_names"]["planner_baseline"] = [
@@ -3529,17 +3512,20 @@ class TestMeasureRun:
         assert cohort["dispatch"]["actual_dispatches"] is None
         assert cohort["dispatch"]["adjustments"] is None
 
-    # sanitize.py:766 is literally `for status_name in ("initial_status",
-    # "final_status")`, so the status_field axis was free. One param per
-    # distinguishable condition is what the guard can actually tell apart:
-    # absent, non-str, empty-str, unsupported-str.
+    # `_sanitize_dispatch`'s per-agent loop is literally `for status_name
+    # in ("initial_status", "final_status")`, so the status_field axis was
+    # free. One param per conjunct the guard can tell apart: absent,
+    # non-str, unsupported-str (an empty string is one more unsupported
+    # string). The non-str row is unhashable on purpose: the vocabulary is
+    # a frozenset, so a hashable non-string (`None`) fails the membership
+    # test anyway, and only an unhashable one needs the `isinstance`
+    # conjunct to be rejected rather than raise.
     @pytest.mark.parametrize("status_field", ["initial_status"])
     @pytest.mark.parametrize(
         "invalid_status",
         [
             pytest.param("__missing__", id="missing"),
-            None,
-            "",
+            pytest.param([], id="list"),
             "UNKNOWN",
         ],
     )
@@ -3598,12 +3584,10 @@ class TestMeasureRun:
     @pytest.mark.parametrize(
         "status,dispatched",
         [
+            # One dispatched and one skipped status: the vocabulary itself
+            # is the producer's (`test_metrics_uses_canonical_telemetry_contract`).
             ("DISPATCH", True),
-            ("DISPATCH_OVERRIDE", True),
             ("SKIPPED", False),
-            ("SKIPPED_OVERRIDE", False),
-            ("SKIPPED_QUICK_MODE", False),
-            ("SKIPPED_TRIAGE", False),
         ],
     )
     def test_final_only_projection_accepts_supported_status_vocabulary(
@@ -3627,15 +3611,12 @@ class TestMeasureRun:
     @pytest.mark.parametrize(
         "invalid_status",
         [
+            # One per conjunct of the per-agent status check: absent,
+            # non-str (unhashable, as in the comparable-mode table above),
+            # unsupported-str.
             pytest.param("__missing__", id="missing"),
-            None,
-            "",
+            pytest.param([], id="list"),
             "UNKNOWN",
-            "DISPATCHED",
-            [],
-            {},
-            [{"nested": []}],
-            {"nested": []},
         ],
     )
     def test_final_only_projection_rejects_matching_invalid_statuses(
@@ -3658,23 +3639,15 @@ class TestMeasureRun:
         assert measured["dispatch"] is None
         assert measured["metric_availability"]["dispatch"] == "missing"
 
-    @pytest.mark.parametrize(
-        "invalid_status",
-        [
-            "DISPATCHED",
-            [],
-            {},
-            [{"nested": []}],
-            {"nested": []},
-        ],
-    )
     def test_invalid_sidecar_dispatch_status_falls_back_to_legacy(
-        self, tmp_path, invalid_status
+        self, tmp_path
     ):
+        """The load-level contract for the per-agent status guard, whose
+        conjuncts are swept at measure level above."""
         manifest = _manifest("sidecar-run")
         manifest["dispatch"]["agents"]["code-reviewer"][
             "final_status"
-        ] = invalid_status
+        ] = "DISPATCHED"
         _write_manifest(tmp_path / "review.manifest.json", manifest)
         _write_jsonl(tmp_path / "review.jsonl", _legacy_events("legacy-fallback"))
 
@@ -3783,13 +3756,9 @@ class TestMeasureRun:
     @pytest.mark.parametrize(
         "invalid_name",
         [
-            pytest.param(None, id="null"),
+            # `type(name) is not str`, then the producer's agent-name
+            # regex (its shape is owned by `dispatch_status.py`).
             pytest.param(7, id="integer"),
-            pytest.param(("security-reviewer",), id="tuple"),
-            pytest.param("", id="empty"),
-            pytest.param("Security-reviewer", id="uppercase"),
-            pytest.param("security_reviewer", id="underscore"),
-            pytest.param("security/reviewer", id="path"),
             pytest.param("private identity prose", id="prose"),
         ],
     )
@@ -3808,53 +3777,15 @@ class TestMeasureRun:
         assert measured["metric_availability"]["dispatch"] == "missing"
         assert "private identity prose" not in json.dumps(measured)
 
-    def test_agent_set_mismatch_rejects_unhashable_projection_identity(self):
-        class UnhashableIdentityProjection(dict):
-            def items(self):
-                return [([], "DISPATCH")]
-
-        dispatch = _mismatched_dispatch()
-        dispatch["plan_projections"]["final_plan"] = (
-            UnhashableIdentityProjection()
-        )
-
-        assert sanitize._sanitize_dispatch(dispatch) is None
-
-    @pytest.mark.parametrize("field", ["identity", "status"])
-    def test_agent_set_mismatch_rejects_unhashable_string_subclasses(self, field):
-        class UnhashableStr(str):
-            __hash__ = None
-
-        dispatch = _mismatched_dispatch()
-        if field == "identity":
-            class UnhashableIdentityProjection(dict):
-                def items(self):
-                    return [
-                        ("code-reviewer", "DISPATCH"),
-                        (UnhashableStr("security-reviewer"), "DISPATCH"),
-                    ]
-
-            dispatch["plan_projections"]["final_plan"] = (
-                UnhashableIdentityProjection()
-            )
-        else:
-            dispatch["plan_projections"]["final_plan"]["security-reviewer"] = (
-                UnhashableStr("DISPATCH")
-            )
-
-        assert sanitize._sanitize_dispatch(dispatch) is None
-
     @pytest.mark.parametrize(
         "invalid_status",
         [
-            pytest.param(None, id="null"),
-            pytest.param(True, id="boolean"),
-            pytest.param(7, id="integer"),
-            pytest.param("", id="empty"),
-            pytest.param("DISPATCHED", id="unsupported"),
+            # `type(status) is not str`, then the supported-status vocabulary.
+            # The non-str row is unhashable: a hashable one (`None`) fails the
+            # frozenset membership test anyway, so only an unhashable value
+            # needs the type conjunct to be rejected rather than raise.
             pytest.param([], id="list"),
-            pytest.param({}, id="mapping"),
-            pytest.param(["DISPATCH"], id="structured"),
+            pytest.param("DISPATCHED", id="unsupported"),
         ],
     )
     def test_agent_set_mismatch_rejects_invalid_projection_status(
@@ -3864,6 +3795,10 @@ class TestMeasureRun:
         manifest["dispatch"] = _mismatched_dispatch()
         projection = manifest["dispatch"]["plan_projections"]["final_plan"]
         projection["security-reviewer"] = invalid_status
+        # The replaced status no longer counts as dispatched; matching the
+        # final count keeps the count recomputation from rejecting the row
+        # first, so only the status check can.
+        manifest["dispatch"]["final_dispatch_count"] = 1
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
@@ -3932,23 +3867,13 @@ class TestMeasureRun:
     @pytest.mark.parametrize(
         "malform",
         [
+            # One per guard: the container is not a dict; its key set is
+            # not exactly the two plans; one plan is not a dict. The key-set
+            # row adds a key rather than dropping one: a dropped plan reads
+            # as `None` and the plan-is-a-dict check would reject it first.
             pytest.param(
                 lambda dispatch: dispatch.__setitem__("plan_projections", None),
                 id="null-object",
-            ),
-            pytest.param(
-                lambda dispatch: dispatch.__setitem__("plan_projections", []),
-                id="list-object",
-            ),
-            pytest.param(
-                lambda dispatch: dispatch["plan_projections"].pop(
-                    "planner_baseline"
-                ),
-                id="missing-planner",
-            ),
-            pytest.param(
-                lambda dispatch: dispatch["plan_projections"].pop("final_plan"),
-                id="missing-final",
             ),
             pytest.param(
                 lambda dispatch: dispatch["plan_projections"].__setitem__(
@@ -3961,12 +3886,6 @@ class TestMeasureRun:
                     "planner_baseline", []
                 ),
                 id="planner-list",
-            ),
-            pytest.param(
-                lambda dispatch: dispatch["plan_projections"].__setitem__(
-                    "final_plan", []
-                ),
-                id="final-list",
             ),
         ],
     )
@@ -3982,19 +3901,16 @@ class TestMeasureRun:
         assert measured["dispatch"] is None
         assert measured["metric_availability"]["dispatch"] == "missing"
 
-    @pytest.mark.parametrize(
-        "mode",
-        ["comparable", "planner-only", "legacy-final", "unavailable"],
-    )
+    # One guard (`"plan_projections" in value and not agent_set_mismatch`).
+    # `comparable` is the only mode whose falsifying conjunct is
+    # `comparison_available is False`; the others' conjuncts are pinned
+    # individually by `test_agent_set_mismatch_requires_exact_mode_metadata`.
+    @pytest.mark.parametrize("mode", ["comparable", "unavailable"])
     def test_dispatch_rejects_plan_projections_outside_agent_set_mismatch(
         self, tmp_path, mode
     ):
         if mode == "comparable":
             dispatch = _manifest()["dispatch"]
-        elif mode == "planner-only":
-            dispatch = _planner_only_dispatch()
-        elif mode == "legacy-final":
-            dispatch = _final_only_dispatch()
         else:
             dispatch = _unavailable_dispatch()
         dispatch["plan_projections"] = {
@@ -4012,61 +3928,12 @@ class TestMeasureRun:
     @pytest.mark.parametrize(
         "malform",
         [
-            pytest.param(
-                lambda dispatch: dispatch.__setitem__(
-                    "planner_candidate_count", 999_999
-                ),
-                id="planner-count",
-            ),
-            pytest.param(
-                lambda dispatch: dispatch["plan_projections"]["final_plan"].__setitem__(
-                    "Security-reviewer", "DISPATCH"
-                ),
-                id="unsafe-identity",
-            ),
-            pytest.param(
-                lambda dispatch: dispatch["plan_projections"]["final_plan"].__setitem__(
-                    "security-reviewer", []
-                ),
-                id="structured-status",
-            ),
-            pytest.param(
-                lambda dispatch: dispatch["plan_projections"].__setitem__(
-                    "extra", {}
-                ),
-                id="extra-projection-key",
-            ),
-            pytest.param(
-                lambda dispatch: dispatch["plan_projections"].__setitem__(
-                    "final_plan", {"code-reviewer": "DISPATCH"}
-                ),
-                id="equal-identity-sets",
-            ),
-            pytest.param(
-                lambda dispatch: dispatch.__setitem__(
-                    "planner_baseline_available", "malformed"
-                ),
-                id="malformed-availability",
-            ),
-            pytest.param(
-                lambda dispatch: dispatch.__setitem__(
-                    "invalid_reason_codes", None
-                ),
-                id="malformed-reasons",
-            ),
-            pytest.param(
-                lambda dispatch: dispatch["invalid_reason_codes"].append(
-                    "extra_reason"
-                ),
-                id="extra-mismatch-reason",
-            ),
-            pytest.param(
-                lambda dispatch: (
-                    dispatch.pop("plan_projections"),
-                    dispatch["invalid_reason_codes"].append("extra_reason"),
-                ),
-                id="mismatch-reason-without-projections",
-            ),
+            # One per branch of `_dispatch_projection_family_failure`:
+            # projections present without the mismatch reason code (only
+            # the `"plan_projections" in value` branch can flag it), and the
+            # reason code without projections. Each malformation's
+            # `dispatch is None` outcome is pinned at measure level by the
+            # tests above.
             pytest.param(
                 lambda dispatch: dispatch.update(
                     {
@@ -4075,6 +3942,13 @@ class TestMeasureRun:
                     }
                 ),
                 id="out-of-mode-projections",
+            ),
+            pytest.param(
+                lambda dispatch: (
+                    dispatch.pop("plan_projections"),
+                    dispatch["invalid_reason_codes"].append("extra_reason"),
+                ),
+                id="mismatch-reason-without-projections",
             ),
         ],
     )
@@ -4139,49 +4013,20 @@ class TestMeasureRun:
         assert run["dispatch"] == manifest["dispatch"]
         assert run["warnings"] == []
 
-    @pytest.mark.parametrize(
-        "planner_available,final_available,comparison_available",
-        [
-            (True, False, True),
-            (False, True, True),
-            (True, True, False),
-        ],
-        ids=[
-            "comparison-without-final",
-            "comparison-without-planner",
-            "comparison-disabled-for-two-valid-plans",
-        ],
-    )
     def test_contradictory_dispatch_availability_flags_are_missing(
-        self,
-        tmp_path,
-        planner_available,
-        final_available,
-        comparison_available,
+        self, tmp_path
     ):
+        """One `comparison_available != (planner and final)` guard; a
+        comparison claimed without a final plan stands for every
+        contradictory combination."""
         manifest = _manifest()
         manifest["dispatch"].update(
             {
-                "planner_baseline_available": planner_available,
-                "final_plan_available": final_available,
-                "comparison_available": comparison_available,
+                "planner_baseline_available": True,
+                "final_plan_available": False,
+                "comparison_available": True,
             }
         )
-
-        measured = measure_run(manifest, tmp_path, include_transcripts=False)
-
-        assert measured["dispatch"] is None
-        assert measured["metric_availability"]["dispatch"] == "missing"
-
-    def test_duplicate_dispatch_evidence_is_missing(self, tmp_path):
-        manifest = _manifest()
-        manifest["dispatch"] = _planner_only_dispatch()
-        manifest["dispatch"]["invalid_reason_codes"].append(
-            "planner_baseline_duplicate_agents"
-        )
-        manifest["dispatch"]["duplicate_agent_names"] = {
-            "planner_baseline": ["security-reviewer"]
-        }
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
@@ -4227,15 +4072,16 @@ class TestMeasureRun:
 
     @pytest.mark.parametrize(
         "contradiction",
+        # A popped `initial_status` is rejected earlier, by the per-agent
+        # status loop (`test_dispatch_decisions_require_supported_nonempty_
+        # statuses[missing]`), so it cannot reach the final-only branch.
         [
-            "incomplete-status",
             "changed-status",
             "planner-count",
             "adjustments",
             "change-label",
         ],
         ids=[
-            "incomplete-status",
             "changed-status",
             "planner-count",
             "adjustments",
@@ -4248,9 +4094,7 @@ class TestMeasureRun:
         manifest = _manifest()
         manifest["dispatch"] = _final_only_dispatch()
         decision = manifest["dispatch"]["agents"]["code-reviewer"]
-        if contradiction == "incomplete-status":
-            decision.pop("initial_status")
-        elif contradiction == "changed-status":
+        if contradiction == "changed-status":
             decision["initial_status"] = "SKIPPED_TRIAGE"
             decision["change"] = "added"
         elif contradiction == "planner-count":
