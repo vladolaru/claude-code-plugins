@@ -98,15 +98,22 @@ class TestDerivedVerdict:
     @pytest.mark.parametrize("payload,label", [
         (None, "no ledger at all"),
         ("{not json", "unparseable ledger"),
+        ("[1, 2]", "non-object ledger"),
     ])
     def test_an_unusable_ledger_falls_back_and_says_so(
         self, tmp_path, payload, label
     ):
-        """The other four spellings (non-object, null verdict, verdict
-        outside the vocabulary, no verdict key) are `read_findings_file`
-        states already pinned in
-        `TestCanonicalFindingsReader::test_only_absence_is_distinguished_from_being_unusable`,
-        and the non-object shape is its own row below."""
+        """The other three spellings (null verdict, verdict outside the
+        vocabulary, no verdict key) are `read_findings_file` states already
+        pinned in
+        `TestCanonicalFindingsReader::test_only_absence_is_distinguished_from_being_unusable`.
+
+        The `[1, 2]` row is the one finalize-layer pin of a fixed crash: a
+        valid-JSON, non-object ledger used to raise `AttributeError` past
+        `validate_findings_document`'s dict guard and kill finalize before
+        `pipeline-result.json` was ever written, instead of falling back
+        the way every other unusable shape does.
+        """
         (tmp_path / "review-report.md").write_text("# report")
         if payload is not None:
             (tmp_path / "review-findings.json").write_text(payload)
@@ -118,13 +125,6 @@ class TestDerivedVerdict:
             "no usable verdict in review-findings.json" in note
             for note in result["degradation_notes"]
         ), label
-
-    def test_a_non_object_ledger_does_not_crash_finalize(self, tmp_path):
-        """The shape that used to raise AttributeError past the guard and
-        kill finalize before pipeline-result.json was ever written."""
-        (tmp_path / "review-report.md").write_text("# report")
-        (tmp_path / "review-findings.json").write_text("[1, 2]")
-        assert self._finalize(tmp_path)["status"] == "degraded"
 
     def test_a_stale_review_verdict_file_is_ignored_entirely(self, tmp_path):
         """Nothing reads the artifact any more. A leftover one from an
