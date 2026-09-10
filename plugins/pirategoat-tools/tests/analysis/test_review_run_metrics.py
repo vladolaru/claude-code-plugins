@@ -34,7 +34,6 @@ from review import run_paths, telemetry_share  # noqa: E402
 from helpers.pipeline_process import init_bare_repo  # noqa: E402
 from review_metrics import (  # noqa: E402
     cli,
-    cohort,
     contracts,
     load,
     measure,
