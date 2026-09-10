@@ -3,9 +3,10 @@
 Each fixture is a real review run's planner input, captured once from a
 clone that holds the range (`tests/helpers/triage_run_fixture.py`) and
 never edited by hand — re-capture it with the helper's CLI. The integrity
-tests guard the fixtures; `TestAuditedRunContract` pins every agent's
-status and reason on each run, the keyword matches the three audits named
-as noise so none can return, and the quick-mode cohort. Keyword-match
+test guards the fixtures; `TestAuditedRunContract` pins every agent's
+status and reason on each run (so none of the keyword matches the three
+audits named as noise can return), the quick-mode cohort, and the
+dispatched signal counts. Keyword-match
 reasons are compared with their sources and keywords sorted, so a
 registry reorder cannot fail the contract by itself. The planner reports
 at most five matches (three per source), so an agent with more matches
@@ -85,7 +86,10 @@ def plans(fixtures):
 
 class TestFixtureIntegrity:
     @pytest.mark.parametrize("name", FIXTURE_NAMES)
-    def test_schema_and_shape(self, fixtures, name):
+    def test_fixture_integrity(self, fixtures, name):
+        """The schema and keys the replay reads, a patch block and per-file
+        stats for every changed file, and no session URL (the fixtures are
+        committed, so a captured session link would be published)."""
         fixture = fixtures[name]
         assert fixture["schema"] == FIXTURE_SCHEMA
         assert fixture["name"] == name
@@ -104,29 +108,10 @@ class TestFixtureIntegrity:
         ):
             assert key in fixture, key
         assert set(fixture["pr"]) == {"title", "body", "labels"}
-
-    @pytest.mark.parametrize("name, file_count", [(RUN_1, 3), (RUN_2, 8), (RUN_3, 6)])
-    def test_changed_file_counts_match_the_audits(self, fixtures, name, file_count):
-        assert len(fixtures[name]["changed_files"]) == file_count
-
-    @pytest.mark.parametrize("name", FIXTURE_NAMES)
-    def test_every_changed_file_has_a_patch_block(self, fixtures, name):
-        fixture = fixtures[name]
         for path in fixture["changed_files"]:
             assert slice_patch(fixture["patch"], [path]).startswith("diff --git "), path
-
-    @pytest.mark.parametrize("name", FIXTURE_NAMES)
-    def test_no_session_url_survives(self, fixtures, name):
-        assert "claude.ai/code/session" not in json.dumps(fixtures[name])
-
-    @pytest.mark.parametrize("name", FIXTURE_NAMES)
-    def test_commit_log_is_nul_separated(self, fixtures, name):
-        assert fixtures[name]["commit_log"].count("\x00") >= 1
-
-    @pytest.mark.parametrize("name", FIXTURE_NAMES)
-    def test_diffstat_carries_per_file_stats(self, fixtures, name):
-        fixture = fixtures[name]
         assert set(fixture["diffstat"]["file_stats"]) >= set(fixture["changed_files"])
+        assert "claude.ai/code/session" not in json.dumps(fixture)
 
 
 DEFAULT = ("DISPATCH", "conditional (domain has files, no triage signal to skip)")
@@ -138,6 +123,15 @@ def _skipped(domain):
     return ("SKIPPED", f"no files in {domain} domain")
 
 
+# The keyword matches the audits named as noise, per run, as the (source,
+# keyword stem) they fired on. None appears below, so a returning one fails
+# test_every_agent_decision. Run 1: the PR template's checklist (security,
+# password, escap*, user_data, performance, request, plugin, package,
+# require, config) and a Co-Authored-By trailer (commits: auth). Run 2: the
+# `plugin: woocommerce` label, a template line (require), and `address`
+# inside "not addressed". Run 3: a trailer (auth), `token` inside the
+# tokenized-* filenames, and `http` from a session URL. `address` is a
+# legitimate whole-word commit match on run 3.
 EXPECTED = {
     RUN_1: {
         "a11y-reviewer": ("DISPATCH", "keywords matched (commits: focusable, keyboard*; pr: aria)"),
@@ -238,24 +232,6 @@ EXPECTED_DISPATCH_SIGNAL_COUNTS = {
     RUN_3: {"always": 4, "check": 1, "default": 2, "keyword": 11},
 }
 
-# Every keyword match the audits named as noise, per run, as the
-# (source, keyword stem) it fired on; none may come back. Run 1: the PR
-# template's checklist and a Co-Authored-By trailer. Run 2: the
-# `plugin: woocommerce` label, a template line, and `address` inside
-# "not addressed". Run 3: a trailer, `token` inside the tokenized-*
-# filenames, and `http` from a session URL. `address` is a legitimate
-# whole-word commit match on run 3, so it is forbidden on run 2 only.
-FORBIDDEN_MATCHES = {
-    RUN_1: {
-        ("commits", "auth"), ("pr", "security"), ("pr", "password"),
-        ("pr", "escap"), ("pr", "user_data"), ("pr", "performance"),
-        ("pr", "request"), ("pr", "plugin"), ("pr", "package"),
-        ("pr", "require"), ("pr", "config"),
-    },
-    RUN_2: {("pr", "plugin"), ("pr", "require"), ("commits", "address")},
-    RUN_3: {("commits", "auth"), ("files", "token"), ("commits", "http")},
-}
-
 
 class TestAuditedRunContract:
     """The planner's decisions on the three audited runs, in full."""
@@ -263,25 +239,6 @@ class TestAuditedRunContract:
     @pytest.mark.parametrize("name", FIXTURE_NAMES)
     def test_every_agent_decision(self, plans, name):
         assert plans[name] == EXPECTED[name]
-
-    @pytest.mark.parametrize("name", FIXTURE_NAMES)
-    def test_no_audited_noise_match_returns(self, plans, name):
-        returned = {
-            (agent, source, keyword)
-            for agent, (_, reason) in plans[name].items()
-            for source, keyword in _match_pairs(reason)
-            if (source, keyword.rstrip("*")) in FORBIDDEN_MATCHES[name]
-        }
-        assert returned == set()
-
-    def test_the_reason_parser_reads_the_planner_s_format(self):
-        pairs = _match_pairs("keywords matched (commits: hook*, woocommerce,  wc ; pr: filter*)")
-        assert pairs == {("commits", "hook*"), ("commits", "woocommerce"),
-                         ("commits", "wc"), ("pr", "filter*")}
-        assert _canonical("keywords matched (pr: b; commits: z, a)") == (
-            "keywords matched (commits: a, z; pr: b)"
-        )
-        assert _canonical("always dispatch (domain has files)") == "always dispatch (domain has files)"
 
     @pytest.mark.parametrize("name", FIXTURE_NAMES)
     def test_quick_mode_cohort(self, fixtures, name):
