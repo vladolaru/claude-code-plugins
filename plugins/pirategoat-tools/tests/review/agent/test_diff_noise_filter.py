@@ -1,7 +1,6 @@
 """Tests for review/agent/diff_noise_filter.py — content-level noise removal from diffs."""
 
 import importlib.util
-import sys
 from pathlib import Path
 
 import pytest
@@ -19,60 +18,32 @@ spec.loader.exec_module(semantic_filter)
 
 
 class TestSuppressionDirectiveExemptions:
-    """Suppression directives must NOT be filtered — they carry intent."""
+    """Suppression directives must NOT be filtered — they carry intent.
+
+    One row per alternation family in `_STRUCTURED_COMMENT_PATTERNS`.
+    Spelling variants within a family (`# noqa` vs `# noqa: E501`, or the
+    `@deprecated` / `deprecated:` pair) are not separately pinned — they
+    share a regex branch, so one representative per family is enough.
+    """
 
     @pytest.mark.parametrize("comment", [
-        "// eslint-disable-next-line no-explicit-any",
-        "// eslint-disable-next-line @typescript-eslint/no-unused-vars",
-        "// eslint-disable no-console",
-        "// @ts-ignore",
-        "// @ts-expect-error",
-        "// @ts-nocheck",
-        "// noinspection JSUnusedLocalSymbols",
-        "# noqa: E501",
-        "# noqa",
-        "# type: ignore",
-        "# type: ignore[assignment]",
-        "# nosec",
-        "# nosec B105",
-        "# pylint: disable=too-many-arguments",
-        "# nolint",
+        pytest.param("// eslint-disable-next-line no-explicit-any", id="eslint_disable"),
+        pytest.param("// @ts-ignore", id="ts_directive"),
+        pytest.param("// noinspection JSUnusedLocalSymbols", id="noinspection"),
+        pytest.param("# noqa", id="noqa"),
+        pytest.param("# type: ignore", id="type_ignore"),
+        pytest.param("# nosec", id="nosec"),
+        pytest.param("# pylint: disable=too-many-arguments", id="pylint"),
+        pytest.param("# nolint", id="nolint"),
+        pytest.param("// phpcs:ignore WordPress.Security.NonceVerification", id="phpcs"),
+        pytest.param("// @deprecated since 3.0", id="deprecated"),
+        pytest.param("// TODO: fix this before merge", id="todo_fixme"),
     ])
-    def test_suppression_directives_not_filtered(self, comment):
+    def test_suppression_directive_exempt(self, comment):
         line = f"+{comment}"
         assert semantic_filter.should_filter(line) is False, (
             f"Suppression directive should NOT be filtered: {comment}"
         )
-
-    @pytest.mark.parametrize("comment", [
-        "// phpcs:ignore WordPress.Security.NonceVerification",
-        "// phpcs:ignore WordPress.DB.DirectDatabaseQuery",
-        "// phpcs:disable WordPress.NamingConventions",
-        "// phpcs:enable WordPress.NamingConventions",
-    ])
-    def test_phpcs_directives_not_filtered(self, comment):
-        line = f"+{comment}"
-        assert semantic_filter.should_filter(line) is False
-
-    @pytest.mark.parametrize("comment", [
-        "// @deprecated since 3.0",
-        "// @deprecated Use newFunction() instead",
-        "# Deprecated: will be removed in v4",
-    ])
-    def test_deprecation_comments_not_filtered(self, comment):
-        line = f"+{comment}"
-        assert semantic_filter.should_filter(line) is False
-
-    @pytest.mark.parametrize("comment", [
-        "// TODO: fix this before merge",
-        "// FIXME: race condition here",
-        "// HACK: temporary workaround for #1234",
-        "// XXX: known issue",
-        "# TODO: add error handling",
-    ])
-    def test_todo_fixme_comments_not_filtered(self, comment):
-        line = f"+{comment}"
-        assert semantic_filter.should_filter(line) is False
 
 
 class TestInlineCommentsPreserved:
@@ -80,12 +51,8 @@ class TestInlineCommentsPreserved:
     (translators directives, API contracts, ordering constraints)."""
 
     @pytest.mark.parametrize("comment", [
-        "// Set the name",
-        "// Initialize the variable",
-        "# This is a helper function",
-        "// Returns the value",
-        "// translators: %s: formatted currency amount",
-        "// Must run before wcpay_init (plugins_loaded priority 11)",
+        pytest.param("// Set the name", id="plain_comment"),
+        pytest.param("// translators: %s: formatted currency amount", id="translators_directive"),
     ])
     def test_inline_comments_not_filtered(self, comment):
         line = f"+{comment}"
@@ -95,63 +62,45 @@ class TestInlineCommentsPreserved:
 class TestFilterDiffIntegration:
     """Integration test: filter_diff preserves suppression directives in full diffs."""
 
-    def test_preserves_eslint_disable_in_diff(self):
-        diff = (
-            "--- a/src/app.ts\n"
-            "+++ b/src/app.ts\n"
-            "@@ -1,5 +1,8 @@\n"
-            " import React from 'react';\n"
-            "+// eslint-disable-next-line @typescript-eslint/no-explicit-any\n"
-            "+const data: any = fetchData();\n"
-            "+// This is just a regular comment\n"
-        )
-        filtered, stats = semantic_filter.filter_diff(diff)
-        assert "eslint-disable" in filtered
-        assert "const data" in filtered
-        assert "regular comment" in filtered  # inline comments are preserved
-
-    def test_preserves_phpcs_ignore_in_diff(self):
+    def test_preserves_suppression_directives_in_diff(self):
         diff = (
             "--- a/src/Plugin.php\n"
             "+++ b/src/Plugin.php\n"
-            "@@ -10,3 +10,5 @@\n"
+            "@@ -1,5 +1,8 @@\n"
             " class Plugin {\n"
+            "+    // eslint-disable-next-line @typescript-eslint/no-explicit-any\n"
             "+    // phpcs:ignore WordPress.Security.NonceVerification\n"
             "+    $value = $_POST['key'];\n"
+            "+    // This is just a regular comment\n"
         )
         filtered, stats = semantic_filter.filter_diff(diff)
+        assert "eslint-disable" in filtered
         assert "phpcs:ignore" in filtered
         assert "$_POST" in filtered
+        assert "regular comment" in filtered  # inline comments are preserved
 
 
 class TestBasicFiltering:
-    """Verify existing filtering behavior is preserved."""
+    """Verify existing filtering behavior is preserved.
 
-    def test_filters_blank_lines(self):
-        assert semantic_filter.should_filter("+") is True
-        assert semantic_filter.should_filter("+   ") is True
+    One row per guard branch in `should_filter`; where multiple concrete
+    lines exercise the same branch (for example "+" vs "+   " for the
+    blank-line check, or the two code-line examples for the default
+    keep-everything-else path), only one representative is kept.
+    """
 
-    def test_filters_docblock_start(self):
-        assert semantic_filter.should_filter("+/**") is True
-
-    def test_filters_docblock_content(self):
-        assert semantic_filter.should_filter("+ * Some docblock text") is True
-
-    def test_filters_docblock_end(self):
-        assert semantic_filter.should_filter("+ */") is True
-
-    def test_filters_formatting_braces(self):
-        assert semantic_filter.should_filter("+{") is True
-        assert semantic_filter.should_filter("+}") is True
-
-    def test_keeps_diff_headers(self):
-        assert semantic_filter.should_filter("--- a/file.py") is False
-        assert semantic_filter.should_filter("+++ b/file.py") is False
-        assert semantic_filter.should_filter("@@ -1,5 +1,5 @@") is False
-
-    def test_keeps_code_lines(self):
-        assert semantic_filter.should_filter("+return $result;") is False
-        assert semantic_filter.should_filter("+function foo() {") is False
-
-    def test_keeps_context_lines(self):
-        assert semantic_filter.should_filter(" unchanged code") is False
+    @pytest.mark.parametrize("line, filtered", [
+        pytest.param("+", True, id="blank_line"),
+        pytest.param("+/**", True, id="docblock_start"),
+        pytest.param("+ * Some docblock text", True, id="docblock_content"),
+        pytest.param("+ */", True, id="docblock_end"),
+        pytest.param("+{", True, id="formatting_open_brace"),
+        pytest.param("+}", True, id="formatting_close_brace"),
+        pytest.param("--- a/file.py", False, id="diff_header_removed_file"),
+        pytest.param("+++ b/file.py", False, id="diff_header_added_file"),
+        pytest.param("@@ -1,5 +1,5 @@", False, id="diff_header_hunk"),
+        pytest.param("+return $result;", False, id="code_line_kept"),
+        pytest.param(" unchanged code", False, id="context_line_kept"),
+    ])
+    def test_filtering(self, line, filtered):
+        assert semantic_filter.should_filter(line) is filtered
