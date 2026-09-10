@@ -1385,6 +1385,8 @@ class TestTemplateFileClassification:
             "Components/NavMenu.razor",
             "views/index.jsp",
             "templates/email.tmpl",
+            "views/cart.nunjucks",
+            "views/cart.j2",
         ],
     )
     def test_common_server_template_is_inherent_ui(self, filepath):
