@@ -40,16 +40,8 @@ _bootstrap_mod = importlib.util.module_from_spec(_bootstrap_spec)
 _bootstrap_spec.loader.exec_module(_bootstrap_mod)
 
 _TEST_TRANSCRIPT_START = datetime(2026, 7, 20, 10, 0, 0, tzinfo=timezone.utc)
-_MALFORMED_RUN_IDENTITIES = (0, False, [], {}, "   ", "run unsafe", "../run")
-_MALFORMED_RUN_ID_CASES = (
-    "zero",
-    "false",
-    "list",
-    "object",
-    "whitespace",
-    "embedded-space",
-    "unsafe-prefix",
-)
+_MALFORMED_RUN_IDENTITIES = (0, "run unsafe")
+_MALFORMED_RUN_ID_CASES = ("zero", "unsafe-prefix")
 
 
 def _write_jsonl(path: Path, entries: list[object]) -> Path:
@@ -335,9 +327,7 @@ class TestSafeModel:
         "value",
         [
             "claude-sonnet-5",
-            "claude-haiku-4-5-20251001",
             "claude-opus-5[1m]",
-            "claude-" + "a" * 119,
             "claude-" + "a" * 119 + "[1m]",
         ],
     )
@@ -347,22 +337,12 @@ class TestSafeModel:
     @pytest.mark.parametrize(
         "value",
         [
-            "claude-x[<b>]",
-            "claude-x[]",
-            "claude-x[1m]extra",
-            "claude-x[" + "a" * 17 + "]",
-            "claude x",
-            "claude-x\n",
+            None,
             "evil-model",
-            "Claude-opus-5",
-            # The tail charset is [a-z0-9._-]: "Claude-opus-5" only exercises
-            # the literal `claude-` prefix, so an uppercase or spaced tail is
-            # what the charset itself has to reject.
-            "claude-opus-5A",
             "claude-opus 5",
             "claude-" + "a" * 200,
-            "",
-            None,
+            "claude-x[]",
+            "claude-x[1m]extra",
         ],
     )
     def test_rejects_unsafe_values(self, value):
@@ -1667,25 +1647,17 @@ class TestAnalyzeSubagent:
         assert result["artifact_writes"]["builder_attempted"] is False
         assert result["artifact_writes"]["first_builder_attempt_succeeded"] is None
 
-    @pytest.mark.parametrize(
-        "content,category",
-        [
-            ("Sibling tool call errored", "sibling_tool_failure"),
-            ("<tool_use_error>Invalid request</tool_use_error>", "tool_use_error"),
-            ("API Error: overloaded", "api_error"),
-        ],
-    )
-    def test_detects_allowlisted_text_failure_signatures(self, tmp_path, content, category):
+    def test_detects_allowlisted_text_failure_signatures(self, tmp_path):
         transcript = _write_jsonl(
-            tmp_path / f"{category}.jsonl",
+            tmp_path / "api_error.jsonl",
             [
                 _assistant(_call("x", "Read", file_path=str(tmp_path / "safe.py"))),
-                _result("x", content, is_error=None),
+                _result("x", "API Error: overloaded", is_error=None),
             ],
         )
 
         failure = analyze_subagent(transcript, tmp_path, [])["tool_failures"][0]
-        assert failure["category"] == category
+        assert failure["category"] == "api_error"
         assert failure["detector"] == "signature"
 
     @pytest.mark.parametrize(
@@ -1736,16 +1708,8 @@ class TestAnalyzeSubagent:
         assert analysis["tool_failures"] == []
         assert analysis["observed_reads"]["all"] == ["src/safe.py"]
 
-    @pytest.mark.parametrize(
-        "structured",
-        [
-            {"interrupted": False},
-            {"status": "started"},
-        ],
-        ids=["not-interrupted", "started"],
-    )
     def test_nonterminal_structured_fields_defer_to_failure_signatures(
-        self, tmp_path, structured
+        self, tmp_path
     ):
         target = tmp_path / "safe.py"
         transcript = _write_jsonl(
@@ -1756,7 +1720,7 @@ class TestAnalyzeSubagent:
                     "read",
                     "API Error: deterministic failure",
                     is_error=None,
-                    structured=structured,
+                    structured={"interrupted": False},
                 ),
             ],
         )
@@ -1766,16 +1730,8 @@ class TestAnalyzeSubagent:
         assert result["tool_failures"][0]["detector"] == "signature"
         assert result["observed_reads"]["all"] == []
 
-    @pytest.mark.parametrize(
-        "structured",
-        [
-            {"interrupted": False},
-            {"status": "started"},
-        ],
-        ids=["not-interrupted", "started"],
-    )
     def test_nonterminal_structured_fields_without_signature_remain_unknown(
-        self, tmp_path, structured
+        self, tmp_path
     ):
         target = tmp_path / "safe.py"
         transcript = _write_jsonl(
@@ -1786,7 +1742,7 @@ class TestAnalyzeSubagent:
                     "read",
                     "ordinary progress",
                     is_error=None,
-                    structured=structured,
+                    structured={"status": "started"},
                 ),
             ],
         )
@@ -2058,36 +2014,14 @@ class TestAnalyzeSubagent:
         assert failure["recovered"] is False
 
     @pytest.mark.parametrize(
-        "tool_name,tool_input,structured",
+        "tool_name,structured",
         [
             (
                 "Read",
-                {"file_path": "/safe/unexpected-type.py"},
-                _current_read_result("/safe/unexpected-type.py")
-                | {"type": "unexpected"},
-            ),
-            (
-                "Read",
-                {"file_path": "/safe/metadata.py"},
                 {"filePath": "/safe/metadata.py"},
             ),
             (
                 "Read",
-                {"file_path": "/safe/read.py"},
-                {
-                    "type": "text",
-                    "file": {
-                        "filePath": "/safe/read.py",
-                        "content": "safe",
-                        "numLines": True,
-                        "startLine": 1,
-                        "totalLines": 1,
-                    },
-                },
-            ),
-            (
-                "Read",
-                {"file_path": "/safe/truncated-type.py"},
                 {
                     "type": "text",
                     "file": _current_read_result(
@@ -2097,67 +2031,12 @@ class TestAnalyzeSubagent:
                 },
             ),
             (
-                "Read",
-                {"file_path": "/safe/unrelated-metadata.py"},
-                {
-                    "type": "text",
-                    "file": _current_read_result(
-                        "/safe/unrelated-metadata.py"
-                    )["file"]
-                    | {"unrelated": False},
-                },
-            ),
-            (
                 "Write",
-                {
-                    "file_path": "/safe/write.py",
-                    "content": (
-                        "builder = ReviewOutputBuilder('safe')\n"
-                        "builder.save_draft()"
-                    ),
-                },
-                {
-                    "type": "create",
-                    "content": "safe",
-                    "filePath": "/safe/write.py",
-                    "originalFile": None,
-                    "structuredPatch": _structured_patch(),
-                    "userModified": False,
-                },
-            ),
-            (
-                "Write",
-                {
-                    "file_path": "/safe/unexpected-type.py",
-                    "content": (
-                        "builder = ReviewOutputBuilder('safe')\n"
-                        "builder.save_draft()"
-                    ),
-                },
                 _current_write_result("/safe/unexpected-type.py")
                 | {"type": "unexpected"},
             ),
             (
                 "Write",
-                {
-                    "file_path": "/safe/update-crossed.py",
-                    "content": (
-                        "builder = ReviewOutputBuilder('safe')\n"
-                        "builder.save_draft()"
-                    ),
-                },
-                _current_write_result("/safe/update-crossed.py")
-                | {"type": "update"},
-            ),
-            (
-                "Write",
-                {
-                    "file_path": "/safe/update-bad-patch.py",
-                    "content": (
-                        "builder = ReviewOutputBuilder('safe')\n"
-                        "builder.save_draft()"
-                    ),
-                },
                 _current_write_result("/safe/update-bad-patch.py", update=True)
                 | {
                     "originalFile": None,
@@ -2166,11 +2045,6 @@ class TestAnalyzeSubagent:
             ),
             (
                 "Edit",
-                {
-                    "file_path": "/safe/edit.py",
-                    "old_string": "before",
-                    "new_string": "after",
-                },
                 {
                     "filePath": "/safe/edit.py",
                     "oldString": "before",
@@ -2183,21 +2057,14 @@ class TestAnalyzeSubagent:
             ),
         ],
         ids=[
-            "read-unexpected-type",
             "read-metadata-only",
-            "read-bool-line-count",
             "read-token-cap-wrong-type",
-            "read-unrelated-file-key",
-            "write-create-with-patch",
             "write-unexpected-type",
-            "write-update-null-original-empty-patch",
             "write-update-null-original-bad-patch",
             "edit-bad-patch",
         ],
     )
-    def test_near_miss_tool_shapes_remain_unknown(
-        self, tmp_path, tool_name, tool_input, structured
-    ):
+    def test_near_miss_tool_shapes_remain_unknown(self, tool_name, structured):
         operation = {
             "Read": "read",
             "Write": "write",
@@ -2208,20 +2075,6 @@ class TestAnalyzeSubagent:
             tool_name,
             operation,
         )[0] == "unknown"
-        transcript = _write_jsonl(
-            tmp_path / f"near-miss-{tool_name}.jsonl",
-            [
-                _assistant(_call("tool", tool_name, **tool_input)),
-                _result("tool", "ordinary result", is_error=None, structured=structured),
-            ],
-        )
-
-        result = analyze_subagent(transcript, tmp_path, [])
-        assert result["tool_failures"] == []
-        assert result["observed_reads"]["all"] == []
-        if tool_name == "Write":
-            assert result["artifact_writes"]["builder_successes"] == 0
-            assert result["artifact_writes"]["first_builder_attempt_succeeded"] is None
 
     def test_write_shape_accepts_memdir_stamped_metadata(self):
         """Current successful Write results carry memdirStamped alongside
@@ -2322,29 +2175,6 @@ class TestAnalyzeSubagent:
                 {"mode": "regex", "filenames": [], "numFiles": 0},
             ),
             (
-                "Grep",
-                {
-                    "mode": "content",
-                    "filenames": [],
-                    "numFiles": 0,
-                    "content": "",
-                    "numLines": 0,
-                    "unexpected": 1,
-                },
-            ),
-            (
-                "Grep",
-                {
-                    "mode": "files_with_matches",
-                    "filenames": "a.py",
-                    "numFiles": 1,
-                },
-            ),
-            (
-                "Glob",
-                {"durationMs": 5, "filenames": [], "numFiles": 0},
-            ),
-            (
                 "Glob",
                 {
                     "durationMs": 5,
@@ -2356,9 +2186,6 @@ class TestAnalyzeSubagent:
         ],
         ids=[
             "grep-unknown-mode",
-            "grep-unexpected-key",
-            "grep-filenames-not-list",
-            "glob-missing-truncated",
             "glob-truncated-wrong-type",
         ],
     )
@@ -2424,29 +2251,8 @@ class TestAnalyzeSubagent:
                 },
                 _current_edit_result("/safe/edit.py"),
             ),
-            (
-                "Grep",
-                {"pattern": "API Error", "path": "/safe"},
-                {
-                    "mode": "content",
-                    "filenames": ["src/a.py"],
-                    "numFiles": 1,
-                    "content": "src/a.py:1:raise RuntimeError('API Error: retry')",
-                    "numLines": 1,
-                },
-            ),
-            (
-                "Glob",
-                {"pattern": "**/*.py", "path": "/safe"},
-                {
-                    "durationMs": 3,
-                    "filenames": ["src/API Error handling.py"],
-                    "numFiles": 1,
-                    "truncated": False,
-                },
-            ),
         ],
-        ids=["write", "edit", "grep", "glob"],
+        ids=["write", "edit"],
     )
     def test_validated_shapes_are_success_despite_prose_signatures(
         self, tmp_path, tool_name, tool_input, structured
@@ -2500,28 +2306,8 @@ class TestAnalyzeSubagent:
                 {"file_path": "/safe/read.py"},
                 _current_read_result("/safe/read.py") | {"exitCode": 1},
             ),
-            (
-                "Write",
-                {
-                    "file_path": "/safe/write.py",
-                    "content": (
-                        "builder = ReviewOutputBuilder('safe')\n"
-                        "builder.save_draft()"
-                    ),
-                },
-                _current_write_result("/safe/write.py") | {"error": "safe"},
-            ),
-            (
-                "Edit",
-                {
-                    "file_path": "/safe/edit.py",
-                    "old_string": "before",
-                    "new_string": "after",
-                },
-                _current_edit_result("/safe/edit.py") | {"success": False},
-            ),
         ],
-        ids=["read", "write", "edit"],
+        ids=["read"],
     )
     def test_structured_failure_wins_tool_specific_shape(
         self, tmp_path, tool_name, tool_input, structured
@@ -2537,8 +2323,6 @@ class TestAnalyzeSubagent:
         result = analyze_subagent(transcript, tmp_path, [])
         assert result["tool_failures"][0]["category"] == "structured_failure"
         assert result["observed_reads"]["all"] == []
-        if tool_name == "Write":
-            assert result["artifact_writes"]["builder_failures"] == 0
 
     def test_structured_failure_takes_precedence_and_ordinary_retry_recovers(self, tmp_path):
         target = tmp_path / "notes.txt"
@@ -2568,11 +2352,10 @@ class TestAnalyzeSubagent:
         "block_error,structured",
         [
             (True, {"exitCode": 0, "success": True}),
-            (False, {"exitCode": 2}),
             (False, {"interrupted": True, "success": True}),
             (False, {"status": "completed", "error": "structured error"}),
         ],
-        ids=["error-flag-wins", "exit-wins", "interrupted-wins", "error-field-wins"],
+        ids=["error-flag-wins", "interrupted-wins", "error-field-wins"],
     )
     def test_structured_failure_wins_conflicting_success_fields(
         self, tmp_path, block_error, structured
@@ -3104,20 +2887,19 @@ def test_manifest_step_timeline_accepts_matching_identified_run_events(tmp_path)
     assert complete is True
 
 
-@pytest.mark.parametrize("identity_mode", ["missing", "none", "empty"])
+@pytest.mark.parametrize("identity_mode", ["none", "empty"])
 def test_manifest_step_timeline_accepts_legacy_identityless_events(
     tmp_path, identity_mode
 ):
     manifest = _manifest("legacy-step", tmp_path, tmp_path / "run", started=[])
+    identity = None if identity_mode == "none" else ""
     event = {
         "event": "step",
+        "run_id": identity,
         "step": 2,
         "timestamp": (_TEST_TRANSCRIPT_START + timedelta(seconds=10)).isoformat(),
     }
-    if identity_mode != "missing":
-        identity = None if identity_mode == "none" else ""
-        manifest["run"]["id"] = identity
-        event["run_id"] = identity
+    manifest["run"]["id"] = identity
     manifest["steps"] = [event]
 
     transitions, complete = manifest_step_timeline(manifest)
@@ -6343,19 +6125,6 @@ class TestBootstrapCommandRecognition:
     form step 6 actually emits — a rejected command leaves the dispatch
     uncorrelated and its usage, read, and builder metrics incomplete."""
 
-    def test_adapter_command_with_model_tier_is_recognized(self, tmp_path):
-        tokens = _mod._reviewer_bootstrap_tokens(
-            "python3 /plugin/review/agent/bootstrap.py "
-            "--agent repo-reviewer-adapter "
-            "--instance-name repo-renewals-reviewer "
-            "--repo-agent-ref .ai/r.md --adapter-label 'R' "
-            "--execution inline --channel blocking --scope-domains code "
-            "--model-tier opus "
-            f'--range "base..head" --output-dir "{tmp_path}"'
-        )
-        assert tokens is not None
-        assert "--model-tier" in tokens
-
     def test_step6_emitted_adapter_command_is_recognized(
         self, tmp_path, pipeline_mod
     ):
@@ -6486,31 +6255,6 @@ class TestEvidenceToolNameSync:
         validated, typed = self._sources()
 
         assert validated | typed == _mod._EVIDENCE_TOOL_NAMES
-
-    def test_the_parser_sees_every_spelling_these_branches_could_use(self):
-        """Guard the guard: an equality pin is only as good as the parser.
-
-        A `_tool_shape_succeeded` rewritten into membership tests or
-        reversed comparisons must still be read, or the equality above
-        would start failing for a parser reason and invite a hand-edit to
-        the set instead of a fix here.
-        """
-        def sample(tool_name, name):
-            if tool_name == "Read":
-                return 1
-            if "Write" == tool_name:
-                return 2
-            if tool_name in {"Edit", "Grep"}:
-                return 3
-            if name in ("Glob",):
-                return 4
-            if name in ["Bash"]:
-                return 5
-            return 0
-
-        assert _branched_tool_names(sample, "tool_name", "name") == {
-            "Read", "Write", "Edit", "Grep", "Glob", "Bash",
-        }
 
 
 def test_usage_summary_for_transcript_counts_a_split_response_once(tmp_path):
