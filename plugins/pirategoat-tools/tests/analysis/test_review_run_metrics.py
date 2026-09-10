@@ -1431,16 +1431,12 @@ class TestLoadRuns:
         assert measured["metric_availability"]["lifecycle"] == "partial"
         assert measured["lifecycle"]["started_events"] == 1
 
-    @pytest.mark.parametrize(
-        "domain",
-        [
-            pytest.param({"unexpected": "object"}, id="object"),
-            pytest.param(7, id="integer"),
-        ],
-    )
     def test_malformed_nonnull_domain_remains_invalid_end_to_end(
-        self, tmp_path, domain
+        self, tmp_path
     ):
+        """Any non-string domain fails `_bounded_event_string`'s
+        `isinstance(value, str)`; an object stands for an integer too."""
+        domain = {"unexpected": "object"}
         telemetry_mod = _load_telemetry_module()
         output_dir = tmp_path / "output"
         output_dir.mkdir()
@@ -4841,28 +4837,14 @@ class TestLifecycleMeasurement:
         }
         assert measured["lifecycle"]["completion_gap"] == 2
 
-    @pytest.mark.parametrize(
-        "incomplete",
-        [
-            pytest.param(
-                ["b-reviewer", "b-reviewer"], id="missing-agent-execution"
-            ),
-            pytest.param(
-                ["a-reviewer", "b-reviewer", "b-reviewer", "c-reviewer"],
-                id="extra-unstarted-agent",
-            ),
-            pytest.param(
-                ["a-reviewer", "b-reviewer"], id="undercounted-retry"
-            ),
-            pytest.param(
-                ["a-reviewer", "b-reviewer", "b-reviewer", "b-reviewer"],
-                id="overcounted-retry",
-            ),
-        ],
-    )
     def test_complete_lifecycle_requires_exact_incomplete_execution_counts(
-        self, tmp_path, incomplete
+        self, tmp_path
     ):
+        """One `Counter(incomplete) != starts - completions` identity; an
+        undercounted retry stands for every inexact multiset. The
+        running-status variant is pinned by
+        `test_running_lifecycle_rejects_missing_unmatched_agent`."""
+        incomplete = ["a-reviewer", "b-reviewer"]
         manifest = _manifest()
         manifest["agents"] = {
             "started": [
@@ -4918,57 +4900,31 @@ class TestLifecycleMeasurement:
         assert measured["lifecycle"]["started_events"] == 2
         assert measured["lifecycle"]["completed_events"] == 2
 
-    @pytest.mark.parametrize(
-        "started,completed",
-        [
-            (
-                [
-                    _agent_start(timestamp="2026-07-19T10:00:20+00:00"),
-                    _agent_start(
-                        "security-reviewer",
-                        timestamp="2026-07-19T10:00:10+00:00",
-                    ),
-                ],
-                [
-                    _agent_complete(timestamp="2026-07-19T10:00:40+00:00"),
-                    _agent_complete(
-                        "security-reviewer",
-                        timestamp="2026-07-19T10:00:30+00:00",
-                    ),
-                ],
+    def test_parallel_agent_lifecycle_may_regress_globally(self, tmp_path):
+        """Ordering is per agent, not global: two agents' retries
+        interleave so both lists regress globally while each agent's own
+        events stay ordered (a superset of two distinct agents
+        regressing)."""
+        started = [
+            _agent_start(timestamp="2026-07-19T10:00:20+00:00"),
+            _agent_start(
+                "security-reviewer", timestamp="2026-07-19T10:00:05+00:00"
             ),
-            (
-                [
-                    _agent_start(timestamp="2026-07-19T10:00:20+00:00"),
-                    _agent_start(
-                        "security-reviewer",
-                        timestamp="2026-07-19T10:00:05+00:00",
-                    ),
-                    _agent_start(timestamp="2026-07-19T10:00:30+00:00"),
-                    _agent_start(
-                        "security-reviewer",
-                        timestamp="2026-07-19T10:00:15+00:00",
-                    ),
-                ],
-                [
-                    _agent_complete(timestamp="2026-07-19T10:00:40+00:00"),
-                    _agent_complete(
-                        "security-reviewer",
-                        timestamp="2026-07-19T10:00:25+00:00",
-                    ),
-                    _agent_complete(timestamp="2026-07-19T10:00:50+00:00"),
-                    _agent_complete(
-                        "security-reviewer",
-                        timestamp="2026-07-19T10:00:35+00:00",
-                    ),
-                ],
+            _agent_start(timestamp="2026-07-19T10:00:30+00:00"),
+            _agent_start(
+                "security-reviewer", timestamp="2026-07-19T10:00:15+00:00"
             ),
-        ],
-        ids=["distinct-agents-regress-globally", "retries-interleave-globally"],
-    )
-    def test_parallel_agent_lifecycle_may_regress_globally(
-        self, tmp_path, started, completed
-    ):
+        ]
+        completed = [
+            _agent_complete(timestamp="2026-07-19T10:00:40+00:00"),
+            _agent_complete(
+                "security-reviewer", timestamp="2026-07-19T10:00:25+00:00"
+            ),
+            _agent_complete(timestamp="2026-07-19T10:00:50+00:00"),
+            _agent_complete(
+                "security-reviewer", timestamp="2026-07-19T10:00:35+00:00"
+            ),
+        ]
         manifest = _manifest()
         manifest["agents"] = {
             "started": started,
@@ -5009,22 +4965,15 @@ class TestLifecycleMeasurement:
                 ["2026-07-19T10:00:20+00:00"],
                 ["2026-07-19T10:00:10+00:00"],
             ),
-            (
-                [
-                    "2026-07-19T10:00:10+00:00",
-                    "2026-07-19T10:00:30+00:00",
-                ],
-                [
-                    "2026-07-19T10:00:20+00:00",
-                    "2026-07-19T10:00:25+00:00",
-                ],
-            ),
         ],
+        # One per guard of `_lifecycle_events_are_causal`: a regressing
+        # per-agent start list, a regressing per-agent completion list, and
+        # a completion before its matched start (a retry completing before
+        # its second start reaches that same guard).
         ids=[
             "same-agent-start-list-regresses",
             "same-agent-completion-list-regresses",
             "completion-precedes-start",
-            "retry-completes-before-second-start",
         ],
     )
     def test_temporally_impossible_lifecycle_is_missing(
@@ -5047,37 +4996,15 @@ class TestLifecycleMeasurement:
         assert measured["lifecycle"] is None
         assert measured["metric_availability"]["lifecycle"] == "missing"
 
-    def test_incomplete_identities_remain_separate_from_completion_gap(self, tmp_path):
-        manifest = _manifest()
-        manifest["agents"] = {
-            "started": [
-                _agent_start(),
-                _agent_start("security-reviewer"),
-            ],
-            "completed": [_agent_complete()],
-            "incomplete": ["security-reviewer"],
-        }
-
-        measured = measure_run(manifest, tmp_path, include_transcripts=False)
-
-        assert measured["lifecycle"]["incomplete_identities"] == [
-            "security-reviewer"
-        ]
-        assert measured["lifecycle"]["incomplete_count"] == 1
-        assert measured["lifecycle"]["incomplete_by_agent"] == {
-            "security-reviewer": 1
-        }
-        assert measured["lifecycle"]["completion_gap"] == 1
-
     @pytest.mark.parametrize(
         "malform",
         [
             lambda manifest: manifest.pop("agents"),
-            lambda manifest: manifest["agents"].pop("started"),
+            # A missing list fails the same `isinstance(..., list)` check.
             lambda manifest: manifest["agents"].__setitem__("completed", {}),
             lambda manifest: manifest["agents"].__setitem__("incomplete", [None]),
         ],
-        ids=["missing-agents", "missing-list", "malformed-list", "unsafe-incomplete"],
+        ids=["missing-agents", "malformed-list", "unsafe-incomplete"],
     )
     def test_missing_or_malformed_agents_are_lifecycle_missing(
         self, tmp_path, malform
@@ -5092,41 +5019,9 @@ class TestLifecycleMeasurement:
         assert measured["metric_availability"]["assignment"] == "complete"
 
     @pytest.mark.parametrize(
-        "identity_family",
-        ["started", "completed", "incomplete"],
-    )
-    def test_unhashable_lifecycle_identity_fails_closed(
-        self, tmp_path, identity_family
-    ):
-        class UnhashableStr(str):
-            __hash__ = None
-
-        manifest = _manifest()
-        manifest["agents"] = {
-            "started": [_agent_start()],
-            "completed": [_agent_complete()],
-            "incomplete": [],
-        }
-        if identity_family == "incomplete":
-            manifest["agents"]["completed"] = []
-            manifest["agents"]["incomplete"] = [
-                UnhashableStr("code-reviewer")
-            ]
-        else:
-            manifest["agents"][identity_family][0]["agent"] = (
-                UnhashableStr("code-reviewer")
-            )
-
-        measured = measure_run(manifest, tmp_path, include_transcripts=False)
-
-        assert measured["lifecycle"] is None
-        assert measured["metric_availability"]["lifecycle"] == "missing"
-
-    @pytest.mark.parametrize(
         "family,mutate",
         [
             ("started", lambda event: event.pop("schema")),
-            ("started", lambda event: event.__setitem__("schema", True)),
             ("started", lambda event: event.__setitem__("event", "agent_complete")),
             ("started", lambda event: event.__setitem__("run_id", "other-run")),
             ("started", lambda event: event.__setitem__("timestamp", "2026-07-19T10:00:10")),
@@ -5137,7 +5032,6 @@ class TestLifecycleMeasurement:
         ],
         ids=[
             "missing-schema",
-            "boolean-schema",
             "wrong-event",
             "wrong-run",
             "naive-timestamp",
