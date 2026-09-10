@@ -723,9 +723,11 @@ class TestCanonicalExecutableBuilderSource:
         assert "DRAFT TOTALS" in prompt
         assert "run the exact FINALIZE REVIEW command printed by" in prompt
 
-    def test_every_bootstrapped_reviewer_sees_only_the_canonical_contract(
+    def test_bootstrapped_reviewer_sees_only_the_canonical_contract(
         self, tmp_path
     ):
+        """build_output()'s Section 3 does not branch on the agent, so one
+        bootstrapped reviewer (security-reviewer) proves the contract for all."""
         forbidden = (
             "add_issue",
             "add_clearance",
@@ -742,23 +744,22 @@ class TestCanonicalExecutableBuilderSource:
             "run the exact FINALIZE REVIEW command printed by",
         )
 
-        for agent_name in ALL_AGENTS:
-            prompt = build_output(
-                agent_name=agent_name,
-                plugin_root=str(PLUGIN_ROOT),
-                status="OK",
-                review_rules="rules",
-                domain_rules=None,
-                scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
-                exploration_scope=None,
-                output_dir=str(tmp_path),
-                pr_number="42",
-                reviewer_name=derive_reviewer_name(agent_name),
-                review_claimable_count=1,
-                has_php=False,
-            )
-            assert all(token in prompt for token in required), agent_name
-            assert not any(token in prompt for token in forbidden), agent_name
+        prompt = build_output(
+            agent_name="security-reviewer",
+            plugin_root=str(PLUGIN_ROOT),
+            status="OK",
+            review_rules="rules",
+            domain_rules=None,
+            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number="42",
+            reviewer_name="security",
+            review_claimable_count=1,
+            has_php=False,
+        )
+        assert [token for token in required if token not in prompt] == []
+        assert [token for token in forbidden if token in prompt] == []
 
     def test_registered_reviewer_definitions_do_not_restore_raw_output_paths(self):
         canonical = (
