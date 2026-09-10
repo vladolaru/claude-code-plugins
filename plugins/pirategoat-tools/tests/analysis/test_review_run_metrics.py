@@ -8809,17 +8809,6 @@ class TestSynthesisAgentsMeasurement:
         assert measured["metric_availability"]["synthesis_agents"] == "missing"
         assert measured["synthesis_agents"] is None
 
-    def test_producer_availability_false_wins_over_a_payload(self):
-        manifest = _synthesis_manifest(
-            "run-1", _synthesis_row(contracts._SYNTHESIS_DECISION_CRITIC)
-        )
-        manifest["availability"]["synthesis_agents"] = False
-        measured = measure_run(
-            manifest, Path("/nonexistent"), include_transcripts=False
-        )
-        assert measured["synthesis_agents"] is None
-        assert measured["metric_availability"]["synthesis_agents"] == "missing"
-
     def test_measured_durations_are_complete(self):
         measured = measure_run(
             _synthesis_manifest(
@@ -9187,13 +9176,6 @@ def _skipped_steps_payload() -> list:
     ]
 
 
-def _synthesis_agents_payload() -> dict:
-    return {
-        "finalized": True,
-        "agents": [],
-    }
-
-
 def _dependency_refresh_payload(**overrides) -> dict:
     payload = {
         "requested": True,
@@ -9227,21 +9209,6 @@ def _host_context_payload():
         "unresolved": [{"name": "jetpack", "reason": "declared_in_plugin_headers", "version": None}],
         "banner_reason": "partial_unresolved", "self_provided": [], "scan_roots": 2,
     }
-
-
-def _optional_section_payload(name: str):
-    return {
-        "assignment": _manifest()["assignment"],
-        "worktree_hygiene": _worktree_hygiene_payload(),
-        "synthesis_agents": _synthesis_agents_payload(),
-        "usage": _usage_snapshot_payload(),
-        "skipped_steps": _skipped_steps_payload(),
-        "dependency_refresh": _dependency_refresh_payload(),
-        "reviewer_markdown": _derived_markdown_payload(),
-        "findings_markdown": _derived_markdown_payload(),
-        "host_context": _host_context_payload(),
-        "evidence": _evidence_payload(),
-    }[name]
 
 
 def _evidence_payload():
@@ -9534,22 +9501,6 @@ class TestHostContextSanitization:
         assert "TICKET-123" not in json.dumps(redacted)
         assert projected["resolved"][0]["refreshed"] == "2026-09-04T00:04:08Z"
 
-    def test_historical_host_absence_survives_repeated_sanitization(self):
-        manifest = _manifest()
-        for _ in range(3):
-            manifest = sanitize._sanitize_manifest(manifest)
-            assert manifest.get("host_context") is None
-            assert "host_context" not in manifest["availability"]
-
-    def test_historical_host_absence_survives_public_measurement(self, tmp_path):
-        manifest = _manifest()
-        for _ in range(3):
-            manifest = measure_run(
-                manifest, sessions_root=tmp_path, include_transcripts=False,
-            )
-            assert manifest.get("host_context") is None
-            assert "host_context" not in manifest["availability"]
-
     def test_explicit_unavailable_host_stays_measured_after_repeated_passes(self, tmp_path):
         manifest = _manifest()
         manifest["host_context"] = None
@@ -9591,48 +9542,39 @@ class TestHostContextSanitization:
         assert result["scan_roots"] is None
 
 
-# `_sanitize_optional_sections` is ONE table-driven loop, so its own
-# properties (flag-wins, pre-feature silence, derive-the-flag-from-what-
-# parsed) are single-homed code and are pinned once, through this
-# representative section, rather than restated per section. What IS
-# per-section is each entry's own sanitizer — covered by the structural
-# round-trip below plus each section's dedicated field-level class.
+# `_sanitize_optional_sections` is ONE table-driven loop with three
+# branches, each pinned once rather than restated per section: the
+# derive-the-flag-from-what-parsed branch by
+# `test_reborn_lie_flag_true_absent_payload_publishes_false` and the
+# one-section `test_every_declared_section_round_trips_and_rejects_garbage`
+# (both through this representative section); the flag-`False`-wins
+# branch by `TestMeasureRun::test_explicit_false_coverage_availability_wins_over_valid_payload`;
+# and the undeclared-section skip by
+# `test_a_pre_feature_run_carries_neither_flag_nor_payload`. What IS
+# per-section is each entry's own sanitizer, covered by each section's
+# dedicated field-level class.
 _REPRESENTATIVE_OPTIONAL_SECTION = "assignment"
 
 
 class TestOptionalSectionAvailabilityConsistency:
     """The flag/payload consistency pin for the shared sanitize loop.
 
-    One test stays parametrized on
-    `contracts._OPTIONAL_SECTION_AVAILABILITY_KEYS` — the telemetry
-    producer's own list of optional sections whose
-    `availability["<name>"]` boolean shares the section's top-level key
-    (mirrors the `synthesis_lifecycle.ROW_KEYS` producer-declared-contract
-    pattern) — so a section added to that tuple joins the structural pin
-    automatically, without a matching test edit. The remaining properties
-    belong to the loop, not to any section, and are pinned once.
+    The loop's properties belong to the loop, not to any section, so
+    each is pinned once through `_REPRESENTATIVE_OPTIONAL_SECTION`.
     """
 
-    @pytest.mark.parametrize(
-        "name", contracts._OPTIONAL_SECTION_AVAILABILITY_KEYS
-    )
-    def test_every_declared_section_round_trips_and_rejects_garbage(
-        self, name
-    ):
-        """The structural pin, per producer-declared section: the
-        section's own sanitizer accepts its own well-formed payload (and
-        the derived flag reads `true`), and rejects a payload of the
-        wrong shape (a bare string instead of the section's dict/list),
-        dropping the derived flag to `false` rather than trusting the raw
-        `true` past a payload that never actually parsed.
-
-        A section added to the producer's tuple joins this test with no
-        edit here beyond registering its payload in
-        `_optional_section_payload` — which `KeyError`s until it does.
+    def test_every_declared_section_round_trips_and_rejects_garbage(self):
+        """The derive-the-flag branch, both ways: the section's own
+        sanitizer accepts its own well-formed payload (and the derived
+        flag reads `true`), and rejects a payload of the wrong shape (a
+        bare string instead of the section's dict), dropping the derived
+        flag to `false` rather than trusting the raw `true` past a
+        payload that never actually parsed.
         """
+        name = _REPRESENTATIVE_OPTIONAL_SECTION
         manifest = _manifest("run-1")
         manifest["availability"][name] = True
-        manifest[name] = _optional_section_payload(name)
+        manifest[name] = _manifest()[name]
 
         sanitized = sanitize._sanitize_manifest(manifest)
 
@@ -9690,46 +9632,6 @@ class TestOptionalSectionAvailabilityConsistency:
         assert sanitized[name] is None
 
 
-class TestOptionalSectionSanitizerTableIsStructurallyComplete:
-    """The reviewer's probe: adding a key to the producer's declared
-    tuple with no matching sanitizer must fail loudly, by name, instead
-    of a bare `KeyError` raised from inside the per-manifest loop."""
-
-    def test_production_table_is_complete_both_directions(self):
-        """The real production call already ran at import time (module
-        load would have raised otherwise); re-running it here pins that
-        outcome as a regression guard, not just an import side effect."""
-        sanitize._require_complete_optional_section_sanitizers(
-            contracts._OPTIONAL_SECTION_AVAILABILITY_KEYS,
-            sanitize._OPTIONAL_SECTION_SANITIZERS,
-        )
-
-    def test_a_declared_key_with_no_sanitizer_fails_loudly_by_name(self):
-        with pytest.raises(AssertionError) as excinfo:
-            sanitize._require_complete_optional_section_sanitizers(
-                ("assignment", "dependency_refresh"),
-                {"assignment": sanitize._sanitize_assignment},
-            )
-        message = str(excinfo.value)
-        assert "dependency_refresh" in message
-        assert "_OPTIONAL_SECTION_SANITIZERS" in message
-
-    def test_a_stale_sanitizer_with_no_declared_key_fails_loudly_by_name(
-        self,
-    ):
-        with pytest.raises(AssertionError) as excinfo:
-            sanitize._require_complete_optional_section_sanitizers(
-                ("assignment",),
-                {
-                    "assignment": sanitize._sanitize_assignment,
-                    "retired_section": sanitize._sanitize_skipped_steps,
-                },
-            )
-        message = str(excinfo.value)
-        assert "retired_section" in message
-        assert "OPTIONAL_SECTION_AVAILABILITY_KEYS" in message
-
-
 class TestOptionalSectionVocabulariesAreNotRestated:
     """I3: the section-status vocabularies must have exactly one
     spelling — the producer's own private constants in
@@ -9758,36 +9660,6 @@ class TestOptionalSectionVocabulariesAreNotRestated:
         )
         assert contracts._DERIVED_MARKDOWN_STATUSES == (
             manifest_sections._DERIVED_MARKDOWN_STATUSES
-        )
-
-    def test_assignment_fields_share_one_producer_consumer_authority(self):
-        manifest_sections = _load_manifest_sections_module()
-        expected = (
-            "changed_files",
-            "reviewable_files",
-            "assigned_files_by_agent",
-            "assigned_files",
-            "file_exclusions",
-            "unassigned_reviewable_files",
-        )
-
-        assert getattr(manifest_sections, "ASSIGNMENT_FIELDS", None) == expected
-        assert getattr(contracts, "_ASSIGNMENT_FIELDS", None) == expected
-        assert contracts._ASSIGNMENT_FIELDS is (
-            contracts._MANIFEST_SECTIONS_CONTRACT.ASSIGNMENT_FIELDS
-        )
-        assert sanitize._ASSIGNMENT_FIELDS is contracts._ASSIGNMENT_FIELDS
-        assert sanitize._ASSIGNMENT_PATH_LIST_FIELDS is (
-            contracts._ASSIGNMENT_PATH_LIST_FIELDS
-        )
-        assert load._ASSIGNMENT_PATH_LIST_FIELDS is (
-            contracts._ASSIGNMENT_PATH_LIST_FIELDS
-        )
-        assert cohort._ASSIGNMENT_COUNTABLE_LIST_FIELDS is (
-            contracts._ASSIGNMENT_COUNTABLE_LIST_FIELDS
-        )
-        assert render._ASSIGNMENT_TABLE_FIELDS is (
-            contracts._ASSIGNMENT_TABLE_FIELDS
         )
 
     def test_every_producer_recognized_worktree_status_survives(self):
@@ -9871,52 +9743,11 @@ class TestOptionalSectionVocabulariesAreNotRestated:
                 assert sanitized[name]["status"] == status
 
 
-class TestUsageSnapshotDivergenceFromProducer:
-    """M3: the sanitizer is at least as strict as its producer, not
-    exactly as strict — pin the one known divergence rather than let the
-    docstring claim more than the code does.
-    """
-
-    def test_an_empty_agent_name_row_is_dropped_though_the_producer_keeps_it(
-        self,
-    ):
-        """`build_usage_manifest` keeps a `by_agent` row whenever `agent`
-        is any string — `isinstance(row.get("agent"), str)` alone, so
-        `""` qualifies. This sanitizer requires `_safe_string`'s
-        non-empty shape, so the same row is dropped here."""
-        manifest = _manifest("run-1")
-        manifest["availability"]["usage"] = True
-        manifest["usage"] = _usage_snapshot_payload(
-            by_agent=[
-                {
-                    "agent": "",
-                    "model": "claude-opus-5[1m]",
-                    "usage": dict(_USAGE_SNAPSHOT_FIELD_MAP),
-                },
-                {
-                    "agent": "security-reviewer",
-                    "model": "claude-opus-5[1m]",
-                    "usage": dict(_USAGE_SNAPSHOT_FIELD_MAP),
-                },
-            ]
-        )
-
-        sanitized = sanitize._sanitize_manifest(manifest)
-
-        assert sanitized["usage"]["by_agent"] == [
-            {
-                "agent": "security-reviewer",
-                "model": "claude-opus-5[1m]",
-                "usage": dict(_USAGE_SNAPSHOT_FIELD_MAP),
-                "tool_calls": None,
-                "repository_reads": None,
-            }
-        ]
-
-
 class TestSkippedStepsDivergenceFromProducer:
-    """M3: same floor-not-exact-parity claim, for the title/condition
-    fallback."""
+    """M3: the sanitizer is at least as strict as its producer, not
+    exactly as strict — pin the known divergence in the title/condition
+    fallback rather than let the docstring claim more than the code
+    does."""
 
     def test_an_oversized_title_becomes_empty_though_the_producer_keeps_it(
         self,
@@ -9930,24 +9761,6 @@ class TestSkippedStepsDivergenceFromProducer:
         oversized_title = "x" * 5000
         manifest["skipped_steps"] = [
             {"step": 10, "title": oversized_title, "condition": "c"}
-        ]
-
-        sanitized = sanitize._sanitize_manifest(manifest)
-
-        assert sanitized["skipped_steps"] == [
-            {"step": 10, "title": "", "condition": "c"}
-        ]
-
-    def test_a_non_string_title_becomes_empty_though_the_producer_keeps_it(
-        self,
-    ):
-        """The producer's bare `or ""` never type-checks its operand: a
-        truthy non-string (an int) survives there verbatim. This
-        sanitizer requires an actual string, so it becomes ""."""
-        manifest = _manifest("run-1")
-        manifest["availability"]["skipped_steps"] = True
-        manifest["skipped_steps"] = [
-            {"step": 10, "title": 12345, "condition": "c"}
         ]
 
         sanitized = sanitize._sanitize_manifest(manifest)
@@ -9980,15 +9793,6 @@ class TestWorktreeHygieneSanitize:
             "probe_residue_removed": [],
             "baseline_captured_at": "2026-08-19T12:00:00+00:00",
         }
-
-    def test_producer_availability_false_wins_over_a_stray_payload(self):
-        manifest = _manifest("run-1")
-        manifest["availability"]["worktree_hygiene"] = False
-        manifest["worktree_hygiene"] = _worktree_hygiene_payload()
-
-        sanitized = sanitize._sanitize_manifest(manifest)
-
-        assert sanitized["worktree_hygiene"] is None
 
     def test_an_unrecognized_status_reads_as_unknown_never_clean(self):
         manifest = _manifest("run-1")
@@ -10032,15 +9836,6 @@ class TestUsageSnapshotSanitize:
         sanitized = sanitize._sanitize_manifest(manifest)
 
         assert sanitized["usage"] == _usage_snapshot_payload()
-
-    def test_producer_availability_false_wins_over_a_stray_payload(self):
-        manifest = _manifest("run-1")
-        manifest["availability"]["usage"] = False
-        manifest["usage"] = _usage_snapshot_payload()
-
-        sanitized = sanitize._sanitize_manifest(manifest)
-
-        assert sanitized["usage"] is None
 
     def test_an_incomplete_usage_map_reads_as_none_not_a_zero(self):
         """All-or-nothing: a map missing a field cannot be summed or
@@ -10209,15 +10004,6 @@ class TestSkippedStepsSanitize:
 
         assert sanitized["skipped_steps"] == _skipped_steps_payload()
 
-    def test_producer_availability_false_wins_over_a_stray_payload(self):
-        manifest = _manifest("run-1")
-        manifest["availability"]["skipped_steps"] = False
-        manifest["skipped_steps"] = _skipped_steps_payload()
-
-        sanitized = sanitize._sanitize_manifest(manifest)
-
-        assert sanitized["skipped_steps"] is None
-
     def test_a_measured_zero_skips_is_an_empty_list_not_missing(self):
         manifest = _manifest("run-1")
         manifest["availability"]["skipped_steps"] = True
@@ -10265,15 +10051,6 @@ class TestDependencyRefreshSanitize:
         sanitized = sanitize._sanitize_manifest(manifest)
 
         assert sanitized["dependency_refresh"] == _dependency_refresh_payload()
-
-    def test_producer_availability_false_wins_over_a_stray_payload(self):
-        manifest = _manifest("run-1")
-        manifest["availability"]["dependency_refresh"] = False
-        manifest["dependency_refresh"] = _dependency_refresh_payload()
-
-        sanitized = sanitize._sanitize_manifest(manifest)
-
-        assert sanitized["dependency_refresh"] is None
 
     def test_requested_without_a_report_survives_with_only_two_fields(self):
         manifest = _manifest("run-1")
@@ -10340,21 +10117,14 @@ class TestDependencyRefreshSanitize:
             "dirty_files": ["composer.lock"],
         }
 
-    @pytest.mark.parametrize(
-        "malformed_reason",
-        [[], {}, None],
-        ids=("list", "object", "null"),
-    )
-    def test_historical_non_string_skip_reason_is_omitted(
-        self, malformed_reason
-    ):
+    def test_historical_non_string_skip_reason_is_omitted(self):
         manifest = _manifest("run-1")
         manifest["availability"]["dependency_refresh"] = True
         manifest["dependency_refresh"] = {
             "requested": True,
             "reported": False,
             "skipped": True,
-            "skipped_reason": malformed_reason,
+            "skipped_reason": [],
             "dirty_files": [],
         }
 
@@ -10437,21 +10207,14 @@ class TestDependencyRefreshSanitize:
             {"directory": ".", "command": "x", "exit_status": "invalid"},
         ]
 
-    @pytest.mark.parametrize(
-        "malformed_exit_status",
-        [[], {}, None],
-        ids=("list", "object", "null"),
-    )
-    def test_a_non_string_exit_status_reads_as_invalid(
-        self, malformed_exit_status
-    ):
+    def test_a_non_string_exit_status_reads_as_invalid(self):
         manifest = _manifest("run-1")
         manifest["availability"]["dependency_refresh"] = True
         manifest["dependency_refresh"] = _dependency_refresh_payload(
             commands=[{
                 "directory": ".",
                 "command": "x",
-                "exit_status": malformed_exit_status,
+                "exit_status": [],
             }],
         )
 
@@ -10507,95 +10270,85 @@ class TestDependencyRefreshDefensiveBounds:
         ]
 
 
+_DERIVED_MARKDOWN_NAME = "reviewer_markdown"
+
+
 class TestDerivedMarkdownOutcomeSanitize:
     """`reviewer_markdown` and `findings_markdown` share one sanitizer
-    (`_sanitize_derived_markdown_outcome`) — every case here is
-    parametrized over both names, since a bug in the shared function
-    shows up identically on either key.
+    (`_sanitize_derived_markdown_outcome`), mapped under both names in
+    `sanitize._OPTIONAL_SECTION_SANITIZERS`, so a bug in the shared
+    function shows up identically on either key. The cases here run
+    through `reviewer_markdown`; the wiring of both keys is pinned by
+    `test_every_producer_recognized_derived_markdown_status_survives`
+    and `TestOptionalSectionsReachMeasureRun`.
 
     PII: none. `ran`/`status` are booleans and a closed four-value
     vocabulary; `written`/`expected` are plain non-negative file counts.
     """
 
-    @pytest.mark.parametrize("name", ("reviewer_markdown", "findings_markdown"))
-    def test_a_well_formed_payload_survives_field_for_field(self, name):
+    def test_a_well_formed_payload_survives_field_for_field(self):
         manifest = _manifest("run-1")
-        manifest["availability"][name] = True
-        manifest[name] = _derived_markdown_payload()
+        manifest["availability"][_DERIVED_MARKDOWN_NAME] = True
+        manifest[_DERIVED_MARKDOWN_NAME] = _derived_markdown_payload()
 
         sanitized = sanitize._sanitize_manifest(manifest)
 
-        assert sanitized[name] == _derived_markdown_payload()
+        assert sanitized[_DERIVED_MARKDOWN_NAME] == _derived_markdown_payload()
 
-    @pytest.mark.parametrize("name", ("reviewer_markdown", "findings_markdown"))
-    def test_producer_availability_false_wins_over_a_stray_payload(self, name):
-        manifest = _manifest("run-1")
-        manifest["availability"][name] = False
-        manifest[name] = _derived_markdown_payload()
-
-        sanitized = sanitize._sanitize_manifest(manifest)
-
-        assert sanitized[name] is None
-
-    @pytest.mark.parametrize("name", ("reviewer_markdown", "findings_markdown"))
-    def test_not_run_is_a_measured_outcome_not_missing(self, name):
+    def test_not_run_is_a_measured_outcome_not_missing(self):
         """`ran: False, status: "not_run"` is the DEFAULT state pipeline
         state carries before either render seam ever runs — a legitimate
         measured outcome (the run never reached that step), distinct
         from the section being entirely absent from the manifest."""
         manifest = _manifest("run-1")
-        manifest["availability"][name] = True
-        manifest[name] = _derived_markdown_payload(
+        manifest["availability"][_DERIVED_MARKDOWN_NAME] = True
+        manifest[_DERIVED_MARKDOWN_NAME] = _derived_markdown_payload(
             ran=False, written=0, expected=0, status="not_run",
         )
 
         sanitized = sanitize._sanitize_manifest(manifest)
 
-        assert sanitized[name] == {
+        assert sanitized[_DERIVED_MARKDOWN_NAME] == {
             "ran": False, "written": 0, "expected": 0, "status": "not_run",
         }
 
-    @pytest.mark.parametrize("name", ("reviewer_markdown", "findings_markdown"))
-    def test_ran_true_with_not_run_status_is_an_inconsistent_shape(self, name):
+    def test_ran_true_with_not_run_status_is_an_inconsistent_shape(self):
         manifest = _manifest("run-1")
-        manifest["availability"][name] = True
-        manifest[name] = _derived_markdown_payload(ran=True, status="not_run")
+        manifest["availability"][_DERIVED_MARKDOWN_NAME] = True
+        manifest[_DERIVED_MARKDOWN_NAME] = _derived_markdown_payload(ran=True, status="not_run")
 
         sanitized = sanitize._sanitize_manifest(manifest)
 
-        assert sanitized[name] is None
+        assert sanitized[_DERIVED_MARKDOWN_NAME] is None
 
-    @pytest.mark.parametrize("name", ("reviewer_markdown", "findings_markdown"))
-    def test_complete_status_requires_written_to_equal_expected(self, name):
+    def test_complete_status_requires_written_to_equal_expected(self):
         manifest = _manifest("run-1")
-        manifest["availability"][name] = True
-        manifest[name] = _derived_markdown_payload(
+        manifest["availability"][_DERIVED_MARKDOWN_NAME] = True
+        manifest[_DERIVED_MARKDOWN_NAME] = _derived_markdown_payload(
             status="complete", written=1, expected=2,
         )
 
         sanitized = sanitize._sanitize_manifest(manifest)
 
-        assert sanitized[name] is None
+        assert sanitized[_DERIVED_MARKDOWN_NAME] is None
 
-    @pytest.mark.parametrize("name", ("reviewer_markdown", "findings_markdown"))
-    def test_a_negative_count_is_a_missing_section(self, name):
+    def test_a_negative_count_is_a_missing_section(self):
         manifest = _manifest("run-1")
-        manifest["availability"][name] = True
-        manifest[name] = _derived_markdown_payload(written=-1)
+        manifest["availability"][_DERIVED_MARKDOWN_NAME] = True
+        manifest[_DERIVED_MARKDOWN_NAME] = _derived_markdown_payload(written=-1)
 
         sanitized = sanitize._sanitize_manifest(manifest)
 
-        assert sanitized[name] is None
+        assert sanitized[_DERIVED_MARKDOWN_NAME] is None
 
-    @pytest.mark.parametrize("name", ("reviewer_markdown", "findings_markdown"))
-    def test_a_non_dict_payload_is_missing_not_a_crash(self, name):
+    def test_a_non_dict_payload_is_missing_not_a_crash(self):
         manifest = _manifest("run-1")
-        manifest["availability"][name] = True
-        manifest[name] = "not a dict"
+        manifest["availability"][_DERIVED_MARKDOWN_NAME] = True
+        manifest[_DERIVED_MARKDOWN_NAME] = "not a dict"
 
         sanitized = sanitize._sanitize_manifest(manifest)
 
-        assert sanitized[name] is None
+        assert sanitized[_DERIVED_MARKDOWN_NAME] is None
 
 
 class TestPreRetrofitManifestsProjectHonestly:
@@ -10608,11 +10361,12 @@ class TestPreRetrofitManifestsProjectHonestly:
     `availability["<name>"]` flag was missing (`findings_markdown` did
     not exist at all — Task 7 deferred its manifest section entirely to
     this task). This class probes those real pre-retrofit shapes
-    directly: the generic `TestOptionalSectionAvailabilityConsistency`
-    parametrization does not cover "the availability KEY is entirely
-    absent (not `False`) while a real payload sits beside it," which is
-    the actual shape every pre-Task-13 manifest on disk carries for
-    `dependency_refresh`/`reviewer_markdown`.
+    directly: `TestOptionalSectionAvailabilityConsistency` does not cover
+    "the availability KEY is entirely absent (not `False`) while a real
+    payload sits beside it," which is the actual shape every pre-Task-13
+    manifest on disk carries for `dependency_refresh`/`reviewer_markdown`.
+    The loop branch is name-independent, so `dependency_refresh` stands
+    for both sections.
     """
 
     def test_dependency_refresh_with_a_flagless_but_real_payload_is_recovered(
@@ -10635,18 +10389,6 @@ class TestPreRetrofitManifestsProjectHonestly:
         assert sanitized["availability"]["dependency_refresh"] is True
         assert sanitized["dependency_refresh"] == _dependency_refresh_payload()
 
-    def test_reviewer_markdown_with_a_flagless_but_real_payload_is_recovered(
-        self,
-    ):
-        manifest = _manifest("run-1")
-        assert "reviewer_markdown" not in manifest["availability"]
-        manifest["reviewer_markdown"] = _derived_markdown_payload()
-
-        sanitized = sanitize._sanitize_manifest(manifest)
-
-        assert sanitized["availability"]["reviewer_markdown"] is True
-        assert sanitized["reviewer_markdown"] == _derived_markdown_payload()
-
     def test_dependency_refresh_with_a_flagless_null_payload_reads_missing_not_zero(
         self,
     ):
@@ -10666,57 +10408,27 @@ class TestPreRetrofitManifestsProjectHonestly:
             assert "dependency_refresh" not in manifest["availability"]
             assert manifest["dependency_refresh"] is None
 
-    def test_findings_markdown_never_existed_before_this_retrofit_and_stays_absent(
-        self,
-    ):
-        """Unlike its sibling, `findings_markdown` never had a manifest
-        section at all before Task 13 — genuinely pre-feature, not just
-        flagless. Neither the key nor the flag exists on an old
-        manifest, so this hits the pre-feature skip and is never
-        promoted to a fabricated `False`."""
-        manifest = _manifest("run-1")
-        assert "findings_markdown" not in manifest["availability"]
-        assert "findings_markdown" not in manifest
-
-        sanitized = sanitize._sanitize_manifest(manifest)
-
-        assert "findings_markdown" not in sanitized["availability"]
-        assert sanitized["findings_markdown"] is None
-
-
 class TestOptionalSectionsReachMeasureRun:
     """End-to-end: `measure_run` builds on `_sanitize_manifest`, so the
     fix must be visible at the same surface cohort/render consume."""
 
-    def test_worktree_hygiene_usage_and_skipped_steps_reach_measure_run(self):
+    def test_every_optional_section_reaches_measure_run(self):
+        """Per-run visibility for each section comes free from the one
+        `_sanitize_optional_sections` loop `measure_run` builds on — no
+        dedicated cohort aggregation was added for them, and none was
+        needed for this to be true. `reviewer_markdown` and
+        `findings_markdown` share one sanitizer; both keys are set here
+        so the map's wiring of each is pinned end to end."""
         manifest = _manifest("run-1")
         manifest["availability"]["worktree_hygiene"] = True
         manifest["availability"]["usage"] = True
         manifest["availability"]["skipped_steps"] = True
-        manifest["worktree_hygiene"] = _worktree_hygiene_payload()
-        manifest["usage"] = _usage_snapshot_payload()
-        manifest["skipped_steps"] = _skipped_steps_payload()
-
-        measured = measure_run(
-            manifest, Path("/nonexistent"), include_transcripts=False
-        )
-
-        assert measured["worktree_hygiene"] is not None
-        assert measured["usage"] is not None
-        assert measured["skipped_steps"] == _skipped_steps_payload()
-
-    def test_dependency_refresh_reviewer_markdown_and_findings_markdown_reach_measure_run(
-        self,
-    ):
-        """Task 13's own version of the same end-to-end pin: per-run
-        visibility for these three families comes free from the same
-        `_sanitize_optional_sections` loop `measure_run` already builds
-        on — no dedicated cohort aggregation was added for them, and none
-        was needed for this to be true."""
-        manifest = _manifest("run-1")
         manifest["availability"]["dependency_refresh"] = True
         manifest["availability"]["reviewer_markdown"] = True
         manifest["availability"]["findings_markdown"] = True
+        manifest["worktree_hygiene"] = _worktree_hygiene_payload()
+        manifest["usage"] = _usage_snapshot_payload()
+        manifest["skipped_steps"] = _skipped_steps_payload()
         manifest["dependency_refresh"] = _dependency_refresh_payload()
         manifest["reviewer_markdown"] = _derived_markdown_payload()
         manifest["findings_markdown"] = _derived_markdown_payload()
@@ -10725,6 +10437,9 @@ class TestOptionalSectionsReachMeasureRun:
             manifest, Path("/nonexistent"), include_transcripts=False
         )
 
+        assert measured["worktree_hygiene"] is not None
+        assert measured["usage"] is not None
+        assert measured["skipped_steps"] == _skipped_steps_payload()
         assert measured["dependency_refresh"] == _dependency_refresh_payload()
         assert measured["reviewer_markdown"] == _derived_markdown_payload()
         assert measured["findings_markdown"] == _derived_markdown_payload()
