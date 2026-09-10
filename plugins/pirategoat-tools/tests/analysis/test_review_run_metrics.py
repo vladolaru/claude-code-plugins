@@ -6316,17 +6316,19 @@ class TestTranscriptFamilyAvailability:
             "non_scope_comparable_availability"
         ]["missing"] == 1
 
+    # One row per condition of `sanitize._safe_repo_read_path`, the predicate
+    # every observed read passes. `TestNonCanonicalPathsFailClosed` pins that
+    # the coverage and lifecycle call sites apply it too.
     @pytest.mark.parametrize(
         "bad_path",
         [
+            # `_safe_string` rejects an empty string before the predicate.
             pytest.param("", id="empty"),
             pytest.param("/etc/passwd", id="posix-absolute"),
+            # One segment check covers "..", "." and the empty segment of a
+            # doubled slash.
             pytest.param("../secret.py", id="parent-prefix"),
-            pytest.param("a/../b.py", id="parent-segment"),
-            pytest.param("./a.py", id="dot-prefix"),
-            pytest.param("a//b.py", id="double-slash"),
-            pytest.param(r"C:\secret.py", id="windows-drive"),
-            pytest.param(r"\\server\share.py", id="windows-unc"),
+            # One backslash check covers drive, UNC and separator shapes.
             pytest.param(r"src\file.py", id="backslash-separator"),
             # The only shape the Windows-drive guard alone rejects: a
             # forward-slash drive path has no backslash, no empty segment and
@@ -6335,33 +6337,20 @@ class TestTranscriptFamilyAvailability:
             pytest.param("C:/secret.py", id="windows-drive-forward-slash"),
             # _safe_string deliberately admits \n and \t as legitimate prose
             # whitespace, so a path carrying one reaches _safe_repo_read_path
-            # intact and only its Cc/Cf check rejects it.
+            # intact and only its Cc/Cf check rejects it (one check for both
+            # categories).
             pytest.param("src/two\nlines.py", id="embedded-newline"),
-            pytest.param("src/\x7fsecret.py", id="unicode-control"),
-            pytest.param("src/\u202esecret.py", id="unicode-format"),
         ],
     )
-    # The four bucket names traverse ONE production loop: measure.py:373-380
-    # runs every bucket through the same _strict_repo_read_paths call, so the
-    # bucket axis multiplied nodes without adding a distinguishable condition.
-    # Mutating each of the five guards in _safe_repo_read_path
-    # (sanitize.py:129-145) is caught by the "all" bucket alone. The loop
-    # cannot silently lose a bucket either: dropping non_scope_comparable
-    # from the tuple still fails nine other tests in this file.
-    @pytest.mark.parametrize("field", ["all"])
+    # Every read bucket passes the same `_strict_repo_read_paths` call in
+    # `measure._sanitize_reads`, so the "all" bucket stands for the others.
     def test_observed_read_paths_require_canonical_repo_relative_form(
-        self, monkeypatch, tmp_path, field, bad_path
+        self, monkeypatch, tmp_path, bad_path
     ):
         transcript = _complete_empty_transcript()
         reads = transcript["observed_reads"]
-        if field in {"all", "in_scope"}:
-            reads["all"] = [bad_path]
-            reads["in_scope"] = [bad_path]
-        elif field == "out_of_scope":
-            reads["all"] = [bad_path]
-            reads["out_of_scope"] = [bad_path]
-        else:
-            reads["non_scope_comparable"] = [bad_path]
+        reads["all"] = [bad_path]
+        reads["in_scope"] = [bad_path]
 
         measured = _measure_fake_transcript(monkeypatch, tmp_path, transcript)
 
@@ -8162,25 +8151,28 @@ class TestStructuredSidecarValuesFailClosed:
 
 class TestNonCanonicalPathsFailClosed:
     """Coverage ledgers and lifecycle scope paths must satisfy the canonical
-    repository-relative path contract — absolute, traversal, backslash,
-    drive-prefixed, dot-segment, and control-character paths from malformed
-    or hand-edited sidecars may not survive into the privacy-reduced report."""
+    repository-relative path contract, so a non-canonical path from a
+    malformed or hand-edited sidecar cannot survive into the
+    privacy-reduced report (fix d253935d). One bad path per call site pins
+    that the site applies the predicate; the predicate's per-condition
+    sweep lives in `test_observed_read_paths_require_canonical_repo_relative_form`."""
 
-    BAD_PATHS = [
-        "/abs/leak.py",
-        "../traversal.py",
-        "dir\\windows.py",
-        "C:drive.py",
-        "dir/./dot-segment.py",
-        "control\x07.py",
-    ]
+    BAD_PATH = "/abs/leak.py"
 
-    @pytest.mark.parametrize("bad_path", BAD_PATHS)
-    def test_non_canonical_coverage_path_invalidates_manifest(
-        self, tmp_path, bad_path
-    ):
+    def test_non_canonical_coverage_path_invalidates_manifest(self, tmp_path):
+        """The bad path joins the ledger as a reviewable, unassigned file, so
+        the partition stays exact and only the path check on the coverage
+        path lists can reject it. Appended to `changed_files` alone, it
+        would break the exclusions-equal-changed-minus-reviewable check
+        first, whatever its form."""
         manifest = _manifest("cover-run")
-        manifest["assignment"]["changed_files"].append(bad_path)
+        assignment = manifest["assignment"]
+        for name in (
+            "changed_files",
+            "reviewable_files",
+            "unassigned_reviewable_files",
+        ):
+            assignment[name].append(self.BAD_PATH)
         _write_manifest(tmp_path / "review.manifest.json", manifest)
         _write_jsonl(tmp_path / "review.jsonl", _legacy_events("legacy-fallback"))
 
@@ -8205,13 +8197,12 @@ class TestNonCanonicalPathsFailClosed:
         assert run["run"]["id"] == "legacy-fallback"
         assert "invalid_manifest_fallback" in run["warnings"]
 
-    @pytest.mark.parametrize("bad_path", BAD_PATHS)
     def test_non_canonical_lifecycle_scope_path_fails_lifecycle_closed(
-        self, tmp_path, bad_path
+        self, tmp_path
     ):
         manifest = _manifest("scope-run")
         start = _agent_start(run_id="scope-run")
-        start["scope"]["paths"] = [bad_path]
+        start["scope"]["paths"] = [self.BAD_PATH]
         manifest["agents"] = {
             "started": [start],
             "completed": [_agent_complete(run_id="scope-run")],
