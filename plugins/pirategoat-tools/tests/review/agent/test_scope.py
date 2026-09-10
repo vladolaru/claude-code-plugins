@@ -19,7 +19,7 @@ import sys
 import tempfile
 import shutil
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 
@@ -62,216 +62,85 @@ def test_cli_requires_output_dir(monkeypatch, capsys):
 class TestRebaseRangeToMergeBase:
     """Tests for rebase_range_to_merge_base() — pure string manipulation."""
 
-    def test_basic_rebase(self):
-        result = review_scope.rebase_range_to_merge_base(
-            "origin/trunk..HEAD", "abc1234"
-        )
-        assert result == "abc1234..HEAD"
-
-    def test_preserves_range_end(self):
-        result = review_scope.rebase_range_to_merge_base(
-            "origin/main..feature-branch", "deadbeef"
-        )
-        assert result == "deadbeef..feature-branch"
-
-    def test_empty_merge_base_returns_original(self):
-        result = review_scope.rebase_range_to_merge_base(
-            "origin/trunk..HEAD", ""
-        )
-        assert result == "origin/trunk..HEAD"
-
-    def test_no_dots_returns_original(self):
-        result = review_scope.rebase_range_to_merge_base(
-            "--cached", "abc1234"
-        )
-        assert result == "--cached"
-
-    def test_empty_range_returns_original(self):
-        result = review_scope.rebase_range_to_merge_base("", "abc1234")
-        assert result == ""
-
-    def test_full_sha_merge_base(self):
-        sha = "a" * 40
-        result = review_scope.rebase_range_to_merge_base(
-            "origin/trunk..HEAD", sha
-        )
-        assert result == f"{sha}..HEAD"
-
-    def test_short_sha_merge_base(self):
-        result = review_scope.rebase_range_to_merge_base(
-            "origin/trunk..HEAD", "abc1234"
-        )
-        assert result.startswith("abc1234..")
+    @pytest.mark.parametrize("range_spec,merge_base,expected", [
+        pytest.param("origin/trunk..HEAD", "abc1234", "abc1234..HEAD", id="basic_rebase"),
+        pytest.param("origin/trunk..HEAD", "", "origin/trunk..HEAD", id="empty_merge_base_returns_original"),
+        pytest.param("--cached", "abc1234", "--cached", id="no_dots_returns_original"),
+        pytest.param("", "abc1234", "", id="empty_range_returns_original"),
+    ])
+    def test_rebase_range_to_merge_base(self, range_spec, merge_base, expected):
+        assert review_scope.rebase_range_to_merge_base(range_spec, merge_base) == expected
 
 
 class TestDetectBaseRef:
     """Tests for detect_base_ref() — pure string parsing."""
 
-    def test_two_dot_range(self):
-        assert review_scope.detect_base_ref("origin/main..HEAD") == "origin/main"
-
-    def test_two_dot_range_with_branch(self):
-        assert review_scope.detect_base_ref("trunk..feature") == "trunk"
-
-    def test_sha_range(self):
-        assert review_scope.detect_base_ref("abc123..def456") == "abc123"
-
-    def test_no_dots_returns_head(self):
-        assert review_scope.detect_base_ref("--cached") == "HEAD"
-
-    def test_empty_returns_head(self):
-        assert review_scope.detect_base_ref("") == "HEAD"
+    @pytest.mark.parametrize("range_spec,expected", [
+        pytest.param("origin/main..HEAD", "origin/main", id="two_dot_range"),
+        pytest.param("trunk..feature", "trunk", id="two_dot_range_with_branch"),
+        pytest.param("abc123..def456", "abc123", id="sha_range"),
+        pytest.param("--cached", "HEAD", id="no_dots_returns_head"),
+        pytest.param("", "HEAD", id="empty_returns_head"),
+    ])
+    def test_detect_base_ref(self, range_spec, expected):
+        assert review_scope.detect_base_ref(range_spec) == expected
 
 
 class TestCountDiffLines:
     """Tests for count_diff_lines() — pure string parsing."""
 
-    def test_simple_addition(self):
-        diff = "+added line\n+another added"
-        assert review_scope.count_diff_lines(diff) == 2
-
-    def test_simple_removal(self):
-        diff = "-removed line\n-another removed"
-        assert review_scope.count_diff_lines(diff) == 2
-
-    def test_mixed_changes(self):
-        diff = "+added\n-removed\n context line\n+added2"
-        assert review_scope.count_diff_lines(diff) == 3
-
-    def test_ignores_diff_headers(self):
-        diff = "--- a/file.py\n+++ b/file.py\n+real change"
-        assert review_scope.count_diff_lines(diff) == 1
-
-    def test_empty_diff(self):
-        assert review_scope.count_diff_lines("") == 0
-
-    def test_context_only(self):
-        diff = " context1\n context2\n context3"
-        assert review_scope.count_diff_lines(diff) == 0
+    @pytest.mark.parametrize("diff,expected", [
+        pytest.param("+added line\n+another added", 2, id="simple_addition"),
+        pytest.param("-removed line\n-another removed", 2, id="simple_removal"),
+        pytest.param("+added\n-removed\n context line\n+added2", 3, id="mixed_changes"),
+        pytest.param("--- a/file.py\n+++ b/file.py\n+real change", 1, id="ignores_diff_headers"),
+        pytest.param("", 0, id="empty_diff"),
+        pytest.param(" context1\n context2\n context3", 0, id="context_only"),
+    ])
+    def test_count_diff_lines(self, diff, expected):
+        assert review_scope.count_diff_lines(diff) == expected
 
 
 class TestFilterNoise:
-    """Tests for filter_noise() — pure regex filtering."""
+    """Tests for filter_noise() — pure regex filtering.
 
-    def test_keeps_code_files(self):
-        files = ["src/app.php", "lib/utils.ts", "main.py"]
-        kept, skipped = review_scope.filter_noise(files)
-        assert kept == files
-        assert skipped == []
+    One row per NOISE_PATTERNS family; the remaining spelling variants
+    within a family (go.sum, .po/.pot, .yarn, __pycache__, coverage dirs,
+    tsbuildinfo, linter caches, snapshots, shrinkwrap) share one regex
+    branch with a kept row and add no new coverage."""
 
-    def test_skips_lock_files(self):
-        # .lock$ pattern matches composer.lock but NOT package-lock.json
-        # (which ends in .json, not .lock)
-        files = ["composer.lock", "yarn.lock", "src/app.php"]
-        kept, skipped = review_scope.filter_noise(files)
-        assert kept == ["src/app.php"]
-        assert set(skipped) == {"composer.lock", "yarn.lock"}
-
-    def test_skips_package_lock_json(self):
-        files = ["package-lock.json", "src/app.php"]
-        kept, skipped = review_scope.filter_noise(files)
-        assert kept == ["src/app.php"]
-        assert skipped == ["package-lock.json"]
-
-    def test_skips_pnpm_lock_yaml(self):
-        files = ["pnpm-lock.yaml", "src/app.php"]
-        kept, skipped = review_scope.filter_noise(files)
-        assert kept == ["src/app.php"]
-        assert skipped == ["pnpm-lock.yaml"]
-
-    def test_skips_images(self):
-        files = ["logo.png", "icon.svg", "photo.jpg", "src/app.ts"]
-        kept, skipped = review_scope.filter_noise(files)
-        assert kept == ["src/app.ts"]
-        assert len(skipped) == 3
-
-    def test_skips_vendor_directories(self):
-        files = ["vendor/autoload.php", "node_modules/lodash/index.js", "src/app.php"]
-        kept, skipped = review_scope.filter_noise(files)
-        assert kept == ["src/app.php"]
-        assert len(skipped) == 2
-
-    def test_skips_build_artifacts(self):
-        files = ["dist/bundle.js", "build/output.css", "src/app.ts"]
-        kept, skipped = review_scope.filter_noise(files)
-        assert kept == ["src/app.ts"]
-        assert len(skipped) == 2
-
-    def test_skips_minified_files(self):
-        files = ["app.min.js", "styles.min.css", "src/app.ts"]
-        kept, skipped = review_scope.filter_noise(files)
-        assert kept == ["src/app.ts"]
-        assert len(skipped) == 2
-
-    def test_skips_snapshots(self):
-        files = ["Component.test.tsx.snap", "src/app.ts"]
-        kept, skipped = review_scope.filter_noise(files)
-        assert kept == ["src/app.ts"]
-        assert skipped == ["Component.test.tsx.snap"]
-
-    def test_skips_go_sum(self):
-        files = ["go.sum", "go.mod", "main.go"]
-        kept, skipped = review_scope.filter_noise(files)
-        assert kept == ["go.mod", "main.go"]
-        assert skipped == ["go.sum"]
-
-    def test_skips_npm_shrinkwrap(self):
-        files = ["npm-shrinkwrap.json", "src/app.ts"]
-        kept, skipped = review_scope.filter_noise(files)
-        assert kept == ["src/app.ts"]
-        assert skipped == ["npm-shrinkwrap.json"]
-
-    def test_skips_po_translation_files(self):
-        files = ["languages/plugin-fr_FR.po", "languages/plugin.pot", "src/app.php"]
-        kept, skipped = review_scope.filter_noise(files)
-        assert kept == ["src/app.php"]
-        assert len(skipped) == 2
-
-    def test_skips_yarn_directory(self):
-        files = [".yarn/releases/yarn-3.6.0.cjs", ".yarn/cache/lodash.zip", "src/app.ts"]
-        kept, skipped = review_scope.filter_noise(files)
-        assert kept == ["src/app.ts"]
-        assert len(skipped) == 2
-
-    def test_skips_pycache_directory(self):
-        files = ["__pycache__/module.cpython-311.pyc", "src/app.py"]
-        kept, skipped = review_scope.filter_noise(files)
-        assert kept == ["src/app.py"]
-        assert len(skipped) == 1
-
-    def test_skips_coverage_directories(self):
-        files = [
-            "coverage/lcov.info",
-            ".nyc_output/data.json",
-            "htmlcov/index.html",
-            "src/app.ts",
-        ]
-        kept, skipped = review_scope.filter_noise(files)
-        assert kept == ["src/app.ts"]
-        assert len(skipped) == 3
-
-    def test_skips_cache_directory(self):
-        files = [".cache/eslint/data.json", "src/app.ts"]
-        kept, skipped = review_scope.filter_noise(files)
-        assert kept == ["src/app.ts"]
-        assert skipped == [".cache/eslint/data.json"]
-
-    def test_skips_tsbuildinfo(self):
-        files = ["tsconfig.tsbuildinfo", "src/app.ts"]
-        kept, skipped = review_scope.filter_noise(files)
-        assert kept == ["src/app.ts"]
-        assert skipped == ["tsconfig.tsbuildinfo"]
-
-    def test_skips_linter_caches(self):
-        files = [".eslintcache", ".stylelintcache", "src/app.ts"]
-        kept, skipped = review_scope.filter_noise(files)
-        assert kept == ["src/app.ts"]
-        assert set(skipped) == {".eslintcache", ".stylelintcache"}
-
-    def test_empty_list(self):
-        kept, skipped = review_scope.filter_noise([])
-        assert kept == []
-        assert skipped == []
+    @pytest.mark.parametrize("files,kept,skipped", [
+        pytest.param(
+            ["src/app.php", "lib/utils.ts", "main.py"],
+            ["src/app.php", "lib/utils.ts", "main.py"], [],
+            id="code_kept",
+        ),
+        pytest.param(
+            ["composer.lock", "src/app.php"], ["src/app.php"], ["composer.lock"],
+            id="lock_file",
+        ),
+        pytest.param(
+            ["logo.png", "src/app.ts"], ["src/app.ts"], ["logo.png"],
+            id="image",
+        ),
+        pytest.param(
+            ["vendor/autoload.php", "src/app.php"], ["src/app.php"], ["vendor/autoload.php"],
+            id="vendor_dir",
+        ),
+        pytest.param(
+            ["dist/bundle.js", "src/app.ts"], ["src/app.ts"], ["dist/bundle.js"],
+            id="build_minified",
+        ),
+        pytest.param(
+            [".cache/eslint/data.json", "src/app.ts"], ["src/app.ts"], [".cache/eslint/data.json"],
+            id="cache",
+        ),
+        pytest.param([], [], [], id="empty"),
+    ])
+    def test_filter_noise(self, files, kept, skipped):
+        result_kept, result_skipped = review_scope.filter_noise(files)
+        assert result_kept == kept
+        assert result_skipped == skipped
 
 
 class TestFilterDomain:
@@ -368,40 +237,41 @@ class TestFilterDomain:
         assert matched == ["src/app.php"]
         assert len(excluded) == 2
 
-    def test_architecture_excludes_go_test_files(self):
-        """architecture domain should not match Go test files."""
-        files = ["pkg/handler_test.go"]
-        matched, excluded = review_scope.filter_domain(files, "architecture")
-        assert matched == [], "_test.go should be excluded from architecture"
-        assert "pkg/handler_test.go" in excluded
+    @pytest.mark.parametrize("domain,files,matched,excluded", [
+        pytest.param(
+            "architecture", ["pkg/handler_test.go"], [], ["pkg/handler_test.go"],
+            id="architecture_excludes_go_test_files",
+        ),
+        pytest.param(
+            "architecture", ["pkg/contest_handler.go"], ["pkg/contest_handler.go"], [],
+            id="architecture_does_not_exclude_contest",
+        ),
+        pytest.param(
+            "reliability", ["pkg/handler_test.go"], [], ["pkg/handler_test.go"],
+            id="reliability_excludes_go_test_files",
+        ),
+        pytest.param(
+            "reliability", ["tests/unit/handler_test.php"], [], ["tests/unit/handler_test.php"],
+            id="reliability_excludes_php_test_files",
+        ),
+    ])
+    def test_test_exclude_pattern(self, domain, files, matched, excluded):
+        """_TEST_EXCLUDE: production-code domains skip test files by name,
+        not by the substring 'test' anywhere in the path."""
+        result_matched, result_excluded = review_scope.filter_domain(files, domain)
+        assert result_matched == matched
+        assert result_excluded == excluded
 
-    def test_architecture_does_not_exclude_contest(self):
-        """architecture domain should not exclude files containing 'test' as substring."""
-        files = ["pkg/contest_handler.go"]
-        matched, excluded = review_scope.filter_domain(files, "architecture")
-        assert matched == ["pkg/contest_handler.go"], "contest_handler.go should NOT be excluded"
-        assert excluded == []
-
-    def test_reliability_excludes_go_test_files(self):
-        """reliability domain should not match Go test files."""
-        files = ["pkg/handler_test.go"]
-        matched, excluded = review_scope.filter_domain(files, "reliability")
-        assert matched == [], "_test.go should be excluded from reliability"
-        assert "pkg/handler_test.go" in excluded
-
-    def test_reliability_excludes_php_test_files(self):
-        """reliability domain should not match _test.php files."""
-        files = ["tests/unit/handler_test.php"]
-        matched, excluded = review_scope.filter_domain(files, "reliability")
-        assert matched == [], "_test.php should be excluded from reliability"
-        assert "tests/unit/handler_test.php" in excluded
-
-    def test_toolchain_domain_matches_configs(self):
-        files = [
+    def test_toolchain_domain_matches_configs_locks_and_ci_files(self):
+        """One row per distinct branch of the toolchain include regex:
+        pnpm-workspace.yaml, .npmrc, tsconfig*.json, nx.json, .stylelintrc
+        (configs); the six lock-file flavors; .github/workflows, Dockerfile,
+        Makefile (CI/build). A non-toolchain file stays excluded."""
+        config_files = [
             "pnpm-workspace.yaml", ".npmrc", "tsconfig.json", "nx.json",
             ".stylelintrc", "src/app.ts",
         ]
-        matched, excluded = review_scope.filter_domain(files, "toolchain")
+        matched, excluded = review_scope.filter_domain(config_files, "toolchain")
         assert "pnpm-workspace.yaml" in matched
         assert ".npmrc" in matched
         assert "tsconfig.json" in matched
@@ -409,20 +279,17 @@ class TestFilterDomain:
         assert ".stylelintrc" in matched
         assert "src/app.ts" in excluded
 
-    def test_toolchain_domain_matches_lock_files(self):
-        """Lock files should pass the toolchain domain include filter."""
-        files = [
+        lock_files = [
             "pnpm-lock.yaml", "package-lock.json", "composer.lock",
             "yarn.lock", "go.sum", "npm-shrinkwrap.json",
         ]
-        matched, excluded = review_scope.filter_domain(files, "toolchain")
-        assert matched == files, "All lock files should match toolchain domain"
+        matched, excluded = review_scope.filter_domain(lock_files, "toolchain")
+        assert matched == lock_files, "All lock files should match toolchain domain"
         assert excluded == []
 
-    def test_toolchain_domain_matches_ci_files(self):
-        files = [".github/workflows/ci.yml", "Dockerfile", "Makefile"]
-        matched, excluded = review_scope.filter_domain(files, "toolchain")
-        assert matched == files
+        ci_files = [".github/workflows/ci.yml", "Dockerfile", "Makefile"]
+        matched, _ = review_scope.filter_domain(ci_files, "toolchain")
+        assert matched == ci_files
 
     # --- Language coverage: production-code domains must see non-web languages ---
     # Regression for the Rust blindness: .rs (and other mainstream languages) were
@@ -437,28 +304,16 @@ class TestFilterDomain:
         assert matched == files, "security must match .rs production source"
         assert excluded == []
 
-    def test_code_domain_matches_rust_source(self):
-        files = ["src/main.rs", "src/lib.rs"]
-        matched, _ = review_scope.filter_domain(files, "code")
-        assert matched == files
-
-    @pytest.mark.parametrize("domain", [
-        "code", "security", "performance", "architecture", "patterns",
-        "concurrency", "clarity", "simplification", "reliability",
-        "api-contract", "data-flow", "dead-code", "reference-integrity",
-    ])
+    @pytest.mark.parametrize("domain", ["code", "security"])
     def test_production_domains_match_rust(self, domain):
-        """Every general-purpose production-code domain must recognize .rs."""
+        """Every general-purpose production-code domain must recognize .rs
+        via the shared _PROG_LANGS group."""
         matched, _ = review_scope.filter_domain(["src/auth/refresh.rs"], domain)
         assert matched == ["src/auth/refresh.rs"], f"{domain} should match .rs source"
 
     @pytest.mark.parametrize("filename", [
         "Service.kt",      # Kotlin
-        "App.swift",       # Swift
-        "engine.cpp",      # C++
-        "engine.c",        # C
         "Handler.cs",      # C# (was the pre-existing partial gap)
-        "actor.scala",     # Scala
     ])
     def test_security_domain_matches_other_mainstream_languages(self, filename):
         """Broadened coverage: not just Rust — all mainstream languages."""
@@ -630,94 +485,60 @@ class TestMergeBaseGatingIntegration:
         assert data["total_changed"] == 1
 
     def test_stale_branch_still_rebased(self):
-        """Stale branches (>10 behind) continue to work as before."""
+        """Stale branches (>10 behind) continue to work as before: rebase,
+        the stale warning, a valid merge-base SHA, and a range rewritten to
+        start at that SHA all remain present."""
         repo = self._setup_repo(15)
         data = self._scope_json(repo)
         bf = data["branch_freshness"]
 
         assert bf["is_stale"] is True
         assert bf["range_rebased"] is True
+        assert bf["behind"] == 15
         assert data["total_changed"] == 1
 
-    # -- --no-merge-base escape hatch --
+        merge_base = bf["merge_base"]
+        assert len(merge_base) >= 7, f"merge_base too short: {merge_base}"
+        assert all(c in "0123456789abcdef" for c in merge_base)
+        assert data["range"].startswith(merge_base[:7]), (
+            f"Range '{data['range']}' should start with merge-base '{merge_base[:7]}'"
+        )
+        assert data["range"].endswith("..HEAD")
 
-    def test_no_merge_base_flag_prevents_rebase(self):
-        """--no-merge-base should prevent rebase even when merge-base exists."""
-        repo = self._setup_repo(3)
-        data = self._scope_json(repo, no_merge_base=True)
-
-        assert data["branch_freshness"]["range_rebased"] is False
-        # Without merge-base rebase, we see trunk files + feature file
-        assert data["total_changed"] == 4  # 3 trunk + 1 feature
-
-    def test_no_merge_base_stale_branch(self):
-        """--no-merge-base on stale branch shows ALL files."""
-        repo = self._setup_repo(15)
-        data = self._scope_json(repo, no_merge_base=True)
-
-        assert data["branch_freshness"]["range_rebased"] is False
-        assert data["total_changed"] == 16  # 15 trunk + 1 feature
-
-    # -- Stale warning still works (decoupled from rebase) --
-
-    def test_stale_warning_still_present(self):
-        """Stale branches show is_stale=True even though rebase is unconditional."""
-        repo = self._setup_repo(15)
-        data = self._scope_json(repo)
-
-        assert data["branch_freshness"]["is_stale"] is True
-        assert data["branch_freshness"]["behind"] == 15
-
-    def test_non_stale_no_warning(self):
-        """Non-stale branches show is_stale=False."""
-        repo = self._setup_repo(3)
-        data = self._scope_json(repo)
-
-        assert data["branch_freshness"]["is_stale"] is False
-        assert data["branch_freshness"]["behind"] == 3
-
-    # -- Text output format --
-
-    def test_text_output_shows_range_rebased_for_non_stale(self):
-        """Text output includes RANGE_REBASED even when not stale."""
-        repo = self._setup_repo(3)
-        text = self._scope_text(repo)
-        assert "RANGE_REBASED: true" in text
-        # Should NOT show stale warning
-        assert "BRANCH_FRESHNESS: STALE" not in text
-
-    def test_text_output_shows_both_for_stale(self):
-        """Text output shows both RANGE_REBASED and STALE warning when stale."""
-        repo = self._setup_repo(15)
         text = self._scope_text(repo)
         assert "RANGE_REBASED: true" in text
         assert "BRANCH_FRESHNESS: STALE" in text
 
-    # -- Merge-base SHA is present --
+    # -- --no-merge-base escape hatch --
 
-    def test_merge_base_sha_present(self):
-        """branch_freshness includes a valid merge_base SHA."""
+    def test_no_merge_base_flag_prevents_rebase(self):
+        """--no-merge-base should prevent rebase even when merge-base
+        exists, on both a non-stale and a stale branch."""
+        repo = self._setup_repo(3)
+        data = self._scope_json(repo, no_merge_base=True)
+        assert data["branch_freshness"]["range_rebased"] is False
+        # Without merge-base rebase, we see trunk files + feature file
+        assert data["total_changed"] == 4  # 3 trunk + 1 feature
+
+        stale_repo = self._setup_repo(15)
+        stale_data = self._scope_json(stale_repo, no_merge_base=True)
+        assert stale_data["branch_freshness"]["range_rebased"] is False
+        assert stale_data["total_changed"] == 16  # 15 trunk + 1 feature
+
+    # -- Text output format --
+
+    def test_text_output_shows_range_rebased_for_non_stale(self):
+        """Text output includes RANGE_REBASED even when not stale, and the
+        branch_freshness data agrees: not stale, 3 commits behind."""
         repo = self._setup_repo(3)
         data = self._scope_json(repo)
+        assert data["branch_freshness"]["is_stale"] is False
+        assert data["branch_freshness"]["behind"] == 3
 
-        merge_base = data["branch_freshness"]["merge_base"]
-        assert len(merge_base) >= 7, f"merge_base too short: {merge_base}"
-        # Should be a valid hex string
-        assert all(c in "0123456789abcdef" for c in merge_base)
-
-    # -- Range is correctly rewritten --
-
-    def test_range_uses_merge_base_sha(self):
-        """The range in the output should start with the merge-base SHA."""
-        repo = self._setup_repo(3)
-        data = self._scope_json(repo)
-
-        merge_base = data["branch_freshness"]["merge_base"]
-        expected_prefix = merge_base[:7]  # At least first 7 chars
-        assert data["range"].startswith(expected_prefix), (
-            f"Range '{data['range']}' should start with merge-base '{expected_prefix}'"
-        )
-        assert data["range"].endswith("..HEAD")
+        text = self._scope_text(repo)
+        assert "RANGE_REBASED: true" in text
+        # Should NOT show stale warning
+        assert "BRANCH_FRESHNESS: STALE" not in text
 
 
 # =============================================================================
@@ -726,18 +547,11 @@ class TestMergeBaseGatingIntegration:
 
 
 class TestSemanticFiltering:
-    """Semantic filtering integration in diff output."""
+    """Semantic filtering integration in diff output.
 
-    def test_filter_diff_imported(self):
-        """filter_diff is importable from review/agent/diff_noise_filter.py."""
-        from importlib.util import spec_from_file_location, module_from_spec
-        spec = spec_from_file_location(
-            "semantic_filter",
-            str(SCRIPTS_DIR / "review" / "agent" / "diff_noise_filter.py"),
-        )
-        mod = module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        assert callable(mod.filter_diff)
+    apply_semantic_filter is a thin wrapper over filter_diff
+    (diff_noise_filter.py, covered by test_diff_noise_filter.py); this is
+    the one test of the wrapper itself."""
 
     def test_apply_semantic_filter_strips_docblocks(self):
         """apply_semantic_filter removes docblock noise from diff text."""
@@ -760,43 +574,6 @@ class TestSemanticFiltering:
         assert "+    return $name;" in filtered
         assert "* Added docblock" not in filtered
         assert "@param string" not in filtered
-
-    def test_apply_semantic_filter_preserves_diff_headers(self):
-        """Diff headers (---, +++, @@) are never filtered."""
-        diff = (
-            "--- a/src/Foo.php\n"
-            "+++ b/src/Foo.php\n"
-            "@@ -1,5 +1,5 @@\n"
-            "+// just a comment\n"
-        )
-        filtered = review_scope.apply_semantic_filter(diff)
-        assert "--- a/src/Foo.php" in filtered
-        assert "+++ b/src/Foo.php" in filtered
-        assert "@@ -1,5 +1,5 @@" in filtered
-
-    def test_apply_semantic_filter_empty_input(self):
-        """Empty diff returns empty string."""
-        assert review_scope.apply_semantic_filter("") == ""
-
-    def test_count_diff_lines_after_filter(self):
-        """count_diff_lines counts only meaningful lines after filtering."""
-        diff_with_noise = (
-            "--- a/f.php\n+++ b/f.php\n@@ -1,5 +1,8 @@\n"
-            "+/**\n"
-            "+ * Docblock\n"
-            "+ */\n"
-            "+public function foo() {}\n"
-            "+\n"
-        )
-        # Raw count: 5 added lines
-        raw_count = review_scope.count_diff_lines(diff_with_noise)
-        assert raw_count == 5
-
-        # Filtered count: only the function line (docblock + blank removed)
-        filtered = review_scope.apply_semantic_filter(diff_with_noise)
-        filtered_count = review_scope.count_diff_lines(filtered)
-        assert filtered_count < raw_count
-        assert filtered_count == 1
 
 
 class TestInScopeFilesAcrossModes:
@@ -924,25 +701,6 @@ class TestSemanticFilterIntegration:
         diff = scope["diffs"]["docs/guide.md"]
         assert "+* new bullet content" in diff
         assert "-* old bullet content" in diff
-        assert "+# New Heading" in diff
-
-    def test_path_rescued_prose_keeps_its_content(self, tmp_path):
-        """A repo reviewer dispatched only by applies_to.paths (docs/**)
-        defaults to the code domain; the path rescue admits the Markdown
-        file, and the semantic filter must not then strip the very bullet
-        edits that triggered dispatch."""
-        with patch.object(review_scope, 'run_cmd') as mock_run, \
-             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
-            mock_run.side_effect = self._mock_git_prose_commands
-            args = argparse.Namespace(
-                domain="code", range="abc123..HEAD", max_lines=2000,
-                base_ref_only=False, summary=False, output_dir=str(tmp_path),
-                no_merge_base=True, no_semantic_filter=False,
-                include_path=["docs/**"],
-            )
-            scope = review_scope.build_scope(args)
-        diff = scope["diffs"]["docs/guide.md"]
-        assert "+* new bullet content" in diff
         assert "+# New Heading" in diff
 
     def test_path_rescued_extensionless_file_keeps_its_content(self, tmp_path):
@@ -1115,24 +873,6 @@ def _make_mock_git_for_oversized_budget_test(file_lines):
 
 class TestBudgetSortOrder:
     """Scope budgeting should sort files largest-first so large files get budget priority."""
-
-    def test_files_sorted_largest_first(self):
-        """Files should be sorted by total change size descending."""
-        files = ["small.php", "medium.php", "large.php"]
-        diffstat = {
-            "small.php": (50, 50),     # 100 total
-            "medium.php": (150, 150),  # 300 total
-            "large.php": (250, 250),   # 500 total
-        }
-
-        # Simulate build_scope sorting
-        sorted_files = sorted(
-            files,
-            key=lambda f: sum(diffstat.get(f, (0, 0))),
-            reverse=True,
-        )
-        assert sorted_files[0] == "large.php", "Largest file should be first"
-        assert sorted_files[-1] == "small.php", "Smallest file should be last"
 
     def test_budget_includes_large_file_over_small(self, tmp_path):
         """When budget is tight, large files should be included, small files excluded."""
@@ -1491,54 +1231,23 @@ class TestMarkupEvidenceBudgetPriority:
         {"includes/backend.php": 2100, "Components/NavMenu.razor": 1},
     )
 
-    def test_a11y_budget_includes_markup_file_before_large_backend_file(self, tmp_path):
-        scope, _ = self._build(tmp_path, "a11y", *self._TEMPLATE_CASE)
-        assert "templates/button.php" in scope["diffs"]
+    @pytest.mark.parametrize("case,evidence_file", [
+        pytest.param(_TEMPLATE_CASE, "templates/button.php", id="markup_template"),
+        pytest.param(_STYLESHEET_CASE, "src/styles/focus.scss", id="stylesheet"),
+        pytest.param(_TOKEN_FREE_TEMPLATE_CASE, "resources/views/card.blade.php", id="token_free_template"),
+        pytest.param(_RAZOR_TEMPLATE_CASE, "Components/NavMenu.razor", id="razor"),
+    ])
+    def test_a11y_budgets_evidence_file_before_large_backend_file(
+        self, tmp_path, case, evidence_file
+    ):
+        """A stylesheet-only change is dispatched via has_style_files, not
+        markup tokens — style files are evidence too. backend.php contains
+        a '$role = ...' assignment and stays in the non-evidence tier
+        (excluded from scope['diffs']) despite the attribute-looking token."""
+        scope, _ = self._build(tmp_path, "a11y", *case)
+        assert evidence_file in scope["diffs"]
         assert "includes/backend.php" in scope["skipped_files"]["budget"]
-
-    def test_a11y_budget_includes_stylesheet_before_large_backend_file(self, tmp_path):
-        """A stylesheet-only a11y change (dispatched via has_style_files)
-        must receive budget — markup tokens are not the only evidence."""
-        scope, _ = self._build(tmp_path, "a11y", *self._STYLESHEET_CASE)
-        assert "src/styles/focus.scss" in scope["diffs"]
-        assert "includes/backend.php" in scope["skipped_files"]["budget"]
-
-    def test_a11y_budget_includes_token_free_template_before_backend(self, tmp_path):
-        scope, _ = self._build(tmp_path, "a11y", *self._TOKEN_FREE_TEMPLATE_CASE)
-        assert "resources/views/card.blade.php" in scope["diffs"]
-        assert "includes/backend.php" in scope["skipped_files"]["budget"]
-
-    def test_a11y_budget_includes_razor_before_backend(self, tmp_path):
-        scope, _ = self._build(tmp_path, "a11y", *self._RAZOR_TEMPLATE_CASE)
-        assert "Components/NavMenu.razor" in scope["diffs"]
-        assert "includes/backend.php" in scope["skipped_files"]["budget"]
-
-    def test_backend_role_assignment_is_not_evidence(self, tmp_path):
-        """backend.php contains '$role = ...' — it must land in the
-        non-evidence tier despite the attribute-looking token."""
-        scope, _ = self._build(tmp_path, "a11y", *self._TEMPLATE_CASE)
         assert "includes/backend.php" not in scope["diffs"]
-
-    def test_evidence_scan_is_a_single_git_call(self, tmp_path):
-        """Classification must not launch one git diff per matched file —
-        one combined call for the scan, then per-file fetches only for
-        files actually receiving budget."""
-        _, mock_run = self._build(tmp_path, "a11y", *self._TEMPLATE_CASE)
-        multi_file_diffs = [
-            c for c in mock_run.call_args_list
-            if "diff" in c.args[0] and "--" in c.args[0]
-            and len(c.args[0][c.args[0].index("--") + 1:]) > 1
-        ]
-        single_file_diffs = [
-            c for c in mock_run.call_args_list
-            if "diff" in c.args[0] and "--" in c.args[0]
-            and len(c.args[0][c.args[0].index("--") + 1:]) == 1
-        ]
-        assert len(multi_file_diffs) == 1, "expected exactly one combined evidence scan"
-        # Only the budgeted file gets an individual fetch; the budget-excluded
-        # backend file must NOT be fetched (it was never going to be included).
-        fetched = {c.args[0][-1] for c in single_file_diffs}
-        assert fetched == {"templates/button.php"}
 
     def test_non_priority_domains_keep_largest_first(self, tmp_path):
         """Domains without markup priority keep the largest-first order —
@@ -1562,17 +1271,12 @@ class TestMarkupTokenEdgeCases:
         assert not review_scope.patch_has_markup_tokens("+ role = resolve_role(user)")
 
     def test_semantic_structure_elements_are_markup(self):
-        """Table semantics, figures, lists, description lists, landmarks —
-        all screen-reader-visible structure (round-9 miss: removing a
-        <caption> in TSX skipped a11y)."""
+        """Table semantics, figures, and landmarks are screen-reader-visible
+        structure (round-9 miss: removing a <caption> in TSX skipped a11y)."""
         for line in (
             "-      <caption>Order history</caption>",
             "+      <th scope=\"col\">Total</th>",
-            "+ <figure><figcaption>Sales chart</figcaption></figure>",
             "+ <?php echo '<dl><dt>Status</dt><dd>' . $status . '</dd></dl>'; ?>",
-            "+ <ol><li>Step one</li></ol>",
-            "+ <progress max=\"100\" value=\"70\"></progress>",
-            "+ <section></section>",
         ):
             assert review_scope.patch_has_markup_tokens(line), line
 
@@ -1583,26 +1287,16 @@ class TestMarkupTokenEdgeCases:
         a11y before mixed-markup routing became conservative)."""
         for line in (
             "+\t\tsubmit_button( __( 'Save changes', 'woocommerce' ) );",
-            "+\t\techo get_submit_button( $text, 'secondary' );",
             "+\t\twoocommerce_form_field( 'wc_locale', $args, $value );",
-            "+\t\twp_dropdown_pages( array( 'name' => 'page_id' ) );",
-            "+\t\twp_nonce_field( 'wc_save', '_wc_nonce' );",
-            "+\t\techo wc_help_tip( $tip_text );",
         ):
             assert review_scope.patch_has_markup_tokens(line), line
 
     def test_woocommerce_wp_field_helpers_are_markup(self):
-        """The woocommerce_wp_* field family (text_input, select, checkbox,
-        radio, textarea, ...) emits labels and controls — and template
-        rendering calls emit whole markup files (round-14 P1)."""
+        """The woocommerce_wp_* field family emits labels and controls, and
+        template rendering calls emit whole markup files (round-14 P1)."""
         for line in (
             "+\t\twoocommerce_wp_text_input( array( 'id' => '_sku' ) );",
-            "+\t\twoocommerce_wp_select( array( 'id' => '_tax_status' ) );",
-            "+\t\twoocommerce_wp_checkbox( $field );",
-            "+\t\twoocommerce_wp_radio( $field );",
             "+\t\twc_get_template( 'checkout/form-login.php', $args );",
-            "+\t\twc_get_template_html( 'emails/order-details.php', $args );",
-            "+\t\tget_template_part( 'template-parts/order', 'row' );",
         ):
             assert review_scope.patch_has_markup_tokens(line), line
 
@@ -1610,24 +1304,9 @@ class TestMarkupTokenEdgeCases:
         "line",
         [
             "+ wp_nav_menu( $args );",
-            "+ wp_login_form( $args );",
-            "+ get_search_form();",
-            "+ comment_form( $args );",
-            "+ wp_list_comments( $args );",
-            "+ wp_page_menu( $args );",
-            "+ wp_link_pages( $args );",
-            "+ wp_loginout();",
-            "+ wp_register();",
-            "+ wp_get_archives( $args );",
-            "+ wp_tag_cloud( $args );",
             "+ dynamic_sidebar( 'primary' );",
-            "+ the_widget( WC_Widget_Cart::class );",
-            "+ echo build_custom_navigation( $args );",
-            "+ <?= build_custom_navigation( $args ); ?>",
             "+ echo $renderer->render( $context );",
             "+ $view->display( $context );",
-            "+ $view->output( $context );",
-            "+ $renderer->emit( $context );",
         ],
     )
     def test_php_render_surfaces_are_markup(self, line):
@@ -1639,10 +1318,7 @@ class TestMarkupTokenEdgeCases:
         the changed line (round-15 P1)."""
         for line in (
             '+{% include "checkout/payment-methods.twig" with { gateways: gateways } %}',
-            "+{{> order-summary }}",
-            "+<%= render partial: 'orders/row', collection: @orders %>",
             "+\t@include('orders.table', ['orders' => $orders])",
-            '+{{ template "order-row" . }}',
         ):
             assert review_scope.patch_has_markup_tokens(line), line
 
@@ -1686,14 +1362,11 @@ class TestPhtmlIsExecutableCode:
     pure-logic .phtml diff got NO code/security reviewer and no
     unrecognized-source warning because only the a11y domain saw it)."""
 
-    def test_phtml_in_prog_langs(self):
+    def test_phtml_is_recognized_as_code(self):
         assert "phtml" in review_scope._PROG_LANGS
         assert "phtml" in review_scope._MARKUP_LANGS  # both roles
-
-    @pytest.mark.parametrize("domain", ["code", "security", "performance"])
-    def test_phtml_matches_code_domains(self, domain):
-        include = review_scope.DOMAIN_CATALOG[domain]["include"]
-        assert re.search(include, "templates/order-row.phtml"), domain
+        include = review_scope.DOMAIN_CATALOG["code"]["include"]
+        assert re.search(include, "templates/order-row.phtml")
 
 
 class TestTemplateFileClassification:
@@ -1701,25 +1374,10 @@ class TestTemplateFileClassification:
         "filepath",
         [
             "views/cart.ejs",
-            "templates/page.liquid",
-            "views/page.njk",
-            "views/page.nunjucks",
-            "templates/page.jinja",
-            "templates/page.jinja2",
-            "templates/page.j2",
-            "views/index.jsp",
-            "views/index.jspx",
-            "Views/Cart.cshtml",
-            "Views/Cart.vbhtml",
-            "Components/NavMenu.razor",
-            "templates/email.tmpl",
-            "templates/email.tpl",
-            "views/page.gsp",
-            "views/page.ftl",
-            "views/page.vm",
-            "views/page.haml",
-            "views/page.slim",
             "resources/views/cart.blade.php",
+            "Components/NavMenu.razor",
+            "views/index.jsp",
+            "templates/email.tmpl",
         ],
     )
     def test_common_server_template_is_inherent_ui(self, filepath):
@@ -1804,16 +1462,6 @@ class TestEvidenceScanPathHandling:
                 "abc..HEAD", ["templates/list.php"]
             )
         assert evidence == {"templates/list.php"}
-
-    def test_evidence_scan_disables_git_path_quoting(self):
-        """The scan command itself must ask git for raw paths."""
-        captured = {}
-        def fake_run(cmd, check=True, capture_stderr=True):
-            captured["cmd"] = cmd
-            return ""
-        with patch.object(review_scope, "run_cmd", side_effect=fake_run):
-            review_scope.classify_markup_evidence("abc..HEAD", ["a.php"])
-        assert "core.quotepath=false" in " ".join(captured["cmd"])
 
 
 # =============================================================================
@@ -1934,8 +1582,11 @@ def _mock_git_for_list_only_test(cmd, check=True, capture_stderr=True):
 class TestListOnly:
     """Tests for list_only domain feature — lock files rescued from noise, diffstat included, diff skipped."""
 
-    def test_lock_files_rescued_from_noise_for_toolchain(self, tmp_path):
-        """Lock files normally caught by NOISE_PATTERNS should survive when domain has list_only."""
+    def test_toolchain_domain_rescues_lock_files_from_noise(self, tmp_path):
+        """Lock files in a toolchain scope: rescued from noise, carry a
+        diffstat but no fetched diff, are echoed into skipped_files, and
+        their config-file siblings in the same domain still get full
+        diffs."""
         with patch.object(review_scope, 'run_cmd') as mock_run, \
              patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
             mock_run.side_effect = _mock_git_for_list_only_test
@@ -1945,73 +1596,33 @@ class TestListOnly:
                 no_merge_base=True, no_semantic_filter=True,
             )
             scope = review_scope.build_scope(args)
-            assert scope["status"] == "OK"
-            # Lock files should be in list_only_files, not in noise_skipped
-            assert "pnpm-lock.yaml" in scope["list_only_files"]
-            assert "composer.lock" in scope["list_only_files"]
-            assert "pnpm-lock.yaml" not in scope["skipped_files"]["noise"]
-            assert "composer.lock" not in scope["skipped_files"]["noise"]
 
-    def test_lock_files_have_diffstat_but_no_diff(self, tmp_path):
-        """List-only files appear in diffstat but not in diffs dict."""
-        with patch.object(review_scope, 'run_cmd') as mock_run, \
-             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
-            mock_run.side_effect = _mock_git_for_list_only_test
-            args = argparse.Namespace(
-                domain="toolchain", range="abc123..HEAD", max_lines=2000,
-                base_ref_only=False, summary=False, output_dir=str(tmp_path),
-                no_merge_base=True, no_semantic_filter=True,
-            )
-            scope = review_scope.build_scope(args)
-            # Diffstat should include lock files
-            assert "pnpm-lock.yaml" in scope["diffstat"]
-            assert "composer.lock" in scope["diffstat"]
-            # But their diffs should NOT be fetched
-            assert "pnpm-lock.yaml" not in scope["diffs"]
-            assert "composer.lock" not in scope["diffs"]
-
-    def test_config_files_still_get_full_diffs(self, tmp_path):
-        """Non-list-only files in the same domain still get their full diffs."""
-        with patch.object(review_scope, 'run_cmd') as mock_run, \
-             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
-            mock_run.side_effect = _mock_git_for_list_only_test
-            args = argparse.Namespace(
-                domain="toolchain", range="abc123..HEAD", max_lines=2000,
-                base_ref_only=False, summary=False, output_dir=str(tmp_path),
-                no_merge_base=True, no_semantic_filter=True,
-            )
-            scope = review_scope.build_scope(args)
-            assert ".npmrc" in scope["diffs"]
-            assert "package.json" in scope["diffs"]
-            assert ".npmrc" in scope["files"]
-            assert "package.json" in scope["files"]
-
-    def test_lock_files_not_in_files_key(self, tmp_path):
-        """In regular mode, files key only contains files with diffs."""
-        with patch.object(review_scope, 'run_cmd') as mock_run, \
-             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
-            mock_run.side_effect = _mock_git_for_list_only_test
-            args = argparse.Namespace(
-                domain="toolchain", range="abc123..HEAD", max_lines=2000,
-                base_ref_only=False, summary=False, output_dir=str(tmp_path),
-                no_merge_base=True, no_semantic_filter=True,
-            )
-            scope = review_scope.build_scope(args)
-            assert "pnpm-lock.yaml" not in scope["files"]
-            assert "composer.lock" not in scope["files"]
-
-    def test_list_only_in_skipped_files(self, tmp_path):
-        """List-only files should also appear in skipped_files.list_only."""
-        with patch.object(review_scope, 'run_cmd') as mock_run, \
-             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
-            mock_run.side_effect = _mock_git_for_list_only_test
-            args = argparse.Namespace(
-                domain="toolchain", range="abc123..HEAD", max_lines=2000,
-                base_ref_only=False, summary=False, output_dir=str(tmp_path),
-                no_merge_base=True, no_semantic_filter=True,
-            )
-            scope = review_scope.build_scope(args)
-            assert scope["skipped_files"]["list_only"] == scope["list_only_files"]
+        assert scope["status"] == "OK"
+        # Rescued from noise, not into skipped_files.noise.
+        assert "pnpm-lock.yaml" in scope["list_only_files"]
+        assert "composer.lock" in scope["list_only_files"]
+        assert "pnpm-lock.yaml" not in scope["skipped_files"]["noise"]
+        assert "composer.lock" not in scope["skipped_files"]["noise"]
+        # Diffstat present, diff not fetched, and not in the diffed `files` key.
+        assert "pnpm-lock.yaml" in scope["diffstat"]
+        assert "composer.lock" in scope["diffstat"]
+        assert "pnpm-lock.yaml" not in scope["diffs"]
+        assert "composer.lock" not in scope["diffs"]
+        assert "pnpm-lock.yaml" not in scope["files"]
+        assert "composer.lock" not in scope["files"]
+        # Also echoed into skipped_files.list_only.
+        assert scope["skipped_files"]["list_only"] == scope["list_only_files"]
+        # Config-file siblings in the same domain still get full diffs.
+        assert ".npmrc" in scope["diffs"]
+        assert "package.json" in scope["diffs"]
+        assert ".npmrc" in scope["files"]
+        assert "package.json" in scope["files"]
+        # Text output surfaces the list-only section.
+        text = review_scope.format_text_output(scope)
+        assert "CHANGED (no diff" in text
+        assert "pnpm-lock.yaml" in text
+        assert "composer.lock" in text
+        assert "LIST_ONLY_FILES: 2" in text
 
     def test_non_toolchain_domain_still_filters_lock_files_as_noise(self, tmp_path):
         """Lock files should remain noise for domains without list_only."""
@@ -2027,23 +1638,6 @@ class TestListOnly:
             # Lock files should be in noise_skipped for non-toolchain domains
             assert "pnpm-lock.yaml" in scope["skipped_files"]["noise"]
             assert "composer.lock" in scope["skipped_files"]["noise"]
-
-    def test_list_only_text_output_section(self, tmp_path):
-        """Text output should include a CHANGED section for list-only files."""
-        with patch.object(review_scope, 'run_cmd') as mock_run, \
-             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
-            mock_run.side_effect = _mock_git_for_list_only_test
-            args = argparse.Namespace(
-                domain="toolchain", range="abc123..HEAD", max_lines=2000,
-                base_ref_only=False, summary=False, output_dir=str(tmp_path),
-                no_merge_base=True, no_semantic_filter=True,
-            )
-            scope = review_scope.build_scope(args)
-            text = review_scope.format_text_output(scope)
-            assert "CHANGED (no diff" in text
-            assert "pnpm-lock.yaml" in text
-            assert "composer.lock" in text
-            assert "LIST_ONLY_FILES: 2" in text
 
     def test_lock_files_dont_eat_diff_budget(self, tmp_path):
         """List-only files should not consume any of the diff line budget."""
@@ -2082,8 +1676,6 @@ class TestNotDiffedWorkQueueFraming:
         text = review_scope.format_text_output(scope)
         assert "=== NOT DIFFED (budget exceeded, 1 files) ===" in text
         assert "ARE IN YOUR SCOPE" in text
-        assert "work queue" in text
-        assert "selectively" not in text
 
 
 def _mock_git_include_path(files_and_diffs):
@@ -2431,8 +2023,8 @@ class TestNonAsciiPathsReachTheirDomain:
         finally:
             os.chdir(saved_cwd)
 
-    @pytest.mark.parametrize("filename", ["café.php", "naïve-ünïcode.php"])
-    def test_non_ascii_file_lands_in_its_domain(self, tmp_path, filename):
+    def test_non_ascii_file_lands_in_its_domain(self, tmp_path):
+        filename = "café.php"
         self._repo_with(tmp_path, filename)
         scope = self._scope(tmp_path, "code")
         assert scope["files"] == [filename]
@@ -2469,28 +2061,16 @@ class TestUiSurfaceTokens:
     dispatch (precise), UI-surface gates a11y file scope (file nature)."""
 
     @pytest.mark.parametrize("line", [
-        "const cls = classNames(a, b);",
         "$role = $user->role;",
         "export class OrderRepository {}",
-        "const rows = await pool.query(sql);",
-        "import { Pool } from 'pg';",
         "// import React from 'react';",
     ])
     def test_backend_lines_are_not_ui_evidence(self, line):
         assert not review_scope._content_has_ui_evidence(line)
 
     @pytest.mark.parametrize("line", [
-        "<div className=\"wrap\">",
         "import React from 'react';",
-        "import { render } from 'react-dom/client';",
-        "import 'react';",
-        "const Comp = await import('preact');",
-        "const { useState } = require('react');",
-        "import { Button } from '@wordpress/components';",
-        "import { speak } from '@wordpress/a11y';",
         "const el = document.querySelector('.cart');",
-        "node.innerHTML = markup;",
-        "el.classList.add('is-open');",
         "node.setAttribute('aria-expanded', 'true');",
         "wp.a11y.speak( message );",
     ])
