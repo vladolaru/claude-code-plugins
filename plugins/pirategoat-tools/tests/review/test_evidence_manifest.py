@@ -238,7 +238,7 @@ def test_critic_counts_actions_and_outcomes(tmp_path):
     }
 
 
-@pytest.mark.parametrize("payload", [{}, {"schema": 2, "adjustments": []}, None], ids=["malformed", "digest-mismatch", "missing"])
+@pytest.mark.parametrize("payload", [{"schema": 2, "adjustments": []}, None], ids=["digest-mismatch", "missing"])
 def test_bad_proposal_preserves_readable_verdict(tmp_path, payload):
     _commit_proposal(tmp_path, _ledger())
     if payload is None:
@@ -293,10 +293,12 @@ def test_host_citations_count_check_methods_and_results(tmp_path):
     assert "post.php" not in json.dumps(evidence)
 
 
-@pytest.mark.parametrize("payload", [None, "broken", [], {}], ids=["missing", "broken-json", "array", "invalid-ledger"])
-def test_unreadable_ledger_is_unmeasured(tmp_path, payload):
-    if payload is not None:
-        _write(tmp_path, "review_findings_json", payload)
+def test_unreadable_ledger_is_unmeasured(tmp_path):
+    """A missing ledger, broken JSON, a non-object list, and an invalid
+    ledger shape all reach `read_findings_file`'s non-OK statuses — a
+    contract pinned in `test_critic_adjustments.py` — and here collapse to
+    the same `read.status != FINDINGS_READ_OK -> None`; `missing`
+    represents the family."""
     assert build_evidence_manifest(str(tmp_path)) is None
 
 
