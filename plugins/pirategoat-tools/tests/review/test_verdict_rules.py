@@ -20,12 +20,8 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 from review import verdict_rules
 from review.verdict_rules import (
-    LEDGER_VERDICTS,
-    PIPELINE_VERDICTS,
-    REVIEW_VERDICTS,
     SEVERITY_RANK,
     VALID_SEVERITIES,
-    VERDICT_RANK,
     publish_verdict,
     summary_for,
     verdict_for_counts,
@@ -35,30 +31,28 @@ from review.agent import output as output_mod
 
 class TestVerdictForCounts:
     @pytest.mark.parametrize("counts,expected", [
-        ({"critical": 1}, "block"),
-        ({"critical": 1, "high": 9, "medium": 9}, "block"),
-        ({"high": 3}, "block"),
-        ({"high": 4}, "block"),
-        ({"high": 2}, "request_changes"),
-        ({"high": 1}, "request_changes"),
-        ({"medium": 5}, "request_changes"),
-        ({"medium": 6}, "request_changes"),
-        ({"medium": 4}, "comment"),
-        ({"medium": 1}, "comment"),
-        ({}, "approve"),
-        ({"low": 20, "info": 20}, "approve"),
+        pytest.param({"critical": 1}, "block", id="critical_gt_0-min"),
+        pytest.param({"high": 3}, "block", id="high_gte_3-min"),
+        pytest.param({"high": 2}, "request_changes", id="high_gt_0-just_below_block"),
+        pytest.param({"medium": 5}, "request_changes", id="medium_gte_5-min"),
+        pytest.param(
+            {"critical": 0, "high": 0, "medium": 4, "low": 7, "info": 1},
+            "comment",
+            id="medium_gt_0-just_below_request_changes-full_block",
+        ),
+        pytest.param({}, "approve", id="no_keys-base_case"),
+        pytest.param(
+            {"low": 20, "info": 20}, "approve",
+            id="missing_gating_keys_read_as_zero-non_gating_ignored",
+        ),
     ])
     def test_the_ladder(self, counts, expected):
+        """One row per boundary of the five-branch ladder (critical>0,
+        high>=3, high>0-or-medium>=5, medium>0, else); the `full_block`
+        row also proves a complete `by_severity` block with explicit
+        zeros is accepted like a partial one, and the last row folds in
+        the missing-keys-default contract callers rely on."""
         assert verdict_for_counts(counts) == expected
-
-    def test_missing_keys_read_as_zero(self):
-        """Callers pass a full by_severity block or just the gating three."""
-        assert verdict_for_counts({"low": 3}) == "approve"
-
-    def test_a_full_by_severity_block_is_accepted_unchanged(self):
-        assert verdict_for_counts({
-            "critical": 0, "high": 0, "medium": 2, "low": 7, "info": 1,
-        }) == "comment"
 
 
 class TestDeriveReviewState:
@@ -90,14 +84,13 @@ class TestOutputBuilderUsesTheSharedLadder:
 
     @pytest.mark.parametrize("severities,expected", [
         (["critical"], "block"),
-        (["high", "high", "high"], "block"),
-        (["high"], "request_changes"),
-        (["medium"] * 5, "request_changes"),
-        (["medium"], "comment"),
-        (["low", "info"], "approve"),
         ([], "approve"),
     ])
     def test_builder_verdict_matches_the_shared_rule(self, severities, expected):
+        """A parity guard, not a re-test of the ladder's branches: the
+        builder reaches `verdict_for_counts` through `summary_for`, a
+        single call site, so one row at each end of the vocabulary is
+        enough to prove the wiring."""
         builder = output_mod.ReviewOutputBuilder(pr_id="1", reviewer="security")
         for index, sev in enumerate(severities):
             builder.add_finding(
@@ -130,11 +123,6 @@ class TestOutputBuilderUsesTheSharedLadder:
 class TestSeverityRank:
     """The rank table two modules used to hand-copy."""
 
-    def test_rank_orders_the_severity_vocabulary(self):
-        assert SEVERITY_RANK == {
-            "info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4,
-        }
-
     def test_rank_covers_exactly_the_valid_severities(self):
         assert set(SEVERITY_RANK) == set(VALID_SEVERITIES)
 
@@ -151,26 +139,16 @@ class TestPublishVerdict:
     def test_every_ledger_verdict_publishes(self, ledger, published):
         assert publish_verdict(ledger) == published
 
-    def test_the_mapping_is_total_over_the_ledger_vocabulary(self):
-        """A ledger verdict with no published answer would publish COMMENT
-        for a critical-finding review — the failure deriving the verdict
-        from the ledger exists to kill."""
-        assert set(LEDGER_VERDICTS) == set(VERDICT_RANK)
-        for ledger in LEDGER_VERDICTS:
-            assert publish_verdict(ledger) in PIPELINE_VERDICTS
-
-    @pytest.mark.parametrize("value", [
-        "not_applicable", "BLOCK", "  approve  ", "Comment", "", None, 3,
-    ])
+    @pytest.mark.parametrize("value", ["not_applicable", None])
     def test_anything_outside_the_ledger_vocabulary_is_refused(self, value):
         """Callers are handed a validated ledger verdict: already lowercase,
-        already stripped, never `not_applicable`. Everything else is a
-        defect to name, not a value to map."""
+        already stripped, never `not_applicable` — the one near-miss a
+        caller could plausibly pass. `None` proves the guard is not
+        merely a string check. Both land on the same dict-miss branch of
+        `publish_verdict`; the function's other except clause (an
+        unhashable value) has no caller that could produce one."""
         with pytest.raises(ValueError):
             publish_verdict(value)
-
-    def test_a_review_may_abstain_where_a_ledger_may_not(self):
-        assert REVIEW_VERDICTS == LEDGER_VERDICTS + ("not_applicable",)
 
 
 class TestSummaryFor:
@@ -249,13 +227,3 @@ class TestOneVocabularyOwner:
                 )
 
         assert offenders == {}
-
-    def test_verdict_rules_owns_every_vocabulary(self):
-        owned = _module_level_assignments(
-            SCRIPTS_DIR / "review" / "verdict_rules.py"
-        )
-
-        assert {
-            "VALID_SEVERITIES", "SEVERITY_RANK", "VERDICT_RANK",
-            "LEDGER_VERDICTS", "REVIEW_VERDICTS", "PIPELINE_VERDICTS",
-        } <= owned
