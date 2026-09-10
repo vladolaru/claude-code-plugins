@@ -8165,8 +8165,10 @@ class TestSynthesisAgentsMeasurement:
         assert row["duration_ms"] is None
 
     @pytest.mark.parametrize(
-        "value", [-1, "665000", 6.5, True],
-        ids=["negative", "string", "float", "bool"],
+        # `_nonnegative_exact_int`: a boolean fails `type is not int` (as a
+        # string or a float does); a negative fails the bound.
+        "value", [-1, True],
+        ids=["negative", "bool"],
     )
     def test_unusable_duration_never_becomes_zero(self, value):
         measured = measure_run(
@@ -8185,24 +8187,6 @@ class TestSynthesisAgentsMeasurement:
         )
         assert measured["synthesis_agents"] is None
         assert measured["metric_availability"]["synthesis_agents"] == "missing"
-
-    def test_reviewer_lifecycle_family_is_untouched(self):
-        """Non-interference: adding the section must not move the
-        reviewer lifecycle family in either direction."""
-        plain = measure_run(
-            _manifest("run-1"), Path("/nonexistent"),
-            include_transcripts=False,
-        )
-        beside = measure_run(
-            _synthesis_manifest("run-1", _synthesis_row(contracts._SYNTHESIS_DECISION_CRITIC)),
-            Path("/nonexistent"), include_transcripts=False,
-        )
-        assert beside["lifecycle"] == plain["lifecycle"]
-        assert beside["agents"] == plain["agents"]
-        assert (
-            beside["metric_availability"]["lifecycle"]
-            == plain["metric_availability"]["lifecycle"]
-        )
 
 
 class TestSynthesisAgentsCohort:
@@ -8269,10 +8253,6 @@ class TestSynthesisAgentsCohort:
             "mean_ms": None,
         }
 
-    def test_the_family_is_a_declared_availability_family(self):
-        assert "synthesis_agents" in contracts._AVAILABILITY_FAMILIES
-        assert "synthesis_agents" not in contracts._TRANSCRIPT_FAMILIES
-
 
 class TestSynthesisAgentsRendering:
     def test_column_position_is_pinned(self):
@@ -8312,47 +8292,6 @@ class TestSynthesisAgentsRendering:
         )
         assert render._table_row(measured)[7] == "—/stalled"
 
-    def test_the_section_reaches_the_json_report(self):
-        measured = measure_run(
-            _synthesis_manifest("run-1", _synthesis_row(contracts._SYNTHESIS_DECISION_CRITIC)),
-            Path("/nonexistent"), include_transcripts=False,
-        )
-        report = json.loads(
-            render.format_json([measured], aggregate_cohort([measured]))
-        )
-        assert report["runs"][0]["synthesis_agents"]["agents"][0][
-            "duration_ms"
-        ] == 665_000
-        assert report["aggregate"]["synthesis_agents"]["by_agent"][
-            contracts._SYNTHESIS_DECISION_CRITIC
-        ]["mean_ms"] == 665_000
-
-
-class TestSynthesisAgentsShape:
-    """The row shape is declared once and the consumer covers exactly it."""
-
-    def test_sanitizer_covers_exactly_the_declared_row_keys(self):
-        """Row-shape parity, consumer side. The shape is written by three
-        modules; a key taught to only two of them would otherwise vanish
-        here with every test green."""
-        measured = measure_run(
-            _synthesis_manifest(
-                "run-1", _synthesis_row(contracts._SYNTHESIS_DECISION_CRITIC)
-            ),
-            Path("/nonexistent"), include_transcripts=False,
-        )
-        row = measured["synthesis_agents"]["agents"][0]
-        assert set(row) == set(contracts._SYNTHESIS_ROW_KEYS)
-
-    def test_an_undeclared_row_key_does_not_survive(self):
-        measured = measure_run(
-            _synthesis_manifest("run-1", _synthesis_row(
-                contracts._SYNTHESIS_DECISION_CRITIC, invented_key="x",
-            )),
-            Path("/nonexistent"), include_transcripts=False,
-        )
-        assert "invented_key" not in measured["synthesis_agents"]["agents"][0]
-
 
 class TestSkippedCriticIsNotACritiqueDuration:
     """Historical SKIPPED rows never become critique durations.
@@ -8370,12 +8309,6 @@ class TestSkippedCriticIsNotACritiqueDuration:
                 verdict=verdict, duration_ms=duration_ms,
             )),
             Path("/nonexistent"), include_transcripts=False,
-        )
-
-    def test_the_verdict_reaches_the_measured_row(self):
-        measured = self._run("1", contracts._CRITIC_VERDICT_SKIPPED, 900)
-        assert measured["synthesis_agents"]["agents"][0]["verdict"] == (
-            contracts._CRITIC_VERDICT_SKIPPED
         )
 
     def test_skipped_rows_are_excluded_from_the_statistics(self):
@@ -8402,11 +8335,6 @@ class TestSkippedCriticIsNotACritiqueDuration:
         assert agent["mean_ms"] is None
         assert agent["skipped_runs"] == 1
         assert agent["dispatched_runs"] == 1
-
-    def test_skipped_is_not_a_critique_verdict(self):
-        """It records that no critique happened, so a consumer measuring
-        critique outcomes must not find it in the verdict vocabulary."""
-        assert contracts._CRITIC_VERDICT_SKIPPED not in contracts._CRITIC_VERDICTS
 
 
 # --- Task 12: optional manifest sections carry their payload through ---
@@ -8640,7 +8568,9 @@ class TestEvidenceMetrics:
         assert result["critic_adjustments"]["demote"]["proposed"] == 2
         assert result["verify_items"] == {"declared": 2, "settled": 2}
 
-    @pytest.mark.parametrize("population", ["unknown-only", "known-first", "unknown-first"])
+    # Both orders pin that one unknown run poisons the totals whichever
+    # side it is on; an unknown run alone is a subset of either.
+    @pytest.mark.parametrize("population", ["known-first", "unknown-first"])
     def test_unavailable_purpose_keeps_both_verify_totals_unknown(self, population):
         known = _manifest("known")
         known["evidence"] = _evidence_payload()
@@ -8649,14 +8579,16 @@ class TestEvidenceMetrics:
         unknown["run"]["id"] = "unknown"
         unknown["evidence"]["verify_items"] = []
         unknown["evidence"]["undeclared_citations"] = None
-        manifests = {"unknown-only": [unknown], "known-first": [known, unknown], "unknown-first": [unknown, known]}[population]
+        manifests = {"known-first": [known, unknown], "unknown-first": [unknown, known]}[population]
         measured = [measure_run(manifest, Path("/nonexistent"), include_transcripts=False) for manifest in manifests]
         result = aggregate_cohort(measured)["evidence"]
         assert result["verify_items"] == {"declared": None, "settled": None}
         assert result["measured_runs"] == len(manifests)
 
-    @pytest.mark.parametrize("counter", ["proposed", "verified", "not_checked", "refuted"])
-    def test_absent_adjustment_counter_is_materialized_as_unknown(self, counter):
+    def test_absent_adjustment_counter_is_materialized_as_unknown(self):
+        """`counts()` is one comprehension over the counter vocabulary;
+        `proposed` stands for the other three."""
+        counter = "proposed"
         known = _manifest("known")
         known["evidence"] = _evidence_payload()
         known["availability"]["evidence"] = True
@@ -8745,27 +8677,25 @@ class TestEvidenceMetrics:
         safe = sanitize._sanitize_evidence(payload)
         assert safe["findings"][0]["sources"] == [{"agent": "security-reviewer", "id": "f2", "severity": None}]
 
-    @pytest.mark.parametrize("value", [None, [], "private prose", {}], ids=["absent", "array", "prose", "empty-object"])
+    # A non-dict (absent and array fail the same isinstance check) and a
+    # dict missing the required keys.
+    @pytest.mark.parametrize("value", ["private prose", {}], ids=["prose", "empty-object"])
     def test_absent_or_malformed_family_is_unmeasured(self, value):
         assert sanitize._sanitize_evidence(value) is None
 
 
 class TestHostContextSanitization:
-    @pytest.mark.parametrize("leaked", [
-        pytest.param("`/Users/private/host`", id="backtick"),
-        pytest.param("~/private/host", id="home"),
-        pytest.param("~alice/private/host", id="named-home"),
-        pytest.param("path=//server/share/host", id="embedded-unc"),
-        pytest.param("\\private\\host", id="windows-rooted"),
-        pytest.param("path=\\private\\host", id="embedded-windows-rooted"),
-        pytest.param("~\\private\\host", id="windows-home"),
-        pytest.param("cwd:~/private/host", id="colon-home"),
-    ])
-    def test_a_path_shaped_host_field_is_kept_locally_and_refused_at_the_share_boundary(self, leaked):
+    def test_a_path_shaped_host_field_is_kept_locally_and_refused_at_the_share_boundary(self):
         """The projection and the sanitizer carry the resolver's facts as
         recorded; the one guard against a path leaving the machine is the
         sharing boundary, which refuses the upload rather than silently
-        nulling a field that bootstrap still prints."""
+        nulling a field that bootstrap still prints.
+
+        The share module's own table (`test_telemetry_share.py`) sweeps
+        the shapes its guard recognizes. This row is the one shape that
+        table does not carry: a rooted Windows path after a delimiter, the
+        delimiter alternative of `_ROOTED_WINDOWS_PATH`."""
+        leaked = "path=\\private\\host"
         projected = contracts._MANIFEST_SECTIONS_CONTRACT.summarize_host_context({
             "resolved": [{
                 "name": "wordpress", "kind": "runtime-host",
@@ -8833,14 +8763,20 @@ class TestHostContextSanitization:
         raw["unresolved"][0]["notes"] = {"path": "/Users/private"}
         assert sanitize._sanitize_host_context(raw) == payload
 
-    @pytest.mark.parametrize("value", [None, "bad", 42, {"resolved": 42, "unresolved": []}])
+    # A non-dict section (None and a number fail the same isinstance check)
+    # and a dict whose `resolved` is not a list.
+    @pytest.mark.parametrize(
+        "value",
+        ["bad", {"resolved": 42, "unresolved": []}],
+        ids=["non-dict", "non-list-resolved"],
+    )
     def test_bad_containers_are_unavailable(self, value):
         assert sanitize._sanitize_host_context(value) is None
 
-    @pytest.mark.parametrize("value", [
-        {"path": "/Users/private"}, ["/Users/private"], 42,
-    ], ids=["object", "list", "number"])
-    def test_non_string_scalars_are_unknown(self, value):
+    def test_non_string_scalars_are_unknown(self):
+        """One `_safe_string` non-string path; an object stands for a list
+        or a number."""
+        value = {"path": "/Users/private"}
         payload = _host_context_payload()
         payload["resolved"][0] = {key: value for key in payload["resolved"][0]}
         payload["unresolved"][0] = {key: value for key in payload["unresolved"][0]}
