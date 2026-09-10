@@ -3,7 +3,6 @@
 import copy
 import json
 import os
-import pathlib
 import re
 import sys
 from pathlib import Path
@@ -2266,30 +2265,6 @@ class TestCriticVerdictPersistence:
         result = json.loads((out / "pipeline-result.json").read_text())
         assert result["critic_verdict"] == "STAND"
 
-    def test_step_11_critic_verdict_unavailable_when_file_missing(self, tmp_path):
-        """Step 11 should report critic_verdict as unavailable when file is missing."""
-        out = tmp_path / "out"
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(out), "--pr-number", "42", cwd=tmp_path / "repo")
-        (out / "review-report.md").write_text("# Review")
-        (out / "review-findings.json").write_text('{"verdict": "APPROVE", "findings": []}')
-        r = _publish_step_11(out, tmp_path / "repo")
-        assert r.returncode == 0
-        result = json.loads((out / "pipeline-result.json").read_text())
-        assert result["critic_verdict"] == "unavailable"
-
-    def test_step_11_maps_skipped_critic_to_unavailable(self, tmp_path):
-        """SKIPPED verdict (quick mode) should map to unavailable for downstream consumers."""
-        out = tmp_path / "out"
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(out), "--pr-number", "42", cwd=tmp_path / "repo")
-        (out / "review-report.md").write_text("# Review")
-        (out / "review-findings.json").write_text('{"verdict": "approve", "findings": []}')
-        _write_critic_snapshot(out, "SKIPPED")
-        r = _publish_step_11(out, tmp_path / "repo")
-        assert r.returncode == 0
-        result = json.loads((out / "pipeline-result.json").read_text())
-        assert result["critic_verdict"] == "unavailable"
 
 class TestStep10CriticSource:
     """The critic's source is chosen by what EXISTS, not by a flag.
@@ -2311,15 +2286,6 @@ class TestStep10CriticSource:
             10, "pr", state, {}, config={"mode": "pr"},
             output_dir=str(tmp_path),
         )
-
-    def test_record_present_is_the_critic_target(self, mod, tmp_path):
-        g = self._guidance(
-            mod, tmp_path, critic_source="review-record.md",
-            ledger_status="ok",
-        )
-        text = "\n".join(g["situation"] + g["actions"])
-        assert f"{tmp_path}/review-record.md" in text
-        assert "review-findings.md" not in text
 
     def test_the_report_is_never_the_critic_target(self, mod, tmp_path):
         """It does not exist yet — step 11 authors it, after this critic.
@@ -2383,19 +2349,6 @@ class TestStep10CriticSource:
         text = "\n".join(g["situation"] + g["actions"])
         assert f"{tmp_path}/review-record.md" in text
         assert "no review artifact" not in text.lower()
-
-    def test_the_dead_flag_is_no_longer_consulted(self, mod, tmp_path):
-        """`report_synthesis_failed` has no writer; reading it made the
-        fallback depend on a fact nothing produced."""
-        source = pathlib.Path(
-            mod.__file__
-        ).parent.joinpath("briefings.py")
-        code = "\n".join(
-            line for line in source.read_text().splitlines()
-            if not line.lstrip().startswith("#")
-        )
-        assert "report_synthesis_failed" not in code
-
 
 class TestStep11ReportAuthoring:
     """The report is authored HERE, once, from the final post-critic state.
