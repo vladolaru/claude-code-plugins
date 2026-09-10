@@ -14,7 +14,6 @@ import pytest
 TESTS_DIR = Path(__file__).resolve().parent.parent
 PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
-SCRIPT = SCRIPTS_DIR / "review" / "telemetry_share.py"
 
 sys.path.insert(0, str(SCRIPTS_DIR))
 
@@ -31,7 +30,7 @@ from helpers.gh_shim import (
     user_config_file,
     write_user_config,
 )
-from helpers.pipeline_process import hermetic_env, init_bare_repo
+from helpers.pipeline_process import init_bare_repo
 from helpers.review_fixtures import canonical_findings_ledger
 from helpers.telemetry_run import RECORDED_UNDISCLOSED, write_complete_run, write_evidence_artifacts
 
@@ -247,14 +246,14 @@ def _install_gh_shim(tmp_path, monkeypatch, **shim_options):
 
 
 def _seed_consent(tmp_path):
-    """Write enabled + include consent for the fixture repo's identity."""
-    config_home = tmp_path / "xdg-consent"
-    write_user_config(config_home, {
+    """Write enabled + include consent for the fixture repo's identity.
+
+    Writes into the same directory the `config_home` autouse fixture already
+    points ``XDG_CONFIG_HOME`` at, so an in-process CLI call reads it.
+    """
+    write_user_config(tmp_path / "xdg", {
         "telemetry": {"sharing": "enabled", "repos": {FIXTURE_REPO: "include"}},
     })
-    return str(config_home)
-
-
 
 
 def _put_requests(call_log):
@@ -273,21 +272,55 @@ def _payloads(telemetry_run):
     return manifest, lines
 
 
-def _run_cli(tmp_path, *args, **env):
-    """Run the consent-store CLI with ``env`` layered on the inherited one.
+def _run_cli(capsys, *args):
+    """Run the consent-store CLI in-process; returns ``(code, stdout, stderr)``.
 
-    `hermetic_env` supplies the isolating XDG_CONFIG_HOME default, so a
-    caller that forgets to override it still cannot read — or write — the
-    developer's real machine-local consent file.
+    `main()` never calls ``sys.exit`` itself (its non-zero paths are plain
+    `return`s), so no `SystemExit` handling is needed here.
     """
-    return subprocess.run(
-        [sys.executable, str(SCRIPT), *args],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        env=hermetic_env(**env),
-        check=False,
-    )
+    code = telemetry_share.main(list(args))
+    captured = capsys.readouterr()
+    return code, captured.out, captured.err
+
+
+def _fake_run_gh(*, login="vlad", content_state="missing", fail_jsonl_put=False,
+                  fail_code=None, fail_stderr=""):
+    """An in-process double for ``telemetry_share._run_gh``.
+
+    Mirrors ``helpers/gh_shim.py``'s protocol (the ``--jq .login`` raw text,
+    the Contents-API GET/PUT shapes) without spawning a subprocess, for the
+    upload variants that only need `_run_gh`'s return value. Returns
+    ``(fake, calls)``; ``calls`` collects every ``(arguments, body)`` pair
+    `_run_gh` was invoked with.
+    """
+    calls: list[tuple[list[str], str | None]] = []
+
+    def fake(arguments, body=None):
+        calls.append((list(arguments), body))
+        if fail_code is not None:
+            return subprocess.CompletedProcess(
+                args=[], returncode=fail_code, stdout="", stderr=fail_stderr
+            )
+        if arguments[:2] == ["user", "--jq"]:
+            return subprocess.CompletedProcess(args=[], returncode=0, stdout=login, stderr="")
+        if arguments[:2] == ["-X", "PUT"]:
+            if fail_jsonl_put and arguments[2].endswith(".jsonl"):
+                return subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="")
+            return subprocess.CompletedProcess(args=[], returncode=0, stdout="{}", stderr="")
+        if content_state == "existing":
+            return subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=json.dumps({"sha": "abc"}), stderr=""
+            )
+        return subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="", stderr="gh: Not Found (HTTP 404)"
+        )
+
+    return fake, calls
+
+
+def _fake_put_paths(calls):
+    """Every PUT request's remote path from a `_fake_run_gh` call log."""
+    return [arguments[2] for arguments, _body in calls if arguments[:2] == ["-X", "PUT"]]
 
 
 # The recorded identity of every telemetry_run fixture's repository.
@@ -832,15 +865,12 @@ class TestRedaction:
             pytest.param("cwd:~/private/host", id="colon-home"),
         ),
     )
-    def test_a_surviving_local_path_anywhere_fails_the_redaction_closed(
-        self, telemetry_run, leaked
-    ):
-        manifest = json.loads(
-            telemetry_run["manifest_path"].read_text(encoding="utf-8")
-        )
+    def test_a_surviving_local_path_anywhere_fails_the_redaction_closed(self, leaked):
         # Carried in the disclosed reviewed-diff list, which survives
-        # redaction — the guard, not a strip, has to catch it.
-        manifest["assignment"] = {"changed_files": [leaked]}
+        # redaction — the guard, not a strip, has to catch it. A minimal
+        # manifest is enough: the guard walks the whole redacted payload,
+        # and `run.repo` is the only other key `redact_payloads` requires.
+        manifest = {"run": {"repo": FIXTURE_REPO}, "assignment": {"changed_files": [leaked]}}
 
         with pytest.raises(ValueError, match="share-unsafe path"):
             telemetry_share.redact_payloads(manifest, [])
@@ -860,11 +890,8 @@ class TestRedaction:
             "verdict: approve",
         ),
     )
-    def test_share_safe_strings_pass_the_guard(self, telemetry_run, harmless):
-        manifest = json.loads(
-            telemetry_run["manifest_path"].read_text(encoding="utf-8")
-        )
-        manifest["assignment"] = {"changed_files": [harmless]}
+    def test_share_safe_strings_pass_the_guard(self, harmless):
+        manifest = {"run": {"repo": FIXTURE_REPO}, "assignment": {"changed_files": [harmless]}}
 
         redacted, _ = telemetry_share.redact_payloads(manifest, [])
 
@@ -1001,37 +1028,40 @@ class TestUploadRun:
 
     @pytest.mark.parametrize("login", ("123", "true", "null", "0", "a-b-c"))
     def test_json_looking_logins_are_raw_text(
-        self, telemetry_run, tmp_path, monkeypatch, login
+        self, telemetry_run, monkeypatch, login
     ):
         # `--jq .login` prints raw text; these are valid GitHub usernames
         # that JSON-decoding would turn into an int, bool, or None.
-        call_log = _install_gh_shim(tmp_path, monkeypatch, login=login)
+        fake, calls = _fake_run_gh(login=login)
+        monkeypatch.setattr(telemetry_share, "_run_gh", fake)
 
         assert telemetry_share._upload_run(
             str(telemetry_run["output_dir"]), FIXTURE_REPO
         ) == f"shared {telemetry_run['run_id']}"
 
-        put_paths = [path for path, _body in _put_requests(call_log)]
-        assert all(f"/contents/v1/{login}/" in path for path in put_paths)
+        put_paths = _fake_put_paths(calls)
+        assert put_paths and all(f"/contents/v1/{login}/" in path for path in put_paths)
 
     @pytest.mark.parametrize("login", ("", "-lead", "a/b", "a b", "{\"login\": \"x\"}"))
     def test_malformed_login_output_fails_closed(
-        self, telemetry_run, tmp_path, monkeypatch, login
+        self, telemetry_run, monkeypatch, login
     ):
-        call_log = _install_gh_shim(tmp_path, monkeypatch, login=login)
+        fake, calls = _fake_run_gh(login=login)
+        monkeypatch.setattr(telemetry_share, "_run_gh", fake)
 
         assert telemetry_share._upload_run(
             str(telemetry_run["output_dir"]), FIXTURE_REPO
         ) == "skipped: upload failed (invalid login response)"
-        assert _put_requests(call_log) == []
+        assert _fake_put_paths(calls) == []
 
     def test_jsonl_failure_after_manifest_upload_reports_a_partial_share(
-        self, telemetry_run, tmp_path, monkeypatch
+        self, telemetry_run, monkeypatch
     ):
         # The manifest is the unit of publication — the shared reader
         # measures a complete manifest fully without its JSONL — so once it
         # is remote the run IS shared and the outcome must say so.
-        call_log = _install_gh_shim(tmp_path, monkeypatch, fail_jsonl_put=True)
+        fake, calls = _fake_run_gh(fail_jsonl_put=True)
+        monkeypatch.setattr(telemetry_share, "_run_gh", fake)
 
         outcome = telemetry_share._upload_run(
             str(telemetry_run["output_dir"]), FIXTURE_REPO
@@ -1041,7 +1071,7 @@ class TestUploadRun:
             f"shared {telemetry_run['run_id']} (manifest only; jsonl upload "
             "failed: gh exited 1; ask Vlad for collaborator access)"
         )
-        put_paths = [path for path, _body in _put_requests(call_log)]
+        put_paths = _fake_put_paths(calls)
         assert [path.rsplit(".", 1)[-1] for path in put_paths] == ["json", "jsonl"]
 
     def test_every_request_pins_github_com_despite_gh_host(
@@ -1063,42 +1093,45 @@ class TestUploadRun:
         assert all(call[:len(_API)] == _API for call in calls)
 
     def test_permission_failure_cli_prints_safe_collaborator_hint(
-        self, telemetry_run, tmp_path, monkeypatch
+        self, telemetry_run, tmp_path, monkeypatch, capsys
     ):
         private_stderr = "permission denied for secret-account@example.test token=private"
-        _install_gh_shim(
-            tmp_path,
-            monkeypatch,
-            fail_code=7,
-            fail_stderr=private_stderr,
+        fake, _calls = _fake_run_gh(fail_code=7, fail_stderr=private_stderr)
+        monkeypatch.setattr(telemetry_share, "_run_gh", fake)
+        _seed_consent(tmp_path)
+
+        code, out, err = _run_cli(
+            capsys, "upload-run", "--output-dir", str(telemetry_run["output_dir"]),
         )
 
-        result = _run_cli(
-            tmp_path, "upload-run", "--output-dir", str(telemetry_run["output_dir"]),
-            XDG_CONFIG_HOME=_seed_consent(tmp_path),
-        )
-
-        assert result.returncode == 0
-        assert result.stdout == ""
-        assert result.stderr == (
+        assert code == 0
+        assert out == ""
+        assert err == (
             "skipped: upload failed (gh exited 7; ask Vlad for collaborator access)\n"
         )
-        assert private_stderr not in result.stdout
-        assert private_stderr not in result.stderr
+        assert private_stderr not in out
+        assert private_stderr not in err
 
     def test_missing_gh_yields_one_skipped_line_and_exit_zero(
-        self, telemetry_run, tmp_path
+        self, telemetry_run, tmp_path, monkeypatch, capsys
     ):
-        empty_bin = tmp_path / "empty-bin"
-        empty_bin.mkdir()
-        result = _run_cli(
-            tmp_path, "upload-run", "--output-dir", str(telemetry_run["output_dir"]),
-            PATH=str(empty_bin), XDG_CONFIG_HOME=_seed_consent(tmp_path),
+        # Preserves the real `_run_gh`'s own except-OSError mapping, unlike
+        # the fake-`_run_gh` tests above: patching `subprocess.run` (what
+        # `_run_gh` calls) rather than `_run_gh` itself exercises that
+        # mapping instead of bypassing it.
+        def missing_gh(*_args, **_kwargs):
+            raise FileNotFoundError("gh")
+
+        monkeypatch.setattr(telemetry_share.subprocess, "run", missing_gh)
+        _seed_consent(tmp_path)
+
+        code, out, err = _run_cli(
+            capsys, "upload-run", "--output-dir", str(telemetry_run["output_dir"]),
         )
 
-        assert result.returncode == 0
-        assert result.stdout == ""
-        assert result.stderr == "skipped: upload failed (gh unavailable)\n"
+        assert code == 0
+        assert out == ""
+        assert err == "skipped: upload failed (gh unavailable)\n"
 
     def test_timeout_yields_safe_skipped_outcome(
         self, telemetry_run, monkeypatch
@@ -1190,81 +1223,82 @@ class TestRecordedRepo:
 
 
 class TestCli:
-    def _run(self, tmp_path, *args):
-        return _run_cli(tmp_path, *args, XDG_CONFIG_HOME=str(tmp_path / "xdg"))
-
-    def test_status_reports_sharing_and_repo_consent(self, tmp_path):
+    def test_status_reports_sharing_and_repo_consent(self, tmp_path, capsys):
         repo = init_bare_repo(tmp_path / "repo", "https://github.com/acme/widget.git")
 
-        result = self._run(tmp_path, "status", "--repo-path", str(repo))
+        code, out, err = _run_cli(capsys, "status", "--repo-path", str(repo))
 
-        assert result.returncode == 0
-        assert result.stdout == "sharing=unset\nrepo=github.com/acme/widget consent=unset\n"
-        assert result.stderr == ""
+        assert code == 0
+        assert out == "sharing=unset\nrepo=github.com/acme/widget consent=unset\n"
+        assert err == ""
 
-    def test_status_reports_malformed_origin_as_unavailable(self, tmp_path):
+    def test_status_reports_malformed_origin_as_unavailable(self, tmp_path, capsys):
         repo = init_bare_repo(tmp_path / "malformed-origin", "ssh://[bad/acme/widget.git")
 
-        result = self._run(tmp_path, "status", "--repo-path", str(repo))
+        code, out, err = _run_cli(capsys, "status", "--repo-path", str(repo))
 
-        assert result.returncode == 0
-        assert result.stdout == "sharing=unset\nrepo=unavailable consent=unavailable\n"
-        assert result.stderr == ""
+        assert code == 0
+        assert out == "sharing=unset\nrepo=unavailable consent=unavailable\n"
+        assert err == ""
 
-    def test_set_sharing_then_status_reflects_it(self, tmp_path):
-        set_result = self._run(tmp_path, "set-sharing", "enabled")
-        status_result = self._run(tmp_path, "status")
+    def test_set_sharing_then_status_reflects_it(self, capsys):
+        set_code, _set_out, _set_err = _run_cli(capsys, "set-sharing", "enabled")
+        status_code, status_out, _status_err = _run_cli(capsys, "status")
 
-        assert set_result.returncode == 0
-        assert status_result.returncode == 0
-        assert status_result.stdout == "sharing=enabled\n"
+        assert set_code == 0
+        assert status_code == 0
+        assert status_out == "sharing=enabled\n"
 
-    def test_upload_run_is_consent_gated(self, tmp_path):
-        result = self._run(tmp_path, "upload-run", "--output-dir", str(tmp_path))
+    def test_upload_run_is_consent_gated(self, tmp_path, capsys):
+        code, out, _err = _run_cli(capsys, "upload-run", "--output-dir", str(tmp_path))
 
-        assert result.returncode == 0
-        assert result.stdout.strip() == "skipped: consent unset"
+        assert code == 0
+        assert out.strip() == "skipped: consent unset"
 
-    def test_set_repo_on_an_identity_less_repo_fails_with_guidance(self, tmp_path):
+    def test_set_repo_on_an_identity_less_repo_fails_with_guidance(self, tmp_path, capsys):
         repo = init_bare_repo(tmp_path / "no-origin")
 
-        result = self._run(tmp_path, "set-repo", "--repo-path", str(repo), "include")
+        code, _out, err = _run_cli(capsys, "set-repo", "--repo-path", str(repo), "include")
 
-        assert result.returncode == 2
-        assert "no shareable identity" in result.stderr
+        assert code == 2
+        assert "no shareable identity" in err
         assert not user_config_file(tmp_path / "xdg").exists()
 
     def test_set_repo_output_dir_binds_to_the_recorded_run_identity(
-        self, telemetry_run, tmp_path
+        self, telemetry_run, tmp_path, capsys
     ):
-        result = self._run(
-            tmp_path, "set-repo",
+        code, _out, err = _run_cli(
+            capsys, "set-repo",
             "--output-dir", str(telemetry_run["output_dir"]), "include",
         )
         config_path = user_config_file(tmp_path / "xdg")
 
-        assert result.returncode == 0, result.stderr
+        assert code == 0, err
         assert json.loads(config_path.read_text(encoding="utf-8")) == {
             "telemetry": {"repos": {"github.com/acme/widget": "include"}},
         }
 
-    def test_set_repo_rejects_both_identity_sources_at_once(self, tmp_path):
-        result = self._run(
-            tmp_path, "set-repo",
-            "--repo-path", str(tmp_path), "--output-dir", str(tmp_path),
-            "include",
-        )
+    def test_set_repo_rejects_both_identity_sources_at_once(self, tmp_path, capsys):
+        # Argparse's own mutually-exclusive-group error calls `sys.exit`
+        # before `main()`'s body ever runs, unlike every other CLI path
+        # here, which only ever `return`s.
+        with pytest.raises(SystemExit) as exc_info:
+            telemetry_share.main([
+                "set-repo",
+                "--repo-path", str(tmp_path), "--output-dir", str(tmp_path),
+                "include",
+            ])
 
-        assert result.returncode == 2
-        assert "not allowed with" in result.stderr
+        assert exc_info.value.code == 2
+        assert "not allowed with" in capsys.readouterr().err
 
-    def test_set_repo_derives_identity_from_repo_path(self, tmp_path):
+    def test_set_repo_derives_identity_from_repo_path(self, tmp_path, capsys):
         repo = init_bare_repo(tmp_path / "repo", "git@github.com:acme/widget.git")
 
-        result = self._run(tmp_path, "set-repo", "--repo-path", str(repo), "include")
+        code, _out, _err = _run_cli(capsys, "set-repo", "--repo-path", str(repo), "include")
         config_path = user_config_file(tmp_path / "xdg")
 
-        assert result.returncode == 0
+        assert code == 0
         assert json.loads(config_path.read_text(encoding="utf-8")) == {
             "telemetry": {"repos": {"github.com/acme/widget": "include"}},
         }
