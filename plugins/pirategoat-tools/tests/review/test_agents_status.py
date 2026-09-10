@@ -565,11 +565,13 @@ class TestWaitMode:
     The subprocess tests are NOT restatements of those: the exit codes
     are the contract the step-7/8 briefings teach the orchestrator by
     number, so the CLI is their unit level. One cheap ALL_DONE smoke
-    covers exit 0 and the `--wait` wiring; `test_wait_exit_3_on_expiry`
-    covers expiry; `test_no_wait_paths_unchanged` covers 0/2. A real
-    threaded completion is not spawned a second time here — the
-    "observed on the very next poll" property is what mattered, and
-    `test_wait_wakes_on_completion` pins it deterministically.
+    covers exit 0 and the `--wait` wiring;
+    `test_wait_expired_status_flushed_before_stderr` covers expiry (exit
+    3, EXPIRED on stderr, and stdout-before-stderr in a merged pipe);
+    `test_no_wait_paths_unchanged` covers 0/2. A real threaded completion
+    is not spawned a second time here — the "observed on the very next
+    poll" property is what mattered, and `test_wait_wakes_on_completion`
+    pins it deterministically.
     """
 
     def test_the_wait_loop_hashes_each_draft_once(
@@ -752,12 +754,14 @@ class TestWaitMode:
         """The no-wait CLI path keeps its pinned 0/2 exit codes.
 
         Error-path exit 1 is already pinned at the CLI level by
-        TestCheckStatus.test_no_dispatch_plan_exits_1 and
-        test_invalid_status_exits_1_with_actionable_error; check_status()'s
-        all_done computation itself is exercised directly by every test in
-        TestCheckStatus / TestNotDispatchedDoesNotBlockPipeline /
-        TestOverrideStatuses. This closes the one CLI-level gap: no existing
-        test invoked main() end-to-end for the success/still-running cases.
+        TestCheckStatus.test_invalid_status_exits_1_with_actionable_error
+        (which covers both the invalid-status ValueError and the
+        no-dispatch-plan FileNotFoundError, folded into it as a second
+        in-process main() call); check_status()'s all_done computation
+        itself is exercised directly by every test in TestCheckStatus /
+        TestNotDispatchedDoesNotBlockPipeline / TestOverrideStatuses. This
+        closes the one CLI-level gap: no existing test invoked main()
+        end-to-end for the success/still-running cases.
         """
         _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
         _start_agent(tmp_path, "code-reviewer")
