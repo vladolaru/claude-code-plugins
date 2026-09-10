@@ -36,15 +36,11 @@ class TestStepCount:
     """The script should have exactly 4 steps."""
 
     def test_total_steps_is_4(self):
-        result = run_critic(
-            "--step-number", "1",
-            "--total-steps", "4",
-            "--report", "/tmp/nonexistent-report.md",
-            "--output-dir", "/tmp/test-critic",
-            "--thoughts", "initial",
+        guidance = critic_module.get_step_guidance(
+            1, 4, "/tmp/nonexistent-report.md", "/tmp/test-critic", None,
         )
-        assert result.returncode == 0
-        assert "Step 1/4" in result.stdout
+        output = critic_module.format_output(1, 4, guidance)
+        assert "Step 1/4" in output
 
     def test_total_steps_mismatch_is_invalid(self):
         result = run_critic(
@@ -57,15 +53,18 @@ class TestStepCount:
         assert result.returncode != 0
         assert "must be 4" in result.stderr
 
-    def test_step_5_is_invalid(self):
-        result = run_critic(
+    def test_step_5_is_invalid(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", [
+            "critic.py",
             "--step-number", "5",
             "--total-steps", "4",
             "--report", "/tmp/nonexistent-report.md",
             "--output-dir", "/tmp/test-critic",
             "--thoughts", "initial",
-        )
-        assert result.returncode != 0
+        ])
+        with pytest.raises(SystemExit) as exc:
+            critic_module.main()
+        assert exc.value.code == 1
 
 
 class TestStepTitles:
@@ -78,16 +77,12 @@ class TestStepTitles:
         (4, "Synthesize", "SYNTHESIS"),
     ])
     def test_step_metadata(self, step, expected_title, expected_phase):
-        result = run_critic(
-            "--step-number", str(step),
-            "--total-steps", "4",
-            "--report", "/tmp/test-report.md",
-            "--output-dir", "/tmp/test-critic",
-            "--thoughts", "accumulated state",
+        guidance = critic_module.get_step_guidance(
+            step, 4, "/tmp/test-report.md", "/tmp/test-critic", None,
         )
-        assert result.returncode == 0
-        assert expected_title in result.stdout
-        assert expected_phase in result.stdout
+        output = critic_module.format_output(step, 4, guidance)
+        assert expected_title in output
+        assert expected_phase in output
 
 
 class TestSynthesisAuthorsSiblingCheckCorrections:
@@ -95,15 +90,12 @@ class TestSynthesisAuthorsSiblingCheckCorrections:
         """A false premise behind a demoted or removed finding is usually
         restated in a check's result; the critic is told to grep the ledger's
         checks for it and correct them in the same proposal."""
-        result = run_critic(
-            "--step-number", "4",
-            "--total-steps", "4",
-            "--report", "/tmp/test-report.md",
-            "--output-dir", "/tmp/test-critic",
-            "--thoughts", "state",
+        guidance = critic_module.get_step_guidance(
+            4, 4, "/tmp/test-report.md", "/tmp/test-critic", None,
         )
+        output = critic_module.format_output(4, 4, guidance)
         # Where to look is the instruction the ledger depends on.
-        assert "checks[].result" in result.stdout and "checks[].method" in result.stdout
+        assert "checks[].result" in output and "checks[].method" in output
 
 
 class TestNextStepDirective:
@@ -111,47 +103,38 @@ class TestNextStepDirective:
 
     @pytest.mark.parametrize("step", [1, 2, 3])
     def test_non_final_step_has_next(self, step):
-        result = run_critic(
-            "--step-number", str(step),
-            "--total-steps", "4",
-            "--report", "/tmp/test-report.md",
-            "--output-dir", "/tmp/test-critic",
-            "--thoughts", "state",
+        guidance = critic_module.get_step_guidance(
+            step, 4, "/tmp/test-report.md", "/tmp/test-critic", None,
         )
-        assert f"--step-number {step + 1}" in result.stdout
+        output = critic_module.format_output(step, 4, guidance)
+        assert f"--step-number {step + 1}" in output
 
     def test_final_step_has_no_next(self):
-        result = run_critic(
-            "--step-number", "4",
-            "--total-steps", "4",
-            "--report", "/tmp/test-report.md",
-            "--output-dir", "/tmp/test-critic",
-            "--thoughts", "state",
+        guidance = critic_module.get_step_guidance(
+            4, 4, "/tmp/test-report.md", "/tmp/test-critic", None,
         )
-        assert "--step-number 5" not in result.stdout
-        assert "COMPLETE" in result.stdout
+        output = critic_module.format_output(4, 4, guidance)
+        assert "--step-number 5" not in output
+        assert "COMPLETE" in output
 
 
 class TestOutputPathInSynthesis:
     """Step 4 must include the output directory path."""
 
     def test_output_dir_in_step_4(self):
-        result = run_critic(
-            "--step-number", "4",
-            "--total-steps", "4",
-            "--report", "/tmp/test-report.md",
-            "--output-dir", "/tmp/test-critic-output",
-            "--thoughts", "state",
+        guidance = critic_module.get_step_guidance(
+            4, 4, "/tmp/test-report.md", "/tmp/test-critic-output", None,
         )
-        assert "/tmp/test-critic-output" in result.stdout
-        assert "decision-critic-findings.md" in result.stdout
-        assert "$TMPDIR/decision-critic-findings.md" in result.stdout
-        assert "critic.py --save" in result.stdout
-        assert "STAND, REVISE, or ESCALATE" in result.stdout
+        output = critic_module.format_output(4, 4, guidance)
+        assert "/tmp/test-critic-output" in output
+        assert "decision-critic-findings.md" in output
+        assert "$TMPDIR/decision-critic-findings.md" in output
+        assert "critic.py --save" in output
+        assert "STAND, REVISE, or ESCALATE" in output
         assert (
             "Write findings to "
             "`/tmp/test-critic-output/decision-critic-findings.md`"
-            not in result.stdout
+            not in output
         )
 
 
@@ -166,44 +149,32 @@ class TestCriticContextArg:
     """
 
     def test_context_surfaced_in_step_1(self):
-        result = run_critic(
-            "--step-number", "1",
-            "--total-steps", "4",
-            "--report", "/tmp/review-record.md",
-            "--context", "/tmp/review-findings.json",
-            "--output-dir", "/tmp/test-critic",
-            "--thoughts", "initial",
+        guidance = critic_module.get_step_guidance(
+            1, 4, "/tmp/review-record.md", "/tmp/test-critic",
+            "/tmp/review-findings.json",
         )
-        assert result.returncode == 0
-        assert "review-findings.json" in result.stdout
+        output = critic_module.format_output(1, 4, guidance)
+        assert "review-findings.json" in output
 
     def test_context_surfaced_in_step_2(self):
         """Step 2 should also reference the context path."""
-        result = run_critic(
-            "--step-number", "2",
-            "--total-steps", "4",
-            "--report", "/tmp/review-record.md",
-            "--context", "/tmp/review-findings.json",
-            "--output-dir", "/tmp/test-critic",
-            "--thoughts", "state",
+        guidance = critic_module.get_step_guidance(
+            2, 4, "/tmp/review-record.md", "/tmp/test-critic",
+            "/tmp/review-findings.json",
         )
-        assert result.returncode == 0
-        assert "review-findings.json" in result.stdout
+        output = critic_module.format_output(2, 4, guidance)
+        assert "review-findings.json" in output
 
     def test_step_1_keys_claims_to_the_ledger_ids(self):
         """A positional label is a rendering artifact no ledger contains;
         an adjustment keyed by one resolves to nothing."""
-        result = run_critic(
-            "--step-number", "1",
-            "--total-steps", "4",
-            "--report", "/tmp/review-record.md",
-            "--context", "/tmp/review-findings.json",
-            "--output-dir", "/tmp/test-critic",
-            "--thoughts", "initial",
+        guidance = critic_module.get_step_guidance(
+            1, 4, "/tmp/review-record.md", "/tmp/test-critic",
+            "/tmp/review-findings.json",
         )
-        assert result.returncode == 0
-        assert "8-hex" not in result.stdout
-        assert "findings[].id" in result.stdout
+        output = critic_module.format_output(1, 4, guidance)
+        assert "8-hex" not in output
+        assert "findings[].id" in output
 
 
 class TestCriticSave:
@@ -429,21 +400,24 @@ class TestCriticSave:
             "a rejected save must write nothing"
         )
 
-    def test_critic_save_rejects_revise_without_adjustments(self, tmp_path):
+    def test_critic_save_rejects_revise_without_adjustments(
+        self, tmp_path, capsys
+    ):
         findings = self._write_findings(tmp_path)
 
-        result = self._run_save(
-            tmp_path, "--verdict", "REVISE", "--findings", str(findings),
+        result = critic_module.run_save(
+            self._args(tmp_path, "REVISE", findings)
         )
+        out = capsys.readouterr().out
 
-        assert result.returncode != 0
-        assert "REJECTED" in result.stdout
-        assert "adjustments" in result.stdout.lower()
+        assert result != 0
+        assert "REJECTED" in out
+        assert "adjustments" in out.lower()
         assert [p.name for p in tmp_path.iterdir()] == [findings.name]
 
     @pytest.mark.parametrize("verdict", ["STAND", "ESCALATE"])
     def test_critic_save_rejects_non_revise_with_adjustments(
-        self, tmp_path, verdict
+        self, tmp_path, verdict, capsys
     ):
         """STAND/ESCALATE alongside a non-empty batch is the contradiction
         the apply gate could only quarantine downstream; now rejected at
@@ -455,21 +429,21 @@ class TestCriticSave:
             "fields": {"severity": "high"}, "rationale": "r",
         }])
 
-        result = self._run_save(
-            tmp_path, "--verdict", verdict,
-            "--findings", str(findings), "--adjustments", str(adjustments),
+        result = critic_module.run_save(
+            self._args(tmp_path, verdict, findings, adjustments)
         )
+        out = capsys.readouterr().out
 
-        assert result.returncode != 0
-        assert "REJECTED" in result.stdout
-        assert "contradiction" in result.stdout.lower()
+        assert result != 0
+        assert "REJECTED" in out
+        assert "contradiction" in out.lower()
         assert sorted(p.name for p in tmp_path.iterdir()) == [
             "a.json", "f.md",
         ], "a rejected save must write nothing"
 
     @pytest.mark.parametrize("verdict", ["STAND", "ESCALATE"])
     def test_critic_save_without_adjustments_replaces_stale_snapshot(
-        self, tmp_path, verdict
+        self, tmp_path, verdict, capsys
     ):
         """A successful verdict is the current snapshot, so a pending
         REVISE batch from an earlier attempt may not survive it."""
@@ -486,11 +460,12 @@ class TestCriticSave:
             }],
         }))
 
-        result = self._run_save(
-            tmp_path, "--verdict", verdict, "--findings", str(findings),
+        result = critic_module.run_save(
+            self._args(tmp_path, verdict, findings)
         )
+        out = capsys.readouterr().out
 
-        assert result.returncode == 0, result.stdout + result.stderr
+        assert result == 0, out
         assert (_artifact(tmp_path, "critic_findings")).is_file()
         assert json.loads(snapshot.read_text()) == {
             "schema": 2, "adjustments": [],
@@ -505,10 +480,12 @@ class TestCriticSave:
                 {"schema": 2, "adjustments": []}
             ),
         }
-        assert f"RECORDED VERDICT: {verdict}" in result.stdout
-        assert "RECORDED ADJUSTMENTS: 0" in result.stdout
+        assert f"RECORDED VERDICT: {verdict}" in out
+        assert "RECORDED ADJUSTMENTS: 0" in out
 
-    def test_critic_save_rejects_two_simultaneous_problems(self, tmp_path):
+    def test_critic_save_rejects_two_simultaneous_problems(
+        self, tmp_path, capsys
+    ):
         """run_save() must collect every problem, not stop at the first —
         the same "don't stop at problems[0]" contract TestValidateAdjustments
         pins for the validator itself, pinned here at the save-command
@@ -519,14 +496,14 @@ class TestCriticSave:
             "fields": {}, "rationale": "r",
         }])
 
-        result = self._run_save(
-            tmp_path, "--verdict", "MAYBE",
-            "--findings", str(findings), "--adjustments", str(adjustments),
+        result = critic_module.run_save(
+            self._args(tmp_path, "MAYBE", findings, adjustments)
         )
+        out = capsys.readouterr().out
 
-        assert result.returncode != 0
+        assert result != 0
         rejected_lines = [
-            line for line in result.stdout.splitlines()
+            line for line in out.splitlines()
             if line.startswith("REJECTED:")
         ]
         assert len(rejected_lines) == 2, (
@@ -597,6 +574,14 @@ class TestSourceBoundCriticSave:
         if adjustments is not None:
             args.extend(["--adjustments", str(adjustments)])
         return subprocess.run(args, capture_output=True, text=True, timeout=10)
+
+    @staticmethod
+    def _args(tmp_path, verdict, findings, adjustments=None):
+        return SimpleNamespace(
+            output_dir=str(tmp_path), verdict=verdict,
+            findings=str(findings),
+            adjustments=str(adjustments) if adjustments else None,
+        )
 
     @staticmethod
     def _write_findings(tmp_path, text="# Decision Critic Findings\n"):
@@ -681,7 +666,7 @@ class TestSourceBoundCriticSave:
         ],
     )
     def test_save_rejects_every_caller_authored_lifecycle_field(
-        self, tmp_path, forbidden, value
+        self, tmp_path, forbidden, value, capsys
     ):
         findings = self._write_findings(tmp_path)
         entry = {
@@ -706,13 +691,14 @@ class TestSourceBoundCriticSave:
             for path in (old_findings, old_adjustments, old_marker)
         }
 
-        result = self._run_save(
-            tmp_path, "REVISE", findings, proposal_input
+        result = critic_module.run_save(
+            self._args(tmp_path, "REVISE", findings, proposal_input)
         )
+        out = capsys.readouterr().out
 
-        assert result.returncode == 1
-        assert "REJECTED:" in result.stdout
-        assert forbidden in result.stdout
+        assert result == 1
+        assert "REJECTED:" in out
+        assert forbidden in out
         assert {path: path.read_bytes() for path in before} == before
 
     @pytest.mark.parametrize(
@@ -724,7 +710,7 @@ class TestSourceBoundCriticSave:
         ],
     )
     def test_save_rejects_caller_authored_settlement_document_fields(
-        self, tmp_path, top_level
+        self, tmp_path, top_level, capsys
     ):
         findings = self._write_findings(tmp_path)
         payload = {
@@ -739,13 +725,14 @@ class TestSourceBoundCriticSave:
         }
         proposal_input = self._write_payload(tmp_path, payload)
 
-        result = self._run_save(
-            tmp_path, "REVISE", findings, proposal_input
+        result = critic_module.run_save(
+            self._args(tmp_path, "REVISE", findings, proposal_input)
         )
+        out = capsys.readouterr().out
 
-        assert result.returncode == 1
-        assert "REJECTED:" in result.stdout
-        assert next(iter(top_level)) in result.stdout
+        assert result == 1
+        assert "REJECTED:" in out
+        assert next(iter(top_level)) in out
 
     def test_retry_after_publication_fault_produces_one_coherent_snapshot(
         self, tmp_path, monkeypatch
@@ -800,22 +787,16 @@ class TestReviewSpecificLanguage:
     """Prompts should contain review-specific terms, not generic decision language."""
 
     def test_step_2_mentions_source_code(self):
-        result = run_critic(
-            "--step-number", "2",
-            "--total-steps", "4",
-            "--report", "/tmp/test-report.md",
-            "--output-dir", "/tmp/test-critic",
-            "--thoughts", "state",
+        guidance = critic_module.get_step_guidance(
+            2, 4, "/tmp/test-report.md", "/tmp/test-critic", None,
         )
-        assert "source" in result.stdout.lower() or "code" in result.stdout.lower()
-        assert "file" in result.stdout.lower()
+        output = critic_module.format_output(2, 4, guidance)
+        assert "source" in output.lower() or "code" in output.lower()
+        assert "file" in output.lower()
 
     def test_step_3_mentions_severity(self):
-        result = run_critic(
-            "--step-number", "3",
-            "--total-steps", "4",
-            "--report", "/tmp/test-report.md",
-            "--output-dir", "/tmp/test-critic",
-            "--thoughts", "state",
+        guidance = critic_module.get_step_guidance(
+            3, 4, "/tmp/test-report.md", "/tmp/test-critic", None,
         )
-        assert "severity" in result.stdout.lower() or "false positive" in result.stdout.lower()
+        output = critic_module.format_output(3, 4, guidance)
+        assert "severity" in output.lower() or "false positive" in output.lower()
