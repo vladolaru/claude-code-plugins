@@ -4,38 +4,39 @@ in test_critic_adjustments.py."""
 
 import json
 import re
-import sys
 from pathlib import Path
 
 import pytest
 
-TESTS_DIR = Path(__file__).resolve().parent.parent  # review/ -> tests/
-PLUGIN_ROOT = TESTS_DIR.parent
-SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
-REVIEW_TESTS_DIR = Path(__file__).resolve().parent  # review/
-sys.path.insert(0, str(SCRIPTS_DIR))
-sys.path.insert(0, str(TESTS_DIR))
-sys.path.insert(0, str(REVIEW_TESTS_DIR))
+# `tests/conftest.py` extends the module search path with `scripts/` and
+# `tests/` once, before any test module is collected — no test file needs
+# its own insert (see its comment); this file relies on that instead of
+# repeating it.
 
-from helpers.review_fixtures import failing_findings_renderer
-from review.critic_adjustments import APPLIED_IDS_KEY
-from review import orchestration as orchestration_mod
-from review.orchestration import _orchestrate_step_11
-
-# test_critic_adjustments.py is the canonical owner of these ledger-seeding
-# helpers — imported rather than duplicated (every one of them is also used
-# by classes that stayed there), per the shared-helper rule: keep one
-# definition and import it.
-from test_critic_adjustments import (
+from helpers.critic_seeds import (
     _artifact,
     _finding,
     _ledger,
     _publish_and_adjudicate,
     _publish_revise,
-    _publish_step_11,
     _publish_verdict,
     _write_findings,
 )
+from helpers.review_fixtures import failing_findings_renderer
+from review.critic_adjustments import APPLIED_IDS_KEY
+from review import orchestration as orchestration_mod
+from review.orchestration import _orchestrate_step_11
+
+
+def _publish_step_11(output_dir, state=None):
+    """Prepare without a report, then publish the authored report."""
+    state = {} if state is None else state
+    report = Path(output_dir) / "review-report.md"
+    report_text = report.read_text() if report.is_file() else "# report"
+    report.unlink(missing_ok=True)
+    _orchestrate_step_11("pr", {}, state, {}, str(output_dir))
+    report.write_text(report_text)
+    return _orchestrate_step_11("pr", {}, state, {}, str(output_dir))
 
 
 class TestDerivedVerdict:
