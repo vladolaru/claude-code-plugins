@@ -214,3 +214,19 @@ class TestBootstrapCompatibility:
             assert "scope_flags" in config, (
                 f"Agent '{agent_name}': missing 'scope_flags' (needed by bootstrap)"
             )
+
+
+class TestEcosystemIntegrationReviewerEntry:
+    """ecosystem-integration-reviewer's registry identity: the domain it
+    scopes by, how it is dispatched and gated, its model, and the fixed
+    budget its upstream-source reading needs (the diff does not size it)."""
+
+    def test_registry_identity(self, agents):
+        entry = agents["ecosystem-integration-reviewer"]
+
+        assert entry["domain"] == "wp-architecture"
+        assert entry["dispatch_class"] == "conditional"
+        assert entry["model_tier"] == "sonnet"
+        assert entry["require_php_source_file"] is True
+        assert entry["triage_keywords"]
+        assert entry.get("budget_override", 0) > 0

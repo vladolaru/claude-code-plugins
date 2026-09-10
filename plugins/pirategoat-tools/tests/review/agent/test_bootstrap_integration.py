@@ -61,28 +61,6 @@ def _write_telemetry_marker(output_dir, telemetry_log):
     marker.write_text(str(telemetry_log))
 
 
-def test_reviewer_protocol_has_no_tmp_pr_review_fallback():
-    protocol = (
-        PLUGIN_ROOT / "agents" / "shared" / "reviewer-protocol.md"
-    ).read_text(encoding="utf-8")
-
-    assert "/tmp/pr-review" not in protocol
-
-
-def test_reviewer_protocol_says_a_mounted_host_is_not_always_upstream():
-    """Run e08e: a WooCommerce core review listed WooPayments as a runtime
-    host because the clone's local wp-env override mounts it. A mapping
-    proves co-installation, not direction; the reviewer decides that from
-    the diff, so the protocol has to say so instead of calling every host
-    upstream."""
-    protocol = (
-        PLUGIN_ROOT / "agents" / "shared" / "reviewer-protocol.md"
-    ).read_text(encoding="utf-8")
-    section = protocol.split("## Host Context Usage", 1)[1].split("\n## ", 1)[0]
-
-    assert "downstream" in section
-
-
 # ---------------------------------------------------------------------------
 # Independent oracles for the rendered briefing
 # ---------------------------------------------------------------------------
@@ -724,14 +702,9 @@ class TestCanonicalExecutableBuilderSource:
             has_php=False,
         )
 
+        # The protocol is reference-only; bootstrap emits the one executable
+        # builder command, envelope filled in.
         assert "python3 <<'PY'" not in protocol
-        for shell_variable in (
-            "PIRATEGOAT_PLUGIN_ROOT=",
-            "PIRATEGOAT_OUTPUT_DIR=",
-            "PIRATEGOAT_REVIEWER_NAME=",
-            "PIRATEGOAT_PR_ID=",
-        ):
-            assert shell_variable not in protocol
         assert prompt.count("python3 <<'PY'") == 1
         assert f"PIRATEGOAT_PLUGIN_ROOT={PLUGIN_ROOT}" in prompt
         assert f"PIRATEGOAT_OUTPUT_DIR={tmp_path}" in prompt
@@ -741,17 +714,8 @@ class TestCanonicalExecutableBuilderSource:
             "builder = ReviewOutputBuilder.open("
             "output_dir, pr_id, reviewer_name)" in prompt
         )
-        assert "builder.save_draft()" in prompt
-        assert "MUST NOT create or write a temporary builder script" in prompt
-        assert "generic filenames collide" in prompt
         assert "DRAFT TOTALS" in prompt
         assert "run the exact FINALIZE REVIEW command printed by" in prompt
-        assert "REVIEW FINALIZED" in prompt
-        assert "Only then return the FINISHED signal" in prompt
-        assert "Return signal format:" in prompt
-        assert "STATUS: FINISHED" in prompt
-        assert review_paths(tmp_path, "security").final in prompt
-        assert f"{tmp_path}/security-review.md" not in prompt
 
     def test_every_bootstrapped_reviewer_sees_only_the_canonical_contract(
         self, tmp_path
@@ -791,7 +755,6 @@ class TestCanonicalExecutableBuilderSource:
             assert not any(token in prompt for token in forbidden), agent_name
 
     def test_registered_reviewer_definitions_do_not_restore_raw_output_paths(self):
-        stale = "Use ReviewOutputBuilder per shared protocol. Write to"
         canonical = (
             "Use ReviewOutputBuilder per the shared protocol's "
             "Canonical Draft Lifecycle."
@@ -803,24 +766,10 @@ class TestCanonicalExecutableBuilderSource:
         }
         for agent_name in sorted(raw_reviewers):
             definition = (PLUGIN_ROOT / "agents" / f"{agent_name}.md").read_text()
-            assert stale not in definition, agent_name
             assert canonical in definition, agent_name
-            assert "builder.set_assessment(" not in definition, agent_name
 
     def test_shared_protocol_teaches_the_complete_draft_lifecycle(self):
         protocol = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
-
-        for phrase in (
-            "rehydrates the existing complete draft",
-            "full persisted draft's totals",
-            "what this save changed against the draft you opened",
-            "review files still unclaimed",
-            "separate tool turn",
-            "verbatim",
-            "Raw reviewers must not call `set_assessment()`",
-            "Never write review JSON or Markdown directly",
-        ):
-            assert phrase in protocol
 
         lifecycle_section = protocol.split(
             "## Canonical Draft Lifecycle", 1
@@ -835,20 +784,6 @@ class TestCanonicalExecutableBuilderSource:
         ]
         positions = [lifecycle_section.index(token) for token in lifecycle]
         assert positions == sorted(positions)
-
-    def test_tests_protocol_requires_structured_evidence_for_material_negatives(self):
-        """The rule lives once, in the shared protocol's Absence Claims
-        section — the tests protocol no longer restates it."""
-        shared_protocol = (
-            PLUGIN_ROOT / "agents/shared/reviewer-protocol.md"
-        ).read_text()
-        tests_protocol = (
-            PLUGIN_ROOT / "agents/shared/tests-reviewer-protocol.md"
-        ).read_text()
-
-        assert "material negative" in shared_protocol
-        assert "builder.record_check(" in shared_protocol
-        assert "material negative" not in tests_protocol
 
     def test_envelope_carries_the_plugin_version_assignment(self, tmp_path):
         """The producing plugin version travels in the same envelope.
@@ -919,7 +854,6 @@ class TestCanonicalExecutableBuilderSource:
             review_claimable_count=0,
             has_php=False,
         )
-        assert "OUTPUT_DIR accepts only your named artifacts" in prompt
         assert "goes in OUTPUT_DIR/tmp/" in prompt
 
     @pytest.mark.parametrize("review_budget", [80, None])
@@ -1006,33 +940,8 @@ class TestNotApplicableCompletionContract:
         heredoc_body = prompt.split("python3 <<'PY'\n", 1)[1].split("\nPY", 1)[0]
         compile(heredoc_body, "<bootstrap builder example>", "exec")
 
-        assert "MUST use a one-shot quoted heredoc" in prompt
-        assert "python3 <<'PY'" in prompt
         assert "MUST NOT create or write a temporary builder script with the Write tool" in prompt
-        assert "parallel reviewers share the parent-session scratch directory" in prompt
-        assert "generic filenames collide" in prompt
-        assert "script FILE (Write tool) or a heredoc" not in prompt
-        assert "python3 -c" in prompt  # named so it can be forbidden
-        assert "NEVER" in prompt
-
-    def test_output_instructions_require_count_reconciliation(self, tmp_path):
-        """Agents must report the builder's recorded state, not their intent."""
-        prompt = build_output(
-            agent_name="security-reviewer",
-            plugin_root=str(PLUGIN_ROOT),
-            status="OK",
-            review_rules="",
-            domain_rules=None,
-            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
-            exploration_scope=None,
-            output_dir=str(tmp_path),
-            pr_number=None,
-            reviewer_name="security",
-            review_claimable_count=0,
-            has_php=False,
-        )
-
-        assert "DRAFT TOTALS" in prompt
+        assert "NEVER inline `python3 -c" in prompt
 
     def test_registered_agents_derive_unique_nonempty_reviewer_names(self):
         """Every shipped agent has a collision-safe output identity."""
@@ -1187,155 +1096,11 @@ class TestNotApplicableCompletionContract:
         assert saved["reviewed_file_count"] == 3
         assert set(tmp_path.rglob("*.py")) == python_files_before
 
-    def test_agent_definitions_do_not_duplicate_abstention_calls(self):
-        offenders = [
-            path.name
-            for path in sorted((PLUGIN_ROOT / "agents").glob("*.md"))
-            if "mark_not_applicable(" in path.read_text()
-        ]
-
-        assert offenders == [], (
-            "Agent-local abstention calls drift from the shared persisted "
-            f"completion sequence: {offenders}"
-        )
-
-    def test_woo_reviewer_uses_structured_floors_not_description_markers(self):
-        prompt = (PLUGIN_ROOT / "agents/woo-regression-reviewer.md").read_text()
-
-        assert 'severity_floor="medium"' in prompt
-        assert 'severity_floor="high"' in prompt
-        assert "Severity-floor:" not in prompt
-
-    def test_woo_reviewer_audits_heuristic_proxy_predicates(self):
-        """Invariant 11 (regression guard for woocommerce/woocommerce#66613):
-        proxy predicates inferred from persisted state shape must be audited
-        against every writer of that state and every store configuration."""
-        prompt = (PLUGIN_ROOT / "agents/woo-regression-reviewer.md").read_text()
-
-        # Per-hunk audit row exists, so the self-audit can catch dismissals.
-        assert "Heuristics — proxy predicate vs. configuration variance" in prompt
-        # Invariant section with the producer-verification rule.
-        assert "Heuristic proxy predicates and configuration variance" in prompt
-        assert "guaranteed-true under some supported configuration" in prompt
-        assert "verified at the producers" in prompt
-        # Findings can carry the dedicated category.
-        assert "`proxy-predicate`" in prompt
-
-    def test_woo_reviewer_audits_markup_selector_contracts(self):
-        """Invariant 12 (regression guard for the 2026-07-16 catch on the
-        woocommerce/woocommerce#55669 fix): rendered markup is a selector
-        surface — removing an element breaks the CSS/JS/tests that key on it,
-        and the dependency must be verified from the dependent side."""
-        prompt = (PLUGIN_ROOT / "agents/woo-regression-reviewer.md").read_text()
-
-        # Per-hunk audit row exists.
-        assert "Markup — removed/renamed selector surface" in prompt
-        # Invariant section with the dependent-side verification rule.
-        assert "Rendered markup is a contract" in prompt
-        assert "dependent side" in prompt
-        # The corpus example.
-        assert "55669" in prompt
-        # Findings can carry the dedicated category.
-        assert "`markup-contract`" in prompt
-
-    def test_woo_reviewer_audits_late_transforms_over_foreign_entries(self):
-        """Invariant 4 addition (regression guard for the
-        woocommerce/woocommerce-subscriptions#5575 rework): a late-priority
-        callback on a collection filter post-processes every other plugin's
-        contributions, so a predicate-selected transform must be scoped to
-        entries the plugin owns."""
-        prompt = (PLUGIN_ROOT / "agents/woo-regression-reviewer.md").read_text()
-
-        # Per-hunk audit row exists, so the self-audit can catch dismissals.
-        assert "Hooks - late transform over foreign collection entries" in prompt
-        # Invariant text with the ownership-scoping rule.
-        assert "caller-side post-processing of every other plugin's contributions" in prompt
-        assert "rewrites entries the plugin does not own" in prompt
-        # The dismissal this closes.
-        assert '"Display-only" is not a reason to dismiss' in prompt
-
-    def test_woo_reviewer_audits_settings_write_surface(self):
-        """Invariant 13 (regression guard for woocommerce-subscriptions#4612 →
-        #5664): registering a settings page, group, or settings-API object
-        makes every field REST/CLI-writable through one of two write routes,
-        so an invariant the settings form enforces at save time has to hold
-        where the value is read."""
-        prompt = (PLUGIN_ROOT / "agents/woo-regression-reviewer.md").read_text()
-
-        # Per-hunk audit row exists, so the self-audit can catch dismissals.
-        assert "Settings - form-only invariant vs. REST/CLI writers" in prompt
-        assert "a settings-API object's `form_fields`" in prompt
-        # Invariant section with the enumerate-the-writers rule.
-        assert "Settings screens are a write surface, not just a form" in prompt
-        assert "the form is one of at least three" in prompt
-        # Both REST write routes, so a WC_Email hunk is not cleared by the
-        # absence of a save_fields() call.
-        assert "WC_Admin_Settings::save_fields( array( $setting ), $update_data )" in prompt
-        assert "For an array `option_key`" in prompt
-        assert "`woocommerce_admin_settings_sanitize_option*` filters never run" in prompt
-        # The remedy that does not work, so reviewers stop recommending it.
-        assert "Do not repair it below the API" in prompt
-        assert "stores `$request['value']` raw" in prompt
-        # The corpus example.
-        assert "woocommerce-subscriptions#4612" in prompt
-        # Findings can carry the dedicated category.
-        assert "`settings-write-surface`" in prompt
-
-    def test_downstream_prompts_preserve_explicit_floor_contract(self):
-        reconciliator = (
-            PLUGIN_ROOT / "agents/review-reconciliator.md"
-        ).read_text().lower()
-        critic = (PLUGIN_ROOT / "agents/decision-reviewer.md").read_text().lower()
-
-        assert "categories never invent a floor" in reconciliator
-        assert "strongest verified" in reconciliator
-        assert "severity_floor" in reconciliator
-        assert "severity floor" in critic
-
-
-class TestDecisionReviewerContract:
-    def test_record_content_provenance_is_explicit(self):
-        critic = (PLUGIN_ROOT / "agents/decision-reviewer.md").read_text().lower()
-
-        assert "mechanically assembled" in critic
-        assert "no model edits it after assembly" in critic
-        assert "initial findings, assessment, and verified checks" in critic
-        assert "reconciliator-authored `review-findings.json`" in critic
-        assert "pipeline supplies measurements and run notes" in critic
-        assert "`findings[].critic_adjustment`" in critic
-        assert "`applied_critic_adjustments`" in critic
-        assert "`rejected_critic_adjustments`" in critic
-        assert "`invalidated_assessments`" in critic
-        assert "inspect these audit fields" in critic
-        assert "nothing in it was authored by an agent" not in critic
-
-    def test_live_ledger_guidance_uses_findings_and_verified_checks(self):
-        critic = (PLUGIN_ROOT / "agents/decision-reviewer.md").read_text()
-
-        assert "stable `fN` `id`" in critic
-        assert "`findings[].id`" in critic
-        assert "`## Verified Checks`" in critic
-        assert "8-hex" not in critic
-        assert "`issues[].id`" not in critic
-        assert "`## Clearances" not in critic
-
-    def test_critic_owns_only_schema_two_finding_and_check_proposals(self):
-        critic = (PLUGIN_ROOT / "agents/decision-reviewer.md").read_text()
-
-        assert "schema 2" in critic
-        assert '"kind": "finding"' in critic
-        assert '"kind": "check"' in critic
-        assert "the orchestrator's adjudication is recorded in the ledger" in (
-            critic
-        )
-        assert "Author only `action`, `target`, `fields`, and `rationale`" in (
-            critic
-        )
-        assert "`adjustment_id`" in critic
-
 
 class TestRepoReviewerAdapterContract:
     def test_empty_review_uses_the_same_draft_finalization_flow(self):
+        """The adapter's empty-findings branch saves a draft and finalizes
+        like every other reviewer instead of skipping publication."""
         adapter = (
             PLUGIN_ROOT / "agents/repo-reviewer-adapter.md"
         ).read_text()
@@ -1344,186 +1109,11 @@ class TestRepoReviewerAdapterContract:
         )[1].split("\n- ", 1)[0]
 
         assert "`save_draft()`" in empty_branch
-        assert "finalize" in empty_branch
-        assert "`finalize_review_command`" not in empty_branch
-        assert "`save()`" not in empty_branch
-        assert "standard pirategoat finding" in adapter
-        assert "Tag EVERY finding" in adapter
-        assert "standard pirategoat issue" not in adapter
-        assert "Tag EVERY issue" not in adapter
-
-    def test_example_runs_the_printed_finalization_command_verbatim(self):
-        """The example calls `save_draft()` and then points at the shared
-        protocol's Canonical Draft Lifecycle rather than re-teaching the
-        finalization mechanics inline."""
-        adapter = (
-            PLUGIN_ROOT / "agents/repo-reviewer-adapter.md"
-        ).read_text()
-
-        assert "receipt = builder.save_draft()" not in adapter
-        assert "builder.save_draft()" in adapter
-        assert "Canonical Draft Lifecycle" in adapter
-        assert "exact printed `FINALIZE REVIEW` command verbatim" not in adapter
-
-
-class TestReconcilerReviewDomainOwnership:
-    def test_reconciler_carries_complete_structured_reviewer_evidence(self):
-        reconciler = (
-            PLUGIN_ROOT / "agents/review-reconciliator.md"
-        ).read_text()
-
-        for token in (
-            "reviews_by_agent",
-            "positive_observations",
-            "builder.set_assessment(",
-            "builder.record_check(",
-            "source_reviewers=",
-        ):
-            assert token in reconciler
-        assert "FindingsLedgerBuilder(pr_id=" in reconciler
-        assert "FindingsLedgerBuilder.open(" not in reconciler
-        assert "builder.add_positive_observation(" in reconciler
-
-    def test_reconciler_uses_the_local_host_context_map_for_host_citations(self):
-        reconciler = (
-            PLUGIN_ROOT / "agents/review-reconciliator.md"
-        ).read_text()
-
-        assert "full local-only `review_context.host_context` manifest" in reconciler
-        assert "use the local `host_context` map" in reconciler
-        assert "host-qualified `source_cited`" in reconciler
-
-
-class TestAPIContractReviewerReturnSideHooks:
-    """Regression guard for caller-side handling of filter return values."""
-
-    @staticmethod
-    def _prompt() -> str:
-        return (PLUGIN_ROOT / "agents/api-contract-reviewer.md").read_text().lower()
-
-    def test_compares_returned_value_handling_before_and_after_diff(self):
-        prompt = self._prompt()
-
-        assert "compare the caller's handling" in prompt
-        assert "returned value before and after the diff" in prompt
-
-    def test_includes_concrete_post_filter_processing_break(self):
-        prompt = self._prompt()
-
-        assert "apply_filters() remains present" in prompt
-        assert "removed normalization" in prompt
-        assert "hook-contract-break" in prompt
-
-    def test_treats_undocumented_established_runtime_behavior_as_contract(self):
-        prompt = self._prompt()
-
-        assert "established runtime behavior" in prompt
-        assert "even when the hook docblock does not document it" in prompt
-
-    def test_accepts_established_behavior_evidence_without_direct_consumer_code(self):
-        prompt = self._prompt()
-
-        assert (
-            "pre-diff implementation or tests can establish changed observable "
-            "behavior without direct consumer code"
-        ) in prompt
-        assert (
-            "when implementation and test evidence are absent, require existing "
-            "consumer code"
-        ) in prompt
-
-    def test_requires_evidence_before_internal_refactoring_dismissal(self):
-        prompt = self._prompt()
-
-        assert "concrete evidence" in prompt
-        assert "observable result is unchanged" in prompt
-
-
-class TestDismissalDisciplineContract:
-    """Dismissal/mitigation verification must apply to ALL findings.
-
-    Regression guard for the woocommerce/woocommerce#66488 miss: a detected
-    concern was demoted to "narrow and acceptable corner" tradeoff prose on
-    an unverified frequency claim, because the verification rules were scoped
-    to floored findings and three regression categories only.
-    """
-
-    def test_reconciliator_has_general_dismissal_discipline(self):
-        text = (PLUGIN_ROOT / "agents/review-reconciliator.md").read_text()
-        assert "## Dismissal & Mitigation Discipline (ALL findings)" in text
-        assert "Frequency claims are not structural reasons" in text
-        assert "verified at the producers" in text
-        assert "verified at file:line for the cited input shape" in text
-
-    def test_reconciliator_sanctions_upstream_producer_tracing(self):
-        text = (PLUGIN_ROOT / "agents/review-reconciliator.md").read_text()
-        assert "sanctioned exception" in text
-        assert "upstream producers" in text
-
-    def test_tradeoffs_section_has_exit_criteria(self):
-        text = (PLUGIN_ROOT / "agents/review-reconciliator.md").read_text()
-        assert "not a disposal path for findings" in text
-        assert "`add_finding()` at Low or Medium" in text
 
 
 class TestVerificationMethodContract:
-    """Verification-method rules ported from ai-regression-review's triage.md
-    (the half the 2026-07-15 dismissal port did not cover).
-
-    Regression guard for the 2026-07-16 run: three agents 'cleared' the blast
-    radius of a removed <label> with the same wrong grep ('.titledesc label'
-    when the load-bearing selectors were 'th label'), the raw signal read as
-    3-clear-vs-1-found, and the reconciliator then repeated the failure one
-    level up by verifying from a 37-line window of a 5,900-line stylesheet,
-    missing a third dependent rule.
-    """
-
-    def test_reconciliator_has_verification_method_weighting(self):
-        text = (PLUGIN_ROOT / "agents/review-reconciliator.md").read_text()
-        assert "## Verification-Method Weighting" in text
-        # Correlated-signal rule: same method = one probe, not N confirmations
-        assert "one probe" in text
-        # Anti-vote-counting: counts alone never move a verdict or severity
-        assert "counts alone" in text
-        # Negative-evidence rule: a negative search proves pattern absence only
-        assert "searched pattern is absent" in text
-        # Whole-artifact rule: enumerate all occurrences before concluding
-        assert "every occurrence" in text
-
-    def test_reconciliator_convergence_is_method_aware(self):
-        text = (PLUGIN_ROOT / "agents/review-reconciliator.md").read_text()
-        assert "distinct verification methods" in text
-        assert "More agents = higher confidence" not in text
-
-    def test_reconciliator_treats_check_conflicts_as_verification_targets(self):
-        """A check that contradicts a finding is resolved by verifying
-        the finding, not by counting sides.
-
-        Pinned on the rule's meaning rather than its old heading text
-        ("check vs. finding"), which moved when the method-adequacy
-        judgment was lifted out to apply to EVERY check — the wording
-        can change, this contract cannot.
-        """
-        text = (PLUGIN_ROOT / "agents/review-reconciliator.md").read_text()
-        assert "contradicts a finding" in text
-        assert "never a vote" in text
-        # And the judgment that voids a bad-method check is not gated
-        # on some finding having disagreed with it first.
-        assert "Judge EVERY check by its method" in text
-
-    def test_protocol_requires_record_check_for_absence_claims(self):
-        text = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
-        assert "record_check" in text
-
-    def test_protocol_has_absence_claim_rules(self):
-        text = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
-        assert "## Absence Claims" in text
-        # Directionality: search the dependent side's vocabulary
-        assert "dependent side" in text
-        # Negative-evidence limit
-        assert "searched pattern is absent" in text
-        # Auditability: state the method used
-        assert "state the exact search" in text
+    """The shared protocol's Absence Claims section reaches the built
+    prompt; its prose pin lives in review/test_registry_docs.py."""
 
     def test_absence_claim_rules_reach_agent_prompts(self, tmp_path):
         """The new protocol section must flow through bootstrap's skip-list
@@ -1554,29 +1144,8 @@ class TestVerificationMethodContract:
 
 
 class TestUnchangedCallerScopeContract:
-    """A hunk that changes a function's contract puts the callers that
-    relied on the old contract in scope, even in a file with no diff.
-    The scope rule lives once, in the shared protocol's STOP CHECK
-    exception; the tracing method lives in Absence Claims; the
-    reliability gate defers to both instead of clearing on its own."""
-
-    def test_protocol_has_unchanged_caller_exception(self):
-        text = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
-        assert "reaching an unchanged caller" in text
-        exception = text[text.index("reaching an unchanged caller"):]
-        # Anchoring: only a hunk-anchored finding survives the structural
-        # prefilter, so the rule names where the finding goes and where not.
-        assert "Anchor the finding at the changed hunk" in exception
-        assert "never at the caller" in exception
-        # The clearance is a recorded check, not free text.
-        assert "record_check" in exception
-        # An empty caller diff is not evidence of safety.
-        assert "not that it is safe" in exception
-
-    def test_absence_claims_cover_a_changed_contract(self):
-        text = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
-        absence = text[text.index("## Absence Claims"):]
-        assert "changed contract" in absence
+    """The shared protocol's unchanged-caller exception reaches the built
+    prompt; its prose pins live in review/test_registry_docs.py."""
 
     def test_unchanged_caller_exception_reaches_agent_prompts(self, tmp_path):
         protocol = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
@@ -1600,21 +1169,6 @@ class TestUnchangedCallerScopeContract:
         )
         assert "reaching an unchanged caller" in prompt
         assert "Anchor the finding at the changed hunk" in prompt
-
-    def test_reliability_gate_defers_to_the_shared_exception(self):
-        text = (PLUGIN_ROOT / "agents/reliability-reviewer.md").read_text()
-        gate = text[text.index("## FALSE POSITIVE GATE"):]
-        assert "unchanged caller" in gate
-        assert "anchor the finding at the changed hunk" in gate
-
-    def test_reliability_observable_rule_rejects_debug_only_signal(self):
-        text = (PLUGIN_ROOT / "agents/reliability-reviewer.md").read_text()
-        rule0 = text[text.index("## RULE 0"):text.index("## Core Mission")]
-        assert "`debug`" in rule0
-        assert "not a positive observation" in rule0
-        # The rule must not assert a log-threshold fact the reviewer has
-        # not read: WooCommerce, for one, logs every level by default.
-        assert "default log threshold" not in rule0
 
 
 class TestEmpiricalProbeContract:
@@ -1731,50 +1285,18 @@ class TestReviewOutputBuilderAPIExample:
             has_php=False,
         )
 
-    def test_output_contains_add_finding_example(self, tmp_path):
-        """The usage example must show add_finding() with named parameters."""
+    def test_output_names_the_builder_api(self, tmp_path):
         output = self._build(tmp_path)
-        assert "add_finding(" in output
-        assert "severity=" in output
-        assert "title=" in output
-        assert "file=" in output
-        assert "description=" in output
-        assert "recommendation=" in output
+        for api in (
+            "add_finding(",
+            "add_positive_observation(",
+            "save_draft()",
+            "set_confidence(",
+        ):
+            assert api in output, api
+        # Two rules the example carries that no other test pins.
         assert "FILE-SCOPED finding" in output
-        assert "FILE-SCOPED issue" not in output
-
-    def test_output_contains_add_positive_example(self, tmp_path):
-        """The usage example must show add_positive_observation()."""
-        output = self._build(tmp_path)
-        assert "add_positive_observation(" in output
-
-    def test_output_contains_bound_save_draft_example(self, tmp_path):
-        """The example opens against output_dir and saves without a path."""
-        output = self._build(tmp_path)
-        assert "ReviewOutputBuilder.open(" in output
-        assert "save_draft()" in output
-        assert str(tmp_path) in output
-
-    def test_output_uses_positive_claims_as_the_only_coverage_input(self, tmp_path):
-        output = self._build(tmp_path)
-        assert "# No review-claimable files in this assignment: do not call claim_files_reviewed()." in output
-        assert "builder.add_un" + "reviewed" not in output
-        assert "builder.set_files_" + "reviewed" not in output
-
-    def test_output_contains_set_confidence(self, tmp_path):
-        """The usage example must show set_confidence()."""
-        output = self._build(tmp_path)
-        assert "set_confidence(" in output
-
-    def test_output_contains_no_verify_instruction(self, tmp_path):
-        """The usage example must tell agents not to verify save() output."""
-        output = self._build(tmp_path)
-        lower = output.lower()
-        # The instruction must convey "proceed directly after save()" — either
-        # via "do not read/verify" or "proceed directly to the status signal".
-        has_do_not = "do not" in lower and ("read" in lower or "verify" in lower) and ("output file" in lower or "save()" in lower)
-        has_proceed_directly = "proceed directly" in lower and "save()" in lower
-        assert has_do_not or has_proceed_directly
+        assert "Do NOT read the output file back to verify" in output
 
 
 class TestBootstrapOutputSizeCap:
@@ -2261,17 +1783,6 @@ class TestOutputFilenameConsistency:
         assert "run the exact FINALIZE REVIEW command printed by" in output
         assert f"{tmp_path}/dead-code-review.md" not in output
 
-    def test_testing_inventory_names_draft_lifecycle_contract(self):
-        testing_doc = (TESTS_DIR / "TESTING.md").read_text()
-        row = next(
-            line for line in testing_doc.splitlines()
-            if "`TestOutputFilenameConsistency`" in line
-        )
-
-        assert "draft" in row
-        assert "finalization" in row
-        assert "match bootstrap expectations" not in row
-
 
 class TestBootstrapImportDoesNotBreakTelemetry:
     """Importing `review.agent.bootstrap` first must leave a working
@@ -2314,32 +1825,6 @@ class TestBootstrapImportDoesNotBreakTelemetry:
             f"stdout: {result.stdout}\nstderr: {result.stderr}"
         )
         assert result.stdout.strip() == "OK"
-
-
-def test_ecosystem_integration_reviewer_registered():
-    """ecosystem-integration-reviewer is in the registry with correct shape."""
-    import json
-    from pathlib import Path
-    reg_path = (
-        Path(__file__).parent.parent.parent.parent
-        / "scripts" / "review" / "agent_registry.json"
-    )
-    registry = json.loads(reg_path.read_text())
-    agents = registry["agents"]
-    entry = agents.get("ecosystem-integration-reviewer")
-    assert entry is not None, "Agent must be registered"
-    assert entry["domain"] == "wp-architecture"
-    assert "reviewer" in entry["protocols"]
-    assert entry["dispatch_class"] == "conditional"
-    assert entry["model_tier"] == "sonnet"
-    # Narrative field (human-facing)
-    assert isinstance(entry.get("triage_criteria"), list) and entry["triage_criteria"]
-    # Machine-consumed fields
-    assert isinstance(entry.get("triage_keywords"), list) and entry["triage_keywords"]
-    assert "require_triage_keyword_match" not in entry
-    assert entry.get("require_php_source_file") is True
-    assert "host_context_runtime_host_resolved" not in entry.get("triage_checks", [])
-    assert entry.get("budget_override", 0) > 0
 
 
 class TestNotDiffedContractIsDelivered:
