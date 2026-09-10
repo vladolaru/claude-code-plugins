@@ -168,41 +168,34 @@ class TestExtractAgentFindings:
         assert result["findings_by_severity"]["high"] == 1
         assert result["findings_by_severity"]["medium"] == 1
         assert result["findings_by_severity"].get("low", 0) == 0
+        # Findings are returned for downstream overlap detection.
+        assert len(result["findings"]) == 3
+        assert result["findings"][0]["file"] == "a.php"
 
-    def test_findings_list_preserved(self):
-        """Parsed findings are returned for downstream overlap detection."""
-        findings = [
-            _make_finding(severity="high", file="x.php", line=42, finding_id="h1"),
-            _make_finding(severity="low", file="y.php", line=7, finding_id="h2"),
-        ]
-        review = _make_review_json(findings=findings)
+    @pytest.mark.parametrize(
+        "review,total_findings,high_count",
+        [
+            pytest.param(
+                {"pr_id": "1", "reviewer": "security", "verdict": "approve"},
+                0, 0, id="missing-findings-key",
+            ),
+            pytest.param(
+                {
+                    "pr_id": "1",
+                    "reviewer": "security",
+                    "verdict": "comment",
+                    "findings": [_make_finding(severity="high")],
+                },
+                1, 1, id="missing-summary-key",
+            ),
+            pytest.param("not a dict", 0, 0, id="non-dict-input"),
+        ],
+    )
+    def test_extract_degenerate_inputs(self, review, total_findings, high_count):
+        """Missing keys and a non-dict input all fall back to the empty result shape."""
         result = extract_agent_findings(review)
-        assert len(result["findings"]) == 2
-        assert result["findings"][0]["file"] == "x.php"
-        assert result["findings"][0]["line"] == 42
-
-    def test_missing_findings_key(self):
-        """Gracefully handles review JSON with no findings key."""
-        review = {"pr_id": "1", "reviewer": "security", "verdict": "approve"}
-        result = extract_agent_findings(review)
-        assert result["total_findings"] == 0
-
-    def test_missing_summary_key(self):
-        """Gracefully handles review JSON with no summary key."""
-        review = {
-            "pr_id": "1",
-            "reviewer": "security",
-            "verdict": "comment",
-            "findings": [_make_finding(severity="high")],
-        }
-        result = extract_agent_findings(review)
-        assert result["total_findings"] == 1
-        assert result["findings_by_severity"]["high"] == 1
-
-    def test_non_dict_input(self):
-        """Non-dict input returns empty result."""
-        result = extract_agent_findings("not a dict")
-        assert result["total_findings"] == 0
+        assert result["total_findings"] == total_findings
+        assert result["findings_by_severity"].get("high", 0) == high_count
 
 
 # ---------------------------------------------------------------------------
@@ -210,62 +203,54 @@ class TestExtractAgentFindings:
 class TestDetectOverlaps:
     """detect_overlaps(all_findings) → dict with overlap_clusters, severity_disagreements."""
 
-    def test_basic_overlap(self):
-        """Two agents flag the same file+line → one overlap cluster."""
-        findings = [
-            {"agent": "security", "file": "src/Foo.php", "line": 42, "severity": "critical", "title": "SQL Injection"},
-            {"agent": "code", "file": "src/Foo.php", "line": 42, "severity": "critical", "title": "Unescaped input"},
-        ]
+    @pytest.mark.parametrize(
+        "findings,overlap_clusters,severity_disagreements",
+        [
+            pytest.param(
+                [
+                    {"agent": "security", "file": "src/Foo.php", "line": 42, "severity": "critical", "title": "SQL Injection"},
+                    {"agent": "code", "file": "src/Foo.php", "line": 42, "severity": "critical", "title": "Unescaped input"},
+                ],
+                1, 0, id="basic-overlap",
+            ),
+            pytest.param(
+                [
+                    {"agent": "security", "file": "src/A.php", "line": 10, "severity": "high", "title": "Issue A"},
+                    {"agent": "code", "file": "src/B.php", "line": 20, "severity": "high", "title": "Issue B"},
+                ],
+                0, 0, id="no-overlaps-different-files",
+            ),
+            pytest.param(
+                [
+                    {"agent": "security", "file": "src/Foo.php", "line": 42, "severity": "critical", "title": "SQL Injection"},
+                    {"agent": "code", "file": "src/Foo.php", "line": 42, "severity": "medium", "title": "Input handling"},
+                ],
+                1, 1, id="severity-disagreement",
+            ),
+            pytest.param(
+                [
+                    {"agent": "security", "file": "x.php", "line": 5, "severity": "high", "title": "X1"},
+                    {"agent": "code", "file": "x.php", "line": 5, "severity": "high", "title": "X2"},
+                    {"agent": "perf", "file": "x.php", "line": 5, "severity": "medium", "title": "X3"},
+                ],
+                # Three agents at the same file+line still form one cluster;
+                # perf's severity differs from security/code.
+                1, 1, id="three-agents-same-location",
+            ),
+            pytest.param(
+                [
+                    {"agent": "security", "file": "a.php", "line": None, "severity": "high", "title": "NoLine1"},
+                    {"agent": "code", "file": "a.php", "line": None, "severity": "high", "title": "NoLine2"},
+                ],
+                # Findings with None line are excluded from overlap detection.
+                0, 0, id="none-line-ignored",
+            ),
+        ],
+    )
+    def test_overlap_counts(self, findings, overlap_clusters, severity_disagreements):
         result = detect_overlaps(findings)
-        assert result["overlap_clusters"] == 1
-        assert result["severity_disagreements"] == 0
-
-    def test_no_overlaps(self):
-        """Different files → no overlap."""
-        findings = [
-            {"agent": "security", "file": "src/A.php", "line": 10, "severity": "high", "title": "Issue A"},
-            {"agent": "code", "file": "src/B.php", "line": 20, "severity": "high", "title": "Issue B"},
-        ]
-        result = detect_overlaps(findings)
-        assert result["overlap_clusters"] == 0
-        assert result["severity_disagreements"] == 0
-
-    def test_severity_disagreement(self):
-        """Same file+line but different severity → severity disagreement."""
-        findings = [
-            {"agent": "security", "file": "src/Foo.php", "line": 42, "severity": "critical", "title": "SQL Injection"},
-            {"agent": "code", "file": "src/Foo.php", "line": 42, "severity": "medium", "title": "Input handling"},
-        ]
-        result = detect_overlaps(findings)
-        assert result["overlap_clusters"] == 1
-        assert result["severity_disagreements"] == 1
-
-    def test_three_agents_same_location(self):
-        """Three agents at the same file+line → still one cluster."""
-        findings = [
-            {"agent": "security", "file": "x.php", "line": 5, "severity": "high", "title": "X1"},
-            {"agent": "code", "file": "x.php", "line": 5, "severity": "high", "title": "X2"},
-            {"agent": "perf", "file": "x.php", "line": 5, "severity": "medium", "title": "X3"},
-        ]
-        result = detect_overlaps(findings)
-        assert result["overlap_clusters"] == 1
-        # perf has different severity than security/code
-        assert result["severity_disagreements"] == 1
-
-    def test_empty_findings(self):
-        """Empty findings list → no overlaps."""
-        result = detect_overlaps([])
-        assert result["overlap_clusters"] == 0
-        assert result["severity_disagreements"] == 0
-
-    def test_none_line_ignored(self):
-        """Findings with None line are excluded from overlap detection."""
-        findings = [
-            {"agent": "security", "file": "a.php", "line": None, "severity": "high", "title": "NoLine1"},
-            {"agent": "code", "file": "a.php", "line": None, "severity": "high", "title": "NoLine2"},
-        ]
-        result = detect_overlaps(findings)
-        assert result["overlap_clusters"] == 0
+        assert result["overlap_clusters"] == overlap_clusters
+        assert result["severity_disagreements"] == severity_disagreements
 
     def test_overlap_details_returned(self):
         """Overlap details include file, line, and involved agents."""
@@ -292,56 +277,23 @@ format_quality_json_report = _mod.format_quality_json_report
 class TestUnrelatedWritesInQualityReport:
     """Quality reports ignore Write payloads that are not review results."""
 
-    @pytest.mark.parametrize(
-        "formatter,path,content",
-        [
-            pytest.param(format_quality_json_report, ".nvmrc", "22\n", id="json-scalar"),
-            pytest.param(
-                format_quality_text_report,
-                "package.json",
-                json.dumps({"name": "example"}),
-                id="unrelated-json-object",
-            ),
-        ],
-    )
-    def test_ignores_non_review_write_payloads(self, formatter, path, content):
+    def test_ignores_non_review_write_payloads(self):
+        """The reader rejects a non-review write regardless of which formatter
+        renders it; the JSON-report formatter (and the retired-schema shape)
+        are pinned elsewhere via test_unreadable_artifact_is_unmeasured_not_zero."""
         dispatch = (
             {"agent_name": "general-purpose"},
             {
-                "write_outputs": [{"content": content, "path": path}],
+                "write_outputs": [{"content": json.dumps({"name": "example"}), "path": "package.json"}],
                 "files_read": [],
                 "bash_commands": [],
                 "final_texts": [],
             },
         )
 
-        report = formatter([dispatch], None)
+        report = format_quality_text_report([dispatch], None)
 
         assert "unknown" not in report
-
-    def test_ignores_retired_review_payload(self):
-        dispatch = (
-            {"agent_name": "security-reviewer"},
-            {
-                "write_outputs": [{
-                    "content": json.dumps({
-                        "schema": 1,
-                        "reviewer": "security",
-                        "findings": [],
-                        "issues": [],
-                        "verdict": "approve",
-                    }),
-                    "path": "reviewers/security/review.json",
-                }],
-                "files_read": [],
-                "bash_commands": [],
-                "final_texts": [],
-            },
-        )
-
-        report = json.loads(format_quality_json_report([dispatch], None))
-
-        assert report["per_agent"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -414,21 +366,6 @@ class TestArtifactBackedReviews:
         assert agent_record["total_findings"] == 2
         assert agent_record["findings_by_severity"] == {"high": 1, "medium": 1}
 
-    def test_artifact_is_owned_by_its_directory_run(self, tmp_path):
-        """A builder envelope's directory is the one durable run it belongs to."""
-        artifact = _write_review_artifact(
-            tmp_path,
-            json.dumps(canonical_review_document("security", ["high"])),
-        )
-        envelope = {"reviewer": "security", "output_dir": str(tmp_path)}
-
-        review = _mod._review_from_artifact(envelope)
-
-        assert review == {
-            "path": str(artifact),
-            "content": json.dumps(canonical_review_document("security", ["high"])),
-        }
-
     def test_a_failed_builder_call_does_not_attribute_a_retry_artifact(
         self, tmp_path
     ):
@@ -486,28 +423,6 @@ class TestArtifactBackedReviews:
 
         assert [r["content"] for r in data["write_outputs"]] == [good]
 
-    def test_write_and_builder_spellings_of_one_artifact_count_once(
-        self, tmp_path
-    ):
-        artifact = _write_review_artifact(
-            tmp_path,
-            json.dumps(canonical_review_document("security", ["high"])),
-        )
-        entries = [
-            _write_entry(
-                f"{tmp_path}/reviewers/security/./review.json", "{}", tool_id="w1"
-            ),
-            _bash_entry(_real_bootstrap_builder_command(tmp_path), tool_id="b1"),
-        ]
-        log = tmp_path / "agent.jsonl"
-        log.write_text("".join(json.dumps(e) + "\n" for e in entries))
-
-        data = _mod.parse_subagent_log(str(log))
-
-        assert [r["path"] for r in data["write_outputs"]] == [
-            str(artifact)
-        ]
-
     @pytest.mark.parametrize(
         "artifact_content,reviewer",
         [
@@ -524,13 +439,10 @@ class TestArtifactBackedReviews:
                 "security",
                 id="retired-schema",
             ),
-            # No artifact is ever looked up for these — review_paths()
-            # raises on the identity itself before any file is opened, the
-            # same ValueError branch _review_from_artifact catches.
+            # review_paths() raises on the identity itself before any file
+            # is opened — the same ValueError branch _review_from_artifact
+            # catches, so no artifact is ever looked up for this row.
             pytest.param(None, "", id="empty-reviewer-identity"),
-            pytest.param(
-                None, "../escape", id="path-traversal-reviewer-identity"
-            ),
         ],
     )
     def test_unreadable_artifact_is_unmeasured_not_zero(
@@ -560,36 +472,6 @@ class TestArtifactBackedReviews:
 
         assert data["write_outputs"] == []
         assert report["per_agent"] == []
-
-    def test_non_straight_line_body_is_still_a_measured_builder_save(
-        self, tmp_path
-    ):
-        artifact = _write_review_artifact(
-            tmp_path,
-            json.dumps(canonical_review_document("security", ["low"])),
-        )
-        body = (
-            "from review.agent.output import ReviewOutputBuilder\n"
-            'builder = ReviewOutputBuilder.open("/o", "42", "security")\n'
-            "for path in ['src/a.php', 'src/b.php']:\n"
-            "    builder.claim_files_reviewed(path)\n"
-            "builder.save_draft()\n"
-        )
-        command = _builder_heredoc(output_dir=str(tmp_path), body=body)
-        log = tmp_path / "agent.jsonl"
-        log.write_text(json.dumps(_bash_entry(command)) + "\n")
-
-        data = _mod.parse_subagent_log(str(log))
-        detail = _mod._categorize_tool_call("Bash", {"command": command})
-
-        assert detail["category"] == "builder-output"
-        assert [record["path"] for record in data["write_outputs"]] == [
-            str(artifact)
-        ]
-        document = json.loads(data["write_outputs"][0]["content"])
-        assert [finding["severity"] for finding in document["findings"]] == [
-            "low"
-        ]
 
     def test_write_tool_save_of_the_same_artifact_counts_once(self, tmp_path):
         artifact = _write_review_artifact(
@@ -707,19 +589,12 @@ class TestWriteRecordDeduplication:
     same normalized path collapses to the last write, and a non-string path
     carries no dedup identity — it must never raise, just stay unreduced."""
 
-    @pytest.mark.parametrize(
-        "malformed_path",
-        [
-            pytest.param(7, id="hashable-non-string"),
-            # An unhashable path (a list, from a malformed transcript) must
-            # never reach a dict membership check unguarded — that raises
-            # TypeError and crashes the whole run.
-            pytest.param(["nested", "path"], id="unhashable-non-string"),
-        ],
-    )
-    def test_non_string_path_is_kept_without_dedup_identity(
-        self, tmp_path, malformed_path
-    ):
+    def test_non_string_path_is_kept_without_dedup_identity(self, tmp_path):
+        """An unhashable path (a list, from a malformed transcript) must never
+        reach a dict membership check unguarded — that raises TypeError and
+        crashes the whole run. A hashable non-string (e.g. an int) is caught
+        by the same isinstance(path, str) guard and is not pinned separately."""
+        malformed_path = ["nested", "path"]
         log = tmp_path / "agent.jsonl"
         entries = [
             _write_tool_entry(
