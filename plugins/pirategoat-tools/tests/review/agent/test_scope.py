@@ -265,8 +265,9 @@ class TestFilterDomain:
     def test_toolchain_domain_matches_configs_locks_and_ci_files(self):
         """One row per distinct branch of the toolchain include regex:
         pnpm-workspace.yaml, .npmrc, tsconfig*.json, nx.json, .stylelintrc
-        (configs); the six lock-file flavors; .github/workflows, Dockerfile,
-        Makefile (CI/build). A non-toolchain file stays excluded."""
+        (configs); the five lock-file flavors (composer.lock stands in for
+        the shared `\\.lock$` branch also matched by yarn.lock); .github/workflows,
+        Dockerfile, Makefile (CI/build). A non-toolchain file stays excluded."""
         config_files = [
             "pnpm-workspace.yaml", ".npmrc", "tsconfig.json", "nx.json",
             ".stylelintrc", "src/app.ts",
@@ -281,7 +282,7 @@ class TestFilterDomain:
 
         lock_files = [
             "pnpm-lock.yaml", "package-lock.json", "composer.lock",
-            "yarn.lock", "go.sum", "npm-shrinkwrap.json",
+            "go.sum", "npm-shrinkwrap.json",
         ]
         matched, excluded = review_scope.filter_domain(lock_files, "toolchain")
         assert matched == lock_files, "All lock files should match toolchain domain"
@@ -1307,6 +1308,12 @@ class TestMarkupTokenEdgeCases:
             "+ dynamic_sidebar( 'primary' );",
             "+ echo $renderer->render( $context );",
             "+ $view->display( $context );",
+            # A view-like receiver + output/emit is its own MARKUP_CODE_TOKEN_PATTERNS
+            # branch, distinct from the bare render/display branch above —
+            # ambiguous output/emit calls require the view-like receiver so
+            # event emitters and byte streams (see test_helper_lookalikes_are_not_markup)
+            # do not masquerade as rendered UI.
+            "+ $view->emit( $context );",
         ],
     )
     def test_php_render_surfaces_are_markup(self, line):
