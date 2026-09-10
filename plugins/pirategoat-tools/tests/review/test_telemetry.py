@@ -7,8 +7,7 @@ import os
 import re
 import subprocess
 import sys
-import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -100,6 +99,22 @@ def _read_events(log_path):
 def _read_manifest(telemetry):
     """Read the materialized manifest for a telemetry run."""
     return json.loads(Path(telemetry.manifest_path).read_text())
+
+
+def _frozen_datetime(mod, *times):
+    """Patch mod.datetime so now() returns each of `times` in sequence,
+    repeating the last one for any call beyond the given values."""
+    calls = [0]
+    real_datetime = datetime
+
+    class FrozenDatetime(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            idx = min(calls[0], len(times) - 1)
+            calls[0] += 1
+            return times[idx]
+
+    return patch.object(mod, "datetime", FrozenDatetime)
 
 
 from helpers.review_fixtures import artifact_file as _artifact  # noqa: E402
@@ -521,16 +536,15 @@ class TestLogStep:
         assert events[1]["phase"] == "AWARENESS"
         assert events[1]["title"] == "PR Review State"
 
-    def test_calculates_duration_since_prev(self, telemetry):
+    def test_calculates_duration_since_prev(self, telemetry, mod):
         """Duration is calculated from previous event's timestamp."""
-        telemetry.start(pr_number="42")
-        # Small sleep to ensure measurable duration
-        time.sleep(0.05)
-        telemetry.log_step(step=1, phase="SETUP", title="Repo Setup")
+        t0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        t1 = t0 + timedelta(milliseconds=50)
+        with _frozen_datetime(mod, t0, t1):
+            telemetry.start(pr_number="42")
+            telemetry.log_step(step=1, phase="SETUP", title="Repo Setup")
         events = _read_events(telemetry.log_path)
-        duration = events[1]["duration_since_prev_ms"]
-        assert duration is not None
-        assert duration >= 40  # At least ~50ms minus some tolerance
+        assert events[1]["duration_since_prev_ms"] == 50
 
     def test_noop_without_start(self, mod, output_dir, tmp_path):
         """log_step is a no-op if start() was never called."""
@@ -586,14 +600,15 @@ class TestFinalize:
         events = _read_events(telemetry.log_path)
         assert events[-1]["event"] == "pipeline_end"
 
-    def test_includes_total_duration(self, telemetry):
-        telemetry.start(pr_number="42")
-        time.sleep(0.05)
-        telemetry.finalize(step=15, phase="OUTPUT", title="Present Results")
+    def test_includes_total_duration(self, telemetry, mod):
+        t0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        t1 = t0 + timedelta(milliseconds=50)
+        with _frozen_datetime(mod, t0, t1):
+            telemetry.start(pr_number="42")
+            telemetry.finalize(step=15, phase="OUTPUT", title="Present Results")
         events = _read_events(telemetry.log_path)
         summary = events[-1]["summary"]
-        assert "total_duration_ms" in summary
-        assert summary["total_duration_ms"] >= 40
+        assert summary["total_duration_ms"] == 50
 
     def test_includes_summary_dict(self, telemetry):
         telemetry.start(pr_number="42")
@@ -3219,17 +3234,7 @@ class TestReReviews:
     @staticmethod
     def _mock_datetime_sequence(mod, times):
         """Return a patch that makes mod.datetime.now() cycle through `times`."""
-        call_count = [0]
-        real_datetime = datetime
-
-        class FakeDatetime(real_datetime):
-            @classmethod
-            def now(cls, tz=None):
-                idx = min(call_count[0], len(times) - 1)
-                call_count[0] += 1
-                return times[idx]
-
-        return patch.object(mod, "datetime", FakeDatetime)
+        return _frozen_datetime(mod, *times)
 
     def test_separate_files_per_run(self, mod, tmp_path):
         output_dir = tmp_path / "pr-review-org-repo-42"
@@ -3455,7 +3460,6 @@ class TestLogAgentComplete:
     def test_appends_agent_complete_event(self, telemetry, output_dir):
         telemetry.start(pr_number="42")
         _write_started(output_dir, "security")
-        time.sleep(0.05)
         telemetry.log_agent_complete(
             agent_name="security-reviewer", review_digest=FINAL_DIGEST,
             verdict="comment",
@@ -3478,17 +3482,19 @@ class TestLogAgentComplete:
         assert events[-1]["finding_count"] == 2
         assert events[-1]["severities"] == {"high": 1, "medium": 1}
 
-    def test_calculates_duration_from_started_file(self, telemetry, output_dir):
+    def test_calculates_duration_from_started_file(self, telemetry, output_dir, mod):
         telemetry.start(pr_number="42")
-        _write_started(output_dir, "security")
-        time.sleep(0.05)
-        telemetry.log_agent_complete(
-            agent_name="security-reviewer", review_digest=FINAL_DIGEST,
-            verdict="approve",
-        )
+        started_path = Path(started_marker_path(output_dir, "security"))
+        started_path.parent.mkdir(parents=True, exist_ok=True)
+        started_at = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        started_path.write_text(started_at.isoformat())
+        with _frozen_datetime(mod, started_at + timedelta(milliseconds=50)):
+            telemetry.log_agent_complete(
+                agent_name="security-reviewer", review_digest=FINAL_DIGEST,
+                verdict="approve",
+            )
         events = _read_events(telemetry.log_path)
-        assert events[-1]["duration_ms"] is not None
-        assert events[-1]["duration_ms"] >= 40
+        assert events[-1]["duration_ms"] == 50
 
     def test_duration_none_without_started_file(self, telemetry):
         telemetry.start(pr_number="42")
@@ -3997,6 +4003,19 @@ class TestDependencyRefreshManifest:
     """The manifest records the sanitized dependency-refresh report."""
 
     def _telemetry(self, mod, tmp_path):
+        out_dir = tmp_path / "out"
+        out_dir.mkdir(exist_ok=True)
+        log_dir = tmp_path / "logs"
+        t = mod.ReviewTelemetry(str(out_dir), log_dir=str(log_dir))
+        t.start(mode="full", repo_path=str(tmp_path), identifier="branch",
+                run_id="run-1")
+        return t, out_dir
+
+    @staticmethod
+    def _init_repo(tmp_path):
+        """Only `save_report` needs a real git repo (it shells out to
+        observe the tracked worktree); every other test in this class
+        reads sidecar artifacts directly and needs no repo at all."""
         subprocess.run(
             ["git", "init", str(tmp_path)], check=True, capture_output=True
         )
@@ -4016,13 +4035,6 @@ class TestDependencyRefreshManifest:
             check=True,
             capture_output=True,
         )
-        out_dir = tmp_path / "out"
-        out_dir.mkdir(exist_ok=True)
-        log_dir = tmp_path / "logs"
-        t = mod.ReviewTelemetry(str(out_dir), log_dir=str(log_dir))
-        t.start(mode="full", repo_path=str(tmp_path), identifier="branch",
-                run_id="run-1")
-        return t, out_dir
 
     @staticmethod
     def _save_report(out_dir, *, status="completed", commands=None):
@@ -4059,6 +4071,7 @@ class TestDependencyRefreshManifest:
         assert "status" not in section
 
     def test_saved_report_is_projected_into_the_manifest(self, mod, tmp_path):
+        self._init_repo(tmp_path)
         t, out_dir = self._telemetry(mod, tmp_path)
         (out_dir / "run-config.json").write_text(json.dumps(
             {"mode": "full", "refresh_dependencies": True}))
@@ -4151,6 +4164,7 @@ class TestDependencyRefreshManifest:
         assert manifest["steps"][-1]["step"] == 5
 
     def test_saved_report_projects_final_dirty_files(self, mod, tmp_path):
+        self._init_repo(tmp_path)
         t, out_dir = self._telemetry(mod, tmp_path)
         (out_dir / "run-config.json").write_text(json.dumps(
             {"mode": "full", "refresh_dependencies": True}))
