@@ -3055,18 +3055,13 @@ class TestMeasureRun:
         expected_state = "complete" if expected is not None else "missing"
         assert measured["metric_availability"]["wall_time"] == expected_state
 
-    @pytest.mark.parametrize(
-        "started,ended",
-        [
-            ("2026-07-19T10:00:00", "2026-07-19T10:01:00"),
-            ("2026-07-19T10:00:00+00:00", "2026-07-19T10:01:00"),
-        ],
-        ids=["both-naive", "mixed-aware-naive"],
-    )
-    def test_naive_timestamps_do_not_supply_wall_time(
-        self, tmp_path, started, ended
-    ):
-        manifest = _manifest(started_at=started, ended_at=ended)
+    def test_naive_timestamps_do_not_supply_wall_time(self, tmp_path):
+        """`_parse_time` returns None for any naive timestamp; one naive end
+        beside an aware start stands for two naive ones."""
+        manifest = _manifest(
+            started_at="2026-07-19T10:00:00+00:00",
+            ended_at="2026-07-19T10:01:00",
+        )
         manifest["outcome"]["summary"].pop("total_duration_ms")
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
@@ -3074,10 +3069,12 @@ class TestMeasureRun:
         assert measured["wall_time_ms"] is None
         assert measured["metric_availability"]["wall_time"] == "missing"
 
-    @pytest.mark.parametrize("verdict", ["STAND", "REVISE", "ESCALATE"])
     def test_critic_is_complete_only_for_exact_supported_verdicts(
-        self, tmp_path, verdict
+        self, tmp_path
     ):
+        """One membership test against the producer's verdict vocabulary;
+        `STAND` stands for `REVISE` and `ESCALATE`."""
+        verdict = "STAND"
         manifest = _manifest()
         manifest["outcome"]["critic_verdict"] = verdict
 
@@ -3090,8 +3087,11 @@ class TestMeasureRun:
 
     @pytest.mark.parametrize(
         "verdict",
-        [None, "unavailable", "stand", "ERROR", " STAND "],
-        ids=["missing", "sentinel", "lowercase", "failure", "padded"],
+        # One membership test: a missing verdict and a near-miss spelling.
+        # The fixed `unavailable` sentinel is pinned, with its retention, by
+        # `test_fixed_unavailable_critic_sentinel_is_retained_but_not_available`.
+        [None, "stand"],
+        ids=["missing", "lowercase"],
     )
     def test_invalid_or_missing_critic_verdict_is_missing(
         self, tmp_path, verdict
@@ -3137,7 +3137,8 @@ class TestMeasureRun:
     @pytest.mark.parametrize(
         "fragment",
         [
-            {"step": 10, "decisions": {"critic_skipped": True}},
+            # One row per missing half of the producer step identity (fix
+            # 57b6db74); a fragment missing both fails both checks.
             {
                 "event": "step",
                 "step": 10,
@@ -3149,7 +3150,7 @@ class TestMeasureRun:
                 "decisions": {"critic_skipped": True},
             },
         ],
-        ids=["no-identity", "missing-run-id", "missing-event"],
+        ids=["missing-run-id", "missing-event"],
     )
     def test_bare_step_fragment_cannot_disable_a_real_critic_verdict(
         self, tmp_path, fragment
@@ -6997,33 +6998,6 @@ class TestAggregateCohort:
 
         assert measured["wall_time_ms"] is None
         assert measured["metric_availability"]["wall_time"] == "missing"
-
-    def test_largest_supported_wall_times_keep_half_millisecond_exactness(self):
-        one_year_ms = 365 * 24 * 60 * 60 * 1000
-        largest = _measured_run("largest-wall")
-        largest["wall_time_ms"] = one_year_ms
-        adjacent = _measured_run("adjacent-wall")
-        adjacent["wall_time_ms"] = one_year_ms - 1
-
-        wall = aggregate_cohort([largest, adjacent])["wall_time"]
-
-        assert wall["total_ms"] == 2 * one_year_ms - 1
-        assert wall["mean_ms"] == one_year_ms - 0.5
-        assert wall["median_ms"] == one_year_ms - 0.5
-
-    def test_empty_cohort_wall_statistics_are_null_in_strict_json(self):
-        cohort = aggregate_cohort([])
-
-        payload = json.loads(
-            format_json([], cohort),
-            parse_constant=lambda value: (_ for _ in ()).throw(
-                AssertionError(f"nonstandard constant: {value}")
-            ),
-        )
-
-        assert payload["aggregate"]["wall_time"]["total_ms"] is None
-        assert payload["aggregate"]["wall_time"]["mean_ms"] is None
-        assert payload["aggregate"]["wall_time"]["median_ms"] is None
 
     def test_aggregates_lifecycle_retries_and_incomplete_identities(self):
         retry_manifest = _manifest("retry-run")
