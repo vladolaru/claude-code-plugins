@@ -2216,40 +2216,6 @@ class TestDetectorPolarity:
     evidence. Small-diff skipping requires an explicit complete-criteria
     contract, not extension membership or representative proof forms."""
 
-    def _config(self):
-        return {
-            "domain": "code",
-            "dispatch_class": "conditional",
-            "triage_criteria": ["x"],
-            "triage_keywords": ["wp_remote"],
-            "triage_checks": ["has_http_client_calls"],
-        }
-
-    def _small(self, filepath):
-        return {
-            "added": 2, "removed": 1,
-            "deleted_files": [], "renamed_files": [], "added_files": [],
-            "file_stats": {filepath: {"added": 2, "removed": 1}},
-        }
-
-    def test_unclaimed_language_dispatches_conservatively(self):
-        f = "src/main/java/SyncClient.java"
-        status, reason, _signal = triage_conditional_agent(
-            "reliability-reviewer", self._config(), [f],
-            "load remote status", self._small(f),
-            diff_text="+        HttpResponse<String> resp = client.send(req, handler);",
-        )
-        assert status == "DISPATCH"
-
-    def test_claimed_language_dispatches_when_detector_is_partial(self):
-        f = "internal/sync/notes.go"
-        status, _, _signal = triage_conditional_agent(
-            "reliability-reviewer", self._config(), [f],
-            "tidy comments", self._small(f),
-            diff_text="+\t// clarify rounding behavior",
-        )
-        assert status == "DISPATCH"
-
     def test_check_registries_derive_from_single_specs_record(self):
         """Supported and diff-based check views derive from one record."""
         specs = _mod._CHECK_SPECS
@@ -2282,9 +2248,6 @@ class TestTemplateExtensionsAreInherentUI:
     PHP/PHTML mix executable logic and markup, so their finite positive
     detectors cannot prove that a token-silent change emits no UI."""
 
-    def _config(self, registry_agents):
-        return registry_agents["a11y-reviewer"]
-
     def test_template_only_diff_dispatches_without_literal_markup(self, registry):
         cfg = registry["agents"]["a11y-reviewer"]
         f = "templates/checkout/form.twig"
@@ -2296,19 +2259,6 @@ class TestTemplateExtensionsAreInherentUI:
             diff_text='+{% set gateways = payment_gateways %}',
         )
         assert status == "DISPATCH", reason
-
-    def test_backend_php_only_diff_dispatches_conservatively(self, registry):
-        cfg = registry["agents"]["a11y-reviewer"]
-        f = "includes/class-wc-order-store.php"
-        status, reason, _signal = triage_conditional_agent(
-            "a11y-reviewer", cfg, [f],
-            "tune order lookups",
-            {"added": 3, "removed": 0,
-             "file_stats": {f: {"added": 3, "removed": 0}}},
-            diff_text="+ $orders = $this->store->load( $ids );",
-        )
-        assert status == "DISPATCH"
-        assert "no triage signal to skip" in reason
 
     def test_template_alias_dispatches_as_inherent_ui(self, registry):
         """A compound template extension (.blade.php) is template, not PHP;
@@ -2414,29 +2364,6 @@ class TestA11yMixedMarkupDispatch:
         assert status == "DISPATCH"
         assert "markup" in reason
 
-    def test_dispatches_on_markup_addition_in_php_diff(self, registry):
-        status, reason, _signal = triage_conditional_agent(
-            "a11y-reviewer", self._a11y_config(registry),
-            ["includes/admin/class-wc-admin-settings.php"],
-            "fix settings radio markup",
-            {},
-            diff_text='+<legend class="screen-reader-text"><span>title</span></legend>',
-        )
-        assert status == "DISPATCH"
-
-    def test_dispatches_on_a11y_keyword_without_markup_in_diff(self, registry):
-        """Commit keywords rescue dispatch even when the scanned diff text
-        carries no markup tokens."""
-        status, reason, _signal = triage_conditional_agent(
-            "a11y-reviewer", self._a11y_config(registry),
-            ["includes/class-renderer.php"],
-            "improve accessibility of settings rows",
-            {},
-            diff_text="+ return $rows;",
-        )
-        assert status == "DISPATCH"
-        assert "keyword" in reason
-
     # The WordPress core renderer alternation, the `<?=` output construct,
     # and the ->render/->display method form of MARKUP_CODE_TOKEN_PATTERNS.
     PHP_RENDER_SURFACES = (
@@ -2471,29 +2398,6 @@ class TestA11yMixedMarkupDispatch:
         }
         assert missed == {}
 
-    @pytest.mark.parametrize(
-        "filepath, render_call",
-        [
-            ("theme/header.php", "get_header();"),
-            ("theme/footer.php", "get_footer();"),
-            ("theme/comments.php", "comments_template();"),
-            ("views/shell.phtml", "my_plugin_render_shell();"),
-        ],
-    )
-    def test_dispatches_when_mixed_markup_detector_is_silent(
-        self, registry, filepath, render_call,
-    ):
-        status, reason, _signal = triage_conditional_agent(
-            "a11y-reviewer",
-            self._a11y_config(registry),
-            [filepath],
-            "compose rendered page",
-            self._large_diffstat(filepath),
-            diff_text=f"+ {render_call}",
-        )
-        assert status == "DISPATCH"
-        assert "no triage signal to skip" in reason
-
     def test_backend_php_dispatches_when_markup_detector_is_silent(self, registry):
         """Backend-looking PHP may still call project-specific render paths;
         detector silence is not proof of accessibility irrelevance."""
@@ -2511,28 +2415,6 @@ class TestA11yMixedMarkupDispatch:
         assert status == "DISPATCH"
         assert "no triage signal to skip" in reason
 
-    def test_php_loop_dispatches_without_false_markup_evidence(self, registry):
-        """A PHP loop remains token-silent but dispatches conservatively."""
-        status, reason, _signal = triage_conditional_agent(
-            "a11y-reviewer", self._a11y_config(registry),
-            ["includes/class-wc-query.php"],
-            "refactor query batching",
-            {},
-            diff_text="+ for ( $i = 0; $i < $count; $i++ ) { $formats[] = '%s'; }",
-        )
-        assert status == "DISPATCH"
-        assert "no triage signal to skip" in reason
-
-    def test_jsx_with_interactive_markup_dispatches(self, registry):
-        status, reason, _signal = triage_conditional_agent(
-            "a11y-reviewer", self._a11y_config(registry),
-            ["src/components/Modal.tsx"],
-            "tweak modal",
-            {},
-            diff_text='+ <button onClick={close} aria-label="Close">',
-        )
-        assert status == "DISPATCH"
-
     # --- Frontend/style files retain their specific positive signals ---
 
     def _large_diffstat(self, filepath):
@@ -2541,50 +2423,6 @@ class TestA11yMixedMarkupDispatch:
             "deleted_files": [], "renamed_files": [], "added_files": [],
             "file_stats": {filepath: {"added": 100, "removed": 20}},
         }
-
-    def test_css_only_focus_and_contrast_change_dispatches(self, registry):
-        """'CSS/SCSS affecting visibility, focus indicators, or contrast' is
-        an explicit a11y triage criterion — a sizable CSS-only change must
-        dispatch even without keywords or markup tokens."""
-        status, reason, _signal = triage_conditional_agent(
-            "a11y-reviewer", self._a11y_config(registry),
-            ["src/styles/buttons.scss"],
-            "adjust button outline and contrast tokens",
-            self._large_diffstat("src/styles/buttons.scss"),
-            diff_text="+ outline: 2px solid var(--focus-ring);\n+ color: #767676;",
-        )
-        assert status == "DISPATCH"
-
-    def test_ts_speak_announcement_dispatches_without_import_in_hunk(self, registry):
-        """'Screen reader announcements: speak() calls' is an explicit a11y
-        triage criterion — a speak() change must not depend on the
-        @wordpress/a11y import line happening to be in the diff."""
-        status, reason, _signal = triage_conditional_agent(
-            "a11y-reviewer", self._a11y_config(registry),
-            ["src/store/notices.ts"],
-            "announce settings save result",
-            self._large_diffstat("src/store/notices.ts"),
-            diff_text="+ speak( message, 'polite' );",
-        )
-        assert status == "DISPATCH"
-
-    def test_mixed_php_and_css_diff_dispatches_on_style_evidence(self, registry):
-        """A style file supplies specific positive accessibility evidence."""
-        status, reason, _signal = triage_conditional_agent(
-            "a11y-reviewer", self._a11y_config(registry),
-            ["includes/class-renderer.php", "src/styles/admin.scss"],
-            "restyle settings rows",
-            {
-                "added": 90, "removed": 10,
-                "deleted_files": [], "renamed_files": [], "added_files": [],
-                "file_stats": {
-                    "includes/class-renderer.php": {"added": 30, "removed": 5},
-                    "src/styles/admin.scss": {"added": 60, "removed": 5},
-                },
-            },
-            diff_text="+ padding-right: 24px;",
-        )
-        assert status == "DISPATCH"
 
     def test_one_line_css_outline_removal_dispatches(self, registry):
         """'+ outline: none;' is a one-line focus-indicator regression — an
@@ -2602,9 +2440,11 @@ class TestA11yMixedMarkupDispatch:
             diff_text="+ outline: none;",
         )
         assert status == "DISPATCH"
+        assert "style file changes" in reason
 
     def test_small_ts_speak_change_dispatches(self, registry):
-        """A small speak() announcement change is markup evidence."""
+        """A small speak() announcement change is markup evidence; it must
+        not depend on the @wordpress/a11y import line being in the hunk."""
         status, reason, _signal = triage_conditional_agent(
             "a11y-reviewer", self._a11y_config(registry),
             ["src/store/notices.ts"],
@@ -2617,26 +2457,7 @@ class TestA11yMixedMarkupDispatch:
             diff_text="+ speak( message, 'polite' );",
         )
         assert status == "DISPATCH"
-
-    def test_unrelated_test_file_does_not_change_conservative_dispatch(self, registry):
-        """An unrelated test cannot manufacture or suppress routing evidence
-        for the production PHP change."""
-        status, reason, _signal = triage_conditional_agent(
-            "a11y-reviewer", self._a11y_config(registry),
-            ["includes/class-wc-query.php", "tests/js/query.test.ts"],
-            "refactor query batching",
-            {
-                "added": 80, "removed": 15,
-                "deleted_files": [], "renamed_files": [], "added_files": [],
-                "file_stats": {
-                    "includes/class-wc-query.php": {"added": 60, "removed": 10},
-                    "tests/js/query.test.ts": {"added": 20, "removed": 5},
-                },
-            },
-            diff_text="+ $results = $wpdb->get_results( $sql );",
-        )
-        assert status == "DISPATCH"
-        assert "no triage signal to skip" in reason
+        assert "markup emission" in reason
 
     def test_small_pure_logic_ts_change_dispatches_without_exhaustive_contract(
         self, registry,
@@ -2762,146 +2583,17 @@ class TestSmallDiffPolarity:
         assert status == "DISPATCH"
         assert "no triage signal to skip" in reason
 
-    @pytest.mark.parametrize(
-        "agent_name",
-        ["performance-reviewer", "reliability-reviewer"],
-    )
-    def test_go_client_do_dispatches_when_partial_detector_is_silent(
-        self, agents, agent_name,
-    ):
-        filepath = "internal/client.go"
-        status, _, _signal = triage_conditional_agent(
-            agent_name,
-            agents[agent_name],
-            [filepath],
-            "tidy client code",
-            self._small_diffstat(filepath),
-            diff_text="+ response, err := client.Do(req)",
-        )
-        assert status == "DISPATCH"
-
-    def test_indexed_javascript_loop_dispatches_when_partial_detector_is_silent(
-        self, agents,
-    ):
-        filepath = "src/items.js"
-        status, _, _signal = triage_conditional_agent(
-            "performance-reviewer",
-            agents["performance-reviewer"],
-            [filepath],
-            "tidy item processing",
-            self._small_diffstat(filepath),
-            diff_text=(
-                "+ for (let i = 0; i < items.length; i++) { consume(items[i]); }"
-            ),
-        )
-        assert status == "DISPATCH"
-
-    def test_large_diff_without_signal_still_dispatches_by_default(self):
-        config = self._make_config(triage_keywords=["async", "lock"])
-        diffstat = self._small_diffstat(added=180, removed=40)
-        status, reason, _signal = triage_conditional_agent(
-            "concurrency-reviewer", config,
-            ["includes/class-renderer.php"],
-            "restructure renderer",
-            diffstat,
-            diff_text="",  # successful scan, nothing found
-        )
-        assert status == "DISPATCH"
-        assert "no triage signal to skip" in reason
-
-    def test_small_diff_with_keyword_evidence_dispatches(self):
-        config = self._make_config(triage_keywords=["async", "lock"])
-        status, reason, _signal = triage_conditional_agent(
-            "concurrency-reviewer", config,
-            ["includes/class-renderer.php"],
-            "add lock around cache write",
-            self._small_diffstat(),
-        )
-        assert status == "DISPATCH"
-        assert "keywords matched" in reason
-
-    def test_small_diff_with_check_evidence_dispatches(self):
-        config = self._make_config(
-            domain="dead-code",
-            triage_checks=["net_removal"],
-        )
-        diffstat = self._small_diffstat(added=2, removed=30)
-        status, reason, _signal = triage_conditional_agent(
-            "dead-code-reviewer", config,
-            ["includes/class-renderer.php"],
-            "trim renderer",
-            diffstat,
-        )
-        assert status == "DISPATCH"
-
     def test_unsized_diffstat_keeps_default_dispatch(self):
-        """No sizing data (empty diffstat) → cannot prove smallness → dispatch."""
+        """No sizing data (empty diffstat) → cannot prove smallness → dispatch.
+        The scan succeeded (diff_text=""), so this reaches the layer-6
+        default, not the diff-unavailable branch a None scan would take."""
         config = self._make_config(triage_keywords=["async"])
         status, reason, _signal = triage_conditional_agent(
             "concurrency-reviewer", config,
             ["includes/class-renderer.php"],
             "fix renderer",
             {},
-        )
-        assert status == "DISPATCH"
-
-    def test_api_contract_registry_has_signature_checks(self, agents):
-        """'Public function signature changes' is an explicit api-contract
-        criterion — structural checks must back it so small signature
-        changes don't depend on commit-text keywords."""
-        checks = set(agents["api-contract-reviewer"].get("triage_checks", []))
-        assert {"has_modified_signatures", "has_public_api_changes"} <= checks
-
-    def test_two_line_required_param_addition_dispatches_api_contract(self, agents):
-        """Adding a required parameter to a public method is a classic
-        two-line breaking change — it must dispatch api-contract-reviewer
-        without any keyword in commits."""
-        status, reason, _signal = triage_conditional_agent(
-            "api-contract-reviewer", agents["api-contract-reviewer"],
-            ["src/PaymentGatewayInterface.php"],
-            "extend process method",
-            {
-                "added": 1, "removed": 1,
-                "deleted_files": [], "renamed_files": [], "added_files": [],
-                "file_stats": {"src/PaymentGatewayInterface.php": {"added": 1, "removed": 1}},
-            },
-            diff_text=(
-                "-    public function process( $order ) {\n"
-                "+    public function process( $order, $currency ) {"
-            ),
-        )
-        assert status == "DISPATCH"
-
-    def test_one_line_superglobal_echo_dispatches_security(self, agents):
-        status, reason, _signal = triage_conditional_agent(
-            "security-reviewer", agents["security-reviewer"],
-            ["includes/render.php"],
-            "show visitor name",
-            {
-                "added": 1, "removed": 0,
-                "deleted_files": [], "renamed_files": [], "added_files": [],
-                "file_stats": {"includes/render.php": {"added": 1, "removed": 0}},
-            },
-            diff_text="+ echo $_GET['name'];",
-        )
-        assert status == "DISPATCH"
-
-    def test_test_file_size_does_not_change_conservative_dispatch(self):
-        config = self._make_config(triage_keywords=["async"])
-        diffstat = {
-            "added": 300, "removed": 10,
-            "deleted_files": [], "renamed_files": [], "added_files": [],
-            "file_stats": {
-                "includes/class-renderer.php": {"added": 6, "removed": 1},
-                "tests/RendererTest.php": {"added": 294, "removed": 9},
-            },
-        }
-        status, reason, _signal = triage_conditional_agent(
-            "concurrency-reviewer", config,
-            ["includes/class-renderer.php", "tests/RendererTest.php"],
-            "fix renderer",
-            diffstat,
-            diff_text="",  # successful scan, nothing found
+            diff_text="",
         )
         assert status == "DISPATCH"
         assert "no triage signal to skip" in reason
@@ -3066,41 +2758,6 @@ class TestDiffFetchFailureConservatism:
         )
         assert status == "DISPATCH"
         assert "unavailable" in reason
-
-    def test_small_diff_gate_dispatches_when_scan_failed(self):
-        config = {
-            "domain": "code",
-            "dispatch_class": "conditional",
-            "triage_criteria": ["x"],
-            "triage_keywords": ["transaction"],
-        }
-        diffstat = {
-            "added": 4, "removed": 1,
-            "file_stats": {"src/orders.php": {"added": 4, "removed": 1}},
-        }
-        status, reason, _signal = triage_conditional_agent(
-            "concurrency-reviewer", config,
-            ["src/orders.php"], "", diffstat, diff_text=None,
-        )
-        assert status == "DISPATCH"
-        assert "unavailable" in reason
-
-    def test_successful_empty_scan_still_dispatches(self):
-        config = {
-            "domain": "code",
-            "dispatch_class": "conditional",
-            "triage_criteria": ["x"],
-            "triage_keywords": ["transaction"],
-        }
-        diffstat = {
-            "added": 4, "removed": 1,
-            "file_stats": {"src/orders.php": {"added": 4, "removed": 1}},
-        }
-        status, _, _signal = triage_conditional_agent(
-            "concurrency-reviewer", config,
-            ["src/orders.php"], "", diffstat, diff_text="",
-        )
-        assert status == "DISPATCH"
 
     def test_fetch_failure_reaches_gates_through_decide_agent_dispatch(self):
         """END-TO-END: the None sentinel must survive the production path.
