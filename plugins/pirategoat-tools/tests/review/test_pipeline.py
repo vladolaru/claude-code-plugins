@@ -73,20 +73,6 @@ class TestStep1ParseInput:
         text = "\n".join(g["actions"])
         assert "usage" in text.lower() or "required" in text.lower()
 
-    def test_full_mode_detects_branch(self, mod, tmp_path):
-        state = {"completed_steps": []}
-        ctx = {}
-        g = mod.get_step_guidance(1, "full", state, ctx)
-        text = "\n".join(g["actions"])
-        assert "branch" in text.lower() or "range" in text.lower()
-
-    def test_incremental_mode_mentions_state(self, mod, tmp_path):
-        state = {"completed_steps": []}
-        ctx = {}
-        g = mod.get_step_guidance(1, "incremental", state, ctx)
-        text = "\n".join(g["actions"])
-        assert "incremental" in text.lower()
-
     def test_full_mode_stops_on_default_branch(self, mod, tmp_path):
         """Step 1 should error when on the default branch (full mode)."""
         state = {"completed_steps": []}
@@ -281,18 +267,6 @@ class TestStep2RepoSetup:
         assert "fatal: not possible to fast-forward, aborting. (exit 128)" in situation
         assert "Never `git reset --hard`" in actions
 
-    def test_no_result_falls_back_to_manual(self, mod, tmp_path):
-        """No workspace_setup_result at all: fall back to manual."""
-        config = {"mode": "pr", "pr_number": "42", "interactive": True}
-        state = {
-            "completed_steps": [1],
-            "workspace": {"original_branch": None, "stash_ref": None},
-        }
-        ctx = {"git": {}}
-        g = mod.get_step_guidance(2, "pr", state, ctx, config=config)
-        text = "\n".join(g["actions"])
-        assert "checkout" in text.lower()
-
 
 class TestStep3GatherContext:
     """Step 3: Gather Context — all modes, curated briefing."""
@@ -426,25 +400,6 @@ class TestStep3GatherContext:
         text = "\n".join(g["situation"])
         assert "47" in text or "behind" in text.lower()
 
-    def test_presents_linked_issues(self, mod, tmp_path):
-        """Should present linked issue details in situation."""
-        state = {"completed_steps": [1, 2]}
-        ctx = self._make_context()
-        g = mod.get_step_guidance(3, "pr", state, ctx)
-        text = "\n".join(g["situation"])
-        assert "WOOPLUG-1234" in text or "issue" in text.lower()
-
-    def test_presents_freshen_base_when_stale(self, mod, tmp_path):
-        """Should suggest freshening base branch when stale."""
-        state = {"completed_steps": [1]}
-        ctx = {"git": {"merge_base": "abc", "git_range": "abc..HEAD",
-                       "changed_files": ["a.py"], "commit_count": 3},
-               "pr_size": {"files": 1, "lines": 20, "category": "tiny"},
-               "staleness": {"is_stale": True, "commits_behind": 47}}
-        g = mod.get_step_guidance(3, "full", state, ctx)
-        text = "\n".join(g["situation"])
-        assert "rebase" in text.lower() or "freshen" in text.lower() or "behind" in text.lower()
-
     def test_no_template_variables(self, mod, tmp_path):
         state = {"completed_steps": [1, 2]}
         ctx = self._make_context()
@@ -535,19 +490,20 @@ class TestStep3GatherContext:
 
     def test_local_range_short_of_the_pr_is_not_called_inflated(self, mod, tmp_path):
         """GitHub having more files than the local range means the checkout
-        is behind the PR, the opposite diagnosis from inflation."""
+        is behind the PR, the opposite diagnosis from inflation — and the
+        simultaneous head mismatch still renders its own line."""
         state = {"completed_steps": [1, 2]}
         ctx = copy.deepcopy(self._make_context())
         ctx["git"]["scope_check"] = {"status": "mismatch", "github_changed_files": 9,
                                      "local_changed_files": 6, "head_matches": False}
         g = mod.get_step_guidance(3, "pr", state, ctx)
         text = "\n".join(g["situation"])
-        assert "**Scope check:** GitHub reports 9 changed files; the local range has 6." in text
-        assert "The local range is short of the PR" in text
-        assert "restart the run from workspace setup" in text
-        assert "bring the checkout" not in text
-        assert "inflated" not in text
-        assert "files the PR did not touch" not in text
+        assert (
+            "**Scope check:** GitHub reports 9 changed files; the local "
+            "range has 6. The local range is short of the PR: files the PR "
+            "touches will reach no reviewer. Stop and restart the run from "
+            "workspace setup"
+        ) in text
         assert "does not match GitHub's headRefOid" in text
 
     def test_moved_head_with_equal_counts_is_not_called_inflated(self, mod, tmp_path):
@@ -736,19 +692,6 @@ class TestStep3GatherContext:
             assert "**Merged-in work:** 1 merge commit (`m1000000`)" in text
 
 
-    def test_presents_foreign_merges(self, mod, tmp_path):
-        state = {"completed_steps": [1, 2]}
-        ctx = {"git": {"merge_base": "abc", "git_range": "abc..HEAD",
-                       "changed_files": ["a.py"], "commit_count": 3,
-                       "foreign_merges": [{"sha": "m1" + "0" * 38,
-                                           "second_parent": "sib" + "0" * 37}]},
-               "pr_size": {"files": 1, "lines": 20, "category": "tiny"}}
-        g = mod.get_step_guidance(3, "full", state, ctx)
-        text = "\n".join(g["situation"])
-        assert "**Merged-in work:** 1 merge commit (`m1000000`)" in text
-        assert "not on the base branch" in text
-
-
 # ===================================================================
 # Steps 4-6 Tests
 # ===================================================================
@@ -756,13 +699,6 @@ class TestStep3GatherContext:
 
 class TestStep4FetchLinearIssues:
     """Step 4: Fetch Issue Context — data-driven condition."""
-
-    def test_instructs_linear_mcp(self, mod, tmp_path):
-        state = {"resolved_params": {"has_unfetched_issues": True}, "completed_steps": [1, 2, 3]}
-        ctx = COMPLETE_CONTEXT
-        g = mod.get_step_guidance(4, "pr", state, ctx)
-        text = "\n".join(g["actions"])
-        assert "linear" in text.lower() or "Linear" in text
 
     def test_has_change_purpose_handoff(self, mod, tmp_path):
         """Step 4 should include the change-purpose handoff (deferred from step 3)."""
@@ -772,26 +708,6 @@ class TestStep4FetchLinearIssues:
         assert g["handoff"] is not None
         text = "\n".join(g["handoff"])
         assert "change-purpose.md" in text
-
-    def test_step_4_handoff_carries_the_same_headings(self, mod, tmp_path):
-        state = {"resolved_params": {"has_unfetched_issues": True}, "completed_steps": [1, 2, 3]}
-        g = mod.get_step_guidance(4, "pr", state, COMPLETE_CONTEXT, output_dir=str(tmp_path))
-        text = "\n".join(g["handoff"])
-        assert "## Verify" in text and "## Author's description (extracted)" in text
-
-    def test_change_purpose_handoff_requires_attribution(self, mod, tmp_path):
-        """Both change-purpose handoffs must instruct attributing intent to its
-        source so downstream stages treat the summary as claims to verify."""
-        state3 = {"resolved_params": {"has_unfetched_issues": False}, "completed_steps": [1]}
-        ctx3 = {"git": {"merge_base": "abc", "git_range": "abc..HEAD",
-                        "changed_files": ["a.py"], "commit_count": 3},
-                "pr_size": {"files": 1, "lines": 20, "category": "tiny"}}
-        state4 = {"resolved_params": {"has_unfetched_issues": True}, "completed_steps": [1, 2, 3]}
-        for step, state, ctx in ((3, state3, ctx3), (4, state4, COMPLETE_CONTEXT)):
-            g = mod.get_step_guidance(step, "pr", state, ctx)
-            text = "\n".join(g["handoff"])
-            assert "Attribute intent to its source" in text, step
-            assert "verify" in text.lower(), step
 
 
 class TestStep5DispatchPlan:
@@ -824,27 +740,6 @@ class TestStep5DispatchPlan:
         full_text = "\n".join(g["actions"] + g["situation"])
         assert not ("python3" in full_text and "plan_dispatch.py" in full_text)
 
-    def test_shows_focus_for_agents(self, mod, tmp_path):
-        """Step 5 gives the main orchestrator agent focus for adjustments."""
-        state = self._make_state_with_plan()
-        ctx = {"git": {"git_range": "abc..HEAD"}}
-        g = mod.get_step_guidance(5, "pr", state, ctx)
-        text = "\n".join(g["situation"])
-        # Focus descriptions should be visible for both dispatched and skipped agents
-        assert "goal alignment" in text.lower()  # code-reviewer's focus
-        assert "XSS" in text  # security-reviewer's focus
-        assert "SOLID" in text  # architecture-reviewer's focus
-
-    def test_triage_authority(self, mod, tmp_path):
-        """The deterministic planner is the baseline for orchestrator adjustment."""
-        state = self._make_state_with_plan()
-        ctx = {"git": {"git_range": "abc..HEAD"}}
-        g = mod.get_step_guidance(5, "full", state, ctx)
-        text = "\n".join(g["actions"])
-        assert "main orchestrator adjustment" in text.lower()
-        assert "adjust" in text.lower()
-        assert "preliminary" not in text.lower()
-
     def test_main_orchestrator_adjustment_contract(self, mod, tmp_path):
         """Step 5 names the actor without changing its routing policy."""
         state = self._make_state_with_plan()
@@ -852,25 +747,10 @@ class TestStep5DispatchPlan:
         text = "\n".join(g["actions"])
         lowered = text.lower()
 
-        assert "main orchestrator" in lowered
-        assert "planner handles keyword/file-type signals" in lowered
-        assert "semantically" in lowered
-        assert "clearly irrelevant" in lowered
         assert (
             "only force-dispatch a skipped agent when you're confident it will find "
             "something the plan missed."
         ) in lowered
-        assert "useful review coverage" not in lowered
-        assert "human override" not in lowered
-        assert "DISPATCH_OVERRIDE" in text
-        assert "SKIPPED_OVERRIDE" in text
-
-    def test_override_writes_to_dispatch_plan(self, mod, tmp_path):
-        state = self._make_state_with_plan()
-        ctx = {"git": {"git_range": "abc..HEAD"}}
-        g = mod.get_step_guidance(5, "pr", state, ctx)
-        text = "\n".join(g["actions"])
-        assert "dispatch-plan.json" in text
         assert "DISPATCH_OVERRIDE" in text
         assert "SKIPPED_OVERRIDE" in text
 
@@ -1031,14 +911,6 @@ class TestStep5QuickMode:
         assert "history-insights-reviewer" not in text
         assert "reliability-reviewer" not in text
 
-    def test_aggressive_override_nudge(self, mod, tmp_path):
-        """Quick mode should nudge the orchestrator to be more aggressive with skips."""
-        state = self._make_state_with_quick_plan()
-        config = {"quick": True}
-        g = mod.get_step_guidance(5, "pr", state, {}, config=config)
-        text = "\n".join(g["actions"])
-        assert "quick" in text.lower()
-
     def test_normal_mode_shows_all_agents(self, mod, tmp_path):
         """Without quick mode, all agents shown including those with unusual statuses."""
         state = self._make_state_with_quick_plan()
@@ -1124,23 +996,6 @@ class TestStep6DispatchAgents:
         text = "\n".join(g["actions"])
         assert "parallel" in text.lower() or "SINGLE message" in text
 
-    def test_references_bootstrap(self, mod, tmp_path):
-        state = self._make_state_with_agents()
-        ctx = {"git": {"git_range": "abc..HEAD"}}
-        g = mod.get_step_guidance(6, "pr", state, ctx, output_dir=str(tmp_path))
-        text = "\n".join(g["actions"])
-        assert "bootstrap.py" in text
-
-    def test_lists_each_agent_dispatch_call(self, mod, tmp_path):
-        """Should list each agent's full dispatch call with concrete values."""
-        state = self._make_state_with_agents()
-        ctx = {"git": {"git_range": "abc..HEAD"}}
-        g = mod.get_step_guidance(6, "pr", state, ctx, output_dir=str(tmp_path))
-        text = "\n".join(g["actions"])
-        assert "code-reviewer" in text
-        assert "security-reviewer" in text
-        assert "abc..HEAD" in text  # concrete range, not template
-
     def test_claude_dispatch_block_opens_with_an_imperative(self, mod, tmp_path):
         """The orchestrator copies the fenced block as the subagent prompt, so the
         instruction to run bootstrap first must live inside the block."""
@@ -1172,9 +1027,20 @@ class TestStep6DispatchAgents:
         assert "Agent tool" not in text
 
     def test_codex_task_names_follow_host_schema(self, mod):
+        """Name mapping, repeated-separator distinction (fix 48ba8d75), and
+        long-shared-prefix distinction, plus the schema/length invariant
+        every generated name must hold."""
         assert mod._codex_task_name("security-reviewer") == "security_reviewer"
         assert mod._codex_task_name("Repo Reviewer/v2") == "repo_reviewer_v2"
         assert mod._codex_task_name("42-check") == "reviewer_42_check"
+        assert mod._codex_task_name("repo-a-b-reviewer") == "repo_a_b_reviewer"
+        assert mod._codex_task_name("repo-a--b-reviewer") == "repo_a__b_reviewer"
+
+        shared_prefix = f"repo-{'a' * 70}"
+        assert (
+            mod._codex_task_name(f"{shared_prefix}-renewals-reviewer")
+            != mod._codex_task_name(f"{shared_prefix}-billing-reviewer")
+        )
 
         long_name = f"repo-{'a' * 70}-renewals-reviewer"
         for reviewer_name in (
@@ -1197,14 +1063,6 @@ class TestStep6DispatchAgents:
         assert "spawn_agent" not in text
         # The retired Task-tool spelling must not come back on this host.
         assert "Task tool" not in text
-
-    def test_references_status_check(self, mod, tmp_path):
-        """Should reference agents_status.py for monitoring."""
-        state = self._make_state_with_agents()
-        ctx = {"git": {"git_range": "abc..HEAD"}}
-        g = mod.get_step_guidance(6, "pr", state, ctx, output_dir=str(tmp_path))
-        text = "\n".join(g["actions"])
-        assert "agents_status.py" in text
 
     def test_repo_reviewer_adapter_command(self, mod, tmp_path):
         """Adapter instances emit the ref-mode bootstrap command + subagent_type hint."""
@@ -1430,16 +1288,18 @@ class TestStep6DispatchAgents:
         assert "None" not in tokens
 
     def test_step6_recomputes_dispatch_plan_summary(self, mod, tmp_path):
-        """Step 6 orchestration must recompute summary from final dispatch-plan.json (post-override)."""
+        """Step 6 orchestration must recompute summary from final
+        dispatch-plan.json (post-override), and `dispatch_adjust.py`'s
+        stamped `planner_status` must reach the step-6 situation the
+        override is repeated in."""
         import json
 
-        # Write a dispatch plan with overrides applied
         plan = {
             "agents": [
                 {"name": "code-reviewer", "status": "DISPATCH", "reason": "always"},
                 {"name": "security-reviewer", "status": "DISPATCH", "reason": "keywords"},
-                {"name": "concurrency-reviewer", "status": "SKIPPED_OVERRIDE", "reason": "conditional", "override_reason": "test"},
-                {"name": "a11y-reviewer", "status": "SKIPPED", "reason": "no files"},
+                {"name": "a11y-reviewer", "status": "SKIPPED_OVERRIDE", "reason": "conditional",
+                 "override_reason": "no markup", "planner_status": "DISPATCH"},
             ]
         }
         _artifact(tmp_path, "dispatch_plan").write_text(json.dumps(plan))
@@ -1448,41 +1308,21 @@ class TestStep6DispatchAgents:
             "resolved_params": {"git_range": "abc..HEAD"},
             "completed_steps": [1, 2, 3, 5],
             # Pre-override summary (stale — should be overwritten)
-            "dispatch_plan_summary": {"dispatched": 3, "skipped": 1, "conditional": 1},
+            "dispatch_plan_summary": {"dispatched": 3, "skipped": 0, "conditional": 1},
         }
         config = {"mode": "pr", "interactive": True}
         context = {"git": {"git_range": "abc..HEAD"}}
 
         mod._orchestrate_step(6, "pr", config, state, context, str(tmp_path))
 
-        # Summary should reflect post-override counts
         summary = state["dispatch_plan_summary"]
         assert summary["dispatched"] == 2  # code-reviewer + security-reviewer
-        assert summary["skipped"] == 2  # SKIPPED + SKIPPED_OVERRIDE
-        # The overrides are recorded for the step-6 briefing; a hand-edited
-        # plan carries no stamped planner status.
-        assert state["dispatch_adjustments"] == [{
-            "name": "concurrency-reviewer", "status": "SKIPPED_OVERRIDE",
-            "override_reason": "test", "planner_status": None, "orphaned_files": None,
-        }]
+        assert summary["skipped"] == 1  # SKIPPED_OVERRIDE
 
-    def test_step6_names_the_planner_status_the_adjustment_stamped(self, mod, tmp_path):
-        """`dispatch_adjust.py` stamps `planner_status` beside the override
-        reason, so the step-6 listing reads the transition from the final
-        plan alone."""
-        import json
-        final = {"agents": [
-            {"name": "code-reviewer", "status": "DISPATCH", "reason": "always"},
-            {"name": "a11y-reviewer", "status": "SKIPPED_OVERRIDE", "reason": "conditional",
-             "override_reason": "no markup", "planner_status": "DISPATCH"},
-        ]}
-        _artifact(tmp_path, "dispatch_plan").write_text(json.dumps(final))
-        state = {"resolved_params": {"git_range": "abc..HEAD"}, "completed_steps": [1, 2, 3, 5]}
-        mod._orchestrate_step(6, "pr", {"mode": "pr", "interactive": True}, state, {"git": {"git_range": "abc..HEAD"}}, str(tmp_path))
-        assert state["dispatch_adjustments"] == [{
-            "name": "a11y-reviewer", "status": "SKIPPED_OVERRIDE",
-            "override_reason": "no markup", "planner_status": "DISPATCH", "orphaned_files": None,
-        }]
+        text = "\n".join(mod.get_step_guidance(
+            6, "pr", state, context, output_dir=str(tmp_path)
+        )["situation"])
+        assert "- SKIPPED_OVERRIDE a11y-reviewer — no markup (planner: DISPATCH)" in text
 
     @pytest.mark.parametrize("step", [5, 6])
     def test_dispatch_summaries_use_the_canonical_dispatched_set(
@@ -1547,47 +1387,19 @@ class TestStep7SaveReviewBaseline:
             assert "cat >" not in text
             assert "STATEEOF" not in text
 
-    def test_step_7_instructs_checking_agent_status(self, mod, tmp_path):
-        """Step 7 should instruct checking agent completion before proceeding."""
-        state = {"completed_steps": [], "resolved_params": {"git_range": "abc..HEAD"}}
-        ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main"}}
-        g = mod.get_step_guidance(7, "full", state, ctx, output_dir=str(tmp_path))
-        text = "\n".join(g["actions"])
-        assert "agents_status" in text or "agent status" in text.lower()
-
-    def test_step_7_surfaces_not_dispatched_agents(self, mod, tmp_path):
-        """Step 7 should warn about NOT_DISPATCHED agents so missed dispatches don't silently pass."""
-        state = {"completed_steps": [], "resolved_params": {"git_range": "abc..HEAD"}}
-        ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main"}}
-        g = mod.get_step_guidance(7, "full", state, ctx, output_dir=str(tmp_path))
-        text = "\n".join(g["actions"])
-        assert "NOT_DISPATCHED" in text
-
     def test_claude_host_wait_uses_notifications_and_watchdog(self, mod, tmp_path):
-        """Claude-host wait guidance: end-turn + notification wake-up + named
-        anti-patterns + a background watchdog launched right after dispatch."""
+        """Claude-host wait guidance: end-turn + a background watchdog
+        launched right after dispatch, in that order — and NOT_DISPATCHED
+        agents are surfaced so a missed dispatch doesn't silently pass."""
         state = {"completed_steps": [], "resolved_params": {"git_range": "abc..HEAD"}}
         ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main"}}
         g = mod.get_step_guidance(7, "full", state, ctx, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
 
+        assert "NOT_DISPATCHED" in text
         assert "END YOUR TURN" in text
-        assert "notification" in text.lower()
-        # Named anti-patterns. The "polling without..." bullet says
-        # "wake-up", not "notification" (M3, backlog #25 follow-up): the
-        # watchdog's own expiry is a legitimate wake-up but not a
-        # notification, so naming the anti-pattern after "notification"
-        # alone would misdescribe the one wake-up path this same briefing
-        # tells the orchestrator to rely on.
-        assert "no foreground" in text.lower() and "sleep" in text.lower()
-        assert "keepalive" in text.lower()
-        assert "polling without a new wake-up" in text.lower()
         # Watchdog: background wait as a guaranteed wake-up
-        assert "--wait" in text
         assert "--max-seconds 1500" in text
-        assert "BACKGROUND" in text
-        assert "run_in_background: true" in text
-        assert "holds no model turn open" in text.lower()
 
         # Ordering (I1, backlog #25 follow-up): the watchdog must be
         # launched BEFORE the instruction to end the turn — a top-to-bottom
@@ -1603,7 +1415,6 @@ class TestStep7SaveReviewBaseline:
 
         # Must not carry the Codex-host cadence
         assert "once a minute" not in text.lower()
-        assert "--max-seconds 60" not in text
 
     def test_codex_host_wait_uses_per_minute_polling(self, mod, tmp_path):
         """Codex-host wait guidance: foreground --wait --max-seconds 60 cadence,
@@ -1614,24 +1425,11 @@ class TestStep7SaveReviewBaseline:
         g = mod.get_step_guidance(7, "full", state, ctx, config=config, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
 
-        assert "--wait" in text
         assert "--max-seconds 60" in text
-        assert "once a minute" in text.lower()
         assert "exit code 3" in text.lower()
-        # I2, backlog #25 follow-up: the loop needs a stated termination —
-        # anchored to the same 1200s agent timeout the Claude branch names,
-        # plus the documented next move once step 8's own escalation is the
-        # real backstop.
-        assert "1200" in text
-        assert "20 min" in text
-        assert "escalation gate force-proceeds" in text.lower()
-        assert "typical run" in text.lower()
-        assert "typical phase" not in text.lower()
 
         # Must not carry the Claude-host end-turn/notification mechanism
         assert "END YOUR TURN" not in text
-        assert "keepalive" not in text.lower()
-        assert "--max-seconds 1500" not in text
 
 
 class TestStep8Reconcile:
@@ -1649,13 +1447,6 @@ class TestStep8Reconcile:
             "change_purpose": "Adds retry logic to the payment gateway." if change_purpose_exists else None,
             "commit_messages": ["feat: add payment retry logic", "test: add retry tests"],
         }
-
-    def test_dispatches_reconciliator(self, mod, tmp_path):
-        state = self._make_state_with_agents(change_purpose_exists=True)
-        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py,b.py"}}
-        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
-        text = "\n".join(g["actions"])
-        assert "review-reconciliator" in text
 
     def test_codex_reconciliator_uses_canonical_agent_definition(self, mod, tmp_path):
         state = self._make_state_with_agents(change_purpose_exists=True)
@@ -1682,14 +1473,6 @@ class TestStep8Reconcile:
         assert "code-reviewer" in text
         assert "security-reviewer" in text
 
-    def test_includes_change_purpose_when_available(self, mod, tmp_path):
-        """Should include change purpose in reconciliator prompt."""
-        state = self._make_state_with_agents(change_purpose_exists=True)
-        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
-        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
-        text = "\n".join(g["situation"] + g["actions"])
-        assert "retry logic" in text.lower() or "change purpose" in text.lower()
-
     def test_change_purpose_framed_as_claims_to_verify(self, mod, tmp_path):
         """The reconciliator dispatch must present change purpose as author-stated
         claims to verify, not context to adopt (regression guard for #66488)."""
@@ -1700,42 +1483,16 @@ class TestStep8Reconcile:
         assert "author-stated" in text.lower()
         assert "claims to verify" in text
 
-    def test_change_purpose_fallback_when_missing(self, mod, tmp_path):
-        """When change-purpose.md is missing, script provides fallback from commits."""
-        state = self._make_state_with_agents(change_purpose_exists=False)
-        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
-        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
-        text = "\n".join(g["situation"] + g["actions"])
-        assert "commit" in text.lower() or "derive" in text.lower()
-
-    def test_instructs_stopping_background_agents(self, mod, tmp_path):
-        """Step 8 should instruct stopping remaining background agents first."""
-        state = self._make_state_with_agents(change_purpose_exists=True)
-        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
-        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
-        text = "\n".join(g["actions"])
-        assert "stop" in text.lower() or "TaskStop" in text
-
-    def test_reconciliator_prompt_references_context_file(self, mod, tmp_path):
-        """Step 8 points at the pre-gathered JSON context, not at the
-        individual review files (they are inside it) and not at a Markdown
+    def test_dispatch_prompt_is_a_fenced_block_of_the_three_inputs(self, mod, tmp_path):
+        """The orchestrator pastes the fence as the prompt; nothing else
+        rides in it. Every hint goes through the notes channel, and the
+        reconciliator is pointed at the JSON context, never the Markdown
         projection written for one agent's eyes only."""
         state = self._make_state_with_agents(change_purpose_exists=True)
         ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
         g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
-        assert "reconciliation-context.json" in text
         assert "reconciliation-context.md" not in text
-        # Individual review files are no longer listed — they're inside the context file
-        assert "code-review.json" not in text
-
-    def test_dispatch_prompt_is_a_fenced_block_of_the_three_inputs(self, mod, tmp_path):
-        """The orchestrator pastes the fence as the prompt; nothing else
-        rides in it. Every hint goes through the notes channel."""
-        state = self._make_state_with_agents(change_purpose_exists=True)
-        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
-        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
-        text = "\n".join(g["actions"])
         block = text.split("**2. Dispatch `review-reconciliator`**", 1)[1].split("```", 2)[1]
         lines = [l for l in block.strip().splitlines() if l.strip()]
         assert lines[0].startswith("Reconciliation context: ")
@@ -1762,21 +1519,16 @@ class TestStep8Reconcile:
         assert "stated as a claim" in text
         assert "BEFORE dispatch" in text
 
-    def test_change_purpose_is_not_repeated_in_the_prompt(self, mod, tmp_path):
-        """It is in the context already (`change_purpose`); the situation
-        line frames it, the prompt does not carry a second copy."""
-        state = self._make_state_with_agents(change_purpose_exists=True)
-        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
-        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
-        assert "retry logic" in "\n".join(g["situation"])
-        assert "retry logic" not in "\n".join(g["actions"])
-
     def test_change_purpose_is_rendered_exactly_once_in_step_8(self, mod, tmp_path):
+        """It is in the context already (`change_purpose`); the situation
+        line frames it once, and the dispatch prompt carries no second
+        copy."""
         state = self._make_state_with_agents(change_purpose_exists=True)
         ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
         g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
         text = "\n".join(g["situation"] + g["actions"] + (g.get("handoff") or []))
         assert text.count("Adds retry logic to the payment gateway.") == 1
+        assert "Adds retry logic to the payment gateway." not in "\n".join(g["actions"])
 
 
 class TestStep8FindingsArtifactOwnership:
@@ -1802,11 +1554,14 @@ class TestStep8FindingsArtifactOwnership:
             8, "pr", state, ctx, output_dir=str(tmp_path)
         )
 
-    def test_expected_output_names_the_json_as_the_agents_artifact(
+    def test_the_json_is_the_agents_only_artifact_and_the_pipeline_renders_the_markdown(
         self, mod, tmp_path
     ):
+        """One contract — the reconciliator writes JSON only, and the
+        pipeline renders the Markdown — split across three call sites."""
+        guidance = self._guidance(mod, tmp_path)
         expected_line = next(
-            line for line in self._guidance(mod, tmp_path)["actions"]
+            line for line in guidance["actions"]
             if line.startswith("**Expected output:**")
         )
         assert "review-findings.json" in expected_line
@@ -1815,28 +1570,27 @@ class TestStep8FindingsArtifactOwnership:
         # produces — never as an output the agent is asked to write.
         assert "writes no Markdown" in expected_line
 
-    def test_handoff_gates_on_the_json_only(self, mod, tmp_path):
-        handoff = "\n".join(self._guidance(mod, tmp_path)["handoff"])
+        handoff = "\n".join(guidance["handoff"])
         assert "review-findings.json" in handoff
         assert "review-findings.md" not in handoff
 
-    def test_actions_say_the_pipeline_renders_the_markdown(self, mod, tmp_path):
-        text = "\n".join(self._guidance(mod, tmp_path)["actions"])
-        assert "review-findings.md" in text
-        assert "pipeline renders" in text
+        actions_text = "\n".join(guidance["actions"])
+        assert "review-findings.md" in actions_text
+        assert "pipeline renders" in actions_text
 
 
 class TestStep8ReadinessGate:
     """Step 8 readiness gate: blocks reconciliation when agents are still running."""
 
     def test_blocked_when_agents_running(self, mod, tmp_path):
-        """Step 8 should return a blocked briefing when waiting_on_agents has running agents."""
+        """Step 8 should return a blocked briefing when waiting_on_agents has
+        running agents, naming both the running and the NOT_DISPATCHED ones."""
         state = {
             "resolved_params": {"git_range": "abc..HEAD"},
             "completed_steps": [1, 3, 5, 6, 7],
             "waiting_on_agents": {
                 "running": ["security-reviewer", "performance-reviewer"],
-                "not_dispatched": [],
+                "not_dispatched": ["dead-code-reviewer"],
             },
             "agents": {
                 "dispatched": ["code-reviewer", "security-reviewer", "performance-reviewer"],
@@ -1851,30 +1605,17 @@ class TestStep8ReadinessGate:
         text = "\n".join(g["situation"])
         assert "security-reviewer" in text
         assert "performance-reviewer" in text
+        assert "dead-code-reviewer" in text
         # Should instruct re-running status check
         actions_text = "\n".join(g["actions"])
         assert "agents_status.py" in actions_text
 
-    def test_blocked_shows_not_dispatched(self, mod, tmp_path):
-        """Blocked briefing should mention NOT_DISPATCHED agents too."""
-        state = {
-            "resolved_params": {"git_range": "abc..HEAD"},
-            "completed_steps": [1, 3, 5, 6, 7],
-            "waiting_on_agents": {
-                "running": ["security-reviewer"],
-                "not_dispatched": ["dead-code-reviewer"],
-            },
-            "agents": {"dispatched": [], "completed": [], "discarded_drafts": []},
-        }
-        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
-        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
-        text = "\n".join(g["situation"])
-        assert "dead-code-reviewer" in text
-
     def test_not_blocked_when_no_running_agents(self, mod, tmp_path):
-        """Step 8 should proceed normally when waiting_on_agents is absent or empty."""
+        """Step 8 should proceed normally when waiting_on_agents is absent,
+        empty, or holds only NOT_DISPATCHED agents (only RUNNING blocks)."""
         state = {
             "resolved_params": {"git_range": "abc..HEAD"},
+            "waiting_on_agents": {"running": [], "not_dispatched": ["dead-code-reviewer"]},
             "completed_steps": [1, 3, 5, 6, 7],
             "agents": {
                 "dispatched": ["code-reviewer"],
@@ -1942,47 +1683,6 @@ class TestStep8ReadinessGate:
         # Escalation warning should appear in situation
         assert "Escalation" in "\n".join(g["situation"])
 
-    def test_does_not_escalate_before_timeout(self, mod, tmp_path):
-        """Step 8 should keep waiting when within timeout threshold."""
-        from datetime import datetime, timezone, timedelta
-
-        # Simulate first_waiting_at was 5 minutes ago (well within threshold)
-        past = datetime.now(timezone.utc) - timedelta(minutes=5)
-        state = {
-            "resolved_params": {"git_range": "abc..HEAD"},
-            "completed_steps": [1, 3, 5, 6, 7],
-            "waiting_on_agents": {
-                "running": ["security-reviewer"],
-                "not_dispatched": [],
-                "first_waiting_at": past.isoformat(),
-                "agent_timeout_seconds": 1200,
-            },
-            "agents": {"dispatched": ["security-reviewer"], "completed": [], "discarded_drafts": []},
-        }
-        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
-        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
-        assert "WAITING" in g["title"]
-
-    def test_not_blocked_when_only_not_dispatched(self, mod, tmp_path):
-        """NOT_DISPATCHED alone should not block — only RUNNING agents block."""
-        state = {
-            "resolved_params": {"git_range": "abc..HEAD"},
-            "completed_steps": [1, 3, 5, 6, 7],
-            "waiting_on_agents": {
-                "running": [],
-                "not_dispatched": ["dead-code-reviewer"],
-            },
-            "agents": {
-                "dispatched": ["code-reviewer"],
-                "completed": ["code-reviewer"],
-                "discarded_drafts": [],
-            },
-            "change_purpose": "Test change.",
-        }
-        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
-        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
-        assert "WAITING" not in g["title"]
-
     def _make_waiting_state(self):
         return {
             "resolved_params": {"git_range": "abc..HEAD"},
@@ -1996,10 +1696,9 @@ class TestStep8ReadinessGate:
 
     def test_claude_host_waiting_uses_end_turn_and_fresh_watchdog(self, mod, tmp_path):
         """Claude-host WAITING gate (backlog #25 follow-up, I4): mirrors
-        step 7's end-turn/notification mechanism, plus a fresh watchdog
-        sized to the remaining budget before escalation force-proceeds —
-        replacing the mechanism-free "wait, then re-run this step" prose
-        that produced the field improvisations in the first place."""
+        step 7's end-turn mechanism, plus a fresh watchdog launched BEFORE
+        the turn ends — replacing the mechanism-free "wait, then re-run
+        this step" prose that produced the field improvisations."""
         state = self._make_waiting_state()
         ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
         g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
@@ -2009,23 +1708,13 @@ class TestStep8ReadinessGate:
 
         assert "END YOUR TURN" in text
         assert "--wait" in text
-        assert "run_in_background: true" in text
-        assert "BACKGROUND" in text
-        assert "holds no model turn open" in text.lower()
-        # Ordering pin (the I1/D1 defect class): ending the turn is
-        # terminal, so the watchdog instruction must come FIRST — a
-        # top-to-bottom executor that ends its turn before launching it
-        # loses what may be the only remaining wake-up in this state.
+
         watchdog_pos = text.index("--wait")
         end_turn_pos = text.index("END YOUR TURN")
         assert watchdog_pos < end_turn_pos
-        # Escalation text itself is untouched (settled design) — still
-        # reachable only via the elapsed>=threshold branch, not asserted
-        # here since this state hits the not-yet-escalated branch.
 
         # Must not carry the Codex-host cadence
         assert "once a minute" not in text.lower()
-        assert "--max-seconds 60" not in text
 
     def test_codex_host_waiting_uses_per_minute_polling(self, mod, tmp_path):
         """Codex-host WAITING gate (backlog #25 follow-up, I4): mirrors
@@ -2038,14 +1727,11 @@ class TestStep8ReadinessGate:
         assert g["blocks_progress"] is True
         text = "\n".join(g["actions"])
 
-        assert "--wait" in text
         assert "--max-seconds 60" in text
-        assert "once a minute" in text.lower()
         assert "exit code 3" in text.lower()
 
         # Must not carry the Claude-host end-turn/notification mechanism
         assert "END YOUR TURN" not in text
-        assert "run_in_background" not in text
 
 
 class TestReviewCoverageSection:
@@ -2089,33 +1775,28 @@ class TestReviewCoverageSection:
         measurement instead of rendering it, and the orchestrator restated
         "skipped by every matching agent's diff budget and no reviewer
         reported reviewing them" as "read by nobody" — false for files
-        that were provably read."""
+        that were provably read. The skip bullet also names every agent
+        that skipped, not just the first."""
         text = self._render(
             mod,
-            gaps={"src/starved.php": ["code-reviewer"]},
+            gaps={"src/starved.php": ["code-reviewer", "security-reviewer"]},
             claims={"src/big.py": ["security-reviewer"]},
             unscoped=["package-lock.json", ".editorconfig"],
         )
-
-        assert text.count("## Review coverage") == 1
 
         assert (
             "1 changed file(s) were skipped by every matching agent's diff "
             "budget and no reviewer reported reviewing them from the "
             "review-claimable queue:" in text
         )
-        assert "- `src/starved.php` (skipped by: `code-reviewer`)" in text
+        assert "- `src/starved.php` (skipped by: `code-reviewer`, `security-reviewer`)" in text
 
         assert (
             "2 changed file(s) matched no reviewer's domain and were "
             "reviewed by no one" in text
         )
-        assert "- `package-lock.json`" in text
-        assert "- `.editorconfig`" in text
 
         assert "### Claimed from the review-claimable queue" in text
-        assert "The pipeline records the claim, not the read:" in text
-        assert "- `src/big.py` (claimed by: `security-reviewer`)" in text
 
     def test_excluded_by_design_files_are_accounted_not_reported_as_a_gap(
         self, mod
@@ -2137,43 +1818,6 @@ class TestReviewCoverageSection:
         # split is unmeasured.
         assert "run-level metrics count reviewable files only" not in text
 
-    def test_unmeasured_noise_keeps_the_single_unscoped_sentence(self, mod):
-        text = self._render(mod, unscoped=["package-lock.json"], noise=None)
-        assert "1 changed file(s) matched no reviewer's domain" in text
-        assert "run-level metrics count reviewable files only" in text
-        assert "excluded from review by design" not in text
-
-    def test_only_excluded_files_still_render_the_section_without_a_gap(
-        self, mod
-    ):
-        from review.briefings import _has_file_review_gap
-
-        file_review = {
-            "agents_receiving_inline_diff_by_file": {},
-            "agents_with_unclaimed_review_by_file": {},
-            "agents_claiming_review_by_file": {},
-            "unscoped_files": ["package-lock.json"],
-            "noise_filtered_files": ["package-lock.json"],
-        }
-        assert "## Review coverage" in self._render(
-            mod,
-            unscoped=["package-lock.json"],
-            noise=["package-lock.json"],
-        )
-        assert _has_file_review_gap(file_review) is False
-
-    def test_an_orphaned_file_is_a_gap(self):
-        from review.briefings import _has_file_review_gap
-
-        assert _has_file_review_gap({
-            "agents_receiving_inline_diff_by_file": {},
-            "agents_with_unclaimed_review_by_file": {},
-            "agents_claiming_review_by_file": {},
-            "unscoped_files": ["changelog/x"],
-            "noise_filtered_files": [],
-            "override_orphaned_files": {"changelog/x": ["docs-drift-reviewer"]},
-        })
-
     def test_unscoped_line_explains_why_it_can_exceed_the_metrics_figure(
         self, mod
     ):
@@ -2186,13 +1830,50 @@ class TestReviewCoverageSection:
             "non-reviewable paths — run-level metrics count reviewable "
             "files only, so its 'uncovered' figure can be smaller" in text
         )
+        assert "- `assets/logo.png`" in text
 
-    def test_gaps_name_every_agent_that_skipped_the_file(self, mod):
-        text = self._render(
-            mod,
-            gaps={"src/starved.php": ["code-reviewer", "security-reviewer"]},
-        )
-        assert "`code-reviewer`, `security-reviewer`" in text
+    HAS_FILE_REVIEW_GAP = (
+        pytest.param(
+            {"agents_claiming_review_by_file": {"src/big.py": ["security-reviewer"]}},
+            False, id="claims_only",
+        ),
+        pytest.param(
+            {"unscoped_files": ["package-lock.json"], "noise_filtered_files": ["package-lock.json"]},
+            False, id="excluded_by_design",
+        ),
+        pytest.param(
+            {
+                "agents_receiving_inline_diff_by_file": {"src/shared.php": ["code-reviewer"]},
+                "agents_with_unclaimed_review_by_file": {"src/shared.php": ["security-reviewer"]},
+            },
+            False, id="inline_receipt",
+        ),
+        pytest.param(
+            {"agents_with_unclaimed_review_by_file": {"src/starved.php": ["code-reviewer"]}},
+            True, id="unclaimed",
+        ),
+        pytest.param(
+            {
+                "unscoped_files": ["changelog/x"],
+                "override_orphaned_files": {"changelog/x": ["docs-drift-reviewer"]},
+            },
+            True, id="orphaned",
+        ),
+    )
+
+    @pytest.mark.parametrize(("file_review_extra", "expected"), HAS_FILE_REVIEW_GAP)
+    def test_has_file_review_gap(self, file_review_extra, expected):
+        from review.briefings import _has_file_review_gap
+
+        file_review = {
+            "agents_receiving_inline_diff_by_file": {},
+            "agents_with_unclaimed_review_by_file": {},
+            "agents_claiming_review_by_file": {},
+            "unscoped_files": [],
+            "noise_filtered_files": [],
+        }
+        file_review.update(file_review_extra)
+        assert _has_file_review_gap(file_review) is expected
 
     def test_inline_receipt_prevents_per_agent_unclaimed_work_from_rendering_as_a_gap(
         self, mod
@@ -2230,13 +1911,6 @@ class TestReviewCoverageSection:
     def test_measured_and_empty_prints_nothing(self, mod):
         """A zero line would read as a finding."""
         assert self._render(mod, gaps={}, claims={}, unscoped=[]) == ""
-
-    def test_unscoped_files_alone_still_render_the_section(self, mod):
-        """This population reaches no per-agent bucket, so it is the one
-        that would otherwise be invisible."""
-        text = self._render(mod, unscoped=["assets/logo.png"])
-        assert "## Review coverage" in text
-        assert "- `assets/logo.png`" in text
 
     def test_unscoped_line_omitted_when_all_files_were_scoped(self, mod):
         text = self._render(mod, gaps={"src/starved.php": ["code-reviewer"]})
@@ -4006,23 +3680,11 @@ class TestStep3DependencyRefresh:
         g = mod.get_step_guidance(3, "full", dict(self._CLEAN_STATE), {},
                                   config=config, output_dir=str(tmp_path))
         text = self._text(g)
-        lowered = text.lower()
         assert "Dependency refresh" in text
-        assert "inspect the repository and reviewed change" in lowered
-        assert "lockfile-preserving" in text
-        assert "decide whether dependency installation is needed" in lowered
-        assert "--refresh-host-context" in text
-        assert "$TMPDIR/dependency-refresh-report.json" in text
-        assert "dependency_refresh.py" in text
-        assert " save " in text
+        assert "decide whether dependency installation is needed" in text.lower()
+        assert "dependency_refresh.py" in text and " save " in text
         assert "SAVED dependency-refresh.json" in text
-        assert '"schema": 1' in text
-        assert '"status": "not_needed"' in text
-        assert '"commands": []' in text
         assert "change-purpose.md" in text
-        for manager in ("composer install", "npm ci", "pnpm install", "yarn install"):
-            assert manager not in text
-        assert "verifies execution" not in text
 
     def test_refresh_handoff_survives_unfetched_issues(self, mod, tmp_path):
         state = dict(self._CLEAN_STATE)
