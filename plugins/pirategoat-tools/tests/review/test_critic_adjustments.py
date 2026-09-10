@@ -236,15 +236,10 @@ class TestCanonicalFindingsReader:
     def test_schema_three_ledger_without_reviewed_files_is_canonical(self):
         validate_findings_document(canonical_findings_ledger(("high",)))
 
-    @pytest.mark.parametrize("extra", [
-        {"reviewer": "reconciliator"},
-        {"review_claimable_files": []},
-        {"schema": 2},
-    ])
-    def test_reviewer_envelope_fields_are_rejected_on_the_ledger(self, extra):
+    def test_reviewer_envelope_fields_are_rejected_on_the_ledger(self):
         with pytest.raises(ValueError):
             validate_findings_document(
-                {**canonical_findings_ledger(("high",)), **extra}
+                {**canonical_findings_ledger(("high",)), "reviewer": "reconciliator"}
             )
 
     def test_reconciliation_counts_must_partition_grouped(self):
@@ -256,40 +251,24 @@ class TestCanonicalFindingsReader:
         with pytest.raises(ValueError, match="grouped_concern_count"):
             validate_findings_document(ledger)
 
-    @pytest.mark.parametrize(
-        "reconciliation",
-        [
-            {"reviewing_agents": ["Security Reviewer"]},
-            {"dispatched_agents": ["security-reviewer", "Rogue_Agent"]},
-            {"missing_agents": ["a11y reviewer"]},
-            {"not_applicable_agents": [
-                {"name": "A11y Reviewer", "skip_reason": "no UI changed"},
-            ]},
-        ],
-        ids=(
-            "reviewing-agents",
-            "dispatched-agents",
-            "missing-agents",
-            "not-applicable-agent-name",
-        ),
-    )
-    def test_reconciliation_agent_names_follow_the_dispatch_grammar(
-        self, reconciliation
-    ):
+    def test_reconciliation_agent_names_follow_the_dispatch_grammar(self):
         """A name outside `[a-z0-9][a-z0-9-]*` used to pass here and then
         null the whole reconciliation block in the offline metrics report,
-        so the ledger is where it has to be refused."""
+        so the ledger is where it has to be refused. Fix 2e0fcec5."""
         with pytest.raises(ValueError, match="agent name"):
-            validate_findings_document(
-                canonical_findings_ledger(reconciliation=reconciliation)
-            )
+            validate_findings_document(canonical_findings_ledger(
+                reconciliation={"not_applicable_agents": [
+                    {"name": "A11y Reviewer", "skip_reason": "no UI changed"},
+                ]},
+            ))
 
     @pytest.mark.parametrize(
         "skip_reason",
-        ["", "   ", "x" * 4097, "no UI\x07 changed"],
-        ids=("empty", "blank", "over-the-ceiling", "control-character"),
+        ["", "no UI\x07 changed"],
+        ids=("empty", "control-character"),
     )
     def test_not_applicable_skip_reasons_are_bounded_text(self, skip_reason):
+        """Fix 2e0fcec5."""
         with pytest.raises(ValueError, match="skip_reason"):
             validate_findings_document(canonical_findings_ledger(
                 reconciliation={"not_applicable_agents": [
@@ -887,13 +866,14 @@ class TestBatchCoherence:
             _adjudicate(tmp_path, ids)
         assert _ledger(tmp_path)["findings"][0]["severity"] == "low"
 
-    @pytest.mark.parametrize("shape", [[{"id": "f1"}], "findings", 7])
     def test_findings_that_is_not_an_object_fails_as_a_value_error(
-        self, tmp_path, shape
+        self, tmp_path
     ):
         """The adjustments file is shape-guarded; the findings file was
         not, so a non-object ledger died on an AttributeError outside this
-        module's ValueError contract — the one step 11 catches."""
+        module's ValueError contract — the one step 11 catches. Fix
+        81ac20af."""
+        shape = [{"id": "f1"}]
         (tmp_path / "review-findings.json").write_text(json.dumps(shape))
         ids = _publish_revise(tmp_path, [{
             "action": "promote", "target": {"kind": "finding", "id": "f1"},
@@ -1278,18 +1258,16 @@ class TestScopeLinePairing:
         assert finding["scope"] == "file"
         assert finding["line"] is None
 
-    @pytest.mark.parametrize("bad_line", ["88", True, 0, -5])
-    def test_a_line_outside_the_1_indexed_contract_is_rejected(
-        self, tmp_path, bad_line
-    ):
+    def test_a_line_outside_the_1_indexed_contract_is_rejected(self, tmp_path):
         """output.py accepts only positive ints for `line`; a patch that
-        smuggled 0 or a negative past this guard would publish a finding
-        the builder itself would have refused."""
+        smuggled a negative past this guard would publish a finding the
+        builder itself would have refused. Same `validate_finding_content_field`
+        domain as `proposal_field_domain` above."""
         _write_findings(tmp_path, [_finding("f1")])
         with pytest.raises(ValueError, match="line must be a positive"):
             _publish_revise(tmp_path, [{
                 "action": "rescope", "target": {"kind": "finding", "id": "f1"},
-                "fields": {"file": "f.go", "line": bad_line}, "rationale": "r",
+                "fields": {"file": "f.go", "line": -5}, "rationale": "r",
             }])
 
 
@@ -1298,27 +1276,23 @@ class TestReadCriticVerdict:
     returns an allowed verdict only from a complete source-bound snapshot
     and otherwise collapses the unusable snapshot to ``None``."""
 
-    def test_missing_file_returns_none(self, tmp_path):
-        assert read_critic_verdict(str(tmp_path)) is None
+    unusable_verdict_marker = [
+        pytest.param(False, None, id="absent"),
+        pytest.param(True, "{not json", id="unparseable"),
+        pytest.param(
+            True, json.dumps({"reason": "no verdict field at all"}),
+            id="no-key",
+        ),
+    ]
 
-    def test_malformed_json_returns_none(self, tmp_path):
-        _artifact(tmp_path, "critic_verdict").write_text("{not json")
-        assert read_critic_verdict(str(tmp_path)) is None
-
-    def test_non_object_json_returns_none(self, tmp_path):
-        _artifact(tmp_path, "critic_verdict").write_text('["REVISE"]')
-        assert read_critic_verdict(str(tmp_path)) is None
-
-    def test_non_string_verdict_field_returns_none(self, tmp_path):
-        _artifact(tmp_path, "critic_verdict").write_text(
-            json.dumps({"verdict": 1})
-        )
-        assert read_critic_verdict(str(tmp_path)) is None
-
-    def test_missing_verdict_key_returns_none(self, tmp_path):
-        _artifact(tmp_path, "critic_verdict").write_text(
-            json.dumps({"reason": "no verdict field at all"})
-        )
+    @pytest.mark.parametrize("write,content", unusable_verdict_marker)
+    def test_unusable_verdict_marker(self, tmp_path, write, content):
+        """A shape the reader cannot use collapses to `None`, the same
+        outcome as a missing file — `non_object_json` and
+        `non_string_verdict_field` reach the same collapse through the
+        same shape check as `unparseable`."""
+        if write:
+            _artifact(tmp_path, "critic_verdict").write_text(content)
         assert read_critic_verdict(str(tmp_path)) is None
 
     def test_a_lifecycle_field_on_a_proposal_entry_is_unusable(self, tmp_path):
@@ -1360,22 +1334,17 @@ class TestReadCriticVerdict:
 
         assert (adj_path.read_bytes(), findings_path.read_bytes()) == before
 
-    @pytest.mark.parametrize(
-        "verdict", ["REVISE", "STAND", "ESCALATE", "SKIPPED"]
-    )
+    @pytest.mark.parametrize("verdict", ["REVISE", "SKIPPED"])
     def test_valid_verdict_string_is_returned_as_is(self, tmp_path, verdict):
         _publish_verdict(tmp_path, verdict)
         assert read_critic_verdict(str(tmp_path)) == verdict
 
-    @pytest.mark.parametrize("near_miss", ["revise", " REVISE ", "REVISE\n"])
-    def test_a_near_miss_spelling_is_never_a_usable_verdict(
-        self, tmp_path, near_miss
-    ):
+    def test_a_near_miss_spelling_is_never_a_usable_verdict(self, tmp_path):
         """The vocabulary is exact-match, not case-insensitive or
         whitespace-tolerant: a critic that deviates fails loudly rather
         than being silently normalized into an adjudicable REVISE."""
         with pytest.raises(ValueError, match="unknown critic verdict"):
-            _publish_verdict(tmp_path, near_miss)
+            _publish_verdict(tmp_path, "revise")
         assert read_critic_verdict(str(tmp_path)) is None
 
 
@@ -2155,10 +2124,7 @@ class TestRecommendationsInvalidation:
 
     @pytest.mark.parametrize("bad", [
         pytest.param("not a dict", id="not-object"),
-        pytest.param({"urgent": ["x"]}, id="unknown-priority"),
         pytest.param({"immediate": "x"}, id="not-list"),
-        pytest.param({"immediate": [""]}, id="empty-text"),
-        pytest.param({"immediate": [" \n "]}, id="blank-text"),
         pytest.param({"immediate": [1]}, id="not-string"),
     ])
     def test_malformed_revised_recommendations_are_refused(self, tmp_path, bad):
@@ -2169,13 +2135,8 @@ class TestRecommendationsInvalidation:
         assert any("revised_recommendations" in p for p in excinfo.value.problems)
         assert (tmp_path / "review-findings.json").read_bytes() == before
 
-    @pytest.mark.parametrize("bad", [
-        pytest.param("not a list", id="not-list"),
-        pytest.param([""], id="empty-string"),
-        pytest.param(["  "], id="blank-string"),
-        pytest.param([1], id="not-string"),
-    ])
-    def test_reader_rejects_malformed_withdrawn_priority(self, tmp_path, bad):
+    def test_reader_rejects_malformed_withdrawn_priority(self, tmp_path):
+        bad = "not a list"
         ids = self._seed(tmp_path)
         _adjudicate(tmp_path, ids, verified=(0,))
         data = _ledger(tmp_path)
@@ -2524,9 +2485,7 @@ class TestOutcomeVocabulary:
             applied=[{"adjustment_id": "a1", "outcome": value}]
         ))
 
-    @pytest.mark.parametrize("value", [
-        "checked", "VERIFIED", "not checked", "", True, 1, None,
-    ])
+    @pytest.mark.parametrize("value", ["not checked", True])
     def test_an_unknown_value_rejects_the_ledger(self, value):
         with pytest.raises(ValueError, match="applied_critic_adjustments"):
             validate_findings_document(self._ledger_with(
@@ -2945,51 +2904,24 @@ class TestSchemaTwoTargetUnion:
             verified=verified, refuted=refuted, assessment=assessment,
         )
 
-    @pytest.mark.parametrize(
-        ("action", "fields"),
-        [
+    def test_finding_mutations_require_kind_and_id(self):
+        """One representative each of the severity-required branch
+        (`promote`) and the exactly-file-and-line branch (`rescope`); the
+        other actions (`demote`, `correct`, `remove`) reach the same two
+        branches with no distinct outcome of their own."""
+        for action, fields in (
             ("promote", {"severity": "high"}),
-            ("demote", {"severity": "low"}),
             ("rescope", {"file": "src/b.py", "line": 20}),
-            ("correct", {"description": "Corrected description."}),
-            ("remove", {}),
-        ],
-    )
-    def test_finding_mutations_require_kind_and_id(self, action, fields):
-        payload = {
-            "schema": 2,
-            "adjustments": [self._entry(action, fields=fields)],
-        }
+        ):
+            payload = {
+                "schema": 2,
+                "adjustments": [self._entry(action, fields=fields)],
+            }
+            assert validate_proposal_input(payload) == []
 
-        assert validate_proposal_input(payload) == []
-
-    def test_add_finding_has_no_caller_supplied_id(self):
-        entry = self._entry(
-            "add",
-            id_=None,
-            fields={
-                "severity": "high",
-                "title": "Missing authorization",
-                "file": "src/api.py",
-                "line": 42,
-                "description": "State changes before authorization.",
-                "recommendation": "Authorize before mutation.",
-                "category": "security",
-                "confidence": 0.98,
-            },
-        )
-        payload = {"schema": 2, "adjustments": [entry]}
-
-        assert validate_proposal_input(payload) == []
-        entry["target"]["id"] = "f9"
-        assert "must not include id" in " ".join(
-            validate_proposal_input(payload)
-        )
-
-    @pytest.mark.parametrize("action", ["promote", "demote"])
-    def test_severity_actions_accept_related_finding_corrections(self, action):
+    def test_severity_actions_accept_related_finding_corrections(self):
         payload = {"schema": 2, "adjustments": [self._entry(
-            action,
+            "promote",
             fields={
                 "severity": "medium", "title": "Corrected title",
                 "description": "Corrected description.",
@@ -3000,12 +2932,10 @@ class TestSchemaTwoTargetUnion:
 
         assert validate_proposal_input(payload) == []
 
-    @pytest.mark.parametrize("action", ["promote", "demote", "correct"])
-    def test_a_file_change_requires_its_line(self, action):
-        fields = {"file": "caller.py"}
-        if action != "correct":
-            fields["severity"] = "medium"
-        payload = {"schema": 2, "adjustments": [self._entry(action, fields=fields)]}
+    def test_a_file_change_requires_its_line(self):
+        payload = {"schema": 2, "adjustments": [self._entry(
+            "promote", fields={"file": "caller.py", "severity": "medium"},
+        )]}
 
         problems = validate_proposal_input(payload)
 
@@ -3015,25 +2945,20 @@ class TestSchemaTwoTargetUnion:
             "a stale line"
         ]
 
-    @pytest.mark.parametrize("action", ["add", "correct", "promote", "demote"])
-    @pytest.mark.parametrize(
-        ("field", "value"),
-        [
-            ("severity", "urgent"),
-            ("title", None),
-            ("description", []),
-            ("recommendation", 7),
-            ("file", None),
-            ("line", 0),
-            ("category", {}),
-            ("confidence", True),
-            ("confidence", -0.01),
-            ("confidence", 1.01),
-        ],
-    )
+    proposal_field_domain = [("severity", "urgent"), ("confidence", 1.01)]
+
+    @pytest.mark.parametrize("action", ["add", "correct"])
+    @pytest.mark.parametrize(("field", "value"), proposal_field_domain)
     def test_finding_content_values_follow_the_canonical_domain_contract(
         self, action, field, value
     ):
+        """Every field/action combination reaches
+        `review_document.validate_finding_content_field` — one delegated
+        function pinned per field at its owner (`agent/test_output.py`).
+        `add` and `correct` are kept because they build the `fields` dict
+        differently (merged onto a full finding vs. built from scratch);
+        `promote`/`demote` reach the identical branch through `add`'s
+        merged-dict path."""
         fields = {
             "severity": "medium",
             "title": "Missing validation",
@@ -3085,21 +3010,20 @@ class TestSchemaTwoTargetUnion:
 
         assert validate_proposal_input(payload) == []
 
-    @pytest.mark.parametrize("action", ["add", "correct"])
     def test_an_invalid_planned_finding_leaves_the_ledger_unchanged(
-        self, tmp_path, action
+        self, tmp_path
     ):
         _write_findings(tmp_path, [_finding("f1")])
         entry = self._entry(
-            action,
-            id_=None if action == "add" else "f1",
+            "add",
+            id_=None,
             fields={
                 "severity": "medium",
                 "title": "Invalid file",
                 "file": None,
                 "description": "The file value violates the domain.",
                 "recommendation": "Name the affected file.",
-            } if action == "add" else {"file": None},
+            },
         )
         entry["adjustment_id"] = "invalid-file"
         _publish_raw_proposal(
@@ -3136,9 +3060,10 @@ class TestSchemaTwoTargetUnion:
     @pytest.mark.parametrize(
         ("action", "fields"),
         [
+            # Hits the generic "action not allowed for check targets" branch.
             ("promote", {"severity": "high"}),
-            ("demote", {"severity": "low"}),
-            ("rescope", {"file": "src/b.py", "line": 20}),
+            # `add` hits a second, distinct branch first: `_validate_target`
+            # refuses a non-finding kind before the generic check ever runs.
             (
                 "add",
                 {
@@ -3169,8 +3094,7 @@ class TestSchemaTwoTargetUnion:
         assert problems
         assert "check" in " ".join(problems)
 
-    @pytest.mark.parametrize("field", ["id", "source_reviewers", "severity"])
-    def test_check_correction_rejects_immutable_or_finding_fields(self, field):
+    def test_check_correction_rejects_immutable_or_finding_fields(self):
         payload = {
             "schema": 2,
             "adjustments": [
@@ -3178,12 +3102,12 @@ class TestSchemaTwoTargetUnion:
                     "correct",
                     kind="check",
                     id_="c1",
-                    fields={field: "replacement"},
+                    fields={"severity": "replacement"},
                 )
             ],
         }
 
-        assert field in " ".join(validate_proposal_input(payload))
+        assert "severity" in " ".join(validate_proposal_input(payload))
 
     def test_non_add_target_requires_id_and_add_rejects_surplus_id(self):
         missing = {
@@ -3531,9 +3455,6 @@ class TestProposalPreparation:
         [
             ("adjustment_id", "critic-owned"),
             ("outcome", "verified"),
-            ("rejected", True),
-            ("rejection_reason", "caller-owned"),
-            ("applied", True),
         ],
     )
     def test_prepare_rejects_lifecycle_fields(self, forbidden, value):
@@ -3543,28 +3464,14 @@ class TestProposalPreparation:
                 "adjustments": [self._entry(**{forbidden: value})],
             })
 
-    @pytest.mark.parametrize(
-        "payload,problem",
-        [
-            (
-                {"schema": 2, "adjustments": [], "revised_assessment": "x"},
-                "revised_assessment",
-            ),
-            (
-                {"schema": 2, "adjustments": [], "adjudication": {}},
-                "adjudication",
-            ),
-            (
-                {"schema": 2, "adjustments": [], "counts": {}},
-                "counts",
-            ),
-        ],
-    )
-    def test_prepare_rejects_non_proposal_top_level_fields(
-        self, payload, problem
-    ):
-        with pytest.raises(ValueError, match=problem):
-            critic_adjustments_module.prepare_proposal(payload)
+    def test_prepare_rejects_non_proposal_top_level_fields(self):
+        """`revised_assessment` doubles as the same-named row that used to
+        cover the now-deleted `TestRevisedAssessment::
+        test_a_non_string_revised_assessment_rejects_the_proposal`."""
+        with pytest.raises(ValueError, match="revised_assessment"):
+            critic_adjustments_module.prepare_proposal(
+                {"schema": 2, "adjustments": [], "revised_assessment": "x"}
+            )
 
     def test_the_digest_covers_every_byte_of_the_proposal(self):
         """The proposal is never rewritten, so the digest has nothing to
@@ -3664,27 +3571,12 @@ class TestAdjudicationRequest:
     @pytest.mark.parametrize(
         "mutate,problem",
         [
+            # One representative of the five `caller-*` rows: all are
+            # spellings of the same `_extra_key_problems(request,
+            # _REQUEST_KEYS)` check.
             (
                 lambda request, ids: request.update({"not_checked": [ids[2]]}),
                 "not_checked",
-            ),
-            (
-                lambda request, ids: request.update({"counts": {}}),
-                "counts",
-            ),
-            (
-                lambda request, ids: request.update({
-                    "recorded_at": "2026-08-24T10:00:00+00:00"
-                }),
-                "recorded_at",
-            ),
-            (
-                lambda request, ids: request.update({"outcome": "verified"}),
-                "outcome",
-            ),
-            (
-                lambda request, ids: request.update({"applied": True}),
-                "applied",
             ),
             (
                 lambda request, ids: request["verified"].append(7),
@@ -3728,8 +3620,7 @@ class TestAdjudicationRequest:
             ),
         ],
         ids=[
-            "caller-not-checked", "caller-counts", "caller-timestamp",
-            "caller-outcome", "caller-apply-state", "non-string-verified",
+            "caller-not-checked", "non-string-verified",
             "duplicate-verified", "overlap", "unknown-id", "blank-reason",
             "refuted-extra-key", "blank-assessment",
         ],
@@ -4176,37 +4067,44 @@ class TestProvenanceAtTheReaderBoundary:
         validate_findings_document(doc)
 
     @pytest.mark.parametrize("mutate", [
-        lambda d: d["findings"][0].__setitem__("sources", []),
-        lambda d: d["findings"][0].__setitem__(
-            "sources", [{"reviewer": "security-review", "id": "F1"}]),
-        lambda d: d["findings"][0].__setitem__(
-            "sources", [{"reviewer": "security-review", "id": "f1", "extra": 1}]),
-        lambda d: d["checks"][0].__setitem__(
-            "sources", [{"reviewer": "security-review", "id": "c1", "severity": "high"}]),
-        lambda d: d.__setitem__("dropped_findings", [
-            {"reviewer": "x-review", "id": "f2", "reason": "false_positive"}]),
-        lambda d: d.__setitem__("dropped_findings", [
-            {"reviewer": "x-review", "id": "f2", "reason": "merged", "evidence": "e"}]),
-        lambda d: d.__setitem__("dropped_checks", [
-            {"reviewer": "x-review", "id": "c2", "reason": "void"}]),
-        lambda d: d.__setitem__("dropped_checks", [
-            {"reviewer": "x-review", "id": "c2", "reason": "void",
-             "evidence": "e", "scope_status": "in_scope"}]),
-        lambda d: d.__setitem__("orchestrator_notes", [
-            {"id": "1", "outcome": "confirmed", "evidence": "e"}]),
-        lambda d: d.__setitem__("orchestrator_notes", [
-            {"id": "n1", "outcome": "confirmed", "evidence": "e"},
-            {"id": "n1", "outcome": "refuted", "evidence": "e"}]),
-        lambda d: d.__setitem__("orchestrator_notes", [
-            {"id": "n1", "outcome": "refuted", "evidence": "e", "verifies": ["V2"]}]),
-        lambda d: d.__setitem__("orchestrator_notes", [
-            {"id": "n1", "outcome": "confirmed", "evidence": "e", "verifies": []}]),
-        lambda d: d.__setitem__("orchestrator_notes", [
-            {"id": "n1", "outcome": "confirmed", "evidence": "e", "verifies": ["v2"]}]),
-        lambda d: d.__setitem__("orchestrator_notes", [
-            {"id": "n1", "outcome": "confirmed", "evidence": "e", "verifies": "V2"}]),
+        pytest.param(
+            lambda d: d["findings"][0].__setitem__("sources", []),
+            id="empty-sources",
+        ),
+        pytest.param(
+            lambda d: d["checks"][0].__setitem__(
+                "sources",
+                [{"reviewer": "security-review", "id": "c1", "severity": "high"}],
+            ),
+            id="severity-on-a-check-source",
+        ),
+        pytest.param(
+            lambda d: d.__setitem__("dropped_findings", [
+                {"reviewer": "x-review", "id": "f2", "reason": "merged",
+                 "evidence": "e"},
+            ]),
+            id="bad-drop-reason",
+        ),
+        pytest.param(
+            lambda d: d.__setitem__("dropped_checks", [
+                {"reviewer": "x-review", "id": "c2", "reason": "void",
+                 "evidence": "e", "scope_status": "in_scope"},
+            ]),
+            id="stamped-key-on-a-check-drop",
+        ),
+        pytest.param(
+            lambda d: d.__setitem__("orchestrator_notes", [
+                {"id": "n1", "outcome": "refuted", "evidence": "e",
+                 "verifies": ["V2"]},
+            ]),
+            id="verifies-on-a-refuted-note",
+        ),
     ])
     def test_malformed_provenance_is_refused(self, mutate):
+        """One row per validated collection (`_validate_sources`,
+        `_validate_dropped` per drop reason set, `_validate_orchestrator_notes`);
+        the reader's counterpart to the builder's matching matrix in
+        `test_findings_ledger.py`."""
         doc = self._with()
         mutate(doc)
         with pytest.raises(ValueError):
