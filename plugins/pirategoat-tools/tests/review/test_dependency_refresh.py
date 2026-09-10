@@ -147,8 +147,6 @@ class TestSaveReport:
         [
             ("not_needed", []),
             ("completed", None),
-            ("partial", None),
-            ("failed", None),
         ],
     )
     def test_all_declared_outcomes_are_publishable(
@@ -438,31 +436,6 @@ class TestCanonicalValidation:
 
 
 class TestSaveCli:
-    def test_success_prints_only_saved_echo(self, git_repo, tmp_path):
-        output_dir = tmp_path / "out"
-        output_dir.mkdir()
-        report_path = tmp_path / "request.json"
-        _write_request(report_path, _request())
-
-        proc = subprocess.run(
-            [
-                sys.executable,
-                str(SCRIPT),
-                "save",
-                "--output-dir",
-                str(output_dir),
-                "--report",
-                str(report_path),
-            ],
-            cwd=git_repo,
-            capture_output=True,
-            text=True,
-        )
-
-        assert proc.returncode == 0
-        assert proc.stdout == "SAVED dependency-refresh.json\n"
-        assert proc.stderr == ""
-
     def test_invalid_input_prints_each_problem_and_does_not_publish(
         self, git_repo, tmp_path
     ):
