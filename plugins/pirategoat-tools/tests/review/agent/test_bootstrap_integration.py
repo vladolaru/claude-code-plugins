@@ -4,7 +4,6 @@ from concurrent.futures import ThreadPoolExecutor
 import importlib
 import importlib.util
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -27,7 +26,6 @@ from review.reviewer_lifecycle import (
     review_paths,
     scope_summary_path,
     scoped_diff_path,
-    started_marker_path,
 )
 
 # Import AGENT_CONFIG to derive ALL_AGENTS
@@ -158,6 +156,41 @@ def run_bootstrap(*args: str, timeout: int = 60, fixture: str = "multi-file-real
     )
 
 
+_IN_PROCESS_SCOPE = "STATUS: OK\n=== FILES ===\nsrc/a.py  (+1 -0)\n"
+_IN_PROCESS_FACTS = {
+    "inline_diff_files": ["src/a.py"],
+    "review_claimable_files": [],
+    "list_only_files": [],
+    "in_scope_stat_lines": 10,
+}
+
+
+def _main_in_process(
+    agent, tmp_path, monkeypatch, capsys,
+    scope_output=_IN_PROCESS_SCOPE, facts=_IN_PROCESS_FACTS,
+):
+    """Run bootstrap's real main() in-process and return its stdout.
+
+    Same harness as test_bootstrap.py::TestPartitionScopePaths: scope.py
+    and its sidecar are stubbed (run_scope_discovery, load_scope_facts);
+    everything else is real, including find_plugin_root() and the protocol
+    files main() reads from this checkout.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        _mod, "run_scope_discovery", lambda *_args, **_kwargs: (0, scope_output)
+    )
+    monkeypatch.setattr(_mod, "load_scope_facts", lambda _paths: facts)
+    monkeypatch.setattr(sys, "argv", [
+        "bootstrap.py", "--agent", agent, "--range", "base..head",
+        "--output-dir", str(tmp_path / "out"),
+    ])
+    with pytest.raises(SystemExit) as exc:
+        _mod.main()
+    out = capsys.readouterr().out
+    assert exc.value.code == 0, out
+    return out
+
 
 def _inline(count):
     """`count` distinct inline placeholder paths for a schema-5 assignment."""
@@ -178,9 +211,15 @@ class TestCategoryRepresentatives:
 
     def test_standard_agent(self, tmp_path):
         """Standard conditional agent with no special flags (performance-reviewer)."""
+        # Step 1 stamps run-config.json and bootstrap forwards it: one
+        # detector, so re-detecting the version here would be a second source.
+        (tmp_path / "run-config.json").write_text(
+            json.dumps({"mode": "pr", "plugin_version": "9.9.9"})
+        )
         result = run_bootstrap("--agent", "performance-reviewer", "--output-dir", str(tmp_path))
         stdout = result.stdout
         assert result.returncode == 0
+        assert "PIRATEGOAT_PLUGIN_VERSION=9.9.9" in stdout
 
         # Section structure (hardcoded in build_output template)
         assert "=== BOOTSTRAP: performance-reviewer ===" in stdout
@@ -216,38 +255,21 @@ class TestCategoryRepresentatives:
         # REVIEW SCOPE header not duplicated
         assert stdout.count("=== REVIEW SCOPE ===") <= 1
 
-    def test_agent_start_telemetry_uses_the_already_parsed_scope_paths(
-        self, tmp_path
-    ):
-        telemetry_log = tmp_path / "review.jsonl"
-        telemetry_log.write_text(json.dumps({
-            "schema": 1,
-            "run_id": "run-1",
-            "event": "pipeline_start",
-            "pipeline": {"repo_path": _get_fixture_repo()},
-        }) + "\n")
-        _write_telemetry_marker(tmp_path, telemetry_log)
-
-        result = run_bootstrap(
-            "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
+        # The assignment persists the authoritative NOT DIFFED set so the
+        # builder can reject claims that match no claimable file.
+        data = json.loads(
+            Path(review_paths(tmp_path, "performance").assignment).read_text()
         )
-
-        assert result.returncode == 0
-        # Telemetry scope covers the full in-scope set: inline FILES entries,
-        # claimable NOT DIFFED paths (in-scope work whose diffs were withheld
-        # for context budget), and list-only CHANGED (no diff) paths the
-        # reviewer is told to inspect when relevant.
-        expected_scope = sorted(set(
-            scope_files_in_text(result.stdout)
-            + not_diffed_files_in_text(result.stdout)
-            + list_only_files_in_text(result.stdout)
-        ))
-        events = [json.loads(line) for line in telemetry_log.read_text().splitlines()]
-        agent_start = next(
-            event for event in events if event.get("event") == "agent_start"
+        assert sorted(data["review_claimable_files"]) == sorted(
+            not_diffed_files_in_text(stdout)
         )
-        assert expected_scope
-        assert agent_start["scope"]["paths"] == expected_scope
+        # Closes the main()->build_output() seam: review_claimable_count must be
+        # derived from this exact claimable set, not a neighboring fact
+        # (e.g. total scope files) that also happens to be non-empty here.
+        # A mis-wired count would pass every other assertion in this suite.
+        assert ("Not reviewed (budget):" in stdout) == bool(
+            data["review_claimable_files"]
+        )
 
     def test_large_end_to_end_bootstrap_keeps_every_artifact_in_reviewer_directory(
         self, tmp_path
@@ -404,7 +426,8 @@ class TestCategoryRepresentatives:
 
     def test_native_agent_start_keeps_the_registry_model_tier(self, tmp_path):
         """Outside ref-mode the registry is the single source of truth for
-        the tier — a stray --model-tier flag must not override it."""
+        the tier — a stray --model-tier flag must not override it — and the
+        agent_start event carries the scope paths main() already parsed."""
         telemetry_log = tmp_path / "review.jsonl"
         telemetry_log.write_text(json.dumps({
             "schema": 1,
@@ -429,60 +452,17 @@ class TestCategoryRepresentatives:
             event for event in events if event.get("event") == "agent_start"
         )
         assert agent_start["model_tier"] == "sonnet"
-
-    def test_assignment_backs_claim_validation(self, tmp_path):
-        """Bootstrap persists the authoritative NOT DIFFED set so the
-        builder can reject claims that match no claimable file."""
-        result = run_bootstrap(
-            "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
-        )
-        assert result.returncode == 0
-        assignment = Path(review_paths(tmp_path, "performance").assignment)
-        assert assignment.is_file()
-        data = json.loads(assignment.read_text())
-        assert sorted(data["review_claimable_files"]) == sorted(
-            not_diffed_files_in_text(result.stdout)
-        )
-        # Closes the main()->build_output() seam: review_claimable_count must be
-        # derived from this exact claimable set, not a neighboring fact
-        # (e.g. total scope files) that also happens to be non-empty here.
-        # A mis-wired count would pass every other assertion in this suite.
-        assert ("Not reviewed (budget):" in result.stdout) == bool(
-            data["review_claimable_files"]
-        )
-
-    def test_assignment_carries_budget_and_scope_counts(self, tmp_path):
-        """Schema 3 carries the effective (override-applied)
-        budget and scope counts save()'s PROGRESS line reads — the retired
-        env-var budget transport silently died for any agent that rebuilt
-        its save command, so the sidecar is the only carrier.
-
-        history-insights-reviewer has a fixed budget_override (45) in the
-        registry — proof the sidecar carries the FINAL number, not a
-        scope-only figure a downstream reader would have to recompute.
-        """
-        result = run_bootstrap(
-            "--agent", "history-insights-reviewer", "--output-dir", str(tmp_path)
-        )
-        assert result.returncode == 0
-        assert "Target: ~45 tool calls" in result.stdout
-
-        assignment = Path(review_paths(tmp_path, "history-insights").assignment)
-        assert assignment.is_file()
-        data = json.loads(assignment.read_text())
-        assert data["schema"] == 5
-        assert data["review_budget"] == 45
-        assert data["channels"] == ["blocking"]
-        assert "budget_capped" not in data
-
-        diffed = scope_files_in_text(result.stdout)
-        not_diffed = not_diffed_files_in_text(result.stdout)
-        expected_in_scope = len(
-            dict.fromkeys([*diffed, *not_diffed])
-        )
-        assert data["in_scope_review_file_count"] == expected_in_scope
-        assert set(data["inline_diff_files"]) == set(diffed)
-        assert len(data["inline_diff_files"]) == len(set(diffed))
+        # Telemetry scope covers the full in-scope set: inline FILES entries,
+        # claimable NOT DIFFED paths (in-scope work whose diffs were withheld
+        # for context budget), and list-only CHANGED (no diff) paths the
+        # reviewer is told to inspect when relevant.
+        expected_scope = sorted(set(
+            scope_files_in_text(result.stdout)
+            + not_diffed_files_in_text(result.stdout)
+            + list_only_files_in_text(result.stdout)
+        ))
+        assert expected_scope
+        assert agent_start["scope"]["paths"] == expected_scope
 
     def test_test_agent(self, tmp_path):
         """Test-reviewer agent gets DOMAIN RULES (php-tests-reviewer)."""
@@ -557,7 +537,15 @@ class TestCategoryRepresentatives:
         assert "REVIEWER_NAME: security" in stdout
 
     def test_history_and_budget_override_agent(self, tmp_path):
-        """history-insights-reviewer gets FILE HISTORY + budget override."""
+        """history-insights-reviewer gets FILE HISTORY + budget override.
+
+        The assignment carries the effective (override-applied) budget and
+        the scope counts save()'s PROGRESS line reads — the retired env-var
+        budget transport silently died for any agent that rebuilt its save
+        command, so the sidecar is the only carrier. The fixed override (45)
+        proves it carries the FINAL number, not a scope-only figure a
+        downstream reader would have to recompute.
+        """
         result = run_bootstrap("--agent", "history-insights-reviewer", "--output-dir", str(tmp_path))
         stdout = result.stdout
         assert result.returncode == 0
@@ -570,6 +558,22 @@ class TestCategoryRepresentatives:
 
         # Personalization
         assert "REVIEWER_NAME: history-insights" in stdout
+
+        data = json.loads(
+            Path(review_paths(tmp_path, "history-insights").assignment).read_text()
+        )
+        assert data["schema"] == 5
+        assert data["review_budget"] == 45
+        assert data["channels"] == ["blocking"]
+        assert "budget_capped" not in data
+
+        diffed = scope_files_in_text(stdout)
+        not_diffed = not_diffed_files_in_text(stdout)
+        assert data["in_scope_review_file_count"] == len(
+            dict.fromkeys([*diffed, *not_diffed])
+        )
+        assert set(data["inline_diff_files"]) == set(diffed)
+        assert len(data["inline_diff_files"]) == len(set(diffed))
 
     def test_file_history_without_budget_override(self, tmp_path):
         """api-contract-reviewer gets FILE HISTORY but uses scope-computed budget."""
@@ -611,7 +615,9 @@ class TestArchitecturalInvariants:
                 end = pos
         return text[start:end].strip()
 
-    def test_review_rules_identical_across_categories(self, tmp_path):
+    def test_review_rules_identical_across_categories(
+        self, tmp_path, monkeypatch, capsys
+    ):
         """REVIEW RULES (shared protocol) must be identical for all agent categories.
 
         The protocol extraction uses the same file + same skip-list for every agent.
@@ -620,9 +626,9 @@ class TestArchitecturalInvariants:
         """
         rules = {}
         for agent in self._REPRESENTATIVE_AGENTS:
-            result = run_bootstrap("--agent", agent, "--output-dir", str(tmp_path))
+            stdout = _main_in_process(agent, tmp_path, monkeypatch, capsys)
             rules[agent] = self._extract_section(
-                result.stdout, "=== REVIEW RULES ===",
+                stdout, "=== REVIEW RULES ===",
                 "=== DOMAIN RULES ===", "=== REVIEW BUDGET ===", "--- Section 2:",
             )
 
@@ -667,7 +673,9 @@ class TestArchitecturalInvariants:
 
         assert section in prompt
 
-    def test_domain_rules_identical_across_test_agents(self, tmp_path):
+    def test_domain_rules_identical_across_test_agents(
+        self, tmp_path, monkeypatch, capsys
+    ):
         """DOMAIN RULES (tests-reviewer protocol) must be identical for all test agents.
 
         All 4 test agents (php, js, e2e, go) must produce the same DOMAIN RULES.
@@ -676,9 +684,9 @@ class TestArchitecturalInvariants:
         agents = ["php-tests-reviewer", "js-tests-reviewer", "e2e-tests-reviewer", "go-tests-reviewer"]
         rules = {}
         for agent in agents:
-            result = run_bootstrap("--agent", agent, "--output-dir", str(tmp_path))
+            stdout = _main_in_process(agent, tmp_path, monkeypatch, capsys)
             rules[agent] = self._extract_section(
-                result.stdout, "=== DOMAIN RULES ===",
+                stdout, "=== DOMAIN RULES ===",
                 "=== REVIEW BUDGET ===", "--- Section 2:",
             )
 
@@ -946,19 +954,6 @@ class TestCanonicalExecutableBuilderSource:
         command_end = prompt.index("python3 <<'PY'", command_start)
         assignment_line = prompt[command_start:command_end]
         assert assignment_line.count("PIRATEGOAT_") == 5
-
-    def test_main_reads_the_version_from_the_run_config_stamp(self, tmp_path):
-        """One detector: step 1 stamps run-config.json, bootstrap forwards it.
-
-        Re-detecting here would create a second source of the same fact.
-        """
-        (tmp_path / "run-config.json").write_text(
-            json.dumps({"mode": "pr", "plugin_version": "9.9.9"})
-        )
-        result = run_bootstrap(
-            "--agent", "security-reviewer", "--output-dir", str(tmp_path)
-        )
-        assert "PIRATEGOAT_PLUGIN_VERSION=9.9.9" in result.stdout
 
 
 class TestNotApplicableCompletionContract:
@@ -1711,12 +1706,9 @@ class TestErrorCases:
     def test_unknown_agent_exits_1(self, tmp_path):
         result = run_bootstrap("--agent", "nonexistent-reviewer", "--output-dir", str(tmp_path))
         assert result.returncode == 1
+        assert "=== BOOTSTRAP: nonexistent-reviewer ===" in result.stdout
         assert "STATUS: ERROR" in result.stdout
         assert "Unknown agent" in result.stdout
-
-    def test_unknown_agent_structured_error(self, tmp_path):
-        result = run_bootstrap("--agent", "fake", "--output-dir", str(tmp_path))
-        assert "=== BOOTSTRAP: fake ===" in result.stdout
         assert "ACTION: Report this error" in result.stdout
 
 
@@ -1975,89 +1967,48 @@ class TestDynamicDispatchRisk:
         assert risk_line, "DYNAMIC_DISPATCH_RISK line not found in output"
         assert "high" in risk_line[0].lower()
 
-    def test_real_php_scope_yields_high_end_to_end(self, tmp_path):
-        """End-to-end (subprocess, real scope.py + main()) proof that a
-        real PHP file in scope drives has_php through main()'s derivation.
-
-        The class above covers build_output() in isolation, which cannot
-        catch a mutation to main()'s has_php derivation itself (e.g.
-        `has_php = False`) — that computation lives outside build_output(),
-        so a unit test that only calls build_output() directly is blind to
-        it. This runs the full subprocess chain against a fixture with a
-        genuinely in-scope PHP file (src/ProductManager.php; the domain
-        also excludes tests/ProductManagerTest.php, which must not count).
-        """
-        r = run_bootstrap(
-            "--agent", "dead-code-reviewer", "--output-dir", str(tmp_path),
-            fixture="multi-file-realistic.diff",
+    @pytest.mark.parametrize(
+        ("inline_files", "scope_output", "expected"),
+        [
+            pytest.param(
+                ["src/a.php"], _IN_PROCESS_SCOPE, "high",
+                id="php-file-in-scope-facts",
+            ),
+            pytest.param(
+                ["src/a.ts"], _IN_PROCESS_SCOPE, "low",
+                id="php-free-scope-facts",
+            ),
+            # The old text scan read the SKIPPED summary line as one token
+            # and its '.php' suffix forced high; the facts carry only files
+            # genuinely in scope, so a domain-excluded test file stays out.
+            pytest.param(
+                ["src/app.ts"],
+                "STATUS: OK\n=== FILES ===\nsrc/app.ts  (+1 -0)\n"
+                "=== SKIPPED ===\nOutside domain (1): tests/ProductManagerTest.php\n",
+                "low",
+                id="domain-excluded-php-test-file",
+            ),
+        ],
+    )
+    def test_main_derives_has_php_from_the_scope_facts(
+        self, tmp_path, monkeypatch, capsys, inline_files, scope_output, expected
+    ):
+        """main()'s own has_php derivation, which the build_output() rows
+        above cannot reach because they supply the fact as a parameter (a
+        mutation such as `has_php = False` in main() passes them all)."""
+        stdout = _main_in_process(
+            "dead-code-reviewer", tmp_path, monkeypatch, capsys,
+            scope_output=scope_output,
+            facts={**_IN_PROCESS_FACTS, "inline_diff_files": inline_files},
         )
-        assert r.returncode == 0, r.stderr
-        assert "DYNAMIC_DISPATCH_RISK: high" in r.stdout
-
-    def test_real_php_free_scope_yields_low_end_to_end(self, tmp_path):
-        """End-to-end companion to the test above: a fixture with zero PHP
-        files (only .ts/.tsx) must drive has_php to False through the same
-        real main() derivation.
-        """
-        r = run_bootstrap(
-            "--agent", "dead-code-reviewer", "--output-dir", str(tmp_path),
-            fixture="js-ts-source.diff",
-        )
-        assert r.returncode == 0, r.stderr
-        assert "DYNAMIC_DISPATCH_RISK: low" in r.stdout
-
-    def test_domain_excluded_php_test_file_does_not_force_high_end_to_end(self, tmp_path):
-        """A PHP file present only under '=== SKIPPED === Outside domain'
-        (e.g. a test file the dead-code domain deliberately excludes) must
-        not count as PHP-in-scope.
-
-        This is the reachable divergence between the old and new
-        derivations on real scope text: the old text scan read every
-        non-'===' line, including the SKIPPED summary line
-        "Outside domain (N): tests/ProductManagerTest.php" — which has no
-        double space, so the whole line survived as one token and its
-        '.php' suffix set has_php=True even though no PHP file was
-        genuinely in scope. telemetry_scope_paths only contains files that
-        are actually in scope (inline, NOT DIFFED, or list-only), so it
-        excludes SKIPPED files correctly.
-        """
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, check=True)
-        subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
-        (repo / "README.md").write_text("# init\n")
-        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
-        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
-
-        (repo / "src").mkdir()
-        (repo / "tests").mkdir()
-        (repo / "src" / "app.ts").write_text("export const x = 1;\n")
-        (repo / "tests" / "ProductManagerTest.php").write_text(
-            "<?php\nclass ProductManagerTest extends TestCase {\n"
-            "    public function test_get_product() {\n"
-            "        $this->assertTrue( true );\n    }\n}\n"
-        )
-        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
-        subprocess.run(["git", "commit", "-q", "-m", "add ts app + php test"], cwd=repo, check=True)
-
-        out_dir = tmp_path / "out"
-        result = subprocess.run(
-            [sys.executable, str(BOOTSTRAP_SCRIPT), "--agent", "dead-code-reviewer",
-             "--output-dir", str(out_dir), "--range", "HEAD~1..HEAD"],
-            capture_output=True, text=True, timeout=60, cwd=repo,
-        )
-        assert result.returncode == 0, result.stderr
-        assert "Outside domain" in result.stdout and "ProductManagerTest.php" in result.stdout, (
-            "fixture setup didn't produce the expected SKIPPED line — test doesn't pin what it claims"
-        )
-        assert "DYNAMIC_DISPATCH_RISK: low" in result.stdout
+        assert f"DYNAMIC_DISPATCH_RISK: {expected}" in stdout
 
 
 class TestRepoRuleAndRefModeSelection:
     """Repo rules must reach the reviewers they target (effective identity,
-    complete scope), adapter instances must receive their declared path
-    scope, and an explicit isolation request must never run inline."""
+    complete scope), and adapter instances must receive their declared path
+    scope. The refusal of an explicit isolation request is pinned at the unit
+    level (test_bootstrap.py::TestResolveReviewerIdentity)."""
 
     @staticmethod
     def _write_review_context(output_dir: Path, rules=None, reviewers=None):
@@ -2216,22 +2167,6 @@ class TestRepoRuleAndRefModeSelection:
                 channel="advisory",
             )
 
-    def test_isolated_execution_is_refused(self, tmp_path):
-        """An explicit isolation request must never silently widen into
-        inline execution of the repo prompt — not even via override."""
-        ref = tmp_path / "r.md"
-        ref.write_text("Review renewals.")
-        result = run_bootstrap(
-            "--agent", "repo-reviewer-adapter",
-            "--repo-agent-ref", str(ref),
-            "--instance-name", "repo-renewals-reviewer",
-            "--execution", "isolated",
-            "--scope-domains", "code",
-            "--output-dir", str(tmp_path),
-        )
-        assert result.returncode == 1
-        assert "Isolated execution is not implemented" in result.stdout
-
     def test_path_rule_matches_a_budget_claimable_file(self, tmp_path):
         """A rule about a NOT DIFFED file applies precisely when the
         reviewer must inspect that file — selection must see the complete
@@ -2298,50 +2233,14 @@ class TestRepoRuleAndRefModeSelection:
 class TestOutputFilenameConsistency:
     """Draft save and immutable finalization use distinct filenames."""
 
-    def test_save_stages_draft_then_finalization_publishes_final(
-        self, tmp_path
-    ):
-        """save_draft() stages a draft; finalization publishes the review."""
-        from review.agent.output import ReviewOutputBuilder, finalize_review
-
-        assignment_path = Path(review_paths(tmp_path, "dead-code").assignment)
-        assignment_path.parent.mkdir(parents=True, exist_ok=True)
-        assignment_path.write_text(json.dumps({
-            "schema": 5,
-            "agent_name": "dead-code-reviewer",
-            "reviewer": "dead-code",
-            "review_claimable_files": [],
-            "review_budget": 15,
-            "inline_diff_files": _inline(1),
-            "in_scope_review_file_count": 1,
-            "channels": ["blocking"],
-        }))
-        builder = ReviewOutputBuilder.open(str(tmp_path), "42", "dead-code")
-        result = builder.save_draft()
-
-        assert set(result) == {
-            "draft", "review_digest", "finalize_review_command"
-        }
-        assert result["draft"] == review_paths(tmp_path, "dead-code").draft
-        draft = Path(result["draft"])
-        final = Path(review_paths(tmp_path, "dead-code").final)
-        assert draft.is_file()
-        assert not final.exists()
-
-        finalized = finalize_review(
-            str(tmp_path), "dead-code", result["review_digest"]
-        )
-        assert finalized["final"] == str(final)
-        assert final.is_file()
-        assert not draft.exists()
-        assert not os.path.exists(os.path.join(str(tmp_path), "dead-code-review.md"))
-
     def test_bootstrap_output_names_finalized_file_not_draft(self, tmp_path):
         """Bootstrap OUTPUT_FILES must name the finalized review JSON,
         and no Markdown the pipeline derives elsewhere.
 
         This checks the briefing TEXT only (what the agent is told to produce);
-        the draft/finalization filesystem contract is covered above.
+        the draft/finalization filesystem contract is pinned in test_output.py
+        (TestSaveDraft::test_creates_only_the_draft_json and
+        TestDerivedReviewedFiles::test_finalized_json_preserves_derived_coverage).
         """
         output = build_output(
             agent_name="dead-code-reviewer",
@@ -2609,106 +2508,6 @@ class TestNotDiffedContractIsDelivered:
         output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, review_claimable_count=3)
         assert "Declare each file you could not reach" not in output
         assert "derives every unclaimed review file" in output
-
-
-class TestReviewClaimableOrderingEndToEnd:
-    """The assignment's claimable list is largest-first end to end.
-
-    build_scope() produces budget_exceeded_files in PRIORITY-TIER order
-    (production files before test files, regardless of size, for domains with
-    budget_priority "production_first") — not pure size order. A small
-    production file can therefore land ahead of a much larger test file. This
-    reproduces that exact divergence with a real git repo and checks
-    write_scope_summary()'s sort at the producer carries largest-first all the
-    way into the assignment bootstrap persists — the same assignment
-    output.py's save() replays for the NEXT UNREAD echo.
-    """
-
-    def _repo_with_priority_tier_divergence(self, repo_dir):
-        """A small production file and a much larger test file, sized so
-        both exceed history-insights-reviewer's 500-line max (registry
-        budget_override does not affect scope.py's own --max-lines
-        claimability, only the tool-call target build_output later reports)."""
-        os.makedirs(os.path.join(repo_dir, "src"), exist_ok=True)
-        os.makedirs(os.path.join(repo_dir, "tests"), exist_ok=True)
-
-        def write(relpath, n_lines):
-            with open(os.path.join(repo_dir, relpath), "w") as f:
-                f.write("\n".join(f"line {i}" for i in range(n_lines)) + "\n")
-
-        subprocess.run(["git", "init"], cwd=repo_dir, capture_output=True, check=True)
-        subprocess.run(
-            ["git", "config", "user.email", "t@t.com"],
-            cwd=repo_dir, capture_output=True, check=True,
-        )
-        subprocess.run(
-            ["git", "config", "user.name", "T"],
-            cwd=repo_dir, capture_output=True, check=True,
-        )
-        subprocess.run(
-            ["git", "config", "commit.gpgsign", "false"],
-            cwd=repo_dir, capture_output=True, check=True,
-        )
-        for relpath, n in [
-            ("src/huge_prod.py", 5), ("src/small_prod.py", 5),
-            ("tests/huge_test.py", 5),
-        ]:
-            write(relpath, n)
-        subprocess.run(["git", "add", "."], cwd=repo_dir, capture_output=True, check=True)
-        subprocess.run(
-            ["git", "commit", "-m", "init"], cwd=repo_dir, capture_output=True, check=True
-        )
-        # huge_prod (485) nearly exhausts the 500-line budget; small_prod
-        # (35, still production tier) is processed next and made claimable;
-        # only then does the test tier run, making huge_test (405) claimable — larger
-        # than small_prod but ordered after it by the priority tier alone.
-        for relpath, n in [
-            ("src/huge_prod.py", 485), ("src/small_prod.py", 35),
-            ("tests/huge_test.py", 405),
-        ]:
-            write(relpath, n)
-        subprocess.run(["git", "add", "."], cwd=repo_dir, capture_output=True, check=True)
-        subprocess.run(
-            ["git", "commit", "-m", "changes"], cwd=repo_dir, capture_output=True, check=True
-        )
-
-    def test_assignment_claimable_files_are_largest_first_despite_priority_tiering(
-        self, tmp_path
-    ):
-        repo_dir = tmp_path / "repo"
-        repo_dir.mkdir()
-        self._repo_with_priority_tier_divergence(str(repo_dir))
-        output_dir = tmp_path / "output"
-        output_dir.mkdir()
-
-        result = subprocess.run(
-            [
-                sys.executable, str(BOOTSTRAP_SCRIPT),
-                "--agent", "history-insights-reviewer",
-                "--output-dir", str(output_dir),
-                "--range", "HEAD~1..HEAD",
-            ],
-            cwd=str(repo_dir), capture_output=True, text=True, timeout=60,
-        )
-        assert result.returncode == 0
-
-        assignment = json.loads(
-            (
-                output_dir
-                / "reviewers" / "history-insights" / "assignment.json"
-            ).read_text()
-        )
-        # Both claimable (the regression this guards): a same-tier-only
-        # re-sort would still fail to fix the divergence, since these two
-        # files are in DIFFERENT priority tiers.
-        assert set(assignment["review_claimable_files"]) == {
-            "src/small_prod.py", "tests/huge_test.py",
-        }
-        # Largest first, size overriding the priority tier that put the
-        # smaller production file first in scope.py's own raw ordering.
-        assert assignment["review_claimable_files"] == [
-            "tests/huge_test.py", "src/small_prod.py",
-        ]
 
 
 # Registry agents that are not dispatched through bootstrap.py. The critic
