@@ -216,7 +216,12 @@ class TestFindingsSave:
             dispatched=["security-review"], missing=[],
         )
 
-    def _run_save(self, output_dir, findings_path):
+    def _run_save(self, output_dir, findings_path, capsys):
+        code = run_save(_args(output_dir, findings_path))
+        captured = capsys.readouterr()
+        return types.SimpleNamespace(returncode=code, stdout=captured.out, stderr=captured.err)
+
+    def _run_save_subprocess(self, output_dir, findings_path):
         cmd = [
             sys.executable, str(SCRIPT),
             "--output-dir", str(output_dir),
@@ -232,7 +237,7 @@ class TestFindingsSave:
     def test_accepts_canonical_findings_checks_and_assessment(self, tmp_path):
         findings = self._write_findings(tmp_path, _valid_findings())
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save_subprocess(tmp_path, findings)
 
         assert result.returncode == 0, result.stdout + result.stderr
         saved = json.loads((tmp_path / "review-findings.json").read_text())
@@ -246,13 +251,13 @@ class TestFindingsSave:
 
     @pytest.mark.parametrize("schema", rejected_schema_values(3))
     def test_rejects_schema_other_than_the_exact_ledger_integer(
-        self, tmp_path, schema
+        self, tmp_path, capsys, schema
     ):
         findings = self._write_findings(
             tmp_path, apply_schema(_valid_findings(), schema)
         )
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode != 0
         assert "schema" in result.stdout
@@ -267,57 +272,57 @@ class TestFindingsSave:
         ],
     )
     def test_rejects_noncanonical_checks_or_assessment(
-        self, tmp_path, field, value
+        self, tmp_path, capsys, field, value
     ):
         findings = self._write_findings(
             tmp_path, _valid_findings(**{field: value})
         )
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode != 0
         assert field in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
 
-    def test_rejects_mutable_or_malformed_check_identity(self, tmp_path):
+    def test_rejects_mutable_or_malformed_check_identity(self, tmp_path, capsys):
         checks = _valid_findings()["checks"]
         checks[0]["source_reviewers"] = ["security", "", 7]
         findings = self._write_findings(
             tmp_path, _valid_findings(checks=checks)
         )
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode != 0
         assert "source_reviewers" in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
 
-    def test_rejects_retired_tool_metadata(self, tmp_path):
+    def test_rejects_retired_tool_metadata(self, tmp_path, capsys):
         doc = _valid_findings()
         doc["meta"]["tool_results_used"] = ["rg"]
         findings = self._write_findings(tmp_path, doc)
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode != 0
         assert "tool_results_used" in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
 
-    def test_rejects_summary_without_advisory_finding_count(self, tmp_path):
+    def test_rejects_summary_without_advisory_finding_count(self, tmp_path, capsys):
         doc = _valid_findings()
         del doc["summary"]["suppressed_advisory_finding_count"]
         findings = self._write_findings(tmp_path, doc)
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode != 0
         assert "summary does not match" in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
 
-    def test_valid_findings_saved_atomically(self, tmp_path):
+    def test_valid_findings_saved_atomically(self, tmp_path, capsys):
         findings = self._write_findings(tmp_path, _valid_findings())
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode == 0, result.stdout + result.stderr
         ledger_path = tmp_path / "review-findings.json"
@@ -326,7 +331,7 @@ class TestFindingsSave:
         assert saved["verdict"] == "request_changes"
         assert len(saved["findings"]) == 1
 
-    def test_echo_format(self, tmp_path):
+    def test_echo_format(self, tmp_path, capsys):
         reviews = _reviews(**{"security-review": (8, ["grep"] * 12)})
         for index, severity in enumerate(
             ["high", "medium", "medium", "medium",
@@ -376,7 +381,7 @@ class TestFindingsSave:
         )
         findings = self._write_findings(tmp_path, doc)
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode == 0, result.stdout + result.stderr
         assert "RECORDED VERDICT: request_changes" in result.stdout
@@ -386,19 +391,19 @@ class TestFindingsSave:
         )
         assert "CHECKS: 12 | ASSESSMENT: present" in result.stdout
 
-    def test_echo_reflects_absent_assessment_and_no_checks(self, tmp_path):
+    def test_echo_reflects_absent_assessment_and_no_checks(self, tmp_path, capsys):
         doc = _valid_findings(assessment=None, checks=[])
         findings = self._write_findings(tmp_path, doc)
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode == 0, result.stdout + result.stderr
         assert "CHECKS: 0 | ASSESSMENT: absent" in result.stdout
 
-    def test_rejects_non_object_top_level(self, tmp_path):
+    def test_rejects_non_object_top_level(self, tmp_path, capsys):
         findings = self._write_findings(tmp_path, ["not", "an", "object"])
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode != 0
         assert "REJECTED" in result.stdout
@@ -412,62 +417,62 @@ class TestFindingsSave:
             Path("synthesis") / CONTEXT_FILENAME,
         }
 
-    def test_rejects_bad_verdict(self, tmp_path):
+    def test_rejects_bad_verdict(self, tmp_path, capsys):
         findings = self._write_findings(
             tmp_path, _valid_findings(verdict="MAYBE")
         )
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode != 0
         assert "REJECTED" in result.stdout
         assert "verdict" in result.stdout.lower()
         assert not (tmp_path / "review-findings.json").exists()
 
-    def test_rejects_verdict_that_does_not_match_issues(self, tmp_path):
+    def test_rejects_verdict_that_does_not_match_issues(self, tmp_path, capsys):
         findings = self._write_findings(
             tmp_path, _valid_findings(verdict="approve")
         )
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode != 0
         assert "REJECTED" in result.stdout
         assert "verdict does not match its findings" in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
 
-    def test_rejects_uppercase_verdict(self, tmp_path):
+    def test_rejects_uppercase_verdict(self, tmp_path, capsys):
         """Casing matters — the ledger's real vocabulary is lowercase,
         matching _verdict_for_issues()'s return values in agent/output.py."""
         findings = self._write_findings(
             tmp_path, _valid_findings(verdict="REQUEST_CHANGES")
         )
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode != 0
         assert "REJECTED" in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
 
-    def test_rejects_count_mismatch(self, tmp_path):
+    def test_rejects_count_mismatch(self, tmp_path, capsys):
         doc = _valid_findings()
         doc["summary"]["total_findings"] = 5  # actual findings list has 1 entry
         findings = self._write_findings(tmp_path, doc)
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode != 0
         assert "REJECTED" in result.stdout
         assert "summary" in result.stdout.lower()
         assert not (tmp_path / "review-findings.json").exists()
 
-    def test_rejects_by_severity_mismatch(self, tmp_path):
+    def test_rejects_by_severity_mismatch(self, tmp_path, capsys):
         doc = _valid_findings()
         doc["summary"]["by_severity"]["high"] = 0
         doc["summary"]["by_severity"]["low"] = 1  # doesn't match the 1 high finding
         findings = self._write_findings(tmp_path, doc)
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode != 0
         assert "REJECTED" in result.stdout
@@ -480,63 +485,63 @@ class TestFindingsSave:
             "id", "category", "confidence", "line",
         ],
     )
-    def test_rejects_issue_missing_required_field(self, tmp_path, missing_field):
+    def test_rejects_issue_missing_required_field(self, tmp_path, capsys, missing_field):
         doc = _valid_findings()
         del doc["findings"][0][missing_field]
         findings = self._write_findings(tmp_path, doc)
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode != 0
         assert "REJECTED" in result.stdout
         assert missing_field in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
 
-    def test_accepts_null_line_for_file_scoped_issue(self, tmp_path):
+    def test_accepts_null_line_for_file_scoped_issue(self, tmp_path, capsys):
         doc = _valid_findings()
         doc["findings"][0]["line"] = None
         doc["findings"][0]["scope"] = "file"
         findings = self._write_findings(tmp_path, doc)
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode == 0, result.stdout + result.stderr
         saved = json.loads((tmp_path / "review-findings.json").read_text())
         assert saved["findings"][0]["line"] is None
 
-    def test_rejects_issue_invalid_severity(self, tmp_path):
+    def test_rejects_issue_invalid_severity(self, tmp_path, capsys):
         doc = _valid_findings()
         doc["findings"][0]["severity"] = "catastrophic"
         findings = self._write_findings(tmp_path, doc)
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode != 0
         assert "REJECTED" in result.stdout
         assert "severity is invalid" in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
 
-    def test_rejects_issue_not_an_object(self, tmp_path):
+    def test_rejects_issue_not_an_object(self, tmp_path, capsys):
         doc = _valid_findings(findings=["not an object"])
         findings = self._write_findings(tmp_path, doc)
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode != 0
         assert "REJECTED" in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
 
-    def test_rejects_issues_not_a_list(self, tmp_path):
+    def test_rejects_issues_not_a_list(self, tmp_path, capsys):
         doc = _valid_findings(findings={"not": "a list"})
         findings = self._write_findings(tmp_path, doc)
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode != 0
         assert "REJECTED" in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
 
-    def test_rejects_checks_not_a_list(self, tmp_path):
+    def test_rejects_checks_not_a_list(self, tmp_path, capsys):
         """A truthy non-list `checks` (e.g. an integer) must be
         rejected here — not merely tolerated by `_echo()` after the
         ledger is already written. `findings.get("checks") or []`
@@ -545,18 +550,18 @@ class TestFindingsSave:
         doc = _valid_findings(checks=12)
         findings = self._write_findings(tmp_path, doc)
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode != 0
         assert "REJECTED" in result.stdout
         assert "checks" in result.stdout.lower()
         assert not (tmp_path / "review-findings.json").exists()
 
-    def test_rejects_clearance_entry_not_an_object(self, tmp_path):
+    def test_rejects_clearance_entry_not_an_object(self, tmp_path, capsys):
         doc = _valid_findings(checks=["not an object"])
         findings = self._write_findings(tmp_path, doc)
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode != 0
         assert "REJECTED" in result.stdout
@@ -572,29 +577,29 @@ class TestFindingsSave:
             {"claim": "no callers", "method": "grep", "evidence": 5},  # bad evidence type
         ],
     )
-    def test_rejects_clearance_wrong_shape(self, tmp_path, bad_clearance):
+    def test_rejects_clearance_wrong_shape(self, tmp_path, capsys, bad_clearance):
         doc = _valid_findings(checks=[bad_clearance])
         findings = self._write_findings(tmp_path, doc)
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode != 0
         assert "REJECTED" in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
 
-    def test_rejects_assessment_wrong_type(self, tmp_path):
+    def test_rejects_assessment_wrong_type(self, tmp_path, capsys):
         doc = _valid_findings(assessment=["not", "a", "string"])
         findings = self._write_findings(tmp_path, doc)
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode != 0
         assert "REJECTED" in result.stdout
         assert "assessment" in result.stdout.lower()
         assert not (tmp_path / "review-findings.json").exists()
 
-    def test_rejects_missing_findings_file(self, tmp_path):
-        result = self._run_save(tmp_path, tmp_path / "nonexistent.json")
+    def test_rejects_missing_findings_file(self, tmp_path, capsys):
+        result = self._run_save(tmp_path, tmp_path / "nonexistent.json", capsys)
 
         assert result.returncode != 0
         assert "REJECTED" in result.stdout
@@ -604,13 +609,13 @@ class TestFindingsSave:
         findings = tmp_path / "bad.json"
         findings.write_text("{not valid json")
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save_subprocess(tmp_path, findings)
 
         assert result.returncode != 0
         assert "REJECTED" in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
 
-    def test_collects_multiple_problems(self, tmp_path):
+    def test_collects_multiple_problems(self, tmp_path, capsys):
         """Producer problems are collected, not reported one at a time —
         the canonical validator raises on the first shape error it meets,
         so this gate is the only place a caller learns everything it got
@@ -621,7 +626,7 @@ class TestFindingsSave:
         }
         findings = self._write_findings(tmp_path, doc)
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode != 0
         rejected_lines = [
@@ -653,7 +658,7 @@ class TestFindingsSave:
         ],
     )
     def test_accepts_every_reconciler_verdict(
-        self, tmp_path, verdict, severity, counts
+        self, tmp_path, capsys, verdict, severity, counts
     ):
         reviews = {
             "security-review": _review(
@@ -680,12 +685,12 @@ class TestFindingsSave:
         )
         findings = self._write_findings(tmp_path, doc)
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode == 0, result.stdout + result.stderr
         assert f"RECORDED VERDICT: {verdict}" in result.stdout
 
-    def test_rejects_not_applicable_verdict(self, tmp_path):
+    def test_rejects_not_applicable_verdict(self, tmp_path, capsys):
         """not_applicable is a per-reviewer abstention verdict
         (ReviewOutputBuilder.mark_not_applicable) that the reconciliator
         never emits — it always produces a reconciled ledger, never
@@ -693,7 +698,7 @@ class TestFindingsSave:
         doc = _valid_findings(verdict="not_applicable")
         findings = self._write_findings(tmp_path, doc)
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode != 0
         assert "REJECTED" in result.stdout
@@ -711,13 +716,13 @@ class TestFindingsSave:
         ],
     )
     def test_rejects_actor_supplied_critic_lifecycle_fields(
-        self, tmp_path, field
+        self, tmp_path, capsys, field
     ):
         findings = self._write_findings(
             tmp_path, _valid_findings(**{field: []})
         )
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode != 0
         assert "critic-owned lifecycle" in result.stdout
@@ -725,7 +730,7 @@ class TestFindingsSave:
 
     @pytest.mark.parametrize("collection", ["findings", "checks"])
     def test_rejects_actor_supplied_critic_provenance(
-        self, tmp_path, collection
+        self, tmp_path, capsys, collection
     ):
         doc = _valid_findings()
         doc[collection][0]["critic_adjustment"] = {
@@ -734,13 +739,13 @@ class TestFindingsSave:
         }
         findings = self._write_findings(tmp_path, doc)
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode != 0
         assert "script-owned provenance" in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
 
-    def test_accepts_empty_findings_with_approve(self, tmp_path):
+    def test_accepts_empty_findings_with_approve(self, tmp_path, capsys):
         doc = _valid_findings(
             verdict="approve",
             findings=[],
@@ -754,7 +759,7 @@ class TestFindingsSave:
         )
         findings = self._write_findings(tmp_path, doc)
 
-        result = self._run_save(tmp_path, findings)
+        result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode == 0, result.stdout + result.stderr
         assert "RECORDED FINDINGS: 0 (critical 0, high 0, medium 0, low 0)" in (
