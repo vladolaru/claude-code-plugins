@@ -642,33 +642,43 @@ class TestFormatOutput:
 
 
 class TestCLIIntegration:
-    """Subprocess tests for the CLI."""
+    """CLI tests for step 1 config/state seeding. Most of the class calls
+    `mod.main()` in-process with a patched `sys.argv` and cwd (the pattern
+    `TestStep8WaitingRouting` in test_pipeline_integration.py already uses);
+    three tests stay real subprocesses as the CLI-process smoke."""
 
     @pytest.fixture(autouse=True)
-    def _isolated_repo(self, tmp_path):
-        """run_pipeline's cwd has no default — see its docstring. Isolate
-        every subprocess call in this class to a throwaway repo at
-        tmp_path/repo so none of them can touch the real checkout. The repo
-        lives in a subdirectory, never at tmp_path itself, and remains a
-        sibling of tmp_path/out so run artifacts cannot dirty the repo."""
+    def _isolated_repo(self, tmp_path, monkeypatch):
+        """Isolate every call in this class to a throwaway repo at
+        tmp_path/repo so none of them can touch the real checkout — the
+        subprocess smokes via their own `cwd=`, the in-process calls via
+        `monkeypatch.chdir` (step 2 runs `git stash push -u` in cwd; see
+        helpers/pipeline_process.py). The repo lives in a subdirectory,
+        never at tmp_path itself, and remains a sibling of tmp_path/out so
+        run artifacts cannot dirty the repo."""
         (tmp_path / "repo").mkdir()
         init_repo(tmp_path / "repo")
         (tmp_path / "out").mkdir()
+        monkeypatch.chdir(tmp_path / "repo")
 
     def test_step_1_pr_mode_exits_0(self, tmp_path):
         r = run_pipeline("--step", "1", "--mode", "pr",
                        "--output-dir", str(tmp_path / "out"), "--pr-number", "42", cwd=tmp_path / "repo")
         assert r.returncode == 0
 
-    def test_step_1_full_mode_exits_0(self, tmp_path):
-        r = run_pipeline("--step", "1", "--mode", "full",
-                       "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
-        assert r.returncode == 0
+    def test_step_1_full_mode_exits_0(self, mod, tmp_path, monkeypatch):
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full",
+            "--output-dir", str(tmp_path / "out"),
+        ])
+        mod.main()
 
-    def test_step_1_incremental_mode_exits_0(self, tmp_path):
-        r = run_pipeline("--step", "1", "--mode", "incremental",
-                       "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
-        assert r.returncode == 0
+    def test_step_1_incremental_mode_exits_0(self, mod, tmp_path, monkeypatch):
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "incremental",
+            "--output-dir", str(tmp_path / "out"),
+        ])
+        mod.main()
 
     def test_invalid_step_exits_1(self, tmp_path):
         r = run_pipeline("--step", "99", "--mode", "pr",
@@ -679,9 +689,12 @@ class TestCLIIntegration:
         r = run_pipeline("--step", "1", "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
         assert r.returncode != 0
 
-    def test_writes_run_config_and_pipeline_state(self, tmp_path):
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path / "out"), "--pr-number", "42", cwd=tmp_path / "repo")
+    def test_writes_run_config_and_pipeline_state(self, mod, tmp_path, monkeypatch):
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
+        ])
+        mod.main()
         config_path = tmp_path / "out" / "run-config.json"
         state_path = _state_path(tmp_path / "out")
         assert config_path.is_file()
@@ -690,7 +703,7 @@ class TestCLIIntegration:
         assert config["mode"] == "pr"
         assert config["pr_number"] == "42"
 
-    def test_cli_seeded_config_fields_are_never_overwritten_on_rerun(self, tmp_path):
+    def test_cli_seeded_config_fields_are_never_overwritten_on_rerun(self, mod, tmp_path, monkeypatch):
         """run-config.json is seeded from the CLI on the FIRST step 1 only.
 
         Step 1 reruns against the same output dir are routine (interactive
@@ -702,16 +715,21 @@ class TestCLIIntegration:
         old one. Only the fields with explicit rerun-sync semantics (host,
         quick, refresh_dependencies, session_id) may change.
         """
-        run_pipeline("--step", "1", "--mode", "pr",
-                     "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
-                     "--git-range", "aaa111..bbb222",
-                     "--output-instructions", "original", cwd=tmp_path / "repo")
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
+            "--git-range", "aaa111..bbb222",
+            "--output-instructions", "original",
+        ])
+        mod.main()
 
-        r = run_pipeline("--step", "1", "--mode", "full",
-                         "--output-dir", str(tmp_path / "out"), "--pr-number", "99",
-                         "--git-range", "ccc333..ddd444",
-                         "--output-instructions", "rewritten", cwd=tmp_path / "repo")
-        assert r.returncode == 0
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full",
+            "--output-dir", str(tmp_path / "out"), "--pr-number", "99",
+            "--git-range", "ccc333..ddd444",
+            "--output-instructions", "rewritten",
+        ])
+        mod.main()
 
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config["mode"] == "pr"
@@ -719,7 +737,7 @@ class TestCLIIntegration:
         assert config["git_range"] == "aaa111..bbb222"
         assert config["output_instructions"] == "original"
 
-    def test_run_config_carries_the_running_plugin_version(self, mod, tmp_path):
+    def test_run_config_carries_the_running_plugin_version(self, mod, tmp_path, monkeypatch):
         """Step 1 stamps the artifact with the plugin that produced it.
 
         The stamp is the SAME fact telemetry records on the manifest, taken
@@ -727,14 +745,17 @@ class TestCLIIntegration:
         runs. Without it, a durable run directory could not be attributed
         to a plugin version once its telemetry log is gone.
         """
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path / "out"), "--pr-number", "42", cwd=tmp_path / "repo")
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
+        ])
+        mod.main()
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         expected = mod._detect_plugin_version()
         assert expected  # source checkout must resolve a version
         assert config["plugin_version"] == expected
 
-    def test_pre_seeded_config_is_stamped_on_the_bot_path(self, mod, tmp_path):
+    def test_pre_seeded_config_is_stamped_on_the_bot_path(self, mod, tmp_path, monkeypatch):
         """Bot runs pre-write run-config.json, so the seed branch is skipped.
 
         The stamp must land on the existing-config path too, or every
@@ -743,11 +764,18 @@ class TestCLIIntegration:
         (tmp_path / "out" / "run-config.json").write_text(json.dumps({
             "mode": "pr", "pr_number": "42", "interactive": False,
         }))
-        run_pipeline("--step", "1", "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--output-dir", str(tmp_path / "out"),
+        ])
+        # No pre-computed context: non-interactive PR mode hits the hard
+        # error below the stamping code, but the stamp itself is written
+        # first — this test is only about the stamp, not the exit.
+        with pytest.raises(SystemExit):
+            mod.main()
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config["plugin_version"] == mod._detect_plugin_version()
 
-    def test_stale_stamp_from_an_earlier_plugin_is_refreshed(self, mod, tmp_path):
+    def test_stale_stamp_from_an_earlier_plugin_is_refreshed(self, mod, tmp_path, monkeypatch):
         """A resumed run keeps its run-config.json.
 
         A rerun under an upgraded plugin must re-stamp, or the artifact
@@ -756,16 +784,21 @@ class TestCLIIntegration:
         (tmp_path / "out" / "run-config.json").write_text(json.dumps({
             "mode": "pr", "pr_number": "42", "plugin_version": "0.0.1",
         }))
-        run_pipeline("--step", "1", "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--output-dir", str(tmp_path / "out"),
+        ])
+        mod.main()
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config["plugin_version"] == mod._detect_plugin_version()
         assert config["plugin_version"] != "0.0.1"
 
-    def test_run_config_carries_the_producing_build_commit(self, mod, tmp_path):
+    def test_run_config_carries_the_producing_build_commit(self, mod, tmp_path, monkeypatch):
         """The plugin under test IS a git checkout, so the field resolves."""
-        run_pipeline("--step", "1", "--mode", "pr",
-                     "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
-                     cwd=tmp_path / "repo")
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
+        ])
+        mod.main()
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config["plugin_commit"] == mod._detect_plugin_commit()
         assert config["plugin_commit"]
@@ -788,25 +821,31 @@ class TestCLIIntegration:
         mod._stamp_run_config(str(tmp_path), config, "plugin_commit", "abc1234")
         assert (tmp_path / "run-config.json").stat().st_mtime_ns == mtime
 
-    def test_stale_build_commit_is_refreshed_on_rerun(self, mod, tmp_path):
+    def test_stale_build_commit_is_refreshed_on_rerun(self, mod, tmp_path, monkeypatch):
         """A step-1 retry on a newer build must re-stamp run-config.json."""
         (tmp_path / "out" / "run-config.json").write_text(json.dumps({
             "mode": "pr", "pr_number": "42", "plugin_commit": "0000000",
         }))
-        run_pipeline("--step", "1", "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--output-dir", str(tmp_path / "out"),
+        ])
+        mod.main()
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config["plugin_commit"] == mod._detect_plugin_commit()
         assert config["plugin_commit"] != "0000000"
 
-    def test_workspace_params_persisted_to_state(self, tmp_path):
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
-                   "--original-branch", "develop", "--stash-ref", "abc123", cwd=tmp_path / "repo")
+    def test_workspace_params_persisted_to_state(self, mod, tmp_path, monkeypatch):
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
+            "--original-branch", "develop", "--stash-ref", "abc123",
+        ])
+        mod.main()
         state = json.loads(_state_path(tmp_path / "out").read_text())
         assert state["workspace"]["original_branch"] == "develop"
         assert state["workspace"]["stash_ref"] == "abc123"
 
-    def test_step_1_resets_interactive_review_context_to_current_output(self, tmp_path):
+    def test_step_1_resets_interactive_review_context_to_current_output(self, mod, tmp_path, monkeypatch):
         """Interactive runs seed context without retaining prior-run fields."""
         (tmp_path / "out" / "review-context.json").write_text(json.dumps({
             "git": {
@@ -818,14 +857,17 @@ class TestCLIIntegration:
             "output": {"directory": "/stale/output"},
         }))
 
-        run_pipeline("--step", "1", "--mode", "full",
-                   "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full",
+            "--output-dir", str(tmp_path / "out"),
+        ])
+        mod.main()
 
         assert json.loads((tmp_path / "out" / "review-context.json").read_text()) == {
             "output": {"directory": str(tmp_path / "out")},
         }
 
-    def test_step_1_preserves_noninteractive_review_context(self, tmp_path):
+    def test_step_1_preserves_noninteractive_review_context(self, mod, tmp_path, monkeypatch):
         """Bot runs retain their precomputed Git and PR context."""
         context = {
             "git": {
@@ -843,38 +885,43 @@ class TestCLIIntegration:
         }))
         (tmp_path / "out" / "review-context.json").write_text(json.dumps(context))
 
-        result = run_pipeline("--step", "1", "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--output-dir", str(tmp_path / "out"),
+        ])
+        mod.main()
 
-        assert result.returncode == 0
         assert json.loads((tmp_path / "out" / "review-context.json").read_text()) == context
 
-    def test_step_1_writes_run_id(self, tmp_path):
+    def test_step_1_writes_run_id(self, mod, tmp_path, monkeypatch):
         """Step 1 should write a run_id to pipeline-state.json."""
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path / "out"), "--pr-number", "42", cwd=tmp_path / "repo")
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
+        ])
+        mod.main()
         state = json.loads(_state_path(tmp_path / "out").read_text())
         assert "run_id" in state
         assert len(state["run_id"]) > 0
 
-    def test_step_1_persists_explicit_session_id(self, tmp_path):
+    def test_step_1_persists_explicit_session_id(self, mod, tmp_path, monkeypatch):
         (tmp_path / "out" / "run-config.json").write_text(json.dumps({
             "mode": "full",
             "interactive": True,
             "session_id": "session-stale",
         }))
 
-        result = run_pipeline(
-            "--step", "1", "--mode", "full", "--output-dir", str(tmp_path / "out"),
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full",
+            "--output-dir", str(tmp_path / "out"),
             "--session-id", "session-current",
-            cwd=tmp_path / "repo",
-        )
+        ])
+        mod.main()
 
-        assert result.returncode == 0
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config["session_id"] == "session-current"
 
     def test_step_1_clears_stale_session_id_on_interactive_rerun(
-        self, tmp_path
+        self, mod, tmp_path, monkeypatch
     ):
         """Interactive output dirs are reused and run-config.json survives
         cleanup: an omitted --session-id means this run's session is
@@ -886,16 +933,16 @@ class TestCLIIntegration:
             "session_id": "session-stale",
         }))
 
-        result = run_pipeline(
-            "--step", "1", "--mode", "full", "--output-dir", str(tmp_path / "out"),
-            cwd=tmp_path / "repo",
-        )
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full",
+            "--output-dir", str(tmp_path / "out"),
+        ])
+        mod.main()
 
-        assert result.returncode == 0
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert "session_id" not in config
 
-    def test_step_1_uses_preseeded_session_id_when_cli_omits_it(self, tmp_path):
+    def test_step_1_uses_preseeded_session_id_when_cli_omits_it(self, mod, tmp_path, monkeypatch):
         (tmp_path / "out" / "run-config.json").write_text(json.dumps({
             "mode": "pr",
             "pr_number": "42",
@@ -906,18 +953,26 @@ class TestCLIIntegration:
             "git": {"merge_base": "abc123"},
         }))
 
-        result = run_pipeline("--step", "1", "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--output-dir", str(tmp_path / "out"),
+        ])
+        mod.main()
 
-        assert result.returncode == 0
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config["session_id"] == "bot-session"
 
-    def test_step_1_generates_unique_run_ids(self, tmp_path):
+    def test_step_1_generates_unique_run_ids(self, mod, tmp_path, monkeypatch):
         first = tmp_path / "first"
         second = tmp_path / "second"
 
-        run_pipeline("--step", "1", "--mode", "full", "--output-dir", str(first), cwd=tmp_path / "repo")
-        run_pipeline("--step", "1", "--mode", "full", "--output-dir", str(second), cwd=tmp_path / "repo")
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full", "--output-dir", str(first),
+        ])
+        mod.main()
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full", "--output-dir", str(second),
+        ])
+        mod.main()
 
         first_state = json.loads(_state_path(first).read_text())
         second_state = json.loads(_state_path(second).read_text())
@@ -928,18 +983,23 @@ class TestSkippedStepRecording:
     """Steps the router passes over are recorded in durable pipeline state."""
 
     @pytest.fixture(autouse=True)
-    def _isolated_repo(self, tmp_path):
-        """Keep the test repo isolated from the run output directory."""
+    def _isolated_repo(self, tmp_path, monkeypatch):
+        """Keep the test repo isolated from the run output directory, and
+        cwd pointed at it for the in-process `mod.main()` calls below."""
         (tmp_path / "repo").mkdir()
         init_repo(tmp_path / "repo")
         (tmp_path / "out").mkdir()
+        monkeypatch.chdir(tmp_path / "repo")
 
-    def _prepare_step_11(self, tmp_path):
-        result = run_pipeline(
-            "--step", "11", "--mode", "full",
-            "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo",
+    def _run_step(self, mod, monkeypatch, *args):
+        monkeypatch.setattr(sys, "argv", ["pipeline.py", *args])
+        mod.main()
+
+    def _prepare_step_11(self, mod, tmp_path, monkeypatch):
+        self._run_step(
+            mod, monkeypatch, "--step", "11", "--mode", "full",
+            "--output-dir", str(tmp_path / "out"),
         )
-        assert result.returncode == 0
         state = json.loads(
             _state_path(tmp_path / "out").read_text()
         )
@@ -948,32 +1008,34 @@ class TestSkippedStepRecording:
         assert 12 not in {entry["step"] for entry in state["skipped_steps"]}
         assert not (tmp_path / "out" / "pipeline-result.json").exists()
 
-    def _publish_step_11(self, tmp_path):
+    def _publish_step_11(self, mod, tmp_path, monkeypatch):
         (tmp_path / "out" / "review-report.md").write_text("# Review report")
-        result = run_pipeline(
-            "--step", "11", "--mode", "full",
-            "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo",
+        self._run_step(
+            mod, monkeypatch, "--step", "11", "--mode", "full",
+            "--output-dir", str(tmp_path / "out"),
         )
-        assert result.returncode == 0
         assert (tmp_path / "out" / "pipeline-result.json").is_file()
 
-    def test_skipped_steps_recorded_with_condition(self, tmp_path):
+    def test_skipped_steps_recorded_with_condition(self, mod, tmp_path, monkeypatch):
         """Branch mode passes over step 2 — needs_workspace_setup is PR-only."""
-        r = run_pipeline("--step", "1", "--mode", "full",
-                       "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
-        assert r.returncode == 0
+        self._run_step(
+            mod, monkeypatch, "--step", "1", "--mode", "full",
+            "--output-dir", str(tmp_path / "out"),
+        )
         state = json.loads(_state_path(tmp_path / "out").read_text())
         skipped = {s["step"]: s for s in state["skipped_steps"]}
         assert 2 in skipped
         assert skipped[2]["condition"] == "needs_workspace_setup"
         assert skipped[2]["title"] == "Repo Setup"
 
-    def test_trailing_skip_recorded_at_last_active_step(self, tmp_path):
+    def test_trailing_skip_recorded_at_last_active_step(self, mod, tmp_path, monkeypatch):
         """Non-interactive step 12 is skipped after step 11 publishes terminally."""
-        run_pipeline("--step", "1", "--mode", "full", "--interactive", "false",
-                   "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
-        self._prepare_step_11(tmp_path)
-        self._publish_step_11(tmp_path)
+        self._run_step(
+            mod, monkeypatch, "--step", "1", "--mode", "full", "--interactive", "false",
+            "--output-dir", str(tmp_path / "out"),
+        )
+        self._prepare_step_11(mod, tmp_path, monkeypatch)
+        self._publish_step_11(mod, tmp_path, monkeypatch)
 
         state = json.loads(_state_path(tmp_path / "out").read_text())
         skipped = {s["step"]: s for s in state["skipped_steps"]}
@@ -982,24 +1044,30 @@ class TestSkippedStepRecording:
         assert skipped[12]["condition"] == "interactive"
         assert skipped[12]["title"] == "Cleanup"
 
-    def test_skip_records_are_not_duplicated(self, tmp_path):
+    def test_skip_records_are_not_duplicated(self, mod, tmp_path, monkeypatch):
         """Re-invoking the same step records each passed-over step once."""
-        run_pipeline("--step", "1", "--mode", "full", "--interactive", "false",
-                   "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
-        self._prepare_step_11(tmp_path)
-        self._publish_step_11(tmp_path)
-        run_pipeline("--step", "11", "--mode", "full",
-                   "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
+        self._run_step(
+            mod, monkeypatch, "--step", "1", "--mode", "full", "--interactive", "false",
+            "--output-dir", str(tmp_path / "out"),
+        )
+        self._prepare_step_11(mod, tmp_path, monkeypatch)
+        self._publish_step_11(mod, tmp_path, monkeypatch)
+        self._run_step(
+            mod, monkeypatch, "--step", "11", "--mode", "full",
+            "--output-dir", str(tmp_path / "out"),
+        )
 
         state = json.loads(_state_path(tmp_path / "out").read_text())
         recorded = [entry["step"] for entry in state["skipped_steps"]]
         assert recorded == sorted(set(recorded))
         assert recorded.count(12) == 1
 
-    def test_active_steps_are_never_recorded_as_skipped(self, tmp_path):
+    def test_active_steps_are_never_recorded_as_skipped(self, mod, tmp_path, monkeypatch):
         """A step the router runs must not appear in the skip ledger."""
-        run_pipeline("--step", "1", "--mode", "full",
-                   "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
+        self._run_step(
+            mod, monkeypatch, "--step", "1", "--mode", "full",
+            "--output-dir", str(tmp_path / "out"),
+        )
         state = json.loads(_state_path(tmp_path / "out").read_text())
         recorded = {entry["step"] for entry in state["skipped_steps"]}
         assert recorded.isdisjoint({1, 3, 5, 6, 7, 8, 9, 10, 11, 12})
@@ -1009,66 +1077,63 @@ class TestQuickModeConfig:
     """--quick CLI flag is stored in run-config.json and persists across steps."""
 
     @pytest.fixture(autouse=True)
-    def _isolated_repo(self, tmp_path):
-        """Keep the test repo isolated from the run output directory."""
+    def _isolated_repo(self, tmp_path, monkeypatch):
+        """Keep the test repo isolated from the run output directory, and
+        cwd pointed at it for the in-process `mod.main()` calls below."""
         (tmp_path / "repo").mkdir()
         init_repo(tmp_path / "repo")
         (tmp_path / "out").mkdir()
+        monkeypatch.chdir(tmp_path / "repo")
 
-    def test_quick_flag_stored_in_config(self, tmp_path):
+    def _run_step1(self, mod, tmp_path, monkeypatch, *extra_args):
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
+            *extra_args,
+        ])
+        mod.main()
+
+    def test_quick_flag_stored_in_config(self, mod, tmp_path, monkeypatch):
         """Passing --quick stores quick=true in run-config.json."""
-        r = run_pipeline("--step", "1", "--mode", "pr",
-                       "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
-                       "--quick", cwd=tmp_path / "repo")
-        assert r.returncode == 0
+        self._run_step1(mod, tmp_path, monkeypatch, "--quick")
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config["quick"] is True
 
-    def test_no_quick_flag_defaults_false(self, tmp_path):
+    def test_no_quick_flag_defaults_false(self, mod, tmp_path, monkeypatch):
         """Without --quick, config has quick=false."""
-        r = run_pipeline("--step", "1", "--mode", "pr",
-                       "--output-dir", str(tmp_path / "out"), "--pr-number", "42", cwd=tmp_path / "repo")
-        assert r.returncode == 0
+        self._run_step1(mod, tmp_path, monkeypatch)
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config.get("quick") is False
 
-    def test_quick_flag_on_rerun_overrides_existing_config(self, tmp_path):
+    def test_quick_flag_on_rerun_overrides_existing_config(self, mod, tmp_path, monkeypatch):
         """Rerunning step 1 with --quick on a previously non-quick output dir
         should update run-config.json to quick=true."""
         # First run: no --quick
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path / "out"), "--pr-number", "42", cwd=tmp_path / "repo")
+        self._run_step1(mod, tmp_path, monkeypatch)
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config.get("quick") is False
         # Second run: with --quick (same output dir)
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
-                   "--quick", cwd=tmp_path / "repo")
+        self._run_step1(mod, tmp_path, monkeypatch, "--quick")
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config["quick"] is True
 
-    def test_quick_flag_resets_on_rerun_without_flag(self, tmp_path):
+    def test_quick_flag_resets_on_rerun_without_flag(self, mod, tmp_path, monkeypatch):
         """Rerunning step 1 WITHOUT --quick after a quick run should reset to false."""
         # First run: with --quick
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
-                   "--quick", cwd=tmp_path / "repo")
+        self._run_step1(mod, tmp_path, monkeypatch, "--quick")
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config["quick"] is True
         # Second run: without --quick (same output dir)
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path / "out"), "--pr-number", "42", cwd=tmp_path / "repo")
+        self._run_step1(mod, tmp_path, monkeypatch)
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config["quick"] is False
 
-    def test_bot_mode_step1_rerun_preserves_quick(self, tmp_path):
+    def test_bot_mode_step1_rerun_preserves_quick(self, mod, tmp_path, monkeypatch):
         """In bot mode (interactive=false), re-invoking step 1 without --quick
         should NOT reset the pre-written quick=true. The bot writes the correct
         value in run-config.json and may not pass --quick on subsequent calls."""
         # Step 1: with --quick
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
-                   "--quick", cwd=tmp_path / "repo")
+        self._run_step1(mod, tmp_path, monkeypatch, "--quick")
         # Simulate bot mode by setting interactive=false and providing
         # the review-context.json that bot mode requires
         config_path = tmp_path / "out" / "run-config.json"
@@ -1080,27 +1145,21 @@ class TestQuickModeConfig:
         }))
         assert config["quick"] is True
         # Step 1 rerun: without --quick (bot mode)
-        r = run_pipeline("--step", "1", "--mode", "pr",
-                       "--output-dir", str(tmp_path / "out"), "--pr-number", "42", cwd=tmp_path / "repo")
-        assert r.returncode == 0
+        self._run_step1(mod, tmp_path, monkeypatch)
         config = json.loads(config_path.read_text())
         assert config["quick"] is True, \
             "bot-mode step 1 rerun should not reset quick to false"
 
-    def test_interactive_step1_rerun_still_resets_quick(self, tmp_path):
+    def test_interactive_step1_rerun_still_resets_quick(self, mod, tmp_path, monkeypatch):
         """In interactive mode, re-invoking step 1 without --quick should still
         reset quick to false (existing behavior for human-driven reruns)."""
         # Step 1: with --quick
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
-                   "--quick", cwd=tmp_path / "repo")
+        self._run_step1(mod, tmp_path, monkeypatch, "--quick")
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config["quick"] is True
         assert config.get("interactive") is True  # default
         # Step 1 rerun: without --quick (interactive rerun)
-        r = run_pipeline("--step", "1", "--mode", "pr",
-                       "--output-dir", str(tmp_path / "out"), "--pr-number", "42", cwd=tmp_path / "repo")
-        assert r.returncode == 0
+        self._run_step1(mod, tmp_path, monkeypatch)
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config["quick"] is False, \
             "interactive step 1 rerun should reset quick to false"
@@ -1110,28 +1169,29 @@ class TestHostConfig:
     """The first pipeline call selects a host for all later briefings."""
 
     @pytest.fixture(autouse=True)
-    def _isolated_repo(self, tmp_path):
-        """Keep the test repo isolated from the run output directory."""
+    def _isolated_repo(self, tmp_path, monkeypatch):
+        """Keep the test repo isolated from the run output directory, and
+        cwd pointed at it for the in-process `mod.main()` calls below."""
         (tmp_path / "repo").mkdir()
         init_repo(tmp_path / "repo")
         (tmp_path / "out").mkdir()
+        monkeypatch.chdir(tmp_path / "repo")
 
-    def test_claude_is_the_backward_compatible_default(self, tmp_path):
-        result = run_pipeline(
-            "--step", "1", "--mode", "full", "--output-dir", str(tmp_path / "out"),
-            cwd=tmp_path / "repo",
-        )
-        assert result.returncode == 0
+    def test_claude_is_the_backward_compatible_default(self, mod, tmp_path, monkeypatch):
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full",
+            "--output-dir", str(tmp_path / "out"),
+        ])
+        mod.main()
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config["host"] == "claude"
 
-    def test_codex_host_is_persisted(self, tmp_path):
-        result = run_pipeline(
-            "--step", "1", "--mode", "full", "--output-dir", str(tmp_path / "out"),
-            "--host", "codex",
-            cwd=tmp_path / "repo",
-        )
-        assert result.returncode == 0
+    def test_codex_host_is_persisted(self, mod, tmp_path, monkeypatch):
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full",
+            "--output-dir", str(tmp_path / "out"), "--host", "codex",
+        ])
+        mod.main()
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config["host"] == "codex"
 
@@ -1140,139 +1200,173 @@ class TestDependencyRefreshConfig:
     """--refresh-deps is stored in run-config.json; hard-off non-interactive."""
 
     @pytest.fixture(autouse=True)
-    def _isolated_repo(self, tmp_path):
-        """Keep the test repo isolated from the run output directory."""
+    def _isolated_repo(self, tmp_path, monkeypatch):
+        """Keep the test repo isolated from the run output directory, and
+        cwd pointed at it for the in-process `mod.main()` calls below."""
         (tmp_path / "repo").mkdir()
         init_repo(tmp_path / "repo")
         (tmp_path / "out").mkdir()
+        monkeypatch.chdir(tmp_path / "repo")
 
-    def _trusting_env(self, tmp_path):
+    def _trusting_config(self, tmp_path, monkeypatch):
         config_dir = tmp_path / "xdg" / "pirategoat"
         config_dir.mkdir(parents=True, exist_ok=True)
         (config_dir / "config.json").write_text(json.dumps(
             {"review": {"refresh_dependencies": True}}))
-        return {**os.environ, "XDG_CONFIG_HOME": str(tmp_path / "xdg")}
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
 
-    def test_help_describes_adaptive_lockfile_preserving_refresh(self, tmp_path):
-        result = run_pipeline("--help", cwd=tmp_path / "repo")
+    def test_help_describes_adaptive_lockfile_preserving_refresh(self, mod, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "argv", ["pipeline.py", "--help"])
 
-        assert result.returncode == 0
-        assert "adaptive" in result.stdout
-        assert "lockfile-preserving" in result.stdout
-        assert "frozen-mode" not in result.stdout
+        with pytest.raises(SystemExit) as exc:
+            mod.main()
+        assert exc.value.code == 0
 
-    def test_flag_stored_in_config(self, tmp_path):
-        r = run_pipeline("--step", "1", "--mode", "pr",
-                      "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
-                      "--refresh-deps", cwd=tmp_path / "repo", env=hermetic_env())
-        assert r.returncode == 0
+        out = capsys.readouterr().out
+        assert "adaptive" in out
+        assert "lockfile-preserving" in out
+        assert "frozen-mode" not in out
+
+    def test_flag_stored_in_config(self, mod, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", "/nonexistent-xdg")
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
+            "--refresh-deps",
+        ])
+        mod.main()
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config["refresh_dependencies"] is True
 
-    def test_no_flag_defaults_false(self, tmp_path):
-        r = run_pipeline("--step", "1", "--mode", "pr",
-                      "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
-                      cwd=tmp_path / "repo", env=hermetic_env())
-        assert r.returncode == 0
+    def test_no_flag_defaults_false(self, mod, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", "/nonexistent-xdg")
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
+        ])
+        mod.main()
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config.get("refresh_dependencies") is False
 
-    def test_non_interactive_cli_flag_is_forced_off(self, tmp_path):
-        r = run_pipeline("--step", "1", "--mode", "full",
-                      "--output-dir", str(tmp_path / "out"),
-                      "--interactive", "false", "--refresh-deps",
-                      cwd=tmp_path / "repo", env=hermetic_env())
-        assert r.returncode == 0
+    def test_non_interactive_cli_flag_is_forced_off(self, mod, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("XDG_CONFIG_HOME", "/nonexistent-xdg")
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full",
+            "--output-dir", str(tmp_path / "out"),
+            "--interactive", "false", "--refresh-deps",
+        ])
+        mod.main()
+        captured = capsys.readouterr()
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config["refresh_dependencies"] is False
-        assert "interactive-only" in r.stderr
+        assert "interactive-only" in captured.err
 
-    def test_non_interactive_preseeded_config_is_forced_off(self, tmp_path):
+    def test_non_interactive_preseeded_config_is_forced_off(self, mod, tmp_path, monkeypatch):
         # A bot pre-writes run-config.json; the pipeline must not honor a
         # pre-seeded refresh_dependencies in bot mode.
         (tmp_path / "out" / "run-config.json").write_text(json.dumps({
             "mode": "full", "interactive": False,
             "refresh_dependencies": True,
         }))
-        r = run_pipeline("--step", "1", "--output-dir", str(tmp_path / "out"),
-                      cwd=tmp_path / "repo", env=hermetic_env())
-        assert r.returncode == 0
+        monkeypatch.setenv("XDG_CONFIG_HOME", "/nonexistent-xdg")
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--output-dir", str(tmp_path / "out"),
+        ])
+        mod.main()
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config["refresh_dependencies"] is False
 
-    def test_interactive_rerun_syncs_flag_from_cli(self, tmp_path):
+    def test_interactive_rerun_syncs_flag_from_cli(self, mod, tmp_path, monkeypatch):
         # First run without the flag; rerun with it — CLI is authoritative
         # on interactive reruns, matching --quick semantics.
-        run_pipeline("--step", "1", "--mode", "pr",
-                  "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
-                  cwd=tmp_path / "repo", env=hermetic_env())
-        r = run_pipeline("--step", "1", "--mode", "pr",
-                      "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
-                      "--refresh-deps", cwd=tmp_path / "repo", env=hermetic_env())
-        assert r.returncode == 0
+        monkeypatch.setenv("XDG_CONFIG_HOME", "/nonexistent-xdg")
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
+        ])
+        mod.main()
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
+            "--refresh-deps",
+        ])
+        mod.main()
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config["refresh_dependencies"] is True
         # And back off again
-        run_pipeline("--step", "1", "--mode", "pr",
-                  "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
-                  cwd=tmp_path / "repo", env=hermetic_env())
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
+        ])
+        mod.main()
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config["refresh_dependencies"] is False
 
-    def test_user_config_defaults_interactive_runs_on(self, tmp_path):
+    def test_user_config_defaults_interactive_runs_on(self, mod, tmp_path, monkeypatch):
         # ~/.config/pirategoat/config.json declares interactive runs
         # dependency-trusted: no per-run flag needed.
+        self._trusting_config(tmp_path, monkeypatch)
         out = tmp_path / "out"
-        r = run_pipeline("--step", "1", "--mode", "pr",
-                      "--output-dir", str(out), "--pr-number", "42",
-                      cwd=tmp_path / "repo", env=self._trusting_env(tmp_path))
-        assert r.returncode == 0
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(out), "--pr-number", "42",
+        ])
+        mod.main()
         config = json.loads((out / "run-config.json").read_text())
         assert config["refresh_dependencies"] is True
 
-    def test_no_refresh_deps_overrides_config_default(self, tmp_path):
+    def test_no_refresh_deps_overrides_config_default(self, mod, tmp_path, monkeypatch):
+        self._trusting_config(tmp_path, monkeypatch)
         out = tmp_path / "out"
-        r = run_pipeline("--step", "1", "--mode", "pr",
-                      "--output-dir", str(out), "--pr-number", "42",
-                      "--no-refresh-deps",
-                      cwd=tmp_path / "repo", env=self._trusting_env(tmp_path))
-        assert r.returncode == 0
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(out), "--pr-number", "42",
+            "--no-refresh-deps",
+        ])
+        mod.main()
         config = json.loads((out / "run-config.json").read_text())
         assert config["refresh_dependencies"] is False
 
-    def test_user_config_never_applies_to_non_interactive(self, tmp_path):
+    def test_user_config_never_applies_to_non_interactive(self, mod, tmp_path, monkeypatch):
+        self._trusting_config(tmp_path, monkeypatch)
         out = tmp_path / "out"
-        r = run_pipeline("--step", "1", "--mode", "full",
-                      "--output-dir", str(out),
-                      "--interactive", "false",
-                      cwd=tmp_path / "repo", env=self._trusting_env(tmp_path))
-        assert r.returncode == 0
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full",
+            "--output-dir", str(out),
+            "--interactive", "false",
+        ])
+        mod.main()
         config = json.loads((out / "run-config.json").read_text())
         assert config["refresh_dependencies"] is False
 
-    def test_rerun_without_flag_keeps_config_default(self, tmp_path):
+    def test_rerun_without_flag_keeps_config_default(self, mod, tmp_path, monkeypatch):
         # With a trusting user config, flag absence resolves to the
         # config default, not to off.
+        self._trusting_config(tmp_path, monkeypatch)
         out = tmp_path / "out"
-        env = self._trusting_env(tmp_path)
-        run_pipeline("--step", "1", "--mode", "pr",
-                  "--output-dir", str(out), "--pr-number", "42",
-                  cwd=tmp_path / "repo", env=env)
-        run_pipeline("--step", "1", "--mode", "pr",
-                  "--output-dir", str(out), "--pr-number", "42",
-                  cwd=tmp_path / "repo", env=env)
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(out), "--pr-number", "42",
+        ])
+        mod.main()
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(out), "--pr-number", "42",
+        ])
+        mod.main()
         config = json.loads((out / "run-config.json").read_text())
         assert config["refresh_dependencies"] is True
 
-    def test_malformed_user_config_defaults_off(self, tmp_path):
+    def test_malformed_user_config_defaults_off(self, mod, tmp_path, monkeypatch):
         config_dir = tmp_path / "xdg" / "pirategoat"
         config_dir.mkdir(parents=True)
         (config_dir / "config.json").write_text("{not json")
-        env = {**os.environ, "XDG_CONFIG_HOME": str(tmp_path / "xdg")}
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
         out = tmp_path / "out"
-        r = run_pipeline("--step", "1", "--mode", "pr",
-                      "--output-dir", str(out), "--pr-number", "42",
-                      cwd=tmp_path / "repo", env=env)
-        assert r.returncode == 0
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(out), "--pr-number", "42",
+        ])
+        mod.main()
         config = json.loads((out / "run-config.json").read_text())
         assert config["refresh_dependencies"] is False
