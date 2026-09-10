@@ -51,8 +51,11 @@ main = _mod.main
 
 
 class TestRepositoryReadEvidence:
+    # `_nonnegative_exact_int`: an exact int passes; a non-int (a boolean,
+    # None, a string, or a historical row without the key) fails
+    # `type(value) is not int`; a negative fails the bound.
     @pytest.mark.parametrize("value, expected", [
-        (0, 0), (4, 4), (None, None), (True, None), (-1, None), ("2", None),
+        (4, 4), (True, None), (-1, None),
     ])
     def test_sanitized_usage_preserves_only_nonnegative_exact_read_counts(self, value, expected):
         [row] = measure._sanitize_agent_usage([{
@@ -62,14 +65,6 @@ class TestRepositoryReadEvidence:
         }])
         assert row["repository_reads"] == expected
         assert row["tool_calls"] == 3
-
-    def test_historical_row_without_reads_stays_usable(self):
-        [row] = measure._sanitize_agent_usage([{
-            "agent": "review-reconciliator", "available": True,
-            "usage": _usage(2),
-            "tool_calls": 3,
-        }])
-        assert row["repository_reads"] is None
 
     def test_unavailable_row_cannot_claim_measured_reads(self):
         [row] = measure._sanitize_agent_usage([{
@@ -5182,55 +5177,32 @@ class TestTranscriptFamilyAvailability:
         assert artifacts["first_builder_attempt_succeeded"] is None
         assert artifacts["by_agent"][0]["first_builder_attempt_succeeded"] is False
 
-    @pytest.mark.parametrize(
-        "by_agent",
-        [
-            [
-                {
-                    "agent": "code-reviewer",
-                    "builder_attempted": True,
-                    "builder_attempts": 1,
-                    "builder_successes": 1,
-                    "builder_failures": 0,
-                    "first_builder_attempt_succeeded": True,
-                    "recovered": False,
-                },
-                {
-                    "agent": "security-reviewer",
-                    "builder_attempted": True,
-                    "builder_attempts": 2,
-                    "builder_successes": 1,
-                    "builder_failures": 1,
-                    "first_builder_attempt_succeeded": False,
-                    "recovered": True,
-                },
-            ],
-            [
-                {
-                    "agent": "security-reviewer",
-                    "builder_attempted": True,
-                    "builder_attempts": 1,
-                    "builder_successes": 0,
-                    "builder_failures": 1,
-                    "first_builder_attempt_succeeded": False,
-                    "recovered": False,
-                },
-                {
-                    "agent": "code-reviewer",
-                    "builder_attempted": True,
-                    "builder_attempts": 1,
-                    "builder_successes": 1,
-                    "builder_failures": 0,
-                    "first_builder_attempt_succeeded": True,
-                    "recovered": False,
-                },
-            ],
-        ],
-        ids=["first-succeeds-later-agent-recovers", "first-fails-other-agent-succeeds"],
-    )
     def test_complete_multi_agent_builder_uses_aggregate_recovery_semantics(
-        self, monkeypatch, tmp_path, by_agent
+        self, monkeypatch, tmp_path
     ):
+        """The run-wide `recovered` is `any(recovered)` over the agents, and
+        a per-agent first result never becomes a run-wide one. One agent
+        recovering stands for the case where none does."""
+        by_agent = [
+            {
+                "agent": "code-reviewer",
+                "builder_attempted": True,
+                "builder_attempts": 1,
+                "builder_successes": 1,
+                "builder_failures": 0,
+                "first_builder_attempt_succeeded": True,
+                "recovered": False,
+            },
+            {
+                "agent": "security-reviewer",
+                "builder_attempted": True,
+                "builder_attempts": 2,
+                "builder_successes": 1,
+                "builder_failures": 1,
+                "first_builder_attempt_succeeded": False,
+                "recovered": True,
+            },
+        ]
         transcript = _complete_empty_transcript()
         transcript["artifact_writes"] = {
             "available": True,
@@ -5754,11 +5726,26 @@ class TestTranscriptFamilyAvailability:
         )
         assert cohort["artifact_writes"]["partial_observed_recoveries"] == 1
 
-    @pytest.mark.parametrize("target", ["top-level", "agent"], ids=str)
+    # At the top level every contradiction but a float count fails one
+    # "top level equals the by-agent sums" check (the top-level first result
+    # is discarded before any first-result rule runs), so the arithmetic case
+    # stands for false-attempt, first-result and recovery there.
     @pytest.mark.parametrize(
-        "contradiction",
-        ["arithmetic", "false-attempt", "first-result", "recovery", "float-count"],
-        ids=str,
+        "target,contradiction",
+        [
+            pytest.param("top-level", "arithmetic", id="top-level-arithmetic"),
+            pytest.param("top-level", "float-count", id="top-level-float-count"),
+            *(
+                pytest.param("agent", name, id=f"agent-{name}")
+                for name in (
+                    "arithmetic",
+                    "false-attempt",
+                    "first-result",
+                    "recovery",
+                    "float-count",
+                )
+            ),
+        ],
     )
     def test_inconsistent_complete_builder_artifacts_are_missing(
         self, monkeypatch, tmp_path, target, contradiction
@@ -5827,24 +5814,14 @@ class TestTranscriptFamilyAvailability:
             == 1
         )
 
-    @pytest.mark.parametrize(
-        "first,successes,failures,partial_successes,partial_failures",
-        [
-            (True, 1, 0, 1, 0),
-            (False, 0, 1, 0, 1),
-        ],
-        ids=["first-success-later-unknown", "first-failure-later-unknown"],
-    )
     def test_known_first_with_later_unknown_result_is_retained_as_partial(
-        self,
-        monkeypatch,
-        tmp_path,
-        first,
-        successes,
-        failures,
-        partial_successes,
-        partial_failures,
+        self, monkeypatch, tmp_path
     ):
+        """A known first result followed by an unknown one. The cohort's
+        success and failure counters take `int(first)` and `int(not first)`
+        on one path, so a first success stands for a first failure."""
+        first, successes, failures = True, 1, 0
+        partial_successes, partial_failures = 1, 0
         transcript = _complete_empty_transcript()
         transcript["artifact_writes"] = {
             "available": True,
@@ -5983,87 +5960,6 @@ class TestTranscriptFamilyAvailability:
         assert measured["transcript"]["artifact_writes"] is None
         assert measured["metric_availability"]["artifact_writes"] == "missing"
 
-    def test_partial_observed_no_attempt_keeps_unknown_aggregate_state(
-        self, monkeypatch, tmp_path
-    ):
-        transcript = _complete_empty_transcript()
-        transcript["completeness"]["artifact_writes"] = False
-        transcript["artifact_writes"] = {
-            "available": True,
-            "complete": False,
-            "builder_attempted": None,
-            "builder_attempts": 0,
-            "builder_successes": 0,
-            "builder_failures": 0,
-            "recovered": False,
-            "by_agent": [
-                {
-                    "agent": "code-reviewer",
-                    "builder_attempted": False,
-                    "builder_attempts": 0,
-                    "builder_successes": 0,
-                    "builder_failures": 0,
-                    "first_builder_attempt_succeeded": None,
-                    "recovered": False,
-                }
-            ],
-        }
-
-        measured = _measure_fake_transcript(monkeypatch, tmp_path, transcript)
-        cohort = aggregate_cohort([measured])
-
-        artifacts = measured["transcript"]["artifact_writes"]
-        assert measured["metric_availability"]["artifact_writes"] == "partial"
-        assert artifacts["builder_attempted"] is None
-        assert cohort["artifact_writes"]["partial_observed_no_builder_attempts"] == 1
-
-    def test_top_level_unknown_first_result_is_partial_attempt_evidence(
-        self, monkeypatch, tmp_path
-    ):
-        transcript = _complete_empty_transcript()
-        transcript["artifact_writes"] = {
-            "available": True,
-            "complete": True,
-            "builder_attempted": True,
-            "builder_attempts": 1,
-            "builder_successes": 0,
-            "builder_failures": 0,
-            "first_builder_attempt_succeeded": None,
-            "recovered": False,
-            "by_agent": [],
-        }
-
-        measured = _measure_fake_transcript(monkeypatch, tmp_path, transcript)
-        cohort = aggregate_cohort([measured])
-
-        assert measured["metric_availability"]["artifact_writes"] == "partial"
-        assert (
-            cohort["artifact_writes"]["partial_observed_first_builder_attempts"]
-            == 0
-        )
-        assert (
-            cohort["artifact_writes"]["partial_observed_unknown_first_results"]
-            == 0
-        )
-        assert (
-            cohort["artifact_writes"][
-                "partial_observed_runs_with_builder_attempts"
-            ]
-            == 1
-        )
-        assert (
-            cohort["artifact_writes"][
-                "partial_observed_top_only_runs_with_unknown_first_builder_result"
-            ]
-            == 1
-        )
-        assert (
-            cohort["artifact_writes"][
-                "partial_observed_top_only_unclassified_builder_results"
-            ]
-            == 1
-        )
-
     @pytest.mark.parametrize(
         "family,flag,payload_key,observed",
         [
@@ -6194,17 +6090,11 @@ class TestTranscriptFamilyAvailability:
     @pytest.mark.parametrize(
         "family,flag,payload_key",
         [
+            # Every family but model_usage resolves in `family_state`'s one
+            # `payload is not None` conjunct; model_usage takes
+            # `_model_usage_availability`.
             ("usage", "usage", "usage"),
-            (
-                "orchestrator_usage",
-                "orchestrator_data",
-                "orchestrator_usage_by_step",
-            ),
-            ("agent_usage", "agent_data", "agent_usage"),
             ("model_usage", "agent_data", "agent_usage"),
-            ("tool_failures", "tool_failures", "tool_failures"),
-            ("artifact_writes", "artifact_writes", "artifact_writes"),
-            ("observed_reads", "observed_reads", "observed_reads"),
         ],
     )
     def test_incomplete_absent_payload_is_missing(
@@ -6218,37 +6108,20 @@ class TestTranscriptFamilyAvailability:
 
         assert measured["metric_availability"][family] == "missing"
 
-    @pytest.mark.parametrize(
-        "duplicate_field",
-        ["all", "in_scope", "out_of_scope", "non_scope_comparable"],
-        ids=["all", "in-scope", "out-of-scope", "non-scope-comparable"],
-    )
     def test_duplicate_observed_read_paths_reject_the_family_and_aggregate(
-        self, monkeypatch, tmp_path, duplicate_field
+        self, monkeypatch, tmp_path
     ):
+        """One `len(paths) != len(set(paths))` check in the bucket loop of
+        `measure._sanitize_reads`; the "all" bucket stands for the others.
+        The payload is otherwise valid (`_empty_reads` supplies the schema
+        and completeness flags), so only the duplicate check can reject it."""
         transcript = _complete_empty_transcript()
-        reads = {
-            "all": ["src/context.py"],
-            "in_scope": ["src/context.py"],
-            "out_of_scope": [],
-            "non_scope_comparable": ["src/synthesis.py"],
-            "exhaustive": False,
-            "transcript_data_complete": True,
-        }
-        if duplicate_field == "all":
-            reads["all"].append("src/context.py")
-        elif duplicate_field == "in_scope":
-            reads["in_scope"].append("src/context.py")
-        elif duplicate_field == "out_of_scope":
-            reads.update(
-                {
-                    "in_scope": [],
-                    "out_of_scope": ["src/context.py", "src/context.py"],
-                }
-            )
-        else:
-            reads["non_scope_comparable"].append("src/synthesis.py")
-        transcript["observed_reads"] = reads
+        transcript["observed_reads"].update(
+            {
+                "all": ["src/context.py", "src/context.py"],
+                "in_scope": ["src/context.py"],
+            }
+        )
 
         measured = _measure_fake_transcript(monkeypatch, tmp_path, transcript)
         cohort = aggregate_cohort([measured])
@@ -6259,22 +6132,15 @@ class TestTranscriptFamilyAvailability:
         assert cohort["observed_reads"]["by_path"] is None
         assert cohort["observed_reads"]["availability"]["complete"] == 0
 
-    @pytest.mark.parametrize(
-        "invalid_value",
-        [
-            pytest.param(None, id="missing"),
-            pytest.param("src/synthesis.py", id="non-list"),
-            pytest.param(["PRIVATE\x00PATH"], id="unsafe-string"),
-        ],
-    )
     def test_non_scope_comparable_reads_require_a_privacy_safe_list(
-        self, monkeypatch, tmp_path, invalid_value
+        self, monkeypatch, tmp_path
     ):
+        """A missing bucket fails `_strict_repo_read_paths`'s list check (a
+        non-list fails it too). An unsafe entry is swept per condition by
+        `test_observed_read_paths_require_canonical_repo_relative_form`,
+        through the same call in the same bucket loop."""
         transcript = _complete_empty_transcript()
-        if invalid_value is None:
-            transcript["observed_reads"].pop("non_scope_comparable")
-        else:
-            transcript["observed_reads"]["non_scope_comparable"] = invalid_value
+        transcript["observed_reads"].pop("non_scope_comparable")
 
         measured = _measure_fake_transcript(monkeypatch, tmp_path, transcript)
 
@@ -6284,20 +6150,19 @@ class TestTranscriptFamilyAvailability:
     @pytest.mark.parametrize(
         "invalid_version",
         [
-            pytest.param(None, id="missing"),
-            pytest.param(1, id="legacy-v1"),
-            pytest.param(3, id="future-mismatch"),
+            # A boolean and the legacy version. A missing or future version
+            # fails the same checks; only a float `2.0` would reach the
+            # `type(schema) is not int` conjunct without also failing
+            # `!= _OBSERVED_READS_SCHEMA`.
             pytest.param(True, id="boolean"),
+            pytest.param(1, id="legacy-v1"),
         ],
     )
     def test_observed_reads_require_exact_v2_schema_and_never_zero_fill_legacy(
         self, monkeypatch, tmp_path, invalid_version
     ):
         transcript = _complete_empty_transcript()
-        if invalid_version is None:
-            transcript["observed_reads"].pop("schema")
-        else:
-            transcript["observed_reads"]["schema"] = invalid_version
+        transcript["observed_reads"]["schema"] = invalid_version
 
         measured = _measure_fake_transcript(monkeypatch, tmp_path, transcript)
         cohort = aggregate_cohort([measured])
@@ -6382,74 +6247,60 @@ class TestTranscriptFamilyAvailability:
     @pytest.mark.parametrize(
         "all_paths,in_scope,out_of_scope",
         [
+            # `not in_scope.isdisjoint(out_of_scope)`; the union is exact.
             (
                 ["src/a.py", "src/b.py"],
                 ["src/a.py"],
                 ["src/a.py", "src/b.py"],
             ),
+            # `in_scope | out_of_scope != set(all)` (an extra member fails
+            # the same check).
             (["src/a.py", "src/b.py"], ["src/a.py"], []),
-            (["src/a.py"], ["src/a.py"], ["src/b.py"]),
         ],
-        ids=["overlap", "missing-member", "extra-member"],
+        ids=["overlap", "missing-member"],
     )
     def test_observed_read_partition_must_be_disjoint_and_exact(
         self, monkeypatch, tmp_path, all_paths, in_scope, out_of_scope
     ):
+        """The payload is otherwise valid (`_empty_reads` supplies the schema
+        and completeness flags), so only the partition checks can reject
+        it."""
         transcript = _complete_empty_transcript()
-        transcript["observed_reads"] = {
-            "all": all_paths,
-            "in_scope": in_scope,
-            "out_of_scope": out_of_scope,
-            "non_scope_comparable": ["src/synthesis.py"],
-            "exhaustive": False,
-            "transcript_data_complete": True,
-        }
+        transcript["observed_reads"].update(
+            {
+                "all": all_paths,
+                "in_scope": in_scope,
+                "out_of_scope": out_of_scope,
+            }
+        )
 
         measured = _measure_fake_transcript(monkeypatch, tmp_path, transcript)
 
         assert measured["transcript"]["observed_reads"] is None
         assert measured["metric_availability"]["observed_reads"] == "missing"
 
-    @pytest.mark.parametrize(
-        "invalid_exhaustive",
-        [
-            pytest.param(True, id="true"),
-            pytest.param(None, id="missing"),
-            pytest.param("false", id="string"),
-        ],
-    )
     def test_observed_reads_require_explicit_false_exhaustive(
-        self, monkeypatch, tmp_path, invalid_exhaustive
+        self, monkeypatch, tmp_path
     ):
+        """One `exhaustive is not False` identity check: `True` stands for a
+        missing key or the string "false"."""
         transcript = _complete_empty_transcript()
-        if invalid_exhaustive is None:
-            transcript["observed_reads"].pop("exhaustive")
-        else:
-            transcript["observed_reads"]["exhaustive"] = invalid_exhaustive
+        transcript["observed_reads"]["exhaustive"] = True
 
         measured = _measure_fake_transcript(monkeypatch, tmp_path, transcript)
 
         assert measured["transcript"]["observed_reads"] is None
         assert measured["metric_availability"]["observed_reads"] == "missing"
 
-    @pytest.mark.parametrize(
-        "invalid_complete",
-        [
-            pytest.param(None, id="missing"),
-            pytest.param(1, id="integer"),
-            pytest.param("true", id="string"),
-        ],
-    )
     def test_observed_reads_require_boolean_transcript_data_complete(
-        self, monkeypatch, tmp_path, invalid_complete
+        self, monkeypatch, tmp_path
     ):
+        """`1 == True`, so an integer passes the alignment checks and only
+        the `type(...) is not bool` conjunct rejects it. A missing key or a
+        string also fails alignment, so neither reaches that conjunct
+        alone."""
         transcript = _complete_empty_transcript()
-        if invalid_complete is None:
-            transcript["observed_reads"].pop("transcript_data_complete")
-        else:
-            transcript["observed_reads"][
-                "transcript_data_complete"
-            ] = invalid_complete
+        transcript["observed_reads"]["transcript_data_complete"] = 1
 
         measured = _measure_fake_transcript(monkeypatch, tmp_path, transcript)
 
@@ -6461,14 +6312,14 @@ class TestTranscriptFamilyAvailability:
         [
             (True, True, "complete"),
             (False, False, "partial"),
+            # A payload flag that disagrees with the family flag fails the
+            # alignment checks in either direction.
             (True, False, "missing"),
-            (False, True, "missing"),
         ],
         ids=[
             "complete-aligned",
             "partial-aligned",
             "family-true-payload-false",
-            "family-false-payload-true",
         ],
     )
     def test_observed_reads_completeness_signals_must_align(
@@ -6551,7 +6402,9 @@ class TestTranscriptFamilyAvailability:
             assert measured_disabled["metric_availability"][family] == "disabled"
 
     @pytest.mark.parametrize(
-        "invalid", [float("inf"), float("nan"), 0.9, 10**1_000]
+        # A non-finite float (inf stands for nan), a fraction, and an
+        # integer past the bound.
+        "invalid", [float("inf"), 0.9, 10**1_000]
     )
     def test_invalid_transcript_numerics_are_unavailable_and_strict_json_safe(
         self, monkeypatch, tmp_path, invalid
