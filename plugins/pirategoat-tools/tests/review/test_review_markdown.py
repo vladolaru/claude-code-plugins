@@ -700,6 +700,32 @@ class TestAssessmentProvenance:
         assert "- `refuted-one` — refuted" in rendered
         assert "- `refuted-two` — refuted" in rendered
 
+    def test_a_replacement_is_not_attributed_to_the_reconciler(self):
+        """Moved from `test_critic_adjustments.py` (fix 554723eb)."""
+        data = _reconciliator_findings("low", "Minor problem",
+            assessment="After spot-checking: guarded upstream.",
+            invalidated_assessments=[
+                {"text": "One CRITICAL blocker.",
+                 "invalidated_by_critic_adjustment_ids": ["a1"]},
+            ],
+        )
+        rendered = render_markdown(data)
+        assert "After spot-checking: guarded upstream." in rendered
+        assert "not adjusted by the decision critic" not in rendered
+
+    def test_malformed_decision_records_are_ignored(self):
+        """Moved from `test_critic_adjustments.py` (fix 554723eb)."""
+        data = _reconciliator_findings("low", "Minor problem",
+            applied_critic_adjustments=[
+                None, "", {"outcome": "verified"},
+                {"adjustment_id": 7, "outcome": "verified"},
+                {"adjustment_id": "bad", "outcome": []},
+            ],
+            rejected_critic_adjustments=[None, "bad", {}, {"adjustment_id": 7}],
+        )
+        rendered = render_markdown(data)
+        assert "Critic Adjustment Decisions" not in rendered
+
 
 class TestRemovedByCriticSection:
     """The ledger deliberately keeps what the critic took out. A reading
