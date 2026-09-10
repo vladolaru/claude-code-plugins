@@ -350,6 +350,37 @@ class TestFindingsSave:
         assert result2.returncode == 0, result2.stdout + result2.stderr
         assert "CHECKS: 0 | ASSESSMENT: absent" in result2.stdout
 
+        # Third row: zero findings on an approve verdict — the by-severity
+        # echo's all-zero spelling, otherwise unpinned once
+        # test_accepts_empty_findings_with_approve folded into
+        # test_accepts_every_reconciler_verdict (whose approve row only
+        # asserts RECORDED VERDICT, not the RECORDED FINDINGS count).
+        reviews3 = {
+            "security-review": {"verdict": "approve", "findings": [], "checks": []},
+        }
+        _write_context(tmp_path, reviews3)
+        doc3 = _valid_findings(
+            context=reviews3,
+            verdict="approve",
+            findings=[],
+            summary={
+                "total_findings": 0,
+                "by_severity": {
+                    "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0,
+                },
+                "suppressed_advisory_finding_count": 0,
+            },
+        )
+        findings3 = self._write_findings(tmp_path, doc3, name="f3.json")
+
+        result3 = self._run_save(tmp_path, findings3, capsys)
+
+        assert result3.returncode == 0, result3.stdout + result3.stderr
+        assert (
+            "RECORDED FINDINGS: 0 (critical 0, high 0, medium 0, low 0)"
+            in result3.stdout
+        )
+
     def test_rejects_non_object_top_level(self, tmp_path, capsys):
         findings = self._write_findings(tmp_path, ["not", "an", "object"])
 
