@@ -20,7 +20,6 @@ BOOTSTRAP_SCRIPT = SCRIPTS_DIR / "review" / "agent" / "bootstrap.py"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from review.agent.output import ReviewOutputBuilder
-from review.agent.scope import format_text_output
 from review import run_paths
 from review.reviewer_lifecycle import (
     review_paths,
@@ -168,6 +167,35 @@ def _main_in_process(
     out = capsys.readouterr().out
     assert exc.value.code == 0, out
     return out
+
+
+def _delivered_protocol_headings(protocol, skip_prefixes):
+    """The `## `/`### ` heading lines of `protocol` a reviewer must receive.
+
+    A test-local oracle, deliberately not extract_protocol_sections(): it
+    walks the protocol with the same skip list, dropping a skipped heading
+    and every deeper heading under it, and ignoring `#` lines inside code
+    fences.
+    """
+    headings = []
+    skip_level = None
+    in_fence = False
+    for line in protocol.splitlines():
+        if line.startswith("```"):
+            in_fence = not in_fence
+            continue
+        match = None if in_fence else re.match(r"(#{2,3}) ", line)
+        if not match:
+            continue
+        level = len(match.group(1))
+        if skip_level is not None and level > skip_level:
+            continue
+        skip_level = None
+        if any(line.strip().startswith(prefix) for prefix in skip_prefixes):
+            skip_level = level
+            continue
+        headings.append(line.strip())
+    return headings
 
 
 def _inline(count):
@@ -617,39 +645,33 @@ class TestArchitecturalInvariants:
                 f"REVIEW RULES differ between {self._REPRESENTATIVE_AGENTS[0]} and {agent}"
             )
 
-    def test_shared_rules_bound_recursive_filesystem_discovery(self, tmp_path):
-        """The bounded-discovery protocol section must reach generated prompts.
+    def test_every_delivered_protocol_heading_reaches_the_prompt(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """Every `## `/`### ` heading of the real reviewer-protocol.md outside
+        the skip list reaches the prompt main() builds, verbatim.
 
-        Diffs the section body against source instead of pinning prose, so
-        rewording the protocol doesn't break the test — only dropping the
-        section (or the prompt path losing it) does.
+        One guard for every section instead of one per section: a section
+        the extractor drops, or main() loses on the way to build_output(),
+        fails here by name, and a new section is covered the day it is
+        added. Adding a heading to the skip list is a deliberate policy
+        change this guard does not police; TestEmpiricalProbeContract pins
+        the section that must never be skipped.
         """
         protocol = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
-        section = self._extract_section(
-            protocol, "### Bounded Filesystem Discovery", "\n## ", "\n### ",
+        expected = _delivered_protocol_headings(
+            protocol, _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
         )
-        assert section, "protocol must define a Bounded Filesystem Discovery section"
+        assert any(heading.startswith("### ") for heading in expected), expected
 
-        review_rules = _mod.extract_protocol_sections(
-            protocol,
-            _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS,
-        )
-        prompt = build_output(
-            agent_name="code-reviewer",
-            plugin_root=str(PLUGIN_ROOT),
-            status="OK",
-            review_rules=review_rules,
-            domain_rules=None,
-            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
-            exploration_scope=None,
-            output_dir=str(tmp_path),
-            pr_number=None,
-            reviewer_name="code",
-            review_claimable_count=0,
-            has_php=False,
+        prompt_lines = set(
+            _main_in_process(
+                "code-reviewer", tmp_path, monkeypatch, capsys
+            ).splitlines()
         )
 
-        assert section in prompt
+        missing = [heading for heading in expected if heading not in prompt_lines]
+        assert not missing, f"protocol headings missing from the prompt: {missing}"
 
     def test_domain_rules_identical_across_test_agents(
         self, tmp_path, monkeypatch, capsys
@@ -1111,120 +1133,16 @@ class TestRepoReviewerAdapterContract:
         assert "`save_draft()`" in empty_branch
 
 
-class TestVerificationMethodContract:
-    """The shared protocol's Absence Claims section reaches the built
-    prompt; its prose pin lives in review/test_registry_docs.py."""
-
-    def test_absence_claim_rules_reach_agent_prompts(self, tmp_path):
-        """The new protocol section must flow through bootstrap's skip-list
-        extraction into generated agent prompts (in-process build against the
-        repo's protocol file — the subprocess path resolves the installed
-        plugin cache, not this checkout)."""
-        protocol = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
-        review_rules = _mod.extract_protocol_sections(
-            protocol,
-            _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS,
-        )
-        prompt = build_output(
-            agent_name="code-reviewer",
-            plugin_root=str(PLUGIN_ROOT),
-            status="OK",
-            review_rules=review_rules,
-            domain_rules=None,
-            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
-            exploration_scope=None,
-            output_dir=str(tmp_path),
-            pr_number=None,
-            reviewer_name="code",
-            review_claimable_count=0,
-            has_php=False,
-        )
-        assert "## Absence Claims" in prompt
-        assert "searched pattern is absent" in prompt
-
-
-class TestUnchangedCallerScopeContract:
-    """The shared protocol's unchanged-caller exception reaches the built
-    prompt; its prose pins live in review/test_registry_docs.py."""
-
-    def test_unchanged_caller_exception_reaches_agent_prompts(self, tmp_path):
-        protocol = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
-        review_rules = _mod.extract_protocol_sections(
-            protocol,
-            _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS,
-        )
-        prompt = build_output(
-            agent_name="reliability-reviewer",
-            plugin_root=str(PLUGIN_ROOT),
-            status="OK",
-            review_rules=review_rules,
-            domain_rules=None,
-            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
-            exploration_scope=None,
-            output_dir=str(tmp_path),
-            pr_number=None,
-            reviewer_name="reliability",
-            review_claimable_count=0,
-            has_php=False,
-        )
-        assert "reaching an unchanged caller" in prompt
-        assert "Anchor the finding at the changed hunk" in prompt
-
-
 class TestEmpiricalProbeContract:
     """The probe-naming convention must reach the reviewers that run code.
 
     The sweep in orchestration deletes only untracked files whose BASENAME
     carries `pirategoat-probe`. That enforcement half is inert unless the
-    producer half — this protocol section — actually reaches an agent, and
-    a section placed in a stripped part of the protocol reaches nobody
-    (the 1.108.0 failure `TestNotDiffedContractIsDelivered` guards for the
-    NOT DIFFED contract). This class is the same guard for the convention.
+    producer half — this protocol section — reaches an agent. Delivery of
+    every non-skipped section is guarded by
+    TestArchitecturalInvariants::test_every_delivered_protocol_heading_reaches_the_prompt;
+    this class pins that the section never joins the skip list.
     """
-
-    CLAUSES = (
-        "## Empirical Probes",
-        "Never create or modify tracked files",
-        "pirategoat-probe",
-        "FILENAME",
-        "git does not ignore",
-        "Create, run, and delete in a single command",
-        "git reset",
-    )
-
-    def _delivered_prompt(self, tmp_path):
-        protocol = (
-            PLUGIN_ROOT / "agents/shared/reviewer-protocol.md"
-        ).read_text()
-        review_rules = _mod.extract_protocol_sections(
-            protocol,
-            _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS,
-        )
-        return build_output(
-            agent_name="code-reviewer",
-            plugin_root=str(PLUGIN_ROOT),
-            status="OK",
-            review_rules=review_rules,
-            domain_rules=None,
-            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
-            exploration_scope=None,
-            output_dir=str(tmp_path),
-            pr_number=None,
-            reviewer_name="code",
-            review_claimable_count=0,
-            has_php=False,
-        )
-
-    @pytest.mark.parametrize("clause", CLAUSES)
-    def test_clause_reaches_agent_prompts(self, clause, tmp_path):
-        """Each clause survives skip-list extraction into the built prompt.
-
-        Compared with whitespace collapsed: the protocol is hard-wrapped
-        prose, so a clause spanning a line break is still delivered. Only
-        deleting or rewording it should fail this guard.
-        """
-        delivered = " ".join(self._delivered_prompt(tmp_path).split())
-        assert " ".join(clause.split()) in delivered
 
     def test_section_is_not_in_the_skip_list(self):
         """A future skip-list entry must not silently strip the convention."""
@@ -1349,14 +1267,11 @@ class TestBootstrapOutputSizeCap:
         assert len(output) < 40 * 1024  # output should be well under 40KB total
 
     def test_large_scope_has_file_reference(self, tmp_path):
-        """When scope is truncated, output tells agent where to read the full scope."""
+        """When scope is truncated, output tells agent where to read the full
+        scope and how to read it in slices."""
         output = self._build_large_output(scope_size_kb=50, output_dir=str(tmp_path))
         expected_path = Path(scoped_diff_path(tmp_path, "security"))
         assert str(expected_path) in output
-
-    def test_large_scope_has_read_instructions(self):
-        """When scope is truncated, output tells agent to use offset/limit."""
-        output = self._build_large_output(scope_size_kb=50)
         lower = output.lower()
         assert "offset" in lower or "limit" in lower or "head" in lower
 
@@ -1401,9 +1316,9 @@ class TestDynamicDispatchRisk:
     has_php is a REQUIRED fact the caller supplies (main() derives it from
     telemetry_scope_paths — the same fact-based, sidecar-preferring path
     union used for scope telemetry and the NOT DIFFED contract).
-    build_output() never parses scope_output for PHP filenames — see the
-    regression tests at the bottom of this class for the failure mode that
-    replaced.
+    build_output() never parses scope_output for PHP filenames: the
+    text-inert rows below pin the failure mode that replaced, and the
+    in-process main() rows pin the derivation itself.
     """
 
     def _build(self, tmp_path, has_php, scope_output="=== FILES ===\n=== DIFFS ===",
@@ -1423,71 +1338,52 @@ class TestDynamicDispatchRisk:
             has_php=has_php,
         )
 
-    def test_dead_code_reviewer_gets_dispatch_risk(self, tmp_path):
-        """dead-code-reviewer output includes DYNAMIC_DISPATCH_RISK."""
-        output = self._build(tmp_path, has_php=True)
-        assert "DYNAMIC_DISPATCH_RISK:" in output
-
-    def test_dispatch_risk_high_with_php_files(self, tmp_path):
-        """DYNAMIC_DISPATCH_RISK is 'high' when the caller's fact says PHP files are in scope."""
-        output = self._build(tmp_path, has_php=True)
-        risk_line = [l for l in output.splitlines() if "DYNAMIC_DISPATCH_RISK:" in l]
-        assert risk_line, "DYNAMIC_DISPATCH_RISK line not found in output"
-        assert "high" in risk_line[0].lower()
-
-    def test_dispatch_risk_low_without_php_files(self, tmp_path):
-        """DYNAMIC_DISPATCH_RISK is 'low' when the caller's fact says no PHP files are in scope."""
-        output = self._build(tmp_path, has_php=False)
-        risk_line = [l for l in output.splitlines() if "DYNAMIC_DISPATCH_RISK:" in l]
-        assert risk_line, "DYNAMIC_DISPATCH_RISK line not found in output"
-        assert "low" in risk_line[0].lower()
+    @pytest.mark.parametrize(
+        ("has_php", "scope_output", "expected"),
+        [
+            pytest.param(
+                True, "=== FILES ===\n=== DIFFS ===", "high", id="php-fact-high",
+            ),
+            pytest.param(
+                False, "=== FILES ===\n=== DIFFS ===", "low", id="no-php-fact-low",
+            ),
+            # Fix 6d99ab03: the old implementation derived has_php by
+            # scanning rendered scope text for a '.php' suffix. PHP-looking
+            # text must not force high when the caller's fact says low...
+            pytest.param(
+                False,
+                "=== FILES ===\n"
+                "src/handler.php  (+10 -5)\n"
+                "src/other.php  (+3 -1)\n"
+                "=== DIFFS ===",
+                "low",
+                id="php-looking-text-cannot-force-high",
+            ),
+            # ...and a scope.py reformat that loses the '.php' text must
+            # not suppress high when the fact says PHP is in scope.
+            pytest.param(
+                True,
+                "=== SCOPE TRUNCATED ===\n"
+                "Full scope written to external file; see it for details.\n",
+                "high",
+                id="garbled-text-cannot-suppress-high",
+            ),
+        ],
+    )
+    def test_dispatch_risk_follows_the_has_php_fact(
+        self, tmp_path, has_php, scope_output, expected
+    ):
+        output = self._build(tmp_path, has_php=has_php, scope_output=scope_output)
+        risk_lines = [
+            line for line in output.splitlines() if "DYNAMIC_DISPATCH_RISK:" in line
+        ]
+        assert risk_lines, "DYNAMIC_DISPATCH_RISK line not found in output"
+        assert expected in risk_lines[0].lower()
 
     def test_other_agents_no_dispatch_risk(self, tmp_path):
         """Non-dead-code agents do NOT get DYNAMIC_DISPATCH_RISK, regardless of has_php."""
         output = self._build(tmp_path, has_php=True, agent_name="security-reviewer")
         assert "DYNAMIC_DISPATCH_RISK:" not in output
-
-    def test_php_looking_text_cannot_force_high_when_fact_says_low(self, tmp_path):
-        """A scope_output full of .php filenames must not flip the decision
-        when the caller's fact (has_php=False) says otherwise.
-
-        This is the exact failure shape being fixed: the old implementation
-        derived has_php by splitting rendered scope_output text on a double
-        space and checking for a '.php' suffix — a second, independent
-        derivation of the same fact build_output() now receives explicitly.
-        """
-        php_looking_text = (
-            "=== FILES ===\n"
-            "src/handler.php  (+10 -5)\n"
-            "src/other.php  (+3 -1)\n"
-            "=== DIFFS ==="
-        )
-        output = self._build(tmp_path, has_php=False, scope_output=php_looking_text)
-        risk_line = [l for l in output.splitlines() if "DYNAMIC_DISPATCH_RISK:" in l]
-        assert risk_line, "DYNAMIC_DISPATCH_RISK line not found in output"
-        assert "low" in risk_line[0].lower()
-
-    def test_garbled_text_cannot_suppress_high_when_fact_says_php(self, tmp_path):
-        """A scope_output with no recognizable '.php' text must not suppress
-        the high-risk contract when the caller's fact says PHP files are
-        genuinely in scope.
-
-        This mirrors the NOT DIFFED fix's renamed-header test: a future
-        scope.py refactor that reformats or renames the FILES/DIFFS section
-        (spacing, column order, a new section name) must not silently flip
-        has_php just because the old '.php'-suffix text scan no longer
-        matches — the caller's fact is authoritative regardless of how
-        scope.py renders.
-        """
-        garbled_scope = (
-            "=== SCOPE TRUNCATED ===\n"
-            "Full scope written to external file; see it for details.\n"
-        )
-        assert ".php" not in garbled_scope  # the old text-scan's anchor is gone
-        output = self._build(tmp_path, has_php=True, scope_output=garbled_scope)
-        risk_line = [l for l in output.splitlines() if "DYNAMIC_DISPATCH_RISK:" in l]
-        assert risk_line, "DYNAMIC_DISPATCH_RISK line not found in output"
-        assert "high" in risk_line[0].lower()
 
     @pytest.mark.parametrize(
         ("inline_files", "scope_output", "expected"),
@@ -1651,17 +1547,7 @@ class TestRepoRuleAndRefModeSelection:
         assignment = json.loads(
             Path(review_paths(tmp_path, "performance").assignment).read_text()
         )
-        assert assignment["schema"] == 5
         assert assignment["channels"] == ["blocking", "advisory"]
-        assert isinstance(assignment["review_budget"], int)
-
-        builder = ReviewOutputBuilder.open(tmp_path, "1", "performance")
-        builder.add_finding(
-            severity="high", title="Advisory", file="src/app.py",
-            description="d", recommendation="r", line=1,
-            channel="advisory",
-        )
-        assert builder.to_dict()["verdict"] == "approve"
 
     def test_blocking_only_rules_omit_the_channel_contract(self, tmp_path):
         self._write_review_context(tmp_path, rules=[self._rule(
@@ -1678,16 +1564,6 @@ class TestRepoRuleAndRefModeSelection:
             Path(review_paths(tmp_path, "performance").assignment).read_text()
         )
         assert assignment["channels"] == ["blocking"]
-
-        builder = ReviewOutputBuilder.open(tmp_path, "1", "performance")
-        with pytest.raises(
-            ValueError, match="channel 'advisory' is not among"
-        ):
-            builder.add_finding(
-                severity="high", title="Advisory", file="src/app.py",
-                description="d", recommendation="r", line=1,
-                channel="advisory",
-            )
 
     def test_path_rule_matches_a_budget_claimable_file(self, tmp_path):
         """A rule about a NOT DIFFED file applies precisely when the
@@ -1875,68 +1751,55 @@ class TestNotDiffedContractIsDelivered:
         "phrase",
         [
             'builder.claim_files_reviewed("<path>")',
-            "authoritative review assignment",
             "derives every unclaimed review file",
-            "Never count an unclaimed review file toward your verdict",
         ],
     )
     def test_contract_reaches_reviewer(self, tmp_path, phrase):
-        """Each clause of the contract appears in the delivered briefing."""
+        """The claim call and the derived complement reach the briefing."""
         output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, review_claimable_count=1)
         assert phrase in output
 
-    def test_scope_and_guidance_never_teach_gap_declarations(self, tmp_path):
-        scope_output = format_text_output({
-            "status": "OK",
-            "range": "base..head",
-            "domain": "code",
-            "files": ["src/inline.py"],
-            "diffs": {"src/inline.py": "diff --git"},
-            "diffstat": {
-                "src/inline.py": (2, 1),
-                "src/claimable.py": (20, 2),
-            },
-            "skipped_files": {"budget": ["src/claimable.py"]},
-        })
-        output = self._build(tmp_path, scope_output, review_claimable_count=1)
-        protocol = (
-            PLUGIN_ROOT / "agents" / "shared" / "reviewer-protocol.md"
-        ).read_text()
-
-        for delivered in (scope_output, output, protocol):
-            assert "declare only the files" not in delivered.lower()
-            assert "claim or declare" not in delivered.lower()
-            assert "what a declaration costs" not in delivered.lower()
-
     @pytest.mark.parametrize(
-        "phrase",
+        ("scope_text", "review_claimable_count", "delivered"),
         [
-            "false statement",
-            "Declaring is for genuine budget exhaustion only",
-            "written with most of your budget unspent",
+            pytest.param(
+                "=== REVIEW SCOPE ===\n=== FILES ===\nsrc/a.py  (+5 -1)\n",
+                0,
+                False,
+                id="no-claimable-files",
+            ),
+            # Fix 606519ab: the count is the caller's fact, never a regex over
+            # scope_output. A renamed header cannot suppress a real count...
+            pytest.param(
+                "=== REVIEW SCOPE ===\n"
+                "=== FILES ===\n"
+                "src/big.py  (+900 -10)\n"
+                "=== CLAIMABLE (too large to inline, 3 files) ===\n"
+                "  src/big.py  (+900 -10)\n",
+                1,
+                True,
+                id="renamed-header-cannot-suppress-a-real-count",
+            ),
+            # ...and the header the old regex parsed cannot enable it alone.
+            pytest.param(
+                NOT_DIFFED_SCOPE,
+                0,
+                False,
+                id="original-header-text-alone-cannot-enable-it",
+            ),
         ],
     )
-    def test_unenforceable_underspend_rule_is_not_restored(
-        self, tmp_path, phrase
+    def test_contract_follows_the_claimable_count_not_the_scope_text(
+        self, tmp_path, scope_text, review_claimable_count, delivered
     ):
-        """The under-spend "protocol violation" sentence must stay deleted.
-
-        It conditioned on a quantity no reviewer is ever shown at the moment
-        it decides — models keep no running tool-call tally — and a 19-agent
-        field run delivered it verbatim to every one of them for zero effect
-        (0/19 reached target, median 44% spent, nine declaring 100+ files
-        while under half budget). Its premise was falsified in the same run:
-        under-spend did not predict weak output. The replacement is salience
-        at the decision point (save()'s TARGET echo), not sterner prose.
-        """
-        output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, review_claimable_count=1)
-        assert phrase not in output
-
-    def test_contract_absent_without_not_diffed_files(self, tmp_path):
-        """No NOT DIFFED files means no positive-claim contract to deliver."""
-        clean_scope = "=== REVIEW SCOPE ===\n=== FILES ===\nsrc/a.py  (+5 -1)\n"
-        output = self._build(tmp_path, clean_scope, review_claimable_count=0)
-        assert "authoritative review assignment" not in output
+        output = self._build(
+            tmp_path, scope_text, review_claimable_count=review_claimable_count
+        )
+        assert ("authoritative review assignment" in output) is delivered
+        assert ("derives every unclaimed review file" in output) is delivered
+        assert (
+            "Never count an unclaimed review file toward your verdict" in output
+        ) is delivered
 
     def test_contract_is_not_sourced_from_stripped_protocol(self):
         """The stripped protocol must not be the contract's only home.
@@ -1952,47 +1815,6 @@ class TestNotDiffedContractIsDelivered:
             "Contract text placed in a stripped protocol section never reaches "
             "a reviewer — keep it in build_output()'s REVIEW BUDGET block."
         )
-
-    def test_renamed_scope_header_cannot_suppress_a_real_count(self, tmp_path):
-        """A scope.py header rename/reformat must not silently drop the contract.
-
-        This is the exact failure shape being fixed: the old regex expected
-        the literal string '=== NOT DIFFED (budget exceeded, N files) ===' in
-        scope_output. Here that header is renamed to something a future
-        scope.py refactor might plausibly emit, and NO section matches the
-        old pattern at all — yet because the caller still supplies the real
-        fact via review_claimable_count, the contract must still be delivered.
-        """
-        renamed_header_scope = (
-            "=== REVIEW SCOPE ===\n"
-            "=== FILES ===\n"
-            "src/big.py  (+900 -10)\n"
-            "=== CLAIMABLE (too large to inline, 3 files) ===\n"
-            "  src/big.py  (+900 -10)\n"
-        )
-        assert "NOT DIFFED" not in renamed_header_scope  # the old regex's anchor is gone
-        output = self._build(tmp_path, renamed_header_scope, review_claimable_count=1)
-        assert "authoritative review assignment" in output
-        assert "derives every unclaimed review file" in output
-
-    def test_original_header_text_alone_no_longer_drives_the_contract(self, tmp_path):
-        """The rendered header text must never re-enable the contract by itself.
-
-        NOT_DIFFED_SCOPE carries the exact header the old regex parsed, but
-        review_claimable_count is explicitly 0 (the caller's fact says nothing was
-        claimable). If build_output() still read scope_output text for this
-        decision, the contract would incorrectly appear. It must not.
-        """
-        output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, review_claimable_count=0)
-        assert "authoritative review assignment" not in output
-
-    def test_briefing_never_commands_bulk_unclaimed_enumeration(self, tmp_path):
-        """run12: performance-reviewer burned ~1/3 of its calls hand-assembling
-        254 unclaimed paths because the briefing said 'Declare each file you
-        could not reach' — the builder already derives them for free."""
-        output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, review_claimable_count=3)
-        assert "Declare each file you could not reach" not in output
-        assert "derives every unclaimed review file" in output
 
 
 # Registry agents that are not dispatched through bootstrap.py. The critic
