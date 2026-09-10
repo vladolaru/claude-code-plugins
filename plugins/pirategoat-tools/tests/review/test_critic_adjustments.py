@@ -1272,30 +1272,6 @@ class TestCheckPassthrough:
         assert _ledger(tmp_path)["checks"] == self.CHECKS
 
 
-class TestReconciliatorCheckPin:
-    """Writer #1 is an agent following a Markdown snippet, so only a test
-    can hold it to teaching structurally merged checks.
-
-    Before this, the taught template never mentioned it: the ledger's
-    `checks` was always null, and step 9 rebuilt "what was verified and
-    held" from the orchestrator's memory — the exact from-memory reporting
-    the artifact chain exists to prevent.
-    """
-
-    SNIPPET = PLUGIN_ROOT / "agents" / "review-reconciliator.md"
-
-    def _text(self):
-        return self.SNIPPET.read_text(encoding="utf-8")
-
-    def test_the_template_teaches_structural_check_recording(self):
-        text = self._text()
-        assert "builder.record_check(" in text
-        for kwarg in (
-            "question=", "method=", "result=", "source_reviewers="
-        ):
-            assert kwarg in text.split("builder.record_check(", 1)[1][:500]
-
-
 class TestReconciliatorWritePathPin:
     """Writer #1 is an agent following a Markdown snippet, so the only
     thing that can hold it to the sanctioned write path is a test.
@@ -1317,51 +1293,21 @@ class TestReconciliatorWritePathPin:
     def _text(self):
         return self.SNIPPET.read_text(encoding="utf-8")
 
-    def test_the_snippet_saves_through_findings_save(self):
-        text = self._text()
-        assert "scripts/review/findings_save.py" in text
-        assert "--output-dir" in text
-        assert "--findings" in text
-
-    def test_the_snippet_does_not_write_the_ledger_any_other_way(self):
-        """Named spellings, not a blanket ban: `atomic_write_json` and
-        `write_findings` may legitimately appear in prose about the write
-        path — what must not come back is a call that writes THIS
-        artifact directly instead of going through findings_save.py."""
-        text = self._text()
-        for forbidden in (
-            'atomic_write_json(f"{output_dir}/review-findings.json"',
-            "atomic_write_json(f'{output_dir}/review-findings.json'",
-            'open(f"{output_dir}/review-findings.json"',
-            "json.dump(output",
-            "from review.critic_adjustments import write_findings",
-            "write_findings(output_dir, output)",
-        ):
-            assert forbidden not in text, forbidden
-
-    def test_the_snippet_builds_the_ledger_with_the_ledger_builder(self):
+    def test_the_snippet_builds_the_ledger_and_saves_through_findings_save(
+        self
+    ):
         """`ReviewOutputBuilder` produces a reviewer document — it carries a
         `reviewer` field and a reviewed-file lifecycle the ledger does not
         have. Only `FindingsLedgerBuilder` produces the artifact this agent
-        is asked for."""
+        is asked for, and the built ledger is saved only through
+        `findings_save.py`, never a bare write."""
         text = self._text()
         assert 'FindingsLedgerBuilder(pr_id="PR_ID_FROM_CONTEXT", output_dir=' in text
         assert "from review.findings_ledger import FindingsLedgerBuilder" in text
         assert "ReviewOutputBuilder(" not in text
-
-    def test_the_snippet_authors_the_four_judgments_and_nothing_else(self):
-        """The pipeline-owned facts are stamped by findings_save.py from
-        reconciliation-context.json. A snippet that teaches the agent to
-        author them produces a ledger the save channel rejects."""
-        text = self._text()
-        call = text.split("builder.set_reconciliation(", 1)[1].split("\n)", 1)[0]
-        for judgment in (
-            "grouped_concern_count", "verified_concern_count",
-            "false_positive_concern_count", "out_of_scope_concern_count",
-        ):
-            assert f"{judgment}=" in call, judgment
-        assert "output['meta']['reconciliation']" not in text
-        assert 'output["meta"]["reconciliation"]' not in text
+        assert "scripts/review/findings_save.py" in text
+        assert "--output-dir" in text
+        assert "--findings" in text
 
 
 

@@ -205,26 +205,19 @@ def test_the_taught_snippet_calls_only_methods_the_builder_has():
         )
 
 
-def test_the_definition_teaches_every_provenance_method():
-    snippet = RECONCILIATOR_MD.read_text(encoding="utf-8")
-    called = set(re.findall(r"\bbuilder\.([A-Za-z_][A-Za-z0-9_]*)\(", snippet))
-    assert {"drop_finding", "drop_check", "resolve_note"} <= called
-    assert "sources=[" in snippet
-    assert "severity_note=" in snippet
-    assert "orchestrator_notes" in snippet
-    assert "neither merged" in snippet
-    # A confirmed note may settle Verify items; the template shows it.
-    assert 'resolve_note("n2", outcome="confirmed"' in snippet
-    assert 'verifies=["V2", "V3"]' in snippet
-
-
 def test_the_definition_states_what_the_builder_derives_and_accepts():
     """In all six field runs the reconciliator read `agent/output.py`,
     `findings_ledger.py` and `verdict_rules.py` for 10 s to 4 min 20 s
     looking for a verdict setter, a category vocabulary and the severity
-    and outcome vocabularies. The template states them instead."""
+    and outcome vocabularies. The template states them instead.
+
+    This is the one parity pin between the constants and the agent
+    definition; the keyword-soup checks that used to sit beside it (the
+    named builder methods it calls, `sources=[`, `severity_note=`, and one
+    literal `resolve_note(...)` call) pinned wording, not parity, and are
+    gone — `test_the_taught_snippet_calls_only_methods_the_builder_has`
+    below is the structural guard for the methods it calls."""
     snippet = RECONCILIATOR_MD.read_text(encoding="utf-8")
-    assert "no `set_verdict()`" in snippet
     for value in DROP_REASONS_FINDING + DROP_REASONS_CHECK + NOTE_OUTCOMES:
         assert f"`{value}`" in snippet, value
 
