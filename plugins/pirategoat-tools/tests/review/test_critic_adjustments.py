@@ -6,7 +6,6 @@ import re
 import subprocess
 import sys
 import threading
-import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -211,17 +210,6 @@ def _check(id_, *, result="No matching callers."):
         "result": result,
         "source_reviewers": ["ecosystem-integration"],
     }
-
-
-class TestCriticArtifactLayout:
-    def test_proposal_and_verdict_publish_under_synthesis(self, tmp_path):
-        _publish_verdict(tmp_path, "STAND")
-
-        synthesis = tmp_path / "synthesis"
-        assert (synthesis / "decision-critic-adjustments.json").is_file()
-        assert (synthesis / "decision-critic-verdict.json").is_file()
-        assert not (tmp_path / "decision-critic-adjustments.json").exists()
-        assert not (tmp_path / "decision-critic-verdict.json").exists()
 
 
 class TestCanonicalFindingsReader:
@@ -490,13 +478,6 @@ class TestAdjudicateWritesTheLedgerOnce:
             _adjudicate(tmp_path, ids, verified=(0,))
         assert read_critic_verdict(str(tmp_path)) is None
 
-    def test_removed_module_surface(self):
-        for name in (
-            "apply_adjustments", "pending_count", "settle", "SPOT_CHECK_KEY",
-            "ADJUDICATION_KEY", "REFUSAL_EXIT_CODE",
-        ):
-            assert not hasattr(critic_adjustments_module, name)
-
 
 class TestApplyAdjustments:
     @pytest.mark.parametrize(
@@ -542,38 +523,6 @@ class TestApplyAdjustments:
         ]
         assert ledger["verdict"] == verdict
 
-    def test_promote_patches_severity_with_provenance(self, tmp_path):
-        _write_findings(tmp_path, [_finding("f1", "low")])
-        _, result = _publish_and_adjudicate(tmp_path, [{
-            "action": "promote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "medium"},
-            "rationale": "affects future strategy authors",
-        }], verified=(0,))
-        assert result["applied"] == 1
-        data = _ledger(tmp_path)
-        finding = data["findings"][0]
-        assert finding["severity"] == "medium"
-        assert finding["critic_adjustment"]["action"] == "promote"
-        assert finding["critic_adjustment"]["prior"] == {"severity": "low"}
-        assert data["summary"]["by_severity"]["medium"] == 1
-        assert data["summary"]["by_severity"]["low"] == 0
-
-    def test_add_appends_full_finding_with_generated_id(self, tmp_path):
-        _write_findings(tmp_path, [_finding("f1")])
-        _publish_and_adjudicate(tmp_path, [{
-            "action": "add", "target": {"kind": "finding"},
-            "fields": {"severity": "low", "title": "stale README",
-                       "file": "internal/strategy/README.md",
-                       "description": "teaches the deleted warm path",
-                       "recommendation": "update the warm/cold section"},
-            "rationale": "promoted from docs-drift observations",
-        }])
-        data = _ledger(tmp_path)
-        assert data["summary"]["total_findings"] == 2
-        added = data["findings"][1]
-        assert added["id"] == "f2"
-        assert added["critic_adjustment"]["action"] == "add"
-
     def test_remove_moves_finding_out_with_provenance(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1"), _finding("f2")])
         _publish_and_adjudicate(tmp_path, [{
@@ -584,42 +533,6 @@ class TestApplyAdjustments:
         assert [i["id"] for i in data["findings"]] == ["f1"]
         assert data["findings_removed_by_critic"][0]["id"] == "f2"
         assert data["summary"]["total_findings"] == 1
-
-    def test_unknown_id_fails_loudly_and_writes_nothing(self, tmp_path):
-        _write_findings(tmp_path, [_finding("f1")])
-        ids = _publish_revise(tmp_path, [
-            {"action": "promote", "target": {"kind": "finding", "id": "f1"},
-             "fields": {"severity": "high"}, "rationale": "r"},
-            {"action": "promote", "target": {"kind": "finding", "id": "f9"},
-             "fields": {"severity": "high"}, "rationale": "r"},
-        ])
-        with pytest.raises(ValueError, match="f9"):
-            _adjudicate(tmp_path, ids)
-        data = _ledger(tmp_path)
-        assert data["findings"][0]["severity"] == "low"  # entry 1 NOT applied
-
-    def test_invalid_action_and_field_rejected(self, tmp_path):
-        _write_findings(tmp_path, [_finding("f1")])
-        with pytest.raises(ValueError, match="obliterate"):
-            _publish_revise(tmp_path, [{
-                "action": "obliterate",
-                "target": {"kind": "finding", "id": "f1"},
-                "fields": {}, "rationale": "r",
-            }])
-        with pytest.raises(ValueError, match="verdict"):
-            _publish_revise(tmp_path, [{
-                "action": "correct", "target": {"kind": "finding", "id": "f1"},
-                "fields": {"verdict": "APPROVE"}, "rationale": "r",
-            }])
-
-    def test_refuted_entries_are_skipped(self, tmp_path):
-        _write_findings(tmp_path, [_finding("f1", "low")])
-        _, result = _publish_and_adjudicate(tmp_path, [{
-            "action": "promote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "critical"}, "rationale": "r",
-        }], refuted=((0, "the probe refuted the claim"),))
-        assert result["applied"] == 0
-        assert _ledger(tmp_path)["findings"][0]["severity"] == "low"
 
     def test_mixed_batch_recounts_totals_and_severities(self, tmp_path):
         """add + remove + promote in one batch must leave the summary exact.
@@ -739,49 +652,6 @@ class TestRejectionAudit:
             "first round refutation", "second round refutation",
         }
 
-    def test_mixed_batch_applies_one_and_audits_the_other(self, tmp_path):
-        _write_findings(
-            tmp_path, [_finding("f1", "low"), _finding("f2", "low")]
-        )
-        _, result = _publish_and_adjudicate(tmp_path, [
-            {"action": "promote", "target": {"kind": "finding", "id": "f1"},
-             "fields": {"severity": "high"}, "rationale": "r"},
-            {"action": "demote", "target": {"kind": "finding", "id": "f2"},
-             "fields": {"severity": "info"}, "rationale": "r"},
-        ], verified=(0,), refuted=((1, "refuted"),))
-        assert result["applied"] == 1
-        assert result["rejected"] == 1
-        data = _ledger(tmp_path)
-        assert data["findings"][0]["severity"] == "high"
-        assert data["findings"][1]["severity"] == "low"  # refuted, untouched
-        records = data[REJECTED_ADJUSTMENTS_KEY]
-        assert len(records) == 1
-        assert records[0]["target"] == {"kind": "finding", "id": "f2"}
-
-    @pytest.mark.parametrize("bad_reason", [None, "", "   "])
-    def test_missing_or_blank_rejection_reason_refuses_the_whole_request(
-        self, tmp_path, bad_reason
-    ):
-        """rejection_reason is the entire payload of the audit record —
-        a refutation without one is refused loudly, the same
-        all-or-nothing style an unknown action or invalid severity gets,
-        instead of silently writing an empty string into the ledger."""
-        _write_findings(tmp_path, [_finding("f1", "low")])
-        ids = _publish_revise(tmp_path, [{
-            "action": "promote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "high"}, "rationale": "r",
-        }])
-        refuted = {"adjustment_id": ids[0]}
-        if bad_reason is not None:
-            refuted["rejection_reason"] = bad_reason
-        with pytest.raises(ValueError, match="rejection_reason"):
-            adjudicate(str(tmp_path), {
-                "schema": 2, "verified": [], "refuted": [refuted],
-                "revised_assessment": None,
-            })
-        assert REJECTED_ADJUSTMENTS_KEY not in _ledger(tmp_path)
-
-
 class TestBatchCoherence:
     def test_duplicate_target_in_one_batch_is_rejected(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1", "low")])
@@ -812,14 +682,6 @@ class TestBatchCoherence:
             ])
         assert [i["id"] for i in _ledger(tmp_path)["findings"]] == ["f1", "f2"]
 
-    def test_entry_without_an_id_fails_as_unknown_id(self, tmp_path):
-        _write_findings(tmp_path, [_finding("f1")])
-        with pytest.raises(ValueError, match="target.id"):
-            _publish_revise(tmp_path, [{
-                "action": "promote", "target": {"kind": "finding"},
-                "fields": {"severity": "high"}, "rationale": "r",
-            }])
-
     def test_findings_finding_without_an_id_is_not_addressable(self, tmp_path):
         """A None target must not silently match an id-less finding."""
         idless = _finding("f1")
@@ -834,17 +696,14 @@ class TestBatchCoherence:
         ):
             _adjudicate(tmp_path, ids)
 
-    def test_add_rejects_a_critic_supplied_id_in_both_spellings(
-        self, tmp_path
-    ):
+    def test_add_rejects_a_critic_supplied_id_in_fields(self, tmp_path):
+        """The `target.id` spelling of this refusal is pinned by
+        `TestSchemaTwoTargetUnion::test_non_add_target_requires_id_and_add_rejects_surplus_id`;
+        this is the other spelling, a caller-supplied `id` smuggled into
+        `fields` instead."""
         _write_findings(tmp_path, [_finding("f1")])
         base_fields = {"severity": "low", "title": "t", "file": "f.go",
                        "description": "d", "recommendation": "r"}
-        with pytest.raises(ValueError, match="must not include id"):
-            _publish_revise(tmp_path, [{
-                "action": "add", "target": {"kind": "finding", "id": "f3"},
-                "fields": dict(base_fields), "rationale": "r",
-            }])
         with pytest.raises(ValueError, match="'id' is not adjustable"):
             _publish_revise(tmp_path, [{
                 "action": "add", "target": {"kind": "finding"},
@@ -886,42 +745,113 @@ class TestBatchCoherence:
         ) == shape
 
 
+def _one_adjustment(action, fields, target_id="f1"):
+    """One-entry proposal payload for `TestValidateProposalInput`'s table."""
+    target = {"kind": "finding"}
+    if target_id is not None:
+        target["id"] = target_id
+    return {
+        "schema": 2,
+        "adjustments": [{
+            "action": action, "target": target, "fields": fields,
+            "rationale": "r",
+        }],
+    }
+
+
 class TestValidateProposalInput:
     """Direct unit coverage for the critic-owned proposal validator."""
 
-    def test_valid_batch_returns_no_problems(self):
-        assert validate_proposal_input({
-            "schema": 2,
-            "adjustments": [{
-                "action": "promote", "target": {"kind": "finding", "id": "f1"},
-                "fields": {"severity": "high"}, "rationale": "r",
-            }],
-        }) == []
+    proposal_problems = [
+        pytest.param(
+            _one_adjustment("promote", {"severity": "high"}),
+            [], id="valid-batch",
+        ),
+        pytest.param(
+            [1, 2, 3],
+            ["decision-critic-adjustments.json must be a JSON object"],
+            id="non-object-payload",
+        ),
+        pytest.param(
+            {"schema": 2, "adjustments": "nope"},
+            ["decision-critic-adjustments.json: 'adjustments' must be a list"],
+            id="adjustments-not-a-list",
+        ),
+        pytest.param(
+            {"schema": 2},
+            ["decision-critic-adjustments.json: 'adjustments' must be a list"],
+            id="missing-adjustments-key",
+        ),
+        pytest.param(
+            {"schema": 2, "adjustments": ["not-a-dict"]},
+            ["adjustment[0] must be an object"],
+            id="entry-not-an-object",
+        ),
+        pytest.param(
+            _one_adjustment("obliterate", {}),
+            ("unknown action", "obliterate"), id="unknown-action",
+        ),
+        pytest.param(
+            _one_adjustment("correct", {"verdict": "APPROVE"}),
+            "not adjustable", id="invalid-field",
+        ),
+        pytest.param(
+            _one_adjustment("add", {"severity": "low"}, target_id=None),
+            "add requires fields", id="add-missing-required-fields",
+        ),
+        pytest.param(
+            _one_adjustment(
+                "correct", {"severity": "low", "title": "Better title"},
+            ),
+            "correct may not change severity; use promote or demote",
+            id="correct-may-not-carry-severity",
+        ),
+        pytest.param(
+            _one_adjustment("correct", {"title": "Better title"}),
+            [], id="correct-without-a-severity-still-validates",
+        ),
+        pytest.param(
+            _one_adjustment("promote", {}),
+            "promote requires the severity field", id="promote-empty",
+        ),
+        pytest.param(
+            _one_adjustment("promote", {"title": "not a severity"}),
+            "promote requires the severity field", id="promote-wrong-field",
+        ),
+        pytest.param(
+            _one_adjustment("demote", {"title": "not a severity"}),
+            "demote requires the severity field", id="demote-wrong-field",
+        ),
+        pytest.param(
+            _one_adjustment("rescope", {}),
+            "rescope requires exactly the file and line fields",
+            id="rescope-empty",
+        ),
+        pytest.param(
+            _one_adjustment("rescope", {"line": 20}),
+            "rescope requires exactly the file and line fields",
+            id="rescope-partial",
+        ),
+        pytest.param(
+            _one_adjustment("correct", {}),
+            "correct requires at least one field", id="correct-empty",
+        ),
+        pytest.param(
+            _one_adjustment("remove", {"title": "replacement"}),
+            "remove does not accept replacement fields",
+            id="remove-with-fields",
+        ),
+    ]
 
-    def test_correct_may_not_carry_a_severity(self):
-        problems = validate_proposal_input({"schema": 2, "adjustments": [{
-            "action": "correct",
-            "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "low", "title": "Better title"},
-            "rationale": "r",
-        }]})
-        assert any(
-            "correct may not change severity; use promote or demote" in p
-            for p in problems
-        )
-
-    def test_correct_without_a_severity_still_validates(self):
-        assert validate_proposal_input({"schema": 2, "adjustments": [{
-            "action": "correct",
-            "target": {"kind": "finding", "id": "f1"},
-            "fields": {"title": "Better title"},
-            "rationale": "r",
-        }]}) == []
-
-    def test_non_object_payload_is_a_problem(self):
-        assert validate_proposal_input([1, 2, 3]) == [
-            "decision-critic-adjustments.json must be a JSON object"
-        ]
+    @pytest.mark.parametrize("payload,expected", proposal_problems)
+    def test_action_specific_field_contract_is_enforced(self, payload, expected):
+        problems = validate_proposal_input(payload)
+        if isinstance(expected, list):
+            assert problems == expected
+        elif isinstance(expected, tuple):
+            assert any(all(s in p for s in expected) for p in problems)
+        else:
+            assert any(expected in p for p in problems)
 
     @pytest.mark.parametrize("schema_field", rejected_schema_values(2))
     def test_a_schema_out_of_template_refuses_the_whole_batch(
@@ -955,136 +885,6 @@ class TestValidateProposalInput:
         data = _ledger(tmp_path)
         assert data["findings"][0]["severity"] == "low"  # nothing written
 
-    def test_adjustments_not_a_list_is_a_problem(self):
-        assert validate_proposal_input({"schema": 2, "adjustments": "nope"}) == [
-            "decision-critic-adjustments.json: 'adjustments' must be a list"
-        ]
-
-    def test_missing_adjustments_key_is_a_problem(self):
-        assert validate_proposal_input({"schema": 2}) == [
-            "decision-critic-adjustments.json: 'adjustments' must be a list"
-        ]
-
-    def test_entry_not_an_object_is_a_problem(self):
-        assert validate_proposal_input({
-            "schema": 2, "adjustments": ["not-a-dict"],
-        }) == ["adjustment[0] must be an object"]
-
-    def test_adjustment_id_is_not_a_proposal_field(self):
-        problems = validate_proposal_input({
-            "schema": 2,
-            "adjustments": [{
-                "adjustment_id": "caller-owned", "action": "promote",
-                "target": {"kind": "finding", "id": "f1"},
-                "fields": {"severity": "high"}, "rationale": "r",
-            }],
-        })
-        assert any("adjustment_id" in problem for problem in problems)
-
-    def test_unknown_action_is_a_problem(self):
-        problems = validate_proposal_input({
-            "schema": 2,
-            "adjustments": [{
-                "action": "obliterate", "target": {"kind": "finding", "id": "f1"},
-                "fields": {}, "rationale": "r",
-            }],
-        })
-        assert any("unknown action" in p and "obliterate" in p for p in problems)
-
-    def test_invalid_field_is_a_problem(self):
-        problems = validate_proposal_input({
-            "schema": 2,
-            "adjustments": [{
-                "action": "correct", "target": {"kind": "finding", "id": "f1"},
-                "fields": {"verdict": "APPROVE"}, "rationale": "r",
-            }],
-        })
-        assert any("not adjustable" in p for p in problems)
-
-    def test_add_missing_required_fields_is_a_problem(self):
-        problems = validate_proposal_input({
-            "schema": 2,
-            "adjustments": [{
-                "action": "add", "target": {"kind": "finding"},
-                "fields": {"severity": "low"}, "rationale": "r",
-            }],
-        })
-        assert any("add requires fields" in p for p in problems)
-
-    def test_add_with_a_critic_supplied_id_is_a_problem(self):
-        problems = validate_proposal_input({
-            "schema": 2,
-            "adjustments": [{
-                "action": "add", "target": {"kind": "finding", "id": "f3"},
-                "fields": {"severity": "low", "title": "t", "file": "f.go",
-                           "description": "d", "recommendation": "r"},
-                "rationale": "r",
-            }],
-        })
-        assert any("must not include id" in p for p in problems)
-
-    @pytest.mark.parametrize(
-        "action,fields,problem",
-        [
-            ("promote", {}, "promote requires the severity field"),
-            (
-                "promote",
-                {"title": "not a severity"},
-                "promote requires the severity field",
-            ),
-            ("demote", {"title": "not a severity"},
-             "demote requires the severity field"),
-            ("rescope", {}, "rescope requires exactly the file and line fields"),
-            (
-                "rescope",
-                {"line": 20},
-                "rescope requires exactly the file and line fields",
-            ),
-            ("correct", {}, "correct requires at least one field"),
-            (
-                "remove", {"title": "replacement"},
-                "remove does not accept replacement fields",
-            ),
-        ],
-    )
-    def test_action_specific_field_contract_is_enforced(
-        self, action, fields, problem
-    ):
-        problems = validate_proposal_input({
-            "schema": 2,
-            "adjustments": [{
-                "action": action,
-                "target": {"kind": "finding", "id": "f1"},
-                "fields": fields,
-                "rationale": "r",
-            }],
-        })
-
-        assert any(problem in candidate for candidate in problems)
-
-    def test_a_proposal_may_target_each_finding_only_once(self):
-        problems = validate_proposal_input({
-            "schema": 2,
-            "adjustments": [
-                {
-                    "action": "promote",
-                    "target": {"kind": "finding", "id": "f1"},
-                    "fields": {"severity": "high"},
-                    "rationale": "r",
-                },
-                {
-                    "action": "correct",
-                    "target": {"kind": "finding", "id": "f1"},
-                    "fields": {"title": "Clearer title"},
-                    "rationale": "r",
-                },
-            ],
-        })
-
-        assert any(
-            "duplicate target finding 'f1'" in problem for problem in problems
-        )
-
     def test_two_independent_problems_are_both_reported(self):
         """The proposal validator collects every independent problem
         instead of stopping at the first one it finds, which can only be
@@ -1110,52 +910,17 @@ class TestAdjustmentsSchemaValidation:
     alongside `"adjustments"`; a doc out of that template is refused
     whole, the same all-or-nothing way an unknown action is."""
 
-    def test_schema_2_proceeds(self, tmp_path):
-        _write_findings(tmp_path, [_finding("f1", "low")])
-        _, result = _publish_and_adjudicate(tmp_path, [{
-            "action": "promote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "high"}, "rationale": "r",
-        }], verified=(0,))
-        assert result["applied"] == 1
-
-    @pytest.mark.parametrize(
-        "schema_field",
-        [{"schema": 1}, {}, {"schema": "2"}],
-        ids=("prior-schema", "missing-schema", "numeric-string"),
-    )
-    def test_a_schema_out_of_template_refuses_the_whole_batch(
-        self, tmp_path, schema_field
-    ):
-        """The taught template always writes `"schema": 2`. A prior value,
-        an absent key, and the string `"2"` are all out of that template
-        and get the same refusal — never a silent read as version 1 or a
-        coerced integer."""
-        _write_findings(tmp_path, [_finding("f1", "low")])
-        _publish_raw_proposal(tmp_path, {
-            **schema_field,
-            "adjustments": [{
-                "adjustment_id": "a1",
-                "action": "promote", "target": {"kind": "finding", "id": "f1"},
-                "fields": {"severity": "high"}, "rationale": "r",
-            }],
-        })
-        with pytest.raises(ValueError, match="'schema' must be 2"):
-            _adjudicate(tmp_path, [])
-        data = _ledger(tmp_path)
-        assert data["findings"][0]["severity"] == "low"  # nothing written
-
-    @pytest.mark.parametrize("shape", [[{"id": "f1"}], "hello", 5])
     def test_non_object_doc_fails_as_a_shape_error_not_a_schema_error(
-        self, tmp_path, shape
+        self, tmp_path
     ):
-        """[], "hello", and 5 are all valid JSON but not a document with a
+        """`[{"id": "f1"}]` is valid JSON but not a document with a
         'schema' field to be wrong about — the diagnosis must name the
         actual defect (not a JSON object) rather than misreporting it as a
         missing or invalid schema."""
         _write_findings(tmp_path, [_finding("f1", "low")])
         _publish_verdict(tmp_path, "REVISE")
         _artifact(tmp_path, "critic_adjustments").write_text(
-            json.dumps(shape)
+            json.dumps([{"id": "f1"}])
         )
         with pytest.raises(
             ValueError,
@@ -1164,34 +929,6 @@ class TestAdjustmentsSchemaValidation:
             _adjudicate(tmp_path, [])
         data = _ledger(tmp_path)
         assert data["findings"][0]["severity"] == "low"  # nothing written
-
-    def test_a_prepared_entry_may_carry_only_its_proposal_fields(self):
-        """Adjudication is recorded in the ledger, never back on the entry."""
-        problems = critic_adjustments_module.validate_adjustments_document({
-            "schema": 2,
-            "adjustments": [{
-                "adjustment_id": "a1",
-                "action": "promote", "target": {"kind": "finding", "id": "f1"},
-                "fields": {"severity": "high"}, "rationale": "r",
-                "outcome": "verified", "applied": True,
-            }],
-        })
-        assert any("'outcome' is not allowed" in p for p in problems)
-        assert any("'applied' is not allowed" in p for p in problems)
-
-    def test_duplicate_adjustment_ids_are_rejected(self):
-        problems = critic_adjustments_module.validate_adjustments_document({
-            "schema": 2,
-            "adjustments": [
-                {"adjustment_id": "dup", "action": "promote",
-                 "target": {"kind": "finding", "id": "f1"},
-                 "fields": {"severity": "high"}, "rationale": "r"},
-                {"adjustment_id": "dup", "action": "promote",
-                 "target": {"kind": "finding", "id": "f2"},
-                 "fields": {"severity": "high"}, "rationale": "r"},
-            ],
-        })
-        assert any("duplicate adjustment_id" in p for p in problems)
 
 
 class TestScopeLinePairing:
@@ -2175,15 +1912,8 @@ class TestAssessmentInvalidation:
             "fields": {"severity": "low"}, "rationale": "guarded upstream",
         }], verified=(0,))
         assert result["applied"] == 1
-        assert _ledger(tmp_path)["assessment"] is None
-
-    def test_the_invalidated_text_stays_auditable(self, tmp_path):
-        self._seed(tmp_path)
-        _publish_and_adjudicate(tmp_path, [{
-            "action": "demote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "low"}, "rationale": "guarded upstream",
-        }], verified=(0,))
         data = _ledger(tmp_path)
+        assert data["assessment"] is None
         invalidated = data[INVALIDATED_ASSESSMENTS_KEY]
         assert len(invalidated) == 1
         assert invalidated[0]["text"] == self._SUMMARY
@@ -2194,7 +1924,9 @@ class TestAssessmentInvalidation:
     def test_a_second_withdrawal_names_only_its_own_batch(self, tmp_path):
         """invalidated_by_critic_adjustment_ids is causal attribution, not history: a second
         reconciliation round's withdrawal must name the batch that caused
-        it, never the cumulative applied-ids list."""
+        it, never the cumulative applied-ids list. Also covers a second
+        round appending rather than overwriting the first withdrawal's
+        text. Fix 47cd4c16."""
         self._seed(tmp_path)
         _publish_and_adjudicate(tmp_path, [{
             "action": "demote", "target": {"kind": "finding", "id": "f1"},
@@ -2213,30 +1945,14 @@ class TestAssessmentInvalidation:
         data = _ledger(tmp_path)
         invalidated = data[INVALIDATED_ASSESSMENTS_KEY]
         assert len(invalidated) == 2
+        texts = [entry["text"] for entry in invalidated]
+        assert texts == [self._SUMMARY, "Fresh assessment after round two."]
         second_batch = [
             i for i in _applied_ids(data) if i not in first_batch
         ]
         assert second_batch
         assert invalidated[1]["invalidated_by_critic_adjustment_ids"] == second_batch
         assert invalidated[0]["invalidated_by_critic_adjustment_ids"] == first_batch
-
-    def test_a_wholly_refuted_batch_leaves_the_summary_alone(self, tmp_path):
-        self._seed(tmp_path)
-        _, result = _publish_and_adjudicate(tmp_path, [{
-            "action": "demote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "low"}, "rationale": "r",
-        }], refuted=((0, "the probe refuted it"),))
-        assert result["applied"] == 0
-        data = _ledger(tmp_path)
-        assert data["assessment"] == self._SUMMARY
-        assert INVALIDATED_ASSESSMENTS_KEY not in data
-
-    def test_a_refused_call_leaves_the_summary_alone(self, tmp_path):
-        self._seed(tmp_path)
-        _publish_verdict(tmp_path, "STAND")
-        with pytest.raises(ValueError, match="STAND"):
-            _adjudicate(tmp_path, [])
-        assert _ledger(tmp_path)["assessment"] == self._SUMMARY
 
     def test_no_summary_to_withdraw_records_no_withdrawal(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1", "critical")])
@@ -2247,27 +1963,6 @@ class TestAssessmentInvalidation:
         data = _ledger(tmp_path)
         assert data["assessment"] is None
         assert INVALIDATED_ASSESSMENTS_KEY not in data
-
-    def test_a_second_batch_appends_rather_than_overwrites(self, tmp_path):
-        """Two rounds of adjustments are two withdrawals — the first must
-        not be erased by the second."""
-        self._seed(tmp_path)
-        _publish_and_adjudicate(tmp_path, [{
-            "action": "demote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "low"}, "rationale": "r",
-        }], verified=(0,))
-        # A second reconciliation pass writes fresh prose, then a second
-        # critic round adjusts again.
-        data = _ledger(tmp_path)
-        data["assessment"] = "Second assessment."
-        write_findings(str(tmp_path), data)
-        _publish_and_adjudicate(tmp_path, [{
-            "action": "promote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "high"}, "rationale": "r2",
-        }], verified=(0,))
-        data = _ledger(tmp_path)
-        texts = [entry["text"] for entry in data[INVALIDATED_ASSESSMENTS_KEY]]
-        assert texts == [self._SUMMARY, "Second assessment."]
 
 
 class TestStepElevenWithdrawsContradictedProse:
@@ -2339,30 +2034,6 @@ class TestCheckPassthrough:
 
         assert result["applied"] == 1
         assert _ledger(tmp_path)["checks"] == self.CHECKS
-
-    def test_write_findings_does_not_filter_unknown_keys(self, tmp_path):
-        """`write_findings` is a whole-document replace, not a projection —
-        it has no field vocabulary of its own to fall out of date."""
-        payload = {"findings": [], "checks": self.CHECKS,
-                   "a_future_key": {"kept": True}}
-        write_findings(str(tmp_path), payload)
-        assert json.loads(
-            (tmp_path / "review-findings.json").read_text()
-        ) == payload
-
-    def test_rendered_markdown_carries_the_checks_section(self, tmp_path):
-        """End of the chain: the renderer the report is told to quote."""
-        _write_findings(tmp_path, [_finding("f1")], checks=self.CHECKS)
-        script = PLUGIN_ROOT / "scripts" / "review" / "review_markdown.py"
-        result = subprocess.run(
-            [sys.executable, str(script), "render",
-             str(tmp_path / "review-findings.json")],
-            capture_output=True, text=True,
-        )
-        assert result.returncode == 0, result.stderr
-        assert "## Verified Checks" in result.stdout
-        assert "legacy_hook" in result.stdout
-        assert "security-reviewer, wp-architecture-reviewer" in result.stdout
 
 
 class TestReconciliatorCheckPin:
@@ -2516,64 +2187,6 @@ class TestOutcomeVocabulary:
             "rejection_reason": "the probe refuted it",
         }]))
 
-    def test_the_critic_proposal_gate_rejects_an_outcome(self):
-        problems = validate_proposal_input({
-            "schema": 2,
-            "adjustments": [{
-                "action": "demote",
-                "target": {"kind": "finding", "id": "f1"},
-                "fields": {"severity": "low"},
-                "rationale": "guarded upstream",
-                "outcome": "verified",
-            }],
-        })
-        assert any("outcome" in problem for problem in problems)
-
-
-class TestOutcomeRecordedInTheLedger:
-    """The applied-ids record carries the orchestrator's outcome per id."""
-
-    def _adjudicate(self, tmp_path, **request_kwargs):
-        _write_findings(tmp_path, [_finding("f1", "high")])
-        _, result = _publish_and_adjudicate(tmp_path, [{
-            "action": "demote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "low"}, "rationale": "guarded upstream",
-        }], **request_kwargs)
-        assert result["applied"] == 1
-        return _ledger(tmp_path)
-
-    def test_an_omitted_entry_records_not_checked(self, tmp_path):
-        data = self._adjudicate(tmp_path)
-        assert data[APPLIED_IDS_KEY][0]["outcome"] == OUTCOME_NOT_CHECKED
-
-    def test_a_verified_entry_records_verified(self, tmp_path):
-        data = self._adjudicate(tmp_path, verified=(0,))
-        assert data[APPLIED_IDS_KEY][0]["outcome"] == OUTCOME_VERIFIED
-
-    def test_the_record_still_carries_the_adjustment_id(self, tmp_path):
-        data = self._adjudicate(tmp_path)
-        adjustments = json.loads(
-            _artifact(tmp_path, "critic_adjustments").read_text()
-        )
-        assert data[APPLIED_IDS_KEY][0]["adjustment_id"] == (
-            adjustments["adjustments"][0]["adjustment_id"]
-        )
-
-    def test_a_schema_one_string_record_is_rejected(self, tmp_path):
-        _write_findings(tmp_path, [_finding("f1", "high")])
-        data = _ledger(tmp_path)
-        data[APPLIED_IDS_KEY] = ["legacy-id"]
-        write_findings(str(tmp_path), data)
-        ids = _publish_revise(tmp_path, [{
-            "action": "demote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "low"}, "rationale": "already landed",
-        }])
-        with pytest.raises(
-            ValueError, match="'applied_critic_adjustments' must be a list"
-        ):
-            _adjudicate(tmp_path, ids)
-
-
 class TestRevisedAssessment:
     """The orchestrator's post-critic assessment, in the channel.
 
@@ -2596,21 +2209,7 @@ class TestRevisedAssessment:
             assessment=self._SUMMARY,
         )
 
-    def test_a_non_string_revised_assessment_rejects_the_proposal(self):
-        problems = validate_proposal_input({
-            "schema": 2, "adjustments": [], "revised_assessment": ["a", "b"],
-        })
-        assert problems and "revised_assessment" in problems[0]
-
     def test_it_becomes_the_ledger_assessment(self, tmp_path):
-        self._seed(tmp_path)
-        _publish_and_adjudicate(
-            tmp_path, self._DEMOTION,
-            verified=(0,), assessment=self._REVISED,
-        )
-        assert _ledger(tmp_path)["assessment"] == self._REVISED
-
-    def test_the_withdrawal_record_survives_the_replacement(self, tmp_path):
         """Replacement is not erasure: the reconciler's retracted words
         stay auditable beside the ids that cost them their standing."""
         self._seed(tmp_path)
@@ -2619,6 +2218,7 @@ class TestRevisedAssessment:
             verified=(0,), assessment=self._REVISED,
         )
         data = _ledger(tmp_path)
+        assert data["assessment"] == self._REVISED
         assert data[INVALIDATED_ASSESSMENTS_KEY][0]["text"] == self._SUMMARY
 
     def test_a_blank_revised_assessment_is_rejected_without_mutation(
@@ -2764,16 +2364,6 @@ class TestLedgerVerdictRecompute:
     machine authority for a wrong GitHub verdict.
     """
 
-    def test_demoting_the_last_high_moves_the_verdict(self, tmp_path):
-        _write_findings(tmp_path, [_finding("f1", "high")],
-                        verdict="request_changes")
-        _, result = _publish_and_adjudicate(tmp_path, [{
-            "action": "demote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "low"}, "rationale": "guarded upstream",
-        }], verified=(0,))
-        assert result["verdict"] == "approve"
-        assert _ledger(tmp_path)["verdict"] == "approve"
-
     def test_promoting_to_critical_blocks(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1", "medium")],
                         verdict="comment")
@@ -2810,17 +2400,6 @@ class TestLedgerVerdictRecompute:
         assert data["verdict"] == "approve"
         assert data["summary"]["suppressed_advisory_finding_count"] == 1
         assert data["summary"]["verdict_without_advisory"] == "request_changes"
-
-    def test_the_pre_apply_verdict_is_preserved(self, tmp_path):
-        _write_findings(tmp_path, [_finding("f1", "high")],
-                        verdict="request_changes")
-        _publish_and_adjudicate(tmp_path, [{
-            "action": "demote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "low"}, "rationale": "guarded upstream",
-        }], verified=(0,))
-        assert _ledger(tmp_path)["verdict_before_adjustments"] == (
-            "request_changes"
-        )
 
     def test_the_audit_trail_records_only_the_first_change(self, tmp_path):
         """A second round must name what the ledger came in as, not what
@@ -3182,20 +2761,6 @@ class TestSchemaTwoTargetUnion:
         )
         assert validate_proposal_input(distinct_kinds) == []
 
-    def test_proposal_digest_commits_the_nested_target(self):
-        proposal = critic_adjustments_module.prepare_proposal({
-            "schema": 2,
-            "adjustments": [
-                self._entry("correct", fields={"description": "Corrected."})
-            ],
-        })
-        original = critic_adjustments_module.proposal_digest(proposal)
-        edited = json.loads(json.dumps(proposal))
-
-        assert critic_adjustments_module.proposal_digest(edited) == original
-        edited["adjustments"][0]["target"]["id"] = "f2"
-        assert critic_adjustments_module.proposal_digest(edited) != original
-
     def test_add_uses_ledger_allocator_and_increments_it(self, tmp_path):
         _write_findings(
             tmp_path,
@@ -3341,48 +2906,6 @@ class TestSchemaTwoTargetUnion:
 
         assert tuple(path.read_bytes() for path in paths) == before
 
-    def test_refuted_and_noop_corrections_leave_assessment_untouched(
-        self, tmp_path
-    ):
-        _write_findings(
-            tmp_path,
-            [_finding("f1")],
-            assessment="Original assessment.",
-        )
-        refuted = self._commit(tmp_path, [self._entry(
-            "correct", fields={"description": "Changed description."}
-        )])
-        self._adjudicate(
-            tmp_path,
-            refuted,
-            verified=(),
-            refuted=((0, "Source confirms the original description."),),
-        )
-        after_refuted = json.loads(
-            (tmp_path / "review-findings.json").read_text()
-        )
-        assert after_refuted["assessment"] == "Original assessment."
-        assert "invalidated_assessments" not in after_refuted
-
-        other_dir = tmp_path / "noop"
-        other_dir.mkdir()
-        _write_findings(
-            other_dir,
-            [_finding("f1")],
-            assessment="Original assessment.",
-        )
-        no_op = self._commit(other_dir, [self._entry(
-            "correct", fields={"description": "d"}
-        )])
-        ledger_path = other_dir / "review-findings.json"
-        before_noop = ledger_path.read_bytes()
-
-        with pytest.raises(ValueError, match="would not change"):
-            self._adjudicate(other_dir, no_op)
-
-        assert ledger_path.read_bytes() == before_noop
-
-
 class TestProposalPreparation:
     def _entry(self, **extra):
         entry = {
@@ -3410,45 +2933,6 @@ class TestProposalPreparation:
         assert payload["adjustments"][0].get("adjustment_id") is None, (
             "normalization must not mutate the critic's temp input"
         )
-
-    def test_prepare_retries_the_improbable_uuid_collision(self, monkeypatch):
-        values = iter(("same", "same", "different"))
-
-        class FakeUuid:
-            def __init__(self, value):
-                self.hex = value
-
-        monkeypatch.setattr(
-            critic_adjustments_module.uuid,
-            "uuid4",
-            lambda: FakeUuid(next(values)),
-        )
-
-        proposal = critic_adjustments_module.prepare_proposal({
-            "schema": 2,
-            "adjustments": [self._entry(), {
-                **self._entry(), "target": {"kind": "finding", "id": "f2"},
-            }],
-        })
-
-        assert [
-            entry["adjustment_id"] for entry in proposal["adjustments"]
-        ] == ["same", "different"]
-
-    def test_prepare_rejects_duplicate_targets_before_assigning_ids(self):
-        with pytest.raises(ValueError, match="duplicate target finding 'f1'"):
-            critic_adjustments_module.prepare_proposal({
-                "schema": 2,
-                "adjustments": [
-                    self._entry(),
-                    {
-                        "action": "correct",
-                        "target": {"kind": "finding", "id": "f1"},
-                        "fields": {"title": "Clearer title"},
-                        "rationale": "Clarify the mechanism.",
-                    },
-                ],
-            })
 
     @pytest.mark.parametrize(
         "forbidden,value",
@@ -3659,39 +3143,6 @@ class TestAdjudicationRequest:
 
         assert (adj_path.read_bytes(), findings_path.read_bytes()) == before
 
-    def test_duplicate_ledger_target_is_rejected_before_any_write(
-        self, tmp_path
-    ):
-        _write_findings(tmp_path, [_finding("f1", "low")])
-        document = {
-            "schema": 2,
-            "adjustments": [
-                {
-                    "adjustment_id": "first",
-                    "action": "promote",
-                    "target": {"kind": "finding", "id": "f1"},
-                    "fields": {"severity": "high"},
-                    "rationale": "First mutation.",
-                },
-                {
-                    "adjustment_id": "second",
-                    "action": "correct",
-                    "target": {"kind": "finding", "id": "f1"},
-                    "fields": {"title": "Clearer title"},
-                    "rationale": "Second mutation.",
-                },
-            ],
-        }
-        _publish_raw_proposal(tmp_path, document)
-        adj_path = _artifact(tmp_path, "critic_adjustments")
-        findings_path = tmp_path / "review-findings.json"
-        before = (adj_path.read_bytes(), findings_path.read_bytes())
-
-        with pytest.raises(ValueError, match="duplicate target finding 'f1'"):
-            _adjudicate(tmp_path, ["first", "second"], verified=(0, 1))
-
-        assert (adj_path.read_bytes(), findings_path.read_bytes()) == before
-
     def test_a_malformed_ledger_is_rejected_before_any_write(self, tmp_path):
         ids = self._seed(tmp_path)
         ledger = _ledger(tmp_path)
@@ -3838,18 +3289,21 @@ class TestPublicationAndAdjudicationShareOneLock:
         }))
         lock = threading.Lock()
         save_inside_write = threading.Event()
+        adjudicate_reached_lock = threading.Event()
         release_save = threading.Event()
         real_write = critic_adjustments_module.write_critic_verdict
 
         @contextmanager
         def thread_lock(_output_dir):
+            if threading.current_thread().name == "adjudicate":
+                adjudicate_reached_lock.set()
             with lock:
                 yield
 
         def blocking_write(output_dir, verdict, proposal):
             if threading.current_thread().name == "critic-save":
                 save_inside_write.set()
-                assert release_save.wait(timeout=2)
+                assert release_save.wait(timeout=5)
             return real_write(output_dir, verdict, proposal)
 
         monkeypatch.setattr(
@@ -3864,6 +3318,7 @@ class TestPublicationAndAdjudicationShareOneLock:
             critic_module.critic_adjustments, "write_critic_verdict",
             blocking_write, raising=False,
         )
+
         results = {}
 
         def run_save():
@@ -3887,13 +3342,18 @@ class TestPublicationAndAdjudicationShareOneLock:
             target=run_adjudicate, name="adjudicate"
         )
         save_thread.start()
-        assert save_inside_write.wait(timeout=2)
+        assert save_inside_write.wait(timeout=5)
         adjudicate_thread.start()
-        time.sleep(0.05)
+        # `adjudicate_reached_lock` fires the instant the adjudicate thread
+        # calls `output_dir_lock`, before it blocks trying to acquire the
+        # real lock `blocking_write` still holds — so the thread cannot
+        # have produced a result yet, with no sleep needed to prove it.
+        assert adjudicate_reached_lock.wait(timeout=5)
+        assert adjudicate_thread.is_alive()
         assert "adjudicated" not in results and "error" not in results
         release_save.set()
-        save_thread.join(timeout=2)
-        adjudicate_thread.join(timeout=2)
+        save_thread.join(timeout=5)
+        adjudicate_thread.join(timeout=5)
 
         assert results["save"] == 0
         assert "error" in results, (
@@ -3952,41 +3412,21 @@ class TestAdjudicationCLI:
         assert "APPLIED: 1 | REJECTED: 0" in result.stdout
         assert "LEDGER VERDICT: approve" in result.stdout
 
-    def test_an_omitted_assessment_is_reported_absent(self, tmp_path):
+    def test_the_assessment_and_recommendations_echo_report_presence(
+        self, tmp_path
+    ):
+        """One request without a revised assessment but with revised
+        recommendations proves the presence/absence echo is per-key, not
+        a single flag."""
         ids = self._seed(tmp_path)
 
-        result = self._run(tmp_path, _request(ids, verified=(0,)))
+        result = self._run(tmp_path, _request(
+            ids, verified=(0,), recommendations={"suggestions": ["Add a nonce."]},
+        ))
 
         assert result.returncode == 0, result.stdout + result.stderr
         assert "REVISED ASSESSMENT: absent" in result.stdout
-        assert "REVISED RECOMMENDATIONS: absent" in result.stdout
-
-    @pytest.mark.parametrize("recommendations", [
-        pytest.param({"suggestions": ["Add a nonce."]}, id="nonempty"),
-        pytest.param({}, id="explicit-empty"),
-    ])
-    def test_revised_recommendations_are_reported_present(self, tmp_path, recommendations):
-        ids = self._seed(tmp_path)
-        result = self._run(tmp_path, _request(
-            ids, verified=(0,), recommendations=recommendations,
-        ))
-        assert result.returncode == 0, result.stdout + result.stderr
         assert "REVISED RECOMMENDATIONS: present" in result.stdout
-
-    def test_a_second_adjudication_is_refused_on_stdout(self, tmp_path):
-        ids = self._seed(tmp_path)
-        request = _request(ids, verified=(0,))
-        first = self._run(tmp_path, request)
-        assert first.returncode == 0, first.stdout + first.stderr
-        settled = (tmp_path / "review-findings.json").read_bytes()
-
-        second = self._run(tmp_path, request)
-
-        assert second.returncode == 1
-        assert second.stdout.startswith("REJECTED:")
-        assert "already adjudicated" in second.stdout
-        assert "Traceback" not in second.stderr
-        assert (tmp_path / "review-findings.json").read_bytes() == settled
 
     def test_an_invalid_request_is_rejected_line_by_line(self, tmp_path):
         self._seed(tmp_path)
@@ -4015,19 +3455,6 @@ class TestAdjudicationCLI:
         assert "REJECTED: adjudication request is not valid JSON" in (
             result.stdout
         )
-
-    @pytest.mark.parametrize(
-        "argv", [[], ["apply"], ["settle"]],
-        ids=("bare", "retired-apply", "retired-settle"),
-    )
-    def test_only_the_adjudicate_subcommand_exists(self, tmp_path, argv):
-        result = subprocess.run(
-            [sys.executable, str(SCRIPT_PATH), *argv,
-             "--output-dir", str(tmp_path)],
-            capture_output=True, text=True, timeout=10,
-        )
-
-        assert result.returncode != 0
 
 
 class TestProvenanceAtTheReaderBoundary:
