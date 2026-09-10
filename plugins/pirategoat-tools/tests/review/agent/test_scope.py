@@ -400,11 +400,16 @@ class TestFilterDomain:
         assert "tests/unit/handler_test.php" in excluded
 
     def test_toolchain_domain_matches_configs(self):
-        files = ["pnpm-workspace.yaml", ".npmrc", "tsconfig.json", "src/app.ts"]
+        files = [
+            "pnpm-workspace.yaml", ".npmrc", "tsconfig.json", "nx.json",
+            ".stylelintrc", "src/app.ts",
+        ]
         matched, excluded = review_scope.filter_domain(files, "toolchain")
         assert "pnpm-workspace.yaml" in matched
         assert ".npmrc" in matched
         assert "tsconfig.json" in matched
+        assert "nx.json" in matched
+        assert ".stylelintrc" in matched
         assert "src/app.ts" in excluded
 
     def test_toolchain_domain_matches_lock_files(self):

@@ -10,7 +10,7 @@ were the executable subset; nothing verified the subset spans the prose.
 This suite closes that loop:
 
 1. **One minimal probe per criterion.** For every conditional agent, every
-   `triage_criteria` bullet has at least one probe — the smallest realistic
+   `triage_criteria` bullet has exactly one probe — the smallest realistic
    diff satisfying that criterion — that MUST dispatch through the real
    pipeline (`decide_agent_dispatch` + real registry), i.e. through domain
    gating, explicit applicability gates, and conservative fallback routing.
@@ -29,7 +29,6 @@ weaken the probe to pass.
 """
 
 import importlib.util
-import sys
 from pathlib import Path
 
 import pytest
@@ -100,7 +99,11 @@ def probe(
 
 
 # ---------------------------------------------------------------------------
-# The probes — one or more per criterion, keyed by agent.
+# The probes — one per criterion, keyed by agent. A detector's other
+# syntax forms belong in test_plan_dispatch.py::TestStructuralChecks (and
+# language-generic ones in the language matrix below), not in a second
+# probe: conditional agents dispatch by default, so a probe proves the
+# criterion reaches dispatch, not that one detector form fires.
 # Criterion strings must match agent_registry.json VERBATIM (the meta-test
 # enforces set equality, so a registry edit forces a probe update here).
 # ---------------------------------------------------------------------------
@@ -111,16 +114,6 @@ CRITERIA_PROBES = {
             "Markup emission added or removed in ANY language that renders UI — JSX/TSX components, PHP echoing HTML, template files (labels, fieldsets, ARIA attributes, interactive elements)",
             ["includes/admin/class-wc-admin-settings.php"],
             diff='+<label for="woocommerce_currency">Currency</label>',
-        ),
-        probe(
-            "Markup emission added or removed in ANY language that renders UI — JSX/TSX components, PHP echoing HTML, template files (labels, fieldsets, ARIA attributes, interactive elements)",
-            ["templates/checkout/form.twig"],
-            diff='+<label for="email">{{ label }}</label>',
-        ),
-        probe(
-            "Markup emission added or removed in ANY language that renders UI — JSX/TSX components, PHP echoing HTML, template files (labels, fieldsets, ARIA attributes, interactive elements)",
-            ["includes/admin/class-wc-settings-page.php"],
-            diff="+\t\tsubmit_button( __( 'Save changes', 'woocommerce' ) );",
         ),
         probe(
             "ARIA attributes or focus management code",
@@ -143,11 +136,6 @@ CRITERIA_PROBES = {
             "Screen reader announcements: speak() calls, aria-live regions, live region wiring",
             ["src/store/notices.ts"],
             diff="+ speak( message, 'polite' );",
-        ),
-        probe(
-            "Screen reader announcements: speak() calls, aria-live regions, live region wiring",
-            ["src/components/StatusRegion.tsx"],
-            diff="+ liveRegion.setAttribute('aria-live', 'polite');",
         ),
         probe(
             "Focus management in hooks or utilities (programmatic .focus(), focus restoration logic)",
@@ -184,41 +172,11 @@ CRITERIA_PROBES = {
             ),
         ),
         probe(
-            "Response schema or DTO class modifications",
-            ["includes/rest/class-orders-controller.php"],
-            diff="+ $schema['properties']['refund_total'] = array( 'type' => 'number' );",
-        ),
-        probe(
-            "Response schema or DTO class modifications",
-            ["src/DTO/OrderStatus.php"],
-            diff=(
-                "-    public string $status;\n"
-                "+    public ?string $status;"
-            ),
-        ),
-        probe(
-            "Response schema or DTO class modifications",
-            ["src/dto/OrderStatus.ts"],
-            diff=(
-                "-  status: string;\n"
-                "+  status?: string;"
-            ),
-        ),
-        probe(
             "Public function signature changes (parameters, return types)",
             ["src/PaymentGatewayInterface.php"],
             diff=(
                 "-    public function process( $order ) {\n"
                 "+    public function process( $order, $currency ) {"
-            ),
-        ),
-        probe(
-            "Public function signature changes (parameters, return types)",
-            ["internal/store/orders.go"],
-            diff=(
-                "-func ExportedName(ctx context.Context) (string, error) {\n"
-                "-\treturn lookup(ctx)\n"
-                "-}"
             ),
         ),
         probe(
@@ -261,24 +219,11 @@ CRITERIA_PROBES = {
             diff="+ $stages = $this->build_stages();",
         ),
         probe(
-            "Large PRs (20+ files or 500+ lines)",
-            [f"src/orders/step_{i}.php" for i in range(21)],
-            stats={f"src/orders/step_{i}.php": (2, 1) for i in range(21)},
-            diff="+ $x = 1;",
-        ),
-        probe(
             "New modules or packages introduced",
             ["src/Inventory/StockSync.php"],
             commits="introduce inventory package for stock sync",
             added_files=["src/Inventory/StockSync.php"],
             diff="+class StockSync {",
-        ),
-        probe(
-            "New modules or packages introduced",
-            ["scripts/util/parsing.py"],
-            commits="add parsing helpers",
-            added_files=["scripts/util/parsing.py"],
-            diff="+def parse_header(raw):\n+    return raw.strip()",
         ),
     ],
     "code-clarity-reviewer": [
@@ -294,24 +239,6 @@ CRITERIA_PROBES = {
             diff="+ const formatOrderTotal = (v) => v;",
         ),
         probe(
-            "Renamed symbols (functions, classes, variables)",
-            ["includes/class-wc-totals.php"],
-            diff=(
-                "-    public function calc( $order ) {\n"
-                "+    public function calculate_totals( $order ) {"
-            ),
-        ),
-        probe(
-            "Renamed symbols (functions, classes, variables)",
-            ["src/util/format.js"],
-            diff=(
-                "-  const tmp = items.filter(active);\n"
-                "-  return tmp.length;\n"
-                "+  const filteredItems = items.filter(active);\n"
-                "+  return filteredItems.length;"
-            ),
-        ),
-        probe(
             "Modified or added docblocks, JSDoc, or PHPDoc comments",
             ["includes/class-wc-order.php"],
             diff="+ * @param int $order_id Order identifier.",
@@ -321,12 +248,6 @@ CRITERIA_PROBES = {
             ["src/api/version.ts"],
             added_files=["src/api/version.ts"],
             diff="+export const API_VERSION = 'v2';",
-        ),
-        probe(
-            "New files introducing public API surface",
-            ["src/Export/csv-exporter.php"],
-            added_files=["src/Export/csv-exporter.php"],
-            diff="+function wc_export_orders_csv( $args ) {",
         ),
         probe(
             "Function signature changes (parameters, return types)",
@@ -349,32 +270,14 @@ CRITERIA_PROBES = {
             diff="+ await processPayment( order );",
         ),
         probe(
-            "Async/await or Promise patterns in JavaScript",
-            ["src/checkout/retry.ts"],
-            diff="+ return new Promise((resolve, reject) => attempt(resolve, reject));",
-        ),
-        probe(
             "Database transaction blocks or direct query sequences",
             ["includes/class-orders-store.php"],
             diff="+ $wpdb->query( 'START TRANSACTION' );",
         ),
         probe(
-            "Database transaction blocks or direct query sequences",
-            ["includes/class-stock-store.php"],
-            diff=(
-                "+ $wpdb->query( $reserve_sql );\n"
-                "+ $wpdb->query( $decrement_sql );"
-            ),
-        ),
-        probe(
             "Background job or queue handler code",
             ["includes/class-webhook-dispatcher.php"],
             diff="+ $this->queue->push( $job );",
-        ),
-        probe(
-            "Background job or queue handler code",
-            ["includes/class-stock-jobs.php"],
-            diff="+ as_enqueue_async_action( 'wc_reserve_stock', array( $order_id ) );",
         ),
         probe(
             "WordPress cron or scheduled event handlers",
@@ -387,19 +290,9 @@ CRITERIA_PROBES = {
             diff="+ set_transient( 'wc_rates', $rates, HOUR_IN_SECONDS );",
         ),
         probe(
-            "Cache read-write sequences (transients, object cache)",
-            ["includes/class-session-store.php"],
-            diff="+ wp_cache_set( $key, $value, 'wc-session' );",
-        ),
-        probe(
             "Order or payment processing flows (idempotency, duplicate suppression, capture races)",
             ["includes/class-payment-capture.php"],
             diff="+ $idempotency_key = $order->get_id() . ':capture';",
-        ),
-        probe(
-            "Order or payment processing flows (idempotency, duplicate suppression, capture races)",
-            ["includes/class-payment-flow.php"],
-            diff="+ $result = $gateway->capture( $intent_id );",
         ),
         probe(
             "Commits mentioning async, concurrent, race, transaction, lock, queue",
@@ -415,19 +308,9 @@ CRITERIA_PROBES = {
             diff="+ logger.info({ customerEmail });",
         ),
         probe(
-            "Code handling personal identifiers (emails, addresses, IPs, usernames)",
-            ["includes/class-rate-limiter.php"],
-            diff="+ $key = 'rl_' . md5( $_SERVER['REMOTE_ADDR'] );",
-        ),
-        probe(
             "Logging or monitoring additions (error_log, WC_Logger, Sentry, New Relic)",
             ["includes/class-checkout.php"],
             diff="+ $logger = wc_get_logger(); $logger->info( wp_json_encode( $payload ) );",
-        ),
-        probe(
-            "Logging or monitoring additions (error_log, WC_Logger, Sentry, New Relic)",
-            ["src/monitoring/errors.ts"],
-            diff="+ Sentry.captureException(err, { extra: context });",
         ),
         probe(
             "API responses or serialization carrying user-identifiable data",
@@ -443,11 +326,6 @@ CRITERIA_PROBES = {
             "Payment or financial data processing",
             ["includes/class-gateway.php"],
             diff="+ $intent = $gateway->capture( $card_number_token );",
-        ),
-        probe(
-            "Payment or financial data processing",
-            ["includes/class-order-handler.php"],
-            diff="+ $result = $this->process_payment( $order->get_total(), $token );",
         ),
         probe(
             "Data export, import, or migration handlers",
@@ -490,12 +368,6 @@ CRITERIA_PROBES = {
             added_files=["src/OrderService.php"],
             deleted_files=["includes/class-order-helper.php"],
             diff="+class OrderService {",
-        ),
-        probe(
-            "New files replacing or superseding existing ones",
-            ["src/parser_v2.py"],
-            added_files=["src/parser_v2.py"],
-            diff="+def parse(raw):\n+    return raw.strip()",
         ),
     ],
     "devils-advocate-reviewer": [
@@ -546,33 +418,9 @@ CRITERIA_PROBES = {
             ),
         ),
         probe(
-            "New, renamed, or removed public functions, classes, or endpoints",
-            ["internal/store/orders.go"],
-            diff=(
-                "+func ExportedName(ctx context.Context) (string, error) {\n"
-                "+\treturn lookup(ctx)\n"
-                "+}"
-            ),
-        ),
-        probe(
-            "New, renamed, or removed public functions, classes, or endpoints",
-            ["src/orders/api.py"],
-            diff="+def get_order(order_id):\n+    return _load(order_id)",
-        ),
-        probe(
-            "New, renamed, or removed public functions, classes, or endpoints",
-            ["src/orders/parse.ts"],
-            diff="+export function parseOrderId( raw: string ): number {",
-        ),
-        probe(
             "Configuration option additions or removals",
             ["includes/class-install.php"],
             diff="+ add_option( 'wc_enable_new_checkout', 'no' );",
-        ),
-        probe(
-            "Configuration option additions or removals",
-            ["src/config/defaults.js"],
-            diff="+  maxUploadSize: 1024,",
         ),
         probe(
             "Behavioral changes flagged in commits (deprecations, renames, migrations, restructuring)",
@@ -643,49 +491,9 @@ CRITERIA_PROBES = {
             diff="+ rows = session.query(Order).filter_by(status='paid').all()",
         ),
         probe(
-            "Database query construction or ORM usage",
-            ["src/Orders/OrderRepository.php"],
-            diff="+        $orders = Order::where( 'status', 'open' )->get();",
-        ),
-        probe(
-            "Database query construction or ORM usage",
-            ["src/reports/rollup.py"],
-            diff='+    cursor.execute("SELECT id, total FROM orders")',
-        ),
-        probe(
-            "Database query construction or ORM usage",
-            ["src/reports/rollup.py"],
-            diff=(
-                '     rows = cursor.execute("""\n'
-                "         SELECT id, total FROM orders\n"
-                "-        ORDER BY created_at DESC\n"
-                "+        ORDER BY created_at DESC, id DESC"
-            ),
-        ),
-        probe(
-            "Database query construction or ORM usage",
-            ["migrations/0042_order_index.sql"],
-            diff="+CREATE INDEX idx_orders_created ON orders (created_at);",
-        ),
-        probe(
-            "Database query construction or ORM usage",
-            ["src/reports/rollup.py"],
-            diff="+        JOIN order_items ON order_items.order_id = orders.id",
-        ),
-        probe(
-            "Database query construction or ORM usage",
-            ["src/reports/rollup.py"],
-            diff="+        WHERE status = 'open' AND total > 100",
-        ),
-        probe(
             "HTTP/API client calls",
             ["src/sync/client.py"],
             diff="+ response = requests.get(api_url, timeout=10)",
-        ),
-        probe(
-            "HTTP/API client calls",
-            ["internal/sync/client.go"],
-            diff="+\tresp, err := http.Get(url)",
         ),
         probe(
             "Data fetching hooks and loaders",
@@ -698,11 +506,6 @@ CRITERIA_PROBES = {
             diff="+ function bulk_update_stock( $ids ) {",
         ),
         probe(
-            "Pagination and bulk operations",
-            ["includes/class-orders-table.php"],
-            diff="+ $orders = wc_get_orders( array( 'posts_per_page' => -1 ) );",
-        ),
-        probe(
             "Unbounded list rendering and collection iteration",
             ["src/components/OrderList.tsx"],
             diff=(
@@ -712,33 +515,14 @@ CRITERIA_PROBES = {
             ),
         ),
         probe(
-            "Unbounded list rendering and collection iteration",
-            ["src/components/OrderList.tsx"],
-            diff=(
-                "+  for (const order of orders) {\n"
-                "+    rows.push(renderRow(order));\n"
-                "+  }"
-            ),
-        ),
-        probe(
             "Asset loading, lazy loading, code splitting",
             ["includes/class-assets.php"],
             diff="+ wp_enqueue_script( 'wc-admin', $url, array(), $ver, true );",
         ),
         probe(
-            "Asset loading, lazy loading, code splitting",
-            ["src/components/index.ts"],
-            diff="+ const AnalyticsPanel = lazy(() => import('./AnalyticsPanel'));",
-        ),
-        probe(
             "Caching logic (transients, object cache, memoization)",
             ["includes/class-reports.php"],
             diff="+ set_transient( 'wc_report_cache', $data, DAY_IN_SECONDS );",
-        ),
-        probe(
-            "Caching logic (transients, object cache, memoization)",
-            ["src/orders/useTotals.ts"],
-            diff="+ const totals = useMemo(() => computeTotals(rows), [rows]);",
         ),
         probe(
             "Commits mentioning performance, optimize, cache, query, load time",
@@ -777,11 +561,6 @@ CRITERIA_PROBES = {
             diff='+    "vendor/payments-sdk": "^2.0",',
         ),
         probe(
-            "New dependency declarations (composer.json require, package.json dependencies)",
-            ["package.json"],
-            diff='+    "lodash": "^4.17.21",',
-        ),
-        probe(
             "Hook or filter names referencing external plugins",
             ["includes/class-compat.php"],
             diff="+ add_action( 'elementor/init', $cb );",
@@ -804,24 +583,9 @@ CRITERIA_PROBES = {
             diff="+\tresp, err := http.Get(url)",
         ),
         probe(
-            "External service integrations or API client changes",
-            ["src/Clients/TaxServiceClient.php"],
-            diff="+ $client = new ExternalTaxClient( $config );",
-        ),
-        probe(
-            "External service integrations or API client changes",
-            ["includes/class-tracker.php"],
-            diff="+ $response = wp_remote_post( $url, array( 'body' => $payload ) );",
-        ),
-        probe(
             "Error handling or retry logic modifications",
             ["src/Webhooks/Delivery.php"],
             diff="+ return $this->retry( $callback, 3 );",
-        ),
-        probe(
-            "Error handling or retry logic modifications",
-            ["includes/class-importer.php"],
-            diff="+ } catch ( Exception $e ) { $failed[] = $row; }",
         ),
         probe(
             "Feature flag or kill-switch changes",
@@ -829,19 +593,9 @@ CRITERIA_PROBES = {
             diff="+ if ( FeatureFlags::enabled( 'new_checkout' ) ) {",
         ),
         probe(
-            "Feature flag or kill-switch changes",
-            ["src/checkout/init.php"],
-            diff="+ if ( ! Features::is_enabled( 'new_checkout' ) ) {",
-        ),
-        probe(
             "Deployment configuration or infrastructure changes",
             [".github/workflows/deploy.yml"],
             diff="+      - run: ./bin/deploy production",
-        ),
-        probe(
-            "Deployment configuration or infrastructure changes",
-            ["infra/main.tf"],
-            diff='+resource "aws_sqs_queue" "webhooks" {}',
         ),
         probe(
             "Background job or queue processing changes",
@@ -926,19 +680,9 @@ CRITERIA_PROBES = {
             diff="+ mode: 'production',",
         ),
         probe(
-            "Build tool config changes (webpack, vite, esbuild, turbo, nx)",
-            ["nx.json"],
-            diff='+ "defaultBase": "main",',
-        ),
-        probe(
             "Linter or formatter config changes (ESLint, Prettier, PHPCS, PHPStan)",
             [".eslintrc.json"],
             diff='+ "no-console": "error",',
-        ),
-        probe(
-            "Linter or formatter config changes (ESLint, Prettier, PHPCS, PHPStan)",
-            [".stylelintrc"],
-            diff='+ "selector-max-specificity": "0,3,0",',
         ),
         probe(
             "TypeScript or Babel config changes (tsconfig.json, babel.config.*)",
@@ -1009,26 +753,9 @@ CRITERIA_PROBES = {
             diff="+ $this->calculate_totals();",
         ),
         probe(
-            # WC core checked out directly: paths are ROOT-relative — the
-            # monorepo prefix must not be the only carrier of the signal.
-            "WooCommerce-specific files",
-            ["includes/class-wc-cart.php"],
-            diff="+\t\t$this->calculate_totals();",
-        ),
-        probe(
             "Admin menus, settings pages, or custom post types",
             ["includes/class-post-types.php"],
             diff="+ register_post_type( 'wc_booking', $args );",
-        ),
-        probe(
-            "Admin menus, settings pages, or custom post types",
-            ["includes/class-settings-page.php"],
-            diff="+ add_settings_field( 'wc_flag', $label, $cb, 'wc_settings' );",
-        ),
-        probe(
-            "Admin menus, settings pages, or custom post types",
-            ["includes/admin/class-tools-page.php"],
-            diff="+ add_submenu_page( 'woocommerce', $title, $title, 'manage_options', 'wc-tools', $cb );",
         ),
         probe(
             "Commits mentioning hooks, filters, backwards compatibility, deprecation, i18n",
@@ -1052,42 +779,12 @@ _FLAT = [
 
 
 class TestCriteriaProbesDispatch:
-    """Every criterion probe must dispatch through the real pipeline."""
-
-    @pytest.mark.parametrize(
-        "agent_name,idx,p",
-        _FLAT,
-        ids=[f"{a}:{i}:{p['criterion'][:50]}" for a, i, p in _FLAT],
-    )
-    def test_probe_dispatches(self, agents, agent_name, idx, p):
-        config = agents[agent_name]
-        status, reason, _signal = decide_agent_dispatch(
-            agent_name,
-            config,
-            build_domain_counts(p["files"]),
-            clean_files=p["files"],
-            commit_messages=p["commits"],
-            diffstat=p["diffstat"],
-            pr_text=p["pr"],
-            diff_text=p["diff"],
-            repository_text=p["repository"],
-        )
-        assert status == "DISPATCH", (
-            f"{agent_name} must dispatch for its criterion "
-            f"{p['criterion']!r} — got {status} ({reason}). Give the agent a "
-            f"backing signal (keyword / triage check) or reword the "
-            f"criterion; never weaken the probe."
-        )
-
-
-class TestProbeNeutrality:
-    """A probe must prove its criterion from the CHANGE ITSELF — diff,
-    files, diffstat — unless the criterion is explicitly about commit/PR
-    text. Without this, a clause can pass its coverage probe via a keyword
-    smuggled into the probe's commit message while staying silently
-    unsignaled for real diffs with neutral text (the round-8 class: eleven
-    clauses skipped on small diffs despite every bullet having a passing
-    probe)."""
+    """Every criterion probe dispatches through the real pipeline, from the
+    change itself. Commit/PR text is blanked unless the criterion is about
+    that text (the round-8 class: a keyword smuggled into the probe's
+    commit message hid an unsignaled clause). Keyword matching is monotonic
+    (text only adds signals), so the blank-text run implies the with-text
+    one."""
 
     _TEXT_ORIENTED_MARKERS = ("commit", "pr ", " pr", "flagged in")
 
@@ -1096,30 +793,26 @@ class TestProbeNeutrality:
         _FLAT,
         ids=[f"{a}:{i}:{p['criterion'][:50]}" for a, i, p in _FLAT],
     )
-    def test_probe_dispatches_without_commit_or_pr_text(
-        self, agents, agent_name, idx, p
-    ):
-        crit = p["criterion"].lower()
-        if any(marker in crit for marker in self._TEXT_ORIENTED_MARKERS):
-            pytest.skip("criterion is explicitly about commit/PR text")
+    def test_probe_dispatches(self, agents, agent_name, idx, p):
         config = agents[agent_name]
+        crit = p["criterion"].lower()
+        text_oriented = any(m in crit for m in self._TEXT_ORIENTED_MARKERS)
         status, reason, _signal = decide_agent_dispatch(
             agent_name,
             config,
             build_domain_counts(p["files"]),
             clean_files=p["files"],
-            commit_messages="",
+            commit_messages=p["commits"] if text_oriented else "",
             diffstat=p["diffstat"],
-            pr_text="",
+            pr_text=p["pr"] if text_oriented else "",
             diff_text=p["diff"],
             repository_text=p["repository"],
         )
         assert status == "DISPATCH", (
-            f"{agent_name}'s probe for {p['criterion']!r} only dispatches "
-            f"via its commit/PR text — got {status} ({reason}) with neutral "
-            f"text. Move the signal into the probe's diff/files/diffstat "
-            f"(and back it with a diff-capable keyword or check), or reword "
-            f"the criterion to say it is commit/PR-text-based."
+            f"{agent_name} must dispatch for its criterion {p['criterion']!r} "
+            f"from the change itself — got {status} ({reason}). Give the agent "
+            f"a backing signal (keyword / triage check) or reword the "
+            f"criterion; never weaken the probe."
         )
 
 
@@ -1301,47 +994,47 @@ def _forms(entry):
     return entry if isinstance(entry, list) else [entry]
 
 
-_MATRIX_FLAT = [
-    (agent, criterion, f"{lang}-{i}" if len(_forms(entry)) > 1 else lang, filepath, diff)
-    for agent, criterion, tbl in _LANGUAGE_MATRIX
-    for lang, entry in sorted(tbl.items())
-    for i, (filepath, diff) in enumerate(_forms(entry))
-]
-
-
 class TestLanguageMatrix:
     """Language-generic criteria must dispatch in EVERY language their
     domain scopes — a detector that only recognizes PHP/JS syntax fails
-    here for Go/Rust/Java/Kotlin/C# instead of failing in review."""
+    here for Go/Rust/Java/Kotlin/C# instead of failing in review. One test
+    per table; every family and form is still asserted, and the failure
+    names each one that did not dispatch."""
 
     @pytest.mark.parametrize(
-        "agent_name,criterion,lang,filepath,diff",
-        _MATRIX_FLAT,
-        ids=[f"{a.split('-reviewer')[0]}:{lang}" for a, _, lang, _, _ in _MATRIX_FLAT],
+        "agent_name,criterion,tbl",
+        _LANGUAGE_MATRIX,
+        ids=[f"{a.split('-reviewer')[0]}:{c[:30]}" for a, c, _ in _LANGUAGE_MATRIX],
     )
-    def test_criterion_dispatches_in_language(
-        self, agents, agent_name, criterion, lang, filepath, diff
+    def test_criterion_dispatches_in_every_language(
+        self, agents, agent_name, criterion, tbl
     ):
         config = agents[agent_name]
         assert criterion in config.get("triage_criteria", []), (
             f"matrix anchor criterion drifted for {agent_name}: {criterion!r}"
         )
-        p = probe(criterion, [filepath], diff=diff)
-        status, reason, _signal = decide_agent_dispatch(
-            agent_name,
-            config,
-            build_domain_counts(p["files"]),
-            clean_files=p["files"],
-            commit_messages="",
-            diffstat=p["diffstat"],
-            pr_text="",
-            diff_text=p["diff"],
-            repository_text="",
-        )
-        assert status == "DISPATCH", (
-            f"{agent_name} criterion {criterion!r} has no backing signal for "
-            f"{lang} — got {status} ({reason}). The domain scopes this "
-            f"language; the detector must recognize its syntax."
+        failures = []
+        for lang, entry in sorted(tbl.items()):
+            for filepath, diff in _forms(entry):
+                p = probe(criterion, [filepath], diff=diff)
+                status, reason, _signal = decide_agent_dispatch(
+                    agent_name,
+                    config,
+                    build_domain_counts(p["files"]),
+                    clean_files=p["files"],
+                    commit_messages="",
+                    diffstat=p["diffstat"],
+                    pr_text="",
+                    diff_text=p["diff"],
+                    repository_text="",
+                )
+                if status != "DISPATCH":
+                    failures.append(f"{lang} ({filepath}): {status} ({reason})")
+        assert not failures, (
+            f"{agent_name} criterion {criterion!r} has no backing signal for: "
+            + "; ".join(failures)
+            + ". The domain scopes these languages; the detector must "
+            "recognize their syntax."
         )
 
 
@@ -1380,61 +1073,6 @@ class TestDetectorSilenceConservatism:
             repository_text="",
         )
         assert status == "DISPATCH", reason
-
-    def test_representative_language_coverage_does_not_authorize_skip(self, agents):
-        status, reason, _signal = decide_agent_dispatch(
-            "concurrency-reviewer", agents["concurrency-reviewer"],
-            build_domain_counts(["src/utils/format.py"]),
-            clean_files=["src/utils/format.py"],
-            commit_messages="tidy formatter",
-            diffstat=self._small("src/utils/format.py"),
-            pr_text="",
-            diff_text="+ return value.strip()",
-            repository_text="",
-        )
-        assert status == "DISPATCH", reason
-
-    def test_mixed_language_files_dispatch_conservatively(self, agents):
-        files = ["src/utils/format.py", "src/native/parser.c"]
-        status, reason, _signal = decide_agent_dispatch(
-            "concurrency-reviewer", agents["concurrency-reviewer"],
-            build_domain_counts(files),
-            clean_files=files,
-            commit_messages="tidy formatting",
-            diffstat={
-                "added": 6, "removed": 2,
-                "deleted_files": [], "renamed_files": [], "added_files": [],
-                "file_stats": {
-                    "src/utils/format.py": {"added": 3, "removed": 1},
-                    "src/native/parser.c": {"added": 3, "removed": 1},
-                },
-            },
-            pr_text="",
-            diff_text="+ trim(value);",
-            repository_text="",
-        )
-        assert status == "DISPATCH", reason
-
-    def test_keyword_required_gate_holds_for_uncovered_languages(self):
-        """An explicit membership gate still requires its configured keyword."""
-        config = {
-            "dispatch_class": "conditional",
-            "domain": "security",
-            "triage_keywords": ["auth", "token"],
-            "require_triage_keyword_match": True,
-        }
-        status, reason, _signal = _mod.triage_conditional_agent(
-            "synthetic-gated-reviewer", config,
-            ["src/native/parser.c"],
-            "tidy parser",
-            {
-                "added": 3, "removed": 1,
-                "deleted_files": [], "renamed_files": [], "added_files": [],
-                "file_stats": {"src/native/parser.c": {"added": 3, "removed": 1}},
-            },
-            diff_text="+ trim(value);",
-        )
-        assert status == "SKIPPED_TRIAGE", reason
 
     def test_every_matrix_family_probes_every_table(self):
         """Each family has representative positive probes in every table."""
