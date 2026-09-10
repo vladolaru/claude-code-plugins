@@ -388,22 +388,38 @@ class TestCheckStatus:
         assert agent["counts"]["high"] == 2
         assert agent["verdict"] == "block"
 
-    def test_no_dispatch_plan_exits_1(self, tmp_path):
-        cmd = [sys.executable, str(SCRIPT_PATH), "--output-dir", str(tmp_path)]
-        r = subprocess.run(cmd, capture_output=True, text=True)
-        assert r.returncode == 1
-
-    def test_invalid_status_exits_1_with_actionable_error(self, tmp_path):
+    def test_invalid_status_exits_1_with_actionable_error(
+        self, mod, tmp_path, monkeypatch, capsys
+    ):
         _write_plan(tmp_path, [
             {"name": "security-reviewer", "status": "DISPATCHED"},
         ])
+        monkeypatch.setattr(
+            sys, "argv",
+            ["agents_status.py", "--output-dir", str(tmp_path)],
+        )
 
-        cmd = [sys.executable, str(SCRIPT_PATH), "--output-dir", str(tmp_path)]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        with pytest.raises(SystemExit) as exc:
+            mod.main()
 
-        assert result.returncode == 1
-        assert "security-reviewer" in result.stderr
-        assert repr("DISPATCHED") in result.stderr
+        assert exc.value.code == 1
+        err = capsys.readouterr().err
+        assert "security-reviewer" in err
+        assert repr("DISPATCHED") in err
+
+        # test_no_dispatch_plan_exits_1 folded in: same `except` clause,
+        # FileNotFoundError from a missing dispatch plan also exits 1.
+        no_plan_dir = tmp_path / "no-plan"
+        no_plan_dir.mkdir()
+        monkeypatch.setattr(
+            sys, "argv",
+            ["agents_status.py", "--output-dir", str(no_plan_dir)],
+        )
+
+        with pytest.raises(SystemExit) as exc2:
+            mod.main()
+
+        assert exc2.value.code == 1
 
 
 class TestDispatchStatusContract:
@@ -884,37 +900,21 @@ class TestWaitMode:
         # rem=1.0 -> sleep clamped to 1.0, not the full 1.5s poll_interval.
         assert clock.sleeps == [1.5, 1.5, 1.0]
 
-    def test_wait_exit_3_on_expiry(self, tmp_path):
-        """Unfinished agent + a short --max-seconds must exit 3, not 0/1/2."""
-        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
-        _start_agent(tmp_path, "code-reviewer")
-        # No review file written — code-reviewer stays RUNNING forever.
-
-        cmd = [
-            sys.executable, str(SCRIPT_PATH),
-            "--output-dir", str(tmp_path),
-            "--wait", "--max-seconds", "1",
-        ]
-        # Generous subprocess-level timeout: if a mutation makes --wait ignore
-        # --max-seconds (never expiring), this call hangs. A bounded
-        # subprocess timeout turns that hang into a clean test failure
-        # (TimeoutExpired) instead of blocking the suite forever.
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-        assert r.returncode == 3
-        assert "EXPIRED" in r.stderr
-
     def test_wait_expired_status_flushed_before_stderr(self, tmp_path):
         """On expiry, the status table (stdout) must precede EXPIRED
         (stderr) in a MERGED stream — a caller that captures both on one
         pipe (e.g. a Codex subprocess) must never see them interleaved out
-        of order."""
+        of order. This also covers exit 3 on expiry: block buffering under
+        a pipe only exists in a real process, so it stays a subprocess
+        test; --max-seconds is type=float, so 0.05 clamps the one sleep to
+        50ms instead of a real second."""
         _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
         _start_agent(tmp_path, "code-reviewer")
 
         cmd = [
             sys.executable, str(SCRIPT_PATH),
             "--output-dir", str(tmp_path),
-            "--wait", "--max-seconds", "1",
+            "--wait", "--max-seconds", "0.05",
         ]
         r = subprocess.run(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -922,6 +922,7 @@ class TestWaitMode:
         )
         assert r.returncode == 3
         merged = r.stdout
+        assert "EXPIRED" in merged
         assert merged.index("ALL_DONE:") < merged.index("EXPIRED:")
 
     def test_wait_wakes_on_completion(self, mod, tmp_path):
@@ -953,40 +954,28 @@ class TestWaitMode:
         # that observes the finish — proves every iteration re-checks.
         assert calls["n"] == 2
 
-    def test_wait_requires_max_seconds(self, tmp_path):
-        """--wait without --max-seconds refuses to block unbounded."""
-        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+    @pytest.mark.parametrize("argv_tail,fragment", [
+        pytest.param(["--wait"], "--max-seconds", id="wait-without-max"),
+        pytest.param(["--max-seconds", "5"], "--wait", id="max-without-wait"),
+        pytest.param(["--wait", "--max-seconds", "0"], "> 0", id="non-positive"),
+    ])
+    def test_wait_argument_guards_exit_1(
+        self, mod, tmp_path, monkeypatch, capsys, argv_tail, fragment
+    ):
+        """--wait requires --max-seconds and vice versa, and --max-seconds
+        must be > 0 — each guard refuses loudly rather than blocking
+        unbounded or expiring instantly/never."""
+        _write_plan(tmp_path, [])
+        monkeypatch.setattr(
+            sys, "argv",
+            ["agents_status.py", "--output-dir", str(tmp_path), *argv_tail],
+        )
 
-        cmd = [sys.executable, str(SCRIPT_PATH), "--output-dir", str(tmp_path), "--wait"]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-        assert r.returncode == 1
-        assert "--max-seconds" in r.stderr
+        with pytest.raises(SystemExit) as exc:
+            mod.main()
 
-    def test_max_seconds_requires_wait(self, tmp_path):
-        """--max-seconds without --wait is rejected, not silently ignored."""
-        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
-
-        cmd = [
-            sys.executable, str(SCRIPT_PATH),
-            "--output-dir", str(tmp_path), "--max-seconds", "30",
-        ]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-        assert r.returncode == 1
-        assert "--wait" in r.stderr
-
-    @pytest.mark.parametrize("value", ["0", "-5"])
-    def test_max_seconds_must_be_positive(self, tmp_path, value):
-        """--max-seconds must be > 0 — 0 or negative is rejected loudly
-        rather than producing a wait that expires instantly or never."""
-        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
-
-        cmd = [
-            sys.executable, str(SCRIPT_PATH),
-            "--output-dir", str(tmp_path), "--wait", "--max-seconds", value,
-        ]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-        assert r.returncode == 1
-        assert "--max-seconds" in r.stderr
+        assert exc.value.code == 1
+        assert fragment in capsys.readouterr().err
 
     def test_no_wait_paths_unchanged(self, tmp_path):
         """The no-wait CLI path keeps its pinned 0/2 exit codes.
