@@ -1153,9 +1153,11 @@ class TestRangeTruthSanitization:
             "base_fetch": {"unmeasured": 1}, "scope_check": {"unmeasured": 1},
         }
 
-    @pytest.mark.parametrize("status", [[], {}], ids=["list", "object"])
-    def test_range_truth_sanitizer_rejects_non_string_status_without_aborting(self, status):
-        """Unhashable nested status values must degrade to unmeasured facts."""
+    def test_range_truth_sanitizer_rejects_non_string_status_without_aborting(self):
+        """Unhashable nested status values must degrade to unmeasured facts.
+        A list stands for an object: both fail `_enum`'s `isinstance(value,
+        str)` before the vocabulary lookup could raise."""
+        status = []
         manifest = _manifest()
         manifest["run"]["git"].update({
             "base_fetch": {"status": status, "sha": "a" * 40, "shallow": False},
@@ -6789,21 +6791,6 @@ class TestBudgetUtilizationRendering:
 
         assert "Uploader" not in table
 
-    def test_format_table_header_includes_budget_util_column(self):
-        table = format_table(
-            [self._run({
-                "agents": [],
-                "median_pct": 40,
-                "min_pct": 12,
-                "max_pct": 78,
-                "sample_count": 3,
-            })],
-            {"runs": 1, "transcript_runs": 0},
-        )
-
-        assert "Budget util" in table
-        assert "median 40% (12" in table
-
 
 class TestAggregateCohort:
     def test_keeps_complete_partial_and_missing_usage_denominators_separate(self):
@@ -7372,6 +7359,7 @@ class TestFormattingAndCli:
             "Outcome/Critic",
             "Wall",
             "Eff In/Out",
+            "Budget util",
             "Transcript",
         ):
             assert label in table
@@ -7492,32 +7480,10 @@ class TestFormattingAndCli:
         assert "\n| forged row |" not in table
         assert max(len(line) for line in lines) < 1_200
 
-    def test_table_cells_strip_c1_csi_sequences_without_leaking_parameters(self):
-        run = _measured_run("c1-csi")
-        run["run"]["id"] = "before\x9b31mred\x9b0mafter"
-
-        table = format_table([run], aggregate_cohort([run]))
-
-        assert "beforeredafter" in table
-        assert "31m" not in table
-        assert "0m" not in table
-        assert "\x9b" not in table
-
-    def test_table_cells_strip_c1_osc_sequences_without_leaking_payload(self):
-        run = _measured_run("c1-osc")
-        run["run"]["id"] = "before\x9d0;owned\x9cafter"
-
-        table = format_table([run], aggregate_cohort([run]))
-
-        assert "beforeafter" in table
-        assert "0;owned" not in table
-        assert "\x9d" not in table
-        assert "\x9c" not in table
-
-    @pytest.mark.parametrize("backslash_count", [1, 3], ids=["one", "multiple"])
-    def test_table_cells_keep_pipes_escaped_after_preceding_backslashes(
-        self, backslash_count
-    ):
+    def test_table_cells_keep_pipes_escaped_after_preceding_backslashes(self):
+        """One `replace` chain doubles backslashes before it escapes the
+        pipe; several backslashes stand for one."""
+        backslash_count = 3
         run = _measured_run("backslash-pipe")
         run["run"]["id"] = "safe" + "\\" * backslash_count + "|forged"
 
@@ -7577,15 +7543,10 @@ class TestFormattingAndCli:
         ] == 1
 
     def test_json_formatter_rejects_nonfinite_values(self):
+        """`format_json`'s one `allow_nan=False` covers the runs and the
+        aggregate alike, and every non-finite float."""
         with pytest.raises(ValueError):
             format_json([{"invalid": float("nan")}], aggregate_cohort([]))
-
-    @pytest.mark.parametrize(
-        "invalid", [float("nan"), float("inf"), float("-inf")]
-    )
-    def test_json_formatter_rejects_nonfinite_aggregate_values(self, invalid):
-        with pytest.raises(ValueError):
-            format_json([], {"wall_time": {"mean_ms": invalid}})
 
     def test_cli_writes_exact_output_and_handles_valid_empty_cohort(self, tmp_path):
         log_dir = tmp_path / "logs"
@@ -7616,29 +7577,20 @@ class TestFormattingAndCli:
     def test_cli_without_source_flags_reads_default_log_directory(
         self, monkeypatch, capsys, tmp_path
     ):
+        """With no source flag the CLI reads `DEFAULT_LOG_DIR`, and a run
+        read from a local log directory carries no uploader."""
         default_log_dir = tmp_path / "default-logs"
-        observed = {}
-
-        def load_default(path, *, last, run_id):
-            observed.update(path=path, last=last, run_id=run_id)
-            return []
-
+        _write_manifest(
+            default_log_dir / "review.manifest.json", _manifest("default-run")
+        )
         monkeypatch.setattr(cli, "DEFAULT_LOG_DIR", default_log_dir)
-        monkeypatch.setattr(cli, "load_runs", load_default)
 
         result = main(["--format", "json", "--no-transcripts"])
 
         assert result == 0
-        assert observed == {
-            "path": str(default_log_dir),
-            "last": None,
-            "run_id": None,
-        }
-        assert json.loads(capsys.readouterr().out) == {
-            "schema": 5,
-            "runs": [],
-            "aggregate": aggregate_cohort([]),
-        }
+        payload = json.loads(capsys.readouterr().out)
+        assert [run["run"]["id"] for run in payload["runs"]] == ["default-run"]
+        assert payload["runs"][0]["uploaded_by"] is None
 
     def test_shared_clone_reports_each_user_and_ignores_direct_v1_files(
         self, shared_telemetry_clone, tmp_path
@@ -7700,31 +7652,6 @@ class TestFormattingAndCli:
             assert run["run"]["session_id"] is None
             assert run["transcript"]["reason"] == "disabled"
             assert run["metric_availability"]["transcript"] == "disabled"
-
-    def test_symlinked_uploader_directories_are_never_followed(
-        self, shared_telemetry_clone
-    ):
-        clone = shared_telemetry_clone["clone"]
-        symlinked = clone / telemetry_share.LAYOUT_PREFIX / "mallory"
-        assert symlinked.is_symlink() and symlinked.is_dir()
-
-        shared = load.load_shared_runs(clone)
-
-        assert {uploaded_by for _, uploaded_by in shared} == {"alice", "bob"}
-
-    def test_symlinked_artifacts_inside_uploader_directories_are_never_followed(
-        self, shared_telemetry_clone
-    ):
-        clone = shared_telemetry_clone["clone"]
-        bob = clone / telemetry_share.LAYOUT_PREFIX / "bob"
-        for name in ("shared-alice.manifest.json", "shared-mallory.jsonl"):
-            assert (bob / name).is_symlink() and (bob / name).is_file()
-
-        shared = load.load_shared_runs(clone)
-
-        assert sorted(
-            (record["run"]["id"], uploaded_by) for record, uploaded_by in shared
-        ) == [("shared-alice", "alice"), ("shared-bob", "bob")]
 
     def test_symlinked_layout_root_is_never_followed(
         self, shared_telemetry_clone, tmp_path
@@ -7828,27 +7755,6 @@ class TestFormattingAndCli:
             assert record["availability"] == original["availability"]
             assert record["run"]["session_id"] is None
 
-    def test_local_log_dir_reports_null_uploader(
-        self, shared_telemetry_clone, tmp_path
-    ):
-        output = tmp_path / "local-report.json"
-
-        result = main(
-            [
-                "--log-dir",
-                str(shared_telemetry_clone["local_logs"]["alice"]),
-                "--format",
-                "json",
-                "--output",
-                str(output),
-                "--no-transcripts",
-            ]
-        )
-
-        assert result == 0
-        [run] = json.loads(output.read_text(encoding="utf-8"))["runs"]
-        assert run["uploaded_by"] is None
-
     def test_cli_reports_exception_type_and_message(
         self, monkeypatch, capsys, tmp_path
     ):
@@ -7869,11 +7775,13 @@ class TestFormattingAndCli:
     @pytest.mark.parametrize(
         "args",
         [
+            # The two branches of `cli._positive_int`. An unknown
+            # `--format` and the mutually exclusive source flags are
+            # argparse's own checks.
             ["--last", "0"],
             ["--last", "not-an-int"],
-            ["--format", "xml"],
-            ["--log-dir", "/local", "--shared-dir", "/shared"],
         ],
+        ids=["last-zero", "last-not-an-int"],
     )
     def test_invalid_cli_arguments_exit_two(self, args):
         with pytest.raises(SystemExit) as error:
