@@ -46,15 +46,12 @@ _scope_spec.loader.exec_module(review_scope)
 # =============================================================================
 
 
-def test_cli_requires_output_dir():
-    result = subprocess.run(
-        [sys.executable, str(REVIEW_SCOPE_SCRIPT), "--domain", "code"],
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode != 0
-    assert "ERROR: --output-dir is required" in result.stderr
+def test_cli_requires_output_dir(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["scope.py", "--domain", "code"])
+    with pytest.raises(SystemExit) as exc:
+        review_scope.main()
+    assert exc.value.code == 2
+    assert "ERROR: --output-dir is required" in capsys.readouterr().err
 
 
 # =============================================================================
@@ -880,12 +877,11 @@ class TestInScopeFilesAcrossModes:
 class TestSemanticFilterIntegration:
     """Semantic filtering integrated into build_scope diff pipeline."""
 
-    def test_build_scope_calls_semantic_filter(self, tmp_path):
-        """build_scope applies semantic filter to diffs by default."""
+    def test_build_scope_applies_semantic_filter_by_default(self, tmp_path):
+        """build_scope applies semantic filter to diffs by default — the
+        docblock noise the diff carries is stripped from scope['diffs']."""
         with patch.object(review_scope, 'run_cmd') as mock_run, \
-             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x), \
-             patch.object(review_scope, 'apply_semantic_filter', wraps=review_scope.apply_semantic_filter) as mock_filter:
-            # Mock git commands
+             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
             mock_run.side_effect = self._mock_git_commands
             args = argparse.Namespace(
                 domain="code", range="abc123..HEAD", max_lines=2000,
@@ -893,14 +889,14 @@ class TestSemanticFilterIntegration:
                 no_merge_base=True, no_semantic_filter=False,
             )
             scope = review_scope.build_scope(args)
-            # Semantic filter should have been called for each diff
-            assert mock_filter.call_count > 0
+        diff = scope["diffs"]["src/Foo.php"]
+        assert "+code();" in diff
+        assert "* Doc" not in diff
 
     def test_build_scope_skips_filter_when_disabled(self, tmp_path):
-        """build_scope skips semantic filter when --no-semantic-filter is set."""
+        """--no-semantic-filter keeps the docblock noise in scope['diffs']."""
         with patch.object(review_scope, 'run_cmd') as mock_run, \
-             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x), \
-             patch.object(review_scope, 'apply_semantic_filter') as mock_filter:
+             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
             mock_run.side_effect = self._mock_git_commands
             args = argparse.Namespace(
                 domain="code", range="abc123..HEAD", max_lines=2000,
@@ -908,7 +904,8 @@ class TestSemanticFilterIntegration:
                 no_merge_base=True, no_semantic_filter=True,
             )
             scope = review_scope.build_scope(args)
-            mock_filter.assert_not_called()
+        diff = scope["diffs"]["src/Foo.php"]
+        assert "* Doc" in diff
 
     def test_prose_files_bypass_semantic_filter(self, tmp_path):
         """The filter's comment heuristics read Markdown bullets ('* ') as
@@ -2089,6 +2086,36 @@ class TestNotDiffedWorkQueueFraming:
         assert "selectively" not in text
 
 
+def _mock_git_include_path(files_and_diffs):
+    """Shared run_cmd stand-in for the include-path rescue tests.
+
+    `files_and_diffs` maps changed path -> (added_lines, diff_body), the
+    same shape build_scope reads via --name-only/--numstat/per-file diff.
+    """
+    def _mock(cmd, check=True, capture_stderr=True):
+        cmd_str = " ".join(cmd)
+        if "rev-parse --git-dir" in cmd_str:
+            return ".git"
+        if "rev-parse" in cmd_str:
+            return "abc123"
+        if "--name-only" in cmd_str:
+            return "\n".join(files_and_diffs)
+        if "--numstat" in cmd_str:
+            return "\n".join(
+                f"{added}\t0\t{path}" for path, (added, _) in files_and_diffs.items()
+            )
+        if "merge-base" in cmd_str:
+            return "abc123"
+        if "rev-list --count" in cmd_str:
+            return "0"
+        if "diff" in cmd_str and "--" in cmd:
+            requested = cmd[cmd.index("--") + 1:]
+            if len(requested) == 1 and requested[0] in files_and_diffs:
+                return files_and_diffs[requested[0]][1]
+        return ""
+    return _mock
+
+
 class TestIncludePathRescue:
     """Repo-contributed reviewers declare applicability by path glob
     (applies_to.paths); those files are the reviewer's scope even when no
@@ -2096,78 +2123,40 @@ class TestIncludePathRescue:
     dispatched FOR docs/** receives a scope that excludes the very file
     that triggered dispatch."""
 
-    def _make_repo(self, tmp_path, feature_files):
-        def _git(*args):
-            subprocess.run(
-                ["git"] + list(args),
-                cwd=tmp_path, capture_output=True, text=True, check=True,
-            )
-        _git("init", "-b", "main")
-        _git("config", "user.email", "t@t.com")
-        _git("config", "user.name", "T")
-        _git("config", "commit.gpgsign", "false")
-        (tmp_path / "README.txt").write_text("base\n")
-        _git("add", ".")
-        _git("commit", "-m", "initial")
-        _git("checkout", "-b", "feature")
-        for relpath, content in feature_files.items():
-            target = tmp_path / relpath
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content)
-        _git("add", ".")
-        _git("commit", "-m", "feature")
+    _DOCS_AND_CODE = {
+        "docs/guide.md": (2, "--- a/docs/guide.md\n+++ b/docs/guide.md\n@@ -1,1 +1,1 @@\n+# guide\n"),
+        "app.php": (1, "--- a/app.php\n+++ b/app.php\n@@ -1,1 +1,1 @@\n+<?php echo 1;\n"),
+    }
+    _DOCS_ONLY = {
+        "docs/guide.md": (2, "--- a/docs/guide.md\n+++ b/docs/guide.md\n@@ -1,1 +1,1 @@\n+# guide\n"),
+    }
 
-    def _scope(self, repo, include_path):
-        args = argparse.Namespace(
-            domain="code",
-            range="main..HEAD",
-            format="json",
-            max_lines=2000,
-            base_ref_only=False,
-            summary=False,
-            output_dir=str(Path(repo) / ".review-output"),
-            no_merge_base=True,
-            no_semantic_filter=False,
-            include_path=include_path,
-        )
-        saved_cwd = os.getcwd()
-        try:
-            os.chdir(repo)
+    def _scope(self, tmp_path, files_and_diffs, include_path):
+        with patch.object(review_scope, "run_cmd") as mock_run, \
+             patch.object(review_scope, "freshen_base_ref", side_effect=lambda x: x):
+            mock_run.side_effect = _mock_git_include_path(files_and_diffs)
+            args = argparse.Namespace(
+                domain="code", range="abc123..HEAD", format="json",
+                max_lines=2000, base_ref_only=False, summary=False,
+                output_dir=str(tmp_path), no_merge_base=True,
+                no_semantic_filter=False, include_path=include_path,
+            )
             return review_scope.build_scope(args)
-        finally:
-            os.chdir(saved_cwd)
 
     def test_glob_matched_file_joins_the_domain_scope(self, tmp_path):
-        self._make_repo(tmp_path, {
-            "docs/guide.md": "# guide\n",
-            "app.php": "<?php echo 1;\n",
-        })
-        scope = self._scope(tmp_path, ["docs/**"])
+        scope = self._scope(tmp_path, self._DOCS_AND_CODE, ["docs/**"])
         assert "docs/guide.md" in scope["files"]
         assert "app.php" in scope["files"]
 
-    def test_without_the_flag_non_domain_files_stay_excluded(self, tmp_path):
-        self._make_repo(tmp_path, {
-            "docs/guide.md": "# guide\n",
-            "app.php": "<?php echo 1;\n",
-        })
-        scope = self._scope(tmp_path, None)
-        assert "docs/guide.md" not in scope["files"]
-
     def test_pure_path_scope_escapes_no_domain_files(self, tmp_path):
-        self._make_repo(tmp_path, {"docs/guide.md": "# guide\n"})
-        without = self._scope(tmp_path, None)
+        without = self._scope(tmp_path, self._DOCS_ONLY, None)
         assert without["status"] == "NO_DOMAIN_FILES"
-        with_flag = self._scope(tmp_path, ["docs/**"])
+        with_flag = self._scope(tmp_path, self._DOCS_ONLY, ["docs/**"])
         assert with_flag["status"] != "NO_DOMAIN_FILES"
         assert with_flag["files"] == ["docs/guide.md"]
 
     def test_nonmatching_globs_change_nothing(self, tmp_path):
-        self._make_repo(tmp_path, {
-            "docs/guide.md": "# guide\n",
-            "app.php": "<?php echo 1;\n",
-        })
-        scope = self._scope(tmp_path, ["config/**"])
+        scope = self._scope(tmp_path, self._DOCS_AND_CODE, ["config/**"])
         assert scope["files"] == ["app.php"]
 
 
@@ -2250,25 +2239,24 @@ class TestA11yUiEvidenceSniff:
         })
         assert self._scope_files(tmp_path, "a11y") == ["src/Cart.tsx"]
 
-    def test_bare_ts_with_aria_in_the_patch_stays(self, tmp_path):
+    def test_bare_ts_with_markup_evidence_in_the_patch_stays(self, tmp_path):
+        """An aria- attribute call and inline JSX are both patch-level UI
+        evidence for an otherwise bare .ts file."""
         self._make_repo(tmp_path, {
             "src/announce.ts": (
                 "export function announce(node: HTMLElement, msg: string) {\n"
                 "  node.setAttribute('aria-live', 'polite');\n"
                 "}\n"
             ),
-        })
-        assert self._scope_files(tmp_path, "a11y") == ["src/announce.ts"]
-
-    def test_bare_ts_with_jsx_in_the_patch_stays(self, tmp_path):
-        self._make_repo(tmp_path, {
             "src/render.ts": (
                 "export function render() {\n"
                 "  return <button type=\"submit\">Save</button>;\n"
                 "}\n"
             ),
         })
-        assert self._scope_files(tmp_path, "a11y") == ["src/render.ts"]
+        assert sorted(self._scope_files(tmp_path, "a11y")) == [
+            "src/announce.ts", "src/render.ts",
+        ]
 
     def test_bare_ts_with_evidence_only_on_disk_stays(self, tmp_path):
         """A UI module edited only in its data layer shows no marker in the
@@ -2376,13 +2364,7 @@ class TestA11yUiEvidenceSniff:
             "src/queries.jsx", "src/queries.tsx",
         ]
 
-    @pytest.mark.parametrize(
-        "domain",
-        ["code", "security", "architecture", "patterns", "reliability"],
-    )
-    def test_other_domains_see_the_backend_file_unchanged(
-        self, tmp_path, domain
-    ):
+    def test_other_domains_see_the_backend_file_unchanged(self, tmp_path):
         """The sniff is a11y-only. On the same fixture, every other domain
         whose include matches `.ts` still gets the file."""
         self._make_repo(tmp_path, {
@@ -2391,7 +2373,8 @@ class TestA11yUiEvidenceSniff:
         })
         # a11y drops it; nothing else does.
         assert "server/orders.ts" not in self._scope_files(tmp_path, "a11y")
-        assert "server/orders.ts" in self._scope_files(tmp_path, domain)
+        for domain in ("code", "security", "architecture", "patterns", "reliability"):
+            assert "server/orders.ts" in self._scope_files(tmp_path, domain), domain
 
     def test_deleted_bare_ts_without_patch_evidence_leaves_scope(
         self, tmp_path
