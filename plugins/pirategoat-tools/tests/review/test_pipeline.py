@@ -968,6 +968,52 @@ class TestStep5DispatchPlan:
         text = "\n".join(mod.get_step_guidance(5, "pr", state, {}, output_dir=str(tmp_path))["situation"])
         assert "Change purpose:" not in text
 
+    @pytest.mark.parametrize(
+        ("report", "expected_line"),
+        (
+            pytest.param(
+                None,
+                "⚠️  The requested dependency-refresh report is missing or "
+                "malformed. Reviewer dispatch may proceed, but dependency "
+                "freshness is not recorded.",
+                id="missing_or_malformed",
+            ),
+            pytest.param(
+                {
+                    "schema": 1, "status": "partial", "commands": [],
+                    "tracked_files_dirty": True,
+                    "dirty_files": ["src/changed.py"],
+                },
+                "⚠️  The dependency-refresh report records a dirty final "
+                "tracked state before reviewer dispatch.",
+                id="dirty",
+            ),
+            pytest.param(
+                {
+                    "schema": 1, "status": "partial", "commands": [],
+                    "tracked_files_dirty": None, "dirty_files": [],
+                },
+                "⚠️  The dependency-refresh report records an unknown final "
+                "tracked state before reviewer dispatch.",
+                id="unknown",
+            ),
+        ),
+    )
+    def test_step_5_warns_on_dependency_refresh_report_state(
+        self, mod, tmp_path, report, expected_line
+    ):
+        """A missing/malformed report, a dirty final tracked state, and an
+        unknown final tracked state each lead with their own one-line
+        warning before reviewer dispatch."""
+        guidance = mod._step_5_dispatch_plan(
+            "full",
+            {"dependency_refresh_report": report},
+            {},
+            {"refresh_dependencies": True},
+            str(tmp_path),
+        )
+        assert guidance["situation"][0] == expected_line
+
 
 class TestStep5QuickMode:
     """Step 5 quick mode: filters SKIPPED_QUICK_MODE agents from display + aggressive nudge."""

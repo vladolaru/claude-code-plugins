@@ -1384,6 +1384,145 @@ class TestTriageInDispatchPlan:
         assert plan["agents"][0]["status"] == "SKIPPED_QUICK_MODE"
 
 
+# Files that cover enough domains to trigger most agents
+_QUICK_MODE_TEST_FILES = [
+    "src/Controller.php",
+    "src/components/Modal.tsx",
+    "src/hooks/useData.ts",
+    "tests/ControllerTest.php",
+    "src/styles/modal.scss",
+    "e2e/checkout.spec.ts",
+    ".github/workflows/ci.yml",
+    "Dockerfile",
+    "src/utils/auth.go",
+    "src/utils/auth_test.go",
+]
+
+_QUICK_MODE_BLOCKED_AGENTS = frozenset([
+    "wp-architecture-reviewer",
+    "history-insights-reviewer",
+    "data-flow-privacy-reviewer",
+    "concurrency-reviewer",
+    "reliability-reviewer",
+])
+
+
+def _init_main_repo(path):
+    """A git repo with a `main` branch at HEAD.
+
+    build_dispatch_plan's triage calls plan_dispatch.get_diff_text() /
+    get_repository_identity() via `git diff`/`git rev-parse`, with no cwd
+    override — they always read the ambient process CWD, not a subprocess
+    we control. Left unpatched, `git_range="main..HEAD"` behaves
+    differently depending on which repo pytest happens to be invoked from:
+    inside this repo the pathspec resolves to an empty diff (low-signal,
+    quick mode skips); from a foreign CWD `git diff` fails outright
+    ("not a git repository"), which the triage treats as an unreadable
+    scan and dispatches conservatively instead of skipping. Pointing CWD at
+    a throwaway repo with a `main` branch at HEAD makes `main..HEAD`
+    resolve to an empty diff everywhere, so the test stops depending on
+    which repo happens to be running it.
+    """
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+    subprocess.run(["git", "checkout", "-q", "-B", "main"], cwd=path, check=True)
+    (path / "README.md").write_text("init")
+    subprocess.run(["git", "add", "."], cwd=path, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t",
+         "commit", "-qm", "init"],
+        cwd=path, check=True,
+    )
+    return path
+
+
+class TestQuickModeDispatch:
+    """Quick mode excludes low-signal agents from dispatch."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_cwd(self, tmp_path, monkeypatch):
+        """build_dispatch_plan calls straight into plan_dispatch's git
+        helpers (no subprocess seam to pass cwd through), so isolation here
+        means chdir'ing the test process itself — see _init_main_repo."""
+        _init_main_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+
+    def test_quick_mode_excludes_blocklisted_agents_without_signals(self, registry):
+        """quick=True skips blocklisted agents when no triage keywords match."""
+        # Use files that don't trigger keyword matches for blocklisted agents
+        # (no "hook", "filter", "concurrent", "privacy", "deploy", etc.)
+        neutral_files = [
+            "src/Controller.php",
+            "src/components/Modal.tsx",
+            "tests/ControllerTest.php",
+            "src/utils/helpers.go",
+        ]
+        plan = build_dispatch_plan(
+            mode="full",
+            git_range="main..HEAD",
+            output_dir="/tmp/test-quick",
+            changed_files=neutral_files,
+            registry=registry,
+            quick=True,
+            commit_messages="fix button alignment in modal",
+            # This test pins quick-mode relabeling of conservative dispatch.
+            diffstat={
+                "added": 200,
+                "removed": 40,
+                "deleted_files": [],
+                "renamed_files": [],
+                "file_stats": {f: {"added": 50, "removed": 10} for f in neutral_files},
+            },
+        )
+        dispatch_map = {d["name"]: d for d in plan["agents"]}
+        for agent_name in _QUICK_MODE_BLOCKED_AGENTS:
+            if agent_name not in dispatch_map:
+                continue  # agent may have no files in domain
+            assert dispatch_map[agent_name]["status"] == "SKIPPED_QUICK_MODE", (
+                f"Expected SKIPPED_QUICK_MODE for '{agent_name}', "
+                f"got '{dispatch_map[agent_name]['status']}'"
+            )
+
+    def test_quick_mode_non_blocked_agents_triage_normally(self, registry):
+        """quick=True does not affect non-blocked agents — code-reviewer still dispatches."""
+        plan = build_dispatch_plan(
+            mode="full",
+            git_range="main..HEAD",
+            output_dir="/tmp/test-quick",
+            changed_files=_QUICK_MODE_TEST_FILES,
+            registry=registry,
+            quick=True,
+        )
+        dispatch_map = {d["name"]: d for d in plan["agents"]}
+        assert dispatch_map["code-reviewer"]["status"] == "DISPATCH", (
+            "code-reviewer should still DISPATCH in quick mode"
+        )
+
+    def test_quick_mode_honors_keyword_triage(self, registry):
+        """Blocklisted agents with keyword matches should still dispatch in quick mode."""
+        plan = build_dispatch_plan(
+            mode="full",
+            git_range="main..HEAD",
+            output_dir="/tmp/test-quick-keywords",
+            changed_files=_QUICK_MODE_TEST_FILES,
+            registry=registry,
+            quick=True,
+            # Commit messages with keywords that match blocklisted agents
+            commit_messages="fix concurrent race condition in payment hook filter",
+        )
+        dispatch_map = {d["name"]: d for d in plan["agents"]}
+        # concurrency-reviewer should dispatch (keyword "concurrent" matched)
+        assert dispatch_map["concurrency-reviewer"]["status"] == "DISPATCH", (
+            "concurrency-reviewer should DISPATCH when keywords match, "
+            f"got {dispatch_map['concurrency-reviewer']['status']}"
+        )
+        # wp-architecture-reviewer should dispatch (keyword "hook"/"filter" matched)
+        assert dispatch_map["wp-architecture-reviewer"]["status"] == "DISPATCH", (
+            "wp-architecture-reviewer should DISPATCH when keywords match, "
+            f"got {dispatch_map['wp-architecture-reviewer']['status']}"
+        )
+
+
 # =============================================================================
 # Keyword triage — shares the class grouping used by other triage tests
 # =============================================================================
