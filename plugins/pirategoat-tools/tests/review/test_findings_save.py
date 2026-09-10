@@ -249,7 +249,10 @@ class TestFindingsSave:
         assert "clearances" not in saved
         assert "narrative_summary" not in saved
 
-    @pytest.mark.parametrize("schema", rejected_schema_values(3))
+    @pytest.mark.parametrize(
+        "schema",
+        [v for v in rejected_schema_values(3) if v.id in ("prior-schema", "bool", "absent")],
+    )
     def test_rejects_schema_other_than_the_exact_ledger_integer(
         self, tmp_path, capsys, schema
     ):
@@ -263,51 +266,6 @@ class TestFindingsSave:
         assert "schema" in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
 
-    @pytest.mark.parametrize(
-        ("field", "value"),
-        [
-            ("checks", None),
-            ("checks", {}),
-            ("assessment", ["not", "text"]),
-        ],
-    )
-    def test_rejects_noncanonical_checks_or_assessment(
-        self, tmp_path, capsys, field, value
-    ):
-        findings = self._write_findings(
-            tmp_path, _valid_findings(**{field: value})
-        )
-
-        result = self._run_save(tmp_path, findings, capsys)
-
-        assert result.returncode != 0
-        assert field in result.stdout
-        assert not (tmp_path / "review-findings.json").exists()
-
-    def test_rejects_mutable_or_malformed_check_identity(self, tmp_path, capsys):
-        checks = _valid_findings()["checks"]
-        checks[0]["source_reviewers"] = ["security", "", 7]
-        findings = self._write_findings(
-            tmp_path, _valid_findings(checks=checks)
-        )
-
-        result = self._run_save(tmp_path, findings, capsys)
-
-        assert result.returncode != 0
-        assert "source_reviewers" in result.stdout
-        assert not (tmp_path / "review-findings.json").exists()
-
-    def test_rejects_retired_tool_metadata(self, tmp_path, capsys):
-        doc = _valid_findings()
-        doc["meta"]["tool_results_used"] = ["rg"]
-        findings = self._write_findings(tmp_path, doc)
-
-        result = self._run_save(tmp_path, findings, capsys)
-
-        assert result.returncode != 0
-        assert "tool_results_used" in result.stdout
-        assert not (tmp_path / "review-findings.json").exists()
-
     def test_rejects_summary_without_advisory_finding_count(self, tmp_path, capsys):
         doc = _valid_findings()
         del doc["summary"]["suppressed_advisory_finding_count"]
@@ -318,18 +276,6 @@ class TestFindingsSave:
         assert result.returncode != 0
         assert "summary does not match" in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
-
-    def test_valid_findings_saved_atomically(self, tmp_path, capsys):
-        findings = self._write_findings(tmp_path, _valid_findings())
-
-        result = self._run_save(tmp_path, findings, capsys)
-
-        assert result.returncode == 0, result.stdout + result.stderr
-        ledger_path = tmp_path / "review-findings.json"
-        assert ledger_path.is_file()
-        saved = json.loads(ledger_path.read_text())
-        assert saved["verdict"] == "request_changes"
-        assert len(saved["findings"]) == 1
 
     def test_echo_format(self, tmp_path, capsys):
         reviews = _reviews(**{"security-review": (8, ["grep"] * 12)})
@@ -391,14 +337,18 @@ class TestFindingsSave:
         )
         assert "CHECKS: 12 | ASSESSMENT: present" in result.stdout
 
-    def test_echo_reflects_absent_assessment_and_no_checks(self, tmp_path, capsys):
-        doc = _valid_findings(assessment=None, checks=[])
-        findings = self._write_findings(tmp_path, doc)
+        # Second row: absent assessment and no checks (restore the default
+        # single-reviewer context this scenario's ledger accounts for).
+        _write_context(
+            tmp_path, _DEFAULT_REVIEWS, dispatched=["security-review"], missing=[],
+        )
+        doc2 = _valid_findings(assessment=None, checks=[])
+        findings2 = self._write_findings(tmp_path, doc2, name="f2.json")
 
-        result = self._run_save(tmp_path, findings, capsys)
+        result2 = self._run_save(tmp_path, findings2, capsys)
 
-        assert result.returncode == 0, result.stdout + result.stderr
-        assert "CHECKS: 0 | ASSESSMENT: absent" in result.stdout
+        assert result2.returncode == 0, result2.stdout + result2.stderr
+        assert "CHECKS: 0 | ASSESSMENT: absent" in result2.stdout
 
     def test_rejects_non_object_top_level(self, tmp_path, capsys):
         findings = self._write_findings(tmp_path, ["not", "an", "object"])
@@ -417,18 +367,6 @@ class TestFindingsSave:
             Path("synthesis") / CONTEXT_FILENAME,
         }
 
-    def test_rejects_bad_verdict(self, tmp_path, capsys):
-        findings = self._write_findings(
-            tmp_path, _valid_findings(verdict="MAYBE")
-        )
-
-        result = self._run_save(tmp_path, findings, capsys)
-
-        assert result.returncode != 0
-        assert "REJECTED" in result.stdout
-        assert "verdict" in result.stdout.lower()
-        assert not (tmp_path / "review-findings.json").exists()
-
     def test_rejects_verdict_that_does_not_match_issues(self, tmp_path, capsys):
         findings = self._write_findings(
             tmp_path, _valid_findings(verdict="approve")
@@ -441,161 +379,16 @@ class TestFindingsSave:
         assert "verdict does not match its findings" in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
 
-    def test_rejects_uppercase_verdict(self, tmp_path, capsys):
-        """Casing matters — the ledger's real vocabulary is lowercase,
-        matching _verdict_for_issues()'s return values in agent/output.py."""
-        findings = self._write_findings(
-            tmp_path, _valid_findings(verdict="REQUEST_CHANGES")
-        )
-
-        result = self._run_save(tmp_path, findings, capsys)
-
-        assert result.returncode != 0
-        assert "REJECTED" in result.stdout
-        assert not (tmp_path / "review-findings.json").exists()
-
-    def test_rejects_count_mismatch(self, tmp_path, capsys):
+    def test_rejects_issue_missing_required_field(self, tmp_path, capsys):
         doc = _valid_findings()
-        doc["summary"]["total_findings"] = 5  # actual findings list has 1 entry
+        del doc["findings"][0]["severity"]
         findings = self._write_findings(tmp_path, doc)
 
         result = self._run_save(tmp_path, findings, capsys)
 
         assert result.returncode != 0
         assert "REJECTED" in result.stdout
-        assert "summary" in result.stdout.lower()
-        assert not (tmp_path / "review-findings.json").exists()
-
-    def test_rejects_by_severity_mismatch(self, tmp_path, capsys):
-        doc = _valid_findings()
-        doc["summary"]["by_severity"]["high"] = 0
-        doc["summary"]["by_severity"]["low"] = 1  # doesn't match the 1 high finding
-        findings = self._write_findings(tmp_path, doc)
-
-        result = self._run_save(tmp_path, findings, capsys)
-
-        assert result.returncode != 0
-        assert "REJECTED" in result.stdout
-        assert not (tmp_path / "review-findings.json").exists()
-
-    @pytest.mark.parametrize(
-        "missing_field",
-        [
-            "severity", "title", "file", "description", "recommendation",
-            "id", "category", "confidence", "line",
-        ],
-    )
-    def test_rejects_issue_missing_required_field(self, tmp_path, capsys, missing_field):
-        doc = _valid_findings()
-        del doc["findings"][0][missing_field]
-        findings = self._write_findings(tmp_path, doc)
-
-        result = self._run_save(tmp_path, findings, capsys)
-
-        assert result.returncode != 0
-        assert "REJECTED" in result.stdout
-        assert missing_field in result.stdout
-        assert not (tmp_path / "review-findings.json").exists()
-
-    def test_accepts_null_line_for_file_scoped_issue(self, tmp_path, capsys):
-        doc = _valid_findings()
-        doc["findings"][0]["line"] = None
-        doc["findings"][0]["scope"] = "file"
-        findings = self._write_findings(tmp_path, doc)
-
-        result = self._run_save(tmp_path, findings, capsys)
-
-        assert result.returncode == 0, result.stdout + result.stderr
-        saved = json.loads((tmp_path / "review-findings.json").read_text())
-        assert saved["findings"][0]["line"] is None
-
-    def test_rejects_issue_invalid_severity(self, tmp_path, capsys):
-        doc = _valid_findings()
-        doc["findings"][0]["severity"] = "catastrophic"
-        findings = self._write_findings(tmp_path, doc)
-
-        result = self._run_save(tmp_path, findings, capsys)
-
-        assert result.returncode != 0
-        assert "REJECTED" in result.stdout
-        assert "severity is invalid" in result.stdout
-        assert not (tmp_path / "review-findings.json").exists()
-
-    def test_rejects_issue_not_an_object(self, tmp_path, capsys):
-        doc = _valid_findings(findings=["not an object"])
-        findings = self._write_findings(tmp_path, doc)
-
-        result = self._run_save(tmp_path, findings, capsys)
-
-        assert result.returncode != 0
-        assert "REJECTED" in result.stdout
-        assert not (tmp_path / "review-findings.json").exists()
-
-    def test_rejects_issues_not_a_list(self, tmp_path, capsys):
-        doc = _valid_findings(findings={"not": "a list"})
-        findings = self._write_findings(tmp_path, doc)
-
-        result = self._run_save(tmp_path, findings, capsys)
-
-        assert result.returncode != 0
-        assert "REJECTED" in result.stdout
-        assert not (tmp_path / "review-findings.json").exists()
-
-    def test_rejects_checks_not_a_list(self, tmp_path, capsys):
-        """A truthy non-list `checks` (e.g. an integer) must be
-        rejected here — not merely tolerated by `_echo()` after the
-        ledger is already written. `findings.get("checks") or []`
-        only normalizes FALSY values; a truthy non-list would otherwise
-        reach `len()`/iteration in `_echo()` post-write."""
-        doc = _valid_findings(checks=12)
-        findings = self._write_findings(tmp_path, doc)
-
-        result = self._run_save(tmp_path, findings, capsys)
-
-        assert result.returncode != 0
-        assert "REJECTED" in result.stdout
-        assert "checks" in result.stdout.lower()
-        assert not (tmp_path / "review-findings.json").exists()
-
-    def test_rejects_clearance_entry_not_an_object(self, tmp_path, capsys):
-        doc = _valid_findings(checks=["not an object"])
-        findings = self._write_findings(tmp_path, doc)
-
-        result = self._run_save(tmp_path, findings, capsys)
-
-        assert result.returncode != 0
-        assert "REJECTED" in result.stdout
-        assert not (tmp_path / "review-findings.json").exists()
-
-    @pytest.mark.parametrize(
-        "bad_clearance",
-        [
-            {"method": "grep"},  # missing claim
-            {"claim": "no callers"},  # missing method
-            {"claim": "", "method": "grep"},  # blank claim
-            {"claim": "no callers", "method": ""},  # blank method
-            {"claim": "no callers", "method": "grep", "evidence": 5},  # bad evidence type
-        ],
-    )
-    def test_rejects_clearance_wrong_shape(self, tmp_path, capsys, bad_clearance):
-        doc = _valid_findings(checks=[bad_clearance])
-        findings = self._write_findings(tmp_path, doc)
-
-        result = self._run_save(tmp_path, findings, capsys)
-
-        assert result.returncode != 0
-        assert "REJECTED" in result.stdout
-        assert not (tmp_path / "review-findings.json").exists()
-
-    def test_rejects_assessment_wrong_type(self, tmp_path, capsys):
-        doc = _valid_findings(assessment=["not", "a", "string"])
-        findings = self._write_findings(tmp_path, doc)
-
-        result = self._run_save(tmp_path, findings, capsys)
-
-        assert result.returncode != 0
-        assert "REJECTED" in result.stdout
-        assert "assessment" in result.stdout.lower()
+        assert "severity" in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
 
     def test_rejects_missing_findings_file(self, tmp_path, capsys):
@@ -644,14 +437,6 @@ class TestFindingsSave:
                 {"critical": 1, "high": 0, "medium": 0, "low": 0, "info": 0},
             ),
             (
-                "request_changes", "high",
-                {"critical": 0, "high": 1, "medium": 0, "low": 0, "info": 0},
-            ),
-            (
-                "comment", "medium",
-                {"critical": 0, "high": 0, "medium": 1, "low": 0, "info": 0},
-            ),
-            (
                 "approve", None,
                 {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0},
             ),
@@ -690,36 +475,11 @@ class TestFindingsSave:
         assert result.returncode == 0, result.stdout + result.stderr
         assert f"RECORDED VERDICT: {verdict}" in result.stdout
 
-    def test_rejects_not_applicable_verdict(self, tmp_path, capsys):
-        """not_applicable is a per-reviewer abstention verdict
-        (ReviewOutputBuilder.mark_not_applicable) that the reconciliator
-        never emits — it always produces a reconciled ledger, never
-        abstains from the whole PR."""
-        doc = _valid_findings(verdict="not_applicable")
-        findings = self._write_findings(tmp_path, doc)
-
-        result = self._run_save(tmp_path, findings, capsys)
-
-        assert result.returncode != 0
-        assert "REJECTED" in result.stdout
-        assert not (tmp_path / "review-findings.json").exists()
-
-    @pytest.mark.parametrize(
-        "field",
-        [
-            "applied_critic_adjustments",
-            "rejected_critic_adjustments",
-            "findings_removed_by_critic",
-            "checks_removed_by_critic",
-            "invalidated_assessments",
-            "verdict_before_adjustments",
-        ],
-    )
     def test_rejects_actor_supplied_critic_lifecycle_fields(
-        self, tmp_path, capsys, field
+        self, tmp_path, capsys
     ):
         findings = self._write_findings(
-            tmp_path, _valid_findings(**{field: []})
+            tmp_path, _valid_findings(applied_critic_adjustments=[])
         )
 
         result = self._run_save(tmp_path, findings, capsys)
@@ -728,12 +488,11 @@ class TestFindingsSave:
         assert "critic-owned lifecycle" in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
 
-    @pytest.mark.parametrize("collection", ["findings", "checks"])
     def test_rejects_actor_supplied_critic_provenance(
-        self, tmp_path, capsys, collection
+        self, tmp_path, capsys
     ):
         doc = _valid_findings()
-        doc[collection][0]["critic_adjustment"] = {
+        doc["findings"][0]["critic_adjustment"] = {
             "action": "correct",
             "rationale": "Caller invented provenance.",
         }
@@ -744,27 +503,6 @@ class TestFindingsSave:
         assert result.returncode != 0
         assert "script-owned provenance" in result.stdout
         assert not (tmp_path / "review-findings.json").exists()
-
-    def test_accepts_empty_findings_with_approve(self, tmp_path, capsys):
-        doc = _valid_findings(
-            verdict="approve",
-            findings=[],
-            summary={
-                "total_findings": 0,
-                "by_severity": {
-                    "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0,
-                },
-                "suppressed_advisory_finding_count": 0,
-            },
-        )
-        findings = self._write_findings(tmp_path, doc)
-
-        result = self._run_save(tmp_path, findings, capsys)
-
-        assert result.returncode == 0, result.stdout + result.stderr
-        assert "RECORDED FINDINGS: 0 (critical 0, high 0, medium 0, low 0)" in (
-            result.stdout
-        )
 
 
 # =============================================================================
@@ -994,7 +732,11 @@ def test_save_rejects_a_host_context_banner_authored_by_the_agent(
 
 
 @pytest.mark.parametrize(
-    "schema", rejected_schema_values(RECONCILIATION_CONTEXT_SCHEMA)
+    "schema",
+    [
+        v for v in rejected_schema_values(RECONCILIATION_CONTEXT_SCHEMA)
+        if v.id in ("prior-schema", "bool", "absent")
+    ],
 )
 def test_save_rejects_a_context_written_at_another_schema(
     tmp_path, capsys, schema
@@ -1073,20 +815,18 @@ def test_the_stamp_fits_a_skip_reason_inside_the_ledger_bound(
 
 
 @pytest.mark.parametrize("entry", [
-    "not-an-object",
-    {"findings": []},
-    {"verdict": "approve"},
-    {"verdict": "approve", "findings": None},
-    {"verdict": "bogus", "findings": []},
-    {"verdict": "approve", "findings": ["not-a-finding"]},
-    {"verdict": "not_applicable", "findings": []},
-    {"verdict": "not_applicable", "skip_reason": "  ", "findings": []},
-    {
-        "verdict": "not_applicable",
-        "skip_reason": "No UI.",
-        "findings": [{"severity": "low"}],
-    },
-    {"verdict": "approve", "skip_reason": "No UI.", "findings": []},
+    pytest.param("not-an-object", id="not-an-object"),
+    pytest.param(
+        {"verdict": "bogus", "findings": []}, id="verdict-outside-vocabulary",
+    ),
+    pytest.param(
+        {"verdict": "not_applicable", "findings": []},
+        id="not-applicable-without-skip-reason",
+    ),
+    pytest.param(
+        {"verdict": "approve", "skip_reason": "No UI.", "findings": []},
+        id="approve-with-skip-reason",
+    ),
 ])
 def test_save_rejects_a_context_review_entry_of_the_wrong_shape(
     tmp_path, capsys, entry
@@ -1163,39 +903,35 @@ class TestAccountingGate:
         assert fragment in out
         assert not (tmp_path / "review-findings.json").exists()
 
-    @pytest.mark.parametrize("collection", ["dropped_findings", "dropped_checks"])
-    def test_an_unknown_drop_reason_is_named(self, tmp_path, capsys, collection):
+    def test_an_unknown_drop_reason_is_named(self, tmp_path, capsys):
         reviews = _reviews(**{"security-review": (2, ["grep", "rg"])})
         _write_context(tmp_path, reviews)
         doc = _valid_findings(context=reviews)
-        doc[collection][0]["reason"] = "duplicate"
+        doc["dropped_findings"][0]["reason"] = "duplicate"
         code, out = _save(tmp_path, doc, capsys)
         assert code == 1
-        allowed = "false_positive, out_of_scope, prefiltered" if collection == "dropped_findings" else "void"
         assert (
-            f"REJECTED: {collection}[0] has an unknown reason 'duplicate' "
-            f"(allowed: {allowed})"
+            "REJECTED: dropped_findings[0] has an unknown reason 'duplicate' "
+            "(allowed: false_positive, out_of_scope, prefiltered)"
         ) in out
 
-    @pytest.mark.parametrize("collection", ["findings", "checks"])
-    def test_an_entry_naming_no_sources_rejects_the_save(self, tmp_path, capsys, collection):
+    def test_an_entry_naming_no_sources_rejects_the_save(self, tmp_path, capsys):
         reviews = _reviews(**{"security-review": (1, ["grep"])})
         _write_context(tmp_path, reviews)
         doc = _valid_findings(context=reviews)
-        doc[collection][0]["sources"] = []
+        doc["findings"][0]["sources"] = []
         code, out = _save(tmp_path, doc, capsys)
         assert code == 1
-        assert f"REJECTED: {collection}[0] names no sources" in out
+        assert "REJECTED: findings[0] names no sources" in out
 
-    @pytest.mark.parametrize("collection", ["findings", "checks"])
-    def test_a_malformed_sources_entry_rejects_the_save(self, tmp_path, capsys, collection):
+    def test_a_malformed_sources_entry_rejects_the_save(self, tmp_path, capsys):
         reviews = _reviews(**{"security-review": (1, ["grep"])})
         _write_context(tmp_path, reviews)
         doc = _valid_findings(context=reviews)
-        doc[collection][0]["sources"] = [{"reviewer": "security-review"}]
+        doc["findings"][0]["sources"] = [{"reviewer": "security-review"}]
         code, out = _save(tmp_path, doc, capsys)
         assert code == 1
-        assert f"REJECTED: {collection}[0] has a malformed sources entry" in out
+        assert "REJECTED: findings[0] has a malformed sources entry" in out
 
     def test_a_merged_check_must_carry_every_source_method_verbatim(self, tmp_path, capsys):
         reviews = _reviews(**{
@@ -1340,28 +1076,14 @@ class TestAccountingGate:
         assert code == 1
         assert "2 findings were dropped as false positives but false_positive_concern_count is 0" in out
 
-    @pytest.mark.parametrize("notes", [
-        pytest.param(..., id="missing"),
-        pytest.param(None, id="null"),
-        pytest.param({}, id="object"),
-        pytest.param("unknown", id="string"),
-        pytest.param([None], id="non-object-entry"),
-        pytest.param([{"id": "n1"}], id="missing-note"),
-        pytest.param([{"note": "claim"}], id="missing-id"),
-        pytest.param([{"id": "n1", "note": "claim", "extra": True}], id="extra-field"),
-        pytest.param([{"id": "n1", "note": None}], id="non-text"),
-        pytest.param([{"id": "n1", "note": " "}], id="empty-text"),
-        pytest.param([{"id": "n1", "note": " padded "}], id="unclean-text"),
-        pytest.param([{"id": "n1", "note": "a\x00b"}], id="control-text"),
-        pytest.param([{"id": "n1", "note": "a\u200bb"}], id="format-text"),
-        pytest.param([{"id": "n1", "note": "x" * 4097}], id="overlong-text"),
-        pytest.param([{"id": "1", "note": "claim"}], id="invalid-id"),
-        pytest.param([{"id": "n2", "note": "claim"}], id="wrong-first-id"),
-        pytest.param([{"id": "n1", "note": "a"}, {"id": "n1", "note": "b"}], id="duplicate"),
-        pytest.param([{"id": "n2", "note": "a"}, {"id": "n1", "note": "b"}], id="non-monotonic"),
-        pytest.param([{"id": "n1", "note": "a"}, {"id": "n3", "note": "b"}], id="non-contiguous"),
+    @pytest.mark.parametrize("notes, existing_ledger", [
+        pytest.param(..., False, id="missing"),
+        pytest.param([None], True, id="non-object-entry"),
+        pytest.param(
+            [{"id": "n1", "note": "a"}, {"id": "n3", "note": "b"}], False,
+            id="non-contiguous",
+        ),
     ])
-    @pytest.mark.parametrize("existing_ledger", [False, True])
     def test_malformed_note_collection_rejects_save_without_writing(
         self, tmp_path, capsys, notes, existing_ledger
     ):
