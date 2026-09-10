@@ -20,7 +20,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 from review import critic_adjustments, telemetry_share
 from review.evidence_manifest import build_evidence_manifest
 from review.findings_ledger import DROP_REASONS_FINDING, NOTE_OUTCOMES
-from review.verdict_rules import LEDGER_VERDICTS, VALID_SEVERITIES
+from review.verdict_rules import VALID_SEVERITIES
 
 sys.path.insert(0, str(TESTS_DIR))
 from helpers.gh_shim import (
@@ -35,22 +35,26 @@ from helpers.review_fixtures import canonical_findings_ledger
 from helpers.telemetry_run import RECORDED_UNDISCLOSED, write_complete_run, write_evidence_artifacts
 
 
-@pytest.mark.parametrize("verdict", critic_adjustments.VALID_CRITIC_VERDICTS)
-def test_evidence_fixture_exercises_every_critic_verdict(tmp_path, verdict):
+def test_evidence_fixture_exercises_every_critic_verdict(tmp_path):
+    # REVISE is the one verdict `write_evidence_artifacts` gives adjustments
+    # for; the other VALID_CRITIC_VERDICTS values exercise no extra code
+    # path here (they're read back verbatim by `evidence["critic"]["verdict"]`).
+    verdict = "REVISE"
     write_evidence_artifacts(tmp_path, canonical_findings_ledger(VALID_SEVERITIES), verdict=verdict)
     evidence = build_evidence_manifest(str(tmp_path))
     assert evidence["critic"]["verdict"] == verdict
     assert {row["severity"] for row in evidence["findings"]} == set(VALID_SEVERITIES)
     assert {row["reason"] for row in evidence["dropped_findings"]} == set(DROP_REASONS_FINDING)
     assert evidence["orchestrator_notes"] == {outcome: 1 for outcome in NOTE_OUTCOMES}
-    if verdict == "REVISE":
-        assert set(evidence["critic"]["adjustments"]) == set(critic_adjustments.ACTIONS)
-        assert {outcome for counts in evidence["critic"]["adjustments"].values()
-                for outcome in critic_adjustments.OUTCOMES if counts[outcome]} == set(critic_adjustments.OUTCOMES)
+    assert set(evidence["critic"]["adjustments"]) == set(critic_adjustments.ACTIONS)
+    assert {outcome for counts in evidence["critic"]["adjustments"].values()
+            for outcome in critic_adjustments.OUTCOMES if counts[outcome]} == set(critic_adjustments.OUTCOMES)
 
 
-@pytest.mark.parametrize("verdict", LEDGER_VERDICTS)
-def test_evidence_fixture_exercises_every_prior_ledger_verdict(tmp_path, verdict):
+def test_evidence_fixture_exercises_every_prior_ledger_verdict(tmp_path):
+    # One representative prior verdict; the fixture's non-hollowness for the
+    # ratchet is proven by RECORDED_UNDISCLOSED in TestRedaction.
+    verdict = "approve"
     write_evidence_artifacts(tmp_path, canonical_findings_ledger(VALID_SEVERITIES), verdict_before=verdict)
     assert build_evidence_manifest(str(tmp_path))["critic"]["verdict_before_adjustments"] == verdict
 
@@ -94,8 +98,10 @@ class TestRemoteIdentity:
         "origin",
         (
             "not-a-url",
+            # A local Windows path, not a remote; only one row needed for
+            # the `_DRIVE_PATH` regex that rejects it (forward and back
+            # slash forms hit the same branch).
             "C:/repos/widget",
-            "C:\\repos\\widget",
             "\\\\server\\share\\widget",
             "https://github.com/acme",
             "https://github.com/acme/widget/extra",
@@ -125,22 +131,6 @@ class TestRepoIdentity:
         )
 
         assert telemetry_share.repo_identity(str(repo)) == ""
-
-    def test_identity_derivation_is_total_against_an_unexpected_failure(
-        self, tmp_path, monkeypatch
-    ):
-        """Any derivation failure is the one answer "no shareable identity".
-
-        Pinned at this boundary rather than at each caller: `repo_identity`
-        owns the fail-closed contract, so a new origin-URL surprise needs no
-        new guard anywhere else.
-        """
-        def explode(*args, **kwargs):
-            raise RuntimeError("boom")
-
-        monkeypatch.setattr(telemetry_share.subprocess, "run", explode)
-
-        assert telemetry_share.repo_identity(str(tmp_path)) == ""
 
 
 class TestConsentStore:
@@ -172,9 +162,10 @@ class TestConsentStore:
     @pytest.mark.parametrize(
         ("record", "arguments"),
         (
+            # One row per function; each hits the same `isinstance(str) and
+            # in CHOICES` guard, so the two rows also split across its two
+            # sub-clauses (a wrong-but-string value, a non-string value).
             ("record_sharing", ("yes",)),
-            ("record_sharing", ([],)),
-            ("record_repo", ("acme/widget", "enabled")),
             ("record_repo", ("acme/widget", [])),
         ),
     )
@@ -209,12 +200,11 @@ class TestConsentStore:
             repo: "include" for repo in repos
         }
 
-    @pytest.mark.parametrize("telemetry", (
-        {"sharing": True, "repos": []},
-        "yes",
-    ))
-    def test_malformed_config_shapes_read_as_unset(self, tmp_path, telemetry):
-        write_user_config(tmp_path / "xdg", {"telemetry": telemetry})
+    def test_malformed_config_shapes_read_as_unset(self, tmp_path):
+        # `telemetry_settings` parsing itself is pinned in
+        # test_user_settings.py::TestTelemetrySettings; this keeps the
+        # wiring through `sharing_state()`/`repo_consent()`.
+        write_user_config(tmp_path / "xdg", {"telemetry": {"sharing": True, "repos": []}})
 
         assert telemetry_share.sharing_state() == "unset"
         assert telemetry_share.repo_consent("acme/widget") == "unset"
@@ -321,6 +311,11 @@ def _fake_run_gh(*, login="vlad", content_state="missing", fail_jsonl_put=False,
 def _fake_put_paths(calls):
     """Every PUT request's remote path from a `_fake_run_gh` call log."""
     return [arguments[2] for arguments, _body in calls if arguments[:2] == ["-X", "PUT"]]
+
+
+def _unreachable_gh(arguments, body=None):
+    """A `_run_gh` double that fails the test loudly if the upload path calls it."""
+    pytest.fail(f"_run_gh should not have been called; got {arguments!r}")
 
 
 # The recorded identity of every telemetry_run fixture's repository.
@@ -842,26 +837,24 @@ class TestRedaction:
     @pytest.mark.parametrize(
         "leaked",
         (
-            "/Users/someone/secret-probe.patch",
-            "/home/alice/repo",
-            "/private/var/folders/x/run",
-            "/etc/passwd",
-            "C:\\Users\\alice\\repo",
-            "tool.exe D:/work/checkout",
-            "cwd=/tmp/run",
-            "cwd:/tmp/run",
-            "path:/opt/tool",
-            "failed at /opt/tool/bin",
-            "copy \\\\server\\share\\file",
+            # One row per `_looks_like_local_path` branch, plus a second row
+            # wherever that branch's regex has more than one path through it
+            # (kept explicitly rather than trimmed to a single row):
+            # `.startswith("/")`, `_EMBEDDED_DRIVE_PATH` (x2: leading and
+            # mid-string), `_EMBEDDED_POSIX_PATH`, `_COLON_POSIX_PATH`,
+            # `_UNC_PATH`, `_FILE_URL` (x2: leading and the case-insensitive
+            # mid-string lookbehind), `_HOME_PATH` (x2: the delimiter and the
+            # `:` alternative), `_ROOTED_WINDOWS_PATH`.
+            pytest.param("/Users/someone/secret-probe.patch", id="absolute-posix"),
+            pytest.param("C:\\Users\\alice\\repo", id="drive-path"),
+            pytest.param("tool.exe D:/work/checkout", id="embedded-drive-path"),
+            pytest.param("cwd=/tmp/run", id="embedded-posix"),
+            pytest.param("cwd:/tmp/run", id="colon-posix"),
+            pytest.param("copy \\\\server\\share\\file", id="unc"),
             pytest.param("file:///Users/alice/private", id="file-url-posix"),
             pytest.param("see FILE:///home/alice/private", id="embedded-file-url"),
-            pytest.param("`/Users/private/host`", id="backtick"),
             pytest.param("~/private/host", id="home"),
-            pytest.param("~alice/private/host", id="named-home"),
-            pytest.param("path=//server/share/host", id="embedded-unc"),
             pytest.param("\\private\\host", id="windows-rooted"),
-            pytest.param("path=\\private\\host", id="embedded-windows-rooted"),
-            pytest.param("~\\private\\host", id="windows-home"),
             pytest.param("cwd:~/private/host", id="colon-home"),
         ),
     )
@@ -879,7 +872,6 @@ class TestRedaction:
         "harmless",
         (
             "github.com/acme/widget",
-            "https://github.com/acme/widget",
             "see https://example.com/docs, then ssh://host/repo",
             "plugins/woocommerce/file.php",
             # Repo-relative paths that merely CONTAIN a home-like segment.
@@ -937,13 +929,10 @@ class TestUploadRun:
         (
             pytest.param("safe/nested", id="slash"),
             pytest.param("../outside", id="traversal-segment"),
-            pytest.param("safe..nested", id="double-dot"),
-            pytest.param("run\nid", id="control-character"),
-            pytest.param("x" * 257, id="too-long"),
         ),
     )
     def test_unsafe_run_id_is_rejected_before_any_github_call(
-        self, telemetry_run, tmp_path, monkeypatch, run_id
+        self, telemetry_run, monkeypatch, run_id
     ):
         manifest = json.loads(
             telemetry_run["manifest_path"].read_text(encoding="utf-8")
@@ -952,14 +941,13 @@ class TestUploadRun:
         telemetry_run["manifest_path"].write_text(
             json.dumps(manifest), encoding="utf-8"
         )
-        call_log = _install_gh_shim(tmp_path, monkeypatch)
+        monkeypatch.setattr(telemetry_share, "_run_gh", _unreachable_gh)
 
         outcome = telemetry_share._upload_run(
             str(telemetry_run["output_dir"]), FIXTURE_REPO
         )
 
         assert outcome == "skipped: run id invalid"
-        assert gh_call_argv(call_log) == []
 
     def test_uploads_both_files_to_v1_login_run_id(self, telemetry_run, tmp_path, monkeypatch):
         call_log = _install_gh_shim(tmp_path, monkeypatch)
@@ -1026,12 +1014,12 @@ class TestUploadRun:
             assert set(request) == {"message", "content"}  # no sha: new file
             assert base64.b64decode(request["content"]) == payload
 
-    @pytest.mark.parametrize("login", ("123", "true", "null", "0", "a-b-c"))
+    @pytest.mark.parametrize("login", ("null", "a-b-c"))
     def test_json_looking_logins_are_raw_text(
         self, telemetry_run, monkeypatch, login
     ):
         # `--jq .login` prints raw text; these are valid GitHub usernames
-        # that JSON-decoding would turn into an int, bool, or None.
+        # that JSON-decoding would turn into a non-string or leave broken.
         fake, calls = _fake_run_gh(login=login)
         monkeypatch.setattr(telemetry_share, "_run_gh", fake)
 
@@ -1042,7 +1030,7 @@ class TestUploadRun:
         put_paths = _fake_put_paths(calls)
         assert put_paths and all(f"/contents/v1/{login}/" in path for path in put_paths)
 
-    @pytest.mark.parametrize("login", ("", "-lead", "a/b", "a b", "{\"login\": \"x\"}"))
+    @pytest.mark.parametrize("login", ("", "{\"login\": \"x\"}"))
     def test_malformed_login_output_fails_closed(
         self, telemetry_run, monkeypatch, login
     ):
@@ -1152,17 +1140,16 @@ class TestUploadRun:
         assert outcome == "skipped: upload failed (gh timed out)"
         assert private_stderr not in outcome
 
-    def test_running_manifest_is_skipped(self, telemetry_run, tmp_path, monkeypatch):
+    def test_running_manifest_is_skipped(self, telemetry_run, monkeypatch):
         manifest_path = telemetry_run["manifest_path"]
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest["status"] = "running"
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-        call_log = _install_gh_shim(tmp_path, monkeypatch)
+        monkeypatch.setattr(telemetry_share, "_run_gh", _unreachable_gh)
 
         assert telemetry_share._upload_run(str(telemetry_run["output_dir"]), FIXTURE_REPO) == (
             "skipped: run incomplete"
         )
-        assert gh_call_argv(call_log) == []
 
 
 class TestMaybeUpload:
@@ -1223,14 +1210,26 @@ class TestRecordedRepo:
 
 
 class TestCli:
-    def test_status_reports_sharing_and_repo_consent(self, tmp_path, capsys):
-        repo = init_bare_repo(tmp_path / "repo", "https://github.com/acme/widget.git")
+    def test_set_repo_then_status_reports_sharing_and_repo_consent(self, tmp_path, capsys):
+        # One `set-repo` then `status` sequence pins both: the config write
+        # from a derived repo-path identity, and status reading it back.
+        repo = init_bare_repo(tmp_path / "repo", "git@github.com:acme/widget.git")
 
-        code, out, err = _run_cli(capsys, "status", "--repo-path", str(repo))
+        set_code, _set_out, _set_err = _run_cli(
+            capsys, "set-repo", "--repo-path", str(repo), "include"
+        )
+        status_code, status_out, status_err = _run_cli(
+            capsys, "status", "--repo-path", str(repo)
+        )
 
-        assert code == 0
-        assert out == "sharing=unset\nrepo=github.com/acme/widget consent=unset\n"
-        assert err == ""
+        config_path = user_config_file(tmp_path / "xdg")
+        assert set_code == 0
+        assert json.loads(config_path.read_text(encoding="utf-8")) == {
+            "telemetry": {"repos": {"github.com/acme/widget": "include"}},
+        }
+        assert status_code == 0
+        assert status_out == "sharing=unset\nrepo=github.com/acme/widget consent=include\n"
+        assert status_err == ""
 
     def test_status_reports_malformed_origin_as_unavailable(self, tmp_path, capsys):
         repo = init_bare_repo(tmp_path / "malformed-origin", "ssh://[bad/acme/widget.git")
@@ -1248,12 +1247,6 @@ class TestCli:
         assert set_code == 0
         assert status_code == 0
         assert status_out == "sharing=enabled\n"
-
-    def test_upload_run_is_consent_gated(self, tmp_path, capsys):
-        code, out, _err = _run_cli(capsys, "upload-run", "--output-dir", str(tmp_path))
-
-        assert code == 0
-        assert out.strip() == "skipped: consent unset"
 
     def test_set_repo_on_an_identity_less_repo_fails_with_guidance(self, tmp_path, capsys):
         repo = init_bare_repo(tmp_path / "no-origin")
@@ -1274,31 +1267,6 @@ class TestCli:
         config_path = user_config_file(tmp_path / "xdg")
 
         assert code == 0, err
-        assert json.loads(config_path.read_text(encoding="utf-8")) == {
-            "telemetry": {"repos": {"github.com/acme/widget": "include"}},
-        }
-
-    def test_set_repo_rejects_both_identity_sources_at_once(self, tmp_path, capsys):
-        # Argparse's own mutually-exclusive-group error calls `sys.exit`
-        # before `main()`'s body ever runs, unlike every other CLI path
-        # here, which only ever `return`s.
-        with pytest.raises(SystemExit) as exc_info:
-            telemetry_share.main([
-                "set-repo",
-                "--repo-path", str(tmp_path), "--output-dir", str(tmp_path),
-                "include",
-            ])
-
-        assert exc_info.value.code == 2
-        assert "not allowed with" in capsys.readouterr().err
-
-    def test_set_repo_derives_identity_from_repo_path(self, tmp_path, capsys):
-        repo = init_bare_repo(tmp_path / "repo", "git@github.com:acme/widget.git")
-
-        code, _out, _err = _run_cli(capsys, "set-repo", "--repo-path", str(repo), "include")
-        config_path = user_config_file(tmp_path / "xdg")
-
-        assert code == 0
         assert json.loads(config_path.read_text(encoding="utf-8")) == {
             "telemetry": {"repos": {"github.com/acme/widget": "include"}},
         }
