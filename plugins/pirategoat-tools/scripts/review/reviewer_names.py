@@ -8,8 +8,11 @@ instead of restating the rule.
 
 Leaf module: stdlib only, never imports from anywhere else in `review/`,
 so any script can import the naming rule without re-entering a module that
-is still initializing. `tests/review/agent/test_bootstrap_integration.py`
-pins both derivations.
+is still initializing. `tests/review/test_reviewer_names.py` pins the
+inverse; the forward rule is pinned by
+`tests/review/agent/test_bootstrap_repo_rules.py` (trailing-suffix stripping
+for adapter instance names) and `tests/review/agent/test_bootstrap_integration.py`
+(a unique, non-empty name for every registered agent).
 """
 
 
