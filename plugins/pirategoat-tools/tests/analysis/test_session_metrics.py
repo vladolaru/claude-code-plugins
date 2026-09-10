@@ -112,7 +112,7 @@ class TestStrategy1Bootstrap:
         "user_message,agent_arg,expected",
         [
             # Agent name without a -reviewer suffix gets it appended.
-            pytest.param("Start", "patterns", "patterns-reviewer", id="without_suffix"),
+            pytest.param("Start", "patterns", "patterns-reviewer", id="without-suffix"),
             # Bootstrap detection fires before keyword inference — the user
             # message baits the wp-architecture keyword, but the bootstrap
             # line still wins.
@@ -120,7 +120,7 @@ class TestStrategy1Bootstrap:
                 "Review WordPress architecture quality",
                 "security-reviewer",
                 "security-reviewer",
-                id="takes_precedence",
+                id="takes-precedence",
             ),
         ],
     )
@@ -175,10 +175,19 @@ class TestStrategy2Keywords:
     constants and not pinned individually here (test_mixed_signal_and_real_keyword
     and test_list_content_format below already infer security-reviewer too)."""
 
-    def test_security_genuine_prompt(self, tmp_path):
-        content = "Check for security issues in the changed files"
+    @pytest.mark.parametrize(
+        "content,expected",
+        [
+            pytest.param(
+                "Check for security issues in the changed files",
+                "security-reviewer",
+                id="security",
+            ),
+        ],
+    )
+    def test_keyword_inference(self, tmp_path, content, expected):
         path = _write_jsonl([_make_user_message(content)], str(tmp_path))
-        assert identify_agent_type(path) == "security-reviewer"
+        assert identify_agent_type(path) == expected
 
     def test_agent_signal_does_not_trigger_keyword_match(self, tmp_path):
         """Agent signal lines like 'wp-architecture-reviewer: STATUS=COMPLETED'
