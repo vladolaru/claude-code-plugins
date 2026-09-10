@@ -10,7 +10,7 @@ were the executable subset; nothing verified the subset spans the prose.
 This suite closes that loop:
 
 1. **One minimal probe per criterion.** For every conditional agent, every
-   `triage_criteria` bullet has exactly one probe — the smallest realistic
+   `triage_criteria` bullet has one probe (by convention) — the smallest realistic
    diff satisfying that criterion — that MUST dispatch through the real
    pipeline (`decide_agent_dispatch` + real registry), i.e. through domain
    gating, explicit applicability gates, and conservative fallback routing.
@@ -32,6 +32,8 @@ import importlib.util
 from pathlib import Path
 
 import pytest
+
+from review.dispatch_status import LOW_SIGNAL_DISPATCH_SIGNALS
 
 # ---------------------------------------------------------------------------
 # Path setup
@@ -777,6 +779,27 @@ _FLAT = [
     for i, p in enumerate(probes)
 ]
 
+# These criteria have no keyword or check backing them, so their probes
+# dispatch only on a low (default) signal; each needs one, or rewording,
+# and removing an entry is the fix.
+KNOWN_UNBACKED_CRITERIA = frozenset({
+    ("history-insights-reviewer", "PR modifies existing code that has meaningful git history (prior fixes, enhancements, refactors)"),
+    ("history-insights-reviewer", "Changed files touch areas with known past issues or multiple prior contributors"),
+    ("history-insights-reviewer", "PR refactors or restructures code where the team may have learned lessons from earlier attempts"),
+    ("reference-integrity-reviewer", "URL literals in configuration arrays or constants (docs links, API endpoints, CDN references)"),
+    ("security-reviewer", "New or modified endpoints accepting external input"),
+    ("security-reviewer", "Code processing user-supplied data (form fields, query params, request bodies, file uploads)"),
+    ("security-reviewer", "Database operations (reads, writes, raw queries)"),
+    ("security-reviewer", "Dynamic content rendered to output"),
+    ("security-reviewer", "Auth, authorization, or session management changes"),
+    ("security-reviewer", "File system operations with user-influenced paths"),
+    ("security-reviewer", "Commits introducing new entry points or data processing"),
+    ("security-reviewer", "CI/CD configuration changes (workflow files, pipeline configs)"),
+    ("security-reviewer", "Infrastructure-as-code changes (Terraform, Helm, Docker)"),
+    ("toolchain-reviewer", "Package manager config changes (pnpm-workspace.yaml, .npmrc, package.json engines/scripts)"),
+    ("toolchain-reviewer", "Linter or formatter config changes (ESLint, Prettier, PHPCS, PHPStan)"),
+})
+
 
 class TestCriteriaProbesDispatch:
     """Every criterion probe dispatches through the real pipeline, from the
@@ -797,7 +820,7 @@ class TestCriteriaProbesDispatch:
         config = agents[agent_name]
         crit = p["criterion"].lower()
         text_oriented = any(m in crit for m in self._TEXT_ORIENTED_MARKERS)
-        status, reason, _signal = decide_agent_dispatch(
+        status, reason, signal = decide_agent_dispatch(
             agent_name,
             config,
             build_domain_counts(p["files"]),
@@ -808,11 +831,37 @@ class TestCriteriaProbesDispatch:
             diff_text=p["diff"],
             repository_text=p["repository"],
         )
+        source = (
+            "from its commit/PR text and change" if text_oriented
+            else "from the change itself (commit/PR text blanked)"
+        )
         assert status == "DISPATCH", (
             f"{agent_name} must dispatch for its criterion {p['criterion']!r} "
-            f"from the change itself — got {status} ({reason}). Give the agent "
+            f"{source} — got {status} ({reason}). Give the agent "
             f"a backing signal (keyword / triage check) or reword the "
             f"criterion; never weaken the probe."
+        )
+        if (agent_name, p["criterion"]) in KNOWN_UNBACKED_CRITERIA:
+            assert signal in LOW_SIGNAL_DISPATCH_SIGNALS, (
+                f"{agent_name} criterion {p['criterion']!r} now dispatches on "
+                f"the backing signal {signal!r} ({reason}) — remove it from "
+                f"KNOWN_UNBACKED_CRITERIA."
+            )
+        else:
+            assert signal not in LOW_SIGNAL_DISPATCH_SIGNALS, (
+                f"{agent_name} dispatches for criterion {p['criterion']!r} "
+                f"{source} only on the low signal {signal!r} ({reason}), so no "
+                f"keyword or check backs it and quick mode can drop it. Give "
+                f"the agent a backing keyword / triage check or reword the "
+                f"criterion; never add it to KNOWN_UNBACKED_CRITERIA."
+            )
+
+    def test_known_unbacked_entries_name_real_probes(self):
+        probed = {(a, p["criterion"]) for a, _, p in _FLAT}
+        stale = KNOWN_UNBACKED_CRITERIA - probed
+        assert not stale, (
+            f"KNOWN_UNBACKED_CRITERIA names criteria no probe carries (reworded "
+            f"or removed); delete these entries: {sorted(stale)}"
         )
 
 
