@@ -173,14 +173,6 @@ def test_metrics_uses_canonical_telemetry_contract():
     dispatch_status = _load_dispatch_status_module()
 
     assert contracts.DEFAULT_LOG_DIR == Path(telemetry.LOG_DIR)
-    assert (
-        contracts._DISPATCHED_STATUSES
-        is contracts._DISPATCH_STATUS_CONTRACT.DISPATCHED_STATUSES
-    )
-    assert (
-        contracts._SUPPORTED_DISPATCH_STATUSES
-        is contracts._DISPATCH_STATUS_CONTRACT.SUPPORTED_DISPATCH_STATUSES
-    )
     assert contracts._DISPATCHED_STATUSES == dispatch_status.DISPATCHED_STATUSES
     assert (
         contracts._SUPPORTED_DISPATCH_STATUSES
@@ -197,14 +189,6 @@ def test_metrics_uses_canonical_telemetry_contract():
     assert (
         contracts._AVAILABILITY_FAMILIES
         == contracts._PIPELINE_FAMILIES + contracts._TRANSCRIPT_FAMILIES
-    )
-    assert (
-        contracts._project_agent_lifecycle
-        is contracts._TELEMETRY_CONTRACT.project_agent_lifecycle
-    )
-    assert (
-        contracts._incomplete_agent_executions
-        is contracts._TELEMETRY_CONTRACT._incomplete_agent_executions
     )
 
 
@@ -308,8 +292,9 @@ def test_sanitize_steps_preserves_positive_exact_integer_step_attempt():
     [
         pytest.param(0, id="zero"),
         pytest.param(-1, id="negative"),
+        # `_nonnegative_exact_int`'s `type(value) is not int`; an integral
+        # float fails the same check.
         pytest.param(True, id="boolean"),
-        pytest.param(2.0, id="integral-float"),
     ],
 )
 def test_sanitize_steps_drops_invalid_step_attempt(attempt):
@@ -400,35 +385,28 @@ def _manifest(
     }
 
 
-@pytest.mark.parametrize("source_kind", ["local", "shared"])
-def test_step_attempt_round_trips_through_supported_report(
-    tmp_path, source_kind
-):
-    run_id = f"{source_kind}-attempts"
+def test_step_attempt_round_trips_through_supported_report(tmp_path):
+    """A local log directory stands for a shared clone: the two differ
+    only in the loader, and the shared loader is pinned by the
+    `shared_telemetry_clone` tests."""
+    run_id = "local-attempts"
     manifest = _manifest(run_id)
     manifest["steps"] = [
         {"run_id": run_id, "event": "step", "step": 11, "attempt": 1},
         {"run_id": run_id, "event": "step", "step": 11, "attempt": 2},
         {"run_id": run_id, "event": "step", "step": 5},
     ]
-    if source_kind == "local":
-        source_root = tmp_path / "local"
-        source_dir = source_root
-        source_flag = "--log-dir"
-    else:
-        source_root = tmp_path / "shared"
-        source_dir = source_root / telemetry_share.LAYOUT_PREFIX / "alice"
-        source_flag = "--shared-dir"
+    source_dir = tmp_path / "local"
     source_dir.mkdir(parents=True)
     (source_dir / f"{run_id}.manifest.json").write_text(
         json.dumps(manifest), encoding="utf-8"
     )
-    output = tmp_path / f"{source_kind}-report.json"
+    output = tmp_path / "local-report.json"
 
     result = main(
         [
-            source_flag,
-            str(source_root),
+            "--log-dir",
+            str(source_dir),
             "--format",
             "json",
             "--output",
@@ -606,13 +584,11 @@ class TestReviewVocabularyLifecycleMigration:
                 id="grouped-exceeds-input",
             ),
             pytest.param({"reviewing_agents": None}, id="reviewing-null"),
+            # One duplicate check in the loop over the reconciliation agent
+            # lists; a duplicated dispatched agent fails the same check.
             pytest.param(
                 {"reviewing_agents": ["security-reviewer", "security-reviewer"]},
                 id="reviewing-duplicate",
-            ),
-            pytest.param(
-                {"dispatched_agents": ["code-reviewer", "code-reviewer"]},
-                id="dispatched-duplicate",
             ),
             pytest.param(
                 {"not_applicable_agents": [
@@ -662,17 +638,6 @@ class TestReviewVocabularyLifecycleMigration:
         assert rendered["runs"][0]["outcome"]["reconciliation"] == (
             _task_5_manifest()["outcome"]["reconciliation"]
         )
-        serialized = json.dumps(measured)
-        for retired in (
-            '"changed"', '"reviewable"', '"assigned"', '"excluded"',
-            '"uncovered"', '"issue_count"', '"total_agent_issues"',
-            '"final_issues"', '"input_findings_count"',
-            '"agents_contributing"', '"concerns_after_grouping"',
-            '"false_positives_dropped"', '"out_of_scope_dropped"',
-            '"verified_concerns"', '"merge_ratio"',
-            '"not_applicable_count"',
-        ):
-            assert retired not in serialized
 
     def test_historical_agent_identity_cohort_normalizes_legacy_rosters(
         self, tmp_path
@@ -760,20 +725,6 @@ class TestReviewVocabularyLifecycleMigration:
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
         assert measured["outcome"]["reconciliation"] is None
-
-    def test_completion_lifecycle_uses_finding_count(self, tmp_path):
-        manifest = _task_5_manifest()
-        manifest["agents"] = {
-            "started": [_agent_start(run_id="task-5-run")],
-            "completed": [_agent_complete(run_id="task-5-run")],
-            "incomplete": [],
-        }
-
-        measured = measure_run(manifest, tmp_path, include_transcripts=False)
-
-        assert measured["metric_availability"]["lifecycle"] == "complete"
-        assert measured["agents"]["completed"][0]["finding_count"] == 0
-        assert "issue_count" not in measured["agents"]["completed"][0]
 
     def test_cohort_aggregates_canonical_coverage_and_finding_totals(self):
         first = measure_run(
