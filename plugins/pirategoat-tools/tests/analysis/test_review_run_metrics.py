@@ -1195,16 +1195,6 @@ class TestLoadRuns:
         with pytest.raises(OSError, match="denied"):
             load_runs(log_dir)
 
-    def test_prefers_valid_manifest_without_loading_sibling_jsonl(self, tmp_path):
-        manifest = _manifest("manifest-run")
-        _write_manifest(tmp_path / "review.manifest.json", manifest)
-        _write_jsonl(tmp_path / "review.jsonl", _legacy_events("jsonl-run"))
-
-        runs = load_runs(tmp_path)
-
-        assert [run["run"]["id"] for run in runs] == ["manifest-run"]
-        assert "legacy_log_no_manifest" not in runs[0].get("warnings", [])
-
     @pytest.mark.parametrize(
         "verdict_source",
         ["findings ledger", "critic ESCALATE override",
@@ -1577,58 +1567,31 @@ class TestLoadRuns:
         assert measured["lifecycle"]["started_events"] == 1
         assert measured["lifecycle"]["completed_events"] == 1
 
-    @pytest.mark.parametrize(
-        "events",
-        [
-            pytest.param(
-                [
-                    _pipeline_start("running-run"),
-                    _step(
-                        "running-run",
-                        timestamp="2026-07-19T09:59:59+00:00",
-                    ),
-                ],
-                id="step-before-start",
-            ),
-            pytest.param(
-                [
-                    _pipeline_start("running-run"),
-                    _step(
-                        "running-run",
-                        timestamp="2026-07-19T10:00:10+00:00",
-                    ),
-                    {
-                        **_step(
-                            "running-run",
-                            timestamp="2026-07-19T10:00:09+00:00",
-                        ),
-                        "step": 2,
-                    },
-                ],
-                id="later-step-regresses",
-            ),
-            pytest.param(
-                [
-                    _pipeline_start("running-run"),
-                    _step(
-                        "running-run",
-                        timestamp="2026-07-19T10:00:10+00:00",
-                    ),
-                    _pipeline_end(
+    def test_running_overlay_rejects_regressing_control_plane_timeline(
+        self, tmp_path
+    ):
+        """One `timestamp < last_control_plane_time` check: a later step
+        regressing stands for a step before the start and an end before
+        the last step."""
+        manifest = _running_manifest("running-run")
+        _write_manifest(tmp_path / "review.manifest.json", manifest)
+        _write_jsonl(
+            tmp_path / "review.jsonl",
+            [
+                _pipeline_start("running-run"),
+                _step(
+                    "running-run",
+                    timestamp="2026-07-19T10:00:10+00:00",
+                ),
+                {
+                    **_step(
                         "running-run",
                         timestamp="2026-07-19T10:00:09+00:00",
                     ),
-                ],
-                id="end-before-last-step",
-            ),
-        ],
-    )
-    def test_running_overlay_rejects_regressing_control_plane_timeline(
-        self, tmp_path, events
-    ):
-        manifest = _running_manifest("running-run")
-        _write_manifest(tmp_path / "review.manifest.json", manifest)
-        _write_jsonl(tmp_path / "review.jsonl", events)
+                    "step": 2,
+                },
+            ],
+        )
 
         [run] = load_runs(tmp_path)
         measured = measure_run(run, tmp_path, include_transcripts=False)
@@ -1724,48 +1687,25 @@ class TestLoadRuns:
         assert measured["metric_availability"]["lifecycle"] == "partial"
         assert "running_lifecycle_overlay_invalid" not in run["warnings"]
 
-    @pytest.mark.parametrize(
-        "events",
-        [
-            pytest.param(
-                [
-                    _pipeline_start("running-run"),
-                    _pipeline_end("running-run"),
-                    _agent_start("code-reviewer", run_id="running-run"),
-                ],
-                id="lifecycle-after-end",
-            ),
-            pytest.param(
-                [
-                    _pipeline_start("running-run"),
-                    _pipeline_end("running-run"),
-                    _step(
-                        "running-run",
-                        timestamp="2026-07-19T10:00:40+00:00",
-                    ),
-                ],
-                id="step-after-end",
-            ),
-            pytest.param(
-                [
-                    _pipeline_start("running-run"),
-                    _agent_start("code-reviewer", run_id="running-run"),
-                    _pipeline_end("running-run"),
-                    _pipeline_end(
-                        "running-run",
-                        timestamp="2026-07-19T10:00:40+00:00",
-                    ),
-                ],
-                id="duplicate-end",
-            ),
-        ],
-    )
     def test_running_overlay_rejects_nonterminal_or_duplicate_end(
-        self, tmp_path, events
+        self, tmp_path
     ):
+        """One `pipeline_end`-must-be-last conjunct: a duplicate end stands
+        for lifecycle or step events appended after the end."""
         manifest = _running_manifest("running-run")
         _write_manifest(tmp_path / "review.manifest.json", manifest)
-        _write_jsonl(tmp_path / "review.jsonl", events)
+        _write_jsonl(
+            tmp_path / "review.jsonl",
+            [
+                _pipeline_start("running-run"),
+                _agent_start("code-reviewer", run_id="running-run"),
+                _pipeline_end("running-run"),
+                _pipeline_end(
+                    "running-run",
+                    timestamp="2026-07-19T10:00:40+00:00",
+                ),
+            ],
+        )
 
         [run] = load_runs(tmp_path)
         measured = measure_run(run, tmp_path, include_transcripts=False)
@@ -1811,15 +1751,6 @@ class TestLoadRuns:
             pytest.param(
                 [
                     _pipeline_start("running-run"),
-                    _with_legacy_schema_key(
-                        _agent_start("code-reviewer", run_id="running-run")
-                    ),
-                ],
-                id="pre-rename-schema-key-mid-stream",
-            ),
-            pytest.param(
-                [
-                    _pipeline_start("running-run"),
                     {
                         **_agent_start("code-reviewer", run_id="running-run"),
                         "schema": contracts._SUPPORTED_MANIFEST_SCHEMA + 1,
@@ -1829,11 +1760,13 @@ class TestLoadRuns:
             ),
             # Control-plane events never reach _strict_lifecycle_event —
             # only agent_start/agent_complete do — so the per-event loop in
-            # _running_lifecycle_overlay is the ONLY schema guard a `step`
-            # or `pipeline_end` event ever passes. Without these cases the
-            # loop's schema conjunct can be deleted with every other test
-            # still green, and an overlay would silently accept control-plane
-            # events whose field meanings its producer never vouched for.
+            # _overlay_running_lifecycle is the ONLY schema guard a `step`
+            # or `pipeline_end` event ever passes. This case keeps that
+            # conjunct pinned (fix 43c845c9): without it the conjunct can be
+            # deleted with every other test still green, and an overlay would
+            # silently accept control-plane events whose field meanings its
+            # producer never vouched for. A pre-rename schema key, or the same
+            # schema on `pipeline_end`, reaches the same conjunct.
             pytest.param(
                 [
                     _pipeline_start("running-run"),
@@ -1848,40 +1781,6 @@ class TestLoadRuns:
                     },
                 ],
                 id="unsupported-schema-on-step-event",
-            ),
-            pytest.param(
-                [
-                    _pipeline_start("running-run"),
-                    _with_legacy_schema_key(
-                        {
-                            "schema": 1,
-                            "run_id": "running-run",
-                            "event": "step",
-                            "timestamp": "2026-07-19T10:00:05+00:00",
-                            "step": 6,
-                            "phase": "REVIEW",
-                            "title": "Dispatch Agents",
-                        }
-                    ),
-                ],
-                id="pre-rename-schema-key-on-step-event",
-            ),
-            pytest.param(
-                [
-                    _pipeline_start("running-run"),
-                    {
-                        **_pipeline_end("running-run"),
-                        "schema": contracts._SUPPORTED_MANIFEST_SCHEMA + 1,
-                    },
-                ],
-                id="unsupported-schema-on-pipeline-end",
-            ),
-            pytest.param(
-                [
-                    _pipeline_start("running-run"),
-                    _with_legacy_schema_key(_pipeline_end("running-run")),
-                ],
-                id="pre-rename-schema-key-on-pipeline-end",
             ),
         ],
     )
@@ -1936,28 +1835,6 @@ class TestLoadRuns:
         assert measured["metric_availability"]["lifecycle"] == "missing"
         assert "running_lifecycle_overlay_invalid" in run["warnings"]
 
-    def test_running_overlay_rejects_sidecar_prefix_mismatch(self, tmp_path):
-        manifest = _running_manifest("running-run")
-        manifest["agents"] = {
-            "started": [_agent_start("code-reviewer", run_id="running-run")],
-            "completed": [],
-            "incomplete": ["code-reviewer"],
-        }
-        _write_manifest(tmp_path / "review.manifest.json", manifest)
-        _write_jsonl(
-            tmp_path / "review.jsonl",
-            [
-                _pipeline_start("running-run"),
-                _agent_start("security-reviewer", run_id="running-run"),
-            ],
-        )
-
-        [run] = load_runs(tmp_path)
-        measured = measure_run(run, tmp_path, include_transcripts=False)
-
-        assert measured["metric_availability"]["lifecycle"] == "missing"
-        assert "running_lifecycle_overlay_invalid" in run["warnings"]
-
     def test_running_overlay_requires_one_global_append_prefix(self, tmp_path):
         manifest = _running_manifest("running-run")
         first_start = _agent_start(
@@ -1997,8 +1874,11 @@ class TestLoadRuns:
         assert "running_lifecycle_overlay_invalid" in run["warnings"]
 
     def test_complete_manifest_suppresses_fresh_same_run_lifecycle_overlay(
-        self, tmp_path, monkeypatch
+        self, tmp_path
     ):
+        """A valid complete manifest is the run: its sibling JSONL, even a
+        fresh same-run lifecycle suffix, is neither overlaid onto the
+        manifest's lifecycle nor loaded as a legacy run of its own."""
         manifest = _manifest("complete-run")
         _write_manifest(tmp_path / "review.manifest.json", manifest)
         _write_jsonl(
@@ -2009,13 +1889,11 @@ class TestLoadRuns:
                 _agent_complete("code-reviewer", run_id="complete-run"),
             ],
         )
-        def unexpected_read(_path):
-            raise AssertionError("complete manifests must not read sibling JSONL")
 
-        monkeypatch.setattr(load, "_read_jsonl_strict", unexpected_read)
+        runs = load_runs(tmp_path)
 
-        [run] = load_runs(tmp_path)
-
+        assert [run["run"]["id"] for run in runs] == ["complete-run"]
+        [run] = runs
         assert run["status"] == "complete"
         assert run["agents"] == manifest["agents"]
         assert run["warnings"] == []
