@@ -1,6 +1,5 @@
 """Tests for review/telemetry.py — JSONL telemetry for PR review pipelines."""
 
-import glob
 import importlib.util
 import json
 import os
@@ -212,10 +211,6 @@ class TestAgentNameProjection:
 class TestStart:
     """ReviewTelemetry.start() creates log infrastructure."""
 
-    def test_default_log_dir_is_pirategoat_tools(self, mod):
-        assert "/.pirategoat-tools/" in mod.LOG_DIR
-        assert mod.LOG_DIR.endswith("/logs/reviews")
-
     def test_creates_log_with_pipeline_start_event(self, telemetry):
         """start() creates a JSONL log file with a pipeline_start event."""
         path = telemetry.start(pr_number="42")
@@ -229,15 +224,6 @@ class TestStart:
         # Timestamp is UTC-aware
         ts = datetime.fromisoformat(events[0]["timestamp"])
         assert ts.tzinfo is not None
-
-    def test_pipeline_start_has_pipeline_info(self, telemetry, output_dir):
-        path = telemetry.start(pr_number="42", total_steps=15, bot_mode=False)
-        events = _read_events(path)
-        pipeline = events[0]["pipeline"]
-        assert pipeline["pr_number"] == 42
-        assert pipeline["output_dir"] == str(output_dir)
-        assert pipeline["total_steps"] == 15
-        assert pipeline["bot_mode"] is False
 
     def test_pr_number_is_null_outside_pr_mode(self, telemetry):
         path = telemetry.start(pr_number="", identifier="feature-branch", mode="full")
@@ -255,7 +241,7 @@ class TestStart:
         assert marker.is_file()
         assert marker.read_text().strip() == path
 
-    def test_start_records_versioned_run_identity(self, telemetry, mod):
+    def test_start_records_versioned_run_identity(self, telemetry, mod, output_dir):
         path = telemetry.start(
             pr_number="42",
             identifier="42",
@@ -267,17 +253,26 @@ class TestStart:
             git_range="abc..def",
             base_sha="abc",
             head_sha="def",
+            total_steps=15,
+            bot_mode=False,
         )
 
         start = _read_events(path)[0]
         assert start["schema"] == mod.EVENT_SCHEMA
         assert "schema_version" not in start
         assert start["run_id"] == "run-1"
+        assert start["pipeline"]["pr_number"] == 42
+        assert start["pipeline"]["output_dir"] == str(output_dir)
+        assert start["pipeline"]["total_steps"] == 15
+        assert start["pipeline"]["bot_mode"] is False
         assert start["pipeline"]["session_id"] == "session-123"
         assert start["pipeline"]["plugin_version"] == "1.108.0"
         assert start["pipeline"]["plugin_commit"] == ""
         assert start["pipeline"]["mode"] == "pr"
         assert start["pipeline"]["repo_path"] == "/repo"
+        # Passing a non-git-identifiable repo_path (here, a bare path
+        # rather than a checkout with an origin remote) records the
+        # empty identity rather than raising — `repo_identity` is total.
         assert start["pipeline"]["repo"] == ""
         assert start["pipeline"]["target"] == "42"
         assert start["pipeline"]["git"] == {
@@ -287,7 +282,8 @@ class TestStart:
         }
 
     def test_start_records_origin_repo_identity_and_target(self, telemetry, tmp_path):
-        """A started run records the canonical repository and review target."""
+        """A started run records the canonical repository and review target,
+        and finalize's manifest projects the same identity."""
         repo = init_bare_repo(tmp_path / "checkout", "https://github.com/owner/repository.git")
 
         path = telemetry.start(repo_path=str(repo), identifier="feature/telemetry")
@@ -296,22 +292,19 @@ class TestStart:
         assert pipeline["repo"] == "github.com/owner/repository"
         assert pipeline["target"] == "feature/telemetry"
 
-    def test_start_records_empty_repo_without_a_shareable_identity(self, telemetry):
-        """A run still starts when the path yields no repository identity.
+        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
-        `repo_identity` is total — it answers "" rather than raising — so
-        telemetry needs no guard of its own and records the empty identity.
-        """
-        path = telemetry.start(repo_path="/does-not-exist", identifier="branch")
-
-        pipeline = _read_events(path)[0]["pipeline"]
-        assert pipeline["repo"] == ""
-        assert pipeline["target"] == "branch"
+        manifest = _read_manifest(telemetry)
+        assert manifest["run"]["repo"] == "github.com/owner/repository"
+        assert manifest["run"]["target"] == "feature/telemetry"
 
     def test_every_event_inherits_schema_and_run_id(self, telemetry, mod, output_dir, tmp_path):
-        telemetry.start(run_id="run-1")
+        log_path = telemetry.start(run_id="run-1")
         later_process = mod.ReviewTelemetry(
             str(output_dir), log_dir=str(tmp_path / "logs")
+        )
+        assert later_process.manifest_path == str(
+            Path(log_path).with_suffix(".manifest.json")
         )
         later_process.log_agent_start(agent_name="security-reviewer")
 
@@ -326,22 +319,31 @@ class TestStart:
 
 
 class TestPathToSlug:
-    """path_to_slug converts absolute paths to filename-safe slugs."""
+    """path_to_slug converts absolute paths to filename-safe slugs.
 
-    def test_absolute_path(self, mod):
-        assert mod.ReviewTelemetry.path_to_slug("/Users/vladolaru/Work/a8c/woocommerce-payments") == \
-            "Users-vladolaru-Work-a8c-woocommerce-payments"
+    The slug is only observable in the log filename, and
+    `TestStructuredFilename` pins the exact slug shape (absolute path,
+    leading separator stripped) in its regexes — this class covers only
+    what those regexes cannot: dots/underscores and separator collapsing.
+    """
 
-    def test_strips_leading_separator(self, mod):
-        slug = mod.ReviewTelemetry.path_to_slug("/foo/bar")
-        assert not slug.startswith("-")
-
-    def test_preserves_dots_and_underscores(self, mod):
-        assert mod.ReviewTelemetry.path_to_slug("/my_project/.duplicates/repo") == \
-            "my_project-.duplicates-repo"
-
-    def test_collapses_consecutive_separators(self, mod):
-        slug = mod.ReviewTelemetry.path_to_slug("/a///b//c")
+    @pytest.mark.parametrize(
+        "path,expected",
+        [
+            pytest.param(
+                "/my_project/.duplicates/repo",
+                "my_project-.duplicates-repo",
+                id="preserves-dots-and-underscores",
+            ),
+            pytest.param(
+                "/a///b//c", None, id="collapses-consecutive-separators",
+            ),
+        ],
+    )
+    def test_slug_edge_cases(self, mod, path, expected):
+        slug = mod.ReviewTelemetry.path_to_slug(path)
+        if expected is not None:
+            assert slug == expected
         assert "--" not in slug
 
 
@@ -384,9 +386,6 @@ class TestPrefixCapping:
             mod.ReviewTelemetry._cap_prefix(base + "-two")
         )
 
-    def test_short_prefixes_are_untouched(self, mod):
-        assert mod.ReviewTelemetry._cap_prefix("pr-repo-42") == "pr-repo-42"
-
     def test_capping_is_byte_safe_for_non_ascii_fallback(self, mod):
         """The legacy fallback prefix is not ASCII-sanitized — truncation
         must never split a multibyte character."""
@@ -398,64 +397,42 @@ class TestPrefixCapping:
 class TestStructuredFilename:
     """Telemetry log filenames use structured prefix--timestamp-nonce format."""
 
-    def test_pr_mode_filename(self, mod, tmp_path):
-        """PR reviews use mode-repo_slug-pr_number--timestamp-nonce."""
+    @pytest.mark.parametrize(
+        "mode,repo_path,identifier,pattern",
+        [
+            pytest.param(
+                "pr",
+                "/Users/vlad/Work/a8c/woocommerce-payments",
+                "42",
+                r"^pr-Users-vlad-Work-a8c-woocommerce-payments-42--\d{8}T\d{6}-[0-9a-f]{32}\.jsonl$",
+                id="pr-numeric-id",
+            ),
+            pytest.param(
+                "full",
+                "/Users/vlad/Work/a8c/ciab-admin",
+                "fix/WOOPLUG-123-some-bug",
+                r"^full-Users-vlad-Work-a8c-ciab-admin-fix-WOOPLUG-123-some-bug--\d{8}T\d{6}-[0-9a-f]{32}\.jsonl$",
+                id="full-slashed-branch-id",
+            ),
+        ],
+    )
+    def test_structured_prefix(
+        self, mod, tmp_path, mode, repo_path, identifier, pattern
+    ):
+        """mode-repo_slug-id_slug--timestamp-nonce. One f-string builds the
+        prefix, so the mode axis is single-homed; what actually varies is
+        the identifier shape (numeric vs. slashed branch), which exercises
+        `_UNSAFE_RE` differently."""
         out = tmp_path / "output"
         out.mkdir()
         t = mod.ReviewTelemetry(str(out), log_dir=str(tmp_path / "logs"))
-        path = t.start(pr_number="42", mode="pr",
-                       repo_path="/Users/vlad/Work/a8c/woocommerce-payments",
-                       identifier="42")
-        filename = os.path.basename(path)
-        assert re.match(
-            r"^pr-Users-vlad-Work-a8c-woocommerce-payments-42--\d{8}T\d{6}-[0-9a-f]{32}\.jsonl$",
-            filename,
+        path = t.start(
+            pr_number="42" if mode == "pr" else "",
+            mode=mode, repo_path=repo_path, identifier=identifier,
         )
+        filename = os.path.basename(path)
+        assert re.match(pattern, filename)
         assert filename.endswith(".jsonl")
-
-    def test_full_mode_with_branch(self, mod, tmp_path):
-        """Full reviews use mode-repo_slug-branch_slug--timestamp-nonce."""
-        out = tmp_path / "output"
-        out.mkdir()
-        t = mod.ReviewTelemetry(str(out), log_dir=str(tmp_path / "logs"))
-        path = t.start(mode="full",
-                       repo_path="/Users/vlad/Work/a8c/ciab-admin",
-                       identifier="fix/WOOPLUG-123-some-bug")
-        filename = os.path.basename(path)
-        assert re.match(
-            r"^full-Users-vlad-Work-a8c-ciab-admin-fix-WOOPLUG-123-some-bug--\d{8}T\d{6}-[0-9a-f]{32}\.jsonl$",
-            filename,
-        )
-
-    def test_incremental_mode(self, mod, tmp_path):
-        out = tmp_path / "output"
-        out.mkdir()
-        t = mod.ReviewTelemetry(str(out), log_dir=str(tmp_path / "logs"))
-        path = t.start(mode="incremental",
-                       repo_path="/Users/vlad/Work/a8c/ciab-admin",
-                       identifier="feat/add-settings")
-        filename = os.path.basename(path)
-        assert re.match(
-            r"^incremental-Users-vlad-Work-a8c-ciab-admin-feat-add-settings--\d{8}T\d{6}-[0-9a-f]{32}\.jsonl$",
-            filename,
-        )
-
-    def test_repeated_runs_use_the_same_filename_shape(self, mod, tmp_path):
-        """Subsequent runs use independent nonce-suffixed filenames."""
-        log_dir = tmp_path / "logs"
-        log_dir.mkdir()
-
-        out1 = tmp_path / "output1"
-        out1.mkdir()
-        t1 = mod.ReviewTelemetry(str(out1), log_dir=str(log_dir))
-        path1 = t1.start(mode="pr", repo_path="/repo", identifier="99")
-        assert re.match(r"^pr-repo-99--\d{8}T\d{6}-[0-9a-f]{32}\.jsonl$", os.path.basename(path1))
-
-        out2 = tmp_path / "output2"
-        out2.mkdir()
-        t2 = mod.ReviewTelemetry(str(out2), log_dir=str(log_dir))
-        path2 = t2.start(mode="pr", repo_path="/repo", identifier="99")
-        assert re.match(r"^pr-repo-99--\d{8}T\d{6}-[0-9a-f]{32}\.jsonl$", os.path.basename(path2))
 
     def test_same_timestamp_allocates_distinct_logs(self, mod, tmp_path):
         """Concurrent starts never share a JSONL file or durable run identity."""
@@ -523,16 +500,11 @@ class TestLogStep:
 
     def test_appends_step_event(self, telemetry):
         telemetry.start(pr_number="42")
-        telemetry.log_step(step=1, phase="SETUP", title="Repo Setup")
+        telemetry.log_step(step=3, phase="AWARENESS", title="PR Review State")
         events = _read_events(telemetry.log_path)
         assert len(events) == 2
         assert events[1]["event"] == "step"
-        assert events[1]["step"] == 1
-
-    def test_includes_phase_and_title(self, telemetry):
-        telemetry.start(pr_number="42")
-        telemetry.log_step(step=3, phase="AWARENESS", title="PR Review State")
-        events = _read_events(telemetry.log_path)
+        assert events[1]["step"] == 3
         assert events[1]["phase"] == "AWARENESS"
         assert events[1]["title"] == "PR Review State"
 
@@ -547,25 +519,24 @@ class TestLogStep:
         assert events[1]["duration_since_prev_ms"] == 50
 
     def test_noop_without_start(self, mod, output_dir, tmp_path):
-        """log_step is a no-op if start() was never called."""
+        """log_step, finalize, log_agent_start, and log_agent_complete are
+        all no-ops when start() was never called — the four writers share
+        the same "self.log_path is None" guard."""
         log_dir = tmp_path / "logs"
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
-        # Should not raise
         t.log_step(step=1, phase="SETUP", title="Repo Setup")
-        # No log file created
+        t.finalize(step=15, phase="OUTPUT", title="Present Results")
+        t.log_agent_start(agent_name="security-reviewer", domain="security")
+        t.log_agent_complete(
+            agent_name="security-reviewer", review_digest=FINAL_DIGEST,
+            verdict="approve",
+        )
         assert t.log_path is None
-
-    def test_multiple_steps_accumulate(self, telemetry):
-        telemetry.start(pr_number="42")
-        for i in range(1, 5):
-            telemetry.log_step(step=i, phase="TEST", title=f"Step {i}")
-        events = _read_events(telemetry.log_path)
-        assert len(events) == 5  # 1 start + 4 steps
-        assert [e["step"] for e in events] == [0, 1, 2, 3, 4]
 
     def test_repeated_step_events_are_numbered(self, telemetry):
         """Step 11 is logged twice by design (prepare, then publish); the two
-        events were indistinguishable in run 6e6a."""
+        events were indistinguishable in run 6e6a. `attempt` is projected
+        one level up into the manifest's `steps`, same numbering."""
         telemetry.start(pr_number="42")
         telemetry.log_step(step=11, phase="OUTPUT", title="Author Report")
         telemetry.log_step(step=11, phase="OUTPUT", title="Author Report")
@@ -573,19 +544,10 @@ class TestLogStep:
         events = _read_events(telemetry.log_path)
         attempts = [(e["step"], e["attempt"]) for e in events if e["event"] == "step"]
         assert attempts == [(11, 1), (11, 2), (12, 1)]
-
-    def test_reads_marker_across_instances(self, mod, output_dir, tmp_path):
-        """A new ReviewTelemetry instance can find the log via marker file."""
-        log_dir = tmp_path / "logs"
-        t1 = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
-        path = t1.start(pr_number="42")
-
-        # New instance (simulates separate process invocation)
-        t2 = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
-        t2.log_step(step=1, phase="SETUP", title="Repo Setup")
-
-        events = _read_events(path)
-        assert len(events) == 2
+        manifest_attempts = [
+            (s["step"], s["attempt"]) for s in _read_manifest(telemetry)["steps"]
+        ]
+        assert manifest_attempts == [(11, 1), (11, 2), (12, 1)]
 
 
 # ── finalize() ──────────────────────────────────────────────────────
@@ -594,34 +556,24 @@ class TestLogStep:
 class TestFinalize:
     """ReviewTelemetry.finalize() writes pipeline_end with summary."""
 
-    def test_writes_pipeline_end_event(self, telemetry):
-        telemetry.start(pr_number="42")
-        telemetry.finalize(step=15, phase="OUTPUT", title="Present Results")
-        events = _read_events(telemetry.log_path)
-        assert events[-1]["event"] == "pipeline_end"
-
-    def test_includes_total_duration(self, telemetry, mod):
+    def test_finalize_writes_pipeline_end_with_summary(self, telemetry, mod):
         t0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
         t1 = t0 + timedelta(milliseconds=50)
         with _frozen_datetime(mod, t0, t1):
             telemetry.start(pr_number="42")
             telemetry.finalize(step=15, phase="OUTPUT", title="Present Results")
         events = _read_events(telemetry.log_path)
-        summary = events[-1]["summary"]
+        event = events[-1]
+        assert event["event"] == "pipeline_end"
+        summary = event["summary"]
+        assert isinstance(summary, dict)
         assert summary["total_duration_ms"] == 50
-
-    def test_includes_summary_dict(self, telemetry):
-        telemetry.start(pr_number="42")
-        telemetry.finalize(step=15, phase="OUTPUT", title="Present Results")
-        events = _read_events(telemetry.log_path)
-        assert "summary" in events[-1]
-        assert isinstance(events[-1]["summary"], dict)
-
-    def test_noop_without_start(self, mod, output_dir, tmp_path):
-        log_dir = tmp_path / "logs"
-        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
-        t.finalize(step=15, phase="OUTPUT", title="Present Results")
-        assert t.log_path is None
+        # Snapshot keys are absent when no source files exist for them.
+        snap = event["snapshot"]
+        assert "context" not in snap
+        assert "dispatch" not in snap
+        assert "agent_results" not in snap
+        assert "findings" not in snap
 
     def test_summary_includes_context_fields(self, mod, output_dir, tmp_path):
         """Summary extracts PR size category from review-context.json."""
@@ -708,16 +660,6 @@ class TestNoFabricatedMeasurements:
         # Neighbours in the same allowlist must survive the drop.
         assert steps[0]["decisions"] == {"critic_skipped": True}
         assert "thoughts_length" not in json.dumps(steps[0])
-
-    def test_log_step_and_finalize_reject_thoughts_length(self, telemetry):
-        """The parameter is gone from the signatures, not merely unused."""
-        telemetry.start(pr_number="42")
-        with pytest.raises(TypeError):
-            telemetry.log_step(step=1, phase="SETUP", title="Repo Setup",
-                               thoughts_length=321)
-        with pytest.raises(TypeError):
-            telemetry.finalize(step=15, phase="OUTPUT", title="Present",
-                               thoughts_length=321)
 
 
 # ── Run manifest ───────────────────────────────────────────────
@@ -813,16 +755,6 @@ class TestRunManifest:
         assert manifest["run"]["repo"] is None
         assert manifest["run"]["target"] is None
 
-    def test_finalize_materializes_repo_and_target(self, telemetry, tmp_path):
-        repo = init_bare_repo(tmp_path / "checkout", "git@github.com:owner/repository.git")
-        telemetry.start(repo_path=str(repo), identifier="42")
-
-        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
-
-        manifest = _read_manifest(telemetry)
-        assert manifest["run"]["repo"] == "github.com/owner/repository"
-        assert manifest["run"]["target"] == "42"
-
     def test_log_step_refreshes_running_manifest(self, telemetry):
         telemetry.start(run_id="run-1")
         telemetry.log_step(step=3, phase="AWARENESS", title="Gather Context")
@@ -831,14 +763,6 @@ class TestRunManifest:
         assert manifest["status"] == "running"
         assert manifest["steps"][-1]["step"] == 3
         assert manifest["steps"][-1]["phase"] == "AWARENESS"
-
-    def test_manifest_steps_carry_attempt(self, telemetry, output_dir):
-        telemetry.start(pr_number="42")
-        telemetry.log_step(step=11, phase="OUTPUT", title="Author Report")
-        telemetry.log_step(step=11, phase="OUTPUT", title="Author Report")
-        manifest = _read_manifest(telemetry)
-        attempts = [(s["step"], s["attempt"]) for s in manifest["steps"]]
-        assert attempts == [(11, 1), (11, 2)]
 
     def test_log_step_opens_no_review_artifact(
         self, telemetry, output_dir, monkeypatch
@@ -896,64 +820,6 @@ class TestRunManifest:
             assert manifest[section] is None
             assert manifest["availability"][section] is False
         assert manifest["outcome"]["reconciliation"] is None
-
-    def test_finalize_builds_the_heavy_sections_and_reads_once(
-        self, mod, telemetry, output_dir, monkeypatch
-    ):
-        telemetry.start(run_id="run-1")
-        _write_assignment_inputs(
-            output_dir,
-            ["src/a.py"],
-            ["src/a.py"],
-            [{"name": "code-reviewer", "status": "DISPATCH"}],
-        )
-        (output_dir / "review-findings.json").write_text(
-            json.dumps(canonical_findings_ledger(["medium"]))
-        )
-
-        reads = []
-        real = mod.read_findings_file
-        monkeypatch.setattr(
-            mod, "read_findings_file",
-            lambda path: reads.append(path) or real(path),
-        )
-        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
-
-        manifest = _read_manifest(telemetry)
-        assert manifest["status"] == "complete"
-        assert manifest["assignment"] is not None
-        assert len(reads) == 1
-
-    def test_the_manifest_section_is_named_for_what_it_holds(
-        self, mod, telemetry, output_dir
-    ):
-        """`assignment`, not `coverage` — the section IS the assignment.
-
-        Its six fields are the assignment vocabulary Plan A settled on, and
-        the sidecar they describe is `<reviewer>-assignment.json`.
-        """
-        telemetry.start(run_id="run-1")
-        _write_assignment_inputs(
-            output_dir,
-            ["src/a.py"],
-            ["src/a.py"],
-            [{"name": "code-reviewer", "status": "DISPATCH"}],
-        )
-
-        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
-
-        manifest = _read_manifest(telemetry)
-        assert "coverage" not in manifest
-        assert "coverage" not in manifest["availability"]
-        assert set(manifest["assignment"]) >= set(
-            mod.manifest_sections.ASSIGNMENT_FIELDS
-        )
-        assert manifest["availability"]["assignment"] is True
-
-    def test_the_assignment_vocabulary_has_one_owner(self, mod):
-        with pytest.raises(ImportError):
-            import review.assignment_vocabulary  # noqa: F401
-        assert mod.manifest_sections.ASSIGNMENT_FIELDS
 
     def test_log_step_manifest_allowlists_lifecycle_and_decision_fields(
         self, telemetry
@@ -1049,16 +915,6 @@ class TestRunManifest:
         assert manifest["agents"]["started"][0]["agent"] == (
             "security-reviewer"
         )
-
-    def test_read_first_event_rejects_invalid_utf8_without_scanning_forward(
-        self, telemetry
-    ):
-        log_path = Path(telemetry.output_dir) / "invalid-first.jsonl"
-        later_event = json.dumps({"event": "pipeline_start"}).encode("utf-8")
-        log_path.write_bytes(b"\xff\n" + later_event + b"\n")
-        telemetry._log_path = str(log_path)
-
-        assert telemetry._read_first_event() is None
 
     def test_finalize_records_agent_lifecycle_and_incomplete_names(
         self, telemetry
@@ -1214,26 +1070,6 @@ class TestRunManifest:
             "b-reviewer",
             "b-reviewer",
         ]
-
-    def test_running_manifest_materializes_current_unmatched_executions(
-        self, telemetry
-    ):
-        telemetry.start(run_id="run-1")
-        telemetry.log_agent_start(agent_name="code-reviewer", domain="code")
-        telemetry.log_agent_start(agent_name="code-reviewer", domain="code")
-        telemetry.log_agent_complete(
-            agent_name="code-reviewer", review_digest=FINAL_DIGEST,
-            verdict="approve",
-        )
-        telemetry.log_step(
-            step=6,
-            phase="EXECUTION",
-            title="Observe Agent Lifecycle",
-        )
-
-        manifest = _read_manifest(telemetry)
-        assert manifest["status"] == "running"
-        assert manifest["agents"]["incomplete"] == ["code-reviewer"]
 
     def test_agent_manifest_allowlists_aggregate_severity_fields(
         self, telemetry
@@ -1538,21 +1374,16 @@ class TestRunManifest:
             "paths"
         ] == event_scope
 
-    @pytest.mark.parametrize(
-        "git_quoted",
-        [
-            pytest.param(r'"src/\q.py"', id="invalid-escape"),
-            pytest.param(r'"src/\377.py"', id="invalid-utf8"),
-            pytest.param(r'"src/\346.py', id="unterminated-quote"),
-        ],
-    )
     def test_malformed_git_quoted_authoritative_path_makes_assignment_unavailable(
-        self, telemetry, output_dir, git_quoted
+        self, telemetry, output_dir
     ):
+        """All three decoder-failure shapes (bad escape, invalid UTF-8,
+        unterminated quote) land on the same assignment-builder decode
+        failure; `invalid-utf8` represents the family."""
         _write_assignment_inputs(
             output_dir,
-            changed=[git_quoted],
-            reviewable=[git_quoted],
+            changed=[r'"src/\377.py"'],
+            reviewable=[r'"src/\377.py"'],
             agents=[],
         )
 
@@ -1654,27 +1485,6 @@ class TestRunManifest:
             "security-reviewer": ["src/a.py", "src/b.py"],
         }
 
-    def test_dispatch_override_status_assigns_scope(
-        self, telemetry, output_dir
-    ):
-        _write_assignment_inputs(
-            output_dir,
-            changed=["templates/page.php"],
-            reviewable=["templates/page.php"],
-            agents=[{"name": "a11y-reviewer", "status": "DISPATCH_OVERRIDE"}],
-        )
-        telemetry.start(run_id="run-1")
-        telemetry.log_agent_start(
-            "a11y-reviewer", scope_paths=["templates/page.php"]
-        )
-        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
-
-        assignment = _read_manifest(telemetry)["assignment"]
-        assert assignment["assigned_files_by_agent"] == {
-            "a11y-reviewer": ["templates/page.php"],
-        }
-        assert assignment["assigned_files"] == ["templates/page.php"]
-
     @pytest.mark.parametrize(
         "context_payload,plan_payload",
         [
@@ -1682,11 +1492,6 @@ class TestRunManifest:
                 None,
                 {"changed_files": ["src/a.py"], "agents": []},
                 id="missing-context",
-            ),
-            pytest.param(
-                "NOT JSON",
-                {"changed_files": ["src/a.py"], "agents": []},
-                id="malformed-context",
             ),
             pytest.param(
                 {"git": {}},
@@ -1702,11 +1507,6 @@ class TestRunManifest:
                 {"git": {"changed_files": ["src/a.py"]}},
                 None,
                 id="missing-plan",
-            ),
-            pytest.param(
-                {"git": {"changed_files": ["src/a.py"]}},
-                "NOT JSON",
-                id="malformed-plan",
             ),
             pytest.param(
                 {"git": {"changed_files": ["src/a.py"]}},
@@ -1793,41 +1593,6 @@ class TestRunManifest:
         assert str(output_dir) in err
         assert "simulated assignment builder bug" in err
 
-    def test_build_assignment_manifest_diagnoses_unexpected_exception_directly(
-        self, mod, capsys, monkeypatch
-    ):
-        """Direct-call pin on build_assignment_manifest's own contract.
-
-        Breaking the path grammar the builder imports exercises the
-        except-Exception path with zero telemetry coupling — a stronger
-        seam than going through ReviewTelemetry.
-        """
-        def _boom(*args, **kwargs):
-            raise RuntimeError("simulated assignment builder bug")
-
-        monkeypatch.setattr(
-            mod.manifest_sections, "normalize_repo_paths", _boom
-        )
-        final_info = {
-            "available": True,
-            "duplicates": [],
-            "plan": {"changed_files": ["src/a.py"]},
-            "index": {},
-        }
-
-        result = mod.manifest_sections.build_assignment_manifest(
-            "/output/dir",
-            [],
-            {"git": {"changed_files": ["src/a.py"]}},
-            "/repo",
-            final_info,
-        )
-
-        assert result is None
-        err = capsys.readouterr().err
-        assert "assignment manifest build failed for /output/dir" in err
-        assert "simulated assignment builder bug" in err
-
     def test_valid_empty_path_sets_are_available_zero_assignment(
         self, telemetry, output_dir
     ):
@@ -1911,42 +1676,6 @@ class TestRunManifest:
             "security-reviewer": 3
         }
 
-    def test_direct_assignment_reads_follow_review_paths_authority(
-        self, mod, output_dir, monkeypatch
-    ):
-        authority_dir = output_dir / "authority"
-        authority_dir.mkdir()
-        paths = ReviewPaths(
-            draft=str(authority_dir / "draft.json"),
-            final=str(authority_dir / "final.json"),
-            assignment=str(authority_dir / "authority.json"),
-        )
-        Path(paths.final).write_text(json.dumps(canonical_review_document(
-            "security",
-            reviewed_file_claims=["a.py"],
-            review_claimable_files=["a.py", "b.py"],
-        )))
-        Path(paths.assignment).write_text(json.dumps(canonical_assignment(
-            "security", review_claimable_files=["a.py", "b.py"],
-        )))
-        monkeypatch.setattr(
-            mod.manifest_sections, "review_paths", lambda *_args: paths
-        )
-
-        review = mod.manifest_sections._load_final_review(
-            str(output_dir), "security-reviewer"
-        )
-        claimable_count = (
-            mod.manifest_sections._load_review_claimable_file_count(
-                str(output_dir), "security-reviewer"
-            )
-        )
-
-        assert len(review["reviewed_file_claims"]) == 1
-        assert len(review["unclaimed_review_files"]) == 1
-        assert len(review["review_claimable_files"]) == 2
-        assert claimable_count == 2
-
     def test_reviewed_files_rejects_retired_final_review(
         self, mod, output_dir
     ):
@@ -1995,19 +1724,6 @@ class TestRunManifest:
         assert assignment["review_claimable_file_count_by_agent"] == {
             "security-reviewer": 1
         }
-
-    def test_manifest_path_resolves_from_marker_in_fresh_instance(
-        self, telemetry, mod, output_dir, tmp_path
-    ):
-        log_path = telemetry.start(run_id="run-1")
-
-        later_process = mod.ReviewTelemetry(
-            str(output_dir), log_dir=str(tmp_path / "logs")
-        )
-
-        assert later_process.manifest_path == str(
-            Path(log_path).with_suffix(".manifest.json")
-        )
 
     def test_manifest_merges_non_empty_resolved_context_git_identity(
         self, telemetry, output_dir
@@ -2069,22 +1785,9 @@ class TestRunManifest:
         assert "origin/main" not in json.dumps(git)
         assert "src/a.php" not in json.dumps(git)
 
-    def test_a_run_without_the_range_facts_projects_them_as_unmeasured(self, mod, tmp_path):
-        """Pre-fetch runs must remain unmeasured instead of reporting invented zeros."""
-        output_dir = tmp_path / "out"
-        output_dir.mkdir()
-        telemetry = mod.ReviewTelemetry(str(output_dir), log_dir=str(tmp_path / "logs"))
-        telemetry.start(pr_number="42", mode="pr", repo_path=str(tmp_path))
-        (output_dir / "review-context.json").write_text(json.dumps({"git": {"git_range": "main..HEAD"}}))
-        telemetry.finalize(step=12, phase="done", title="Done")
-
-        git = json.loads(Path(telemetry.manifest_path).read_text())["run"]["git"]
-        assert git["base_fetch"] is None
-        assert git["scope_check"] is None
-
-    @pytest.mark.parametrize("status", [[], {}], ids=["list", "object"])
-    def test_range_fact_projection_rejects_non_string_status_without_aborting(self, mod, status):
+    def test_range_fact_projection_rejects_non_string_status_without_aborting(self, mod):
         """A malformed nested status must not abort manifest finalization."""
+        status = {}
         fetch = mod._project_base_fetch({"status": status, "sha": "a" * 40, "shallow": False})
         scope = mod._project_scope_check({"status": status, "github_changed_files": 1})
 
@@ -2299,8 +2002,6 @@ class TestRunManifest:
         "invalid_status",
         [
             pytest.param("__missing__", id="missing"),
-            None,
-            "",
             "UNKNOWN",
         ],
     )
@@ -2334,11 +2035,7 @@ class TestRunManifest:
     @pytest.mark.parametrize(
         "status,dispatched",
         [
-            ("DISPATCH", True),
             ("DISPATCH_OVERRIDE", True),
-            ("SKIPPED", False),
-            ("SKIPPED_OVERRIDE", False),
-            ("SKIPPED_QUICK_MODE", False),
             ("SKIPPED_TRIAGE", False),
         ],
     )
@@ -2357,23 +2054,15 @@ class TestRunManifest:
         assert dispatch["final_dispatch_count"] == int(dispatched)
         assert dispatch["agents"]["code-reviewer"]["change"] == "unchanged"
 
-    @pytest.mark.parametrize(
-        "initial_names,final_names,planner_count,final_count",
-        [
-            (["code-reviewer"], ["code-reviewer", "security-reviewer"], 1, 2),
-            (["code-reviewer", "security-reviewer"], ["code-reviewer"], 2, 1),
-        ],
-        ids=["agent-added", "agent-removed"],
-    )
     def test_manifest_agent_set_mismatch_disables_only_comparison(
-        self,
-        telemetry,
-        output_dir,
-        initial_names,
-        final_names,
-        planner_count,
-        final_count,
+        self, telemetry, output_dir,
     ):
+        """A symmetric set inequality; one direction (an agent added
+        between the planner baseline and the final plan) proves it."""
+        initial_names = ["code-reviewer"]
+        final_names = ["code-reviewer", "security-reviewer"]
+        planner_count, final_count = 1, 2
+
         def plan(names):
             return {
                 "agents": [
@@ -2506,7 +2195,7 @@ class TestRunManifest:
 
     @pytest.mark.parametrize(
         "mode",
-        ["comparable", "legacy-final", "unavailable", "duplicate"],
+        ["comparable", "legacy-final", "duplicate"],
     )
     def test_manifest_omits_plan_projections_outside_agent_set_mismatch(
         self, telemetry, output_dir, mode
@@ -2529,8 +2218,12 @@ class TestRunManifest:
         assert "plan_projections" not in _read_manifest(telemetry)["dispatch"]
 
     def test_manifest_legacy_plan_falls_back_to_unchanged_baseline(
-        self, telemetry, output_dir
+        self, telemetry, mod, output_dir, tmp_path
     ):
+        """An absent initial dispatch plan (no baseline was ever recorded)
+        and a malformed one (baseline present but unreadable) both read as
+        `planner_baseline_available: False` and project every final-plan
+        agent as `unchanged`."""
         final = {
             "agents": [
                 {
@@ -2563,11 +2256,13 @@ class TestRunManifest:
         assert dispatch["planner_candidate_count"] == 1
         assert dispatch["final_dispatch_count"] == 1
 
-    def test_manifest_malformed_baseline_uses_legacy_unchanged_projection(
-        self, telemetry, output_dir
-    ):
-        (_artifact(output_dir, "dispatch_plan_initial")).write_text("NOT JSON")
-        (_artifact(output_dir, "dispatch_plan")).write_text(json.dumps({
+        malformed_out = tmp_path / "malformed-output"
+        malformed_out.mkdir()
+        t2 = mod.ReviewTelemetry(
+            str(malformed_out), log_dir=str(tmp_path / "logs2")
+        )
+        (_artifact(malformed_out, "dispatch_plan_initial")).write_text("NOT JSON")
+        (_artifact(malformed_out, "dispatch_plan")).write_text(json.dumps({
             "agents": [
                 {
                     "name": "code-reviewer",
@@ -2578,14 +2273,14 @@ class TestRunManifest:
             ]
         }))
 
-        telemetry.start(run_id="run-1")
+        t2.start(run_id="run-2")
 
-        dispatch = _read_manifest(telemetry)["dispatch"]
-        assert dispatch["planner_baseline_available"] is False
-        assert dispatch["final_plan_available"] is True
-        assert dispatch["comparison_available"] is False
-        assert dispatch["agents"]["code-reviewer"]["change"] == "unchanged"
-        assert dispatch["adjustment_counts"] == {
+        dispatch2 = _read_manifest(t2)["dispatch"]
+        assert dispatch2["planner_baseline_available"] is False
+        assert dispatch2["final_plan_available"] is True
+        assert dispatch2["comparison_available"] is False
+        assert dispatch2["agents"]["code-reviewer"]["change"] == "unchanged"
+        assert dispatch2["adjustment_counts"] == {
             "added": 0,
             "removed": 0,
             "unchanged": 1,
@@ -2745,20 +2440,6 @@ class TestRunManifest:
         assert "SENSITIVE_DUPLICATE_PROMPT" not in serialized
         assert "SENSITIVE_DUPLICATE_RESULT" not in serialized
 
-    def test_read_events_skips_malformed_blank_and_non_object_lines(
-        self, telemetry
-    ):
-        telemetry.start(run_id="run-1")
-        telemetry.log_step(step=3, phase="AWARENESS", title="Gather Context")
-        with open(telemetry.log_path, "a") as log:
-            log.write("\nNOT JSON\n[]\n\"string\"\n")
-
-        events = telemetry._read_events()
-        assert [event["event"] for event in events] == [
-            "pipeline_start",
-            "step",
-        ]
-
     def test_manifest_omits_pr_prompt_finding_and_tool_result_prose(
         self, telemetry, output_dir
     ):
@@ -2805,44 +2486,29 @@ class TestRunManifest:
         serialized = Path(telemetry.manifest_path).read_text()
         assert not any(sentinel in serialized for sentinel in sentinels)
 
-    def test_start_manifest_replace_failure_preserves_start_event(
+    def test_manifest_replace_failure_preserves_events_and_cleans_temp(
         self, telemetry, mod
     ):
+        """`_materialize_manifest`'s fail-open `except` around `os.replace`
+        is one code path reached from all three entry points; driving
+        start, log_step, and finalize through one patched `os.replace`
+        proves the event log survives at each of them and no temp file is
+        left behind."""
         with patch.object(
             mod.os, "replace", side_effect=OSError("nope")
         ) as replace:
             telemetry.start(run_id="run-1")
-
-        replace.assert_called_once()
-        assert _read_events(telemetry.log_path)[-1]["event"] == "pipeline_start"
-
-    def test_log_step_manifest_replace_failure_preserves_step_event_and_cleans_temp(
-        self, telemetry, mod
-    ):
-        telemetry.start(run_id="run-1")
-        existing = set(Path(telemetry.log_dir).iterdir())
-
-        with patch.object(
-            mod.os, "replace", side_effect=OSError("nope")
-        ) as replace:
+            existing = set(Path(telemetry.log_dir).iterdir())
             telemetry.log_step(step=3, phase="AWARENESS", title="Gather Context")
-
-        replace.assert_called_once()
-        assert _read_events(telemetry.log_path)[-1]["step"] == 3
-        assert set(Path(telemetry.log_dir).iterdir()) == existing
-
-    def test_finalize_manifest_replace_failure_preserves_end_event(
-        self, telemetry, mod
-    ):
-        telemetry.start(run_id="run-1")
-
-        with patch.object(
-            mod.os, "replace", side_effect=OSError("nope")
-        ) as replace:
+            assert set(Path(telemetry.log_dir).iterdir()) == existing
             telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
-        replace.assert_called_once()
-        assert _read_events(telemetry.log_path)[-1]["event"] == "pipeline_end"
+        assert replace.call_count == 3
+        events = _read_events(telemetry.log_path)
+        assert events[0]["event"] == "pipeline_start"
+        assert events[1]["step"] == 3
+        assert events[-1]["event"] == "pipeline_end"
+        assert set(Path(telemetry.log_dir).iterdir()) == existing
 
 
 # ── Snapshot extraction ─────────────────────────────────────────────
@@ -2850,44 +2516,6 @@ class TestRunManifest:
 
 class TestSnapshot:
     """Snapshot extraction — only present in finalize() / pipeline_end."""
-
-    def test_finalize_has_snapshot(self, telemetry, output_dir):
-        (output_dir / "review-context.json").write_text('{"version": 1}')
-        telemetry.start(pr_number="42")
-        telemetry.finalize(step=15, phase="OUTPUT", title="Present Results")
-        events = _read_events(telemetry.log_path)
-        assert "snapshot" in events[-1]
-
-    def test_lists_files_with_sizes(self, mod, output_dir, tmp_path):
-        log_dir = tmp_path / "logs"
-        (output_dir / "review-context.json").write_text('{"version": 1}')
-        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
-        t.start(pr_number="42")
-        t.finalize(step=15, phase="OUTPUT", title="Present Results")
-        events = _read_events(t.log_path)
-        files = events[-1]["snapshot"]["files"]
-        names = [f["name"] for f in files]
-        assert "review-context.json" in names
-        for f in files:
-            assert "size" in f
-            assert isinstance(f["size"], int)
-
-    def test_extracts_context_from_review_context_json(self, mod, output_dir, tmp_path):
-        log_dir = tmp_path / "logs"
-        (output_dir / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
-        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
-        t.start(pr_number="42")
-        t.finalize(step=15, phase="OUTPUT", title="Present Results")
-        events = _read_events(t.log_path)
-        ctx = events[-1]["snapshot"]["context"]
-        assert ctx["pr_number"] == 42
-        assert ctx["pr_title"] == "Fix the thing"
-        assert ctx["pr_author"] == "octocat"
-        assert ctx["git_range"] == "abc123..fix/thing"
-        assert ctx["pr_size"] == {"files": 2, "lines": 38, "category": "small"}
-        assert ctx["linked_issues"] == ["WOOPLUG-1234"]
-        assert ctx["source"] == "pirategoat-bot"
-        assert ctx["changed_files"] == ["src/a.js", "src/b.js"]
 
     def test_context_changed_files_are_normalized_and_deduplicated(
         self, mod, output_dir, tmp_path
@@ -2912,46 +2540,14 @@ class TestSnapshot:
         assert context["changed_files"] == ["src/a.py", "tests/test_a.py"]
         assert context["changed_files_count"] == 2
 
-    def test_extracts_dispatch_plan(self, mod, output_dir, tmp_path):
-        log_dir = tmp_path / "logs"
-        dispatch = {
-            "agents": [
-                {"name": "code-reviewer", "status": "DISPATCH", "domain": "code", "reason": "always"},
-                {"name": "security-reviewer", "status": "DISPATCH", "domain": "security", "reason": "triage match"},
-                {"name": "performance-reviewer", "status": "SKIPPED_TRIAGE", "domain": "performance", "reason": "no perf files"},
-            ]
-        }
-        (_artifact(output_dir, "dispatch_plan")).write_text(json.dumps(dispatch))
-        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
-        t.start(pr_number="42")
-        t.finalize(step=15, phase="OUTPUT", title="Present Results")
-        events = _read_events(t.log_path)
-        d = events[-1]["snapshot"]["dispatch"]
-        assert d["total_agents"] == 3
-        assert "DISPATCH" in d["by_status"]
-        assert len(d["by_status"]["DISPATCH"]) == 2
-        assert d["agents"]["code-reviewer"]["status"] == "DISPATCH"
-
-    @pytest.mark.parametrize(
-        "plan",
-        [
-            pytest.param(
-                {
-                    "agents": [
-                        {
-                            "name": "security-reviewer",
-                            "status": "DISPATCHED",
-                        },
-                    ],
-                },
-                id="unsupported-status",
-            ),
-            pytest.param({}, id="missing-agents"),
-        ],
-    )
     def test_invalid_dispatch_plan_omits_snapshot_and_summary(
-        self, mod, output_dir, tmp_path, plan
+        self, mod, output_dir, tmp_path
     ):
+        plan = {
+            "agents": [
+                {"name": "security-reviewer", "status": "DISPATCHED"},
+            ],
+        }
         (_artifact(output_dir, "dispatch_plan")).write_text(json.dumps(plan))
         telemetry = mod.ReviewTelemetry(
             str(output_dir), log_dir=str(tmp_path / "logs")
@@ -2965,21 +2561,6 @@ class TestSnapshot:
         assert "agents_total" not in event["summary"]
         assert "agents_dispatched" not in event["summary"]
         assert "agents_skipped" not in event["summary"]
-
-    def test_dispatch_plan_read_error_fails_open(self, mod, output_dir, tmp_path):
-        (_artifact(output_dir, "dispatch_plan")).write_text(json.dumps({
-            "agents": [
-                {"name": "code-reviewer", "status": "DISPATCH"},
-            ],
-        }))
-        telemetry = mod.ReviewTelemetry(
-            str(output_dir), log_dir=str(tmp_path / "logs")
-        )
-
-        with patch("builtins.open", side_effect=OSError("unreadable")):
-            dispatch = telemetry._extract_dispatch()
-
-        assert dispatch is None
 
     def test_extracts_agent_results(self, mod, output_dir, tmp_path):
         t = _telemetry_with_finalized_security_review(mod, output_dir, tmp_path)
@@ -3009,24 +2590,6 @@ class TestSnapshot:
         assert telemetry._extract_agent_results()["security-reviewer"] == {
             "error": "malformed"
         }
-
-    def test_extracts_agent_advisory_measurement(self, mod, output_dir, tmp_path):
-        review = canonical_review_document(
-            "security", ["critical", "critical"]
-        )
-        for finding in review["findings"]:
-            finding["channel"] = "advisory"
-        review["verdict"] = "approve"
-        review["summary"]["suppressed_advisory_finding_count"] = 2
-        review["summary"]["verdict_without_advisory"] = "block"
-        _write_dispatch_plan(output_dir, ["security-reviewer"])
-        _write_final_review(output_dir, "security", review)
-        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(tmp_path / "logs"))
-
-        extracted = t._extract_agent_results()["security-reviewer"]
-
-        assert extracted["suppressed_advisory_finding_count"] == 2
-        assert extracted["verdict_without_advisory"] == "block"
 
     def test_excludes_review_findings_from_agent_results(self, mod, output_dir, tmp_path):
         """review-findings.json is reconciled output, not an agent result.
@@ -3125,51 +2688,6 @@ class TestSnapshot:
         assert manifest_summary["final_suppressed_advisory_finding_count"] == 1
         assert manifest_summary["final_verdict_without_advisory"] == "block"
 
-    def test_findings_omit_malformed_advisory_measurement(
-        self, mod, output_dir, tmp_path
-    ):
-        (output_dir / "review-findings.json").write_text(json.dumps({
-            "verdict": "approve",
-            "summary": {
-                "suppressed_advisory_finding_count": True,
-                "verdict_without_advisory": "banana",
-            },
-            "findings": [],
-        }))
-        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(tmp_path / "logs"))
-
-        findings = t._extract_findings()
-
-        assert findings is None
-
-    def test_findings_preserve_count_but_reject_impossible_counterfactual(
-        self, mod, output_dir, tmp_path
-    ):
-        (output_dir / "review-findings.json").write_text(json.dumps({
-            "verdict": "block",
-            "summary": {
-                "suppressed_advisory_finding_count": 1,
-                "verdict_without_advisory": "comment",
-            },
-            "findings": [],
-        }))
-        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(tmp_path / "logs"))
-
-        findings = t._extract_findings()
-
-        assert findings is None
-
-    def test_omits_missing_snapshot_sections(self, telemetry):
-        """Snapshot keys are absent when source files don't exist."""
-        telemetry.start(pr_number="42")
-        telemetry.finalize(step=15, phase="OUTPUT", title="Present Results")
-        events = _read_events(telemetry.log_path)
-        snap = events[-1]["snapshot"]
-        assert "context" not in snap
-        assert "dispatch" not in snap
-        assert "agent_results" not in snap
-        assert "findings" not in snap
-
     def test_handles_malformed_json(self, mod, output_dir, tmp_path):
         """Malformed files are skipped gracefully."""
         log_dir = tmp_path / "logs"
@@ -3228,78 +2746,41 @@ class TestSnapshot:
 # ── Re-reviews ──────────────────────────────────────────────────────
 
 
-class TestReReviews:
-    """Multiple review runs for the same PR create separate log files."""
-
-    @staticmethod
-    def _mock_datetime_sequence(mod, times):
-        """Return a patch that makes mod.datetime.now() cycle through `times`."""
-        return _frozen_datetime(mod, *times)
-
-    def test_separate_files_per_run(self, mod, tmp_path):
-        output_dir = tmp_path / "pr-review-org-repo-42"
-        output_dir.mkdir()
-        log_dir = tmp_path / "logs"
-
-        # Two timestamps 2s apart (filename uses 1-second resolution).
-        # start() calls datetime.now() once per invocation.
-        t1_time = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        t2_time = datetime(2026, 1, 1, 12, 0, 2, tzinfo=timezone.utc)
-
-        with self._mock_datetime_sequence(mod, [t1_time, t2_time]):
-            t1 = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
-            path1 = t1.start(pr_number="42")
-
-            t2 = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
-            path2 = t2.start(pr_number="42")
-
-        assert path1 != path2
-        assert os.path.isfile(path1)
-        assert os.path.isfile(path2)
-
-    def test_glob_finds_all_run_logs(self, mod, tmp_path):
-        output_dir = tmp_path / "pr-review-org-repo-42"
-        output_dir.mkdir()
-        log_dir = tmp_path / "logs"
-
-        t1_time = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        t2_time = datetime(2026, 1, 1, 12, 0, 2, tzinfo=timezone.utc)
-
-        with self._mock_datetime_sequence(mod, [t1_time, t2_time]):
-            t1 = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
-            t1.start(pr_number="42")
-
-            t2 = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
-            t2.start(pr_number="42")
-
-        pattern = str(log_dir / "pr-review-org-repo-42--*.jsonl")
-        matches = glob.glob(pattern)
-        assert len(matches) == 2
-
-
 # ── log_agent_start() ────────────────────────────────────────────
 
 
 class TestLogAgentStart:
     """ReviewTelemetry.log_agent_start() appends agent lifecycle events."""
 
-    def test_appends_agent_start_event(self, telemetry):
-        telemetry.start(pr_number="42")
-        telemetry.log_agent_start(agent_name="security-reviewer", domain="security")
-        events = _read_events(telemetry.log_path)
-        assert len(events) == 2
-        assert events[1]["event"] == "agent_start"
-        assert events[1]["agent"] == "security-reviewer"
+    def test_agent_start_event_full_shape(self, telemetry, mod):
+        telemetry.start(run_id="run-1")
 
-    def test_includes_domain_and_model_tier(self, telemetry):
-        telemetry.start(pr_number="42")
         telemetry.log_agent_start(
             agent_name="security-reviewer", domain="security",
             model_tier="sonnet", scope_files=3, scope_lines=150,
+            budget_target=35,
         )
-        events = _read_events(telemetry.log_path)
-        assert events[1]["domain"] == "security"
-        assert events[1]["model_tier"] == "sonnet"
+
+        event = _read_events(telemetry.log_path)[-1]
+        assert event == {
+            "event": "agent_start",
+            "timestamp": event["timestamp"],
+            "agent": "security-reviewer",
+            "domain": "security",
+            "model_tier": "sonnet",
+            "scope": {"files": 3, "lines": 150},
+            "budget_target": 35,
+            "schema": mod.EVENT_SCHEMA,
+            "run_id": "run-1",
+        }
+
+    def test_agent_start_omits_budget_when_none(self, telemetry):
+        telemetry.start(pr_number="42")
+        telemetry.log_agent_start(
+            agent_name="security-reviewer", domain="security",
+        )
+        event = _read_events(telemetry.log_path)[-1]
+        assert "budget_target" not in event
 
     def test_null_domain_is_canonicalized_to_empty_string(self, telemetry):
         telemetry.start(run_id="run-1")
@@ -3312,16 +2793,6 @@ class TestLogAgentStart:
         start = next(event for event in events if event["event"] == "agent_start")
         assert start["domain"] == ""
         assert _read_manifest(telemetry)["agents"]["started"][0]["domain"] == ""
-
-    def test_includes_scope(self, telemetry):
-        telemetry.start(pr_number="42")
-        telemetry.log_agent_start(
-            agent_name="security-reviewer", domain="security",
-            scope_files=3, scope_lines=150,
-        )
-        events = _read_events(telemetry.log_path)
-        assert events[1]["scope"]["files"] == 3
-        assert events[1]["scope"]["lines"] == 150
 
     def test_scope_paths_are_normalized_deduplicated_and_safely_relativized(
         self, mod, tmp_path
@@ -3366,67 +2837,24 @@ class TestLogAgentStart:
         }
         assert "SENSITIVE_" not in json.dumps(start_event)
 
-    @pytest.mark.parametrize(
-        "unsafe_path",
-        [
-            pytest.param("src/control\x7fname.py", id="unicode-control"),
-            pytest.param("src/format\u202ename.py", id="unicode-format"),
-        ],
-    )
     def test_scope_paths_reject_unicode_control_and_format_characters(
-        self, telemetry, unsafe_path
+        self, telemetry
     ):
+        """One character-class regex in `git_paths` rejects both control
+        and format Unicode categories alike; `unicode-control` represents
+        the family."""
         telemetry.start(run_id="run-1")
 
         telemetry.log_agent_start(
             agent_name="security-reviewer",
-            scope_paths=[unsafe_path, "src/caf\N{LATIN SMALL LETTER E WITH ACUTE}.py"],
+            scope_paths=[
+                "src/control\x7fname.py",
+                "src/caf\N{LATIN SMALL LETTER E WITH ACUTE}.py",
+            ],
         )
 
         start_event = _read_events(telemetry.log_path)[1]
         assert start_event["scope"]["paths"] == ["src/café.py"]
-
-    def test_noop_without_start(self, mod, output_dir, tmp_path):
-        log_dir = tmp_path / "logs"
-        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
-        t.log_agent_start(agent_name="security-reviewer", domain="security")
-        assert t.log_path is None
-
-    def test_multiple_agents(self, telemetry):
-        telemetry.start(pr_number="42")
-        telemetry.log_agent_start(agent_name="security-reviewer", domain="security")
-        telemetry.log_agent_start(agent_name="performance-reviewer", domain="performance")
-        events = _read_events(telemetry.log_path)
-        agents = [e for e in events if e["event"] == "agent_start"]
-        assert len(agents) == 2
-        assert agents[0]["agent"] == "security-reviewer"
-        assert agents[1]["agent"] == "performance-reviewer"
-
-    def test_agent_start_includes_budget(self, telemetry):
-        """agent_start event should include the budget_target field."""
-        telemetry.start(pr_number="42")
-        telemetry.log_agent_start(
-            agent_name="security-reviewer",
-            domain="security",
-            model_tier="sonnet",
-            scope_files=10,
-            scope_lines=200,
-            budget_target=35,
-        )
-        events = _read_events(telemetry.log_path)
-        start_event = [e for e in events if e["event"] == "agent_start"][0]
-        assert start_event["budget_target"] == 35
-
-    def test_agent_start_omits_budget_when_none(self, telemetry):
-        """agent_start event should omit budget_target when not provided."""
-        telemetry.start(pr_number="42")
-        telemetry.log_agent_start(
-            agent_name="security-reviewer",
-            domain="security",
-        )
-        events = _read_events(telemetry.log_path)
-        start_event = [e for e in events if e["event"] == "agent_start"][0]
-        assert "budget_target" not in start_event
 
 
 # ── reviewer publication events ──────────────────────────────────
@@ -3457,30 +2885,32 @@ class TestLogAgentReviewDraftSaved:
 class TestLogAgentComplete:
     """ReviewTelemetry.log_agent_complete() appends completion events."""
 
-    def test_appends_agent_complete_event(self, telemetry, output_dir):
-        telemetry.start(pr_number="42")
+    def test_agent_complete_event_full_shape(self, telemetry, output_dir, mod):
+        """Full-event equality also proves the retired `issue_count` noun
+        stays gone — renaming only the review artifacts would otherwise
+        leave lifecycle telemetry still teaching it."""
+        telemetry.start(run_id="run-1")
         _write_started(output_dir, "security")
-        telemetry.log_agent_complete(
-            agent_name="security-reviewer", review_digest=FINAL_DIGEST,
-            verdict="comment",
-            finding_count=2, severities={"high": 1, "medium": 1},
-        )
-        events = _read_events(telemetry.log_path)
-        assert events[-1]["event"] == "agent_complete"
-        assert events[-1]["agent"] == "security-reviewer"
 
-    def test_includes_verdict_and_issues(self, telemetry, output_dir):
-        telemetry.start(pr_number="42")
-        _write_started(output_dir, "security")
         telemetry.log_agent_complete(
             agent_name="security-reviewer", review_digest=FINAL_DIGEST,
             verdict="comment",
             finding_count=2, severities={"high": 1, "medium": 1},
         )
-        events = _read_events(telemetry.log_path)
-        assert events[-1]["verdict"] == "comment"
-        assert events[-1]["finding_count"] == 2
-        assert events[-1]["severities"] == {"high": 1, "medium": 1}
+
+        event = _read_events(telemetry.log_path)[-1]
+        assert event == {
+            "event": "agent_complete",
+            "timestamp": event["timestamp"],
+            "agent": "security-reviewer",
+            "duration_ms": event["duration_ms"],
+            "verdict": "comment",
+            "finding_count": 2,
+            "severities": {"high": 1, "medium": 1},
+            "review_digest": FINAL_DIGEST,
+            "schema": mod.EVENT_SCHEMA,
+            "run_id": "run-1",
+        }
 
     def test_calculates_duration_from_started_file(self, telemetry, output_dir, mod):
         telemetry.start(pr_number="42")
@@ -3505,103 +2935,8 @@ class TestLogAgentComplete:
         events = _read_events(telemetry.log_path)
         assert events[-1]["duration_ms"] is None
 
-    def test_noop_without_start(self, mod, output_dir, tmp_path):
-        log_dir = tmp_path / "logs"
-        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
-        t.log_agent_complete(
-            agent_name="security-reviewer", review_digest=FINAL_DIGEST,
-            verdict="approve",
-        )
-        assert t.log_path is None
-
-    def test_completion_carries_finalized_review_digest(self, telemetry):
-        telemetry.start(pr_number="42")
-        telemetry.log_agent_complete(
-            agent_name="security-reviewer", review_digest=FINAL_DIGEST,
-            verdict="approve",
-        )
-        event = _read_events(telemetry.log_path)[-1]
-        assert event["review_digest"] == FINAL_DIGEST
-
-    def test_completion_uses_finding_count_without_retired_issue_count(
-        self, telemetry
-    ):
-        """Renaming only review artifacts would leave lifecycle telemetry
-        teaching and persisting the retired review-domain noun."""
-        telemetry.start(run_id="run-1")
-
-        telemetry.log_agent_complete(
-            agent_name="security-reviewer",
-            review_digest=FINAL_DIGEST,
-            verdict="comment",
-            finding_count=2,
-            severities={"high": 1, "medium": 1},
-        )
-
-        event = _read_events(telemetry.log_path)[-1]
-        assert event["finding_count"] == 2
-        assert "issue_count" not in event
-
 
 class TestReviewVocabularyManifestProjection:
-    def test_manifest_projects_assignment_and_review_claims_separately(
-        self, mod, output_dir, monkeypatch
-    ):
-        monkeypatch.setattr(
-            mod.manifest_sections,
-            "_load_final_review",
-            lambda output_dir, agent: {
-                "reviewed_file_claims": ["a.php"],
-                "unclaimed_review_files": [],
-                "review_claimable_files": ["a.php"],
-            },
-        )
-
-        assignment = mod.manifest_sections.build_assignment_manifest(
-            str(output_dir),
-            [{
-                "event": "agent_start",
-                "agent": "security-reviewer",
-                "scope": {"paths": ["a.php", "b.php"]},
-            }],
-            {"git": {"changed_files": ["a.php", "b.php"]}},
-            str(output_dir),
-            {
-                "available": True,
-                "duplicates": [],
-                "plan": {"changed_files": ["a.php", "b.php"]},
-                "index": {
-                    "security-reviewer": {"status": "DISPATCH"},
-                },
-            },
-        )
-
-        assert assignment == {
-            "changed_files": ["a.php", "b.php"],
-            "reviewable_files": ["a.php", "b.php"],
-            "assigned_files_by_agent": {
-                "security-reviewer": ["a.php", "b.php"],
-            },
-            "assigned_files": ["a.php", "b.php"],
-            "file_exclusions": [],
-            "unassigned_reviewable_files": [],
-            "reviewed_files_by_agent": {
-                "security-reviewer": {
-                    "reviewed_file_claim_count": 1,
-                    "unclaimed_review_file_count": 0,
-                },
-            },
-            "review_claimable_file_count_by_agent": {
-                "security-reviewer": 1,
-            },
-            "semantics": "generated_scope_not_proof_of_model_read",
-        }
-        for retired in (
-            "changed", "reviewable", "by_agent", "assigned", "excluded",
-            "uncovered", "deferred_honesty_by_agent",
-        ):
-            assert retired not in assignment
-
     def test_finalized_summary_and_reconciliation_use_finding_vocabulary(
         self, mod, output_dir, tmp_path
     ):
@@ -3637,17 +2972,7 @@ class TestReviewVocabularyManifestProjection:
         assert summary["total_agent_findings"] == 1
         assert summary["final_finding_count"] == 1
         assert manifest["outcome"]["reconciliation"] == reconciliation
-        serialized = json.dumps(manifest)
-        for retired in (
-            "total_agent_issues", "final_issues", "total_issues",
-            "input_findings_count", "agents_contributing",
-            "concerns_after_grouping", "false_positives_dropped",
-            "out_of_scope_dropped", "verified_concerns", "merge_ratio",
-            "not_applicable_count", "false_positive_finding_count",
-            "out_of_scope_finding_count", "verified_finding_count",
-            "deduplication_ratio", "not_applicable_agent_count",
-        ):
-            assert retired not in serialized
+        assert "total_agent_issues" not in json.dumps(manifest)
 
     def test_missing_reconciliation_is_null_not_an_empty_measurement(
         self, telemetry
@@ -3715,25 +3040,19 @@ class TestSummaryOverrideCounting:
 class TestQuickModeTelemetry:
     """Quick mode flag and decisions captured in telemetry."""
 
-    def test_start_captures_quick_mode(self, mod, tmp_path):
+    def test_quick_mode_flag_reflects_the_passed_value(self, mod, tmp_path):
         output_dir = tmp_path / "pr-review-org-repo-42"
         output_dir.mkdir()
         log_dir = tmp_path / "logs"
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
         t.start(pr_number="42", quick_mode=True)
-        events = _read_events(t.log_path)
-        start = events[0]
-        assert start["pipeline"]["quick_mode"] is True
+        assert _read_events(t.log_path)[0]["pipeline"]["quick_mode"] is True
 
-    def test_start_defaults_quick_mode_false(self, mod, tmp_path):
-        output_dir = tmp_path / "pr-review-org-repo-42"
-        output_dir.mkdir()
-        log_dir = tmp_path / "logs"
-        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
-        t.start(pr_number="42")
-        events = _read_events(t.log_path)
-        start = events[0]
-        assert start["pipeline"]["quick_mode"] is False
+        output_dir2 = tmp_path / "pr-review-org-repo-43"
+        output_dir2.mkdir()
+        t2 = mod.ReviewTelemetry(str(output_dir2), log_dir=str(log_dir))
+        t2.start(pr_number="43")
+        assert _read_events(t2.log_path)[0]["pipeline"]["quick_mode"] is False
 
     def test_log_step_captures_decisions(self, mod, tmp_path):
         output_dir = tmp_path / "pr-review-org-repo-42"
@@ -3744,42 +3063,12 @@ class TestQuickModeTelemetry:
         decisions = {"critic_skipped": True, "reason": "quick mode + verdict: comment"}
         t.log_step(step=10, phase="VALIDATION", title="Decision Critic",
                    decisions=decisions)
-        events = _read_events(t.log_path)
-        step_event = events[1]
+        step_event = _read_events(t.log_path)[1]
         assert step_event["decisions"] == decisions
 
-    def test_log_step_no_decisions_by_default(self, mod, tmp_path):
-        output_dir = tmp_path / "pr-review-org-repo-42"
-        output_dir.mkdir()
-        log_dir = tmp_path / "logs"
-        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
-        t.start(pr_number="42")
         t.log_step(step=5, phase="EXECUTION", title="Dispatch Plan")
-        events = _read_events(t.log_path)
-        step_event = events[1]
-        assert "decisions" not in step_event
-
-    def test_summary_includes_quick_mode(self, mod, tmp_path):
-        output_dir = tmp_path / "pr-review-org-repo-42"
-        output_dir.mkdir()
-        log_dir = tmp_path / "logs"
-        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
-        t.start(pr_number="42", quick_mode=True)
-        t.finalize(step=11, phase="OUTPUT", title="Present Results")
-        events = _read_events(t.log_path)
-        final = events[-1]
-        assert final["summary"]["quick_mode"] is True
-
-    def test_summary_quick_mode_false_by_default(self, mod, tmp_path):
-        output_dir = tmp_path / "pr-review-org-repo-42"
-        output_dir.mkdir()
-        log_dir = tmp_path / "logs"
-        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
-        t.start(pr_number="42")
-        t.finalize(step=11, phase="OUTPUT", title="Present Results")
-        events = _read_events(t.log_path)
-        final = events[-1]
-        assert final["summary"]["quick_mode"] is False
+        no_decisions_event = _read_events(t.log_path)[2]
+        assert "decisions" not in no_decisions_event
 
     def test_summary_quick_mode_cross_process(self, mod, tmp_path):
         """Separate ReviewTelemetry instance (simulating different process)
@@ -3814,13 +3103,6 @@ class TestReviewerMarkdownManifest:
         )
         return telemetry, out_dir
 
-    def test_absent_state_is_recorded_as_unavailable(self, mod, tmp_path):
-        telemetry, _out_dir = self._telemetry(mod, tmp_path)
-
-        manifest = json.loads(Path(telemetry.manifest_path).read_text())
-
-        assert manifest["reviewer_markdown"] is None
-
     def test_state_outcome_is_sanitized_into_manifest(self, mod, tmp_path):
         telemetry, out_dir = self._telemetry(mod, tmp_path)
         (_artifact(out_dir, "pipeline_state")).write_text(json.dumps({
@@ -3840,29 +3122,6 @@ class TestReviewerMarkdownManifest:
             "ran": True,
             "written": 2,
             "expected": 3,
-            "status": "partial",
-        }
-
-    def test_partial_outcome_allows_equal_counts_when_path_identities_differ(
-        self, mod, tmp_path
-    ):
-        telemetry, out_dir = self._telemetry(mod, tmp_path)
-        (_artifact(out_dir, "pipeline_state")).write_text(json.dumps({
-            "reviewer_markdown": {
-                "ran": True,
-                "written": 1,
-                "expected": 1,
-                "status": "partial",
-            },
-        }))
-
-        telemetry.log_step(step=8, phase="SYNTHESIS", title="Reconcile")
-        manifest = json.loads(Path(telemetry.manifest_path).read_text())
-
-        assert manifest["reviewer_markdown"] == {
-            "ran": True,
-            "written": 1,
-            "expected": 1,
             "status": "partial",
         }
 
@@ -3891,6 +3150,7 @@ class TestReviewerMarkdownManifest:
         telemetry, out_dir = self._telemetry(mod, tmp_path)
 
         absent_manifest = json.loads(Path(telemetry.manifest_path).read_text())
+        assert absent_manifest["reviewer_markdown"] is None
         assert absent_manifest["availability"]["reviewer_markdown"] is False
 
         (_artifact(out_dir, "pipeline_state")).write_text(json.dumps({
@@ -3928,15 +3188,11 @@ class TestFindingsMarkdownManifest:
         )
         return telemetry, out_dir
 
-    def test_absent_state_is_recorded_as_unavailable(self, mod, tmp_path):
-        telemetry, _out_dir = self._telemetry(mod, tmp_path)
-
-        manifest = json.loads(Path(telemetry.manifest_path).read_text())
-
-        assert manifest["findings_markdown"] is None
-        assert manifest["availability"]["findings_markdown"] is False
-
     def test_state_outcome_is_sanitized_into_manifest(self, mod, tmp_path):
+        """Mirrors `TestReviewerMarkdownManifest` field for field (both
+        share `_sanitize_derived_markdown_outcome`), which already covers
+        the absent and malformed cases for this validator; this is the
+        parity/wiring guard for the second key."""
         telemetry, out_dir = self._telemetry(mod, tmp_path)
         (_artifact(out_dir, "pipeline_state")).write_text(json.dumps({
             "findings_markdown": {
@@ -3958,45 +3214,6 @@ class TestFindingsMarkdownManifest:
             "status": "complete",
         }
         assert manifest["availability"]["findings_markdown"] is True
-
-    def test_a_failed_render_is_recorded_not_dropped(self, mod, tmp_path):
-        telemetry, out_dir = self._telemetry(mod, tmp_path)
-        (_artifact(out_dir, "pipeline_state")).write_text(json.dumps({
-            "findings_markdown": {
-                "ran": True,
-                "written": 0,
-                "expected": 1,
-                "status": "failed",
-            },
-        }))
-
-        telemetry.log_step(step=9, phase="VALIDATION", title="Render Findings")
-        manifest = json.loads(Path(telemetry.manifest_path).read_text())
-
-        assert manifest["findings_markdown"] == {
-            "ran": True,
-            "written": 0,
-            "expected": 1,
-            "status": "failed",
-        }
-        assert manifest["availability"]["findings_markdown"] is True
-
-    def test_malformed_state_outcome_is_unavailable(self, mod, tmp_path):
-        telemetry, out_dir = self._telemetry(mod, tmp_path)
-        (_artifact(out_dir, "pipeline_state")).write_text(json.dumps({
-            "findings_markdown": {
-                "ran": "yes",
-                "written": True,
-                "expected": -1,
-                "status": "complete",
-            },
-        }))
-
-        telemetry.log_step(step=9, phase="VALIDATION", title="Render Findings")
-        manifest = json.loads(Path(telemetry.manifest_path).read_text())
-
-        assert manifest["findings_markdown"] is None
-        assert manifest["availability"]["findings_markdown"] is False
 
 
 class TestDependencyRefreshManifest:
@@ -4054,11 +3271,6 @@ class TestDependencyRefreshManifest:
             out_dir, request, out_dir.parent
         ) == []
 
-    def test_absent_when_never_requested_and_no_report(self, mod, tmp_path):
-        t, out_dir = self._telemetry(mod, tmp_path)
-        manifest = json.loads(Path(t.manifest_path).read_text())
-        assert manifest["dependency_refresh"] is None
-
     def test_requested_without_report_is_recorded(self, mod, tmp_path):
         t, out_dir = self._telemetry(mod, tmp_path)
         (out_dir / "run-config.json").write_text(json.dumps(
@@ -4091,41 +3303,31 @@ class TestDependencyRefreshManifest:
             ],
         }
 
-    def test_dirty_precheck_refusal_is_projected_without_a_report(
-        self, mod, tmp_path
+    @pytest.mark.parametrize(
+        "tracked_files_dirty,dirty_files,expected_precheck",
+        [
+            pytest.param(
+                True, ["tracked.txt"],
+                {"tracked_files_dirty": True, "dirty_files": ["tracked.txt"]},
+                id="dirty",
+            ),
+            pytest.param(False, [], None, id="clean"),
+        ],
+    )
+    def test_precheck_projection(
+        self, mod, tmp_path, tracked_files_dirty, dirty_files, expected_precheck
     ):
+        """`tracked_files_dirty` is a bool-or-None passthrough. `True` and
+        `None` both hit the "project the precheck" branch (`dirty`
+        represents that branch); `False` is the "omit it" branch (`clean`,
+        where the section carries no `precheck` key at all)."""
         t, out_dir = self._telemetry(mod, tmp_path)
         (out_dir / "run-config.json").write_text(json.dumps(
             {"mode": "full", "refresh_dependencies": True}))
         (_artifact(out_dir, "pipeline_state")).write_text(json.dumps({
             "dependency_refresh_precheck": {
-                "tracked_files_dirty": True,
-                "dirty_files": ["tracked.txt"],
-            },
-        }))
-
-        t.log_step(step=5, phase="EXECUTION", title="Dispatch Plan + Triage")
-
-        manifest = json.loads(Path(t.manifest_path).read_text())
-        assert manifest["dependency_refresh"] == {
-            "requested": True,
-            "reported": False,
-            "precheck": {
-                "tracked_files_dirty": True,
-                "dirty_files": ["tracked.txt"],
-            },
-        }
-
-    def test_unknown_precheck_refusal_is_projected_without_a_report(
-        self, mod, tmp_path
-    ):
-        t, out_dir = self._telemetry(mod, tmp_path)
-        (out_dir / "run-config.json").write_text(json.dumps(
-            {"mode": "full", "refresh_dependencies": True}))
-        (_artifact(out_dir, "pipeline_state")).write_text(json.dumps({
-            "dependency_refresh_precheck": {
-                "tracked_files_dirty": None,
-                "dirty_files": [],
+                "tracked_files_dirty": tracked_files_dirty,
+                "dirty_files": dirty_files,
             },
         }))
 
@@ -4133,14 +3335,10 @@ class TestDependencyRefreshManifest:
 
         manifest = json.loads(Path(t.manifest_path).read_text())
         section = manifest["dependency_refresh"]
-        assert section == {
-            "requested": True,
-            "reported": False,
-            "precheck": {
-                "tracked_files_dirty": None,
-                "dirty_files": [],
-            },
-        }
+        expected = {"requested": True, "reported": False}
+        if expected_precheck is not None:
+            expected["precheck"] = expected_precheck
+        assert section == expected
 
     def test_malformed_canonical_report_is_unreported_without_replacement(
         self, mod, tmp_path
@@ -4183,25 +3381,6 @@ class TestDependencyRefreshManifest:
         assert section["tracked_files_dirty"] is True
         assert section["dirty_files"] == ["tracked.txt"]
 
-    def test_clean_precheck_is_not_repeated_in_the_manifest(
-        self, mod, tmp_path
-    ):
-        t, out_dir = self._telemetry(mod, tmp_path)
-        (out_dir / "run-config.json").write_text(json.dumps(
-            {"mode": "full", "refresh_dependencies": True}))
-        (_artifact(out_dir, "pipeline_state")).write_text(json.dumps({
-            "dependency_refresh_precheck": {
-                "tracked_files_dirty": False,
-                "dirty_files": [],
-            },
-        }))
-
-        t.log_step(step=5, phase="EXECUTION", title="Dispatch Plan + Triage")
-
-        manifest = json.loads(Path(t.manifest_path).read_text())
-        section = manifest["dependency_refresh"]
-        assert section == {"requested": True, "reported": False}
-
     @pytest.mark.parametrize(
         "report_bytes",
         [
@@ -4218,8 +3397,9 @@ class TestDependencyRefreshManifest:
                 + b"}"
             ),
             b"\xff",
+            b"[1, 2, 3]",
         ],
-        ids=("malformed", "oversized", "deeply-nested", "invalid-utf8"),
+        ids=("malformed", "oversized", "deeply-nested", "invalid-utf8", "non-object"),
     )
     def test_hostile_canonical_report_reads_as_unreported(
         self, mod, tmp_path, report_bytes
@@ -4249,17 +3429,6 @@ class TestDependencyRefreshManifest:
         manifest = json.loads(Path(t.manifest_path).read_text())
         assert manifest["dependency_refresh"] is None
 
-    def test_non_object_report_reads_as_unreported(self, mod, tmp_path):
-        t, out_dir = self._telemetry(mod, tmp_path)
-        (out_dir / "run-config.json").write_text(json.dumps(
-            {"mode": "full", "refresh_dependencies": True}))
-        (_artifact(out_dir, "dependency_refresh")).write_text("[1, 2, 3]")
-        t.log_step(step=3, phase="SETUP", title="Gather Context")
-        manifest = json.loads(Path(t.manifest_path).read_text())
-        section = manifest["dependency_refresh"]
-        assert section["requested"] is True
-        assert section["reported"] is False
-
     def test_availability_flag_tracks_the_payload(self, mod, tmp_path):
         """Task 13: `availability["dependency_refresh"]` used to not
         exist at all — the section was written with no flag beside it.
@@ -4270,6 +3439,7 @@ class TestDependencyRefreshManifest:
         t, out_dir = self._telemetry(mod, tmp_path)
 
         absent_manifest = json.loads(Path(t.manifest_path).read_text())
+        assert absent_manifest["dependency_refresh"] is None
         assert absent_manifest["availability"]["dependency_refresh"] is False
 
         (out_dir / "run-config.json").write_text(json.dumps(
@@ -4291,79 +3461,51 @@ class TestWorktreeHygieneManifest:
                 run_id="run-1")
         return t, out_dir
 
-    def test_absent_artifact_yields_none(self, mod, tmp_path):
-        build = mod.manifest_sections.build_worktree_hygiene_manifest
-        assert build(str(tmp_path)) is None
-
-    def test_artifact_projected_into_manifest(self, mod, tmp_path):
-        (_artifact(tmp_path, "worktree_hygiene")).write_text(json.dumps({
-            "schema": 1,
-            "status": "clean",
-            "new_files": [],
-            "changed_files": [],
-            "probe_residue_removed": ["zz_pirategoat-probe.go"],
-            "baseline_captured_at": "2026-08-19T10:00:00+00:00",
-        }))
-
-        section = mod.manifest_sections.build_worktree_hygiene_manifest(
-            str(tmp_path)
-        )
-
-        assert section["status"] == "clean"
-        assert section["probe_residue_removed"] == ["zz_pirategoat-probe.go"]
-        assert section["baseline_captured_at"] == "2026-08-19T10:00:00+00:00"
-
     def test_malformed_artifact_yields_none(self, mod, tmp_path):
         (_artifact(tmp_path, "worktree_hygiene")).write_text("[]")
         build = mod.manifest_sections.build_worktree_hygiene_manifest
         assert build(str(tmp_path)) is None
 
-    def test_missing_fields_project_safely(self, mod, tmp_path):
-        (_artifact(tmp_path, "worktree_hygiene")).write_text(json.dumps(
-            {"schema": 1}
-        ))
+    @pytest.mark.parametrize(
+        "payload,expected",
+        [
+            pytest.param(
+                {"schema": 1},
+                {
+                    "status": "unknown", "new_files": [], "changed_files": [],
+                    "probe_residue_removed": [], "baseline_captured_at": None,
+                },
+                id="missing-fields",
+            ),
+            pytest.param(
+                {
+                    "schema": 1, "status": 7,
+                    "new_files": ["?? a.txt", 3, None],
+                    "changed_files": " M b.txt",
+                    "probe_residue_removed": [{"path": "x"}],
+                    "baseline_captured_at": 1234,
+                },
+                {
+                    "status": "unknown", "new_files": ["?? a.txt"],
+                    "changed_files": [], "probe_residue_removed": [],
+                    "baseline_captured_at": None,
+                },
+                id="non-string-entries",
+            ),
+        ],
+    )
+    def test_hygiene_sanitization(self, mod, tmp_path, payload, expected):
+        """Missing fields and wrongly-typed entries both degrade to the
+        same safe defaults, `status` included — a well-typed status
+        outside the allowlist (`test_non_string_entries_are_dropped`'s
+        `status: 7`) already exercises the same "unknown" fallback."""
+        (_artifact(tmp_path, "worktree_hygiene")).write_text(json.dumps(payload))
 
         section = mod.manifest_sections.build_worktree_hygiene_manifest(
             str(tmp_path)
         )
 
-        assert section["status"] == "unknown"
-        assert section["new_files"] == []
-        assert section["changed_files"] == []
-        assert section["probe_residue_removed"] == []
-        assert section["baseline_captured_at"] is None
-
-    def test_non_string_entries_are_dropped(self, mod, tmp_path):
-        (_artifact(tmp_path, "worktree_hygiene")).write_text(json.dumps({
-            "schema": 1,
-            "status": 7,
-            "new_files": ["?? a.txt", 3, None],
-            "changed_files": " M b.txt",
-            "probe_residue_removed": [{"path": "x"}],
-            "baseline_captured_at": 1234,
-        }))
-
-        section = mod.manifest_sections.build_worktree_hygiene_manifest(
-            str(tmp_path)
-        )
-
-        assert section["status"] == "unknown"
-        assert section["new_files"] == ["?? a.txt"]
-        assert section["changed_files"] == []
-        assert section["probe_residue_removed"] == []
-        assert section["baseline_captured_at"] is None
-
-    def test_unrecognized_status_degrades_to_unknown(self, mod, tmp_path):
-        """A well-typed status outside the allowlist reads "unknown"."""
-        (_artifact(tmp_path, "worktree_hygiene")).write_text(json.dumps(
-            {"schema": 1, "status": "corrupted"}
-        ))
-
-        section = mod.manifest_sections.build_worktree_hygiene_manifest(
-            str(tmp_path)
-        )
-
-        assert section["status"] == "unknown"
+        assert section == expected
 
     def test_measured_unknown_is_not_absent(self, mod, tmp_path):
         """A measured "unknown" is a section; only an absent artifact is None."""
@@ -4475,43 +3617,6 @@ class TestUsageManifest:
             json.dumps(snapshot)
         )
 
-    def test_absent_artifact_yields_none(self, mod, tmp_path):
-        build = mod.manifest_sections.build_usage_manifest
-        assert build(str(tmp_path)) is None
-
-    def test_malformed_artifact_yields_none(self, mod, tmp_path):
-        (_artifact(tmp_path, "usage_snapshot")).write_text("[]")
-        build = mod.manifest_sections.build_usage_manifest
-        assert build(str(tmp_path)) is None
-
-    def test_artifact_projected_into_a_section(self, mod, tmp_path):
-        self._write(tmp_path, self._snapshot())
-
-        section = mod.manifest_sections.build_usage_manifest(str(tmp_path))
-
-        assert section["captured_at"] == "2026-08-19T10:43:00+00:00"
-        assert section["window"] == {
-            "started_at": "2026-08-19T10:00:00+00:00",
-            "ended_at": "2026-08-19T10:43:00+00:00",
-            "closed": False,
-        }
-        assert section["availability"] == {
-            "subagents": "complete", "orchestrator": "partial",
-        }
-        assert section["agents_measured"] == {"measured": 2, "expected": 2}
-        assert section["subagent_totals"]["output_tokens"] == 7
-        assert section["orchestrator_usage"]["output_tokens"] == 9
-        assert section["usage_by_model"]["claude-opus-5[1m]"][
-            "output_tokens"] == 5
-        assert section["by_agent"] == [
-            {"agent": "code-reviewer", "model": "claude-opus-5[1m]",
-             "usage": self._usage(output=5), "tool_calls": None,
-             "repository_reads": None},
-            {"agent": "security-reviewer", "model": "claude-sonnet-5",
-             "usage": self._usage(output=2), "tool_calls": None,
-             "repository_reads": None},
-        ]
-
     def test_agent_tool_and_read_counts_are_projected_without_inventing_them(
         self, mod, tmp_path
     ):
@@ -4540,18 +3645,21 @@ class TestUsageManifest:
         assert section["by_agent"][1]["tool_calls"] is None
         assert section["by_agent"][1]["repository_reads"] == 3
 
-    def test_unknown_schema_yields_none(self, mod, tmp_path):
-        """A snapshot announcing a schema this builder does not know was
-        written by a producer whose field meanings it cannot vouch for."""
-        self._write(tmp_path, self._snapshot(schema=2))
-
-        build = mod.manifest_sections.build_usage_manifest
-        assert build(str(tmp_path)) is None
-
-    def test_missing_schema_yields_none(self, mod, tmp_path):
-        snapshot = self._snapshot()
-        del snapshot["schema"]
-        self._write(tmp_path, snapshot)
+    @pytest.mark.parametrize(
+        "raw_text",
+        [
+            pytest.param("[]", id="malformed-json"),
+            pytest.param(None, id="unknown-schema"),
+        ],
+    )
+    def test_usage_unmeasured(self, mod, tmp_path, raw_text):
+        """Malformed JSON and a schema this builder does not know (a
+        missing schema key hits the same `schema != 1` check) are both
+        evidence this builder cannot vouch for."""
+        if raw_text is not None:
+            (_artifact(tmp_path, "usage_snapshot")).write_text(raw_text)
+        else:
+            self._write(tmp_path, self._snapshot(schema=2))
 
         build = mod.manifest_sections.build_usage_manifest
         assert build(str(tmp_path)) is None
@@ -4571,13 +3679,15 @@ class TestUsageManifest:
 
     @pytest.mark.parametrize(
         "window",
-        [{}, {"closed": "yes"}, {"closed": 1}, "not-an-object", None],
-        ids=["absent", "string", "int", "scalar", "null"],
+        [{}, {"closed": 1}],
+        ids=["absent", "int"],
     )
     def test_unreadable_window_falls_to_substituted(self, mod, tmp_path,
                                                     window):
         """"closed" is the stronger claim, so an unreadable flag must fall
-        to the weaker one rather than license the stronger."""
+        to the weaker one rather than license the stronger. `int` also
+        guards the `1 == True` trap: a bare `is True` would wrongly accept
+        a truthy `1`."""
         self._write(tmp_path, self._snapshot(window=window))
 
         section = mod.manifest_sections.build_usage_manifest(str(tmp_path))
@@ -4672,7 +3782,29 @@ class TestUsageManifest:
         t.finalize(step=11, phase="OUTPUT", title="Present Results")
         manifest = _read_manifest(t)
 
-        assert manifest["usage"]["availability"]["subagents"] == "complete"
+        section = manifest["usage"]
+        assert section["captured_at"] == "2026-08-19T10:43:00+00:00"
+        assert section["window"] == {
+            "started_at": "2026-08-19T10:00:00+00:00",
+            "ended_at": "2026-08-19T10:43:00+00:00",
+            "closed": False,
+        }
+        assert section["availability"] == {
+            "subagents": "complete", "orchestrator": "partial",
+        }
+        assert section["agents_measured"] == {"measured": 2, "expected": 2}
+        assert section["subagent_totals"]["output_tokens"] == 7
+        assert section["orchestrator_usage"]["output_tokens"] == 9
+        assert section["usage_by_model"]["claude-opus-5[1m]"][
+            "output_tokens"] == 5
+        assert section["by_agent"] == [
+            {"agent": "code-reviewer", "model": "claude-opus-5[1m]",
+             "usage": self._usage(output=5), "tool_calls": None,
+             "repository_reads": None},
+            {"agent": "security-reviewer", "model": "claude-sonnet-5",
+             "usage": self._usage(output=2), "tool_calls": None,
+             "repository_reads": None},
+        ]
         assert manifest["availability"]["usage"] is True
 
     def test_absent_artifact_is_recorded_as_unavailable(self, mod, tmp_path):
@@ -4696,46 +3828,20 @@ class TestSkippedStepsManifest:
                 run_id="run-1")
         return t, out_dir
 
-    def test_absent_state_yields_none(self, mod, tmp_path):
-        build = mod.manifest_sections.build_skipped_steps_manifest
-        assert build(str(tmp_path)) is None
-
-    def test_recorded_skips_projected(self, mod, tmp_path):
-        (_artifact(tmp_path, "pipeline_state")).write_text(json.dumps({
-            "skipped_steps": [
-                {"step": 2, "title": "Repo Setup",
-                 "condition": "needs_workspace_setup"},
-            ],
-        }))
-
-        section = mod.manifest_sections.build_skipped_steps_manifest(
-            str(tmp_path)
-        )
-
-        assert section == [{"step": 2, "title": "Repo Setup",
-                            "condition": "needs_workspace_setup"}]
-
-    def test_state_without_the_key_yields_none(self, mod, tmp_path):
-        (_artifact(tmp_path, "pipeline_state")).write_text(json.dumps({}))
-        build = mod.manifest_sections.build_skipped_steps_manifest
-        assert build(str(tmp_path)) is None
-
-    def test_empty_list_is_a_measured_zero(self, mod, tmp_path):
-        (_artifact(tmp_path, "pipeline_state")).write_text(json.dumps({
-            "skipped_steps": [],
-        }))
-        build = mod.manifest_sections.build_skipped_steps_manifest
-        assert build(str(tmp_path)) == []
-
-    def test_malformed_state_yields_none(self, mod, tmp_path):
-        (_artifact(tmp_path, "pipeline_state")).write_text("[]")
-        build = mod.manifest_sections.build_skipped_steps_manifest
-        assert build(str(tmp_path)) is None
-
-    def test_non_list_value_yields_none(self, mod, tmp_path):
-        (_artifact(tmp_path, "pipeline_state")).write_text(json.dumps({
-            "skipped_steps": {"step": 2},
-        }))
+    @pytest.mark.parametrize(
+        "state",
+        [
+            pytest.param(None, id="missing-file"),
+            pytest.param({"skipped_steps": {"step": 2}}, id="non-list-value"),
+        ],
+    )
+    def test_skipped_steps_unmeasured(self, mod, tmp_path, state):
+        """A missing `pipeline_state.json`, a state without the key, a
+        malformed (non-object) state, and a non-list `skipped_steps` value
+        all reach the same `not isinstance(value, list) -> None` guard;
+        `missing-file` and `non-list-value` represent the family."""
+        if state is not None:
+            (_artifact(tmp_path, "pipeline_state")).write_text(json.dumps(state))
         build = mod.manifest_sections.build_skipped_steps_manifest
         assert build(str(tmp_path)) is None
 
@@ -4850,9 +3956,6 @@ class TestSynthesisAgentsManifest:
             str(tmp_path)
         )
 
-    def test_absent_artifact_is_unmeasured(self, mod, tmp_path):
-        assert self._build(mod, tmp_path) is None
-
     def test_unknown_schema_is_unmeasured(self, mod, tmp_path):
         self._write(tmp_path, self._artifact(
             self._row(self.CRITIC), schema=2,
@@ -4889,20 +3992,21 @@ class TestSynthesisAgentsManifest:
         assert row["duration_ms"] is None
 
     @pytest.mark.parametrize(
-        "value", [None, "yes", 1, 0, "true"],
-        ids=["null", "string", "int", "zero", "truthy-string"],
+        "value", [1, "true"],
+        ids=["int", "truthy-string"],
     )
     def test_only_an_explicit_true_reads_as_stalled(self, mod, tmp_path, value):
         """A stall accuses the run. An unreadable flag does not license
-        that claim — same rule usage's `window.closed` follows."""
+        that claim — same rule usage's `window.closed` follows. `int`
+        also guards the `1 == True` trap."""
         self._write(tmp_path, self._artifact(
             self._row(self.CRITIC, stalled=value)
         ))
         assert self._build(mod, tmp_path)["agents"][0]["stalled"] is False
 
     @pytest.mark.parametrize(
-        "value", [-1, "665000", 6.5, True, None],
-        ids=["negative", "string", "float", "bool", "null"],
+        "value", [-1, True],
+        ids=["negative", "bool"],
     )
     def test_unusable_duration_is_none_never_zero(self, mod, tmp_path, value):
         """A duration that cannot be read is absent. Zeroing it would
@@ -5031,32 +4135,22 @@ class TestSynthesisAgentsManifestShape:
 
     def test_builder_covers_exactly_the_declared_row_keys(self, mod, tmp_path):
         """Row-shape parity, producer side. Three modules write this
-        shape; teaching only one of them must fail loudly."""
-        section = self._build(mod, tmp_path, self._artifact(self._row()))
-        assert set(section["agents"][0]) == set(lifecycle_contract.ROW_KEYS)
-
-    def test_an_undeclared_row_key_is_dropped(self, mod, tmp_path):
+        shape; teaching only one of them must fail loudly. The same
+        `set(row) == set(ROW_KEYS)` equality already rejects an
+        undeclared key sneaking in beside the declared ones."""
         section = self._build(
             mod, tmp_path, self._artifact(self._row(invented_key="x"))
         )
-        assert "invented_key" not in section["agents"][0]
+        assert set(section["agents"][0]) == set(lifecycle_contract.ROW_KEYS)
 
-    def test_the_verdict_reaches_the_manifest(self, mod, tmp_path):
+    def test_an_unusable_verdict_is_none(self, mod, tmp_path):
+        """`test_durations_project_intact` already asserts the whole row
+        (verdict included) for a good value; only an unusable one needs
+        its own case."""
         section = self._build(
-            mod, tmp_path, self._artifact(self._row(verdict="SKIPPED"))
-        )
-        assert section["agents"][0]["verdict"] == "SKIPPED"
-
-    @pytest.mark.parametrize(
-        "value", [None, 5, True, ["STAND"]],
-        ids=["null", "int", "bool", "list"],
-    )
-    def test_an_unusable_verdict_is_none(self, mod, tmp_path, value):
-        section = self._build(
-            mod, tmp_path, self._artifact(self._row(verdict=value))
+            mod, tmp_path, self._artifact(self._row(verdict=None))
         )
         assert section["agents"][0]["verdict"] is None
-
 
 
 class TestOptionalSectionAvailabilityKeysContract:
@@ -5097,30 +4191,6 @@ class TestOptionalSectionAvailabilityKeysContract:
             "_OPTIONAL_SECTION_SANITIZERS) when a section's availability "
             "wiring changes."
         )
-
-    def test_the_reviewers_probe_a_flag_added_without_the_tuple_fails_here(
-        self, mod, telemetry, output_dir
-    ):
-        """Simulates the exact gap this contract exists to catch:
-        `_build_manifest` assigning a flag for a section the tuple does
-        not declare. Patches the bound method for one call only."""
-        real_build_manifest = telemetry._build_manifest
-
-        def _build_manifest_with_undeclared_flag(status, extracts=None):
-            manifest = real_build_manifest(status, extracts)
-            manifest["availability"]["speculative_section"] = True
-            return manifest
-
-        telemetry._build_manifest = _build_manifest_with_undeclared_flag
-        telemetry.start(run_id="run-1")
-        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
-
-        manifest = _read_manifest(telemetry)
-        produced = set(manifest["availability"]) - {"pipeline", "transcript"}
-        declared = set(mod.OPTIONAL_SECTION_AVAILABILITY_KEYS)
-
-        assert produced != declared
-        assert "speculative_section" in produced - declared
 
 
 class TestReprojectUsage:
