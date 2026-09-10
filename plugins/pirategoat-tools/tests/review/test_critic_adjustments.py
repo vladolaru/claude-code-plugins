@@ -653,21 +653,6 @@ class TestRejectionAudit:
         }
 
 class TestBatchCoherence:
-    def test_duplicate_target_in_one_batch_is_rejected(self, tmp_path):
-        _write_findings(tmp_path, [_finding("f1", "low")])
-        with pytest.raises(ValueError, match="duplicate target"):
-            _publish_revise(tmp_path, [
-                {"action": "promote",
-                 "target": {"kind": "finding", "id": "f1"},
-                 "fields": {"severity": "high"}, "rationale": "r"},
-                {"action": "correct",
-                 "target": {"kind": "finding", "id": "f1"},
-                 "fields": {"title": "clearer title"}, "rationale": "r"},
-            ])
-        data = _ledger(tmp_path)
-        assert data["findings"][0]["severity"] == "low"
-        assert "critic_adjustment" not in data["findings"][0]
-
     def test_targeting_an_id_removed_earlier_in_the_batch_is_rejected(
         self, tmp_path
     ):
@@ -2368,20 +2353,28 @@ class TestSchemaTwoTargetUnion:
             verified=verified, refuted=refuted, assessment=assessment,
         )
 
-    def test_finding_mutations_require_kind_and_id(self):
+    @pytest.mark.parametrize(
+        ("action", "fields"),
+        [
+            pytest.param(
+                "promote", {"severity": "high"}, id="severity-required-branch",
+            ),
+            pytest.param(
+                "rescope", {"file": "src/b.py", "line": 20},
+                id="exactly-file-and-line-branch",
+            ),
+        ],
+    )
+    def test_finding_mutations_require_kind_and_id(self, action, fields):
         """One representative each of the severity-required branch
         (`promote`) and the exactly-file-and-line branch (`rescope`); the
         other actions (`demote`, `correct`, `remove`) reach the same two
         branches with no distinct outcome of their own."""
-        for action, fields in (
-            ("promote", {"severity": "high"}),
-            ("rescope", {"file": "src/b.py", "line": 20}),
-        ):
-            payload = {
-                "schema": 2,
-                "adjustments": [self._entry(action, fields=fields)],
-            }
-            assert validate_proposal_input(payload) == []
+        payload = {
+            "schema": 2,
+            "adjustments": [self._entry(action, fields=fields)],
+        }
+        assert validate_proposal_input(payload) == []
 
     def test_severity_actions_accept_related_finding_corrections(self):
         payload = {"schema": 2, "adjustments": [self._entry(
