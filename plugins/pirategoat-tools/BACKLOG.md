@@ -298,3 +298,11 @@ The analysis/metrics layer carries a handful of pre-existing untested guards tha
 **Evidence:** `.claude/docs/analysis/2026-09-10-claude-tests-corpus-audit.md` "Side findings worth fixing on sight"; ledger Task 27 pre-check (no `test_cli.py` test reaches the timeout path).
 **Deferred because:** the test-corpus trim's mandate was to cut tests without losing pins, not to add new coverage; a real timeout test needs a fake backend that returns `TIMEOUT_SENTINEL` through `action_review`, which is new test infrastructure.
 **Do when:** the next change to `action_review`'s timeout or fallback handling, or the next time a field run shows a timeout producing unexpected CLI output.
+
+### 36. The reconciliator spends its run in one silent extended-thinking turn
+
+Reconciliation is two acts and one of them is invisible: a single extended-thinking turn of 343s (PR #66900) and 298s (PR #12089) that produces no artifact and hides 77-82% of the agent's output tokens, followed by one ledger-script write that takes another 110s. Nothing can be seen, interrupted, or resumed until the whole ledger lands. The proposed lever is writing the ledger concern by concern as the reconciliator decides each one — `FindingsLedgerBuilder` already supports incremental saves — with a concern-count bound so a large PR does not turn into dozens of writes.
+
+**Evidence:** `.claude/docs/analysis/2026-09-11-claude-two-pr-review-runs-audit.md` § F1 and § Decision critic pass (per-turn anatomy for PR #66900 and PR #12089).
+**Deferred because:** it is an experiment, not a fix — whether visible incremental work actually shortens the think is unknown — and it changes the reconciliator's definition, its briefing, and the save channel's expectations about partial ledgers. Handoff 06's severity-floor and orchestrator-note changes also push the reconciliator toward reading rather than re-deciding, so measuring both at once would confound them.
+**Do when:** two field runs after the floor and note changes have landed show the reconciliator's single-turn time unchanged, or a run stalls inside that turn.
