@@ -105,19 +105,34 @@ def _result(
 
 
 _POLL_COMMAND = 'python3 /plugin/scripts/review/agents_status.py --output-dir "/output"'
+# What the program prints on every 0/2/3 exit, and what argparse and the
+# Python launcher print instead when it never ran — all three exiting 2.
+_POLL_STATUS = "Dispatched: 2 | Finished: 1 | Running: 1\n\nALL_DONE: false"
+_POLL_USAGE_ERROR = (
+    "usage: agents_status.py [-h] --output-dir OUTPUT_DIR [--wait]\n"
+    "agents_status.py: error: unrecognized arguments: --timeout 60"
+)
+_POLL_MISSING_SCRIPT = (
+    "python3: can't open file '/plugin/scripts/review/agents_status.py': "
+    "[Errno 2] No such file or directory"
+)
 
 
-def _bash_exit(tool_id: str, command: str, code: int) -> list[dict]:
+def _bash_exit(
+    tool_id: str, command: str, code: int, output: str = "output"
+) -> list[dict]:
     """A non-zero Bash exit as the harness records it: `is_error`, the code
     on the content's first line, and a plain-string `toolUseResult` with no
-    structured exit code."""
+    structured exit code. `output` is what the command printed, which is
+    what separates a program's contractual exit from a broken invocation
+    of the same program."""
     return [
         _assistant(_call(tool_id, "Bash", command=command)),
         _result(
             tool_id,
-            f"Exit code {code}\noutput",
+            f"Exit code {code}\n{output}",
             is_error=True,
-            structured=f"Error: Exit code {code}\noutput",
+            structured=f"Error: Exit code {code}\n{output}",
         ),
     ]
 
@@ -1462,41 +1477,54 @@ class TestAnalyzeSubagent:
         assert failure["recovered"] is True
 
     @pytest.mark.parametrize(
-        "command,exit_code,category,recovery",
+        "command,exit_code,output,category,recovery",
         [
             pytest.param(
-                _POLL_COMMAND, 2, "poll_outcome", "not_applicable",
-                id="poll-still-running",
+                _POLL_COMMAND, 2, _POLL_STATUS,
+                "poll_outcome", "not_applicable", id="poll-still-running",
             ),
             pytest.param(
-                f"{_POLL_COMMAND} --wait --max-seconds 60", 3,
+                f"{_POLL_COMMAND} --wait --max-seconds 60", 3, _POLL_STATUS,
                 "poll_outcome", "not_applicable", id="poll-wait-expired",
             ),
             pytest.param(
-                f"{_POLL_COMMAND} 2>&1", 2, "poll_outcome", "not_applicable",
-                id="poll-redirected",
+                f"{_POLL_COMMAND} 2>&1", 2, _POLL_STATUS,
+                "poll_outcome", "not_applicable", id="poll-redirected",
             ),
             pytest.param(
-                _POLL_COMMAND, 1, "structured_failure", "none", id="poll-error",
+                _POLL_COMMAND, 1, "ERROR: No dispatch plan",
+                "structured_failure", "none", id="poll-error",
+            ),
+            pytest.param(
+                f"{_POLL_COMMAND} --timeout 60", 2, _POLL_USAGE_ERROR,
+                "structured_failure", "none", id="poll-rejected-by-argparse",
+            ),
+            pytest.param(
+                _POLL_COMMAND, 2, _POLL_MISSING_SCRIPT,
+                "structured_failure", "none", id="poll-script-not-found",
             ),
             pytest.param(
                 "grep -n ALL_DONE /plugin/scripts/review/agents_status.py", 2,
-                "structured_failure", "none", id="script-as-operand",
+                "output", "structured_failure", "none", id="script-as-operand",
             ),
             pytest.param(
-                "ls /output/missing.json", 1, "structured_failure", "none",
-                id="other-command",
+                "ls /output/missing.json", 1, "output",
+                "structured_failure", "none", id="other-command",
             ),
         ],
     )
     def test_poll_exit_is_listed_as_poll_outcome_by_program_and_code(
-        self, tmp_path, command, exit_code, category, recovery
+        self, tmp_path, command, exit_code, output, category, recovery
     ):
         """`agents_status.py` exits 2 (still running) and 3 (`--wait`
-        expired) by contract; the harness flags both as errors. Only that
-        program with those codes is a poll outcome."""
+        expired) by contract; the harness flags both as errors. The
+        exemption needs all three of the program, the code, and the status
+        render — argparse answers an unknown flag with 2 and the Python
+        launcher answers a missing script path with 2, from a command line
+        naming this same program, and neither one polled anything."""
         transcript = _write_jsonl(
-            tmp_path / "exit.jsonl", _bash_exit("call", command, exit_code)
+            tmp_path / "exit.jsonl",
+            _bash_exit("call", command, exit_code, output),
         )
 
         [failure] = analyze_subagent(transcript, tmp_path, [])["tool_failures"]
@@ -1509,8 +1537,8 @@ class TestAnalyzeSubagent:
         transcript = _write_jsonl(
             tmp_path / "poll-series.jsonl",
             [
-                *_bash_exit("poll-1", _POLL_COMMAND, 2),
-                *_bash_exit("poll-2", _POLL_COMMAND, 2),
+                *_bash_exit("poll-1", _POLL_COMMAND, 2, _POLL_STATUS),
+                *_bash_exit("poll-2", _POLL_COMMAND, 2, _POLL_STATUS),
                 _assistant(_call("poll-3", "Bash", command=_POLL_COMMAND)),
                 _result(
                     "poll-3",
@@ -1531,8 +1559,8 @@ class TestAnalyzeSubagent:
         transcript = _write_jsonl(
             tmp_path / "poll-after-error.jsonl",
             [
-                *_bash_exit("error", _POLL_COMMAND, 1),
-                *_bash_exit("poll", _POLL_COMMAND, 2),
+                *_bash_exit("error", _POLL_COMMAND, 1, "ERROR: No dispatch plan"),
+                *_bash_exit("poll", _POLL_COMMAND, 2, _POLL_STATUS),
             ],
         )
 

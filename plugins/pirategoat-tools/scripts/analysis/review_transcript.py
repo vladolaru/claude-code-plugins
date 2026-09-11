@@ -14,7 +14,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_ANALYSIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _ANALYSIS_DIR)
+# Sibling package in scripts/review — the poll program declares the line
+# its status render always carries, so a reformat there cannot silently
+# turn every contractual poll back into a recorded tool failure.
+sys.path.insert(0, os.path.dirname(_ANALYSIS_DIR))
+from review.agents_status import STATUS_ENVELOPE_PREFIX  # noqa: E402
 
 
 _USAGE_FIELDS = (
@@ -58,6 +64,9 @@ EXPECTED_EXIT_CATEGORIES = frozenset({"poll_outcome"})
 # a real error. The harness marks EVERY non-zero Bash exit `is_error`, so
 # before this every poll in a waiting window was recorded as a tool
 # failure — 23 of the 31 failures the two 2026-09-10 field runs recorded.
+# The name and the code alone do not settle it: argparse and the Python
+# launcher both answer a broken invocation of this same program with 2,
+# so the exemption also requires the status render itself.
 _POLL_PROGRAM = "agents_status.py"
 _POLL_OUTCOME_EXIT_CODES = frozenset({2, 3})
 _PYTHON_PROGRAMS = frozenset({"python", "python3"})
@@ -1867,19 +1876,8 @@ def _sole_simple_command(command: object) -> list[str] | None:
     return None if piped or not tokens else tokens
 
 
-def _is_poll_outcome(command: object, result: dict[str, Any]) -> bool:
-    """Whether a failed Bash call is one of `agents_status.py`'s
-    contractual non-zero outcomes rather than a fault.
-
-    Recognition is the named program plus the exit codes its docstring
-    defines, the way `parse_builder_envelope` recognizes the builder by its
-    envelope — never a substring of what the command printed.
-    """
-    if _exit_code(result) not in _POLL_OUTCOME_EXIT_CODES:
-        return False
-    tokens = _sole_simple_command(command)
-    if tokens is None:
-        return False
+def _names_poll_program(tokens: list[str]) -> bool:
+    """Whether these tokens run `agents_status.py`, directly or via Python."""
     if os.path.basename(tokens[0]) == _POLL_PROGRAM:
         return True
     return (
@@ -1887,6 +1885,27 @@ def _is_poll_outcome(command: object, result: dict[str, Any]) -> bool:
         and len(tokens) > 1
         and os.path.basename(tokens[1]) == _POLL_PROGRAM
     )
+
+
+def _is_poll_outcome(command: object, result: dict[str, Any]) -> bool:
+    """Whether a failed Bash call is one of `agents_status.py`'s
+    contractual non-zero outcomes rather than a fault.
+
+    Recognition is the named program, the exit codes its docstring
+    defines, AND the status envelope it prints — the way
+    `parse_builder_envelope` recognizes the builder by its envelope rather
+    than by prose. The envelope is load-bearing, not belt-and-braces: a
+    misspelled flag and a missing script path both exit 2 from this very
+    program, and exempting those would report a broken invocation as zero
+    failures. Every 0/2/3 exit renders the status first, so its presence
+    is what separates "it polled and said so" from "it never ran".
+    """
+    if _exit_code(result) not in _POLL_OUTCOME_EXIT_CODES:
+        return False
+    tokens = _sole_simple_command(command)
+    if tokens is None or not _names_poll_program(tokens):
+        return False
+    return STATUS_ENVELOPE_PREFIX in _result_text(result)
 
 
 def _bash_read_paths(command: object, repo_root: Path) -> list[str]:
