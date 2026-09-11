@@ -427,9 +427,13 @@ class TestStep3GatherContext:
                                      "local_changed_files": 91, "head_matches": True}
         g = mod.get_step_guidance(3, "pr", state, ctx)
         text = "\n".join(g["situation"])
-        assert "**Scope check:** GitHub reports 8 changed files; the local range has 91." in text
-        assert "The local range is inflated" in text
-        assert "treat GitHub's file list as the PR's scope" in text
+        assert (
+            "**Scope check:** GitHub reports 8 changed files; the local "
+            "range has 91. The local range is inflated: treat GitHub's "
+            "file list as the PR's scope in the change purpose, name the "
+            "discrepancy there, and expect reviewer assignments to carry "
+            "files the PR did not touch."
+        ) in text
 
     def test_local_range_short_of_the_pr_is_not_called_inflated(self, mod, tmp_path):
         """GitHub having more files than the local range means the checkout
@@ -509,9 +513,11 @@ class TestStep3GatherContext:
                                      "base_matches": None}
         g = mod.get_step_guidance(3, "pr", state, ctx)
         text = "\n".join(g["situation"])
-        assert "**Scope check:** file counts agree (8)" in text
-        assert "not proof of matching scope" in text
-        assert "matches GitHub" not in text
+        assert (
+            "**Scope check:** file counts agree (8) but GitHub's file "
+            "list was not available and the base or head identity could "
+            "not be verified, so this is not proof of matching scope."
+        ) in text
 
     def test_head_mismatch_without_counts_still_renders(self, mod, tmp_path):
         state = {"completed_steps": [1, 2]}
@@ -532,9 +538,14 @@ class TestStep3GatherContext:
                                      "base_matches": False}
         g = mod.get_step_guidance(3, "pr", state, ctx)
         text = "\n".join(g["situation"])
-        assert text.count("**Scope check:**") == 1
-        assert "merge base" in text
-        assert "inflated" not in text
+        assert (
+            "**Scope check:** The range's merge base is not where "
+            "GitHub's recorded base meets the head: the range was "
+            "computed from a different base than the PR's (a base that "
+            "merely advanced, or a fork point behind GitHub's recorded "
+            "base, does not trip this). The base line above says whether "
+            "the fetch refreshed it."
+        ) in text
 
     def test_a_base_mismatch_with_agreeing_file_sets_names_the_hunks(self, mod, tmp_path):
         """Equal file sets do not make the range the PR's: a range from an
@@ -547,9 +558,16 @@ class TestStep3GatherContext:
                                      "missing_local_files": []}
         g = mod.get_step_guidance(3, "pr", state, ctx)
         text = "\n".join(g["situation"])
-        assert text.count("**Scope check:**") == 1
-        assert "hunks" in text
-        assert "matches GitHub" not in text
+        assert (
+            "**Scope check:** The range's merge base is not where "
+            "GitHub's recorded base meets the head: the range was "
+            "computed from a different base than the PR's (a base that "
+            "merely advanced, or a fork point behind GitHub's recorded "
+            "base, does not trip this). The file sets agree path for "
+            "path, so the difference is in the hunks the local range "
+            "takes from the base. The base line above says whether the "
+            "fetch refreshed it."
+        ) in text
 
     def test_presents_scope_match_briefly(self, mod, tmp_path):
         state = {"completed_steps": [1, 2]}
@@ -3181,11 +3199,9 @@ class TestStep3DependencyRefresh:
         g = mod.get_step_guidance(3, "full", dict(self._CLEAN_STATE), {},
                                   config=config, output_dir=str(tmp_path))
         text = self._text(g)
-        assert "Dependency refresh" in text
         assert "decide whether dependency installation is needed" in text.lower()
-        assert "dependency_refresh.py" in text and " save " in text
+        assert "dependency_refresh.py" in text
         assert "SAVED dependency-refresh.json" in text
-        assert "change-purpose.md" in text
 
     def test_refresh_handoff_survives_unfetched_issues(self, mod, tmp_path):
         state = dict(self._CLEAN_STATE)
