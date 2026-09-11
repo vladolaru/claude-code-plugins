@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Bootstrap now writes each reviewer's briefing to `reviewers/<reviewer>/briefing.md` and prints a short pointer to it, so a reviewer reads one deterministic file instead of a harness-persisted tool result behind a truncated preview, and the briefing it was given is kept with the run.
+- While reviewers run, the orchestrator no longer polls status after every completion notification: the background watchdog signals completion, and a poll happens only on the watchdog's exit or on a reviewer that did not return `STATUS: FINISHED`.
 
 ### Fixed
 
