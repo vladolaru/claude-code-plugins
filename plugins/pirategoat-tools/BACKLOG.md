@@ -242,3 +242,59 @@ The wp-env resolver knows whether an entry came from `core` or from a plugin map
 **Evidence:** the PR #68212 field-run audit (`.claude/docs/analysis/2026-09-08-claude-pr-68212-field-run-audit.md`, F1); simplify pass 2, altitude 7.
 **Deferred because:** a `relation` note rendered only for mounted entries is forty lines across two resolvers, bootstrap and tests, for a line no reviewer has yet acted on.
 **Do when:** a run shows a reviewer reading a mounted sibling as upstream.
+
+### 29. Fifteen triage criteria dispatch on no real signal
+
+`KNOWN_UNBACKED_CRITERIA` in `test_criteria_coverage.py` names 15 triage criteria with no keyword or check that actually backs their dispatch — 9 security, 3 history-insights (which additionally receive `SKIPPED_QUICK_MODE`), 2 toolchain, and 1 reference-integrity — each one dispatching today only because it happens to receive `signal="default"` alongside real keywords for other criteria in the same registry entry. The test-corpus trim (Task 12) turned this from an unverified assumption into a named, test-enforced list rather than fixing it, since giving each criterion a real backing signal changes dispatch behavior.
+
+**Evidence:** `.claude/docs/analysis/2026-09-10-claude-tests-corpus-audit.md` Task 12 fix round; `review/test_criteria_coverage.py::KNOWN_UNBACKED_CRITERIA` and `test_known_unbacked_entries_name_real_probes`.
+**Deferred because:** widening any of the 15 criteria's dispatch conditions is a triage-behavior change, not a test-trim decision, and needs its own review of false-positive/false-negative risk per criterion.
+**Do when:** the next dispatch-planning pass, or when a field run shows one of the 15 criteria's reviewer either never firing when it should or always firing on an unrelated diff.
+
+### 30. The suppression-directive exemption in diff-noise filtering pins the wrong claim
+
+`diff_noise_filter.should_filter()` never recognizes `//`- or `#`-prefixed lines as comments at all, so every such line — suppression directive or not — survives the filter through its default `return False`, not through the directive-exemption logic the tests believe they are pinning. The comment-classification helpers (`is_inline_comment_only()`, `_STRUCTURED_COMMENT_PATTERNS`) run only in `filter_diff()`'s post-hoc statistics, never in the active filtering path. `test_diff_noise_filter.py`'s exemption table therefore proves "comments are never filtered," not "directives survive an active filter" — a pre-existing gap the test-corpus trim's mutation pass surfaced rather than caused.
+
+**Evidence:** `.claude/docs/analysis/2026-09-10-claude-tests-corpus-audit.md` Task 15 report and reviewer confirmation at `agent/diff_noise_filter.py:198-237,276`.
+**Deferred because:** fixing the classification requires deciding whether comment-only lines should ever be actively filtered, which changes noise-filtering behavior beyond a test fix.
+**Do when:** a field run shows a suppression directive filtered out (or a comment wrongly kept) by the active filter, or the next time `diff_noise_filter.py` is touched.
+
+### 31. Several review_run_metrics guards cannot be isolated by any test input
+
+The analysis/metrics layer carries a handful of pre-existing untested guards that Task 16's per-branch trim could not close: the overlay causal check, the legacy event-path check, and two share-guard alternatives. Some of the schema type checks in this module cannot be triggered by any input a test could construct, because an earlier guard in the same function already rejects that input first.
+
+**Evidence:** `.claude/docs/analysis/2026-09-10-claude-tests-corpus-audit.md` Task 16 report (`task-16-report.md`); `analysis/test_review_run_metrics.py`.
+**Deferred because:** the guards are defensive code for conditions the current producers cannot emit; closing the gap needs either a way to construct the shadowed input or a decision that the guard is dead code to delete.
+**Do when:** `review_run_metrics.py`'s producers change in a way that could reach one of these guards, or the next audit of the metrics layer (see item 3).
+
+### 32. `publish_verdict`'s TypeError branch has no test
+
+`verdict_rules.publish_verdict()` raises `ValueError` for an unknown ledger verdict via an `except (KeyError, TypeError)` clause, but only the `KeyError` half (an unrecognized string) is exercised anywhere in the suite — the `TypeError` half (an unhashable input, such as a list or dict passed as the verdict) has never had a test, before or after the test-corpus trim.
+
+**Evidence:** `.claude/docs/analysis/2026-09-10-claude-tests-corpus-audit.md` Task 20 report; `scripts/review/verdict_rules.py::publish_verdict`.
+**Deferred because:** both callers pass a ledger verdict that already passed `validate_findings_document()`, so the branch is defensive rather than reachable in practice; adding the test costs one row whenever someone next touches this function.
+**Do when:** `publish_verdict()` is next edited, or a caller is added that does not validate its input first.
+
+### 33. `_slot_entry`'s confidence/notes parameters have one caller left
+
+`hosts/resolvers/ecosystem_cache.py::_slot_entry` still takes `confidence` and `notes` parameters, but after Task 26 removed `EcosystemCacheResolver`'s ambient `resolve()` body, the one remaining call site always passes `confidence="high"` and an empty `notes`. The parameters are load-bearing for the function's contract today only in the sense that nothing else calls it with a different value.
+
+**Evidence:** `.claude/docs/analysis/2026-09-10-claude-tests-corpus-audit.md` Task 26 report; `scripts/hosts/resolvers/ecosystem_cache.py`.
+**Deferred because:** it is a test-corpus trim, not a production refactor; collapsing the parameters to a fixed `"high"` is a one-line simplification that belongs with its own review, not folded into an unrelated test commit.
+**Do when:** `ecosystem_cache.py` next gains a second caller of `_slot_entry` (which would need the parameter back) or is otherwise edited — collapse the signature if it still has one caller then.
+
+### 34. Several docker-compose variable-expansion branches have no test
+
+`hosts/resolvers/docker_compose.py::_COMPOSE_VAR_RE`'s bare `$VAR` alternative (as opposed to the `${VAR}` form) and `_expand_source`'s six `:-`/`-`/`:+`/`+`/`:?`/`?` operator branches have no test — a pre-existing gap the test-corpus trim did not introduce and, per its branch-coverage rule, could not close without inventing new test scope.
+
+**Evidence:** `.claude/docs/analysis/2026-09-10-claude-tests-corpus-audit.md` Task 26 report; `scripts/hosts/resolvers/docker_compose.py`.
+**Deferred because:** these are real, reachable branches of a resolver relied on for docker-compose host discovery, not dead code — testing them is scope beyond a test-trim task.
+**Do when:** `docker_compose.py`'s variable expansion is next changed, or a resolver bug is traced to one of these operators.
+
+### 35. The iterative-review CLI's timeout handler has no test
+
+`scripts/iterative_review/__main__.py:566-610` (the primary-and-fallback timeout branch of `action_review`, including the autonomous-mode round-cap termination path) has no test that reaches it — the audit found only backend-level tests that mention `TIMEOUT_SENTINEL`, none that drive it through the CLI's own dispatch.
+
+**Evidence:** `.claude/docs/analysis/2026-09-10-claude-tests-corpus-audit.md` "Side findings worth fixing on sight"; ledger Task 27 pre-check (no `test_cli.py` test reaches the timeout path).
+**Deferred because:** the test-corpus trim's mandate was to cut tests without losing pins, not to add new coverage; a real timeout test needs a fake backend that returns `TIMEOUT_SENTINEL` through `action_review`, which is new test infrastructure.
+**Do when:** the next change to `action_review`'s timeout or fallback handling, or the next time a field run shows a timeout producing unexpected CLI output.
