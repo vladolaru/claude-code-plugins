@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import re
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 
 
@@ -15,6 +16,22 @@ def _load_exact_path_module(name: str, path: Path, unavailable: str):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@lru_cache(maxsize=None)
+def _transcript_contract():
+    """The adjacent transcript parser, loaded by exact path exactly once.
+
+    Lazy, unlike the contracts below: the parser is optional evidence, so
+    an unavailable one disables transcript metrics rather than the tool.
+    `measure.py` takes its enrichment entry point from here and `cohort.py`
+    the expected-exit categories, so both read one module object.
+    """
+    return _load_exact_path_module(
+        "review_transcript",
+        Path(__file__).resolve().parents[1] / "review_transcript.py",
+        "review transcript parser unavailable",
+    )
 
 
 _REVIEW_DIR = Path(__file__).resolve().parents[2] / "review"

@@ -46,6 +46,27 @@ _FAILURE_SIGNATURES = (
     ("<tool_use_error>", "tool_use_error"),
     ("api error", "api_error"),
 )
+# Categories a call is LISTED under but never counted a fault: an
+# instrument of the pipeline's own reporting its contractual non-zero
+# exit. This module owns the list; `review_metrics/cohort.py` reads it to
+# keep those entries out of its failure totals, so a reader still sees
+# them by category without mistaking them for breakage.
+EXPECTED_EXIT_CATEGORIES = frozenset({"poll_outcome"})
+# `agents_status.py` exits 2 for "some agents still running or not
+# dispatched" and 3 for "--wait expired" by contract (its docstring, which
+# the step-7 briefing and the Codex adapter read); 0 is ALL_DONE and 1 is
+# a real error. The harness marks EVERY non-zero Bash exit `is_error`, so
+# before this every poll in a waiting window was recorded as a tool
+# failure — 23 of the 31 failures the two 2026-09-10 field runs recorded.
+_POLL_PROGRAM = "agents_status.py"
+_POLL_OUTCOME_EXIT_CODES = frozenset({2, 3})
+_PYTHON_PROGRAMS = frozenset({"python", "python3"})
+# The harness frames a failed Bash result as `Exit code <n>` on the FIRST
+# line, ahead of the command's own output, and gives it a plain-string
+# `toolUseResult`; no recorded transcript carries a structured exit code
+# for Bash. Reading line one is reading the harness's framing, never the
+# command's stdout — and only for a result the harness already flagged.
+_HARNESS_EXIT_LINE = re.compile(r"Exit code (\d{1,3})")
 _SAFE_TOOL_NAMES = {
     "Agent",
     "Task",
@@ -539,6 +560,25 @@ def _structured_failure(structured: object) -> bool:
         return True
     error = structured.get("error")
     return error not in (None, "", False, [], {})
+
+
+def _exit_code(result: dict[str, Any]) -> int | None:
+    """The exit code a failed call reports, or None.
+
+    Two recorded shapes: a structured payload carrying the code, and the
+    harness's own `Exit code <n>` first line on a result it flagged
+    `is_error`. Never the command's output.
+    """
+    structured = result.get("structured")
+    if isinstance(structured, dict):
+        for key in ("exitCode", "exit_code", "returncode"):
+            value = structured.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                return value
+    if result.get("block", {}).get("is_error") is not True:
+        return None
+    match = _HARNESS_EXIT_LINE.fullmatch(_result_text(result).split("\n", 1)[0])
+    return int(match.group(1)) if match else None
 
 
 def _structured_success(structured: object) -> bool:
@@ -1805,6 +1845,50 @@ def _may_end_shell_successfully(simple: list[str]) -> bool:
     return False
 
 
+def _sole_simple_command(command: object) -> list[str] | None:
+    """The tokens of the one simple command a Bash call runs, or None.
+
+    Only such a command has an exit status that is unambiguously its own
+    program's. In anything longer the status may come from a later list, a
+    failed `&&` member, or — in the harness's zsh — an expansion error that
+    aborted the whole line, all of which were observed in the field runs.
+    A redirection is dropped (it cannot change the status); a pipe ends the
+    recognition, since a pipeline reports its LAST stage's status.
+    """
+    if not isinstance(command, str):
+        return None
+    lists = _and_or_lists(command)
+    if len(lists) != 1:
+        return None
+    commands, operators, backgrounded = lists[0]
+    if backgrounded or operators or len(commands) != 1:
+        return None
+    tokens, _, piped = _pipeline_reader(commands[0])
+    return None if piped or not tokens else tokens
+
+
+def _is_poll_outcome(command: object, result: dict[str, Any]) -> bool:
+    """Whether a failed Bash call is one of `agents_status.py`'s
+    contractual non-zero outcomes rather than a fault.
+
+    Recognition is the named program plus the exit codes its docstring
+    defines, the way `parse_builder_envelope` recognizes the builder by its
+    envelope — never a substring of what the command printed.
+    """
+    if _exit_code(result) not in _POLL_OUTCOME_EXIT_CODES:
+        return False
+    tokens = _sole_simple_command(command)
+    if tokens is None:
+        return False
+    if os.path.basename(tokens[0]) == _POLL_PROGRAM:
+        return True
+    return (
+        os.path.basename(tokens[0]) in _PYTHON_PROGRAMS
+        and len(tokens) > 1
+        and os.path.basename(tokens[1]) == _POLL_PROGRAM
+    )
+
+
 def _bash_read_paths(command: object, repo_root: Path) -> list[str]:
     """Every repository-relative or absolute path a Bash command reads.
 
@@ -1961,6 +2045,15 @@ def _analyze_entries(
         state, category, detector = _result_state(
             result, call["name"], operation
         )
+        if (
+            state == "failure"
+            and call["name"] == "Bash"
+            and _is_poll_outcome(call["input"].get("command"), result)
+        ):
+            # A poll saying "still running" is the instrument working, not
+            # the call failing. It stays in the list under its own category
+            # and out of the counted totals.
+            category = "poll_outcome"
         if state == "unknown" and call["name"] not in _DISPATCH_TOOL_NAMES:
             # The call resolves to neither success nor failure — the
             # transcript ends mid-call (no tool_result), or an evidence
@@ -1991,9 +2084,18 @@ def _analyze_entries(
         name_op = (name, operation)
         # At each item, these sets contain strictly later successes.
         if item["state"] == "failure":
-            recovered = key in success_keys or (
-                operation == "builder_output_attempt"
-                and name_op in success_name_ops
+            # An expected instrument exit has nothing to recover from: the
+            # ALL_DONE poll that ends a waiting window is the same
+            # instrument reporting a later state, not a retry that worked.
+            # It never enters `success_keys` either, so it cannot mark a
+            # genuine failure of the same command recovered.
+            expected_exit = item["category"] in EXPECTED_EXIT_CATEGORIES
+            recovered = not expected_exit and (
+                key in success_keys
+                or (
+                    operation == "builder_output_attempt"
+                    and name_op in success_name_ops
+                )
             )
             failures.append(
                 {
@@ -2003,7 +2105,11 @@ def _analyze_entries(
                     "operation_class": operation,
                     "normalized_target": target,
                     "recovered": recovered,
-                    "recovery": "later_success" if recovered else "none",
+                    "recovery": (
+                        "not_applicable"
+                        if expected_exit
+                        else "later_success" if recovered else "none"
+                    ),
                 }
             )
         elif item["state"] == "success":

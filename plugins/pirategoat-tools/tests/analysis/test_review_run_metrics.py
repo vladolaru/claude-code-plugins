@@ -7207,6 +7207,12 @@ class TestAggregateCohort:
         assert cohort["artifact_writes"]["availability"]["missing"] == 1
 
     def test_tool_failures_and_nonexhaustive_reads_use_only_complete_totals(self):
+        poll = {
+            "category": "poll_outcome",
+            "recovered": False,
+            "recovery": "not_applicable",
+            "actor": "orchestrator",
+        }
         run = _measured_run(
             "complete",
             failures=[
@@ -7214,7 +7220,9 @@ class TestAggregateCohort:
                     "category": "write_requires_read",
                     "recovered": True,
                     "actor": "code-reviewer",
-                }
+                },
+                poll,
+                poll,
             ],
             reads={
                 "all": ["src/a.py", "src/context.py"],
@@ -7228,8 +7236,14 @@ class TestAggregateCohort:
 
         cohort = aggregate_cohort([run])
 
+        # Expected instrument exits stay visible by category, but a poll
+        # that reported "still running" is not a fault to count.
         assert cohort["tool_failures"]["total"] == 1
         assert cohort["tool_failures"]["recovered"] == 1
+        assert cohort["tool_failures"]["by_category"] == {
+            "poll_outcome": 2,
+            "write_requires_read": 1,
+        }
         assert cohort["observed_reads"]["out_of_scope_count"] == 1
         assert cohort["observed_reads"]["by_path"] == {"src/context.py": 1}
         assert cohort["observed_reads"]["non_scope_comparable_count"] == 1

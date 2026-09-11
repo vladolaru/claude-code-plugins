@@ -16,6 +16,7 @@ from .contracts import (
     _CRITIC_VERDICTS,
     _REVIEWABLE_FILES_FIELD,
     _SCOPE_CHECK_STATUSES,
+    _transcript_contract,
 )
 from .sanitize import _exact_statistic, _nonnegative_int, _safe_wall_time_ms
 from .usage import _add_usage, _dispatched_model, _empty_usage
@@ -533,24 +534,41 @@ def _aggregate_tool_failures(
     failure_total = 0
     failure_recovered = 0
     partial_failure_total = 0
+    # The transcript parser owns the list of categories that are evidence
+    # rather than faults (a status poll reporting "still running"). Asked
+    # for only once a run actually carries failures, which proves the
+    # parser loaded: an unavailable one leaves every list None.
+    expected_exits: frozenset[str] | None = None
     for run in runs:
         state = run.get("metric_availability", {}).get("tool_failures")
         transcript = run.get("transcript")
         failures = transcript.get("tool_failures") if isinstance(transcript, dict) else None
         if not isinstance(failures, list):
             continue
+        if expected_exits is None:
+            expected_exits = _transcript_contract().EXPECTED_EXIT_CATEGORIES
+        counted = [
+            failure
+            for failure in failures
+            if not (
+                isinstance(failure, dict)
+                and failure.get("category") in expected_exits
+            )
+        ]
         if state == "complete":
-            failure_total += len(failures)
+            failure_total += len(counted)
             for failure in failures:
                 if not isinstance(failure, dict):
                     continue
                 category = failure.get("category")
                 if isinstance(category, str):
+                    # Every category stays visible, counted or not.
                     failure_counts[category] += 1
-                if failure.get("recovered") is True:
+            for failure in counted:
+                if isinstance(failure, dict) and failure.get("recovered") is True:
                     failure_recovered += 1
         elif state == "partial":
-            partial_failure_total += len(failures)
+            partial_failure_total += len(counted)
     return {
         "total": failure_total if availability["tool_failures"]["complete"] else None,
         "recovered": failure_recovered if availability["tool_failures"]["complete"] else None,

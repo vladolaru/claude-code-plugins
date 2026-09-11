@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Reviewer briefings listed their files with an empty diff whenever the reviewer's shell sat in a subdirectory of the repository, which has been every review since Claude Code 2.1.267 made subagents inherit the orchestrator's working directory; scope now runs every git command from the repository toplevel.
 - The dependency-refresh save now prints the file's run-relative path (`SAVED pipeline/dependency-refresh.json`), and the step-3 briefing asks only for that line, so the orchestrator no longer looks for the file at the run root.
+- Run metrics no longer count reviewer-status polls as tool failures: `agents_status.py`'s contractual exits (2 while agents run, 3 when a `--wait` window expires) are listed under a `poll_outcome` category and excluded from failure totals, which drops the two 2026-09-10 field runs from 31 recorded failures to 8 real ones.
 
 ## [1.119.4] - 2026-09-11
 

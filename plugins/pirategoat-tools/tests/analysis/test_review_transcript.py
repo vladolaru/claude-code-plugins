@@ -104,6 +104,24 @@ def _result(
     return entry
 
 
+_POLL_COMMAND = 'python3 /plugin/scripts/review/agents_status.py --output-dir "/output"'
+
+
+def _bash_exit(tool_id: str, command: str, code: int) -> list[dict]:
+    """A non-zero Bash exit as the harness records it: `is_error`, the code
+    on the content's first line, and a plain-string `toolUseResult` with no
+    structured exit code."""
+    return [
+        _assistant(_call(tool_id, "Bash", command=command)),
+        _result(
+            tool_id,
+            f"Exit code {code}\noutput",
+            is_error=True,
+            structured=f"Error: Exit code {code}\noutput",
+        ),
+    ]
+
+
 def _usage(input_tokens: int, output_tokens: int, create: int = 0, read: int = 0) -> dict:
     return {
         "input_tokens": input_tokens,
@@ -1442,6 +1460,112 @@ class TestAnalyzeSubagent:
         assert failure["category"] == "structured_failure"
         assert failure["operation_class"] == "builder_output_attempt"
         assert failure["recovered"] is True
+
+    @pytest.mark.parametrize(
+        "command,exit_code,category,recovery",
+        [
+            pytest.param(
+                _POLL_COMMAND, 2, "poll_outcome", "not_applicable",
+                id="poll-still-running",
+            ),
+            pytest.param(
+                f"{_POLL_COMMAND} --wait --max-seconds 60", 3,
+                "poll_outcome", "not_applicable", id="poll-wait-expired",
+            ),
+            pytest.param(
+                f"{_POLL_COMMAND} 2>&1", 2, "poll_outcome", "not_applicable",
+                id="poll-redirected",
+            ),
+            pytest.param(
+                _POLL_COMMAND, 1, "structured_failure", "none", id="poll-error",
+            ),
+            pytest.param(
+                "grep -n ALL_DONE /plugin/scripts/review/agents_status.py", 2,
+                "structured_failure", "none", id="script-as-operand",
+            ),
+            pytest.param(
+                "ls /output/missing.json", 1, "structured_failure", "none",
+                id="other-command",
+            ),
+        ],
+    )
+    def test_poll_exit_is_listed_as_poll_outcome_by_program_and_code(
+        self, tmp_path, command, exit_code, category, recovery
+    ):
+        """`agents_status.py` exits 2 (still running) and 3 (`--wait`
+        expired) by contract; the harness flags both as errors. Only that
+        program with those codes is a poll outcome."""
+        transcript = _write_jsonl(
+            tmp_path / "exit.jsonl", _bash_exit("call", command, exit_code)
+        )
+
+        [failure] = analyze_subagent(transcript, tmp_path, [])["tool_failures"]
+
+        assert (failure["category"], failure["recovered"], failure["recovery"]) == (
+            category, False, recovery,
+        )
+
+    def test_poll_series_ending_in_all_done_is_not_a_recovery(self, tmp_path):
+        transcript = _write_jsonl(
+            tmp_path / "poll-series.jsonl",
+            [
+                *_bash_exit("poll-1", _POLL_COMMAND, 2),
+                *_bash_exit("poll-2", _POLL_COMMAND, 2),
+                _assistant(_call("poll-3", "Bash", command=_POLL_COMMAND)),
+                _result(
+                    "poll-3",
+                    "ALL_DONE: true",
+                    is_error=False,
+                    structured={"stdout": "ALL_DONE: true", "stderr": ""},
+                ),
+            ],
+        )
+
+        failures = analyze_subagent(transcript, tmp_path, [])["tool_failures"]
+
+        assert [
+            (f["category"], f["recovered"], f["recovery"]) for f in failures
+        ] == [("poll_outcome", False, "not_applicable")] * 2
+
+    def test_poll_outcome_does_not_recover_an_earlier_poll_error(self, tmp_path):
+        transcript = _write_jsonl(
+            tmp_path / "poll-after-error.jsonl",
+            [
+                *_bash_exit("error", _POLL_COMMAND, 1),
+                *_bash_exit("poll", _POLL_COMMAND, 2),
+            ],
+        )
+
+        failures = analyze_subagent(transcript, tmp_path, [])["tool_failures"]
+
+        assert [(f["category"], f["recovered"]) for f in failures] == [
+            ("structured_failure", False),
+            ("poll_outcome", False),
+        ]
+
+    def test_search_miss_the_harness_interprets_is_not_a_failure(self, tmp_path):
+        """The harness records a grep/rg miss as a success carrying
+        `returnCodeInterpretation`, never as `is_error`, so a search that
+        found nothing needs no category of its own."""
+        transcript = _write_jsonl(
+            tmp_path / "grep-miss.jsonl",
+            [
+                _assistant(_call("grep", "Bash", command="grep -n absent src/a.py")),
+                _result(
+                    "grep",
+                    "",
+                    is_error=False,
+                    structured={
+                        "stdout": "",
+                        "stderr": "",
+                        "interrupted": False,
+                        "returnCodeInterpretation": "No matches found",
+                    },
+                ),
+            ],
+        )
+
+        assert analyze_subagent(transcript, tmp_path, [])["tool_failures"] == []
 
     def test_bash_failure_cannot_recover_through_write_success(self, tmp_path):
         command = _builder_envelope("print('attempt')")

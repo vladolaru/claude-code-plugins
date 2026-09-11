@@ -17,8 +17,8 @@ from .contracts import (
     _SYNTHESIS_RECONCILIATOR,
     _TRANSCRIPT_FAMILIES,
     _OBSERVED_READS_SCHEMA,
-    _load_exact_path_module,
     _parse_time,
+    _transcript_contract,
 )
 from .sanitize import (
     _exact_statistic,
@@ -42,22 +42,16 @@ _SYNTHESIS_AGENT_NAMES = frozenset({
 })
 
 
-@lru_cache(maxsize=None)
 def _load_transcript_module():
     # Always load the adjacent parser by exact path, like the telemetry and
     # dispatch-status contracts. An ambient `import review_transcript`
     # would pick up whatever another checkout or version already put on
     # sys.path/sys.modules in a long-lived process — an incompatible module
     # disables transcript metrics; a compatible stale one silently measures
-    # with different semantics. Cached so a cohort sweep pays the exact-path
-    # module execution once, not once per run.
-    path = Path(__file__).resolve().parents[1] / "review_transcript.py"
-    module = _load_exact_path_module(
-        "review_transcript",
-        path,
-        "review transcript parser unavailable",
-    )
-    return module.enrich_run_transcript
+    # with different semantics. `contracts._transcript_contract` caches the
+    # module, so a cohort sweep pays the exact-path execution once, not
+    # once per run, and cohort.py reads the same object.
+    return _transcript_contract().enrich_run_transcript
 
 
 @lru_cache(maxsize=None)
