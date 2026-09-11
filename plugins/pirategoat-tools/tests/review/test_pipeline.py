@@ -1408,6 +1408,29 @@ class TestStep7SaveReviewBaseline:
         # Must not carry the Codex-host cadence
         assert "once a minute" not in text.lower()
 
+    def test_an_agent_that_never_started_is_handled_before_step_8(
+        self, mod, tmp_path
+    ):
+        """`check_status` computes `all_done` as `running == 0`, so a
+        reviewer with no started marker never blocks ALL_DONE, and step 8
+        closes review intake on the exit-0 transition — after which that
+        reviewer can no longer submit. So the watchdog-exit bullet has to
+        dispatch NOT_DISPATCHED agents before it takes exit 0, not under
+        exit 2, which those agents can never produce."""
+        state = {"completed_steps": [], "resolved_params": {"git_range": "abc..HEAD"}}
+        ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main"}}
+        g = mod.get_step_guidance(7, "full", state, ctx, output_dir=str(tmp_path))
+
+        poll_line = next(
+            line for line in "\n".join(g["actions"]).splitlines()
+            if line.startswith("- The watchdog exited")
+        )
+
+        assert "NOT_DISPATCHED" in poll_line
+        assert poll_line.index("NOT_DISPATCHED") < poll_line.index(
+            "proceed to step 8"
+        )
+
     def test_codex_host_wait_uses_per_minute_polling(self, mod, tmp_path):
         """Codex-host wait guidance: foreground --wait --max-seconds 60 cadence,
         not the Claude notification/end-turn mechanism."""

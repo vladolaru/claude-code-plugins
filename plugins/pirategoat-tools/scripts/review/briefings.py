@@ -1333,10 +1333,16 @@ def _step_7_save_baseline(mode, state, context, config, output_dir):
             "2. END YOUR TURN.",
             "",
             "On wake-up, act on what woke you:",
+            # NOT_DISPATCHED is read BEFORE the exit code, not under exit 2:
+            # `all_done` is `running == 0`, so an agent that never wrote a
+            # started marker does not block ALL_DONE, and step 8 closes
+            # intake on exit 0 — the reviewer could never submit.
             "- The watchdog exited: run "
             f"`python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\"` "
-            "once. Exit 0: proceed to step 8. Exit 2: dispatch any "
-            "NOT_DISPATCHED agents, launch a fresh watchdog, end your turn.",
+            "once. Any NOT_DISPATCHED agents: dispatch them, launch a fresh "
+            "watchdog, end your turn — ALL_DONE does not wait for an agent "
+            "that never started. Otherwise exit 0: proceed to step 8; "
+            "exit 2: launch a fresh watchdog, end your turn.",
             "- A subagent notification whose result begins `STATUS: "
             "FINISHED`: no action. End your turn; the watchdog fires when "
             "all are done.",
