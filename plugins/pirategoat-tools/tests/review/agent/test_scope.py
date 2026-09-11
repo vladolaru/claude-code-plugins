@@ -542,6 +542,60 @@ class TestMergeBaseGatingIntegration:
         assert "BRANCH_FRESHNESS: STALE" not in text
 
 
+class TestGitRunsFromTheRepositoryToplevel:
+    """Regression: every reviewer briefing since 2026-09-10 had an empty diff.
+
+    `git diff --name-only` reports root-relative paths from any cwd, but the
+    per-file `git diff <range> -- <path>` resolves its pathspec against the
+    cwd. From a subdirectory it matched nothing and exited 0, so the scope
+    listed the file with a blank body and TOTAL_DIFF_LINES: 0. Reviewer
+    subagents inherit the orchestrator's shell cwd since Claude Code
+    2.1.267, and the orchestrator is routinely in a subdirectory.
+    """
+
+    CHANGED = "client/checkout/button.js"
+
+    @pytest.fixture(scope="class")
+    def repo(self, tmp_path_factory):
+        repo = tmp_path_factory.mktemp("toplevel-repo")
+
+        def _git(*args):
+            subprocess.run(["git", *args], cwd=repo, check=True,
+                           capture_output=True)
+
+        _git("init", "-b", "main")
+        _git("config", "user.email", "t@t.com")
+        _git("config", "user.name", "T")
+        _git("config", "commit.gpgsign", "false")
+        changed = repo / self.CHANGED
+        changed.parent.mkdir(parents=True)
+        changed.write_text("export const label = 'Pay';\n")
+        _git("add", ".")
+        _git("commit", "-m", "initial")
+        _git("checkout", "-b", "feature")
+        changed.write_text("export const label = 'Pay now';\n")
+        _git("commit", "-am", "feature")
+        return repo
+
+    @pytest.mark.parametrize("cwd", ["", "client/checkout"],
+                             ids=["toplevel", "subdirectory"])
+    def test_diff_bodies_reach_the_scope_from_any_cwd(self, repo, cwd, tmp_path):
+        args = argparse.Namespace(
+            domain="code", range="main..HEAD", max_lines=2000,
+            base_ref_only=False, summary=False, output_dir=str(tmp_path),
+            no_merge_base=False, no_semantic_filter=False, include_path=None,
+        )
+        saved_cwd = os.getcwd()
+        try:
+            os.chdir(repo / cwd)
+            scope = review_scope.build_scope(args)
+        finally:
+            os.chdir(saved_cwd)
+
+        assert scope["total_diff_lines"] == 2
+        assert "+export const label = 'Pay now';" in scope["diffs"][self.CHANGED]
+
+
 # =============================================================================
 # Semantic filtering tests — apply_semantic_filter() integration
 # =============================================================================
@@ -588,7 +642,7 @@ class TestInScopeFilesAcrossModes:
     """
 
     @staticmethod
-    def _mock_git(cmd, check=True, capture_stderr=True):
+    def _mock_git(cmd, check=True, cwd=None):
         cmd_str = " ".join(cmd)
         if "rev-parse --git-dir" in cmd_str:
             return ".git"
@@ -619,7 +673,7 @@ class TestInScopeFilesAcrossModes:
     ):
         with patch.object(review_scope, "run_cmd") as mock_run, \
              patch.object(review_scope, "freshen_base_ref",
-                          side_effect=lambda x: x):
+                          side_effect=lambda ref, repo_root: ref):
             mock_run.side_effect = self._mock_git
             args = argparse.Namespace(
                 domain="code", range="abc123..HEAD", max_lines=2000,
@@ -637,7 +691,7 @@ class TestInScopeFilesAcrossModes:
         """The exact field failure: three empty lists, a full workload."""
         with patch.object(review_scope, "run_cmd") as mock_run, \
              patch.object(review_scope, "freshen_base_ref",
-                          side_effect=lambda x: x):
+                          side_effect=lambda ref, repo_root: ref):
             mock_run.side_effect = self._mock_git
             args = argparse.Namespace(
                 domain="code", range="abc123..HEAD", max_lines=2000,
@@ -659,7 +713,7 @@ class TestSemanticFilterIntegration:
         """build_scope applies semantic filter to diffs by default — the
         docblock noise the diff carries is stripped from scope['diffs']."""
         with patch.object(review_scope, 'run_cmd') as mock_run, \
-             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
+             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda ref, repo_root: ref):
             mock_run.side_effect = self._mock_git_commands
             args = argparse.Namespace(
                 domain="code", range="abc123..HEAD", max_lines=2000,
@@ -674,7 +728,7 @@ class TestSemanticFilterIntegration:
     def test_build_scope_skips_filter_when_disabled(self, tmp_path):
         """--no-semantic-filter keeps the docblock noise in scope['diffs']."""
         with patch.object(review_scope, 'run_cmd') as mock_run, \
-             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
+             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda ref, repo_root: ref):
             mock_run.side_effect = self._mock_git_commands
             args = argparse.Namespace(
                 domain="code", range="abc123..HEAD", max_lines=2000,
@@ -691,7 +745,7 @@ class TestSemanticFilterIntegration:
         they strip the content itself. Doc-language files must reach the
         reviewer unfiltered."""
         with patch.object(review_scope, 'run_cmd') as mock_run, \
-             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
+             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda ref, repo_root: ref):
             mock_run.side_effect = self._mock_git_prose_commands
             args = argparse.Namespace(
                 domain="docs-drift", range="abc123..HEAD", max_lines=2000,
@@ -709,7 +763,7 @@ class TestSemanticFilterIntegration:
         language recognition did NOT match them (extensionless docs/README,
         unknown formats) — the filter's comment heuristics have no basis
         and must not run on them."""
-        def _mock(cmd, check=True, capture_stderr=True):
+        def _mock(cmd, check=True, cwd=None):
             cmd_str = " ".join(cmd)
             if "rev-parse --git-dir" in cmd_str:
                 return ".git"
@@ -733,7 +787,7 @@ class TestSemanticFilterIntegration:
             return ""
 
         with patch.object(review_scope, 'run_cmd') as mock_run, \
-             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
+             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda ref, repo_root: ref):
             mock_run.side_effect = _mock
             args = argparse.Namespace(
                 domain="code", range="abc123..HEAD", max_lines=2000,
@@ -747,7 +801,7 @@ class TestSemanticFilterIntegration:
         assert "-* old bullet content" in diff
 
     @staticmethod
-    def _mock_git_prose_commands(cmd, check=True, capture_stderr=True):
+    def _mock_git_prose_commands(cmd, check=True, cwd=None):
         """Mock git commands for a Markdown-only change."""
         cmd_str = " ".join(cmd)
         if "rev-parse --git-dir" in cmd_str:
@@ -774,7 +828,7 @@ class TestSemanticFilterIntegration:
         return ""
 
     @staticmethod
-    def _mock_git_commands(cmd, check=True, capture_stderr=True):
+    def _mock_git_commands(cmd, check=True, cwd=None):
         """Mock git commands for build_scope testing."""
         cmd_str = " ".join(cmd)
         if "rev-parse --git-dir" in cmd_str:
@@ -802,7 +856,7 @@ class TestSemanticFilterIntegration:
 # =============================================================================
 
 
-def _mock_git_for_budget_test(cmd, check=True, capture_stderr=True):
+def _mock_git_for_budget_test(cmd, check=True, cwd=None):
     """Mock git commands for budget sort order testing."""
     cmd_str = " ".join(cmd)
     if "rev-parse --git-dir" in cmd_str:
@@ -843,7 +897,7 @@ _RAW_EXACT_FIT_BUDGET_FILE_LINES = {
 
 def _make_mock_git_for_oversized_budget_test(file_lines):
     """Mock an oversized leading diff plus later ordinary-budget candidates."""
-    def _mock(cmd, check=True, capture_stderr=True):
+    def _mock(cmd, check=True, cwd=None):
         cmd_str = " ".join(cmd)
         if "rev-parse --git-dir" in cmd_str:
             return ".git"
@@ -886,7 +940,7 @@ class TestBudgetSortOrder:
         #   medium(300) fits → 400 used
         #   large(500) exceeds → skipped  ← large file lost!
         with patch.object(review_scope, 'run_cmd') as mock_run, \
-             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
+             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda ref, repo_root: ref):
             mock_run.side_effect = _mock_git_for_budget_test
             args = argparse.Namespace(
                 domain="code", range="abc123..HEAD", max_lines=600,
@@ -905,7 +959,7 @@ class TestBudgetSortOrder:
         """One protected oversized diff must not consume the ordinary budget pool."""
         max_lines = 600
         with patch.object(review_scope, "run_cmd") as mock_run, \
-             patch.object(review_scope, "freshen_base_ref", side_effect=lambda x: x):
+             patch.object(review_scope, "freshen_base_ref", side_effect=lambda ref, repo_root: ref):
             mock_run.side_effect = _make_mock_git_for_oversized_budget_test(
                 _OVERSIZED_BUDGET_FILE_LINES
             )
@@ -942,7 +996,7 @@ class TestBudgetSortOrder:
         """A raw estimate equal to remaining capacity fits the ordinary pool."""
         max_lines = 600
         with patch.object(review_scope, "run_cmd") as mock_run, \
-             patch.object(review_scope, "freshen_base_ref", side_effect=lambda x: x):
+             patch.object(review_scope, "freshen_base_ref", side_effect=lambda ref, repo_root: ref):
             mock_run.side_effect = _make_mock_git_for_oversized_budget_test(
                 _RAW_EXACT_FIT_BUDGET_FILE_LINES
             )
@@ -973,7 +1027,7 @@ class TestProductionFirstBudget:
 
     def _build(self, domain, max_lines, tmp_path):
         with patch.object(review_scope, "run_cmd") as mock_run, \
-             patch.object(review_scope, "freshen_base_ref", side_effect=lambda x: x):
+             patch.object(review_scope, "freshen_base_ref", side_effect=lambda ref, repo_root: ref):
             mock_run.side_effect = _make_mock_git_for_oversized_budget_test(
                 _PRODUCTION_FIRST_FILE_LINES
             )
@@ -1169,7 +1223,7 @@ def _make_mock_git_for_priority(files, sizes):
     loop's per-file fetch) returns that file's body from
     _PRIORITY_FILE_DIFFS. Tests asserting call counts or ordering rely
     on this multi-vs-single discrimination."""
-    def _mock(cmd, check=True, capture_stderr=True):
+    def _mock(cmd, check=True, cwd=None):
         cmd_str = " ".join(cmd)
         if "rev-parse --git-dir" in cmd_str:
             return ".git"
@@ -1206,7 +1260,7 @@ class TestMarkupEvidenceBudgetPriority:
 
     def _build(self, tmp_path, domain, files, sizes, max_lines=2000):
         with patch.object(review_scope, 'run_cmd') as mock_run, \
-             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
+             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda ref, repo_root: ref):
             mock_run.side_effect = _make_mock_git_for_priority(files, sizes)
             args = argparse.Namespace(
                 domain=domain, range="abc123..HEAD", max_lines=max_lines,
@@ -1410,7 +1464,7 @@ class TestEvidenceScanPathHandling:
             "+<button>OK</button>"
         )
         with patch.object(review_scope, "run_cmd", return_value=patch_text):
-            evidence = review_scope.classify_markup_evidence("abc..HEAD", [raw])
+            evidence = review_scope.classify_markup_evidence("abc..HEAD", [raw], "/repo")
         assert evidence == {raw}
 
     def test_unparseable_header_degrades_to_non_evidence(self):
@@ -1418,7 +1472,7 @@ class TestEvidenceScanPathHandling:
         the file just lands in the non-evidence tier."""
         patch_text = "diff --git gibberish header\n+<button>OK</button>"
         with patch.object(review_scope, "run_cmd", return_value=patch_text):
-            evidence = review_scope.classify_markup_evidence("abc..HEAD", ["a.php"])
+            evidence = review_scope.classify_markup_evidence("abc..HEAD", ["a.php"], "/repo")
         assert evidence == set()
 
     def test_space_containing_path_attributes_correctly(self):
@@ -1434,7 +1488,7 @@ class TestEvidenceScanPathHandling:
             "+<button>OK</button>"
         )
         with patch.object(review_scope, "run_cmd", return_value=patch_text):
-            evidence = review_scope.classify_markup_evidence("abc..HEAD", [raw])
+            evidence = review_scope.classify_markup_evidence("abc..HEAD", [raw], "/repo")
         assert evidence == {raw}
 
     def test_deleted_file_attributes_via_old_side_marker(self):
@@ -1450,7 +1504,7 @@ class TestEvidenceScanPathHandling:
         )
         with patch.object(review_scope, "run_cmd", return_value=patch_text):
             evidence = review_scope.classify_markup_evidence(
-                "abc..HEAD", ["templates/form.php"]
+                "abc..HEAD", ["templates/form.php"], "/repo"
             )
         assert evidence == {"templates/form.php"}
 
@@ -1468,7 +1522,7 @@ class TestEvidenceScanPathHandling:
         )
         with patch.object(review_scope, "run_cmd", return_value=patch_text):
             evidence = review_scope.classify_markup_evidence(
-                "abc..HEAD", ["templates/list.php"]
+                "abc..HEAD", ["templates/list.php"], "/repo"
             )
         assert evidence == {"templates/list.php"}
 
@@ -1498,7 +1552,7 @@ _PRESKIP_FILES = {
 }
 
 
-def _mock_git_for_preskip(cmd, check=True, capture_stderr=True):
+def _mock_git_for_preskip(cmd, check=True, cwd=None):
     cmd_str = " ".join(cmd)
     if "rev-parse --git-dir" in cmd_str:
         return ".git"
@@ -1528,7 +1582,7 @@ class TestRawSizePreSkip:
 
     def _build(self, tmp_path, no_semantic_filter):
         with patch.object(review_scope, 'run_cmd') as mock_run, \
-             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
+             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda ref, repo_root: ref):
             mock_run.side_effect = _mock_git_for_preskip
             args = argparse.Namespace(
                 domain="code", range="abc123..HEAD", max_lines=2000,
@@ -1557,7 +1611,7 @@ class TestRawSizePreSkip:
 # =============================================================================
 
 
-def _mock_git_for_list_only_test(cmd, check=True, capture_stderr=True):
+def _mock_git_for_list_only_test(cmd, check=True, cwd=None):
     """Mock git commands for list-only (lock file rescue) testing.
 
     Simulates a diff with both config files and lock files.
@@ -1597,7 +1651,7 @@ class TestListOnly:
         their config-file siblings in the same domain still get full
         diffs."""
         with patch.object(review_scope, 'run_cmd') as mock_run, \
-             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
+             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda ref, repo_root: ref):
             mock_run.side_effect = _mock_git_for_list_only_test
             args = argparse.Namespace(
                 domain="toolchain", range="abc123..HEAD", max_lines=2000,
@@ -1636,7 +1690,7 @@ class TestListOnly:
     def test_non_toolchain_domain_still_filters_lock_files_as_noise(self, tmp_path):
         """Lock files should remain noise for domains without list_only."""
         with patch.object(review_scope, 'run_cmd') as mock_run, \
-             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
+             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda ref, repo_root: ref):
             mock_run.side_effect = _mock_git_for_list_only_test
             args = argparse.Namespace(
                 domain="code", range="abc123..HEAD", max_lines=2000,
@@ -1651,7 +1705,7 @@ class TestListOnly:
     def test_lock_files_dont_eat_diff_budget(self, tmp_path):
         """List-only files should not consume any of the diff line budget."""
         with patch.object(review_scope, 'run_cmd') as mock_run, \
-             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
+             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda ref, repo_root: ref):
             mock_run.side_effect = _mock_git_for_list_only_test
             args = argparse.Namespace(
                 domain="toolchain", range="abc123..HEAD", max_lines=50,
@@ -1693,7 +1747,7 @@ def _mock_git_include_path(files_and_diffs):
     `files_and_diffs` maps changed path -> (added_lines, diff_body), the
     same shape build_scope reads via --name-only/--numstat/per-file diff.
     """
-    def _mock(cmd, check=True, capture_stderr=True):
+    def _mock(cmd, check=True, cwd=None):
         cmd_str = " ".join(cmd)
         if "rev-parse --git-dir" in cmd_str:
             return ".git"
@@ -1734,7 +1788,7 @@ class TestIncludePathRescue:
 
     def _scope(self, tmp_path, files_and_diffs, include_path):
         with patch.object(review_scope, "run_cmd") as mock_run, \
-             patch.object(review_scope, "freshen_base_ref", side_effect=lambda x: x):
+             patch.object(review_scope, "freshen_base_ref", side_effect=lambda ref, repo_root: ref):
             mock_run.side_effect = _mock_git_include_path(files_and_diffs)
             args = argparse.Namespace(
                 domain="code", range="abc123..HEAD", format="json",
@@ -1928,10 +1982,13 @@ class TestA11yUiEvidenceSniff:
         self._make_repo(tmp_path, {"server/orders.ts": self._BACKEND_TS})
         assert self._scope_files(tmp_path, "a11y") == ["server/orders.ts"]
 
-    def test_removal_only_evidence_keeps_the_file(self, tmp_path):
+    @pytest.mark.parametrize("cwd", ["", "src"], ids=["toplevel", "subdirectory"])
+    def test_removal_only_evidence_keeps_the_file(self, tmp_path, cwd):
         """A patch that only REMOVES an `aria-` line is exactly the change
         an a11y reviewer must see. The scan reads `-` lines as evidence,
-        and nothing else in the file need mention UI at all."""
+        and nothing else in the file need mention UI at all. From a
+        subdirectory too: the scan's `-- <path>` pathspec must resolve
+        against the repository toplevel, or it reads an empty patch."""
         before = (
             "export function mount(node: HTMLElement) {\n"
             "  node.setAttribute('aria-live', 'polite');\n"
@@ -1952,7 +2009,9 @@ class TestA11yUiEvidenceSniff:
         assert not review_scope._file_has_ui_evidence(
             "src/mount.ts", str(tmp_path)
         )
-        assert self._scope_files(tmp_path, "a11y") == ["src/mount.ts"]
+        assert self._scope_files(
+            tmp_path, "a11y", cwd=tmp_path / cwd
+        ) == ["src/mount.ts"]
 
     def test_tsx_and_jsx_never_need_evidence(self, tmp_path):
         """JSX in the extension IS the evidence — a `.tsx` file with a
@@ -2043,24 +2102,18 @@ class TestNonAsciiPathsReachTheirDomain:
         """The failure mode is upstream of any filter: a quoted name never
         equals the real one, so pin the enumeration itself."""
         self._repo_with(tmp_path, "café.php")
-        saved_cwd = os.getcwd()
-        try:
-            os.chdir(tmp_path)
-            assert review_scope.get_changed_files("main..HEAD") == ["café.php"]
-        finally:
-            os.chdir(saved_cwd)
+        assert review_scope.get_changed_files(
+            "main..HEAD", str(tmp_path)
+        ) == ["café.php"]
 
     def test_diffstat_keys_match_the_enumerated_names(self, tmp_path):
         """numstat rows are keyed on the path too — a quoted key matches no
         enumerated file and silently reports a 0-line change, which is what
         orders the diff budget."""
         self._repo_with(tmp_path, "café.php")
-        saved_cwd = os.getcwd()
-        try:
-            os.chdir(tmp_path)
-            stats = review_scope.get_diffstat("main..HEAD", ["café.php"])
-        finally:
-            os.chdir(saved_cwd)
+        stats = review_scope.get_diffstat(
+            "main..HEAD", ["café.php"], str(tmp_path)
+        )
         assert stats["café.php"] == (1, 0)
 
 

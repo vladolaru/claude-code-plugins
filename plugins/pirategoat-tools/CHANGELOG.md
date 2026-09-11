@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.119.5] - UNRELEASED
+
+### Fixed
+
+- Reviewer briefings listed their files with an empty diff whenever the reviewer's shell sat in a subdirectory of the repository, which has been every review since Claude Code 2.1.267 made subagents inherit the orchestrator's working directory; scope now runs every git command from the repository toplevel.
+
 ## [1.119.4] - 2026-09-11
 
 ### Removed
