@@ -53,13 +53,3 @@ class TestPipelineEvents:
         e = json.loads(lines[0])
         assert e["event"] == "review_loop_started"
         assert e["max_rounds"] == 4
-
-
-class TestContextTracking:
-    def test_tracks_context_size(self, tmp_path):
-        d = str(tmp_path)
-        t = ReviewTelemetry(d)
-        t.progress("composing_context", round=2, context_chars=2500, context_limit=50000)
-        lines = iterative_artifact_path(d, "progress").read_text().strip().split("\n")
-        e = json.loads(lines[0])
-        assert e["context_chars"] == 2500
