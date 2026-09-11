@@ -1498,7 +1498,8 @@ class TestStep8Reconcile:
         assert lines[2] == f"Output directory: {tmp_path}"
         assert lines[3] == (
             "Orchestrator notes: read orchestrator_notes in the context and "
-            "answer each with an outcome and evidence."
+            "answer each with an outcome and evidence; a confirmed note about "
+            "severity changes that severity in the same pass."
         )
         assert len(lines) == 4
         assert "retry logic" not in block

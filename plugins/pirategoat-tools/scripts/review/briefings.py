@@ -1546,7 +1546,8 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
     actions.append(f"Output directory: {od}")
     actions.append(
         "Orchestrator notes: read orchestrator_notes in the context and "
-        "answer each with an outcome and evidence."
+        "answer each with an outcome and evidence; a confirmed note about "
+        "severity changes that severity in the same pass."
     )
     actions.append("```")
     actions.append(

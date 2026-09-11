@@ -148,6 +148,22 @@ class TestDismissalDisciplineContract:
         )
 
 
+class TestConfirmedNoteMovesSeverity:
+    """Regression guard for the 2026-09-10 review of
+    woocommerce/woocommerce#12089: note n2 said the finding was a goal
+    misalignment on a pre-existing race, not a regression. The
+    reconciliator resolved n2 `confirmed` and left the finding at high,
+    which published request_changes; the critic then demoted it on n2's
+    own framing. Confirming a note and acting on it are one pass."""
+
+    def test_the_notes_item_says_a_confirmed_note_moves_the_severity(self):
+        item = _agent_definition("review-reconciliator.md").split(
+            "9. **`orchestrator_notes`**", 1
+        )[1].split("\n10. ", 1)[0]
+
+        assert "moves that severity in this same pass" in item
+
+
 class TestVerificationMethodContract:
     """Regression guard for the 2026-07-16 run: three agents 'cleared' the
     blast radius of a removed <label> with the same wrong grep, the raw
