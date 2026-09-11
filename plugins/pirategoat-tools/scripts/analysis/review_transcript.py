@@ -1093,11 +1093,20 @@ def _recognized_identity(
 def _dispatch_call_blocks(
     entries: Iterable[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Collect recognizable dispatch blocks without requiring a pairable ID."""
+    """Collect recognizable dispatch blocks without requiring a pairable ID.
+
+    ``dispatched_at`` is the entry's own timestamp: when the orchestrator
+    actually issued the call. It is the only record of that instant — the
+    pipeline scripts write their markers before the orchestrator composes
+    the dispatch, and cannot see the call itself. None when the entry
+    carries no parseable timestamp, which every consumer reads as
+    unmeasured rather than as a zero-length gap.
+    """
     calls: list[dict[str, Any]] = []
     for index, entry in enumerate(entries):
         if entry.get("type") != "assistant":
             continue
+        dispatched_at = _aware_timestamp(entry.get("timestamp"))
         for block in _content_blocks(entry):
             if (
                 block.get("type") != "tool_use"
@@ -1115,6 +1124,7 @@ def _dispatch_call_blocks(
                     "id_valid": isinstance(tool_id, str),
                     "name": block["name"],
                     "input": tool_input,
+                    "dispatched_at": dispatched_at,
                 }
             )
     return calls
@@ -1202,6 +1212,7 @@ def _correlate_run_agent_entries(
                 "agent_id": agent_id,
                 "file_id": _agent_file_id(agent_id),
                 "model": _safe_model(structured_dict.get("resolvedModel")),
+                "dispatched_at": call.get("dispatched_at"),
             }
         )
 
@@ -1217,11 +1228,17 @@ def _correlate_run_agent_entries(
             / "subagents"
             / f"agent-{item['file_id']}.jsonl"
         )
+        dispatched_at = item["dispatched_at"]
         correlated.append(
             {
                 "agent": item["agent"],
                 "agent_id": item["agent_id"],
                 "model": item["model"],
+                "dispatched_at": (
+                    dispatched_at.isoformat()
+                    if isinstance(dispatched_at, datetime)
+                    else None
+                ),
                 "transcript": str(transcript),
             }
         )
@@ -2541,6 +2558,9 @@ def enrich_run_transcript(
             "agent": dispatch["agent"],
             "agent_id": dispatch["agent_id"],
             "model": dispatch["model"],
+            # When the orchestrator issued the Agent call, which the
+            # pipeline's own step markers are written too early to see.
+            "dispatched_at": dispatch["dispatched_at"],
         }
         if not transcript.is_file():
             missing_transcripts.add(dispatch["agent"])

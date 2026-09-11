@@ -227,6 +227,7 @@ _FIXED_WARNING_CODES = {
     "agent_transcript_unresolved_calls",
     "agent_scope_evidence_missing",
     "inline_diff_empty",
+    "synthesis_dispatch_before_marker",
 }
 _SUMMARY_FIELDS = (
     "total_duration_ms",

@@ -8206,6 +8206,8 @@ class TestSynthesisAgentsCohort:
             "skipped_runs": 0,
             "total_ms": 1_300_000,
             "mean_ms": 650_000,
+            "dispatch_lag_measured_runs": 0,
+            "dispatch_lag_mean_ms": None,
         }
         assert block["by_agent"][
             contracts._SYNTHESIS_RECONCILIATOR
@@ -8244,7 +8246,119 @@ class TestSynthesisAgentsCohort:
             "skipped_runs": 0,
             "total_ms": None,
             "mean_ms": None,
+            "dispatch_lag_measured_runs": 0,
+            "dispatch_lag_mean_ms": None,
         }
+
+
+class TestSynthesisDispatchLag:
+    """The orchestrator gap each synthesis duration already contains.
+
+    `started_at` is a marker the step script writes before the orchestrator
+    registers its notes and issues the `Agent` call; `duration_ms` runs from
+    that marker to the completion artifact's mtime and has been carrying the
+    gap as agent runtime. The transcript's dispatch timestamp is the only
+    record of the call itself.
+    """
+
+    def _measure(self, monkeypatch, tmp_path, row, dispatched_at):
+        registry = tmp_path / "registry.json"
+        registry.write_text(json.dumps({"agents": {"code-reviewer": {}}}))
+        transcript = _complete_empty_transcript()
+        transcript["agent_usage"] = [
+            {
+                "agent": row["agent"],
+                "agent_id": "synthesis-id",
+                "model": "claude-opus-5",
+                "dispatched_at": dispatched_at,
+                "available": True,
+                "usage": _usage(0),
+                "usage_by_model": {},
+                "tool_calls": 3,
+            }
+        ] if dispatched_at is not None else []
+
+        monkeypatch.setattr(
+            measure,
+            "_load_transcript_module",
+            lambda: lambda *_args: copy.deepcopy(transcript),
+        )
+        manifest = _synthesis_manifest("run-1", row, session_id="session-1")
+        return measure_run(manifest, tmp_path, registry_path=registry)
+
+    @pytest.mark.parametrize(
+        ("started_at", "dispatched_at", "expected", "warned"),
+        [
+            pytest.param(
+                "2026-09-10T10:00:00+00:00",
+                "2026-09-10T10:01:30+00:00",
+                90_000,
+                False,
+                id="marker-then-dispatch",
+            ),
+            pytest.param(
+                "2026-09-10T10:00:00+00:00", None, None, False,
+                id="no-correlated-transcript-row",
+            ),
+            pytest.param(
+                "2026-09-10T10:01:30+00:00",
+                "2026-09-10T10:00:00+00:00",
+                None,
+                True,
+                id="dispatch-before-the-marker",
+            ),
+        ],
+    )
+    def test_lag_is_measured_beside_an_unchanged_duration(
+        self, monkeypatch, tmp_path, started_at, dispatched_at, expected, warned
+    ):
+        measured = self._measure(
+            monkeypatch,
+            tmp_path,
+            _synthesis_row(
+                contracts._SYNTHESIS_RECONCILIATOR, started_at=started_at
+            ),
+            dispatched_at,
+        )
+
+        [row] = measured["synthesis_agents"]["agents"]
+        assert row["dispatch_lag_ms"] == expected
+        # The duration keeps its meaning whether or not a transcript was
+        # available: one number, one definition.
+        assert row["duration_ms"] == 665_000
+        assert (
+            "synthesis_dispatch_before_marker" in measured["warnings"]
+        ) is warned
+        assert render._table_row(measured)[8] == "665.0s/—"
+
+    def test_cohort_mean_counts_only_the_measured_runs(
+        self, monkeypatch, tmp_path
+    ):
+        """A mean over one measured run of two must say so: the lag needs a
+        correlated transcript, which most runs in a cohort will not have."""
+        measured = self._measure(
+            monkeypatch,
+            tmp_path,
+            _synthesis_row(
+                contracts._SYNTHESIS_RECONCILIATOR,
+                started_at="2026-09-10T10:00:00+00:00",
+            ),
+            "2026-09-10T10:01:30+00:00",
+        )
+        unmeasured = measure_run(
+            _synthesis_manifest(
+                "run-2", _synthesis_row(contracts._SYNTHESIS_RECONCILIATOR)
+            ),
+            Path("/nonexistent"),
+            include_transcripts=False,
+        )
+
+        agent = aggregate_cohort([measured, unmeasured])["synthesis_agents"][
+            "by_agent"
+        ][contracts._SYNTHESIS_RECONCILIATOR]
+        assert agent["dispatched_runs"] == 2
+        assert agent["dispatch_lag_measured_runs"] == 1
+        assert agent["dispatch_lag_mean_ms"] == 90_000
 
 
 class TestSynthesisAgentsRendering:
@@ -8318,6 +8432,8 @@ class TestSkippedCriticIsNotACritiqueDuration:
             "skipped_runs": 1,
             "total_ms": 600_000,
             "mean_ms": 600_000,
+            "dispatch_lag_measured_runs": 0,
+            "dispatch_lag_mean_ms": None,
         }
 
     def test_an_all_skipped_cohort_reports_no_duration_at_all(self):

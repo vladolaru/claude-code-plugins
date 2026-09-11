@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A reviewer's severity floor now binds reconciliation only when the reviewer stood behind the finding (confidence 0.7 or above), so an unverified self-audit promotion is reconciled on its merits instead of locking the reconciliator at medium.
 - An orchestrator note the reconciliator confirms now changes the severity it bears on during reconciliation, instead of leaving a wrong verdict for the decision critic to correct a step later.
 - Run metrics now record how many diff lines each reviewer's briefing carried, and flag a run whose briefings carried none while the diffstat said otherwise.
+- Synthesis-agent durations now report the orchestrator gap before dispatch separately as `dispatch_lag_ms`, instead of leaving it inside `duration_ms` as agent runtime.
 
 ## [1.119.4] - 2026-09-11
 

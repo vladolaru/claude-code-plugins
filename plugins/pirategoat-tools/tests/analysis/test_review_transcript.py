@@ -402,11 +402,36 @@ class TestCorrelateRunAgents:
                 "agent": "security-reviewer",
                 "agent_id": "abc123",
                 "model": "claude-opus-4-1",
+                # The instant the orchestrator issued the call — the only
+                # record of it, since the step markers are written earlier.
+                "dispatched_at": "2026-07-20T10:00:00+00:00",
                 "transcript": str(
                     tmp_path / "session-1" / "subagents" / "agent-abc123.jsonl"
                 ),
             }
         ]
+
+    def test_dispatch_without_a_timestamp_is_unmeasured(self, tmp_path):
+        """A dispatch entry the harness wrote without a timestamp carries no
+        instant. None says so; any substitute would invent a zero-length gap
+        between the step marker and the call."""
+        session = tmp_path / "session-1.jsonl"
+        output_dir = tmp_path / "pr-review-1"
+        entry = _assistant(_call("a1", "Agent", prompt=_agent_prompt(output_dir)))
+        session.write_text(
+            "\n".join(
+                json.dumps(item)
+                for item in (
+                    {**entry, "timestamp": None},
+                    _result("a1", structured={"agentId": "abc123"}),
+                )
+            ) + "\n"
+        )
+
+        [correlated] = correlate_run_agents(
+            session, output_dir, {"security-reviewer"}
+        )
+        assert correlated["dispatched_at"] is None
 
     @pytest.mark.parametrize(
         "prompt_template",
@@ -3667,6 +3692,7 @@ class TestEnrichRunTranscript:
                 "agent": "security-reviewer",
                 "agent_id": "missing-agent",
                 "model": None,
+                "dispatched_at": "2026-07-20T10:00:00+00:00",
                 "available": False,
                 "usage": None,
                 "usage_by_model": None,

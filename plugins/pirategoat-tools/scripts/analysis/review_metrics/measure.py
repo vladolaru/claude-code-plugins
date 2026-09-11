@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import statistics
 from collections import Counter
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
@@ -139,7 +140,7 @@ def _sanitize_agent_usage(value: object) -> list[dict[str, Any]] | None:
             "agent": agent,
             "available": item["available"],
         }
-        for name in ("agent_id", "model"):
+        for name in ("agent_id", "model", "dispatched_at"):
             scalar = item.get(name)
             if scalar is None:
                 safe[name] = None
@@ -618,6 +619,64 @@ def _briefings_carried_no_diff(measured: dict[str, Any]) -> bool:
         if isinstance(lines, int) and not isinstance(lines, bool):
             stat_lines += lines
     return stat_lines > 0
+
+
+def _apply_synthesis_dispatch_lag(measured: dict[str, Any]) -> list[str]:
+    """Record the orchestrator gap each synthesis duration already contains.
+
+    `started_at` is a marker `orchestration.py` writes at the END of the
+    step's script work, before the orchestrator registers its notes,
+    narrates, and composes the dispatch. The `Agent` call lands some time
+    later, and `duration_ms` — marker to completion-artifact mtime — has
+    been carrying that gap as if it were agent runtime (97s and 79s for
+    the reconciliator on the two 2026-09-10 runs, 10-17% of its reported
+    duration). The script cannot see the call it is about to be used for;
+    the orchestrator's transcript can, and correlation already reads it.
+
+    `dispatch_lag_ms` is reported BESIDE `duration_ms`, which does not
+    change: a duration whose meaning depended on whether a transcript was
+    available would be worse than one that consistently includes the gap.
+    None whenever either instant is missing — an uncorrelated run, a
+    transcript-less host, a row with no marker — and None with a warning
+    when the call precedes the marker, which no ordering of the two
+    writers can produce and so means the correlation is not this run's.
+
+    First dispatch wins per agent: the marker precedes the first call, so
+    a retry's later call would measure a gap that includes the first
+    execution.
+    """
+    section = measured.get("synthesis_agents")
+    rows = section.get("agents") if isinstance(section, dict) else None
+    if not isinstance(rows, list):
+        return []
+    transcript = measured.get("transcript")
+    usage_rows = (
+        transcript.get("agent_usage") if isinstance(transcript, dict) else None
+    )
+    dispatched_at: dict[str, datetime] = {}
+    for entry in usage_rows if isinstance(usage_rows, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        agent = entry.get("agent")
+        instant = _parse_time(entry.get("dispatched_at"))
+        if isinstance(agent, str) and instant is not None:
+            dispatched_at.setdefault(agent, instant)
+
+    warnings: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row["dispatch_lag_ms"] = None
+        started = _parse_time(row.get("started_at"))
+        dispatch = dispatched_at.get(row.get("agent"))
+        if started is None or dispatch is None:
+            continue
+        lag_ms = int((dispatch - started).total_seconds() * 1000)
+        if lag_ms < 0:
+            warnings.append("synthesis_dispatch_before_marker")
+            continue
+        row["dispatch_lag_ms"] = lag_ms
+    return warnings
 
 
 def _lifecycle_summary(manifest: dict[str, Any]) -> dict[str, Any] | None:
@@ -1185,8 +1244,11 @@ def measure_run(
     for warning in _sanitize_warnings(transcript.get("warnings")):
         if warning not in warnings:
             warnings.append(warning)
-    measured["warnings"] = _sanitize_warnings(warnings)
     measured["transcript"] = transcript
+    for warning in _apply_synthesis_dispatch_lag(measured):
+        if warning not in warnings:
+            warnings.append(warning)
+    measured["warnings"] = _sanitize_warnings(warnings)
     measured["budget_utilization"] = _budget_utilization(measured)
     measured["usage_shares"] = _usage_shares(measured)
     measured["metric_availability"] = {

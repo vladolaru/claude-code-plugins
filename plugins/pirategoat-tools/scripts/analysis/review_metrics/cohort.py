@@ -478,6 +478,7 @@ def _aggregate_synthesis_agents(
     counted, and excluded from the duration average under `skipped_runs`.
     """
     durations: dict[str, list[int]] = {}
+    dispatch_lags: dict[str, list[int]] = {}
     stalled: Counter = Counter()
     skipped: Counter = Counter()
     dispatched: Counter = Counter()
@@ -496,6 +497,12 @@ def _aggregate_synthesis_agents(
                 continue
             name = row["agent"]
             dispatched[name] += 1
+            # Independent of the duration statistics below: the lag needs a
+            # correlated orchestrator transcript, which a stalled or skipped
+            # row can still have, and a measured duration can still lack.
+            lag = _nonnegative_int(row.get("dispatch_lag_ms"))
+            if lag is not None:
+                dispatch_lags.setdefault(name, []).append(lag)
             if row.get("stalled") is True:
                 stalled[name] += 1
             if row.get("verdict") == _CRITIC_VERDICT_SKIPPED:
@@ -508,6 +515,7 @@ def _aggregate_synthesis_agents(
     by_agent = {}
     for name in sorted(dispatched):
         values = durations.get(name, [])
+        lags = dispatch_lags.get(name, [])
         by_agent[name] = {
             "dispatched_runs": dispatched[name],
             # Runs contributing to the statistics below — dispatched
@@ -518,6 +526,14 @@ def _aggregate_synthesis_agents(
             "total_ms": sum(values) if values else None,
             "mean_ms": (
                 _exact_statistic(statistics.mean(values)) if values else None
+            ),
+            # The orchestrator gap the durations above already include,
+            # with its own denominator: it is measured on a different and
+            # usually smaller set of runs than `measured_runs`, so a mean
+            # without that count would read as covering every run.
+            "dispatch_lag_measured_runs": len(lags),
+            "dispatch_lag_mean_ms": (
+                _exact_statistic(statistics.mean(lags)) if lags else None
             ),
         }
     return {
