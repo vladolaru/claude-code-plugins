@@ -77,6 +77,16 @@ def _artifact_name(key):
     """Return one registry-owned basename for state comparisons and prose."""
     return artifact_path("", key).name
 
+
+def _artifact_run_path(key):
+    """Return one registry-owned path relative to the run directory.
+
+    For literals a script echoes back, such as `SAVED <path>`, so the
+    orchestrator matches the file's real location, not a bare basename.
+    """
+    return str(artifact_path("", key))
+
+
 # ---------------------------------------------------------------------------
 # Pipeline Identity
 # ---------------------------------------------------------------------------
@@ -735,8 +745,7 @@ def _dependency_refresh_briefing(state, config, output_dir):
         f"--output-dir {od} --report "
         '"$TMPDIR/dependency-refresh-report.json"`',
         "Proceed only when the command prints literal `SAVED "
-        f"{_artifact_name('dependency_refresh')}` and the canonical file exists in the "
-        "output directory.",
+        f"{_artifact_run_path('dependency_refresh')}`.",
     ]
     return situation, actions, handoff
 

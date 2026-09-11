@@ -3195,7 +3195,8 @@ class TestStep3DependencyRefresh:
         text = self._text(g)
         assert "decide whether dependency installation is needed" in text.lower()
         assert "dependency_refresh.py" in text
-        assert "SAVED dependency-refresh.json" in text
+        assert "prints literal `SAVED pipeline/dependency-refresh.json`" in text
+        assert "exists in the output directory" not in text
 
     def test_refresh_handoff_survives_unfetched_issues(self, mod, tmp_path):
         state = dict(self._CLEAN_STATE)

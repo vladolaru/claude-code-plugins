@@ -558,7 +558,7 @@ class TestCriticAdjudicationLifecycle:
 
 class TestDependencyRefreshSaveLifecycle:
     def test_adaptive_refresh_report_is_saved_and_consumed_once(
-        self, mod, orchestration_mod, tmp_path, monkeypatch
+        self, mod, orchestration_mod, tmp_path, monkeypatch, capsys
     ):
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -577,7 +577,9 @@ class TestDependencyRefreshSaveLifecycle:
             "pipeline.py", "--step", "3", "--mode", "full",
             "--output-dir", str(output_dir),
         ])
+        capsys.readouterr()
         mod.main()
+        step3_briefing = capsys.readouterr().out
 
         request = tmp_path / "dependency-refresh-request.json"
         request.write_text(json.dumps({
@@ -602,7 +604,12 @@ class TestDependencyRefreshSaveLifecycle:
             text=True,
         )
         assert saved.returncode == 0, saved.stderr
-        assert saved.stdout.strip() == "SAVED dependency-refresh.json"
+        saved_line = saved.stdout.strip()
+        assert saved_line == "SAVED pipeline/dependency-refresh.json"
+        # The briefing's gate literal is the CLI's own echo, so the two
+        # cannot drift apart (both 2026-09-10 field runs probed the run
+        # root when the echo named only the basename).
+        assert f"prints literal `{saved_line}`" in step3_briefing
         canonical_path = _artifact(output_dir, "dependency_refresh")
         canonical = json.loads(canonical_path.read_text())
         assert canonical == {
