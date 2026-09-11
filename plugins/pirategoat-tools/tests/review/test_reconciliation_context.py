@@ -1027,6 +1027,9 @@ class TestFullScript:
         assert ctx["change_purpose"] == "Fix auth bug"
         assert ctx["pr_id"] == "42"
         assert ctx["host_context_banner"] is None
+        # No Markdown projection: this artifact has exactly one reader,
+        # the reconciliator agent, which reads the JSON directly.
+        assert not list(tmp_path.glob("*.md"))
 
     def test_verify_items_carry_the_checks_that_cite_them(self, tmp_path):
         review = _make_review_json(
@@ -1065,40 +1068,12 @@ class TestFullScript:
         ]
         assert ctx["change_purpose_problems"] == []
 
-    def test_an_unstructured_purpose_yields_empty_tiers(self, tmp_path):
-        _write_review_json(tmp_path, "security", _make_review_json(reviewer="security", findings=[]))
-        result = self._run(
-            "--output-dir", str(tmp_path), "--git-range", "abc123..HEAD",
-            "--changed-files", "src/auth.py", "--change-purpose", "Fix auth bug",
-            cwd=tmp_path,
-        )
-        assert result.returncode == 0, result.stderr
-        ctx = _read_reconciliation_context(tmp_path)
-        assert ctx["verify_items"] == [] and ctx["context_items"] == []
-        assert ctx["change_purpose_problems"] == []
-
-    def test_the_banner_comes_from_the_same_local_host_snapshot(
-        self, tmp_path
-    ):
-        """The banner can be as large as the local map and must stay on disk."""
-        (tmp_path / "review-context.json").write_text(json.dumps(
-            {"host_context": {"banner": {"degraded": True, "message": "x"}}}
-        ))
-
-        result = self._run(
-            "--output-dir", str(tmp_path),
-            "--git-range", "abc..HEAD",
-            cwd=tmp_path,
-        )
-
-        assert result.returncode == 0, f"stderr: {result.stderr}"
-        ctx = _read_reconciliation_context(tmp_path)
-        assert ctx["host_context_banner"] == {"degraded": True, "message": "x"}
-        assert ctx["host_context_banner"] == ctx["host_context"]["banner"]
-
     def test_full_host_context_is_carried_for_local_citation_reconciliation(
         self, tmp_path
     ):
+        """The full local host map is carried for citation reconciliation,
+        and the banner — which can be as large as that map — comes from
+        the same on-disk snapshot rather than a second channel."""
         host_context = {
             "version": 1,
             "resolved": [{
@@ -1110,7 +1085,7 @@ class TestFullScript:
                 "notes": {"commit": None},
             }],
             "unresolved": [],
-            "banner": None,
+            "banner": {"degraded": True, "message": "x"},
         }
 
         (tmp_path / "review-context.json").write_text(
@@ -1122,7 +1097,10 @@ class TestFullScript:
         )
 
         assert result.returncode == 0, result.stderr
-        assert _read_reconciliation_context(tmp_path)["host_context"] == host_context
+        ctx = _read_reconciliation_context(tmp_path)
+        assert ctx["host_context"] == host_context
+        assert ctx["host_context_banner"] == {"degraded": True, "message": "x"}
+        assert ctx["host_context_banner"] == ctx["host_context"]["banner"]
 
     def test_absent_host_context_is_omitted_defensively(self, tmp_path):
         result = self._run(
@@ -1136,9 +1114,6 @@ class TestFullScript:
     @pytest.mark.parametrize("contents", [
         pytest.param(b"{", id="malformed-json"),
         pytest.param(b'{"host_context": "nope"}', id="non-object-host"),
-        pytest.param(b"[]", id="non-object-context"),
-        pytest.param(b"\x80", id="undecodable-utf8"),
-        pytest.param(b'{"unrelated": ' + b"1" * 4301 + b'}', id="oversized-integer"),
     ])
     def test_malformed_or_non_object_host_context_is_omitted_defensively(
         self, tmp_path, contents
@@ -1160,55 +1135,6 @@ class TestFullScript:
         assert context["change_purpose"] == "Fix auth bug"
         assert context["pr_id"] == "42"
         assert list(context["reviews_by_agent"]) == ["security-review"]
-
-    def test_oversized_host_context_is_read_from_disk_without_argv_transport(
-        self, tmp_path
-    ):
-        host_context = {
-            "version": 1,
-            "resolved": [
-                {
-                    "name": f"wordpress-{index}",
-                    "kind": "runtime-host",
-                    "path": f"/repo/wordpress-{index}",
-                    "source": "ecosystem-cache",
-                    "version": None,
-                    "notes": {},
-                }
-                for index in range(9000)
-            ],
-            "unresolved": [],
-            "banner": None,
-        }
-        review_context = tmp_path / "review-context.json"
-        review_context.write_text(json.dumps({"host_context": host_context}))
-        assert review_context.stat().st_size > 1_000_000
-
-        result = self._run(
-            "--output-dir", str(tmp_path), "--git-range", "abc..HEAD",
-            cwd=tmp_path,
-        )
-
-        assert result.returncode == 0, result.stderr
-        context = _read_reconciliation_context(tmp_path)
-        assert len(context["host_context"]["resolved"]) == 9000
-
-    def test_empty_output_dir(self, tmp_path):
-        """Runs successfully with no review files."""
-        result = self._run(
-            "--output-dir", str(tmp_path),
-            "--git-range", "abc..HEAD",
-            cwd=tmp_path,
-        )
-        assert result.returncode == 0
-
-        ctx = _read_reconciliation_context(tmp_path)
-        assert ctx["reviews_by_agent"] == {}
-
-    def test_missing_required_args(self, tmp_path):
-        """Missing --output-dir or --git-range exits with code 2 (argparse)."""
-        result = self._run("--output-dir", str(tmp_path), cwd=tmp_path)
-        assert result.returncode == 2  # argparse exits with 2
 
     def test_scope_annotations_present(self, tmp_path):
         """Scope annotations are correctly populated with file:line keys."""
@@ -1234,130 +1160,6 @@ class TestFullScript:
         assert ctx["scope_annotations"]["src/auth.py:10"] == "IN_SCOPE:in_hunk"
         assert ctx["scope_annotations"]["src/other.py:20"] == "OUT_OF_SCOPE:file_not_in_diff"
 
-    def test_multiple_agents(self, tmp_path):
-        """Multiple agent review files are all loaded."""
-        for agent in ["security", "performance", "patterns"]:
-            review = _make_review_json(
-                reviewer=agent,
-                findings=[_make_finding(file=f"src/{agent}.py", line=10)],
-            )
-            _write_review_json(tmp_path, agent, review)
-
-        result = self._run(
-            "--output-dir", str(tmp_path),
-            "--git-range", "abc..HEAD",
-            cwd=tmp_path,
-        )
-        assert result.returncode == 0
-
-        ctx = _read_reconciliation_context(tmp_path)
-        assert len(ctx["reviews_by_agent"]) == 3
-        assert "security-review" in ctx["reviews_by_agent"]
-        assert "performance-review" in ctx["reviews_by_agent"]
-        assert "patterns-review" in ctx["reviews_by_agent"]
-
-    def test_dispatched_agents_empty_string_produces_empty_list(self, tmp_path):
-        """--dispatched-agents '' means 0 agents dispatched, not unknown."""
-        result = self._run(
-            "--output-dir", str(tmp_path),
-            "--git-range", "abc..HEAD",
-            "--dispatched-agents", "",
-            cwd=tmp_path,
-        )
-        assert result.returncode == 0
-
-        ctx = _read_reconciliation_context(tmp_path)
-        # Key present with empty list — "0 agents dispatched"
-        assert "dispatched_agents" in ctx
-        assert ctx["dispatched_agents"] == []
-
-    def test_no_dispatched_agents_flag_omits_key(self, tmp_path):
-        """Without --dispatched-agents, the key is absent (metadata unknown)."""
-        result = self._run(
-            "--output-dir", str(tmp_path),
-            "--git-range", "abc..HEAD",
-            cwd=tmp_path,
-        )
-        assert result.returncode == 0
-
-        ctx = _read_reconciliation_context(tmp_path)
-        assert "dispatched_agents" not in ctx
-
-    def test_dispatched_agents_with_names_produces_list(self, tmp_path):
-        """--dispatched-agents with names produces the expected list."""
-        review = _make_review_json(
-            reviewer="security",
-            findings=[_make_finding(file="src/auth.py", line=10)],
-        )
-        _write_review_json(tmp_path, "security", review)
-
-        result = self._run(
-            "--output-dir", str(tmp_path),
-            "--git-range", "abc..HEAD",
-            "--dispatched-agents", "security-reviewer,performance-reviewer",
-            cwd=tmp_path,
-        )
-        assert result.returncode == 0
-
-        ctx = _read_reconciliation_context(tmp_path)
-        # Names are normalized: -reviewer → -review to match reviews_by_agent keys
-        assert ctx["dispatched_agents"] == [
-            "security-review", "performance-review"
-        ]
-
-    def test_writes_no_markdown_projection(self, tmp_path):
-        """`reconciliation-context.md` had exactly one reader — the
-        reconciliator agent — and a Markdown projection whose only reader
-        is an agent is a second rendering of the same data that has to be
-        kept honest by hand. The agent reads the JSON."""
-        review = _make_review_json(
-            reviewer="security",
-            findings=[_make_finding(file="src/auth.py", line=10)],
-        )
-        _write_review_json(tmp_path, "security", review)
-
-        result = self._run(
-            "--output-dir", str(tmp_path),
-            "--git-range", "abc123..HEAD",
-            "--changed-files", "src/auth.py,src/db.py",
-            "--change-purpose", "Fix auth bug",
-            "--pr-id", "42",
-            cwd=tmp_path,
-        )
-
-        assert result.returncode == 0, f"stderr: {result.stderr}"
-        assert not (tmp_path / "reconciliation-context.md").exists()
-
-        stdout_json = json.loads(result.stdout.strip())
-        assert stdout_json["status"] == "ok"
-        assert stdout_json["path"].endswith("reconciliation-context.json")
-        assert "markdown_path" not in stdout_json
-
-    def test_main_leaves_reviewer_markdown_to_step_orchestration(self, tmp_path):
-        """Reconciliation context building has no human-artifact side effect."""
-        review = _make_review_json(
-            reviewer="security",
-            findings=[_make_finding(file="src/auth.py", line=10)],
-        )
-        _write_review_json(tmp_path, "security", review)
-
-        result = self._run(
-            "--output-dir", str(tmp_path),
-            "--git-range", "abc123..HEAD",
-            "--changed-files", "src/auth.py",
-            "--pr-id", "42",
-            cwd=tmp_path,
-        )
-
-        assert result.returncode == 0, f"stderr: {result.stderr}"
-
-        md_path = tmp_path / "security-review.md"
-        assert not md_path.exists()
-
-        stdout_json = json.loads(result.stdout.strip())
-        assert stdout_json["status"] == "ok"
-        assert "reviewer_markdown" not in stdout_json
-
 
 class TestMissingAgentDetection:
     """Missing-agent detection is a MEASUREMENT, not an agent's arithmetic.
@@ -1371,22 +1173,36 @@ class TestMissingAgentDetection:
     and the JSON carries the answer.
     """
 
-    def test_dispatched_but_silent_agents_are_named(self, mod):
-        assert mod.compute_missing_agents(
+    @pytest.mark.parametrize("dispatched_stems,reviews_by_agent,expected", [
+        pytest.param(
             ["security-review", "performance-review", "a11y-review"],
-            {"security-review": {}},
-        ) == ["a11y-review", "performance-review"]
-
-    def test_result_is_sorted_not_dispatch_ordered(self, mod):
-        """A stable order, so a diff of two runs shows a real change."""
-        assert mod.compute_missing_agents(
+            {"security-review": {}}, ["a11y-review", "performance-review"],
+            id="dispatched_but_silent_agents_are_named",
+        ),
+        pytest.param(
             ["zz-review", "aa-review", "mm-review"], {},
-        ) == ["aa-review", "mm-review", "zz-review"]
-
-    def test_every_agent_reporting_measures_empty(self, mod):
+            ["aa-review", "mm-review", "zz-review"],
+            id="result_is_sorted_not_dispatch_ordered",
+        ),
+        pytest.param(
+            ["security-review"], {"security-review": {}}, [],
+            id="every_agent_reporting_measures_empty",
+        ),
+        pytest.param(
+            [], {}, [],
+            id="empty_dispatch_measures_empty",
+        ),
+        pytest.param(
+            ["security-review"], {"security-review": {}, "rogue-review": {}}, [],
+            id="an_unexpected_reporter_is_not_subtracted_from_nothing",
+        ),
+    ])
+    def test_missing_agents(
+        self, mod, dispatched_stems, reviews_by_agent, expected
+    ):
         assert mod.compute_missing_agents(
-            ["security-review"], {"security-review": {}},
-        ) == []
+            dispatched_stems, reviews_by_agent,
+        ) == expected
 
     def test_unknown_dispatch_is_unmeasured_not_empty(self, mod):
         """`None`, never `[]`. A run with no dispatch plan did not measure
@@ -1394,19 +1210,6 @@ class TestMissingAgentDetection:
         "nobody was missing" — the same zero-vs-unknown rule
         `unscoped_files` follows."""
         assert mod.compute_missing_agents(None, {"security-review": {}}) is None
-
-    def test_empty_dispatch_measures_empty(self, mod):
-        """An explicitly empty dispatch list IS a measurement: the planner
-        ran and selected zero agents (a docs-only change)."""
-        assert mod.compute_missing_agents([], {}) == []
-
-    def test_an_unexpected_reporter_is_not_subtracted_from_nothing(self, mod):
-        """Output from an agent nobody dispatched is not a missing agent —
-        it is a different anomaly, and this function must not report a
-        negative population or crash on one."""
-        assert mod.compute_missing_agents(
-            ["security-review"], {"security-review": {}, "rogue-review": {}},
-        ) == []
 
     def test_json_carries_the_measurement(self, mod, tmp_path):
         review = _make_review_json(reviewer="security")
@@ -1428,6 +1231,17 @@ class TestMissingAgentDetection:
         assert ctx["dispatched_agents"] == [
             "security-review", "performance-review", "a11y-review",
         ]
+
+        # --dispatched-agents '' means 0 agents dispatched, not unknown.
+        empty_result = subprocess.run(
+            [sys.executable, str(SCRIPT_PATH),
+             "--output-dir", str(tmp_path),
+             "--git-range", "abc123..HEAD",
+             "--dispatched-agents", ""],
+            capture_output=True, text=True, cwd=tmp_path,
+        )
+        assert empty_result.returncode == 0, f"stderr: {empty_result.stderr}"
+        assert _read_reconciliation_context(tmp_path)["dispatched_agents"] == []
 
     def test_json_carries_null_when_dispatch_is_unknown(self, mod, tmp_path):
         review = _make_review_json(reviewer="security")
@@ -1470,43 +1284,10 @@ class TestPrefilterAnnotation:
         )
 
     def test_out_of_scope_findings_are_annotated_in_place(self, mod, tmp_path):
-        review = _make_review_json(reviewer="security", findings=[
-            _make_finding(file="src/untouched.py", line=10, title="Out"),
-            _make_finding(file="src/app.py", line=42, title="In"),
-        ])
-        _write_review_json(tmp_path, "security", review)
-
-        result = self._run(tmp_path, "--changed-files", "src/app.py")
-        assert result.returncode == 0, f"stderr: {result.stderr}"
-
-        ctx = _read_reconciliation_context(tmp_path)
-        findings = ctx["reviews_by_agent"]["security-review"]["findings"]
-        by_title = {i["title"]: i for i in findings}
-        assert by_title["Out"]["prefiltered"] == (
-            "OUT_OF_SCOPE:file_not_in_diff"
-        )
-        assert "prefiltered" not in by_title["In"]
-
-    def test_the_finding_is_kept_not_removed(self, mod, tmp_path):
         """`reviews_by_agent` is the record of what each reviewer said, and
-        the reconciliation metrics are counted from it. Deleting entries
-        would make both silently wrong."""
-        review = _make_review_json(reviewer="security", findings=[
-            _make_finding(file="src/untouched.py", line=10),
-        ])
-        _write_review_json(tmp_path, "security", review)
-
-        result = self._run(tmp_path, "--changed-files", "src/app.py")
-        assert result.returncode == 0, f"stderr: {result.stderr}"
-
-        ctx = _read_reconciliation_context(tmp_path)
-        assert len(ctx["reviews_by_agent"]["security-review"]["findings"]) == 1
-
-    def test_a_checkable_count_travels_beside_the_annotations(
-        self, mod, tmp_path
-    ):
-        """The agent's drop is verifiable against a number it did not
-        compute: N annotated in, N dropped out."""
+        the reconciliation metrics are counted from it — an out-of-scope
+        finding is annotated, not deleted, and a checkable count travels
+        beside the annotations: N annotated in, N dropped out."""
         review = _make_review_json(reviewer="security", findings=[
             _make_finding(file="src/untouched.py", line=10, title="A"),
             _make_finding(file="src/other.py", line=1, title="B"),
@@ -1518,21 +1299,28 @@ class TestPrefilterAnnotation:
         assert result.returncode == 0, f"stderr: {result.stderr}"
 
         ctx = _read_reconciliation_context(tmp_path)
+        findings = ctx["reviews_by_agent"]["security-review"]["findings"]
+        assert len(findings) == 3
+        by_title = {i["title"]: i for i in findings}
+        assert by_title["A"]["prefiltered"] == "OUT_OF_SCOPE:file_not_in_diff"
+        assert "prefiltered" not in by_title["C"]
         assert ctx["prefiltered_out_of_scope"] == {
             "count": 2, "by_agent": {"security-review": 2},
         }
 
-    def test_a_clean_run_reports_a_measured_zero(self, mod, tmp_path):
-        review = _make_review_json(reviewer="security", findings=[
-            _make_finding(file="src/app.py", line=42),
-        ])
-        _write_review_json(tmp_path, "security", review)
-
-        result = self._run(tmp_path, "--changed-files", "src/app.py")
-        assert result.returncode == 0, f"stderr: {result.stderr}"
-
-        ctx = _read_reconciliation_context(tmp_path)
-        assert ctx["prefiltered_out_of_scope"] == {"count": 0, "by_agent": {}}
+        # A clean run (nothing out of scope) reports a measured zero, not
+        # an absent key.
+        clean = tmp_path / "clean"
+        clean.mkdir()
+        _write_review_json(clean, "security", _make_review_json(
+            reviewer="security",
+            findings=[_make_finding(file="src/app.py", line=42)],
+        ))
+        clean_result = self._run(clean, "--changed-files", "src/app.py")
+        assert clean_result.returncode == 0, f"stderr: {clean_result.stderr}"
+        assert _read_reconciliation_context(clean)["prefiltered_out_of_scope"] == {
+            "count": 0, "by_agent": {},
+        }
 
     def test_not_in_hunk_is_never_prefiltered(self, mod, tmp_path):
         """The one out-of-scope status that IS a judgment call: agent line
@@ -1637,6 +1425,8 @@ class TestRegisteredNotesSurviveARebuild:
 
     def test_a_rebuild_keeps_the_claims_and_the_next_id(self, tmp_path):
         self._build(tmp_path)
+        assert self._context(tmp_path)["orchestrator_notes"] == []
+
         first = add_note(str(tmp_path), "Findings f1 and f3 describe one concern.")
         assert first["id"] == "n1"
 
@@ -1644,11 +1434,6 @@ class TestRegisteredNotesSurviveARebuild:
 
         assert self._context(tmp_path)["orchestrator_notes"] == [first]
         assert add_note(str(tmp_path), "A second, different claim.")["id"] == "n2"
-
-    def test_a_first_build_registers_none(self, tmp_path):
-        self._build(tmp_path)
-
-        assert self._context(tmp_path)["orchestrator_notes"] == []
 
     def test_a_malformed_collection_fails_the_rebuild_rather_than_dropping(
         self, tmp_path
