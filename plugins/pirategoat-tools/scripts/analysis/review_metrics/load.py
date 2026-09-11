@@ -147,6 +147,8 @@ def _privacy_reduced_lifecycle_event(
             "paths": [],
         },
     }
+    if "inline_lines" in event["scope"]:
+        reduced["scope"]["inline_lines"] = event["scope"]["inline_lines"]
     if "budget_target" in event:
         reduced["budget_target"] = event["budget_target"]
     return reduced

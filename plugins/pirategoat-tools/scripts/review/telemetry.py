@@ -413,8 +413,17 @@ class ReviewTelemetry:
                         model_tier: str = "", scope_files: int = 0,
                         scope_lines: int = 0,
                         budget_target: Optional[int] = None,
-                        scope_paths: Optional[List[str]] = None) -> None:
-        """Append agent_start event. No-op if not started."""
+                        scope_paths: Optional[List[str]] = None,
+                        scope_inline_lines: Optional[int] = None) -> None:
+        """Append agent_start event. No-op if not started.
+
+        ``scope_lines`` is the diffstat total over the reviewer's files;
+        ``scope_inline_lines`` is how many diff lines its briefing actually
+        carried. They differ whenever scope could not inline the diffs, and
+        the second is the one that says the briefing was empty. It is
+        optional because manifests written before it exists carry no such
+        measurement — an absent key is unmeasured, never zero.
+        """
         if self.log_path is None:
             return
 
@@ -430,6 +439,8 @@ class ReviewTelemetry:
                 "lines": scope_lines,
             },
         }
+        if scope_inline_lines is not None:
+            event["scope"]["inline_lines"] = scope_inline_lines
         if scope_paths is not None:
             event["scope"]["paths"] = normalize_repo_paths(
                 scope_paths,
@@ -701,7 +712,9 @@ class ReviewTelemetry:
             result["domain"] = ""
         scope = event.get("scope", {})
         if isinstance(scope, dict):
-            safe_scope = self._select_scalar_fields(scope, ("files", "lines"))
+            safe_scope = self._select_scalar_fields(
+                scope, ("files", "lines", "inline_lines")
+            )
             if isinstance(scope.get("paths"), list):
                 safe_scope["paths"] = normalize_repo_paths(
                     scope["paths"],

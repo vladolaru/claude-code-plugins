@@ -1097,6 +1097,10 @@ class TestScopeSummaryJson:
             # Priority-tier order, as build_scope produces it.
             "budget_exceeded_files": ["tests/test_small.php", "tests/test_big.php"],
             "list_only_files": ["package-lock.json"],
+            # The hunk lines build_scope actually inlined — deliberately
+            # unrelated to the diffstat totals above, because the two
+            # measure different things.
+            "total_diff_lines": 17,
             "in_scope_files": [
                 "src/a.php", "src/b.php",
                 "tests/test_small.php", "tests/test_big.php",
@@ -1110,8 +1114,9 @@ class TestScopeSummaryJson:
         assert set(data) == {
             "schema", "inline_diff_files", "review_claimable_files",
             "list_only_files", "routing_files", "in_scope_stat_lines",
+            "inline_diff_lines",
         }
-        assert data["schema"] == 3
+        assert data["schema"] == 4
         assert data["inline_diff_files"] == ["src/a.php", "src/b.php"]
         # Largest first — the order the assignment's claimable queue and the
         # save echo's next-unread list both promise.
@@ -1121,6 +1126,10 @@ class TestScopeSummaryJson:
         assert data["list_only_files"] == ["package-lock.json"]
         # (10+5) + (3+2) + (700+100) + (12+0), excluding the lock file.
         assert data["in_scope_stat_lines"] == 832
+        # Carried from the scope's own accumulator, not re-derived from the
+        # diffstat — telemetry reads this to tell a briefing that carried
+        # code from one that carried only a file list.
+        assert data["inline_diff_lines"] == 17
 
     def test_routing_files_covers_every_population(self, tmp_path):
         """The run-level file review subtracts this union from the changed
@@ -1158,6 +1167,7 @@ class TestScopeSummaryJson:
         assert data["list_only_files"] == []
         assert data["routing_files"] == ["src/a.php", "src/b.php"]
         assert data["in_scope_stat_lines"] == 0
+        assert data["inline_diff_lines"] == 0
 
     def test_write_scope_summary_tolerates_minimal_scope(self, tmp_path):
         # NO_DOMAIN_FILES scopes lack diffs/budget keys — must not raise.
@@ -1166,6 +1176,7 @@ class TestScopeSummaryJson:
         data = json.loads(path.read_text())
         assert data["routing_files"] == []
         assert data["in_scope_stat_lines"] == 0
+        assert data["inline_diff_lines"] == 0
 
     def test_write_scope_summary_fails_closed(self, tmp_path):
         """The summary is the only source of a reviewer's assignment facts.

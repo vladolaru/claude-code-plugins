@@ -143,6 +143,7 @@ _IN_PROCESS_FACTS = {
     "review_claimable_files": [],
     "list_only_files": [],
     "in_scope_stat_lines": 10,
+    "inline_diff_lines": 6,
 }
 
 
@@ -356,8 +357,9 @@ class TestCategoryRepresentatives:
         data = json.loads(summary.read_text())
         # The domain lives in the filename asserted above — the summary body
         # carries only the facts its readers consume.
-        assert data["schema"] == 3
+        assert data["schema"] == 4
         assert isinstance(data["in_scope_stat_lines"], int)
+        assert isinstance(data["inline_diff_lines"], int)
         # Identity chain: the assignment is named for the reviewer
         # the instance is taught to construct its builder with.
         assert "PIRATEGOAT_REVIEWER_NAME=repo-renewals" in briefing_text(result)

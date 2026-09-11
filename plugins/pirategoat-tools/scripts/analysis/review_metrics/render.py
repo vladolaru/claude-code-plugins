@@ -120,6 +120,20 @@ def _budget_utilization_cell(value: object) -> str:
     return f"median {median}% ({low}–{high}%)"
 
 
+def _inline_diff_lines_cell(lifecycle: object) -> str:
+    """The diff lines this run's reviewer briefings carried.
+
+    "—" is unmeasured and covers every run written before the count
+    existed, plus any run where only some reviewers carry it. A measured
+    `0` is the alarm the column exists for: briefings that arrived with a
+    file list and no code, which no other cell in this table can show.
+    """
+    inline = (
+        lifecycle.get("inline_diff_lines") if isinstance(lifecycle, dict) else None
+    )
+    return _format_count(inline.get("total")) if isinstance(inline, dict) else "—"
+
+
 def _usage_shares_cell(value: object, state: object) -> str:
     if state not in {"complete", "partial"} or not isinstance(value, dict):
         return "—"
@@ -216,6 +230,7 @@ def _table_row(run: dict[str, Any]) -> list[str]:
         planner_actual,
         adjustments,
         assignment_text,
+        _inline_diff_lines_cell(run.get("lifecycle")),
         outcome_text,
         wall_text,
         synthesis_text,
@@ -238,6 +253,7 @@ def format_table(runs: list[dict[str, Any]], aggregate: dict[str, Any]) -> str:
         "Planner→Actual",
         "Adjustments",
         "Assigned/Reviewable/Unassigned",
+        "Diff lines",
         "Outcome/Critic",
         "Wall",
         "Recon/Critic",

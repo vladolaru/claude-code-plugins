@@ -1807,13 +1807,21 @@ def format_json_output(scope: dict) -> str:
 def write_scope_summary(scope: dict, path: str) -> None:
     """Persist the one machine-readable scope contract for this agent.
 
-    Five facts, each with exactly one consumer relationship:
+    Six facts, each with exactly one consumer relationship:
     ``inline_diff_files`` and ``review_claimable_files`` are the reviewer's
     assignment (bootstrap passes both straight through, and their lengths
     ARE the assignment's two counts); ``list_only_files`` is descriptive
     scope; ``routing_files`` is the every-mode population the run-level file
     review subtracts from the changed set; ``in_scope_stat_lines`` sizes the
-    tool-call budget.
+    tool-call budget; ``inline_diff_lines`` is how many diff lines the
+    briefing actually carried, which telemetry records so a run whose
+    briefings arrived empty is visible without reading them by hand.
+
+    The last two answer different questions and can disagree: the diffstat
+    total counts every changed line of every reviewed file, while the
+    inline count is the hunk lines this scope managed to fetch and inline.
+    A scope that fetched no diff at all reports a budget-sized
+    ``in_scope_stat_lines`` beside a zero ``inline_diff_lines``.
 
     ``review_claimable_files`` is published largest-diffstat-first because
     that is the order the assignment's claimable queue and the save echo's
@@ -1841,7 +1849,7 @@ def write_scope_summary(scope: dict, path: str) -> None:
     )
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     summary = {
-        "schema": 3,
+        "schema": 4,
         "inline_diff_files": inline_diff_files,
         "review_claimable_files": review_claimable_files,
         "list_only_files": list_only_files,
@@ -1854,6 +1862,10 @@ def write_scope_summary(scope: dict, path: str) -> None:
         "in_scope_stat_lines": sum(
             sum(diffstat.get(f, (0, 0))) for f in reviewed_files
         ),
+        # Carried, never recomputed: build_scope accumulates this as it
+        # inlines each hunk, and a second count here would be a second
+        # answer to the same question.
+        "inline_diff_lines": scope.get("total_diff_lines", 0),
     }
     parent = os.path.dirname(path)
     if parent:

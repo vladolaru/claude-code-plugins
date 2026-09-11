@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Run metrics no longer count reviewer-status polls as tool failures: a call to `agents_status.py` that reported a status and exited on one of its contractual codes (2 while agents run, 3 when a `--wait` window expires) is listed under a `poll_outcome` category and excluded from failure totals, which drops the two 2026-09-10 field runs from 31 recorded failures to 8 real ones.
 - A reviewer's severity floor now binds reconciliation only when the reviewer stood behind the finding (confidence 0.7 or above), so an unverified self-audit promotion is reconciled on its merits instead of locking the reconciliator at medium.
 - An orchestrator note the reconciliator confirms now changes the severity it bears on during reconciliation, instead of leaving a wrong verdict for the decision critic to correct a step later.
+- Run metrics now record how many diff lines each reviewer's briefing carried, and flag a run whose briefings carried none while the diffstat said otherwise.
 
 ## [1.119.4] - 2026-09-11
 

@@ -380,6 +380,14 @@ _SCOPE_FACT_LISTS = (
     "list_only_files",
 )
 
+# Both are required, not defaulted: a summary missing either is malformed,
+# and an absent count silently read as 0 would report an empty briefing and
+# a zero-sized budget as measured facts.
+_SCOPE_FACT_COUNTS = (
+    "in_scope_stat_lines",
+    "inline_diff_lines",
+)
+
 
 def load_scope_facts(summary_paths: List[str]) -> Dict[str, Any]:
     """Accumulate this agent's scope facts from its summary sidecars.
@@ -392,20 +400,22 @@ def load_scope_facts(summary_paths: List[str]) -> Dict[str, Any]:
     text was a quietly different answer to the same question.
     """
     facts: Dict[str, Any] = {key: [] for key in _SCOPE_FACT_LISTS}
-    facts["in_scope_stat_lines"] = 0
+    for key in _SCOPE_FACT_COUNTS:
+        facts[key] = 0
     for path in summary_paths:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except (OSError, json.JSONDecodeError) as exc:
             raise ValueError(f"unreadable scope summary {path}: {exc}") from exc
-        if not isinstance(data, dict) or data.get("schema") != 3:
-            raise ValueError(f"scope summary {path} is not schema 3")
-        stat_lines = data.get("in_scope_stat_lines")
-        if not isinstance(stat_lines, int) or isinstance(stat_lines, bool):
-            raise ValueError(
-                f"scope summary {path} has no in_scope_stat_lines count"
-            )
+        if not isinstance(data, dict) or data.get("schema") != 4:
+            raise ValueError(f"scope summary {path} is not schema 4")
+        counts = {}
+        for key in _SCOPE_FACT_COUNTS:
+            count = data.get(key)
+            if not isinstance(count, int) or isinstance(count, bool):
+                raise ValueError(f"scope summary {path} has no {key} count")
+            counts[key] = count
         for key in _SCOPE_FACT_LISTS:
             value = data.get(key)
             if not isinstance(value, list) or not all(
@@ -413,7 +423,8 @@ def load_scope_facts(summary_paths: List[str]) -> Dict[str, Any]:
             ):
                 raise ValueError(f"scope summary {path} has a malformed {key}")
             facts[key].extend(value)
-        facts["in_scope_stat_lines"] += stat_lines
+        for key, count in counts.items():
+            facts[key] += count
     return facts
 
 
@@ -1881,6 +1892,9 @@ def main():
                 ),
                 scope_files=len(telemetry_scope_paths),
                 scope_lines=scope_lines_for_budget,
+                # Distinct from scope_lines: the diffstat total sizes the
+                # budget, this is what the briefing actually carried.
+                scope_inline_lines=scope_facts["inline_diff_lines"],
                 budget_target=review_budget,
                 scope_paths=telemetry_scope_paths,
             )

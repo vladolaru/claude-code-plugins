@@ -283,6 +283,7 @@ class TestPartitionScopePaths:
                     "package-lock.json", "generated/api.json",
                 ],
                 "in_scope_stat_lines": 100,
+                "inline_diff_lines": 60,
             },
         )
         scope_output = (
@@ -377,6 +378,7 @@ class TestPartitionScopePaths:
                 "review_claimable_files": [],
                 "list_only_files": [],
                 "in_scope_stat_lines": 1,
+                "inline_diff_lines": 1,
             },
         )
         monkeypatch.setattr(
@@ -484,12 +486,13 @@ class TestPartitionScopePaths:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
             with open(path, "w") as f:
                 json.dump({
-                    "schema": 3,
+                    "schema": 4,
                     "inline_diff_files": ["src/a.py"],
                     "review_claimable_files": ["src/claimable.py"],
                     "list_only_files": [],
                     "routing_files": ["src/a.py", "src/claimable.py"],
                     "in_scope_stat_lines": 40,
+                    "inline_diff_lines": 24,
                 }, f)
             return 0, f"STATUS: OK\nOUTPUT_DIR: {tmp_path}\n"
 
@@ -1030,12 +1033,13 @@ class TestLoadScopeFacts:
 
     def _write_summary(self, path, **overrides):
         data = {
-            "schema": 3,
+            "schema": 4,
             "inline_diff_files": ["src/a.py"],
             "review_claimable_files": ["src/claimable.py"],
             "list_only_files": ["package-lock.json"],
             "routing_files": ["src/a.py", "src/claimable.py"],
             "in_scope_stat_lines": 100,
+            "inline_diff_lines": 60,
         }
         data.update(overrides)
         path.write_text(json.dumps(data))
@@ -1050,12 +1054,14 @@ class TestLoadScopeFacts:
             list_only_files=[],
             routing_files=["ci.yml"],
             in_scope_stat_lines=7,
+            inline_diff_lines=4,
         )
         assert load_scope_facts([primary, secondary]) == {
             "inline_diff_files": ["src/a.py", "ci.yml"],
             "review_claimable_files": ["src/claimable.py"],
             "list_only_files": ["package-lock.json"],
             "in_scope_stat_lines": 107,
+            "inline_diff_lines": 64,
         }
 
     def test_no_paths_is_no_scope(self):
@@ -1065,6 +1071,7 @@ class TestLoadScopeFacts:
             "review_claimable_files": [],
             "list_only_files": [],
             "in_scope_stat_lines": 0,
+            "inline_diff_lines": 0,
         }
 
     def test_missing_sidecar_raises(self, tmp_path):
@@ -1080,10 +1087,14 @@ class TestLoadScopeFacts:
     @pytest.mark.parametrize(
         "overrides",
         [
-            {"schema": 2},
+            {"schema": 3},
+            {"schema": 5},
             {"in_scope_stat_lines": None},
             {"in_scope_stat_lines": True},
             {"in_scope_stat_lines": 1.5},
+            {"inline_diff_lines": None},
+            {"inline_diff_lines": True},
+            {"inline_diff_lines": 1.5},
             {"inline_diff_files": "src/a.py"},
             {"review_claimable_files": [1]},
             {"list_only_files": None},
@@ -1095,6 +1106,28 @@ class TestLoadScopeFacts:
         )
         with pytest.raises(ValueError, match="scope summary"):
             load_scope_facts([path])
+
+    def test_prior_schema_names_the_schema_it_wanted(self, tmp_path):
+        """A schema-3 sidecar predates inline_diff_lines. Reading it would
+        report an unmeasured briefing size as a measured zero, so the
+        boundary fails closed and says which schema it needed."""
+        path = self._write_summary(
+            tmp_path / "a-scope-summary.json", schema=3
+        )
+        with pytest.raises(ValueError, match="is not schema 4"):
+            load_scope_facts([path])
+
+    def test_absent_inline_diff_lines_raises(self, tmp_path):
+        """Absent is rejected the same way a malformed value is: there is no
+        second source for how much diff the briefing carried."""
+        data = json.loads(
+            Path(self._write_summary(tmp_path / "a-scope-summary.json")).read_text()
+        )
+        del data["inline_diff_lines"]
+        path = tmp_path / "b-scope-summary.json"
+        path.write_text(json.dumps(data))
+        with pytest.raises(ValueError, match="inline_diff_lines"):
+            load_scope_facts([str(path)])
 
 
 class TestLoadAdditionalInstructions:

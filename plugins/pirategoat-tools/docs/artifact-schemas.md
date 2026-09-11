@@ -39,7 +39,7 @@ The field earns its place where an artifact outlives the run that wrote it, or c
 | `reconciliation-context.json` | 4 | `main()`, `scripts/review/reconciliation_context.py`; carries `orchestrator_notes` (registered through `reconciliation_notes.py`) and the `verify_items`, `context_items` and `change_purpose_problems` parsed by `change_purpose.py` |
 | `decision-critic-adjustments.json`, `decision-critic-verdict.json` | 2 | `ADJUSTMENTS_SCHEMA`, `VERDICT_MARKER_SCHEMA`, `scripts/review/critic_adjustments.py`; the orchestrator's adjudication request (stdin only, never persisted) validates at `ADJUDICATION_SCHEMA` |
 | Per-agent sidecars: worktree baseline and hygiene | 1 | literal at the write site |
-| Per-agent scope summaries | 3 | `write_scope_summary()`, `scripts/review/agent/scope.py` |
+| Per-agent scope summaries (`reviewers/<reviewer>/scope-summary*.json`) | 4 | `write_scope_summary()`, `scripts/review/agent/scope.py` |
 
 **Exception:** `review-context.json` and `issue-context.json` carry `version: 1`, and that key is not ours. pirategoat-bot writes both files and asserts on that field (`src/orchestrator-review.test.js`, `src/orchestrator-linear.test.js`). Leave it alone.
 
