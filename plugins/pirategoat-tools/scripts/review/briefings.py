@@ -1308,6 +1308,9 @@ def _step_7_save_baseline(mode, state, context, config, output_dir):
             "- Exit code 3 (60s elapsed, still running): re-run the same "
             "call, no commentary",
             "- NOT_DISPATCHED agents: dispatch them first, then re-check",
+            "- A `DRAFT` line for an agent whose Codex task has returned: "
+            "run the exact command on its `FINALIZE_REVIEW_COMMAND` line, "
+            "then re-check",
             "",
             "A RUNNING agent flips to TIMED_OUT at the agent timeout "
             f"(default {DEFAULT_AGENT_TIMEOUT}s) and stops blocking "
@@ -1430,6 +1433,9 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
                     "- Exit code 0 (ALL_DONE): re-run step 8",
                     "- Exit code 3 (60s elapsed, still running): re-run the "
                     "same call, no commentary",
+                    "- A `DRAFT` line for an agent whose Codex task has "
+                    "returned: run the exact command on its "
+                    "`FINALIZE_REVIEW_COMMAND` line, then re-check",
                     f"A RUNNING agent flips to TIMED_OUT at the {agent_timeout}s "
                     "agent timeout, so exit 0 always arrives; the escalation "
                     f"above force-proceeds {escalation_threshold}s after "

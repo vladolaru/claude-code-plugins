@@ -1359,6 +1359,27 @@ def _assert_poll_is_evidence_gated(text, output_dir, exit_zero_action):
     assert exit_zero_action in poll_line
 
 
+def _waiting_text(mod, host, step, output_dir):
+    """One host's step-7 or step-8 waiting block, as the orchestrator reads it."""
+    ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main", "changed_files_csv": "a.py"}}
+    config = {"host": host} if host == "codex" else None
+    if step == 7:
+        state = {"completed_steps": [], "resolved_params": {"git_range": "abc..HEAD"}}
+        g = mod.get_step_guidance(7, "full", state, ctx, config=config, output_dir=output_dir)
+        text = "\n".join(g["actions"])
+        # Step 7 also confirms the baseline write; only the wait is at issue.
+        return text[text.index("**Wait for agents before step 8.**"):]
+    state = {
+        "resolved_params": {"git_range": "abc..HEAD"},
+        "completed_steps": [1, 3, 5, 6, 7],
+        "waiting_on_agents": {"running": ["security-reviewer"], "not_dispatched": []},
+        "agents": {"dispatched": ["security-reviewer"], "completed": [], "discarded_drafts": []},
+    }
+    g = mod.get_step_guidance(8, "pr", state, ctx, config=config, output_dir=output_dir)
+    assert "WAITING" in g["title"]
+    return "\n".join(g["actions"])
+
+
 class TestStep7SaveReviewBaseline:
     def test_confirms_baseline_saved(self, mod, tmp_path):
         """Step 7 confirms the file was written (script writes it internally). Runs for ALL modes."""
@@ -1785,6 +1806,23 @@ class TestStep8ReadinessGate:
         assert "END YOUR TURN" not in text
 
 
+class TestCodexDraftRecovery:
+    """A Codex reviewer that saves a draft and returns without finalizing
+    stays RUNNING until the agent timeout, and `close_review_intake()` then
+    discards the draft with every finding in it. Codex has no completion
+    notifications, so the recovery rides on the status output the
+    orchestrator already polls — and it has to be in BOTH waiting blocks,
+    since either can be the live gate when that reviewer returns."""
+
+    @pytest.mark.parametrize("step", [7, 8])
+    def test_a_returned_reviewers_draft_can_be_finalized(
+        self, mod, tmp_path, step
+    ):
+        text = _waiting_text(mod, "codex", step, str(tmp_path))
+
+        assert "FINALIZE_REVIEW_COMMAND" in text
+
+
 class TestWaitingGuidanceBudget:
     """The waiting briefings are rendered on every wake-up, so their size is
     part of their cost. Handoff 05 traded the per-notification poll for
@@ -1800,31 +1838,11 @@ class TestWaitingGuidanceBudget:
         ("codex", 8): 1115,
     }
 
-    @staticmethod
-    def _waiting_text(mod, host, step, output_dir):
-        ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main", "changed_files_csv": "a.py"}}
-        config = {"host": host} if host == "codex" else None
-        if step == 7:
-            state = {"completed_steps": [], "resolved_params": {"git_range": "abc..HEAD"}}
-            g = mod.get_step_guidance(7, "full", state, ctx, config=config, output_dir=output_dir)
-            text = "\n".join(g["actions"])
-            # Step 7 also confirms the baseline write; only the wait is at issue.
-            return text[text.index("**Wait for agents before step 8.**"):]
-        state = {
-            "resolved_params": {"git_range": "abc..HEAD"},
-            "completed_steps": [1, 3, 5, 6, 7],
-            "waiting_on_agents": {"running": ["security-reviewer"], "not_dispatched": []},
-            "agents": {"dispatched": ["security-reviewer"], "completed": [], "discarded_drafts": []},
-        }
-        g = mod.get_step_guidance(8, "pr", state, ctx, config=config, output_dir=output_dir)
-        assert "WAITING" in g["title"]
-        return "\n".join(g["actions"])
-
     @pytest.mark.parametrize("host,step", sorted(CEILINGS))
     def test_waiting_block_stays_within_its_budget(self, mod, tmp_path, host, step):
         from review.pipeline_contract import SCRIPTS_DIR
 
-        text = self._waiting_text(mod, host, step, str(tmp_path))
+        text = _waiting_text(mod, host, step, str(tmp_path))
         normalized = text.replace(str(SCRIPTS_DIR), "<S>").replace(str(tmp_path), "<O>")
         size = len(normalized.encode())
         assert size <= self.CEILINGS[(host, step)], (
