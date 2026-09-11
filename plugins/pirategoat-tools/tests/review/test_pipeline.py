@@ -3050,6 +3050,7 @@ class TestStep12Cleanup:
         )
         text = "\n".join(guidance["situation"] + guidance["actions"])
 
+        assert "telemetry" not in text.lower()
         assert "Ask whether" not in text
         assert "set-sharing" not in text
         assert "set-repo" not in text
