@@ -1792,8 +1792,19 @@ class TestReviewCoverageSection:
             False, id="inline_receipt",
         ),
         pytest.param(
+            {
+                "agents_claiming_review_by_file": {"src/big.py": ["security-reviewer"]},
+                "agents_with_unclaimed_review_by_file": {"src/big.py": ["code-reviewer"]},
+            },
+            False, id="claim_covers_per_agent_unclaimed",
+        ),
+        pytest.param(
             {"agents_with_unclaimed_review_by_file": {"src/starved.php": ["code-reviewer"]}},
             True, id="unclaimed",
+        ),
+        pytest.param(
+            {"unscoped_files": ["Gemfile"]},
+            True, id="unowned_unscoped",
         ),
         pytest.param(
             {
@@ -2461,9 +2472,10 @@ class TestStep11ReportAuthoring:
         assert "skipped by every matching agent's diff budget" not in text
 
     def test_a_proven_gap_demands_the_verdict_clause(self, mod):
-        """The six branches of `_has_file_review_gap` (claims-only,
-        excluded-by-design, inline receipt, unclaimed, unscoped, orphaned)
-        are pinned once, at the predicate, in
+        """The seven branches of `_has_file_review_gap` (claims-only,
+        excluded-by-design, inline receipt, a claim covering per-agent
+        unclaimed work, unclaimed, unowned-unscoped, orphaned) are pinned
+        once, at the predicate, in
         `TestReviewCoverageSection::test_has_file_review_gap`; step 11 only
         needs the gap and no-gap outcomes of the clause itself."""
         state = {"file_review": {
