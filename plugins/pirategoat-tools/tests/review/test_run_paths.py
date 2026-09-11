@@ -25,17 +25,30 @@ def home(monkeypatch, tmp_path):
 
 
 class TestStateRoot:
-    def test_defaults_to_dot_pirategoat_tools_under_home(self, home):
-        assert run_paths.state_root() == home / ".pirategoat-tools"
+    @pytest.mark.parametrize(
+        "env_value, expect_default",
+        [
+            (None, True),
+            ("elsewhere", False),
+            ("relative/path", True),
+        ],
+        ids=["unset", "absolute-override", "relative-override-ignored"],
+    )
+    def test_state_root_honors_only_an_absolute_override(
+        self, home, monkeypatch, tmp_path, env_value, expect_default
+    ):
+        if env_value is None:
+            monkeypatch.delenv("PIRATEGOAT_TOOLS_HOME", raising=False)
+        elif env_value == "elsewhere":
+            override = tmp_path / "elsewhere"
+            monkeypatch.setenv("PIRATEGOAT_TOOLS_HOME", str(override))
+        else:
+            monkeypatch.setenv("PIRATEGOAT_TOOLS_HOME", env_value)
 
-    def test_honours_an_absolute_override(self, home, monkeypatch, tmp_path):
-        override = tmp_path / "elsewhere"
-        monkeypatch.setenv("PIRATEGOAT_TOOLS_HOME", str(override))
-        assert run_paths.state_root() == override
-
-    def test_ignores_a_relative_override(self, home, monkeypatch):
-        monkeypatch.setenv("PIRATEGOAT_TOOLS_HOME", "relative/path")
-        assert run_paths.state_root() == home / ".pirategoat-tools"
+        if expect_default:
+            assert run_paths.state_root() == home / ".pirategoat-tools"
+        else:
+            assert run_paths.state_root() == tmp_path / "elsewhere"
 
 
 class TestSafeSegment:
@@ -83,12 +96,12 @@ class TestTargetDir:
 
         assert nested != flattened
 
-    @pytest.mark.parametrize("bad", ["", ".", "..", "..."])
-    def test_rejects_dot_only_repo_or_target_components(self, home, bad):
+    def test_rejects_a_dot_only_repo_root(self, home):
+        """`target`'s own dot-only rejection is `safe_segment`'s table
+        (`TestSafeSegment::test_rejects_empty_and_dot_only_identities`);
+        this is the pre-check that is `target_dir`'s own."""
         with pytest.raises(ValueError, match="empty or dot-only"):
-            run_paths.target_dir("branch", bad, "main")
-        with pytest.raises(ValueError, match="empty or dot-only"):
-            run_paths.target_dir("branch", "/repo", bad)
+            run_paths.target_dir("branch", "", "main")
 
     def test_rejects_a_resolved_target_outside_the_kind_directory(
         self, home, tmp_path
@@ -334,9 +347,6 @@ class TestPruneRuns:
 
 
 class TestInternalLayout:
-    def test_reviewer_dir_nests_under_reviewers(self, tmp_path):
-        assert run_paths.reviewer_dir(tmp_path, "a11y") == tmp_path / "reviewers" / "a11y"
-
     @pytest.mark.parametrize("bad", ["", ".", "..", "a/b", "a\\b", "a\x00b"])
     def test_reviewer_dir_rejects_unsafe_identities(self, tmp_path, bad):
         with pytest.raises(ValueError):
@@ -346,40 +356,34 @@ class TestInternalLayout:
         assert run_paths.artifact_path(tmp_path, "run_config") == tmp_path / "run-config.json"
         assert run_paths.artifact_path(tmp_path, "pipeline_state") == tmp_path / "pipeline" / "pipeline-state.json"
         assert run_paths.artifact_path(tmp_path, "reconciliation_context") == tmp_path / "synthesis" / "reconciliation-context.json"
+        assert run_paths.reviewer_dir(tmp_path, "a11y") == tmp_path / "reviewers" / "a11y"
+        assert run_paths.synthesis_started_marker(tmp_path, "decision-reviewer") == tmp_path / "synthesis" / "decision-reviewer.synthesis-started"
+        assert run_paths.scratch_dir(tmp_path) == tmp_path / "tmp"
 
     def test_artifact_registry_is_the_exact_run_contract(self):
-        assert run_paths.ARTIFACTS == {
-            "run_config": ("", "run-config.json"),
-            "review_context": ("", "review-context.json"),
-            "pipeline_result": ("", "pipeline-result.json"),
-            "review_report": ("", "review-report.md"),
-            "review_record": ("", "review-record.md"),
-            "review_findings_json": ("", "review-findings.json"),
-            "review_findings_md": ("", "review-findings.md"),
-            "pipeline_state": ("pipeline", "pipeline-state.json"),
-            "review_intake": ("pipeline", "review-intake.json"),
-            "dispatch_plan": ("pipeline", "dispatch-plan.json"),
-            "dispatch_plan_initial": ("pipeline", "dispatch-plan.initial.json"),
-            "change_purpose": ("pipeline", "change-purpose.md"),
-            "dependency_refresh": ("pipeline", "dependency-refresh.json"),
-            "synthesis_agents": ("pipeline", "synthesis-agents.json"),
-            "usage_snapshot": ("pipeline", "usage-snapshot.json"),
-            "worktree_hygiene": ("pipeline", "worktree-hygiene.json"),
-            "telemetry_log_path": ("pipeline", ".telemetry-log-path"),
-            "worktree_baseline": ("pipeline", ".worktree-baseline.json"),
-            "reconciliation_context": ("synthesis", "reconciliation-context.json"),
-            "critic_adjustments": ("synthesis", "decision-critic-adjustments.json"),
-            "critic_findings": ("synthesis", "decision-critic-findings.md"),
-            "critic_verdict": ("synthesis", "decision-critic-verdict.json"),
+        """Only the root (`""`) entries are pinned exactly: they are a
+        cross-repo contract (pirategoat-bot reads `pipeline-result.json`
+        and `review-report.md` directly). The grouped entries are not —
+        every consumer resolves them through `artifact_path`, so a
+        rename there is not a break this test needs to catch."""
+        root_entries = {
+            key: filename
+            for key, (subdir, filename) in run_paths.ARTIFACTS.items()
+            if subdir == ""
+        }
+        assert root_entries == {
+            "run_config": "run-config.json",
+            "review_context": "review-context.json",
+            "pipeline_result": "pipeline-result.json",
+            "review_report": "review-report.md",
+            "review_record": "review-record.md",
+            "review_findings_json": "review-findings.json",
+            "review_findings_md": "review-findings.md",
         }
 
     def test_artifact_path_rejects_unknown_keys(self, tmp_path):
         with pytest.raises(KeyError):
             run_paths.artifact_path(tmp_path, "nope")
-
-    def test_synthesis_started_marker_and_scratch(self, tmp_path):
-        assert run_paths.synthesis_started_marker(tmp_path, "decision-reviewer") == tmp_path / "synthesis" / "decision-reviewer.synthesis-started"
-        assert run_paths.scratch_dir(tmp_path) == tmp_path / "tmp"
 
 
 class TestArtifactLiteralAuthority:
@@ -435,55 +439,15 @@ class TestCli:
         config = json.loads((run_dir / "run-config.json").read_text())
         assert config == {"target_dir": str(run_dir.parent.parent)}
 
-    @pytest.mark.parametrize(
-        ("kind", "target_name"),
-        [
-            ("pr", "42"),
-            ("branch", "feature/durable"),
-            ("iterative", "feature/durable"),
-        ],
-    )
-    def test_all_command_kinds_share_containment_layout_and_retention(
-        self, home, kind, target_name
-    ):
-        allocated = []
-        for _ in range(run_paths.KEEP_RUNS + 1):
-            result = self._run(
-                home,
-                "allocate",
-                "--kind",
-                kind,
-                "--repo-root",
-                "/repo",
-                "--target",
-                target_name,
-            )
-            assert result.returncode == 0, result.stderr
-            allocated.append(Path(result.stdout.strip()))
-
-        target = run_paths.target_dir(kind, "/repo", target_name)
-        survivors = sorted((target / "runs").iterdir())
-        assert survivors == allocated[-run_paths.KEEP_RUNS:]
-        assert allocated[0] not in survivors
-        assert run_paths.latest_run_dir(target) == allocated[-1]
-        for run_dir in survivors:
-            run_dir.resolve().relative_to((target / "runs").resolve())
-            assert {child.name for child in run_dir.iterdir()} == {
-                "run-config.json",
-                "pipeline",
-                "reviewers",
-                "synthesis",
-                "tmp",
-            }
-
     def test_latest_finds_the_allocated_run(self, home):
         first = self._run(home, "allocate", "--kind", "pr", "--repo-root", "/r", "--target", "42")
         latest = self._run(home, "latest", "--kind", "pr", "--repo-root", "/r", "--target", "42")
         assert latest.returncode == 0
         assert Path(latest.stdout.strip()).resolve() == Path(first.stdout.strip()).resolve()
 
-    @pytest.mark.parametrize("target", ["", ".", "..", "..."])
-    def test_allocate_rejects_dot_only_direct_cli_targets(self, home, target):
+    def test_allocate_rejects_a_dot_only_direct_cli_target(self, home):
+        """The dot-only value table is `TestSafeSegment`'s; this is the
+        CLI's own proof of a nonzero exit and no directory created."""
         result = self._run(
             home,
             "allocate",
@@ -492,7 +456,7 @@ class TestCli:
             "--repo-root",
             "/r",
             "--target",
-            target,
+            "",
         )
 
         assert result.returncode != 0

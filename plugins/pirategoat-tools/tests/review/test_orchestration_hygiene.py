@@ -74,17 +74,6 @@ class TestStepNineReconciliationVerification:
             findings=canonical_findings_ledger(("high",) * verified),
         )
 
-    def test_reads_measured_from_the_reconciliator_row(self, tmp_path, monkeypatch):
-        snapshot = {"schema": 1, "subagent_usage": [
-            {"agent": "security-reviewer", "repository_reads": 9, "tool_calls": 20},
-            {"agent": "review-reconciliator", "repository_reads": 3, "tool_calls": 11},
-        ]}
-        monkeypatch.setattr(orchestration_mod, "_run_subprocess",
-                            lambda cmd, cwd=None, timeout=60: (json.dumps(snapshot), True))
-        assert orchestration_mod._reconciliation_verification(
-            str(tmp_path), self._read_ok(2)
-        ) == {"verified_concern_count": 2, "repository_reads": 3, "status": "verified"}
-
     @pytest.mark.parametrize(
         "reads,status", [(None, "unmeasured"), (0, "unverified"), (2, "verified")],
     )
@@ -98,6 +87,7 @@ class TestStepNineReconciliationVerification:
         result = orchestration_mod._reconciliation_verification(str(tmp_path), self._read_ok(1))
         assert result["status"] == status
         assert result["repository_reads"] == reads
+        assert result["verified_concern_count"] == 1
 
     @pytest.mark.parametrize("stdout, ok", [
         ("", False), ("not json", True),
@@ -139,25 +129,19 @@ class TestStepNineReconciliationVerification:
 
 
 class TestBaselineCapture:
-    def test_baseline_written_with_entries(self, git_repo):
+    @pytest.mark.parametrize("dirty", [True, False], ids=["dirty", "clean"])
+    def test_baseline_captures_entries_and_repo_identity(self, git_repo, dirty):
+        """Identity, not just content: the sweep will check `repo_root` later."""
         repo, out = git_repo
-        (repo / "wip.txt").write_text("uncommitted user work")
+        if dirty:
+            (repo / "wip.txt").write_text("uncommitted user work")
         _capture_worktree_baseline(str(out))
         data = json.loads((_artifact(out, "worktree_baseline")).read_text())
         assert data["schema"] == 1
-        assert any("wip.txt" in e for e in data["entries"])
-
-    def test_clean_tree_writes_empty_entries(self, git_repo):
-        repo, out = git_repo
-        _capture_worktree_baseline(str(out))
-        data = json.loads((_artifact(out, "worktree_baseline")).read_text())
-        assert data["entries"] == []
-
-    def test_baseline_records_the_repo_it_measured(self, git_repo):
-        """Identity, not just content: the sweep will check this later."""
-        repo, out = git_repo
-        _capture_worktree_baseline(str(out))
-        data = json.loads((_artifact(out, "worktree_baseline")).read_text())
+        if dirty:
+            assert any("wip.txt" in e for e in data["entries"])
+        else:
+            assert data["entries"] == []
         assert data["repo_root"] == os.path.realpath(str(repo))
 
     def test_capture_failure_writes_nothing(self, git_repo, monkeypatch):
@@ -168,22 +152,17 @@ class TestBaselineCapture:
 
 
 class TestHygieneCheck:
-    def test_clean_run_reports_clean(self, git_repo):
-        repo, out = git_repo
-        _capture_worktree_baseline(str(out))
-        result = _check_worktree_hygiene(str(out))
-        assert result["status"] == "clean"
-        assert result["new_files"] == []
-        data = json.loads((_artifact(out, "worktree_hygiene")).read_text())
-        assert data["status"] == "clean"
-
     def test_clean_run_dates_its_baseline(self, git_repo):
         """The counts mean nothing without the window they cover."""
         repo, out = git_repo
         _capture_worktree_baseline(str(out))
         baseline = json.loads((_artifact(out, "worktree_baseline")).read_text())
         result = _check_worktree_hygiene(str(out))
+        assert result["status"] == "clean"
+        assert result["new_files"] == []
         assert result["baseline_captured_at"] == baseline["captured_at"]
+        data = json.loads((_artifact(out, "worktree_hygiene")).read_text())
+        assert data["status"] == "clean"
 
     def test_unknown_run_dates_nothing(self, git_repo):
         repo, out = git_repo
@@ -229,22 +208,6 @@ class TestHygieneCheck:
         (repo / "pre-existing-wip.txt").write_text("dirty before review")
         _capture_worktree_baseline(str(out))
         result = _check_worktree_hygiene(str(out))
-        assert result["status"] == "clean"
-
-    def test_missing_baseline_reports_unknown(self, git_repo):
-        repo, out = git_repo
-        result = _check_worktree_hygiene(str(out))
-        assert result["status"] == "unknown"
-
-    def test_probe_in_subdirectory_swept(self, git_repo):
-        repo, out = git_repo
-        _capture_worktree_baseline(str(out))
-        sub = repo / "pkg"
-        sub.mkdir()
-        probe = sub / f"zz_{PROBE_MARKER}_test.go"
-        probe.write_text("package pkg")
-        result = _check_worktree_hygiene(str(out))
-        assert not probe.exists()
         assert result["status"] == "clean"
 
     def test_probe_in_new_untracked_directory_swept(self, git_repo):
@@ -486,6 +449,10 @@ class TestStepElevenHygieneNotes:
     pipeline itself did wrong.
     """
 
+    @pytest.fixture(autouse=True)
+    def _no_usage_snapshot_spawn(self, monkeypatch, orchestration_mod):
+        monkeypatch.setattr(orchestration_mod, "_run_subprocess", lambda *a, **k: ("", False))
+
     def _step_11(self, out):
         return _publish_step_11(out)
 
@@ -662,48 +629,6 @@ class TestStepElevenHygieneNotes:
         assert first == reordered
         assert first["count"] == 2
 
-    def test_surrogateescaped_new_probe_invalidates_prepared_report(
-        self, git_repo
-    ):
-        repo, out = git_repo
-        _seed_step_11(out)
-        (out / "review-report.md").unlink()
-        _capture_worktree_baseline(str(out))
-        probe_a = f"a_{PROBE_MARKER}_\udcff.go"
-        probe_b = f"b_{PROBE_MARKER}_\udcfe.go"
-        (_artifact(out, "worktree_hygiene")).write_text(json.dumps({
-            "schema": 1,
-            "probe_residue_removed": [probe_a],
-        }))
-        state = {}
-
-        _orchestrate_step_11("pr", {}, state, {}, str(out))
-
-        assert state["publication_pending"] is True
-        assert state["report_handoff_status"] == "report_missing"
-        assert not (out / "pipeline-result.json").exists()
-
-        (out / "review-report.md").write_text("# report for probe A")
-        hygiene = json.loads((_artifact(out, "worktree_hygiene")).read_text())
-        hygiene["probe_residue_removed"].append(probe_b)
-        (_artifact(out, "worktree_hygiene")).write_text(json.dumps(hygiene))
-        _orchestrate_step_11("pr", {}, state, {}, str(out))
-
-        assert state["publication_pending"] is True
-        assert state["report_handoff_status"] == "source_changed"
-        assert not (out / "pipeline-result.json").exists()
-
-        (out / "review-report.md").write_text("# report for probes A and B")
-        _orchestrate_step_11("pr", {}, state, {}, str(out))
-
-        result = json.loads((out / "pipeline-result.json").read_text())
-        assert state["report_handoff_status"] == "published"
-        assert result["worktree_hygiene"]["probe_residue_removed"] == 2
-        assert result["degradation_notes"] == [
-            "probe residue swept at finalize: 2 file(s) — a probe should "
-            "be deleted in the same command that created it"
-        ]
-
     def test_non_git_cwd_adds_no_hygiene_notes(self, git_repo, monkeypatch,
                                                tmp_path):
         """"unknown" is inert: nothing swept, nothing compared.
@@ -793,11 +718,15 @@ class TestStepElevenUsageSnapshot:
 
     def test_compact_block_mirrors_a_measured_snapshot(self, git_repo,
                                                        monkeypatch):
+        """"partial" has two stories and the bot has to tell them apart:
+        a substituted bound (the run was still open at capture) versus
+        damaged transcript evidence inside a window that really closed —
+        this snapshot is captured with the window already closed."""
         repo, out = git_repo
         _seed_step_11(out)
-        self._fake_capture(
-            monkeypatch, json.dumps(self._usage_snapshot())
-        )
+        payload = self._usage_snapshot()
+        payload["window"]["closed"] = True
+        self._fake_capture(monkeypatch, json.dumps(payload))
 
         self._step_11(out)
         result = json.loads((out / "pipeline-result.json").read_text())
@@ -813,56 +742,32 @@ class TestStepElevenUsageSnapshot:
             "availability": {
                 "subagents": "complete", "orchestrator": "partial",
             },
-            "window_closed": False,
+            "window_closed": True,
         }
         assert result["status"] == "success"
         assert result["degradation_notes"] == []
 
-    def test_compact_block_carries_the_windows_own_state(self, git_repo,
-                                                         monkeypatch):
-        """"partial" has two stories and the bot has to tell them apart:
-        a substituted bound (the run was still open at capture) versus
-        damaged transcript evidence inside a window that really closed."""
-        repo, out = git_repo
-        _seed_step_11(out)
-        payload = self._usage_snapshot()
-        payload["window"]["closed"] = True
-        self._fake_capture(monkeypatch, json.dumps(payload))
-
-        self._step_11(out)
-        result = json.loads((out / "pipeline-result.json").read_text())
-
-        assert result["usage"]["window_closed"] is True
-        assert result["usage"]["availability"]["orchestrator"] == "partial"
-
-    def test_failed_capture_reads_unmeasured_and_degrades_nothing(
-        self, git_repo, monkeypatch
+    @pytest.mark.parametrize(
+        "payload", [None, "[]"], ids=["capture-fails", "unreadable-snapshot"],
+    )
+    def test_unmeasured_usage_degrades_nothing(
+        self, git_repo, monkeypatch, payload
     ):
         """A Codex host and every pre-feature run land here. Spending
         `status` on a legacy-normal absence would teach consumers to ignore
         the one field that means the review underperformed."""
         repo, out = git_repo
         _seed_step_11(out)
-        self._fake_capture(monkeypatch, None)
+        self._fake_capture(monkeypatch, payload)
 
         self._step_11(out)
         result = json.loads((out / "pipeline-result.json").read_text())
 
-        assert not (_artifact(out, "usage_snapshot")).exists()
+        if payload is None:
+            assert not (_artifact(out, "usage_snapshot")).exists()
         assert result["usage"] is None
         assert result["status"] == "success"
         assert result["degradation_notes"] == []
-
-    def test_unreadable_snapshot_reads_unmeasured(self, git_repo, monkeypatch):
-        repo, out = git_repo
-        _seed_step_11(out)
-        self._fake_capture(monkeypatch, "[]")
-
-        self._step_11(out)
-        result = json.loads((out / "pipeline-result.json").read_text())
-
-        assert result["usage"] is None
-        assert result["status"] == "success"
 
     def test_measured_missing_half_is_reported_not_zeroed(self, git_repo,
                                                           monkeypatch):

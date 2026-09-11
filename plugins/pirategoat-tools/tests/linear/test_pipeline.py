@@ -36,20 +36,9 @@ def mod():
 # ---------------------------------------------------------------------------
 
 class TestStepSequence:
-    def test_has_15_steps(self, mod):
-        assert len(mod.STEP_SEQUENCE) == TOTAL_STEPS
-
     def test_step_numbers_are_sequential(self, mod):
         numbers = [s["step"] for s in mod.STEP_SEQUENCE]
         assert numbers == list(range(1, TOTAL_STEPS + 1))
-
-    def test_all_steps_have_required_keys(self, mod):
-        required = {"step", "title", "phase", "condition"}
-        for s in mod.STEP_SEQUENCE:
-            assert required.issubset(s.keys()), f"Step {s.get('step')} missing keys"
-
-    def test_step_map_covers_all_steps(self, mod):
-        assert len(mod._STEP_MAP) == TOTAL_STEPS
 
     def test_phases_are_valid(self, mod):
         valid_phases = {"SETUP", "INVESTIGATION", "IMPLEMENTATION", "VALIDATION", "OUTPUT"}
@@ -70,30 +59,27 @@ class TestStepSequence:
 # ---------------------------------------------------------------------------
 # Condition Evaluation
 # ---------------------------------------------------------------------------
+#
+# `_eval_condition` is private; every branch reached by a real STEP_SEQUENCE
+# entry is exercised through the public get_active_steps in TestActiveSteps
+# and TestClarityGateRouting: "always" (steps 1-8, 15), "fix_mode_and_unresolved"
+# (steps 9-11, 14, including the mode/resolved/clarity_blocked/override
+# sub-branches) and "fix_mode_and_unresolved_review_needed" (steps 12-13,
+# including the small/medium/large complexity sub-branches). The unknown-
+# condition default is defensive code for a STEP_SEQUENCE typo that
+# test_conditions_are_valid already forbids, so it needs no test.
+#
+# "fix_mode_only" is a valid condition (test_conditions_are_valid accepts it)
+# that no current STEP_SEQUENCE entry uses, so get_active_steps never reaches
+# it. Its two rows stay here directly on _eval_condition since it is
+# otherwise completely untested.
 
 class TestConditionEvaluation:
-    def test_always_is_true(self, mod):
-        assert mod._eval_condition("always", "investigate", {}, {}, {})
-        assert mod._eval_condition("always", "fix", {}, {}, {})
-
     def test_fix_mode_only_true_in_fix(self, mod):
         assert mod._eval_condition("fix_mode_only", "fix", {}, {}, {})
 
     def test_fix_mode_only_false_in_investigate(self, mod):
         assert not mod._eval_condition("fix_mode_only", "investigate", {}, {}, {})
-
-    def test_unknown_condition_returns_false(self, mod):
-        assert not mod._eval_condition("nonexistent_condition", "fix", {}, {}, {})
-
-    def test_fix_mode_and_unresolved_true_when_unresolved(self, mod):
-        assert mod._eval_condition("fix_mode_and_unresolved", "fix", {}, {}, {})
-
-    def test_fix_mode_and_unresolved_false_when_resolved(self, mod):
-        state = {"issue_resolved": True}
-        assert not mod._eval_condition("fix_mode_and_unresolved", "fix", {}, state, {})
-
-    def test_fix_mode_and_unresolved_false_in_investigate(self, mod):
-        assert not mod._eval_condition("fix_mode_and_unresolved", "investigate", {}, {}, {})
 
 
 # ---------------------------------------------------------------------------
@@ -124,13 +110,8 @@ class TestActiveSteps:
         assert 14 in active
 
     def test_medium_complexity_keeps_iterative_review_steps(self, mod):
+        """medium and large take the same != "small" branch; one row proves it."""
         state = {"complexity": {"complexity": "medium"}}
-        active = mod.get_active_steps("fix", {}, state, {})
-        assert 12 in active
-        assert 13 in active
-
-    def test_large_complexity_keeps_iterative_review_steps(self, mod):
-        state = {"complexity": {"complexity": "large"}}
         active = mod.get_active_steps("fix", {}, state, {})
         assert 12 in active
         assert 13 in active
@@ -144,10 +125,6 @@ class TestActiveSteps:
         # Steps 1-8 and 15 should still be active
         for step in [1, 2, 3, 4, 5, 6, 7, 8, 15]:
             assert step in active
-
-    def test_returns_set(self, mod):
-        active = mod.get_active_steps("investigate", {}, {}, {})
-        assert isinstance(active, set)
 
 
 # ---------------------------------------------------------------------------
@@ -216,23 +193,13 @@ class TestNextStep:
     def test_returns_none_for_empty_active(self, mod):
         assert mod.compute_next_step(1, set()) is None
 
-    def test_investigate_mode_7_to_8(self, mod):
-        active = mod.get_active_steps("investigate", {}, {}, {})
-        result = mod.compute_next_step(7, active)
-        assert result["step"] == 8
-        assert result["skip_reason"] is None
-
     def test_investigate_mode_8_to_15(self, mod):
+        """The sequential 7→8 branch is pinned by test_no_skip_reason_when_sequential;
+        this covers the interesting 8→15 skip."""
         active = mod.get_active_steps("investigate", {}, {}, {})
         result = mod.compute_next_step(8, active)
         assert result["step"] == 15
         assert result["skip_reason"] is not None
-
-    def test_fix_mode_7_to_8(self, mod):
-        active = mod.get_active_steps("fix", {}, {}, {})
-        result = mod.compute_next_step(7, active)
-        assert result["step"] == 8
-        assert result["skip_reason"] is None
 
     def test_small_complexity_routes_11_to_14(self, mod):
         active = mod.get_active_steps("fix", {}, {"complexity": {"complexity": "small"}}, {})
@@ -298,79 +265,66 @@ class TestContextReading:
 # Repo Sanity Check
 # ---------------------------------------------------------------------------
 
+REPO_MATCH_ROWS = [
+    pytest.param(
+        None, 0, "", True, None, None,
+        id="no-repo-slug-skips-check",
+    ),
+    pytest.param(
+        "Automattic/woocommerce-payments", 0,
+        "git@github.com:Automattic/woocommerce-payments.git",
+        True, "Automattic/woocommerce-payments", None,
+        id="ssh-url-matches",
+    ),
+    pytest.param(
+        "Automattic/woocommerce-payments", 0,
+        "https://github.com/Automattic/woocommerce-payments.git",
+        True, None, None,
+        id="https-url-matches",
+    ),
+    pytest.param(
+        "Automattic/woocommerce-payments", 0,
+        "git@github.com:automattic/WooCommerce-Payments.git",
+        True, None, None,
+        id="case-insensitive",
+    ),
+    pytest.param(
+        "Automattic/woocommerce-payments", 0,
+        "git@github.com:Automattic/wpcom.git",
+        False, "Automattic/wpcom", "Automattic/woocommerce-payments",
+        id="mismatch-detected",
+    ),
+    pytest.param(
+        "Automattic/woocommerce-payments", 1, "",
+        True, None, None,
+        id="git-failure-skips-check",
+    ),
+]
+
+
 class TestCheckRepoMatch:
-    def test_matches_when_no_repo_slug_in_context(self, mod):
-        """No repo_slug → skip check, return True."""
-        matches, actual, expected = mod.check_repo_match({})
-        assert matches is True
-
-    def test_matches_ssh_url(self, mod, monkeypatch):
-        """SSH remote URL matches repo_slug."""
+    @pytest.mark.parametrize(
+        "repo_slug,returncode,stdout,expected_matches,expected_actual,expected_expected",
+        REPO_MATCH_ROWS,
+    )
+    def test_check_repo_match(self, mod, monkeypatch, repo_slug, returncode, stdout,
+                               expected_matches, expected_actual, expected_expected):
         def fake_subprocess(cmd, **kwargs):
             class R:
-                returncode = 0
-                stdout = "git@github.com:Automattic/woocommerce-payments.git"
-                stderr = ""
-            return R()
+                pass
+            r = R()
+            r.returncode = returncode
+            r.stdout = stdout
+            r.stderr = "" if returncode == 0 else "not a git repo"
+            return r
         monkeypatch.setattr(subprocess, "run", fake_subprocess)
-        ctx = {"repo_slug": "Automattic/woocommerce-payments"}
+        ctx = {"repo_slug": repo_slug} if repo_slug else {}
         matches, actual, expected = mod.check_repo_match(ctx)
-        assert matches is True
-        assert actual == "Automattic/woocommerce-payments"
-
-    def test_matches_https_url(self, mod, monkeypatch):
-        """HTTPS remote URL matches repo_slug."""
-        def fake_subprocess(cmd, **kwargs):
-            class R:
-                returncode = 0
-                stdout = "https://github.com/Automattic/woocommerce-payments.git"
-                stderr = ""
-            return R()
-        monkeypatch.setattr(subprocess, "run", fake_subprocess)
-        ctx = {"repo_slug": "Automattic/woocommerce-payments"}
-        matches, actual, expected = mod.check_repo_match(ctx)
-        assert matches is True
-
-    def test_case_insensitive(self, mod, monkeypatch):
-        """Comparison is case-insensitive (GitHub slugs are)."""
-        def fake_subprocess(cmd, **kwargs):
-            class R:
-                returncode = 0
-                stdout = "git@github.com:automattic/WooCommerce-Payments.git"
-                stderr = ""
-            return R()
-        monkeypatch.setattr(subprocess, "run", fake_subprocess)
-        ctx = {"repo_slug": "Automattic/woocommerce-payments"}
-        matches, _, _ = mod.check_repo_match(ctx)
-        assert matches is True
-
-    def test_mismatch_detected(self, mod, monkeypatch):
-        """Different repo returns False with both slugs."""
-        def fake_subprocess(cmd, **kwargs):
-            class R:
-                returncode = 0
-                stdout = "git@github.com:Automattic/wpcom.git"
-                stderr = ""
-            return R()
-        monkeypatch.setattr(subprocess, "run", fake_subprocess)
-        ctx = {"repo_slug": "Automattic/woocommerce-payments"}
-        matches, actual, expected = mod.check_repo_match(ctx)
-        assert matches is False
-        assert actual == "Automattic/wpcom"
-        assert expected == "Automattic/woocommerce-payments"
-
-    def test_git_failure_skips_check(self, mod, monkeypatch):
-        """If git fails, skip check (don't block on infra issues)."""
-        def fake_subprocess(cmd, **kwargs):
-            class R:
-                returncode = 1
-                stdout = ""
-                stderr = "not a git repo"
-            return R()
-        monkeypatch.setattr(subprocess, "run", fake_subprocess)
-        ctx = {"repo_slug": "Automattic/woocommerce-payments"}
-        matches, _, _ = mod.check_repo_match(ctx)
-        assert matches is True
+        assert matches is expected_matches
+        if expected_actual is not None:
+            assert actual == expected_actual
+        if expected_expected is not None:
+            assert expected == expected_expected
 
 
 # ---------------------------------------------------------------------------
@@ -456,36 +410,22 @@ class TestRepoMismatchOrchestration:
 # Stale Artifact Cleanup
 # ---------------------------------------------------------------------------
 
+STALE_CLEANUP_ROWS = [
+    pytest.param("pipeline-state.json", "{}", False, id="pipeline-state-removed"),
+    pytest.param("pipeline-result.json", "{}", False, id="pipeline-result-removed"),
+    pytest.param("pipeline-events.jsonl", "", False, id="pipeline-events-removed"),
+    pytest.param("run-config.json", '{"mode": "fix"}', True, id="run-config-preserved"),
+    pytest.param("issue-context.json", '{"issue_id": "X-1"}', True, id="issue-context-preserved"),
+    pytest.param("clarity-assessment.json", "{}", False, id="clarity-assessment-removed"),
+]
+
+
 class TestStaleArtifactCleanup:
-    def test_removes_pipeline_state(self, mod, tmp_path):
-        (tmp_path / "pipeline-state.json").write_text("{}")
+    @pytest.mark.parametrize("filename,content,survives", STALE_CLEANUP_ROWS)
+    def test_stale_artifact_cleanup(self, mod, tmp_path, filename, content, survives):
+        (tmp_path / filename).write_text(content)
         mod.clean_stale_artifacts(str(tmp_path))
-        assert not (tmp_path / "pipeline-state.json").exists()
-
-    def test_removes_pipeline_result(self, mod, tmp_path):
-        (tmp_path / "pipeline-result.json").write_text("{}")
-        mod.clean_stale_artifacts(str(tmp_path))
-        assert not (tmp_path / "pipeline-result.json").exists()
-
-    def test_removes_pipeline_events(self, mod, tmp_path):
-        (tmp_path / "pipeline-events.jsonl").write_text("")
-        mod.clean_stale_artifacts(str(tmp_path))
-        assert not (tmp_path / "pipeline-events.jsonl").exists()
-
-    def test_preserves_run_config(self, mod, tmp_path):
-        (tmp_path / "run-config.json").write_text('{"mode": "fix"}')
-        mod.clean_stale_artifacts(str(tmp_path))
-        assert (tmp_path / "run-config.json").exists()
-
-    def test_preserves_issue_context(self, mod, tmp_path):
-        (tmp_path / "issue-context.json").write_text('{"issue_id": "X-1"}')
-        mod.clean_stale_artifacts(str(tmp_path))
-        assert (tmp_path / "issue-context.json").exists()
-
-    def test_removes_clarity_assessment(self, mod, tmp_path):
-        (tmp_path / "clarity-assessment.json").write_text("{}")
-        mod.clean_stale_artifacts(str(tmp_path))
-        assert not (tmp_path / "clarity-assessment.json").exists()
+        assert (tmp_path / filename).exists() is survives
 
 
 # ---------------------------------------------------------------------------
@@ -493,52 +433,30 @@ class TestStaleArtifactCleanup:
 # ---------------------------------------------------------------------------
 
 class TestFormatOutput:
-    def test_includes_header(self, mod):
-        guidance = {
-            "phase": "SETUP",
-            "title": "Parse Input",
-            "situation": ["Mode: investigate"],
-            "actions": ["Read issue-context.json"],
-            "handoff": None,
-            "next_step": {"step": 2, "title": "Fetch Issue", "skip_reason": None},
-            "skip_reason": None,
-        }
-        output = mod.format_output(1, guidance)
-        assert "Step 1" in output
-        assert "SETUP" in output
-        assert "Parse Input" in output
-
-    def test_includes_situation_and_actions(self, mod):
+    def test_includes_header_situation_actions_and_handoff(self, mod):
+        """The section markers the orchestrator parses: header, SITUATION,
+        ACTIONS, HANDOFF."""
         guidance = {
             "phase": "INVESTIGATION",
             "title": "Investigate",
             "situation": ["Bug investigation"],
             "actions": ["Search for duplicates"],
-            "handoff": None,
-            "next_step": None,
-            "skip_reason": None,
-        }
-        output = mod.format_output(5, guidance)
-        assert "SITUATION" in output
-        assert "Bug investigation" in output
-        assert "ACTIONS" in output
-        assert "Search for duplicates" in output
-
-    def test_includes_handoff_when_present(self, mod):
-        guidance = {
-            "phase": "OUTPUT",
-            "title": "Write Report",
-            "situation": [],
-            "actions": [],
             "handoff": ["investigation-report.md must exist"],
             "next_step": None,
             "skip_reason": None,
         }
-        output = mod.format_output(6, guidance)
+        output = mod.format_output(5, guidance)
+        assert "Step 5" in output
+        assert "INVESTIGATION" in output
+        assert "Investigate" in output
+        assert "SITUATION" in output
+        assert "Bug investigation" in output
+        assert "ACTIONS" in output
+        assert "Search for duplicates" in output
         assert "HANDOFF" in output
         assert "investigation-report.md must exist" in output
 
-    def test_pipeline_complete_when_no_next_step(self, mod):
+    def test_pipeline_complete_when_no_next_step_else_points_at_next(self, mod):
         guidance = {
             "phase": "OUTPUT",
             "title": "Present Results",
@@ -548,36 +466,13 @@ class TestFormatOutput:
             "next_step": None,
             "skip_reason": None,
         }
-        output = mod.format_output(15, guidance)
-        assert "PIPELINE COMPLETE" in output
+        assert "PIPELINE COMPLETE" in mod.format_output(15, guidance)
 
-    def test_next_step_pointer(self, mod):
-        guidance = {
-            "phase": "SETUP",
-            "title": "Parse Input",
-            "situation": [],
-            "actions": [],
-            "handoff": None,
-            "next_step": {"step": 2, "title": "Fetch Issue", "skip_reason": None},
-            "skip_reason": None,
-        }
+        guidance["next_step"] = {"step": 2, "title": "Fetch Issue", "skip_reason": None}
         output = mod.format_output(1, guidance)
         assert "Step 2" in output
         assert "Fetch Issue" in output
         assert "pipeline.py" in output
-
-    def test_skip_reason_in_output(self, mod):
-        guidance = {
-            "phase": "OUTPUT",
-            "title": "Present Results",
-            "situation": [],
-            "actions": [],
-            "handoff": None,
-            "next_step": None,
-            "skip_reason": "Skipped: Step 9 (Write Plan), Step 10 (Implement)",
-        }
-        output = mod.format_output(15, guidance)
-        assert "Skipped" in output
 
 
 # ---------------------------------------------------------------------------
@@ -585,14 +480,6 @@ class TestFormatOutput:
 # ---------------------------------------------------------------------------
 
 class TestStepGuidance:
-    def test_returns_dict_for_valid_step(self, mod):
-        result = mod.get_step_guidance(1, "investigate", {}, {}, config={}, output_dir="/tmp")
-        assert isinstance(result, dict)
-        assert "phase" in result
-        assert "title" in result
-        assert "situation" in result
-        assert "actions" in result
-
     def test_returns_none_for_invalid_step(self, mod):
         assert mod.get_step_guidance(99, "investigate", {}, {}, config={}, output_dir="/tmp") is None
 
@@ -613,8 +500,9 @@ class TestStepGuidance:
 # ---------------------------------------------------------------------------
 
 class TestCLI:
-    def test_step_1_creates_state_file(self, tmp_path):
-        # Write run-config
+    def test_step_1_creates_state_cleans_stale_artifacts_and_prints_guidance(self, tmp_path):
+        # Create a stale artifact from a previous run
+        (tmp_path / "pipeline-result.json").write_text("{}")
         config = {"mode": "investigate", "interactive": False}
         (tmp_path / "run-config.json").write_text(json.dumps(config))
         (tmp_path / "issue-context.json").write_text(json.dumps({"issue_id": "TEST-1"}))
@@ -627,33 +515,7 @@ class TestCLI:
         )
         assert result.returncode == 0, f"stderr: {result.stderr}"
         assert (tmp_path / "pipeline-state.json").exists()
-
-    def test_step_1_cleans_stale_artifacts(self, tmp_path):
-        # Create stale artifact
-        (tmp_path / "pipeline-result.json").write_text("{}")
-        config = {"mode": "investigate", "interactive": False}
-        (tmp_path / "run-config.json").write_text(json.dumps(config))
-        (tmp_path / "issue-context.json").write_text(json.dumps({"issue_id": "TEST-1"}))
-
-        subprocess.run(
-            [sys.executable, str(PIPELINE_SCRIPT),
-             "--step", "1", "--mode", "investigate",
-             "--output-dir", str(tmp_path), "--issue-id", "TEST-1"],
-            capture_output=True, text=True, timeout=10,
-        )
         assert not (tmp_path / "pipeline-result.json").exists()
-
-    def test_outputs_guidance_text(self, tmp_path):
-        config = {"mode": "investigate", "interactive": False}
-        (tmp_path / "run-config.json").write_text(json.dumps(config))
-        (tmp_path / "issue-context.json").write_text(json.dumps({"issue_id": "TEST-1"}))
-
-        result = subprocess.run(
-            [sys.executable, str(PIPELINE_SCRIPT),
-             "--step", "1", "--mode", "investigate",
-             "--output-dir", str(tmp_path), "--issue-id", "TEST-1"],
-            capture_output=True, text=True, timeout=10,
-        )
         assert "Step 1" in result.stdout
         assert "SETUP" in result.stdout
 

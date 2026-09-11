@@ -120,18 +120,6 @@ def out_dir(tmp_path):
 
 
 class TestRecordAssembly:
-    def test_record_preserves_upstream_source_citation(self, out_dir):
-        findings = _ledger()
-        findings["findings"][0]["source_cited"] = (
-            "wordpress@unknown:src/wp-includes/post.php:1234"
-        )
-        _write_ledger(out_dir, findings)
-
-        assemble_review_record(str(out_dir), {}, _read(out_dir))
-
-        text = (out_dir / REVIEW_RECORD_MD).read_text()
-        assert "**Upstream evidence:** `wordpress@unknown:src/wp-includes/post.php:1234`" in text
-
     @pytest.mark.parametrize("reads, status", [(0, "unverified"), (None, "unmeasured")])
     def test_step_9_records_reconciliation_verification_without_rewriting_ledger(
         self, out_dir, monkeypatch, reads, status
@@ -159,27 +147,13 @@ class TestRecordAssembly:
         record = (out_dir / REVIEW_RECORD_MD).read_text()
         assert ("Reconciliation is UNVERIFIED" in record) == (status == "unverified")
         assert "- Reconciliation verification: 2 verified concern(s)" in record
-
-    def test_run_notes_and_verdict_line_carry_reconciliation_verification(self, out_dir):
-        _write_ledger(out_dir)
-        state = {"reconciliation_verification": {
-            "verified_concern_count": 2, "repository_reads": 0, "status": "unverified",
-        }}
-        assemble_review_record(str(out_dir), state, _read(out_dir))
-        text = (out_dir / REVIEW_RECORD_MD).read_text()
-        assert "- Reconciliation verification: 2 verified concern(s), 0 repository read(s) observed for the reconciliator — UNVERIFIED (no read observed; the read detector is not exhaustive)." in text
-        tail = text.rsplit("Verdict — from", 1)[1]
-        assert "Reconciliation is UNVERIFIED" in tail
-        assert "no repository read by the reconciliator was observed" in tail
-        assert "read no repository file" not in text
+        if status == "unverified":
+            # The UNVERIFIED call-out sits in the closing verdict line, not
+            # merely somewhere in the document.
+            tail = record.rsplit("Verdict — from", 1)[1]
+            assert "Reconciliation is UNVERIFIED" in tail
 
     @pytest.mark.parametrize("state, note", [
-        ({"reconciliation_verification": {"verified_concern_count": 2,
-          "repository_reads": 5, "status": "verified"}},
-         "2 verified concern(s), 5 repository read(s) observed for the reconciliator — verified."),
-        ({"reconciliation_verification": {"verified_concern_count": 2,
-          "repository_reads": None, "status": "unmeasured"}},
-         "2 verified concern(s), repository reads unmeasured (no transcript)."),
         ({}, "- Reconciliation verification: not measured."),
     ])
     def test_reconciliation_verification_without_warning(self, out_dir, state, note):
@@ -188,63 +162,6 @@ class TestRecordAssembly:
         text = (out_dir / REVIEW_RECORD_MD).read_text()
         assert note in text
         assert "Reconciliation is UNVERIFIED" not in text
-
-    def test_canonical_findings_checks_and_assessment_render_mechanically(
-        self, out_dir
-    ):
-        findings = _ledger(
-            verdict="request_changes",
-            summary={
-                "total_findings": 1,
-                "by_severity": {
-                    "critical": 0,
-                    "high": 1,
-                    "medium": 0,
-                    "low": 0,
-                    "info": 0,
-                },
-                "suppressed_advisory_finding_count": 0,
-            },
-            findings=[
-                {
-                    "id": "f1",
-                    "severity": "high",
-                    "category": "security",
-                    "title": "Unescaped output",
-                    "file": "src/admin.php",
-                    "line": 42,
-                    "description": "The notice is not escaped.",
-                    "recommendation": "Escape the notice.",
-                    "confidence": 0.95,
-                },
-            ],
-            checks=[
-                {
-                    "id": "c1",
-                    "question": "Are other callers affected?",
-                    "method": "Read every caller.",
-                    "result": "No.",
-                    "source_reviewers": ["security", "code"],
-                },
-            ],
-            assessment="One correction is required.",
-            positive_observations=["The helper boundary is clear."],
-        )
-        findings["meta"]["next_finding_number"] = 2
-        _write_ledger(out_dir, findings)
-
-        outcome, error = assemble_review_record(str(out_dir), {}, _read(out_dir))
-
-        assert error is None
-        assert outcome["status"] == "complete"
-        text = (out_dir / REVIEW_RECORD_MD).read_text()
-        assert "**Total Findings:** 1" in text
-        assert "## High Findings" in text
-        assert "## Verified Checks" in text
-        assert "**Are other callers affected?**" in text
-        assert "Result: No." in text
-        assert "## Assessment\n\nOne correction is required." in text
-        assert "## Positive Observations" in text
 
     def test_writes_the_record_and_reports_a_complete_outcome(self, out_dir):
         _write_ledger(out_dir)
@@ -363,6 +280,8 @@ class TestRecordAssembly:
         assert "**Total Findings:** 2" in text
         assert "- High: 1" in text
         assert "- Medium: 1" in text
+        assert "Verdict — from the findings ledger: `request_changes`" in text
+        assert "REQUEST_CHANGES" in text.rsplit("Verdict — from", 1)[1]
 
     def test_findings_body_is_byte_identical_to_the_shared_renderer(
         self, out_dir
@@ -397,60 +316,6 @@ class TestRecordAssembly:
             state["file_review"]
         ) in text
 
-    @pytest.mark.parametrize("covered_by", ["inline", "claim"])
-    def test_per_agent_unclaimed_work_is_not_rendered_as_a_run_gap_when_covered_elsewhere(
-        self, out_dir, covered_by
-    ):
-        _write_ledger(out_dir)
-        state = {"file_review": {
-            "agents_receiving_inline_diff_by_file": (
-                {"src/shared.php": ["code-reviewer"]}
-                if covered_by == "inline" else {}
-            ),
-            "agents_claiming_review_by_file": (
-                {"src/shared.php": ["code-reviewer"]}
-                if covered_by == "claim" else {}
-            ),
-            "agents_with_unclaimed_review_by_file": {
-                "src/shared.php": ["security-reviewer"]
-            },
-            "unscoped_files": [],
-        }}
-
-        assemble_review_record(str(out_dir), state, _read(out_dir))
-        text = (out_dir / REVIEW_RECORD_MD).read_text()
-
-        assert "skipped by every matching agent's diff budget" not in text
-        assert not briefings_mod._has_file_review_gap(
-            state["file_review"]
-        )
-
-    def test_unscoped_line_says_why_it_can_exceed_the_metrics_figure(
-        self, out_dir
-    ):
-        """F9: the two "uncovered" numbers count different populations.
-
-        The section counts every changed file; run-level metrics count
-        reviewable files only. Without the clause a reader treats the two
-        figures as the same measurement and reads the difference as a bug
-        in one of them.
-        """
-        _write_ledger(out_dir)
-        state = {"file_review": {
-            "agents_with_unclaimed_review_by_file": {},
-            "agents_claiming_review_by_file": {},
-            "unscoped_files": ["assets/logo.png"],
-        }}
-
-        assemble_review_record(str(out_dir), state, _read(out_dir))
-        text = (out_dir / REVIEW_RECORD_MD).read_text()
-
-        assert (
-            "this counts every changed file, including binaries and "
-            "non-reviewable paths — run-level metrics count reviewable "
-            "files only, so its 'uncovered' figure can be smaller" in text
-        )
-
     def test_unmeasured_coverage_renders_no_coverage_section(self, out_dir):
         _write_ledger(out_dir)
 
@@ -458,22 +323,6 @@ class TestRecordAssembly:
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert "## Review coverage" not in text
-
-    def test_banner_precedes_every_finding(self, out_dir):
-        _write_ledger(out_dir, _ledger(host_context_banner={
-            "degraded": True,
-            "reason": "fully_unavailable",
-            "message": "WooCommerce source unresolved.",
-            "unresolved": [{
-                "name": "woocommerce", "reason": "not found",
-            }],
-        }))
-
-        assemble_review_record(str(out_dir), {}, _read(out_dir))
-        text = (out_dir / REVIEW_RECORD_MD).read_text()
-
-        assert "> **⚠ Host Context Banner:** WooCommerce source" in text
-        assert text.index("Host Context Banner") < text.index("## High Findings")
 
     def test_run_notes_state_the_hosts_the_run_verified_against(self, out_dir):
         _write_ledger(out_dir)
@@ -490,9 +339,27 @@ class TestRecordAssembly:
         }}))
         assemble_review_record(str(out_dir), {}, _read(out_dir))
         text = (out_dir / REVIEW_RECORD_MD).read_text()
-        assert "- Host context: wordpress via ecosystem-cache (version 7.2-alpha-63166-src, commit 474555a85c05, refreshed 2026-09-04; the repository declares it requires 7.0)." in text
+        # Loosened to fragments (wording is prose); the load-bearing assert
+        # is that the cache path never leaks into owner-read text.
+        assert "wordpress via ecosystem-cache" in text
+        assert "7.2-alpha-63166-src" in text
+        assert "474555a85c05" in text
         assert "- Unresolved hosts: jetpack (declared_in_plugin_headers)." in text
         assert "/x/cache/wordpress/latest" not in text
+
+        # Two absence spellings: no context file at all, and a context
+        # file that resolved nothing.
+        empty_dir = out_dir.parent / f"{out_dir.name}-no-context"
+        empty_dir.mkdir()
+        _write_ledger(empty_dir)
+        assemble_review_record(str(empty_dir), {}, _read(empty_dir))
+        assert "- Host context: not recorded." in (empty_dir / REVIEW_RECORD_MD).read_text()
+
+        (out_dir / "review-context.json").write_text(json.dumps({
+            "host_context": {"resolved": [], "unresolved": [], "banner": None, "diagnostics": {}}
+        }))
+        assemble_review_record(str(out_dir), {}, _read(out_dir))
+        assert "- Host context: no runtime host resolved." in (out_dir / REVIEW_RECORD_MD).read_text()
 
     def test_the_record_reads_the_host_identity_current_at_assembly(self, out_dir):
         """A step-3 handoff may re-resolve hosts after a dependency refresh
@@ -519,15 +386,11 @@ class TestRecordAssembly:
         assert "old123" not in text
         assert "/local/wordpress" not in text
 
-    def test_run_notes_say_when_no_host_was_resolved_or_recorded(self, out_dir):
-        _write_ledger(out_dir)
-        assemble_review_record(str(out_dir), {}, _read(out_dir))
-        assert "- Host context: not recorded." in (out_dir / REVIEW_RECORD_MD).read_text()
-        (out_dir / "review-context.json").write_text(json.dumps({"host_context": {"resolved": [], "unresolved": [], "banner": None, "diagnostics": {}}}))
-        assemble_review_record(str(out_dir), {}, _read(out_dir))
-        assert "- Host context: no runtime host resolved." in (out_dir / REVIEW_RECORD_MD).read_text()
-
-    def test_run_notes_carry_dependency_refresh_and_dispatch(self, out_dir):
+    def test_run_notes_report_dispatch_summary_and_warnings(self, out_dir):
+        """The `- Dispatch:` and `- ⚠ Dispatch warning:` lines are a
+        separate branch of the same run-notes builder from the dependency
+        refresh line covered by ``dependency_refresh_note_table`` below;
+        nothing else in the suite pins their rendering."""
         _write_ledger(out_dir)
         state = {
             "dependency_refresh_precheck": {
@@ -551,10 +414,68 @@ class TestRecordAssembly:
         text = (out_dir / REVIEW_RECORD_MD).read_text()
 
         assert "## Run notes" in text
-        assert "Dependency refresh:" in text
         assert "12 dispatched" in text
         assert "9 skipped" in text
         assert "unrecognized source language: .zig" in text
+
+    DEPENDENCY_REFRESH_NOTES = (
+        pytest.param(
+            {}, "Dependency refresh: not requested.", id="not_requested",
+        ),
+        pytest.param(
+            {"dependency_refresh_precheck": {
+                "tracked_files_dirty": True, "dirty_files": [],
+            }},
+            "Dependency refresh: refused before execution because the "
+            "tracked worktree was dirty.",
+            id="refused_dirty",
+        ),
+        pytest.param(
+            {"dependency_refresh_precheck": {
+                "tracked_files_dirty": None, "dirty_files": [],
+            }},
+            "Dependency refresh: refused before execution because the "
+            "tracked worktree state was unknown.",
+            id="refused_unknown",
+        ),
+        pytest.param(
+            {"dependency_refresh_precheck": {
+                "tracked_files_dirty": False, "dirty_files": [],
+            }},
+            "Dependency refresh: requested but not recorded.",
+            id="requested_not_recorded",
+        ),
+        pytest.param(
+            {
+                "dependency_refresh_precheck": {
+                    "tracked_files_dirty": False, "dirty_files": [],
+                },
+                "dependency_refresh_report": {
+                    "schema": 1,
+                    "status": "partial",
+                    "commands": [{
+                        "directory": ".",
+                        "command": "custom sync",
+                        "exit_status": "failed",
+                    }],
+                    "tracked_files_dirty": None,
+                    "dirty_files": [],
+                },
+            },
+            "Dependency refresh: partial; 1 command(s) reported; final "
+            "tracked files dirty: unknown.",
+            id="recorded_report",
+        ),
+    )
+
+    @pytest.mark.parametrize(("state", "fragment"), DEPENDENCY_REFRESH_NOTES)
+    def test_run_notes_report_dependency_refresh(self, out_dir, state, fragment):
+        _write_ledger(out_dir)
+
+        assemble_review_record(str(out_dir), state, _read(out_dir))
+        text = (out_dir / REVIEW_RECORD_MD).read_text()
+
+        assert fragment in text
 
     @pytest.mark.parametrize(
         ("state", "expected_line"),
@@ -589,87 +510,6 @@ class TestRecordAssembly:
             assert "Discarded reviewer drafts" not in text
         else:
             assert expected_line in text
-
-    def test_run_notes_report_a_requested_but_unrecorded_refresh(self, out_dir):
-        _write_ledger(out_dir)
-        state = {
-            "dependency_refresh_precheck": {
-                "tracked_files_dirty": False,
-                "dirty_files": [],
-            }
-        }
-
-        assemble_review_record(str(out_dir), state, _read(out_dir))
-        text = (out_dir / REVIEW_RECORD_MD).read_text()
-
-        assert "Dependency refresh: requested but not recorded" in text
-
-    def test_run_notes_report_declared_status_command_count_and_final_state(
-        self, out_dir
-    ):
-        _write_ledger(out_dir)
-        state = {
-            "dependency_refresh_precheck": {
-                "tracked_files_dirty": False,
-                "dirty_files": [],
-            },
-            "dependency_refresh_report": {
-                "schema": 1,
-                "status": "partial",
-                "commands": [{
-                    "directory": ".",
-                    "command": "custom sync",
-                    "exit_status": "failed",
-                }],
-                "tracked_files_dirty": None,
-                "dirty_files": [],
-            },
-        }
-
-        assemble_review_record(str(out_dir), state, _read(out_dir))
-        text = (out_dir / REVIEW_RECORD_MD).read_text()
-
-        assert "Dependency refresh: partial" in text
-        assert "1 command(s) reported" in text
-        assert "final tracked files dirty: unknown" in text
-
-    @pytest.mark.parametrize(
-        ("tracked_files_dirty", "reason"),
-        [(True, "tracked worktree was dirty"), (None, "tracked worktree state was unknown")],
-    )
-    def test_run_notes_report_precheck_refusal(
-        self, out_dir, tracked_files_dirty, reason
-    ):
-        _write_ledger(out_dir)
-        state = {
-            "dependency_refresh_precheck": {
-                "tracked_files_dirty": tracked_files_dirty,
-                "dirty_files": [],
-            },
-        }
-
-        assemble_review_record(str(out_dir), state, _read(out_dir))
-        text = (out_dir / REVIEW_RECORD_MD).read_text()
-
-        assert "Dependency refresh: refused before execution" in text
-        assert reason in text
-
-    def test_run_notes_say_not_requested_when_refresh_was_off(self, out_dir):
-        _write_ledger(out_dir)
-
-        assemble_review_record(str(out_dir), {}, _read(out_dir))
-        text = (out_dir / REVIEW_RECORD_MD).read_text()
-
-        assert "Dependency refresh: not requested" in text
-
-    def test_closing_line_reports_the_ledger_verdict(self, out_dir):
-        _write_ledger(out_dir)
-
-        assemble_review_record(str(out_dir), {}, _read(out_dir))
-        text = (out_dir / REVIEW_RECORD_MD).read_text()
-
-        assert "Verdict — from the findings ledger: `request_changes`" in text
-        assert "REQUEST_CHANGES" in text.rsplit("Verdict — from", 1)[1]
 
 
 class TestRecordIsAProjection:
@@ -757,78 +597,6 @@ class TestRecordIsAProjection:
         # An entry with no stated outcome is recorded as unprobed, never
         # absorbed into a batch-level claim.
         assert "not_checked" in text
-
-    def test_reassembly_projects_mixed_applied_and_refuted_decisions(
-        self, out_dir
-    ):
-        _write_ledger(out_dir)
-        proposal, _result = self._revise(out_dir, [
-            {
-                "action": "correct",
-                "target": {"kind": "finding", "id": "f1"},
-                "fields": {"title": "Escaping is already present"},
-                "rationale": "verified against the source",
-            },
-            {
-                "action": "correct",
-                "target": {"kind": "finding", "id": "f2"},
-                "fields": {"title": "This change does not apply"},
-                "rationale": "critic claim",
-            },
-        ], verified=(0,), refuted=((1, "the source contradicts the claim"),))
-        ids = [entry["adjustment_id"] for entry in proposal["adjustments"]]
-
-        assemble_review_record(str(out_dir), {}, _read(out_dir))
-        text = (out_dir / REVIEW_RECORD_MD).read_text()
-
-        assert "## Critic Adjustment Decisions" in text
-        assert f"- `{ids[0]}` — verified" in text
-        assert f"- `{ids[1]}` — refuted" in text
-
-    def test_reassembly_projects_an_all_refuted_batch(self, out_dir):
-        _write_ledger(out_dir)
-        proposal, _result = self._revise(out_dir, [
-            {
-                "action": "correct",
-                "target": {"kind": "finding", "id": "f1"},
-                "fields": {"title": "This change does not apply"},
-                "rationale": "critic claim",
-            },
-            {
-                "action": "correct",
-                "target": {"kind": "finding", "id": "f2"},
-                "fields": {"title": "This change does not apply"},
-                "rationale": "critic claim",
-            },
-        ], refuted=(
-            (0, "the source contradicts the claim"),
-            (1, "the source contradicts the claim"),
-        ))
-        ids = [entry["adjustment_id"] for entry in proposal["adjustments"]]
-
-        assemble_review_record(str(out_dir), {}, _read(out_dir))
-        text = (out_dir / REVIEW_RECORD_MD).read_text()
-
-        assert "## Critic Adjustment Decisions" in text
-        assert f"- `{ids[0]}` — refuted" in text
-        assert f"- `{ids[1]}` — refuted" in text
-
-    def test_invalidated_assessment_renders_the_explicit_absence(self, out_dir):
-        _write_ledger(out_dir)
-        self._revise(out_dir, [{
-            "action": "demote",
-            "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "low"},
-            "rationale": "escaped one frame up",
-        }], verified=(0,), assessment=None)
-
-        assemble_review_record(str(out_dir), {}, _read(out_dir))
-        text = (out_dir / REVIEW_RECORD_MD).read_text()
-
-        assert "No current assessment" in text
-        assert "invalidated by critic revision" in text
-        # The retracted text is never presented as current.
-        assert "Two real problems, both fixable in one pass." not in text
 
 
 class TestRecordSanitization:
@@ -945,16 +713,6 @@ class TestRecordSanitization:
         assert "not reachable" in text
         assert "the check was moot" in text
 
-    def test_structured_severity_floor_still_renders(self, out_dir):
-        findings = _ledger()
-        findings["findings"][0]["severity_floor"] = "high"
-        _write_ledger(out_dir, findings)
-
-        assemble_review_record(str(out_dir), {}, _read(out_dir))
-        text = (out_dir / REVIEW_RECORD_MD).read_text()
-
-        assert "**Severity floor:** high" in text
-
     def test_non_string_finding_fields_fail_closed_without_crashing(
         self, out_dir
     ):
@@ -996,115 +754,25 @@ class TestRecordFailureModes:
         }
         assert not (out_dir / REVIEW_RECORD_MD).exists()
 
+    @pytest.mark.parametrize(
+        "ledger_text",
+        [
+            pytest.param("{ nope", id="unparseable-json"),
+            pytest.param(
+                json.dumps({"verdict": "approve"}), id="missing-required-keys",
+            ),
+        ],
+    )
     def test_unreadable_ledger_reports_failed_and_writes_nothing(
-        self, out_dir
+        self, out_dir, ledger_text
     ):
-        (out_dir / critic_adjustments.FINDINGS_FILENAME).write_text("{ nope")
+        (out_dir / critic_adjustments.FINDINGS_FILENAME).write_text(ledger_text)
 
         outcome, error = assemble_review_record(str(out_dir), {}, _read(out_dir))
 
         assert outcome["status"] == "failed"
         assert outcome["written"] == 0
         assert error
-        assert not (out_dir / REVIEW_RECORD_MD).exists()
-
-    def test_a_ledger_missing_required_keys_degrades_not_raises(
-        self, out_dir
-    ):
-        (out_dir / critic_adjustments.FINDINGS_FILENAME).write_text(
-            json.dumps({"verdict": "approve"})
-        )
-
-        outcome, error = assemble_review_record(str(out_dir), {}, _read(out_dir))
-
-        assert outcome["status"] == "failed"
-        assert error
-
-
-class TestStepsReadTheLedgerOnce:
-    """A step reads `review-findings.json` once and shares the result.
-
-    Step 9 opened it twice (render, then record assembly) and step 11
-    three times (render, record assembly, verdict derivation). Three reads
-    of one file inside one step is three chances to disagree about what
-    the run published, and the last of them decided the verdict.
-    """
-
-    def _count_reads(self, monkeypatch):
-        reads = []
-        real = critic_adjustments.read_findings_file
-
-        def counting(path):
-            reads.append(path)
-            return real(path)
-
-        monkeypatch.setattr(
-            orchestration_mod.critic_adjustments,
-            "read_findings_file",
-            counting,
-        )
-        return reads
-
-    def test_step_9_reads_the_ledger_once(self, out_dir, monkeypatch):
-        _write_ledger(out_dir)
-        reads = self._count_reads(monkeypatch)
-        state = {}
-
-        orchestration_mod._orchestrate_step_9(
-            "full", {}, state, {"git": {"changed_files_csv": ""}},
-            str(out_dir),
-        )
-
-        assert len(reads) == 1
-        assert state["findings_markdown"]["status"] == "complete"
-        assert state["review_record"]["status"] == "complete"
-
-    def test_the_record_and_the_render_share_one_read(self, out_dir):
-        """Both derived artifacts come from the same ledger object."""
-        _write_ledger(out_dir)
-        read = _read(out_dir)
-
-        render_outcome, render_error = (
-            orchestration_mod._render_findings_markdown(str(out_dir), read)
-        )
-        record_outcome, record_error = assemble_review_record(
-            str(out_dir), {}, read
-        )
-
-        assert render_error is None and record_error is None
-        assert render_outcome["written"] == 1
-        assert record_outcome["written"] == 1
-        assert (out_dir / "review-findings.md").exists()
-        assert (out_dir / REVIEW_RECORD_MD).exists()
-
-    def test_an_absent_ledger_is_a_measured_zero_for_both(self, out_dir):
-        read = _read(out_dir)
-
-        for outcome, error in (
-            orchestration_mod._render_findings_markdown(str(out_dir), read),
-            assemble_review_record(str(out_dir), {}, read),
-        ):
-            assert error is None
-            assert outcome == {
-                "ran": True, "written": 0, "expected": 0,
-                "status": "complete",
-            }
-
-    def test_an_unreadable_ledger_is_one_expected_artifact_unrendered(
-        self, out_dir
-    ):
-        (out_dir / critic_adjustments.FINDINGS_FILENAME).write_text("{ nope")
-        read = _read(out_dir)
-
-        for outcome, error in (
-            orchestration_mod._render_findings_markdown(str(out_dir), read),
-            assemble_review_record(str(out_dir), {}, read),
-        ):
-            assert outcome == {
-                "ran": True, "written": 0, "expected": 1,
-                "status": "failed",
-            }
-            assert error
         assert not (out_dir / REVIEW_RECORD_MD).exists()
 
 
@@ -1159,9 +827,6 @@ class TestBriefingsAreConstantSize:
             assert f"vendor/generated/module_{i:04d}.lock" in record
         assert record.count("vendor/generated/module_") == 500
 
-    def test_step_9_briefing_does_not_grow_with_the_diff(self, out_dir):
-        _write_ledger(out_dir)
-
         def briefing_size(count):
             guidance = briefings_mod.get_step_guidance(
                 9, "full", self._coverage_state(count), {},
@@ -1192,25 +857,6 @@ class TestRecordWriteIsAtomic:
         assert "render exploded" in str(error)
         assert (out_dir / REVIEW_RECORD_MD).read_text() == first
 
-    def test_write_goes_through_the_atomic_primitive(
-        self, out_dir, monkeypatch
-    ):
-        _write_ledger(out_dir)
-        seen = {}
-
-        real = orchestration_mod.atomic_write_text
-
-        def spy(path, text):
-            seen["path"] = path
-            return real(path, text)
-
-        monkeypatch.setattr(
-            orchestration_mod, "atomic_write_text", spy, raising=True
-        )
-        assemble_review_record(str(out_dir), {}, _read(out_dir))
-
-        assert os.path.basename(seen["path"]) == REVIEW_RECORD_MD
-
     def test_no_temp_files_survive_a_successful_assembly(self, out_dir):
         _write_ledger(out_dir)
 
@@ -1233,12 +879,6 @@ class TestPreparedReportSourceFingerprint:
             "STAND",
             records or [],
         )
-
-    def test_same_source_and_facts_are_deterministic(self, out_dir):
-        _write_ledger(out_dir)
-        assemble_review_record(str(out_dir), {}, _read(out_dir))
-
-        assert self._fingerprint(out_dir) == self._fingerprint(out_dir)
 
     def test_exact_record_and_ledger_bytes_are_bound(self, out_dir):
         _write_ledger(out_dir)

@@ -1,53 +1,40 @@
 """Tests for the resolver chain."""
 
 import json
-from pathlib import Path
-
-import pytest
 
 from hosts.chain import ResolverChain
 from hosts.resolvers.base import ResolverResult
-from hosts.types import HostContextManifest
 
 
-def test_empty_repo_produces_no_banner_without_host_signal(make_repo, monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
-    repo = make_repo({"README.md": "# x"})
-    manifest = ResolverChain().run(str(repo))
-    assert manifest.resolved == []
-    assert manifest.unresolved == []
-    assert manifest.banner is None
-
-
-def test_default_chain_ignores_ambient_sibling_hosts_without_repo_signal(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
-    (tmp_path / "wordpress-develop").mkdir()
-    (tmp_path / "woocommerce-develop" / "plugins" / "woocommerce").mkdir(parents=True)
-    repo = tmp_path / "repo"
-    repo.mkdir()
-
-    manifest = ResolverChain().run(str(repo))
-
-    assert [e for e in manifest.resolved if e.kind == "runtime-host"] == []
-    assert manifest.banner is None
-    assert "sibling" not in manifest.diagnostics["resolvers_consulted"]
-
-
-def test_default_chain_ignores_ecosystem_cache_without_repo_signal(tmp_path, monkeypatch):
+def test_empty_repo_with_ambient_hosts_and_populated_cache_yields_nothing(tmp_path, monkeypatch):
+    """No repo signal at all: an empty repo resolves nothing and shows no
+    banner, even with adjacent directories that look like ecosystem
+    checkouts and a populated cache sitting right next to it — the default
+    chain doesn't have a sibling-directory resolver, and cache fulfillment
+    never fires without a repo signal asking for a name."""
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg-cache"))
+    monkeypatch.setattr(
+        "hosts.cache.manager.update_host",
+        lambda name: {"name": name, "action": "cloned", "ok": False, "stderr": "blocked in test"},
+    )
+    (tmp_path / "wordpress-develop").mkdir()
+    (tmp_path / "woocommerce-develop" / "plugins" / "woocommerce").mkdir(parents=True)
     (tmp_path / "xdg-cache" / "pirategoat" / "ecosystem" / "wordpress" / "latest").mkdir(parents=True)
     (tmp_path / "xdg-cache" / "pirategoat" / "ecosystem" / "woocommerce" / "latest").mkdir(parents=True)
     repo = tmp_path / "repo"
     repo.mkdir()
+    (repo / "README.md").write_text("# x")
 
     manifest = ResolverChain().run(str(repo))
 
-    assert [e for e in manifest.resolved if e.kind == "runtime-host"] == []
+    assert manifest.resolved == []
+    assert manifest.unresolved == []
     assert manifest.banner is None
-    assert "ecosystem-cache" not in manifest.diagnostics["resolvers_consulted"]
+    assert set(manifest.diagnostics["resolvers_consulted"]) == {
+        "explicit", "wp-env", "docker-compose", "plugin-headers",
+        "vendor-inspection",
+    }
 
 
 def test_explicit_resolver_runs_even_when_ambient_sibling_exists(tmp_path, monkeypatch):
@@ -127,8 +114,17 @@ def test_partial_unresolved_banner_serializes_unresolved_names(tmp_path, monkeyp
 
 
 def test_later_resolved_host_drops_stale_unresolved_signal(tmp_path, monkeypatch):
+    """wp-env declares a remote woocommerce (unresolved); docker-compose then
+    resolves it locally. The stale unresolved signal is dropped and cache
+    fulfillment — which would otherwise try to satisfy it — is never asked,
+    since the pre-filter sees woocommerce is already in `seen_names`."""
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    update_calls = []
+    monkeypatch.setattr(
+        "hosts.cache.manager.update_host",
+        lambda name: update_calls.append(name) or {"ok": True, "action": "fresh"},
+    )
     woocommerce = tmp_path / "woocommerce"
     woocommerce.mkdir()
     repo = tmp_path / "repo"
@@ -148,18 +144,7 @@ services:
     assert [e.name for e in manifest.resolved if e.kind == "runtime-host"] == ["woocommerce"]
     assert manifest.unresolved == []
     assert manifest.banner is None
-
-
-def test_diagnostics_records_which_resolvers_ran(make_repo, monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
-    repo = make_repo({"README.md": "# x"})
-    manifest = ResolverChain().run(str(repo))
-    consulted = manifest.diagnostics.get("resolvers_consulted", [])
-    assert set(consulted) == {
-        "explicit", "wp-env", "docker-compose", "plugin-headers",
-        "vendor-inspection",
-    }
+    assert update_calls == []  # no ensure_fresh / update_host calls
 
 
 def test_library_dep_does_not_trigger_runtime_host_banner(tmp_path, monkeypatch):
@@ -187,13 +172,6 @@ class TestCacheFulfillment:
     """The chain's post-loop fulfillment pass promotes unresolved →
     resolved when the cache can satisfy the name."""
 
-    def _block_network(self, monkeypatch):
-        """Prevent any test in this class from doing real git pulls."""
-        monkeypatch.setattr(
-            "hosts.cache.manager.update_host",
-            lambda name: {"name": name, "action": "cloned", "ok": False, "stderr": "blocked"},
-        )
-
     def _stub_update_to_populate(self, monkeypatch, cache_root_dir):
         """Make update_host populate the slot so resolve_for_names succeeds."""
         import time as _time
@@ -209,7 +187,8 @@ class TestCacheFulfillment:
 
     def test_fulfillment_promotes_unresolved_to_resolved(self, tmp_path, monkeypatch):
         """vendored_self_mount of WP core → cache populated → wordpress
-        ends up in resolved with source='ecosystem-cache'."""
+        ends up in resolved with source='ecosystem-cache', and diagnostics
+        record what fulfillment did."""
         cache_root_dir = tmp_path / "xdg-cache"
         monkeypatch.setenv("XDG_CACHE_HOME", str(cache_root_dir))
         monkeypatch.setenv("HOME", str(tmp_path / "home"))
@@ -235,83 +214,11 @@ services:
         # Unresolved cleared, no banner
         assert manifest.unresolved == []
         assert manifest.banner is None
-
-    def test_fulfillment_records_diagnostics(self, tmp_path, monkeypatch):
-        """When fulfillment fires, diagnostics record what was fulfilled."""
-        cache_root_dir = tmp_path / "xdg-cache"
-        monkeypatch.setenv("XDG_CACHE_HOME", str(cache_root_dir))
-        monkeypatch.setenv("HOME", str(tmp_path / "home"))
-        self._stub_update_to_populate(monkeypatch, cache_root_dir)
-
-        repo = tmp_path / "wcpay"
-        repo.mkdir()
-        (repo / "docker" / "wordpress").mkdir(parents=True)
-        (repo / "docker-compose.yml").write_text("""
-services:
-  wordpress:
-    volumes:
-      - ./docker/wordpress:/var/www/html
-""")
-        manifest = ResolverChain().run(str(repo))
-
         consulted = manifest.diagnostics["resolvers_consulted"]
         assert "ecosystem-cache-fulfillment" in consulted
         detail = manifest.diagnostics["resolver_detail"]["ecosystem-cache-fulfillment"]
         assert detail["entries"] == 1
         assert detail["notes"]["fulfilled"] == ["wordpress"]
-
-    def test_no_fulfillment_when_repo_signals_nothing(self, tmp_path, monkeypatch):
-        """Empty repo + populated cache → no fulfillment, no leakage."""
-        cache_root_dir = tmp_path / "xdg-cache"
-        monkeypatch.setenv("XDG_CACHE_HOME", str(cache_root_dir))
-        monkeypatch.setenv("HOME", str(tmp_path / "home"))
-        # Pre-populate cache (no fulfillment should still skip it)
-        wp = cache_root_dir / "pirategoat" / "ecosystem" / "wordpress" / "latest"
-        wp.mkdir(parents=True)
-        self._block_network(monkeypatch)
-
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        manifest = ResolverChain().run(str(repo))
-
-        runtime_hosts = [e for e in manifest.resolved if e.kind == "runtime-host"]
-        assert runtime_hosts == []
-        assert "ecosystem-cache-fulfillment" not in manifest.diagnostics["resolvers_consulted"]
-
-    def test_fulfillment_skipped_when_higher_priority_resolver_won(self, tmp_path, monkeypatch):
-        """wp-env declares woocommerce remote (unresolved), docker-compose
-        also resolves woocommerce locally. Pre-filter must skip fulfillment
-        for woocommerce since seen_names already has it — no network call."""
-        cache_root_dir = tmp_path / "xdg-cache"
-        monkeypatch.setenv("XDG_CACHE_HOME", str(cache_root_dir))
-        monkeypatch.setenv("HOME", str(tmp_path / "home"))
-
-        update_calls = []
-        monkeypatch.setattr(
-            "hosts.cache.manager.update_host",
-            lambda name: update_calls.append(name) or {"ok": True, "action": "fresh"},
-        )
-
-        woocommerce = tmp_path / "woocommerce"
-        woocommerce.mkdir()
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        (repo / ".wp-env.override.json").write_text(json.dumps({
-            "plugins": ["woocommerce/woocommerce#9.5"],
-        }))
-        (repo / "docker-compose.yml").write_text("""
-services:
-  wordpress:
-    volumes:
-      - ../woocommerce:/var/www/html/wp-content/plugins/woocommerce
-""")
-        manifest = ResolverChain().run(str(repo))
-
-        # docker-compose's woocommerce wins; fulfillment skipped via pre-filter.
-        wc_entries = [e for e in manifest.resolved if e.name == "woocommerce"]
-        assert len(wc_entries) == 1
-        assert wc_entries[0].source == "docker-compose"
-        assert update_calls == []  # no ensure_fresh / update_host calls
 
     def test_fulfillment_falls_back_to_banner_when_cache_unpopulated(self, tmp_path, monkeypatch):
         """vendored_self_mount of WP + cache empty + offline → wordpress
@@ -638,32 +545,6 @@ def test_resolver_chain_merges_numeric_and_large_unresolved_versions(tmp_path):
 
     versions = {item["name"]: item["version"] for item in manifest.unresolved}
     assert versions == {"jetpack": "6.10", "akismet": "1.9"}
-    assert json.dumps(manifest.to_dict())
-
-
-def test_resolver_chain_merges_unicode_decimal_versions_numerically(tmp_path):
-    """Decimal digits from every script compare by their numeric values."""
-    from hosts.resolvers.base import HostResolver, ResolverResult
-
-    class VersionResolver(HostResolver):
-        source = "version"
-
-        def resolve(self, repo_path, scan=None):
-            return ResolverResult(
-                entries=[],
-                unresolved=[
-                    {"name": "jetpack", "version": "6.٠٠٩"},
-                    {"name": "jetpack", "version": "6.10"},
-                    {"name": "akismet", "version": "6.１２"},
-                    {"name": "akismet", "version": "6.99"},
-                ],
-                notes={},
-            )
-
-    manifest = ResolverChain(resolvers=[VersionResolver()]).run(str(tmp_path))
-
-    versions = {item["name"]: item["version"] for item in manifest.unresolved}
-    assert versions == {"jetpack": "6.10", "akismet": "6.99"}
     assert json.dumps(manifest.to_dict())
 
 

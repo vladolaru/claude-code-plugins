@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.119.4] - UNRELEASED
 
+### Removed
+
+- The unused sibling-directory host resolver and the ecosystem cache resolver's ambient mode; neither was reachable from the resolver chain.
+
 ### Fixed
 
 - `wp-architecture-reviewer` now flags a half-deprecation: a `@deprecated` tag added without the runtime `_deprecated_function()` / `_deprecated_hook()` call, or the reverse. The Deprecation Rule only fired on removals, so a diff that tagged a still-public symbol and never notified its external callers passed clean.

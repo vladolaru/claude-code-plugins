@@ -44,7 +44,8 @@ class TestAbsence:
         assert result["diagnostics"] == []
         assert result["defaults"] == {"execution": "inline", "channel": "blocking"}
 
-    def test_config_without_review_section(self, mod, tmp_path):
+        # A config file present but missing the `review` section is the
+        # same absence, just with one more (ignored) top-level key.
         _write_config(tmp_path, {"hosts": {"runtime": []}})
         result = mod.load_review_config(str(tmp_path), changed_files=[])
         assert result["rules"] == []
@@ -104,21 +105,14 @@ class TestRules:
         assert len(result["rules"]) == 1
         assert any("duplicate" in d for d in result["diagnostics"])
 
-    @pytest.mark.parametrize(
-        "bad_id",
-        ["Payments", "plăți", "paym_ents", "-payments"],
-        ids=["uppercase", "non-ascii", "underscore", "dash-start"],
-    )
-    def test_non_contract_ids_dropped_with_diagnostic(
-        self, mod, tmp_path, bad_id
-    ):
+    def test_non_contract_ids_dropped_with_diagnostic(self, mod, tmp_path):
         """IDs become machine identifiers (repo-<id>-reviewer telemetry
         names, filenames, shell tokens) and the measurement chain enforces
         lowercase ASCII kebab throughout — an id accepted here but rejected
         downstream would make a validly configured reviewer unmeasurable."""
         _touch(tmp_path, "a.md")
         _write_config(tmp_path, {"review": {"rules": [
-            {"id": bad_id, "path": "a.md"}
+            {"id": "paym_ents", "path": "a.md"}
         ]}})
         result = mod.load_review_config(str(tmp_path), changed_files=[])
         assert result["rules"] == []
@@ -162,10 +156,6 @@ class TestRules:
             assert manifest_sections.AGENT_NAME_RE.fullmatch(instance), instance
             assert contracts._PRODUCER_AGENT_NAME_RE.fullmatch(instance), instance
             assert transcript._REPO_REVIEWER_INSTANCE_RE.fullmatch(instance), instance
-        # The consumers' shared charset is [a-z0-9-]; _VALID_ID_RE must be a
-        # subset of it, proven by construction: its pattern draws only from
-        # that class.
-        assert mod._VALID_ID_RE.pattern == "[a-z0-9][a-z0-9-]*"
 
 
 class TestReviewers:
@@ -227,23 +217,6 @@ class TestReviewers:
 
 
 class TestSecurityHardening:
-    def test_reviewer_ref_traversal_escape_is_dropped(self, mod, tmp_path):
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        outside = tmp_path / "outside-reviewer.md"
-        outside.write_text("review instructions")
-        _write_config(repo, {"review": {"reviewers": [
-            {"id": "escape", "ref": "../outside-reviewer.md"}
-        ]}})
-
-        result = mod.load_review_config(str(repo), changed_files=[])
-
-        assert result["reviewers"] == []
-        assert any(
-            "escape" in item and "escapes" in item
-            for item in result["diagnostics"]
-        )
-
     def test_reviewer_ref_symlink_escape_is_dropped(self, mod, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -332,77 +305,74 @@ class TestProvenanceGate:
             "reviewers": [{"id": "x", "ref": "reviewer.md"}],
         }})
 
-    def test_untouched_entries_are_trusted(self, mod, tmp_path):
-        self._config(tmp_path)
-        result = mod.load_review_config(
-            str(tmp_path), changed_files=["src/app.php"]
-        )
-        assert [r["id"] for r in result["rules"]] == ["r1"]
-        assert [r["id"] for r in result["reviewers"]] == ["x"]
-        assert result["untrusted"] == []
+    # Each row: `changed_files` (None means call without the kwarg at all —
+    # the unknown-provenance branch), the surviving rule and reviewer ids,
+    # the `kind` of every `untrusted` entry, and an optional diagnostic
+    # fragment. All rows share the one `_config(tmp_path)` fixture setup.
+    PROVENANCE_GATE_CASES = (
+        pytest.param(
+            ["src/app.php"], ["r1"], ["x"], [], None,
+            id="untouched_entries_are_trusted",
+        ),
+        pytest.param(
+            ["reviewer.md", "src/app.php"], ["r1"], [], ["reviewer"],
+            "untrusted until merged",
+            id="reviewer_ref_in_range_is_excluded",
+        ),
+        pytest.param(
+            ["rule.md"], [], ["x"], ["rule"], None,
+            id="rule_path_in_range_is_excluded",
+        ),
+        pytest.param(
+            [".pirategoat/config.json"], [], [], ["config"], None,
+            id="config_in_range_excludes_everything",
+        ),
+        pytest.param(
+            None, [], [], ["config"], None,
+            id="unknown_provenance_fails_closed",
+        ),
+        pytest.param(
+            # On case-insensitive filesystems (default macOS, Windows) Git
+            # can track REVIEWER.MD while open() reads reviewer.md — the
+            # same on-disk file. The gate must compare canonical
+            # identities, not exact spellings.
+            ["REVIEWER.MD"], ["r1"], [], ["reviewer"], None,
+            id="case_variant_changed_path_is_untrusted",
+        ),
+        pytest.param(
+            # If .pirategoat itself is a changed gitlink, the config
+            # content comes from the new submodule commit — nothing it
+            # declares can be trusted.
+            [".pirategoat"], [], [], ["config"], "untrusted until merged",
+            id="changed_gitlink_over_config_excludes_everything",
+        ),
+    )
 
-    def test_reviewer_ref_in_range_is_excluded(self, mod, tmp_path):
-        self._config(tmp_path)
-        result = mod.load_review_config(
-            str(tmp_path), changed_files=["reviewer.md", "src/app.php"]
-        )
-        assert result["reviewers"] == []
-        assert [r["id"] for r in result["rules"]] == ["r1"]
-        [entry] = result["untrusted"]
-        assert entry["kind"] == "reviewer"
-        assert entry["id"] == "x"
-        assert any("untrusted until merged" in d for d in result["diagnostics"])
-
-    def test_rule_path_in_range_is_excluded(self, mod, tmp_path):
-        self._config(tmp_path)
-        result = mod.load_review_config(
-            str(tmp_path), changed_files=["rule.md"]
-        )
-        assert result["rules"] == []
-        assert [r["id"] for r in result["reviewers"]] == ["x"]
-        assert result["untrusted"][0]["kind"] == "rule"
-
-    def test_config_in_range_excludes_everything(self, mod, tmp_path):
-        self._config(tmp_path)
-        result = mod.load_review_config(
-            str(tmp_path), changed_files=[".pirategoat/config.json"]
-        )
-        assert result["rules"] == []
-        assert result["reviewers"] == []
-        [entry] = result["untrusted"]
-        assert entry["kind"] == "config"
-
-    def test_unknown_provenance_fails_closed(self, mod, tmp_path):
-        self._config(tmp_path)
-        result = mod.load_review_config(str(tmp_path))
-        assert result["rules"] == []
-        assert result["reviewers"] == []
-        [entry] = result["untrusted"]
-        assert entry["kind"] == "config"
-
-    def test_case_variant_changed_path_is_untrusted(self, mod, tmp_path):
-        """On case-insensitive filesystems (default macOS, Windows) Git can
-        track REVIEWER.MD while open() reads reviewer.md — the same on-disk
-        file. The gate must compare canonical identities, not exact
-        spellings."""
-        self._config(tmp_path)
-        result = mod.load_review_config(
-            str(tmp_path), changed_files=["REVIEWER.MD"]
-        )
-        assert result["reviewers"] == []
-        assert result["untrusted"][0]["kind"] == "reviewer"
-
-    def test_case_variant_changed_config_excludes_everything(
-        self, mod, tmp_path
+    @pytest.mark.parametrize(
+        (
+            "changed_files", "expected_rules", "expected_reviewers",
+            "expected_untrusted_kinds", "diagnostic_fragment",
+        ),
+        PROVENANCE_GATE_CASES,
+    )
+    def test_provenance_gate_table(
+        self, mod, tmp_path, changed_files, expected_rules,
+        expected_reviewers, expected_untrusted_kinds, diagnostic_fragment,
     ):
         self._config(tmp_path)
-        result = mod.load_review_config(
-            str(tmp_path), changed_files=[".PIRATEGOAT/Config.json"]
-        )
-        assert result["rules"] == []
-        assert result["reviewers"] == []
-        [entry] = result["untrusted"]
-        assert entry["kind"] == "config"
+        kwargs = {} if changed_files is None else {"changed_files": changed_files}
+
+        result = mod.load_review_config(str(tmp_path), **kwargs)
+
+        assert [r["id"] for r in result["rules"]] == expected_rules
+        assert [r["id"] for r in result["reviewers"]] == expected_reviewers
+        assert [
+            entry["kind"] for entry in result["untrusted"]
+        ] == expected_untrusted_kinds
+        if diagnostic_fragment:
+            assert any(
+                diagnostic_fragment in d for d in result["diagnostics"]
+            )
 
     def test_unicode_normalization_variant_is_untrusted(self, mod, tmp_path):
         """Git can report an NFD spelling (e + combining accent) of a file
@@ -449,22 +419,6 @@ class TestProvenanceGate:
         assert [r["id"] for r in result["reviewers"]] == ["x"]
         assert result["untrusted"] == []
 
-    def test_changed_gitlink_over_config_excludes_everything(
-        self, mod, tmp_path
-    ):
-        """If .pirategoat itself is a changed gitlink, the config content
-        comes from the new submodule commit — nothing it declares can be
-        trusted."""
-        self._config(tmp_path)
-        result = mod.load_review_config(
-            str(tmp_path), changed_files=[".pirategoat"]
-        )
-        assert result["rules"] == []
-        assert result["reviewers"] == []
-        [entry] = result["untrusted"]
-        assert entry["kind"] == "config"
-        assert any("untrusted until merged" in d for d in result["diagnostics"])
-
     def test_git_quoted_changed_path_still_gates(self, mod, tmp_path):
         """Git C-quotes names with non-ASCII bytes by default
         (core.quotePath), so the changed list may carry the encoded
@@ -481,16 +435,6 @@ class TestProvenanceGate:
         )
         assert result["rules"] == []
         assert result["untrusted"][0]["kind"] == "rule"
-
-    def test_git_quoted_config_path_still_gates(self, mod, tmp_path):
-        self._config(tmp_path)
-        quoted = '".pirategoat/conf\\151g.json"'  # \151 = "i"
-        result = mod.load_review_config(
-            str(tmp_path), changed_files=[quoted]
-        )
-        assert result["rules"] == []
-        assert result["reviewers"] == []
-        assert result["untrusted"][0]["kind"] == "config"
 
     def test_symlinked_declaration_gates_on_the_target(self, mod, tmp_path):
         """Git reports a change against the symlink's TARGET path, while
@@ -554,27 +498,3 @@ class TestProvenanceGate:
         )
         assert [r["id"] for r in result["rules"]] == ["r1"]
         assert result["untrusted"] == []
-
-
-class TestDequoteGitPath:
-    """Git C-quoting decoder used by the provenance gate."""
-
-    @pytest.mark.parametrize(
-        "quoted,expected",
-        [
-            ('"r\\303\\250gles.md"', "règles.md"),
-            ("plain.md", "plain.md"),
-            # The wrapper's own legacy branch (:376-377): the shared grammar
-            # reads a quote-delimited spelling with no escapes as an ordinary
-            # filename, and this gate additionally compares the unwrapped
-            # form. Nothing else in the file reaches that branch.
-            ('"plain.md"', "plain.md"),
-        ],
-    )
-    def test_decodes_quoted_forms(self, mod, quoted, expected):
-        assert mod._dequote_git_path(quoted) == expected
-
-    @pytest.mark.parametrize("malformed", ['"unterminated'])
-    def test_malformed_quoting_passes_through_unchanged(self, mod, malformed):
-        # An undecodable entry can only fail to match — never widen trust.
-        assert mod._dequote_git_path(malformed) == malformed

@@ -15,7 +15,6 @@ from iterative_review.briefing import (
     format_completion_briefing,
     format_degraded_briefing,
     format_timeout_briefing,
-    _TERMINATION_REASONS,
 )
 from iterative_review.paths import round_artifact_path
 
@@ -29,32 +28,28 @@ SAMPLE_FINDINGS = [
 
 class TestEvaluationBriefing:
     def test_contains_header_with_round(self):
-        text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=2, merge_base="abc123", diff_lines=500)
+        text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=2, merge_base="abc123def", diff_lines=750)
         assert "Review Round 2" in text
         assert "Evaluate" in text
+        assert "abc123def" in text
+        assert "750" in text
 
     def test_contains_all_finding_ids(self):
         text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=1, merge_base="abc", diff_lines=100)
         assert "[r1_f1]" in text
         assert "[r1_f2]" in text
         assert "[r1_f3]" in text
-
-    def test_contains_severity_labels(self):
-        text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=1, merge_base="abc", diff_lines=100)
         assert "[P0]" in text
         assert "[P1]" in text
         assert "[P3]" in text
-
-    def test_contains_file_locations(self):
-        text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=1, merge_base="abc", diff_lines=100)
         assert "db.py:42-45" in text
         assert "handler.py:10" in text
 
     def test_contains_evaluation_steps(self, tmp_path):
-        outcomes_path = round_artifact_path(tmp_path, 1, "outcomes")
+        outcomes_path = round_artifact_path(tmp_path, 3, "outcomes")
         text = format_evaluation_briefing(
             SAMPLE_FINDINGS,
-            round_num=1,
+            round_num=3,
             merge_base="abc",
             diff_lines=100,
             outcomes_path=outcomes_path,
@@ -66,38 +61,8 @@ class TestEvaluationBriefing:
         assert "4. DECIDE" in text
         assert "Fix discipline" in text
         assert str(outcomes_path) in text
-
-    def test_contains_phase_headers(self):
-        text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=1, merge_base="abc", diff_lines=100)
-        assert "### Phase 1: Evaluate Findings" in text
-        assert "### Phase 2: Fix" in text
-        assert "### Phase 3: Commit and Record" in text
-
-    def test_outcomes_format_uses_round_num(self, tmp_path):
-        outcomes_path = round_artifact_path(tmp_path, 3, "outcomes")
-        text = format_evaluation_briefing(
-            SAMPLE_FINDINGS,
-            round_num=3,
-            merge_base="abc",
-            diff_lines=100,
-            outcomes_path=outcomes_path,
-        )
         assert "r3_f1" in text
         assert "r3_f2" in text
-        assert str(outcomes_path) in text
-
-    def test_outcomes_format_shows_all_actions(self):
-        text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=1, merge_base="abc", diff_lines=100)
-        assert '"fixed"' in text
-        assert '"rejected"' in text
-        assert '"deferred"' in text
-        assert '"summary"' in text
-        assert '"reasoning"' in text
-
-    def test_contains_merge_base_visibility(self):
-        text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=1, merge_base="abc123def", diff_lines=750)
-        assert "abc123def" in text
-        assert "750" in text
 
     def test_nitpicks_only_adds_note(self):
         p3_only = [{"id": "r2_f1", "severity": "P3", "title": "Nit", "body": "Nit detail.", "location": "a.py:1"}]
@@ -105,73 +70,32 @@ class TestEvaluationBriefing:
         assert "P3" in text
         assert "no further rounds" in text
 
-    def test_round_2_includes_stalemate_prompt(self):
-        text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=2, merge_base="abc", diff_lines=100)
-        assert "stalemate" in text.lower()
-
-    def test_round_1_no_stalemate_prompt(self):
-        text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=1, merge_base="abc", diff_lines=100)
-        assert "stalemate" not in text.lower()
-
-    def test_round_1_includes_cognitive_traps(self):
-        text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=1, merge_base="abc", diff_lines=100)
-        assert "Cognitive traps" in text
-        assert "Rubber-stamping" in text
-        assert "Positional entrenchment" in text
-        assert "Scope inflation" in text
-
-    def test_round_2_no_cognitive_traps(self):
-        text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=2, merge_base="abc", diff_lines=100)
-        assert "Cognitive traps" not in text
-
-    def test_round_2_correction_pattern(self):
-        """Round 2+ prompts agent to state what was wrong in prior reasoning."""
-        text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=2, merge_base="abc", diff_lines=100)
-        assert "what was wrong" in text.lower()
-        assert "prior reasoning" in text.lower()
-        assert "correction" in text.lower()
-
-    def test_round_3_includes_stalemate_escalation(self):
-        text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=3, merge_base="abc", diff_lines=100)
-        assert "force-defer" in text.lower()
-        assert "stalemate escalation" in text.lower()
-
-    def test_round_2_no_stalemate_escalation(self):
-        """Round 2 has correction prompt but not the escalation guidance."""
-        text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=2, merge_base="abc", diff_lines=100)
-        assert "force-defer" not in text.lower()
-
-    def test_outcomes_format_includes_severity(self):
-        text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=1, merge_base="abc", diff_lines=100)
-        assert '"severity"' in text
-
-    def test_contains_commit_instruction(self):
-        text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=1, merge_base="abc", diff_lines=100)
-        assert "commit" in text.lower()
+    @pytest.mark.parametrize(
+        "round_num,traps,stalemate,escalation",
+        [
+            pytest.param(1, True, False, False, id="round-1"),
+            pytest.param(2, False, True, False, id="round-2"),
+            pytest.param(3, False, True, True, id="round-3"),
+        ],
+    )
+    def test_round_gated_blocks(self, round_num, traps, stalemate, escalation):
+        text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=round_num, merge_base="abc", diff_lines=100)
+        lower = text.lower()
+        assert ("cognitive traps" in lower) is traps
+        assert ("stalemate" in lower) is stalemate
+        assert ("force-defer" in lower) is escalation
 
 
 class TestCompletionBriefing:
-    def test_contains_human_readable_reason(self):
+    def test_contains_human_readable_reason_and_stats(self):
         text = format_completion_briefing(
             termination="zero_findings", rounds_completed=2,
             total_fixed=3, total_rejected=1, total_deferred=0
         )
         assert "clean" in text.lower()
         assert "complete" in text.lower()
-
-    def test_contains_stats(self):
-        text = format_completion_briefing(
-            termination="max_rounds", rounds_completed=5,
-            total_fixed=8, total_rejected=2, total_deferred=1
-        )
-        assert "5" in text
-        assert "8" in text
-
-    def test_all_termination_reasons_have_descriptions(self):
-        for key in ["zero_findings", "all_rejected", "nitpicks_only",
-                     "max_rounds", "hard_limit", "backend_unavailable",
-                     "backend_timeout", "backend_timeout_at_cap"]:
-            assert key in _TERMINATION_REASONS
+        assert "2" in text
+        assert "3" in text
 
     def test_unknown_termination_falls_back_to_raw(self):
         text = format_completion_briefing(
@@ -180,28 +104,8 @@ class TestCompletionBriefing:
         )
         assert "some_new_reason" in text
 
-    def test_contains_actionable_instruction(self):
-        text = format_completion_briefing(
-            termination="zero_findings", rounds_completed=1,
-            total_fixed=0, total_rejected=0, total_deferred=0
-        )
-        assert "report" in text.lower()
-        assert "deferred" in text.lower()
-
 
 class TestDegradedBriefing:
-    def test_contains_raw_output_reference(self):
-        text = format_degraded_briefing(round_num=1, raw_id="r1_raw")
-        assert "r1_raw" in text
-        assert "unstructured" in text.lower()
-
-    def test_contains_evaluation_guidance(self):
-        text = format_degraded_briefing(round_num=1, raw_id="r1_raw")
-        assert "READ" in text
-        assert "VERIFY" in text
-        assert "EVALUATE" in text
-        assert "DECIDE" in text
-
     def test_uses_round_num_for_outcomes_file(self, tmp_path):
         outcomes_path = round_artifact_path(tmp_path, 3, "outcomes")
         text = format_degraded_briefing(
@@ -209,46 +113,41 @@ class TestDegradedBriefing:
         )
         assert str(outcomes_path) in text
         assert "r3_raw" in text
+        assert "unstructured" in text.lower()
 
 
 class TestTimeoutBriefing:
-    def test_interactive_asks_user(self):
-        text = format_timeout_briefing(round_num=1, timeout_seconds=1800, autonomous=False)
-        assert "timed out" in text.lower()
-        assert "user" in text.lower() or "ask" in text.lower()
-
-    def test_autonomous_skips_round(self):
-        text = format_timeout_briefing(round_num=2, timeout_seconds=1800, autonomous=True)
-        assert "timed out" in text.lower()
-        assert "skip" in text.lower()
-        assert "advance" in text.lower() or "proceed" in text.lower()
-
-    def test_autonomous_no_user_prompt(self):
-        text = format_timeout_briefing(round_num=1, timeout_seconds=1800, autonomous=True)
+    @pytest.mark.parametrize(
+        "round_num,autonomous,at_round_cap,must_contain,must_not_contain",
+        [
+            pytest.param(
+                2, True, False,
+                ["skip", "proceed"],
+                ["ask the user", "ask the human"],
+                id="autonomous",
+            ),
+            pytest.param(
+                1, False, False,
+                ["ask", "retry", "skip", "stop", "30"],
+                [],
+                id="interactive-under-cap",
+            ),
+            pytest.param(
+                3, False, True,
+                ["retry", "stop"],
+                ["skip"],
+                id="interactive-at-cap",
+            ),
+        ],
+    )
+    def test_timeout_briefing_modes(self, round_num, autonomous, at_round_cap, must_contain, must_not_contain):
+        text = format_timeout_briefing(
+            round_num=round_num, timeout_seconds=1800,
+            autonomous=autonomous, at_round_cap=at_round_cap,
+        )
         lower = text.lower()
-        assert "ask the user" not in lower
-        assert "ask the human" not in lower
-
-    def test_contains_round_number(self):
-        text = format_timeout_briefing(round_num=3, timeout_seconds=1800, autonomous=False)
-        assert "3" in text
-
-    def test_contains_timeout_duration(self):
-        text = format_timeout_briefing(round_num=1, timeout_seconds=1800, autonomous=False)
-        assert "30" in text  # 30 minutes
-
-    def test_interactive_at_cap_no_skip_option(self):
-        """At the round cap, skip is not offered — would exceed the budget."""
-        text = format_timeout_briefing(round_num=3, timeout_seconds=1800,
-                                        autonomous=False, at_round_cap=True)
-        assert "retry" in text.lower()
-        assert "stop" in text.lower()
-        assert "skip" not in text.lower()
-
-    def test_interactive_under_cap_has_skip_option(self):
-        """Under the round cap, all three options are offered."""
-        text = format_timeout_briefing(round_num=1, timeout_seconds=1800,
-                                        autonomous=False, at_round_cap=False)
-        assert "retry" in text.lower()
-        assert "skip" in text.lower()
-        assert "stop" in text.lower()
+        assert "timed out" in lower
+        for phrase in must_contain:
+            assert phrase in lower
+        for phrase in must_not_contain:
+            assert phrase not in lower

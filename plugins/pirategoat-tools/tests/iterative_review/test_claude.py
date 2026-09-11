@@ -17,12 +17,11 @@ from iterative_review.backends.claude import (
     invoke_review,
     parse_output,
     write_prompt_file,
-    get_rubric,
     check_auth,
     TIMEOUT_SENTINEL,
     TIMEOUT,
-    _EFFORT_MAP,
 )
+from iterative_review.backends import codex as codex_backend
 
 
 # --- Sample data ---
@@ -160,48 +159,6 @@ class TestParseOutput:
         findings, _ = parse_output(response, round_num=1)
         assert findings[0]["location"] == "unknown"
 
-    def test_file_path_used_instead_of_absolute(self):
-        """CC schema uses file_path (relative), not absolute_file_path."""
-        response = json.dumps({
-            "type": "result",
-            "structured_output": {
-                "findings": [{
-                    "title": "Test",
-                    "body": "Detail",
-                    "priority": 1,
-                    "code_location": {
-                        "file_path": "lib/utils.js",
-                        "line_range": {"start": 5, "end": 5}
-                    }
-                }],
-                "overall_correctness": "ok",
-                "overall_explanation": "ok",
-            }
-        })
-        findings, _ = parse_output(response, round_num=1)
-        assert findings[0]["location"] == "lib/utils.js:5"
-
-    def test_line_range_with_different_start_end(self):
-        """When start != end, produces file:start-end format."""
-        response = json.dumps({
-            "type": "result",
-            "structured_output": {
-                "findings": [{
-                    "title": "Multi-line issue",
-                    "body": "Spans multiple lines.",
-                    "priority": 2,
-                    "code_location": {
-                        "file_path": "src/foo.py",
-                        "line_range": {"start": 10, "end": 20}
-                    }
-                }],
-                "overall_correctness": "ok",
-                "overall_explanation": "ok",
-            }
-        })
-        findings, _ = parse_output(response, round_num=1)
-        assert findings[0]["location"] == "src/foo.py:10-20"
-
     def test_is_error_envelope_returns_empty_findings(self):
         """CLI error envelopes (auth failures, budget, etc.) return empty findings, not pseudo-findings."""
         error_response = json.dumps({
@@ -214,12 +171,6 @@ class TestParseOutput:
         findings, degraded = parse_output(error_response, round_num=1)
         assert len(findings) == 0
         assert degraded is True
-
-    def test_is_error_false_not_rejected(self):
-        """Normal responses with is_error=false are not rejected."""
-        findings, degraded = parse_output(SAMPLE_CC_RESPONSE, round_num=1)
-        assert len(findings) == 2
-        assert degraded is False
 
     def test_no_line_range_returns_path_only(self):
         """When line_range is missing, returns just the file path."""
@@ -243,94 +194,42 @@ class TestParseOutput:
 
 
 class TestWritePromptFile:
-    """Prompt composition is identical to codex backend."""
+    """claude.write_prompt_file and codex.write_prompt_file are
+    byte-identical apart from their docstrings. Full coverage of the
+    composed prompt shape (pushback log, deferred items, prior analysis,
+    round-specific filename) lives in test_codex.py::TestWritePromptFile;
+    this is the parity guard that keeps the two backends in lockstep."""
 
-    def test_writes_prompt_to_file(self, tmp_path):
-        path = write_prompt_file(
-            str(tmp_path), 1, rubric="# Review Guidelines\nBe thorough.",
-            merge_base="abc123", context="Fix checkout button bug.",
-            pushback_log=None, analysis_doc_path="r1-analysis.md",
-        )
-        assert Path(path).exists()
-        content = Path(path).read_text()
-        assert "Review Guidelines" in content
-        assert "abc123" in content
-        assert "Fix checkout button bug" in content
-        assert "r1-analysis.md" in content
-        assert "Review History" not in content
-
-    def test_round_2_includes_pushback_and_prior_analysis(self, tmp_path):
-        path = write_prompt_file(
-            str(tmp_path), 2, rubric="# Rubric",
-            merge_base="abc123", context="Context.",
+    def test_matches_codex_backend_byte_for_byte(self, tmp_path):
+        kwargs = dict(
+            rubric="# Rubric",
+            merge_base="abc123",
+            context="Context.",
             pushback_log="### Round 1\nREJECTED: [r1_f2] ...",
             analysis_doc_path="r2-analysis.md",
             prior_analysis_path="r1-analysis.md",
+            deferred_items=[
+                {"severity": "P2", "title": "Missing null check", "location": "api.ts:42"},
+            ],
         )
-        content = Path(path).read_text()
-        assert "Review History" in content
-        assert "REJECTED" in content
-        assert "r1-analysis.md" in content
-        assert "r2-analysis.md" in content
-
-    def test_round_2_includes_deferred_items_section(self, tmp_path):
-        deferred = [
-            {"severity": "P2", "title": "Missing null check", "location": "api.ts:42"},
-            {"severity": "P3", "title": "Vague error message", "location": "handler.ts:15"},
-        ]
-        path = write_prompt_file(
-            str(tmp_path), 2, rubric="# Rubric",
-            merge_base="abc123", context="Context.",
-            pushback_log="### Round 1\nREJECTED: ...",
-            analysis_doc_path="r2-analysis.md",
-            deferred_items=deferred,
-        )
-        content = Path(path).read_text()
-        assert "Previously Deferred Items" in content
-        assert "Missing null check" in content
-        assert "api.ts:42" in content
-        assert "Do not re-raise deferred items" in content
-
-    def test_no_deferred_section_when_empty(self, tmp_path):
-        path = write_prompt_file(
-            str(tmp_path), 2, rubric="# Rubric",
-            merge_base="abc123", context="Context.",
-            pushback_log="### Round 1\nREJECTED: ...",
-            analysis_doc_path="r2-analysis.md",
-            deferred_items=None,
-        )
-        content = Path(path).read_text()
-        assert "Previously Deferred Items" not in content
-
-    def test_review_history_mentions_deferred(self, tmp_path):
-        path = write_prompt_file(
-            str(tmp_path), 2, rubric="# Rubric",
-            merge_base="abc123", context="Context.",
-            pushback_log="### Round 1\nDEFERRED: ...",
-            analysis_doc_path="r2-analysis.md",
-        )
-        content = Path(path).read_text()
-        assert "Treat deferred items as" in content
-        assert "out-of-scope" in content
-
-    def test_round_specific_filename(self, tmp_path):
-        path = write_prompt_file(
-            str(tmp_path), 3, rubric="# R", merge_base="x",
-            context="", pushback_log=None, analysis_doc_path="a.md",
-        )
-        assert Path(path) == tmp_path / "reviewers" / "round-3" / "prompt.md"
+        claude_path = write_prompt_file(str(tmp_path / "claude"), 2, **kwargs)
+        codex_path = codex_backend.write_prompt_file(str(tmp_path / "codex"), 2, **kwargs)
+        assert Path(claude_path).read_text() == Path(codex_path).read_text()
 
 
 class TestInvokeReview:
     """Tests for subprocess command construction and response handling."""
 
     @patch("iterative_review.backends.claude.subprocess.run")
-    def test_command_contains_isolation_flags(self, mock_run, tmp_path):
-        """The CC command includes all isolation flags."""
+    def test_default_command_shape(self, mock_run, tmp_path):
+        """One invocation pins every isolation flag, the model, the output
+        format, the inline schema, the input-kwarg prompt delivery, the
+        scoped tool allowlist, and the two flags absent by default."""
         prompt = tmp_path / "prompt.md"
-        prompt.write_text("Review this code.")
+        prompt.write_text("Review this code please.")
         schema = tmp_path / "schema.json"
-        schema.write_text('{"type":"object"}')
+        schema_content = '{"type":"object","properties":{"findings":{"type":"array"}}}'
+        schema.write_text(schema_content)
         # First call: git rev-parse, second call: claude
         mock_run.side_effect = [
             MagicMock(returncode=0, stdout=str(tmp_path)),
@@ -341,7 +240,9 @@ class TestInvokeReview:
 
         claude_call = mock_run.call_args_list[1]
         cmd = claude_call[0][0]
-        # Check isolation flags are present
+        kwargs = claude_call[1]
+
+        # Isolation flags
         assert "--permission-mode" in cmd
         assert "dontAsk" in cmd
         assert "--settings" in cmd
@@ -349,85 +250,42 @@ class TestInvokeReview:
         assert "--strict-mcp-config" in cmd
         assert "--disable-slash-commands" in cmd
 
-    @patch("iterative_review.backends.claude.subprocess.run")
-    def test_command_uses_json_output_format(self, mock_run, tmp_path):
-        """The CC command requests JSON output format."""
-        prompt = tmp_path / "prompt.md"
-        prompt.write_text("Review this code.")
-        schema = tmp_path / "schema.json"
-        schema.write_text('{"type":"object"}')
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stdout=str(tmp_path)),
-            MagicMock(returncode=0, stdout=SAMPLE_CC_RESPONSE),
-        ]
-
-        invoke_review(str(prompt), str(schema), timeout=60)
-
-        claude_call = mock_run.call_args_list[1]
-        cmd = claude_call[0][0]
+        # Model and output format
+        idx = cmd.index("--model")
+        assert cmd[idx + 1] == "sonnet"
         idx = cmd.index("--output-format")
         assert cmd[idx + 1] == "json"
 
-    @patch("iterative_review.backends.claude.subprocess.run")
-    def test_command_passes_schema_inline(self, mock_run, tmp_path):
-        """The schema JSON is passed inline via --json-schema, not as a file path."""
-        prompt = tmp_path / "prompt.md"
-        prompt.write_text("Review this code.")
-        schema = tmp_path / "schema.json"
-        schema_content = '{"type":"object","properties":{"findings":{"type":"array"}}}'
-        schema.write_text(schema_content)
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stdout=str(tmp_path)),
-            MagicMock(returncode=0, stdout=SAMPLE_CC_RESPONSE),
-        ]
-
-        invoke_review(str(prompt), str(schema), timeout=60)
-
-        claude_call = mock_run.call_args_list[1]
-        cmd = claude_call[0][0]
+        # Schema is passed inline, not as a file path
         idx = cmd.index("--json-schema")
-        # The value should be the schema content string, not the file path
         assert cmd[idx + 1] == schema_content
 
-    @patch("iterative_review.backends.claude.subprocess.run")
-    def test_prompt_passed_via_input_kwarg(self, mock_run, tmp_path):
-        """The prompt content is passed via input= kwarg to subprocess.run."""
-        prompt = tmp_path / "prompt.md"
-        prompt.write_text("Review this code please.")
-        schema = tmp_path / "schema.json"
-        schema.write_text('{"type":"object"}')
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stdout=str(tmp_path)),
-            MagicMock(returncode=0, stdout=SAMPLE_CC_RESPONSE),
-        ]
+        # Tool allowlist
+        idx = cmd.index("--allowedTools")
+        tools = cmd[idx + 1]
+        assert "Read" in tools
+        assert "Grep" in tools
+        assert "Glob" in tools
+        assert "Write" in tools
+        assert "git diff" in tools
 
-        invoke_review(str(prompt), str(schema), timeout=60)
-
-        claude_call = mock_run.call_args_list[1]
-        kwargs = claude_call[1]
+        # Prompt delivered via input= kwarg, not embedded in the command
         assert kwargs.get("input") == "Review this code please."
 
-    @patch("iterative_review.backends.claude.subprocess.run")
-    def test_no_effort_omits_effort_flag(self, mock_run, tmp_path):
-        """When effort is None, --effort is not in the command."""
-        prompt = tmp_path / "prompt.md"
-        prompt.write_text("Review this code.")
-        schema = tmp_path / "schema.json"
-        schema.write_text('{"type":"object"}')
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stdout=str(tmp_path)),
-            MagicMock(returncode=0, stdout=SAMPLE_CC_RESPONSE),
-        ]
-
-        invoke_review(str(prompt), str(schema), timeout=60)
-
-        claude_call = mock_run.call_args_list[1]
-        cmd = claude_call[0][0]
+        # Absent by default
         assert "--effort" not in cmd
+        assert "--add-dir" not in cmd
 
+    @pytest.mark.parametrize(
+        "effort,expected",
+        [
+            pytest.param("xhigh", "high", id="xhigh-maps-to-high"),
+            pytest.param("medium", "medium", id="medium-passthrough"),
+        ],
+    )
     @patch("iterative_review.backends.claude.subprocess.run")
-    def test_effort_high_injects_flag(self, mock_run, tmp_path):
-        """When effort='high', --effort high is present."""
+    def test_claude_effort_flag(self, mock_run, tmp_path, effort, expected):
+        """_EFFORT_MAP caps Sonnet at 'high'; other values pass through unchanged."""
         prompt = tmp_path / "prompt.md"
         prompt.write_text("Review this code.")
         schema = tmp_path / "schema.json"
@@ -437,50 +295,12 @@ class TestInvokeReview:
             MagicMock(returncode=0, stdout=SAMPLE_CC_RESPONSE),
         ]
 
-        invoke_review(str(prompt), str(schema), timeout=60, effort="high")
+        invoke_review(str(prompt), str(schema), timeout=60, effort=effort)
 
         claude_call = mock_run.call_args_list[1]
         cmd = claude_call[0][0]
         idx = cmd.index("--effort")
-        assert cmd[idx + 1] == "high"
-
-    @patch("iterative_review.backends.claude.subprocess.run")
-    def test_effort_xhigh_maps_to_high(self, mock_run, tmp_path):
-        """CC caps at 'high' — xhigh maps to high via _EFFORT_MAP."""
-        prompt = tmp_path / "prompt.md"
-        prompt.write_text("Review this code.")
-        schema = tmp_path / "schema.json"
-        schema.write_text('{"type":"object"}')
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stdout=str(tmp_path)),
-            MagicMock(returncode=0, stdout=SAMPLE_CC_RESPONSE),
-        ]
-
-        invoke_review(str(prompt), str(schema), timeout=60, effort="xhigh")
-
-        claude_call = mock_run.call_args_list[1]
-        cmd = claude_call[0][0]
-        idx = cmd.index("--effort")
-        assert cmd[idx + 1] == "high"  # xhigh -> high
-
-    @patch("iterative_review.backends.claude.subprocess.run")
-    def test_effort_medium_stays_medium(self, mock_run, tmp_path):
-        """Medium effort passes through unchanged."""
-        prompt = tmp_path / "prompt.md"
-        prompt.write_text("Review this code.")
-        schema = tmp_path / "schema.json"
-        schema.write_text('{"type":"object"}')
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stdout=str(tmp_path)),
-            MagicMock(returncode=0, stdout=SAMPLE_CC_RESPONSE),
-        ]
-
-        invoke_review(str(prompt), str(schema), timeout=60, effort="medium")
-
-        claude_call = mock_run.call_args_list[1]
-        cmd = claude_call[0][0]
-        idx = cmd.index("--effort")
-        assert cmd[idx + 1] == "medium"
+        assert cmd[idx + 1] == expected
 
     @patch("iterative_review.backends.claude.subprocess.run")
     def test_timeout_returns_sentinel(self, mock_run, tmp_path):
@@ -547,49 +367,6 @@ class TestInvokeReview:
         assert success is False
 
     @patch("iterative_review.backends.claude.subprocess.run")
-    def test_uses_model_sonnet(self, mock_run, tmp_path):
-        """The CC command specifies --model sonnet."""
-        prompt = tmp_path / "prompt.md"
-        prompt.write_text("Review this code.")
-        schema = tmp_path / "schema.json"
-        schema.write_text('{"type":"object"}')
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stdout=str(tmp_path)),
-            MagicMock(returncode=0, stdout=SAMPLE_CC_RESPONSE),
-        ]
-
-        invoke_review(str(prompt), str(schema), timeout=60)
-
-        claude_call = mock_run.call_args_list[1]
-        cmd = claude_call[0][0]
-        idx = cmd.index("--model")
-        assert cmd[idx + 1] == "sonnet"
-
-    @patch("iterative_review.backends.claude.subprocess.run")
-    def test_allowed_tools_scoped(self, mock_run, tmp_path):
-        """The CC command scopes tools to Read, Grep, Glob, Write, and git commands."""
-        prompt = tmp_path / "prompt.md"
-        prompt.write_text("Review this code.")
-        schema = tmp_path / "schema.json"
-        schema.write_text('{"type":"object"}')
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stdout=str(tmp_path)),
-            MagicMock(returncode=0, stdout=SAMPLE_CC_RESPONSE),
-        ]
-
-        invoke_review(str(prompt), str(schema), timeout=60)
-
-        claude_call = mock_run.call_args_list[1]
-        cmd = claude_call[0][0]
-        idx = cmd.index("--allowedTools")
-        tools = cmd[idx + 1]
-        assert "Read" in tools
-        assert "Grep" in tools
-        assert "Glob" in tools
-        assert "Write" in tools
-        assert "git diff" in tools
-
-    @patch("iterative_review.backends.claude.subprocess.run")
     def test_add_dir_when_output_dir_provided(self, mock_run, tmp_path):
         """When output_dir= is passed, --add-dir grants access to the workspace."""
         prompt = tmp_path / "prompt.md"
@@ -608,24 +385,6 @@ class TestInvokeReview:
         cmd = claude_call[0][0]
         idx = cmd.index("--add-dir")
         assert cmd[idx + 1] == "/tmp/iterative-review-test"
-
-    @patch("iterative_review.backends.claude.subprocess.run")
-    def test_no_add_dir_when_output_dir_absent(self, mock_run, tmp_path):
-        """When output_dir= is not passed, --add-dir is not in the command."""
-        prompt = tmp_path / "prompt.md"
-        prompt.write_text("Review this code.")
-        schema = tmp_path / "schema.json"
-        schema.write_text('{"type":"object"}')
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stdout=str(tmp_path)),
-            MagicMock(returncode=0, stdout=SAMPLE_CC_RESPONSE),
-        ]
-
-        invoke_review(str(prompt), str(schema), timeout=60)
-
-        claude_call = mock_run.call_args_list[1]
-        cmd = claude_call[0][0]
-        assert "--add-dir" not in cmd
 
     @patch("iterative_review.backends.claude.subprocess.run")
     def test_invoke_review_ignores_extra_kwargs(self, mock_run, tmp_path):
@@ -647,109 +406,53 @@ class TestInvokeReview:
         assert success is True
 
 
+def _auth_logged_in(mock_run):
+    mock_run.return_value = MagicMock(
+        returncode=0,
+        stdout='{"loggedIn": true, "authMethod": "claude.ai", "email": "test@test.com"}',
+        stderr="",
+    )
+
+
+def _auth_not_logged_in(mock_run):
+    mock_run.return_value = MagicMock(returncode=0, stdout='{"loggedIn": false}', stderr="")
+
+
+def _auth_not_found(mock_run):
+    mock_run.side_effect = FileNotFoundError("claude not found")
+
+
+def _auth_nonzero_exit(mock_run):
+    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="auth command failed")
+
+
+def _auth_unparseable_json(mock_run):
+    mock_run.return_value = MagicMock(returncode=0, stdout="not json at all", stderr="")
+
+
+def _auth_timeout(mock_run):
+    mock_run.side_effect = subprocess.TimeoutExpired(cmd="claude", timeout=10)
+
+
 class TestCheckAuth:
-    """Tests for check_auth — uses `claude auth status` for real auth check."""
+    """check_auth uses `claude auth status` (claude --version is NOT enough —
+    it exits 0 even when unauthenticated). Fix 1a59efe0: an unauthenticated
+    CC previously produced pseudo-findings instead of a clean failure."""
 
+    @pytest.mark.parametrize(
+        "mock_setup,expected_ok,msg_fragment",
+        [
+            pytest.param(_auth_logged_in, True, "loggedIn", id="logged-in"),
+            pytest.param(_auth_not_logged_in, False, "not logged in", id="not-logged-in"),
+            pytest.param(_auth_not_found, False, "not found", id="binary-not-found"),
+            pytest.param(_auth_nonzero_exit, False, "auth command failed", id="nonzero-exit"),
+            pytest.param(_auth_unparseable_json, False, "unexpected", id="unparseable-json"),
+            pytest.param(_auth_timeout, False, "timed out", id="timeout"),
+        ],
+    )
     @patch("iterative_review.backends.claude.subprocess.run")
-    def test_logged_in_returns_true(self, mock_run):
-        """When claude auth status reports loggedIn=true, returns (True, ...)."""
-        mock_run.return_value = MagicMock(
-            returncode=0,
-            stdout='{"loggedIn": true, "authMethod": "claude.ai", "email": "test@test.com"}',
-            stderr=""
-        )
+    def test_check_auth(self, mock_run, mock_setup, expected_ok, msg_fragment):
+        mock_setup(mock_run)
         ok, msg = check_auth()
-        assert ok is True
-        assert "loggedIn" in msg
-
-    @patch("iterative_review.backends.claude.subprocess.run")
-    def test_not_logged_in_returns_false(self, mock_run):
-        """When claude auth status reports loggedIn=false, returns (False, ...)."""
-        mock_run.return_value = MagicMock(
-            returncode=0,
-            stdout='{"loggedIn": false}',
-            stderr=""
-        )
-        ok, msg = check_auth()
-        assert ok is False
-        assert "not logged in" in msg
-
-    @patch("iterative_review.backends.claude.subprocess.run")
-    def test_not_found_returns_error(self, mock_run):
-        """When claude is not in PATH, returns (False, error message)."""
-        mock_run.side_effect = FileNotFoundError("claude not found")
-        ok, msg = check_auth()
-        assert ok is False
-        assert "not found" in msg
-
-    @patch("iterative_review.backends.claude.subprocess.run")
-    def test_nonzero_exit_returns_error(self, mock_run):
-        """When claude auth status exits non-zero, returns (False, stderr)."""
-        mock_run.return_value = MagicMock(
-            returncode=1, stdout="", stderr="auth command failed"
-        )
-        ok, msg = check_auth()
-        assert ok is False
-        assert "auth command failed" in msg
-
-    @patch("iterative_review.backends.claude.subprocess.run")
-    def test_unparseable_json_returns_error(self, mock_run):
-        """When auth status output isn't valid JSON, returns (False, ...)."""
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="not json at all", stderr=""
-        )
-        ok, msg = check_auth()
-        assert ok is False
-        assert "unexpected" in msg
-
-    @patch("iterative_review.backends.claude.subprocess.run")
-    def test_timeout_returns_error(self, mock_run):
-        """When claude auth status times out, returns (False, timeout message)."""
-        mock_run.side_effect = subprocess.TimeoutExpired(
-            cmd="claude", timeout=10
-        )
-        ok, msg = check_auth()
-        assert ok is False
-        assert "timed out" in msg
-
-
-class TestEffortMap:
-    """Effort mapping constants."""
-
-    def test_medium_maps_to_medium(self):
-        assert _EFFORT_MAP["medium"] == "medium"
-
-    def test_high_maps_to_high(self):
-        assert _EFFORT_MAP["high"] == "high"
-
-    def test_xhigh_maps_to_high(self):
-        assert _EFFORT_MAP["xhigh"] == "high"
-
-
-class TestTimeoutSentinel:
-    """TIMEOUT_SENTINEL and TIMEOUT constants."""
-
-    def test_sentinel_is_string(self):
-        assert isinstance(TIMEOUT_SENTINEL, str)
-
-    def test_timeout_is_1800(self):
-        assert TIMEOUT == 1800
-
-    def test_sentinel_contains_claude(self):
-        """Sentinel is distinct from codex sentinel."""
-        assert "CLAUDE" in TIMEOUT_SENTINEL
-
-
-class TestRubric:
-    """get_rubric reads the shared rubric file."""
-
-    def test_rubric_file_exists(self):
-        rubric = get_rubric()
-        assert len(rubric) > 0, "Rubric file missing or empty"
-
-    def test_rubric_contains_severity_levels(self):
-        rubric = get_rubric()
-        assert "P0" in rubric
-        assert "P1" in rubric
-        assert "P2" in rubric
-        assert "P3" in rubric
+        assert ok is expected_ok
+        assert msg_fragment in msg

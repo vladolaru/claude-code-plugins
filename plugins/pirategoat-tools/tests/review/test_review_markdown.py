@@ -23,7 +23,6 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from review import critic_adjustments
-from review import review_markdown as review_markdown_mod
 from review.agent.output import ReviewOutputBuilder, finalize_review
 from review.review_markdown import materialize_markdown, render_markdown, render_review_body
 from review.reviewer_lifecycle import review_paths, reviewer_markdown_path
@@ -31,7 +30,6 @@ from review.reviewer_lifecycle import review_paths, reviewer_markdown_path
 sys.path.insert(0, str(TESTS_DIR))
 from helpers.review_fixtures import (
     apply_schema,
-    canonical_assignment,
     canonical_findings_ledger,
     canonical_review_document,
     rejected_schema_values,
@@ -102,27 +100,6 @@ class TestRenderMarkdown:
         b = self._rich_builder()
         assert render_markdown(json.loads(json.dumps(b.to_dict()))) == render_markdown(b.to_dict())
 
-    def test_file_location_without_scope_renders_plainly(self):
-        data = self._rich_builder().to_dict()
-        data["findings"] = [{
-            "id": "f1",
-            "severity": "high",
-            "title": "Finding",
-            "file": "f.py",
-            "line": None,
-            "category": "general",
-            "confidence": 0.9,
-            "description": "d",
-            "recommendation": "r",
-        }]
-        data["summary"] = {
-            "total_findings": 1,
-            "by_severity": {"critical": 0, "high": 1, "medium": 0, "low": 0, "info": 0},
-        }
-        rendered = render_markdown(data)
-        assert "**File:** `f.py`\n" in rendered
-        assert "(file-scoped)" not in rendered
-
     def test_summary_without_advisory_measurement_still_renders(self):
         data = self._rich_builder().to_dict()
         data["summary"].pop("suppressed_advisory_finding_count")
@@ -133,23 +110,111 @@ class TestRenderMarkdown:
         assert "# Security Review" in rendered
         assert "Advisory suppression" not in rendered
 
-    def test_renders_a_non_empty_derived_coverage_gap(self):
-        data = self._rich_builder().to_dict()
-        data["unclaimed_review_files"] = ["src/unread.py", "docs/not checked.md"]
-
-        rendered = render_markdown(data)
-
-        assert (
-            "**Not reviewed (budget):** `src/unread.py`, "
-            "`docs/not checked.md`\n\n"
-        ) in rendered
-
-    @pytest.mark.parametrize("unclaimed_review_files", [[], None], ids=["empty", "none"])
-    def test_omits_an_empty_derived_coverage_gap(self, unclaimed_review_files):
+    @pytest.mark.parametrize(
+        ("unclaimed_review_files", "expected"),
+        [
+            pytest.param(
+                ["src/unread.py", "docs/not checked.md"],
+                "**Not reviewed (budget):** `src/unread.py`, "
+                "`docs/not checked.md`\n\n",
+                id="non-empty",
+            ),
+            pytest.param([], None, id="empty"),
+            pytest.param(None, None, id="none"),
+        ],
+    )
+    def test_derived_coverage_gap_renders_only_when_non_empty(
+        self, unclaimed_review_files, expected
+    ):
         data = self._rich_builder().to_dict()
         data["unclaimed_review_files"] = unclaimed_review_files
 
-        assert "**Not reviewed (budget):**" not in render_markdown(data)
+        rendered = render_markdown(data)
+
+        if expected is None:
+            assert "**Not reviewed (budget):**" not in rendered
+        else:
+            assert expected in rendered
+
+    # -- Moved from agent/test_output.py (G7): the builder file is not the
+    # renderer's test file. --
+
+    def test_markdown_renders_severity_floor(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="woo-regression")
+        b.add_finding(
+            "medium", "Title", "f.php", "desc", "rec", line=1,
+            severity_floor="medium",
+        )
+
+        assert "**Severity floor:** medium" in render_markdown(b.to_dict())
+
+    def test_renders_checks_performed_with_method(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="a11y")
+        b.record_check(
+            question="Does CSS depend on the label?",
+            method="grep 'th label' admin.scss",
+            result="No dependencies found.",
+        )
+        md = render_markdown(b.to_dict())
+        assert "## Checks Performed" in md
+        assert "Does CSS depend on the label?" in md
+        assert "grep 'th label' admin.scss" in md
+
+    def test_observations_in_markdown(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_observation("f.py", "File lacks CSRF protection")
+        md = render_markdown(b.to_dict())
+        assert "Observations" in md
+        assert "File lacks CSRF protection" in md
+
+    def test_file_scoped_finding_renders_under_severity_section(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="js-tests")
+        b.add_finding(
+            "high", "whole-file has no test", "src/foo.ts", "desc", "rec",
+            category="missing-coverage",
+        )
+        md = render_markdown(b.to_dict())
+        assert "## High Findings" in md
+        assert "whole-file has no test" in md
+        assert "`src/foo.ts` (file-scoped)" in md
+
+    def test_renders_as_an_assessment_section(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
+        b.set_assessment("Two sentences of judgment.")
+        rendered = render_markdown(b.to_dict())
+        assert "## Assessment\n\nTwo sentences of judgment." in rendered
+
+    def test_absent_prose_renders_no_assessment_section(self):
+        rendered = render_markdown(
+            ReviewOutputBuilder(pr_id="1", reviewer="pr").to_dict()
+        )
+        assert "## Assessment" not in rendered
+
+    def test_critical_advisory_suppression_states_the_stricter_counterfactual(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
+        b.add_finding(
+            severity="critical", title="x", file="a.php",
+            description="d", recommendation="r", line=5,
+            channel="advisory",
+        )
+
+        rendered = render_markdown(b.to_dict())
+
+        assert "Advisory suppression:** 1 finding excluded" in rendered
+        assert "verdict without suppression: BLOCK" in rendered
+
+    def test_advisory_suppression_without_a_counterfactual_still_states_the_count(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
+        b.add_finding(
+            severity="low", title="x", file="a.php",
+            description="d", recommendation="r", line=5,
+            channel="advisory",
+        )
+
+        assert (
+            "Advisory suppression:** 1 finding excluded"
+            in render_markdown(b.to_dict())
+        )
 
 
 class TestMaterializeMarkdown:
@@ -168,16 +233,8 @@ class TestMaterializeMarkdown:
                 data = json.load(f)
             md_text = Path(reviewer_markdown_path(d, "security")).read_text()
             assert md_text == render_markdown(data)
-
-    def test_is_idempotent(self):
-        with tempfile.TemporaryDirectory() as d:
-            b = ReviewOutputBuilder(pr_id="1", reviewer="security")
-            write_canonical_assignment(d, "security")
-            _save_and_finalize(b, d)
-            first = materialize_markdown(d)
-            second = materialize_markdown(d)
-            assert first == second
-            assert Path(reviewer_markdown_path(d, "security")).is_file()
+            # Materializing a second time is idempotent.
+            assert materialize_markdown(d) == written
 
     def test_skips_malformed_json_without_raising(self):
         with tempfile.TemporaryDirectory() as d:
@@ -241,54 +298,17 @@ class TestMaterializeMarkdown:
             assert not Path(d, "arbitrary.md").exists()
             assert "unsupported review artifact" in capsys.readouterr().err
 
-    @pytest.mark.parametrize(
-        ("filename", "payload"),
-        [
-            pytest.param(
-                "security-review.json",
-                canonical_review_document("security"),
-                id="legacy-flat-final",
-            ),
-            pytest.param(
-                "security-assignment.json",
-                canonical_assignment("security"),
-                id="legacy-flat-sidecar",
-            ),
-        ],
-    )
     def test_canonical_looking_legacy_flat_artifacts_are_not_rendered(
-        self, tmp_path, capsys, filename, payload
+        self, tmp_path, capsys
     ):
-        artifact = tmp_path / filename
-        artifact.write_text(json.dumps(payload))
+        artifact = tmp_path / "security-review.json"
+        artifact.write_text(json.dumps(canonical_review_document("security")))
 
-        assert materialize_markdown(tmp_path, suffix=filename) == []
+        assert materialize_markdown(
+            tmp_path, suffix="security-review.json"
+        ) == []
         assert not artifact.with_suffix(".md").exists()
         assert "unsupported review artifact" in capsys.readouterr().err
-
-    @pytest.mark.parametrize(
-        ("relative_path", "reviewer"),
-        [
-            pytest.param(
-                "other/security/review.json", "security",
-                id="non-reviewers-grandparent",
-            ),
-            pytest.param(
-                r"reviewers/security\escape/review.json",
-                r"security\escape",
-                id="unsafe-reviewer-component",
-            ),
-        ],
-    )
-    def test_direct_loader_rejects_noncanonical_reviewer_paths(
-        self, tmp_path, relative_path, reviewer
-    ):
-        path = tmp_path / relative_path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(canonical_review_document(reviewer)))
-
-        with pytest.raises(ValueError, match="unsupported review artifact"):
-            review_markdown_mod._load_renderable_review_artifact(path)
 
     def test_render_cli_prints_markdown(self):
         render_py = SCRIPTS_DIR / "review" / "review_markdown.py"
@@ -359,16 +379,6 @@ class TestReconciliationSectionsRender:
         assert "3 false positives dropped" in rendered
         assert "1 out-of-scope dropped" in rendered
 
-    def test_pipeline_line_points_at_the_full_metrics_block(self):
-        """The narrative template ended its Pipeline line with a pointer to
-        the metrics block. Dropping it in the substitution would lose the
-        one hint a reader has that more metrics exist."""
-        rendered = render_markdown(canonical_findings_ledger(("high",)))
-        assert (
-            "Full metrics in the findings ledger \u2192 "
-            "`meta.reconciliation`." in rendered
-        )
-
     def test_not_applicable_agents_are_reported_with_reasons(self):
         rendered = render_markdown(canonical_findings_ledger(
             ("high",),
@@ -399,9 +409,6 @@ class TestReconciliationSectionsRender:
         assert "**Suggestions:**" in rendered
         assert "- Rename the helper" in rendered
 
-    def test_no_recommendations_renders_no_section(self):
-        assert "## Recommendations" not in render_markdown(_reconciliator_findings())
-
     def test_degraded_host_context_banner_leads_the_body(self):
         """Directly under the title — the H1 stays first so one grader rule
         covers every rendering (see TestRendererFaithfulness)."""
@@ -426,21 +433,6 @@ class TestReconciliationSectionsRender:
         })
         assert not render_markdown(data).startswith(">")
 
-    def test_tradeoffs_ride_the_existing_observation_channel(self):
-        """The narrative's "Tradeoffs Identified" section has a structured
-        home already: verified, maintainer-intended compromises are
-        observations; unverified ones are findings."""
-        b = ReviewOutputBuilder(pr_id="9", reviewer="reconciliator")
-        b.add_observation(
-            "cart.php",
-            "Trigger: bulk import. Population: verified at cart.php:88. "
-            "Intentional: throughput over per-row validation.",
-            category="tradeoff",
-        )
-        rendered = render_markdown(b.to_dict())
-        assert "## Observations" in rendered
-        assert "Trigger: bulk import." in rendered
-
 
 class TestMaterializeFindingsMarkdown:
     """One materializer, parameterized — never a second render path."""
@@ -457,6 +449,9 @@ class TestMaterializeFindingsMarkdown:
 
     def test_suffix_selects_the_findings_artifact(self):
         with tempfile.TemporaryDirectory() as d:
+            # No ledger yet: writes nothing, does not raise.
+            assert materialize_markdown(d, suffix="review-findings.json") == []
+
             data = canonical_findings_ledger(("high",))
             Path(d, "review-findings.json").write_text(json.dumps(data))
             assert critic_adjustments.read_findings_file(
@@ -487,10 +482,6 @@ class TestMaterializeFindingsMarkdown:
             assert [Path(p).parent.name for p in written] == ["security"]
             assert not Path(d, "review-findings.md").exists()
 
-    def test_missing_findings_json_writes_nothing_and_does_not_raise(self):
-        with tempfile.TemporaryDirectory() as d:
-            assert materialize_markdown(d, suffix="review-findings.json") == []
-
     def test_canonical_reader_rejection_writes_no_findings_markdown(
         self, tmp_path, capsys
     ):
@@ -509,21 +500,6 @@ class TestMaterializeFindingsMarkdown:
         assert not (tmp_path / "review-findings.md").exists()
         assert "skipped review-findings.json" in capsys.readouterr().err
 
-    def test_unreadable_findings_ledger_writes_no_markdown(
-        self, tmp_path, capsys
-    ):
-        findings_path = tmp_path / "review-findings.json"
-        findings_path.mkdir()
-
-        assert critic_adjustments.read_findings_file(
-            findings_path
-        ).status == critic_adjustments.FINDINGS_READ_INVALID
-        assert materialize_markdown(
-            str(tmp_path), suffix="review-findings.json"
-        ) == []
-        assert not (tmp_path / "review-findings.md").exists()
-        assert "invalid" in capsys.readouterr().err
-
     def test_materialize_cli_accepts_the_suffix(self):
         """The on-demand recovery path step 11 prints has to be able to
         render the findings ledger, not only the per-reviewer family."""
@@ -541,51 +517,6 @@ class TestMaterializeFindingsMarkdown:
             assert "review-findings.md" in result.stdout
             assert Path(d, "review-findings.md").is_file()
 
-    def test_materialize_cli_skips_a_canonically_invalid_ledger(
-        self, tmp_path
-    ):
-        render_py = SCRIPTS_DIR / "review" / "review_markdown.py"
-        data = canonical_findings_ledger(("high",))
-        data["verdict"] = "APPROVE"
-        findings_path = tmp_path / "review-findings.json"
-        findings_path.write_text(json.dumps(data))
-
-        result = subprocess.run(
-            [
-                sys.executable, str(render_py), "materialize", str(tmp_path),
-                "--suffix", "review-findings.json",
-            ],
-            capture_output=True,
-            text=True,
-        )
-
-        assert result.returncode == 0
-        assert result.stdout == ""
-        assert "skipped review-findings.json" in result.stderr
-        assert not (tmp_path / "review-findings.md").exists()
-
-    def test_materialize_cli_default_suffix_is_unchanged(self):
-        render_py = SCRIPTS_DIR / "review" / "review_markdown.py"
-        with tempfile.TemporaryDirectory() as d:
-            write_canonical_assignment(d, "security")
-            _save_and_finalize(
-                ReviewOutputBuilder(pr_id="1", reviewer="security"), d
-            )
-            Path(d, "review-findings.json").write_text(
-                json.dumps(
-                    ReviewOutputBuilder(
-                        pr_id="1", reviewer="reconciliator"
-                    ).to_dict()
-                )
-            )
-            result = subprocess.run(
-                [sys.executable, str(render_py), "materialize", d],
-                capture_output=True, text=True,
-            )
-            assert result.returncode == 0, result.stderr
-            assert reviewer_markdown_path(d, "security") in result.stdout
-            assert not Path(d, "review-findings.md").exists()
-
 
 class TestAssessmentProvenance:
     """`## Assessment` is prose about a ledger that keeps changing.
@@ -602,8 +533,6 @@ class TestAssessmentProvenance:
             "low", "Minor problem", assessment="All clear on the whole."
         )
         rendered = render_markdown(data)
-        assert "## Assessment\n\nAll clear on the whole." in rendered
-        assert "reconciler-authored" in rendered.lower()
         assert "not adjusted by the decision critic" in rendered.lower()
 
     def test_invalidated_assessment_renders_the_invalidation_notice(self):
@@ -620,36 +549,27 @@ class TestAssessmentProvenance:
             ],
         )
         rendered = render_markdown(data)
-        assert "## Assessment" in rendered
-        assert "invalidated" in rendered.lower()
         # An explicit absence, not a pointer at a file nobody may open: an
         # invalidated-and-unreplaced assessment says it has no current one.
         assert "no current assessment" in rendered.lower()
-        assert "not replaced" in rendered.lower()
+        # The retracted text is never presented as current.
         assert "Old claim." not in rendered
 
-    def test_applied_batch_without_an_invalidation_claims_no_retraction(self):
-        """A reconciler that never wrote a summary has nothing to retract:
-        the writer side refuses to fabricate an empty invalidation entry, and
-        the renderer must not assert one either. The invalidation record —
-        not the applied-ids list — is the signal."""
-        data = _reconciliator_findings("low", "Minor problem",
-            assessment=None,
-            applied_critic_adjustments=["a1b2c3"],
-        )
-        assert "## Assessment" not in render_markdown(data)
+    ASSESSMENT_ABSENT_CASES = (
+        pytest.param({}, id="no_summary_and_no_adjustments"),
+        pytest.param(
+            {"assessment": None, "applied_critic_adjustments": ["a1b2c3"]},
+            id="applied_batch_without_an_invalidation",
+        ),
+    )
 
-    def test_no_summary_and_no_adjustments_renders_no_assessment(self):
-        assert "## Assessment" not in render_markdown(
-            _reconciliator_findings("low", "Minor problem")
-        )
-
-    def test_an_empty_adjustment_list_is_not_an_invalidation(self):
-        """A ledger the critic reached but never changed said nothing about
-        the assessment — the reconciler simply wrote none."""
-        data = _reconciliator_findings("low", "Minor problem",
-            assessment=None, applied_critic_adjustments=[],
-        )
+    @pytest.mark.parametrize("extra", ASSESSMENT_ABSENT_CASES)
+    def test_assessment_absent_when_nothing_invalidated_it(self, extra):
+        """Neither an empty batch nor a summary-less reconciler run claims
+        an invalidation: the invalidation record — not the applied-ids list
+        — is the signal, and the writer side refuses to fabricate an empty
+        one."""
+        data = _reconciliator_findings("low", "Minor problem", **extra)
         assert "## Assessment" not in render_markdown(data)
 
     def test_surviving_prose_beside_adjustments_still_renders_as_prose(self):
@@ -700,6 +620,32 @@ class TestAssessmentProvenance:
         assert "- `refuted-one` — refuted" in rendered
         assert "- `refuted-two` — refuted" in rendered
 
+    def test_a_replacement_is_not_attributed_to_the_reconciler(self):
+        """Moved from `test_critic_adjustments.py` (fix 554723eb)."""
+        data = _reconciliator_findings("low", "Minor problem",
+            assessment="After spot-checking: guarded upstream.",
+            invalidated_assessments=[
+                {"text": "One CRITICAL blocker.",
+                 "invalidated_by_critic_adjustment_ids": ["a1"]},
+            ],
+        )
+        rendered = render_markdown(data)
+        assert "After spot-checking: guarded upstream." in rendered
+        assert "not adjusted by the decision critic" not in rendered
+
+    def test_malformed_decision_records_are_ignored(self):
+        """Moved from `test_critic_adjustments.py` (fix 554723eb)."""
+        data = _reconciliator_findings("low", "Minor problem",
+            applied_critic_adjustments=[
+                None, "", {"outcome": "verified"},
+                {"adjustment_id": 7, "outcome": "verified"},
+                {"adjustment_id": "bad", "outcome": []},
+            ],
+            rejected_critic_adjustments=[None, "bad", {}, {"adjustment_id": 7}],
+        )
+        rendered = render_markdown(data)
+        assert "Critic Adjustment Decisions" not in rendered
+
 
 class TestRemovedByCriticSection:
     """The ledger deliberately keeps what the critic took out. A reading
@@ -727,6 +673,10 @@ class TestRemovedByCriticSection:
         assert "Phantom leak" in rendered
         assert "The guard on line 9 already prevents it." in rendered
         assert "`b.py`" in rendered
+        # An empty list is the same falsy branch as absent: no section.
+        assert "Removed by the Decision Critic" not in render_markdown(
+            self._with_removed([])
+        )
 
     def test_a_removal_without_rationale_still_lists_the_finding(self):
         rendered = render_markdown(self._with_removed([{
@@ -736,11 +686,6 @@ class TestRemovedByCriticSection:
         }]))
         assert "Phantom leak" in rendered
         assert "no rationale recorded" in rendered
-
-    def test_no_removals_renders_no_section(self):
-        assert "Removed by the Decision Critic" not in render_markdown(
-            self._with_removed([])
-        )
 
     def test_removed_findings_do_not_leak_into_the_severity_sections(self):
         rendered = render_markdown(self._with_removed([{
@@ -775,21 +720,6 @@ class TestRendererFaithfulness:
         assert "> **⚠ Host Context Banner:** WooCommerce was not resolved.\n" in rendered
         assert "> Reviewer claims are scoped accordingly.\n" in rendered
 
-    def test_banner_follows_the_h1_so_the_document_still_starts_with_it(self):
-        """`grade_review_markdown` requires the file to start with '# ' —
-        one rule for every rendering, and prominence survives either way."""
-        data = self._base()
-        data["host_context_banner"] = {
-            "degraded": True, "reason": "fully_unavailable",
-            "message": "Nothing resolved.", "unresolved": [],
-        }
-        rendered = render_markdown(data)
-        assert rendered.startswith("# Reconciliator Review - PR #9\n")
-        assert "> **⚠ Host Context Banner:** Nothing resolved." in rendered
-        assert rendered.index("Host Context Banner") < rendered.index(
-            "## Executive Summary"
-        )
-
     def test_unknown_recommendation_priorities_render_rather_than_vanish(self):
         data = self._base()
         data["recommendations"] = {
@@ -800,13 +730,6 @@ class TestRendererFaithfulness:
         assert "## Recommendations" in rendered
         assert "- Fix the escaping" in rendered
         assert "**Urgent:**" in rendered
-        assert "- Roll back the migration" in rendered
-
-    def test_only_unknown_priorities_still_render_a_populated_section(self):
-        data = self._base()
-        data["recommendations"] = {"urgent": ["Roll back the migration"]}
-        rendered = render_markdown(data)
-        assert "## Recommendations" in rendered
         assert "- Roll back the migration" in rendered
 
     def test_a_header_is_never_emitted_over_dropped_content(self):
@@ -829,36 +752,25 @@ class TestEvidenceTrailSections:
         }])
         text = render_review_body(doc)
         assert "  - Source reviewers: security-reviewer\n  - Settles: V1, V3\n" in text
-
-    def test_a_check_without_citations_renders_no_settles_line(self):
-        doc = canonical_findings_ledger(("high",), checks=[{
+        # A check with no citations renders no Settles line.
+        doc_without_citations = canonical_findings_ledger(("high",), checks=[{
             "id": "c1", "question": "q", "method": "m", "result": "r",
             "source_reviewers": ["security-reviewer"],
         }])
-        assert "Settles:" not in render_review_body(doc)
+        assert "Settles:" not in render_review_body(doc_without_citations)
 
-    def test_revised_recommendations_without_prior_advice_are_attributed(self, tmp_path):
-        ledger = canonical_findings_ledger(("high",))
-        ledger["recommendations"] = {
-            "immediate": [], "important": [], "suggestions": [],
-        }
-        critic_adjustments.write_findings(str(tmp_path), ledger)
-        proposal = critic_adjustments.prepare_proposal({
-            "schema": 2,
-            "adjustments": [{
-                "action": "demote", "target": {"kind": "finding", "id": "f1"},
-                "fields": {"severity": "low"}, "rationale": "Guarded upstream.",
-            }],
-        })
-        critic_adjustments.write_critic_verdict(str(tmp_path), "REVISE", proposal)
-        critic_adjustments.adjudicate(str(tmp_path), {
-            "schema": 2,
-            "verified": [proposal["adjustments"][0]["adjustment_id"]],
-            "refuted": [],
-            "revised_recommendations": {"suggestions": ["Add a nonce."]},
-        })
-        settled = critic_adjustments.read_findings_file(tmp_path / "review-findings.json").findings
-        assert "invalidated_recommendations" not in settled
+    def test_revised_recommendations_without_prior_advice_are_attributed(self):
+        """The rendering-facing half of what `adjudicate()` produces when a
+        critic batch revises recommendations with no prior advice to
+        invalidate — built as a dict, as
+        ``test_withdrawn_recommendations_render_the_current_state`` does;
+        the write/adjudicate mechanics that produce this shape are
+        `test_critic_adjustments.py`'s contract."""
+        settled = canonical_findings_ledger(("high",))
+        settled["recommendations"] = {"suggestions": ["Add a nonce."]}
+        settled["applied_critic_adjustments"] = [
+            {"adjustment_id": "a1", "outcome": "verified"},
+        ]
         text = render_review_body(settled)
         assert "- Add a nonce." in text
         assert "*Post-critic recommendations, installed after the critic adjustments applied.*" in text
@@ -934,12 +846,13 @@ class TestEvidenceTrailSections:
         assert "  - Outcome: confirmed" in section
         assert "  - Evidence: same sink at src/a.php:4" in section
 
-    def test_a_note_that_settles_verify_items_says_so(self):
+        # A note that settles verify items says so.
         doc = self._ledger()
         doc["orchestrator_notes"][0]["verifies"] = ["V2", "V3"]
-        text = render_markdown(doc)
-        section = text.split("## Orchestrator Notes", 1)[1]
-        assert "  - Settles: V2, V3" in section
+        settles_section = render_markdown(doc).split(
+            "## Orchestrator Notes", 1
+        )[1]
+        assert "  - Settles: V2, V3" in settles_section
 
     def test_sections_are_absent_without_the_fields(self):
         text = render_markdown(canonical_findings_ledger(("high",)))

@@ -6,7 +6,7 @@ from typing import Dict, List, Literal, Optional, Any
 
 HostKind = Literal["runtime-host", "library-dep"]
 ResolverSource = Literal[
-    "explicit", "wp-env", "docker-compose", "sibling",
+    "explicit", "wp-env", "docker-compose",
     "ecosystem-cache", "vendor-inspection",
 ]
 Confidence = Literal["low", "medium", "high"]

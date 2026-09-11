@@ -8,17 +8,9 @@ from pathlib import Path
 
 import pytest
 
+from hosts import ecosystem_cache
+
 SCRIPTS = (Path(__file__).parent.parent.parent / "scripts").resolve()
-
-
-def _run_cli(*args, env_extra=None):
-    env = {**os.environ, "PYTHONPATH": str(SCRIPTS)}
-    if env_extra:
-        env.update(env_extra)
-    return subprocess.run(
-        [sys.executable, "-m", "hosts.ecosystem_cache", *args],
-        capture_output=True, text=True, env=env, timeout=30,
-    )
 
 
 def test_cli_runs_from_absolute_script_path_without_pythonpath(tmp_path):
@@ -41,46 +33,47 @@ def test_cli_runs_from_absolute_script_path_without_pythonpath(tmp_path):
     assert payload["action"] == "list"
 
 
-def test_list_reports_both_hosts(tmp_path):
-    result = _run_cli("--list", env_extra={"HOME": str(tmp_path)})
-    assert result.returncode == 0
-    payload = json.loads(result.stdout)
+def test_list_prints_the_identity_slot_for_every_known_host(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+    monkeypatch.setattr(sys, "argv", ["ecosystem_cache", "--list"])
+
+    rc = ecosystem_cache.main()
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
     names = {e["name"] for e in payload["hosts"]}
     assert names == {"wordpress", "woocommerce"}
-
-
-def test_list_prints_the_identity_slot_for_every_known_host(tmp_path):
-    result = _run_cli(
-        "--list",
-        env_extra={"HOME": str(tmp_path), "XDG_CACHE_HOME": str(tmp_path / "xdg")},
-    )
-
-    assert result.returncode == 0, result.stderr
-    payload = json.loads(result.stdout)
     assert [row["identity"] for row in payload["hosts"]] == [None, None]
 
 
-def test_verify_runs_without_error(tmp_path):
-    result = _run_cli("--verify", env_extra={"HOME": str(tmp_path)})
-    assert result.returncode == 0
-    payload = json.loads(result.stdout)
+def test_verify_runs_without_error(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(sys, "argv", ["ecosystem_cache", "--verify"])
+
+    rc = ecosystem_cache.main()
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
     assert "hosts" in payload
 
 
-def test_missing_subcommand_errors(tmp_path):
-    result = _run_cli(env_extra={"HOME": str(tmp_path)})
-    assert result.returncode != 0
+def test_missing_subcommand_errors(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(sys, "argv", ["ecosystem_cache"])
+
+    with pytest.raises(SystemExit) as exc:
+        ecosystem_cache.main()
+
+    assert exc.value.code == 2  # argparse's mutually-exclusive-group error
 
 
 def test_ecosystem_cache_cli_unknown_host_returns_structured_error(tmp_path, monkeypatch, capsys):
-    import json as json_lib
-    from hosts import ecosystem_cache
-
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
     monkeypatch.setattr(sys, "argv", ["ecosystem_cache", "--update", "--host", "not-a-real-host"])
     rc = ecosystem_cache.main()
     assert rc != 0  # user error — it's fine for this path to exit non-zero
     captured = capsys.readouterr()
-    data = json_lib.loads(captured.out)
+    data = json.loads(captured.out)
     assert data["status"] == "error"
     assert "unknown" in data["error"].lower() or "not-a-real-host" in data["error"]

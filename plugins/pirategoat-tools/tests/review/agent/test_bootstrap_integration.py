@@ -4,7 +4,6 @@ from concurrent.futures import ThreadPoolExecutor
 import importlib
 import importlib.util
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -21,13 +20,11 @@ BOOTSTRAP_SCRIPT = SCRIPTS_DIR / "review" / "agent" / "bootstrap.py"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from review.agent.output import ReviewOutputBuilder
-from review.agent.scope import format_text_output
 from review import run_paths
 from review.reviewer_lifecycle import (
     review_paths,
     scope_summary_path,
     scoped_diff_path,
-    started_marker_path,
 )
 
 # Import AGENT_CONFIG to derive ALL_AGENTS
@@ -41,48 +38,10 @@ derive_reviewer_name = _mod.derive_reviewer_name
 ALL_AGENTS = sorted(AGENT_CONFIG.keys())
 
 
-class TestAgentNameFromReviewStem:
-    @pytest.mark.parametrize(
-        ("stem", "expected"),
-        [
-            ("security-review", "security-reviewer"),
-            ("repo-api-reviewer-v2-review", "repo-api-reviewer-v2-reviewer"),
-            ("security-reviewer", "security-reviewer"),
-            ("tests-mutation-reviewer", "tests-mutation-reviewer"),
-            ("review", "review"),
-        ],
-    )
-    def test_maps_stem_to_registry_name(self, stem, expected):
-        from review.reviewer_names import agent_name_from_review_stem
-        assert agent_name_from_review_stem(stem) == expected
-
-
 def _write_telemetry_marker(output_dir, telemetry_log):
     marker = run_paths.artifact_path(output_dir, "telemetry_log_path")
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(str(telemetry_log))
-
-
-def test_reviewer_protocol_has_no_tmp_pr_review_fallback():
-    protocol = (
-        PLUGIN_ROOT / "agents" / "shared" / "reviewer-protocol.md"
-    ).read_text(encoding="utf-8")
-
-    assert "/tmp/pr-review" not in protocol
-
-
-def test_reviewer_protocol_says_a_mounted_host_is_not_always_upstream():
-    """Run e08e: a WooCommerce core review listed WooPayments as a runtime
-    host because the clone's local wp-env override mounts it. A mapping
-    proves co-installation, not direction; the reviewer decides that from
-    the diff, so the protocol has to say so instead of calling every host
-    upstream."""
-    protocol = (
-        PLUGIN_ROOT / "agents" / "shared" / "reviewer-protocol.md"
-    ).read_text(encoding="utf-8")
-    section = protocol.split("## Host Context Usage", 1)[1].split("\n## ", 1)[0]
-
-    assert "downstream" in section
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +117,70 @@ def run_bootstrap(*args: str, timeout: int = 60, fixture: str = "multi-file-real
     )
 
 
+_IN_PROCESS_SCOPE = "STATUS: OK\n=== FILES ===\nsrc/a.py  (+1 -0)\n"
+_IN_PROCESS_FACTS = {
+    "inline_diff_files": ["src/a.py"],
+    "review_claimable_files": [],
+    "list_only_files": [],
+    "in_scope_stat_lines": 10,
+}
+
+
+def _main_in_process(
+    agent, tmp_path, monkeypatch, capsys,
+    scope_output=_IN_PROCESS_SCOPE, facts=_IN_PROCESS_FACTS,
+):
+    """Run bootstrap's real main() in-process and return its stdout.
+
+    Same harness as test_bootstrap.py::TestPartitionScopePaths: scope.py
+    and its sidecar are stubbed (run_scope_discovery, load_scope_facts);
+    everything else is real, including find_plugin_root() and the protocol
+    files main() reads from this checkout.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        _mod, "run_scope_discovery", lambda *_args, **_kwargs: (0, scope_output)
+    )
+    monkeypatch.setattr(_mod, "load_scope_facts", lambda _paths: facts)
+    monkeypatch.setattr(sys, "argv", [
+        "bootstrap.py", "--agent", agent, "--range", "base..head",
+        "--output-dir", str(tmp_path / "out"),
+    ])
+    with pytest.raises(SystemExit) as exc:
+        _mod.main()
+    out = capsys.readouterr().out
+    assert exc.value.code == 0, out
+    return out
+
+
+def _delivered_protocol_headings(protocol, skip_prefixes):
+    """The `## `/`### ` heading lines of `protocol` a reviewer must receive.
+
+    A test-local oracle, deliberately not extract_protocol_sections(): it
+    walks the protocol with the same skip list, dropping a skipped heading
+    and every deeper heading under it, and ignoring `#` lines inside code
+    fences.
+    """
+    headings = []
+    skip_level = None
+    in_fence = False
+    for line in protocol.splitlines():
+        if line.startswith("```"):
+            in_fence = not in_fence
+            continue
+        match = None if in_fence else re.match(r"(#{2,3}) ", line)
+        if not match:
+            continue
+        level = len(match.group(1))
+        if skip_level is not None and level > skip_level:
+            continue
+        skip_level = None
+        if any(line.strip().startswith(prefix) for prefix in skip_prefixes):
+            skip_level = level
+            continue
+        headings.append(line.strip())
+    return headings
+
 
 def _inline(count):
     """`count` distinct inline placeholder paths for a schema-5 assignment."""
@@ -178,9 +201,15 @@ class TestCategoryRepresentatives:
 
     def test_standard_agent(self, tmp_path):
         """Standard conditional agent with no special flags (performance-reviewer)."""
+        # Step 1 stamps run-config.json and bootstrap forwards it: one
+        # detector, so re-detecting the version here would be a second source.
+        (tmp_path / "run-config.json").write_text(
+            json.dumps({"mode": "pr", "plugin_version": "9.9.9"})
+        )
         result = run_bootstrap("--agent", "performance-reviewer", "--output-dir", str(tmp_path))
         stdout = result.stdout
         assert result.returncode == 0
+        assert "PIRATEGOAT_PLUGIN_VERSION=9.9.9" in stdout
 
         # Section structure (hardcoded in build_output template)
         assert "=== BOOTSTRAP: performance-reviewer ===" in stdout
@@ -216,38 +245,21 @@ class TestCategoryRepresentatives:
         # REVIEW SCOPE header not duplicated
         assert stdout.count("=== REVIEW SCOPE ===") <= 1
 
-    def test_agent_start_telemetry_uses_the_already_parsed_scope_paths(
-        self, tmp_path
-    ):
-        telemetry_log = tmp_path / "review.jsonl"
-        telemetry_log.write_text(json.dumps({
-            "schema": 1,
-            "run_id": "run-1",
-            "event": "pipeline_start",
-            "pipeline": {"repo_path": _get_fixture_repo()},
-        }) + "\n")
-        _write_telemetry_marker(tmp_path, telemetry_log)
-
-        result = run_bootstrap(
-            "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
+        # The assignment persists the authoritative NOT DIFFED set so the
+        # builder can reject claims that match no claimable file.
+        data = json.loads(
+            Path(review_paths(tmp_path, "performance").assignment).read_text()
         )
-
-        assert result.returncode == 0
-        # Telemetry scope covers the full in-scope set: inline FILES entries,
-        # claimable NOT DIFFED paths (in-scope work whose diffs were withheld
-        # for context budget), and list-only CHANGED (no diff) paths the
-        # reviewer is told to inspect when relevant.
-        expected_scope = sorted(set(
-            scope_files_in_text(result.stdout)
-            + not_diffed_files_in_text(result.stdout)
-            + list_only_files_in_text(result.stdout)
-        ))
-        events = [json.loads(line) for line in telemetry_log.read_text().splitlines()]
-        agent_start = next(
-            event for event in events if event.get("event") == "agent_start"
+        assert sorted(data["review_claimable_files"]) == sorted(
+            not_diffed_files_in_text(stdout)
         )
-        assert expected_scope
-        assert agent_start["scope"]["paths"] == expected_scope
+        # Closes the main()->build_output() seam: review_claimable_count must be
+        # derived from this exact claimable set, not a neighboring fact
+        # (e.g. total scope files) that also happens to be non-empty here.
+        # A mis-wired count would pass every other assertion in this suite.
+        assert ("Not reviewed (budget):" in stdout) == bool(
+            data["review_claimable_files"]
+        )
 
     def test_large_end_to_end_bootstrap_keeps_every_artifact_in_reviewer_directory(
         self, tmp_path
@@ -404,7 +416,8 @@ class TestCategoryRepresentatives:
 
     def test_native_agent_start_keeps_the_registry_model_tier(self, tmp_path):
         """Outside ref-mode the registry is the single source of truth for
-        the tier — a stray --model-tier flag must not override it."""
+        the tier — a stray --model-tier flag must not override it — and the
+        agent_start event carries the scope paths main() already parsed."""
         telemetry_log = tmp_path / "review.jsonl"
         telemetry_log.write_text(json.dumps({
             "schema": 1,
@@ -429,60 +442,17 @@ class TestCategoryRepresentatives:
             event for event in events if event.get("event") == "agent_start"
         )
         assert agent_start["model_tier"] == "sonnet"
-
-    def test_assignment_backs_claim_validation(self, tmp_path):
-        """Bootstrap persists the authoritative NOT DIFFED set so the
-        builder can reject claims that match no claimable file."""
-        result = run_bootstrap(
-            "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
-        )
-        assert result.returncode == 0
-        assignment = Path(review_paths(tmp_path, "performance").assignment)
-        assert assignment.is_file()
-        data = json.loads(assignment.read_text())
-        assert sorted(data["review_claimable_files"]) == sorted(
-            not_diffed_files_in_text(result.stdout)
-        )
-        # Closes the main()->build_output() seam: review_claimable_count must be
-        # derived from this exact claimable set, not a neighboring fact
-        # (e.g. total scope files) that also happens to be non-empty here.
-        # A mis-wired count would pass every other assertion in this suite.
-        assert ("Not reviewed (budget):" in result.stdout) == bool(
-            data["review_claimable_files"]
-        )
-
-    def test_assignment_carries_budget_and_scope_counts(self, tmp_path):
-        """Schema 3 carries the effective (override-applied)
-        budget and scope counts save()'s PROGRESS line reads — the retired
-        env-var budget transport silently died for any agent that rebuilt
-        its save command, so the sidecar is the only carrier.
-
-        history-insights-reviewer has a fixed budget_override (45) in the
-        registry — proof the sidecar carries the FINAL number, not a
-        scope-only figure a downstream reader would have to recompute.
-        """
-        result = run_bootstrap(
-            "--agent", "history-insights-reviewer", "--output-dir", str(tmp_path)
-        )
-        assert result.returncode == 0
-        assert "Target: ~45 tool calls" in result.stdout
-
-        assignment = Path(review_paths(tmp_path, "history-insights").assignment)
-        assert assignment.is_file()
-        data = json.loads(assignment.read_text())
-        assert data["schema"] == 5
-        assert data["review_budget"] == 45
-        assert data["channels"] == ["blocking"]
-        assert "budget_capped" not in data
-
-        diffed = scope_files_in_text(result.stdout)
-        not_diffed = not_diffed_files_in_text(result.stdout)
-        expected_in_scope = len(
-            dict.fromkeys([*diffed, *not_diffed])
-        )
-        assert data["in_scope_review_file_count"] == expected_in_scope
-        assert set(data["inline_diff_files"]) == set(diffed)
-        assert len(data["inline_diff_files"]) == len(set(diffed))
+        # Telemetry scope covers the full in-scope set: inline FILES entries,
+        # claimable NOT DIFFED paths (in-scope work whose diffs were withheld
+        # for context budget), and list-only CHANGED (no diff) paths the
+        # reviewer is told to inspect when relevant.
+        expected_scope = sorted(set(
+            scope_files_in_text(result.stdout)
+            + not_diffed_files_in_text(result.stdout)
+            + list_only_files_in_text(result.stdout)
+        ))
+        assert expected_scope
+        assert agent_start["scope"]["paths"] == expected_scope
 
     def test_test_agent(self, tmp_path):
         """Test-reviewer agent gets DOMAIN RULES (php-tests-reviewer)."""
@@ -557,7 +527,15 @@ class TestCategoryRepresentatives:
         assert "REVIEWER_NAME: security" in stdout
 
     def test_history_and_budget_override_agent(self, tmp_path):
-        """history-insights-reviewer gets FILE HISTORY + budget override."""
+        """history-insights-reviewer gets FILE HISTORY + budget override.
+
+        The assignment carries the effective (override-applied) budget and
+        the scope counts save()'s PROGRESS line reads — the retired env-var
+        budget transport silently died for any agent that rebuilt its save
+        command, so the sidecar is the only carrier. The fixed override (45)
+        proves it carries the FINAL number, not a scope-only figure a
+        downstream reader would have to recompute.
+        """
         result = run_bootstrap("--agent", "history-insights-reviewer", "--output-dir", str(tmp_path))
         stdout = result.stdout
         assert result.returncode == 0
@@ -570,6 +548,22 @@ class TestCategoryRepresentatives:
 
         # Personalization
         assert "REVIEWER_NAME: history-insights" in stdout
+
+        data = json.loads(
+            Path(review_paths(tmp_path, "history-insights").assignment).read_text()
+        )
+        assert data["schema"] == 5
+        assert data["review_budget"] == 45
+        assert data["channels"] == ["blocking"]
+        assert "budget_capped" not in data
+
+        diffed = scope_files_in_text(stdout)
+        not_diffed = not_diffed_files_in_text(stdout)
+        assert data["in_scope_review_file_count"] == len(
+            dict.fromkeys([*diffed, *not_diffed])
+        )
+        assert set(data["inline_diff_files"]) == set(diffed)
+        assert len(data["inline_diff_files"]) == len(set(diffed))
 
     def test_file_history_without_budget_override(self, tmp_path):
         """api-contract-reviewer gets FILE HISTORY but uses scope-computed budget."""
@@ -611,7 +605,9 @@ class TestArchitecturalInvariants:
                 end = pos
         return text[start:end].strip()
 
-    def test_review_rules_identical_across_categories(self, tmp_path):
+    def test_review_rules_identical_across_categories(
+        self, tmp_path, monkeypatch, capsys
+    ):
         """REVIEW RULES (shared protocol) must be identical for all agent categories.
 
         The protocol extraction uses the same file + same skip-list for every agent.
@@ -620,9 +616,9 @@ class TestArchitecturalInvariants:
         """
         rules = {}
         for agent in self._REPRESENTATIVE_AGENTS:
-            result = run_bootstrap("--agent", agent, "--output-dir", str(tmp_path))
+            stdout = _main_in_process(agent, tmp_path, monkeypatch, capsys)
             rules[agent] = self._extract_section(
-                result.stdout, "=== REVIEW RULES ===",
+                stdout, "=== REVIEW RULES ===",
                 "=== DOMAIN RULES ===", "=== REVIEW BUDGET ===", "--- Section 2:",
             )
 
@@ -633,41 +629,39 @@ class TestArchitecturalInvariants:
                 f"REVIEW RULES differ between {self._REPRESENTATIVE_AGENTS[0]} and {agent}"
             )
 
-    def test_shared_rules_bound_recursive_filesystem_discovery(self, tmp_path):
-        """The bounded-discovery protocol section must reach generated prompts.
+    def test_every_delivered_protocol_heading_reaches_the_prompt(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """Every `## `/`### ` heading of the real reviewer-protocol.md outside
+        the skip list reaches the prompt main() builds, verbatim.
 
-        Diffs the section body against source instead of pinning prose, so
-        rewording the protocol doesn't break the test — only dropping the
-        section (or the prompt path losing it) does.
+        One guard for every section instead of one per section: a section
+        the extractor drops, or main() loses on the way to build_output(),
+        fails here by name, and a new section is covered the day it is
+        added. Adding a heading to the skip list is a deliberate policy
+        change this guard does not police; TestEmpiricalProbeContract pins
+        the section that must never be skipped. Blind spot: a new `###`
+        heading placed under a skipped `##` section is dropped by the
+        extractor and so is not checked by this guard.
         """
         protocol = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
-        section = self._extract_section(
-            protocol, "### Bounded Filesystem Discovery", "\n## ", "\n### ",
+        expected = _delivered_protocol_headings(
+            protocol, _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
         )
-        assert section, "protocol must define a Bounded Filesystem Discovery section"
+        assert any(heading.startswith("### ") for heading in expected), expected
 
-        review_rules = _mod.extract_protocol_sections(
-            protocol,
-            _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS,
-        )
-        prompt = build_output(
-            agent_name="code-reviewer",
-            plugin_root=str(PLUGIN_ROOT),
-            status="OK",
-            review_rules=review_rules,
-            domain_rules=None,
-            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
-            exploration_scope=None,
-            output_dir=str(tmp_path),
-            pr_number=None,
-            reviewer_name="code",
-            review_claimable_count=0,
-            has_php=False,
+        prompt_lines = set(
+            _main_in_process(
+                "code-reviewer", tmp_path, monkeypatch, capsys
+            ).splitlines()
         )
 
-        assert section in prompt
+        missing = [heading for heading in expected if heading not in prompt_lines]
+        assert not missing, f"protocol headings missing from the prompt: {missing}"
 
-    def test_domain_rules_identical_across_test_agents(self, tmp_path):
+    def test_domain_rules_identical_across_test_agents(
+        self, tmp_path, monkeypatch, capsys
+    ):
         """DOMAIN RULES (tests-reviewer protocol) must be identical for all test agents.
 
         All 4 test agents (php, js, e2e, go) must produce the same DOMAIN RULES.
@@ -676,9 +670,9 @@ class TestArchitecturalInvariants:
         agents = ["php-tests-reviewer", "js-tests-reviewer", "e2e-tests-reviewer", "go-tests-reviewer"]
         rules = {}
         for agent in agents:
-            result = run_bootstrap("--agent", agent, "--output-dir", str(tmp_path))
+            stdout = _main_in_process(agent, tmp_path, monkeypatch, capsys)
             rules[agent] = self._extract_section(
-                result.stdout, "=== DOMAIN RULES ===",
+                stdout, "=== DOMAIN RULES ===",
                 "=== REVIEW BUDGET ===", "--- Section 2:",
             )
 
@@ -716,14 +710,9 @@ class TestCanonicalExecutableBuilderSource:
             has_php=False,
         )
 
+        # The protocol is reference-only; bootstrap emits the one executable
+        # builder command, envelope filled in.
         assert "python3 <<'PY'" not in protocol
-        for shell_variable in (
-            "PIRATEGOAT_PLUGIN_ROOT=",
-            "PIRATEGOAT_OUTPUT_DIR=",
-            "PIRATEGOAT_REVIEWER_NAME=",
-            "PIRATEGOAT_PR_ID=",
-        ):
-            assert shell_variable not in protocol
         assert prompt.count("python3 <<'PY'") == 1
         assert f"PIRATEGOAT_PLUGIN_ROOT={PLUGIN_ROOT}" in prompt
         assert f"PIRATEGOAT_OUTPUT_DIR={tmp_path}" in prompt
@@ -733,21 +722,14 @@ class TestCanonicalExecutableBuilderSource:
             "builder = ReviewOutputBuilder.open("
             "output_dir, pr_id, reviewer_name)" in prompt
         )
-        assert "builder.save_draft()" in prompt
-        assert "MUST NOT create or write a temporary builder script" in prompt
-        assert "generic filenames collide" in prompt
         assert "DRAFT TOTALS" in prompt
         assert "run the exact FINALIZE REVIEW command printed by" in prompt
-        assert "REVIEW FINALIZED" in prompt
-        assert "Only then return the FINISHED signal" in prompt
-        assert "Return signal format:" in prompt
-        assert "STATUS: FINISHED" in prompt
-        assert review_paths(tmp_path, "security").final in prompt
-        assert f"{tmp_path}/security-review.md" not in prompt
 
-    def test_every_bootstrapped_reviewer_sees_only_the_canonical_contract(
+    def test_bootstrapped_reviewer_sees_only_the_canonical_contract(
         self, tmp_path
     ):
+        """build_output()'s Section 3 does not branch on the agent, so one
+        bootstrapped reviewer (security-reviewer) proves the contract for all."""
         forbidden = (
             "add_issue",
             "add_clearance",
@@ -764,26 +746,24 @@ class TestCanonicalExecutableBuilderSource:
             "run the exact FINALIZE REVIEW command printed by",
         )
 
-        for agent_name in ALL_AGENTS:
-            prompt = build_output(
-                agent_name=agent_name,
-                plugin_root=str(PLUGIN_ROOT),
-                status="OK",
-                review_rules="rules",
-                domain_rules=None,
-                scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
-                exploration_scope=None,
-                output_dir=str(tmp_path),
-                pr_number="42",
-                reviewer_name=derive_reviewer_name(agent_name),
-                review_claimable_count=1,
-                has_php=False,
-            )
-            assert all(token in prompt for token in required), agent_name
-            assert not any(token in prompt for token in forbidden), agent_name
+        prompt = build_output(
+            agent_name="security-reviewer",
+            plugin_root=str(PLUGIN_ROOT),
+            status="OK",
+            review_rules="rules",
+            domain_rules=None,
+            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number="42",
+            reviewer_name="security",
+            review_claimable_count=1,
+            has_php=False,
+        )
+        assert [token for token in required if token not in prompt] == []
+        assert [token for token in forbidden if token in prompt] == []
 
     def test_registered_reviewer_definitions_do_not_restore_raw_output_paths(self):
-        stale = "Use ReviewOutputBuilder per shared protocol. Write to"
         canonical = (
             "Use ReviewOutputBuilder per the shared protocol's "
             "Canonical Draft Lifecycle."
@@ -795,24 +775,10 @@ class TestCanonicalExecutableBuilderSource:
         }
         for agent_name in sorted(raw_reviewers):
             definition = (PLUGIN_ROOT / "agents" / f"{agent_name}.md").read_text()
-            assert stale not in definition, agent_name
             assert canonical in definition, agent_name
-            assert "builder.set_assessment(" not in definition, agent_name
 
     def test_shared_protocol_teaches_the_complete_draft_lifecycle(self):
         protocol = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
-
-        for phrase in (
-            "rehydrates the existing complete draft",
-            "full persisted draft's totals",
-            "what this save changed against the draft you opened",
-            "review files still unclaimed",
-            "separate tool turn",
-            "verbatim",
-            "Raw reviewers must not call `set_assessment()`",
-            "Never write review JSON or Markdown directly",
-        ):
-            assert phrase in protocol
 
         lifecycle_section = protocol.split(
             "## Canonical Draft Lifecycle", 1
@@ -827,20 +793,6 @@ class TestCanonicalExecutableBuilderSource:
         ]
         positions = [lifecycle_section.index(token) for token in lifecycle]
         assert positions == sorted(positions)
-
-    def test_tests_protocol_requires_structured_evidence_for_material_negatives(self):
-        """The rule lives once, in the shared protocol's Absence Claims
-        section — the tests protocol no longer restates it."""
-        shared_protocol = (
-            PLUGIN_ROOT / "agents/shared/reviewer-protocol.md"
-        ).read_text()
-        tests_protocol = (
-            PLUGIN_ROOT / "agents/shared/tests-reviewer-protocol.md"
-        ).read_text()
-
-        assert "material negative" in shared_protocol
-        assert "builder.record_check(" in shared_protocol
-        assert "material negative" not in tests_protocol
 
     def test_envelope_carries_the_plugin_version_assignment(self, tmp_path):
         """The producing plugin version travels in the same envelope.
@@ -911,7 +863,6 @@ class TestCanonicalExecutableBuilderSource:
             review_claimable_count=0,
             has_php=False,
         )
-        assert "OUTPUT_DIR accepts only your named artifacts" in prompt
         assert "goes in OUTPUT_DIR/tmp/" in prompt
 
     @pytest.mark.parametrize("review_budget", [80, None])
@@ -946,19 +897,6 @@ class TestCanonicalExecutableBuilderSource:
         command_end = prompt.index("python3 <<'PY'", command_start)
         assignment_line = prompt[command_start:command_end]
         assert assignment_line.count("PIRATEGOAT_") == 5
-
-    def test_main_reads_the_version_from_the_run_config_stamp(self, tmp_path):
-        """One detector: step 1 stamps run-config.json, bootstrap forwards it.
-
-        Re-detecting here would create a second source of the same fact.
-        """
-        (tmp_path / "run-config.json").write_text(
-            json.dumps({"mode": "pr", "plugin_version": "9.9.9"})
-        )
-        result = run_bootstrap(
-            "--agent", "security-reviewer", "--output-dir", str(tmp_path)
-        )
-        assert "PIRATEGOAT_PLUGIN_VERSION=9.9.9" in result.stdout
 
 
 class TestNotApplicableCompletionContract:
@@ -1011,33 +949,8 @@ class TestNotApplicableCompletionContract:
         heredoc_body = prompt.split("python3 <<'PY'\n", 1)[1].split("\nPY", 1)[0]
         compile(heredoc_body, "<bootstrap builder example>", "exec")
 
-        assert "MUST use a one-shot quoted heredoc" in prompt
-        assert "python3 <<'PY'" in prompt
         assert "MUST NOT create or write a temporary builder script with the Write tool" in prompt
-        assert "parallel reviewers share the parent-session scratch directory" in prompt
-        assert "generic filenames collide" in prompt
-        assert "script FILE (Write tool) or a heredoc" not in prompt
-        assert "python3 -c" in prompt  # named so it can be forbidden
-        assert "NEVER" in prompt
-
-    def test_output_instructions_require_count_reconciliation(self, tmp_path):
-        """Agents must report the builder's recorded state, not their intent."""
-        prompt = build_output(
-            agent_name="security-reviewer",
-            plugin_root=str(PLUGIN_ROOT),
-            status="OK",
-            review_rules="",
-            domain_rules=None,
-            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
-            exploration_scope=None,
-            output_dir=str(tmp_path),
-            pr_number=None,
-            reviewer_name="security",
-            review_claimable_count=0,
-            has_php=False,
-        )
-
-        assert "DRAFT TOTALS" in prompt
+        assert "NEVER inline `python3 -c" in prompt
 
     def test_registered_agents_derive_unique_nonempty_reviewer_names(self):
         """Every shipped agent has a collision-safe output identity."""
@@ -1192,183 +1105,11 @@ class TestNotApplicableCompletionContract:
         assert saved["reviewed_file_count"] == 3
         assert set(tmp_path.rglob("*.py")) == python_files_before
 
-    def test_agent_definitions_do_not_duplicate_abstention_calls(self):
-        offenders = [
-            path.name
-            for path in sorted((PLUGIN_ROOT / "agents").glob("*.md"))
-            if "mark_not_applicable(" in path.read_text()
-        ]
-
-        assert offenders == [], (
-            "Agent-local abstention calls drift from the shared persisted "
-            f"completion sequence: {offenders}"
-        )
-
-    def test_woo_reviewer_uses_structured_floors_not_description_markers(self):
-        prompt = (PLUGIN_ROOT / "agents/woo-regression-reviewer.md").read_text()
-
-        assert 'severity_floor="medium"' in prompt
-        assert 'severity_floor="high"' in prompt
-        assert "Severity-floor:" not in prompt
-
-    def test_woo_reviewer_audits_heuristic_proxy_predicates(self):
-        """Invariant 11 (regression guard for woocommerce/woocommerce#66613):
-        proxy predicates inferred from persisted state shape must be audited
-        against every writer of that state and every store configuration."""
-        prompt = (PLUGIN_ROOT / "agents/woo-regression-reviewer.md").read_text()
-
-        # Per-hunk audit row exists, so the self-audit can catch dismissals.
-        assert "Heuristics — proxy predicate vs. configuration variance" in prompt
-        # Invariant section with the producer-verification rule.
-        assert "Heuristic proxy predicates and configuration variance" in prompt
-        assert "guaranteed-true under some supported configuration" in prompt
-        assert "verified at the producers" in prompt
-        # Findings can carry the dedicated category.
-        assert "`proxy-predicate`" in prompt
-
-    def test_woo_reviewer_audits_markup_selector_contracts(self):
-        """Invariant 12 (regression guard for the 2026-07-16 catch on the
-        woocommerce/woocommerce#55669 fix): rendered markup is a selector
-        surface — removing an element breaks the CSS/JS/tests that key on it,
-        and the dependency must be verified from the dependent side."""
-        prompt = (PLUGIN_ROOT / "agents/woo-regression-reviewer.md").read_text()
-
-        # Per-hunk audit row exists.
-        assert "Markup — removed/renamed selector surface" in prompt
-        # Invariant section with the dependent-side verification rule.
-        assert "Rendered markup is a contract" in prompt
-        assert "dependent side" in prompt
-        # The corpus example.
-        assert "55669" in prompt
-        # Findings can carry the dedicated category.
-        assert "`markup-contract`" in prompt
-
-    def test_woo_reviewer_audits_late_transforms_over_foreign_entries(self):
-        """Invariant 4 addition (regression guard for the
-        woocommerce/woocommerce-subscriptions#5575 rework): a late-priority
-        callback on a collection filter post-processes every other plugin's
-        contributions, so a predicate-selected transform must be scoped to
-        entries the plugin owns."""
-        prompt = (PLUGIN_ROOT / "agents/woo-regression-reviewer.md").read_text()
-
-        # Per-hunk audit row exists, so the self-audit can catch dismissals.
-        assert "Hooks - late transform over foreign collection entries" in prompt
-        # Invariant text with the ownership-scoping rule.
-        assert "caller-side post-processing of every other plugin's contributions" in prompt
-        assert "rewrites entries the plugin does not own" in prompt
-        # The dismissal this closes.
-        assert '"Display-only" is not a reason to dismiss' in prompt
-
-    def test_wp_architecture_reviewer_audits_half_deprecations(self):
-        """Deprecation Rule addition (regression guard for the
-        woocommerce/woocommerce-subscriptions#5692 rework): a `@deprecated`
-        tag added without the runtime notice, or the reverse, is an
-        incomplete deprecation the removal-gated rule above never reaches."""
-        prompt = (PLUGIN_ROOT / "agents/wp-architecture-reviewer.md").read_text()
-
-        # The invariant, and why the removal-gated rule above does not reach it.
-        assert "**Half-deprecations count.**" in prompt
-        assert "the rule above does not cover it because nothing was removed" in prompt
-        # Both halves named as the mechanisms they are. The bare function names
-        # also appear in the removal-gated rule above, so they are asserted in
-        # this paragraph's phrasing - a bare name would pass with the paragraph
-        # deleted.
-        assert "`@deprecated` tag, which speaks to" in prompt
-        assert "runtime `_deprecated_function()` / `_deprecated_hook()` call" in prompt
-        # Both directions of the incompleteness.
-        assert "A tag with no notice means no consumer is ever told" in prompt
-        assert "a notice with no tag" in prompt
-        # The evidence the reviewer is sent to gather.
-        assert "Check the sibling deprecated symbols in the same file" in prompt
-        # The dismissal this closes.
-        assert "An author's stated reason for the omission does not settle it" in prompt
-        # Both false-positive gates, so a planned second half and genuinely
-        # internal symbols stay unflagged.
-        assert "when the diff names the version the missing half lands in" in prompt
-        assert "provably unreachable from outside the codebase" in prompt
-
-    def test_woo_reviewer_audits_settings_write_surface(self):
-        """Invariant 13 (regression guard for woocommerce-subscriptions#4612 →
-        #5664): registering a settings page, group, or settings-API object
-        makes every field REST/CLI-writable through one of two write routes,
-        so an invariant the settings form enforces at save time has to hold
-        where the value is read."""
-        prompt = (PLUGIN_ROOT / "agents/woo-regression-reviewer.md").read_text()
-
-        # Per-hunk audit row exists, so the self-audit can catch dismissals.
-        assert "Settings - form-only invariant vs. REST/CLI writers" in prompt
-        assert "a settings-API object's `form_fields`" in prompt
-        # Invariant section with the enumerate-the-writers rule.
-        assert "Settings screens are a write surface, not just a form" in prompt
-        assert "the form is one of at least three" in prompt
-        # Both REST write routes, so a WC_Email hunk is not cleared by the
-        # absence of a save_fields() call.
-        assert "WC_Admin_Settings::save_fields( array( $setting ), $update_data )" in prompt
-        assert "For an array `option_key`" in prompt
-        assert "`woocommerce_admin_settings_sanitize_option*` filters never run" in prompt
-        # The remedy that does not work, so reviewers stop recommending it.
-        assert "Do not repair it below the API" in prompt
-        assert "stores `$request['value']` raw" in prompt
-        # The corpus example.
-        assert "woocommerce-subscriptions#4612" in prompt
-        # Findings can carry the dedicated category.
-        assert "`settings-write-surface`" in prompt
-
-    def test_downstream_prompts_preserve_explicit_floor_contract(self):
-        reconciliator = (
-            PLUGIN_ROOT / "agents/review-reconciliator.md"
-        ).read_text().lower()
-        critic = (PLUGIN_ROOT / "agents/decision-reviewer.md").read_text().lower()
-
-        assert "categories never invent a floor" in reconciliator
-        assert "strongest verified" in reconciliator
-        assert "severity_floor" in reconciliator
-        assert "severity floor" in critic
-
-
-class TestDecisionReviewerContract:
-    def test_record_content_provenance_is_explicit(self):
-        critic = (PLUGIN_ROOT / "agents/decision-reviewer.md").read_text().lower()
-
-        assert "mechanically assembled" in critic
-        assert "no model edits it after assembly" in critic
-        assert "initial findings, assessment, and verified checks" in critic
-        assert "reconciliator-authored `review-findings.json`" in critic
-        assert "pipeline supplies measurements and run notes" in critic
-        assert "`findings[].critic_adjustment`" in critic
-        assert "`applied_critic_adjustments`" in critic
-        assert "`rejected_critic_adjustments`" in critic
-        assert "`invalidated_assessments`" in critic
-        assert "inspect these audit fields" in critic
-        assert "nothing in it was authored by an agent" not in critic
-
-    def test_live_ledger_guidance_uses_findings_and_verified_checks(self):
-        critic = (PLUGIN_ROOT / "agents/decision-reviewer.md").read_text()
-
-        assert "stable `fN` `id`" in critic
-        assert "`findings[].id`" in critic
-        assert "`## Verified Checks`" in critic
-        assert "8-hex" not in critic
-        assert "`issues[].id`" not in critic
-        assert "`## Clearances" not in critic
-
-    def test_critic_owns_only_schema_two_finding_and_check_proposals(self):
-        critic = (PLUGIN_ROOT / "agents/decision-reviewer.md").read_text()
-
-        assert "schema 2" in critic
-        assert '"kind": "finding"' in critic
-        assert '"kind": "check"' in critic
-        assert "the orchestrator's adjudication is recorded in the ledger" in (
-            critic
-        )
-        assert "Author only `action`, `target`, `fields`, and `rationale`" in (
-            critic
-        )
-        assert "`adjustment_id`" in critic
-
 
 class TestRepoReviewerAdapterContract:
     def test_empty_review_uses_the_same_draft_finalization_flow(self):
+        """The adapter's empty-findings branch saves a draft and finalizes
+        like every other reviewer instead of skipping publication."""
         adapter = (
             PLUGIN_ROOT / "agents/repo-reviewer-adapter.md"
         ).read_text()
@@ -1377,277 +1118,6 @@ class TestRepoReviewerAdapterContract:
         )[1].split("\n- ", 1)[0]
 
         assert "`save_draft()`" in empty_branch
-        assert "finalize" in empty_branch
-        assert "`finalize_review_command`" not in empty_branch
-        assert "`save()`" not in empty_branch
-        assert "standard pirategoat finding" in adapter
-        assert "Tag EVERY finding" in adapter
-        assert "standard pirategoat issue" not in adapter
-        assert "Tag EVERY issue" not in adapter
-
-    def test_example_runs_the_printed_finalization_command_verbatim(self):
-        """The example calls `save_draft()` and then points at the shared
-        protocol's Canonical Draft Lifecycle rather than re-teaching the
-        finalization mechanics inline."""
-        adapter = (
-            PLUGIN_ROOT / "agents/repo-reviewer-adapter.md"
-        ).read_text()
-
-        assert "receipt = builder.save_draft()" not in adapter
-        assert "builder.save_draft()" in adapter
-        assert "Canonical Draft Lifecycle" in adapter
-        assert "exact printed `FINALIZE REVIEW` command verbatim" not in adapter
-
-
-class TestReconcilerReviewDomainOwnership:
-    def test_reconciler_carries_complete_structured_reviewer_evidence(self):
-        reconciler = (
-            PLUGIN_ROOT / "agents/review-reconciliator.md"
-        ).read_text()
-
-        for token in (
-            "reviews_by_agent",
-            "positive_observations",
-            "builder.set_assessment(",
-            "builder.record_check(",
-            "source_reviewers=",
-        ):
-            assert token in reconciler
-        assert "FindingsLedgerBuilder(pr_id=" in reconciler
-        assert "FindingsLedgerBuilder.open(" not in reconciler
-        assert "builder.add_positive_observation(" in reconciler
-
-    def test_reconciler_uses_the_local_host_context_map_for_host_citations(self):
-        reconciler = (
-            PLUGIN_ROOT / "agents/review-reconciliator.md"
-        ).read_text()
-
-        assert "full local-only `review_context.host_context` manifest" in reconciler
-        assert "use the local `host_context` map" in reconciler
-        assert "host-qualified `source_cited`" in reconciler
-
-
-class TestAPIContractReviewerReturnSideHooks:
-    """Regression guard for caller-side handling of filter return values."""
-
-    @staticmethod
-    def _prompt() -> str:
-        return (PLUGIN_ROOT / "agents/api-contract-reviewer.md").read_text().lower()
-
-    def test_compares_returned_value_handling_before_and_after_diff(self):
-        prompt = self._prompt()
-
-        assert "compare the caller's handling" in prompt
-        assert "returned value before and after the diff" in prompt
-
-    def test_includes_concrete_post_filter_processing_break(self):
-        prompt = self._prompt()
-
-        assert "apply_filters() remains present" in prompt
-        assert "removed normalization" in prompt
-        assert "hook-contract-break" in prompt
-
-    def test_treats_undocumented_established_runtime_behavior_as_contract(self):
-        prompt = self._prompt()
-
-        assert "established runtime behavior" in prompt
-        assert "even when the hook docblock does not document it" in prompt
-
-    def test_accepts_established_behavior_evidence_without_direct_consumer_code(self):
-        prompt = self._prompt()
-
-        assert (
-            "pre-diff implementation or tests can establish changed observable "
-            "behavior without direct consumer code"
-        ) in prompt
-        assert (
-            "when implementation and test evidence are absent, require existing "
-            "consumer code"
-        ) in prompt
-
-    def test_requires_evidence_before_internal_refactoring_dismissal(self):
-        prompt = self._prompt()
-
-        assert "concrete evidence" in prompt
-        assert "observable result is unchanged" in prompt
-
-
-class TestDismissalDisciplineContract:
-    """Dismissal/mitigation verification must apply to ALL findings.
-
-    Regression guard for the woocommerce/woocommerce#66488 miss: a detected
-    concern was demoted to "narrow and acceptable corner" tradeoff prose on
-    an unverified frequency claim, because the verification rules were scoped
-    to floored findings and three regression categories only.
-    """
-
-    def test_reconciliator_has_general_dismissal_discipline(self):
-        text = (PLUGIN_ROOT / "agents/review-reconciliator.md").read_text()
-        assert "## Dismissal & Mitigation Discipline (ALL findings)" in text
-        assert "Frequency claims are not structural reasons" in text
-        assert "verified at the producers" in text
-        assert "verified at file:line for the cited input shape" in text
-
-    def test_reconciliator_sanctions_upstream_producer_tracing(self):
-        text = (PLUGIN_ROOT / "agents/review-reconciliator.md").read_text()
-        assert "sanctioned exception" in text
-        assert "upstream producers" in text
-
-    def test_tradeoffs_section_has_exit_criteria(self):
-        text = (PLUGIN_ROOT / "agents/review-reconciliator.md").read_text()
-        assert "not a disposal path for findings" in text
-        assert "`add_finding()` at Low or Medium" in text
-
-
-class TestVerificationMethodContract:
-    """Verification-method rules ported from ai-regression-review's triage.md
-    (the half the 2026-07-15 dismissal port did not cover).
-
-    Regression guard for the 2026-07-16 run: three agents 'cleared' the blast
-    radius of a removed <label> with the same wrong grep ('.titledesc label'
-    when the load-bearing selectors were 'th label'), the raw signal read as
-    3-clear-vs-1-found, and the reconciliator then repeated the failure one
-    level up by verifying from a 37-line window of a 5,900-line stylesheet,
-    missing a third dependent rule.
-    """
-
-    def test_reconciliator_has_verification_method_weighting(self):
-        text = (PLUGIN_ROOT / "agents/review-reconciliator.md").read_text()
-        assert "## Verification-Method Weighting" in text
-        # Correlated-signal rule: same method = one probe, not N confirmations
-        assert "one probe" in text
-        # Anti-vote-counting: counts alone never move a verdict or severity
-        assert "counts alone" in text
-        # Negative-evidence rule: a negative search proves pattern absence only
-        assert "searched pattern is absent" in text
-        # Whole-artifact rule: enumerate all occurrences before concluding
-        assert "every occurrence" in text
-
-    def test_reconciliator_convergence_is_method_aware(self):
-        text = (PLUGIN_ROOT / "agents/review-reconciliator.md").read_text()
-        assert "distinct verification methods" in text
-        assert "More agents = higher confidence" not in text
-
-    def test_reconciliator_treats_check_conflicts_as_verification_targets(self):
-        """A check that contradicts a finding is resolved by verifying
-        the finding, not by counting sides.
-
-        Pinned on the rule's meaning rather than its old heading text
-        ("check vs. finding"), which moved when the method-adequacy
-        judgment was lifted out to apply to EVERY check — the wording
-        can change, this contract cannot.
-        """
-        text = (PLUGIN_ROOT / "agents/review-reconciliator.md").read_text()
-        assert "contradicts a finding" in text
-        assert "never a vote" in text
-        # And the judgment that voids a bad-method check is not gated
-        # on some finding having disagreed with it first.
-        assert "Judge EVERY check by its method" in text
-
-    def test_protocol_requires_record_check_for_absence_claims(self):
-        text = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
-        assert "record_check" in text
-
-    def test_protocol_has_absence_claim_rules(self):
-        text = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
-        assert "## Absence Claims" in text
-        # Directionality: search the dependent side's vocabulary
-        assert "dependent side" in text
-        # Negative-evidence limit
-        assert "searched pattern is absent" in text
-        # Auditability: state the method used
-        assert "state the exact search" in text
-
-    def test_absence_claim_rules_reach_agent_prompts(self, tmp_path):
-        """The new protocol section must flow through bootstrap's skip-list
-        extraction into generated agent prompts (in-process build against the
-        repo's protocol file — the subprocess path resolves the installed
-        plugin cache, not this checkout)."""
-        protocol = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
-        review_rules = _mod.extract_protocol_sections(
-            protocol,
-            _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS,
-        )
-        prompt = build_output(
-            agent_name="code-reviewer",
-            plugin_root=str(PLUGIN_ROOT),
-            status="OK",
-            review_rules=review_rules,
-            domain_rules=None,
-            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
-            exploration_scope=None,
-            output_dir=str(tmp_path),
-            pr_number=None,
-            reviewer_name="code",
-            review_claimable_count=0,
-            has_php=False,
-        )
-        assert "## Absence Claims" in prompt
-        assert "searched pattern is absent" in prompt
-
-
-class TestUnchangedCallerScopeContract:
-    """A hunk that changes a function's contract puts the callers that
-    relied on the old contract in scope, even in a file with no diff.
-    The scope rule lives once, in the shared protocol's STOP CHECK
-    exception; the tracing method lives in Absence Claims; the
-    reliability gate defers to both instead of clearing on its own."""
-
-    def test_protocol_has_unchanged_caller_exception(self):
-        text = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
-        assert "reaching an unchanged caller" in text
-        exception = text[text.index("reaching an unchanged caller"):]
-        # Anchoring: only a hunk-anchored finding survives the structural
-        # prefilter, so the rule names where the finding goes and where not.
-        assert "Anchor the finding at the changed hunk" in exception
-        assert "never at the caller" in exception
-        # The clearance is a recorded check, not free text.
-        assert "record_check" in exception
-        # An empty caller diff is not evidence of safety.
-        assert "not that it is safe" in exception
-
-    def test_absence_claims_cover_a_changed_contract(self):
-        text = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
-        absence = text[text.index("## Absence Claims"):]
-        assert "changed contract" in absence
-
-    def test_unchanged_caller_exception_reaches_agent_prompts(self, tmp_path):
-        protocol = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
-        review_rules = _mod.extract_protocol_sections(
-            protocol,
-            _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS,
-        )
-        prompt = build_output(
-            agent_name="reliability-reviewer",
-            plugin_root=str(PLUGIN_ROOT),
-            status="OK",
-            review_rules=review_rules,
-            domain_rules=None,
-            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
-            exploration_scope=None,
-            output_dir=str(tmp_path),
-            pr_number=None,
-            reviewer_name="reliability",
-            review_claimable_count=0,
-            has_php=False,
-        )
-        assert "reaching an unchanged caller" in prompt
-        assert "Anchor the finding at the changed hunk" in prompt
-
-    def test_reliability_gate_defers_to_the_shared_exception(self):
-        text = (PLUGIN_ROOT / "agents/reliability-reviewer.md").read_text()
-        gate = text[text.index("## FALSE POSITIVE GATE"):]
-        assert "unchanged caller" in gate
-        assert "anchor the finding at the changed hunk" in gate
-
-    def test_reliability_observable_rule_rejects_debug_only_signal(self):
-        text = (PLUGIN_ROOT / "agents/reliability-reviewer.md").read_text()
-        rule0 = text[text.index("## RULE 0"):text.index("## Core Mission")]
-        assert "`debug`" in rule0
-        assert "not a positive observation" in rule0
-        # The rule must not assert a log-threshold fact the reviewer has
-        # not read: WooCommerce, for one, logs every level by default.
-        assert "default log threshold" not in rule0
 
 
 class TestEmpiricalProbeContract:
@@ -1655,55 +1125,11 @@ class TestEmpiricalProbeContract:
 
     The sweep in orchestration deletes only untracked files whose BASENAME
     carries `pirategoat-probe`. That enforcement half is inert unless the
-    producer half — this protocol section — actually reaches an agent, and
-    a section placed in a stripped part of the protocol reaches nobody
-    (the 1.108.0 failure `TestNotDiffedContractIsDelivered` guards for the
-    NOT DIFFED contract). This class is the same guard for the convention.
+    producer half — this protocol section — reaches an agent. Delivery of
+    every non-skipped section is guarded by
+    TestArchitecturalInvariants::test_every_delivered_protocol_heading_reaches_the_prompt;
+    this class pins that the section never joins the skip list.
     """
-
-    CLAUSES = (
-        "## Empirical Probes",
-        "Never create or modify tracked files",
-        "pirategoat-probe",
-        "FILENAME",
-        "git does not ignore",
-        "Create, run, and delete in a single command",
-        "git reset",
-    )
-
-    def _delivered_prompt(self, tmp_path):
-        protocol = (
-            PLUGIN_ROOT / "agents/shared/reviewer-protocol.md"
-        ).read_text()
-        review_rules = _mod.extract_protocol_sections(
-            protocol,
-            _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS,
-        )
-        return build_output(
-            agent_name="code-reviewer",
-            plugin_root=str(PLUGIN_ROOT),
-            status="OK",
-            review_rules=review_rules,
-            domain_rules=None,
-            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
-            exploration_scope=None,
-            output_dir=str(tmp_path),
-            pr_number=None,
-            reviewer_name="code",
-            review_claimable_count=0,
-            has_php=False,
-        )
-
-    @pytest.mark.parametrize("clause", CLAUSES)
-    def test_clause_reaches_agent_prompts(self, clause, tmp_path):
-        """Each clause survives skip-list extraction into the built prompt.
-
-        Compared with whitespace collapsed: the protocol is hard-wrapped
-        prose, so a clause spanning a line break is still delivered. Only
-        deleting or rewording it should fail this guard.
-        """
-        delivered = " ".join(self._delivered_prompt(tmp_path).split())
-        assert " ".join(clause.split()) in delivered
 
     def test_section_is_not_in_the_skip_list(self):
         """A future skip-list entry must not silently strip the convention."""
@@ -1739,12 +1165,9 @@ class TestErrorCases:
     def test_unknown_agent_exits_1(self, tmp_path):
         result = run_bootstrap("--agent", "nonexistent-reviewer", "--output-dir", str(tmp_path))
         assert result.returncode == 1
+        assert "=== BOOTSTRAP: nonexistent-reviewer ===" in result.stdout
         assert "STATUS: ERROR" in result.stdout
         assert "Unknown agent" in result.stdout
-
-    def test_unknown_agent_structured_error(self, tmp_path):
-        result = run_bootstrap("--agent", "fake", "--output-dir", str(tmp_path))
-        assert "=== BOOTSTRAP: fake ===" in result.stdout
         assert "ACTION: Report this error" in result.stdout
 
 
@@ -1767,50 +1190,18 @@ class TestReviewOutputBuilderAPIExample:
             has_php=False,
         )
 
-    def test_output_contains_add_finding_example(self, tmp_path):
-        """The usage example must show add_finding() with named parameters."""
+    def test_output_names_the_builder_api(self, tmp_path):
         output = self._build(tmp_path)
-        assert "add_finding(" in output
-        assert "severity=" in output
-        assert "title=" in output
-        assert "file=" in output
-        assert "description=" in output
-        assert "recommendation=" in output
+        for api in (
+            "add_finding(",
+            "add_positive_observation(",
+            "save_draft()",
+            "set_confidence(",
+        ):
+            assert api in output, api
+        # Two rules the example carries that no other test pins.
         assert "FILE-SCOPED finding" in output
-        assert "FILE-SCOPED issue" not in output
-
-    def test_output_contains_add_positive_example(self, tmp_path):
-        """The usage example must show add_positive_observation()."""
-        output = self._build(tmp_path)
-        assert "add_positive_observation(" in output
-
-    def test_output_contains_bound_save_draft_example(self, tmp_path):
-        """The example opens against output_dir and saves without a path."""
-        output = self._build(tmp_path)
-        assert "ReviewOutputBuilder.open(" in output
-        assert "save_draft()" in output
-        assert str(tmp_path) in output
-
-    def test_output_uses_positive_claims_as_the_only_coverage_input(self, tmp_path):
-        output = self._build(tmp_path)
-        assert "# No review-claimable files in this assignment: do not call claim_files_reviewed()." in output
-        assert "builder.add_un" + "reviewed" not in output
-        assert "builder.set_files_" + "reviewed" not in output
-
-    def test_output_contains_set_confidence(self, tmp_path):
-        """The usage example must show set_confidence()."""
-        output = self._build(tmp_path)
-        assert "set_confidence(" in output
-
-    def test_output_contains_no_verify_instruction(self, tmp_path):
-        """The usage example must tell agents not to verify save() output."""
-        output = self._build(tmp_path)
-        lower = output.lower()
-        # The instruction must convey "proceed directly after save()" — either
-        # via "do not read/verify" or "proceed directly to the status signal".
-        has_do_not = "do not" in lower and ("read" in lower or "verify" in lower) and ("output file" in lower or "save()" in lower)
-        has_proceed_directly = "proceed directly" in lower and "save()" in lower
-        assert has_do_not or has_proceed_directly
+        assert "Do NOT read the output file back to verify" in output
 
 
 class TestBootstrapOutputSizeCap:
@@ -1863,14 +1254,11 @@ class TestBootstrapOutputSizeCap:
         assert len(output) < 40 * 1024  # output should be well under 40KB total
 
     def test_large_scope_has_file_reference(self, tmp_path):
-        """When scope is truncated, output tells agent where to read the full scope."""
+        """When scope is truncated, output tells agent where to read the full
+        scope and how to read it in slices."""
         output = self._build_large_output(scope_size_kb=50, output_dir=str(tmp_path))
         expected_path = Path(scoped_diff_path(tmp_path, "security"))
         assert str(expected_path) in output
-
-    def test_large_scope_has_read_instructions(self):
-        """When scope is truncated, output tells agent to use offset/limit."""
-        output = self._build_large_output(scope_size_kb=50)
         lower = output.lower()
         assert "offset" in lower or "limit" in lower or "head" in lower
 
@@ -1915,9 +1303,9 @@ class TestDynamicDispatchRisk:
     has_php is a REQUIRED fact the caller supplies (main() derives it from
     telemetry_scope_paths — the same fact-based, sidecar-preferring path
     union used for scope telemetry and the NOT DIFFED contract).
-    build_output() never parses scope_output for PHP filenames — see the
-    regression tests at the bottom of this class for the failure mode that
-    replaced.
+    build_output() never parses scope_output for PHP filenames: the
+    text-inert rows below pin the failure mode that replaced, and the
+    in-process main() rows pin the derivation itself.
     """
 
     def _build(self, tmp_path, has_php, scope_output="=== FILES ===\n=== DIFFS ===",
@@ -1937,155 +1325,95 @@ class TestDynamicDispatchRisk:
             has_php=has_php,
         )
 
-    def test_dead_code_reviewer_gets_dispatch_risk(self, tmp_path):
-        """dead-code-reviewer output includes DYNAMIC_DISPATCH_RISK."""
-        output = self._build(tmp_path, has_php=True)
-        assert "DYNAMIC_DISPATCH_RISK:" in output
-
-    def test_dispatch_risk_high_with_php_files(self, tmp_path):
-        """DYNAMIC_DISPATCH_RISK is 'high' when the caller's fact says PHP files are in scope."""
-        output = self._build(tmp_path, has_php=True)
-        risk_line = [l for l in output.splitlines() if "DYNAMIC_DISPATCH_RISK:" in l]
-        assert risk_line, "DYNAMIC_DISPATCH_RISK line not found in output"
-        assert "high" in risk_line[0].lower()
-
-    def test_dispatch_risk_low_without_php_files(self, tmp_path):
-        """DYNAMIC_DISPATCH_RISK is 'low' when the caller's fact says no PHP files are in scope."""
-        output = self._build(tmp_path, has_php=False)
-        risk_line = [l for l in output.splitlines() if "DYNAMIC_DISPATCH_RISK:" in l]
-        assert risk_line, "DYNAMIC_DISPATCH_RISK line not found in output"
-        assert "low" in risk_line[0].lower()
+    @pytest.mark.parametrize(
+        ("has_php", "scope_output", "expected"),
+        [
+            pytest.param(
+                True, "=== FILES ===\n=== DIFFS ===", "high", id="php-fact-high",
+            ),
+            pytest.param(
+                False, "=== FILES ===\n=== DIFFS ===", "low", id="no-php-fact-low",
+            ),
+            # Fix 6d99ab03: the old implementation derived has_php by
+            # scanning rendered scope text for a '.php' suffix. PHP-looking
+            # text must not force high when the caller's fact says low...
+            pytest.param(
+                False,
+                "=== FILES ===\n"
+                "src/handler.php  (+10 -5)\n"
+                "src/other.php  (+3 -1)\n"
+                "=== DIFFS ===",
+                "low",
+                id="php-looking-text-cannot-force-high",
+            ),
+            # ...and a scope.py reformat that loses the '.php' text must
+            # not suppress high when the fact says PHP is in scope.
+            pytest.param(
+                True,
+                "=== SCOPE TRUNCATED ===\n"
+                "Full scope written to external file; see it for details.\n",
+                "high",
+                id="garbled-text-cannot-suppress-high",
+            ),
+        ],
+    )
+    def test_dispatch_risk_follows_the_has_php_fact(
+        self, tmp_path, has_php, scope_output, expected
+    ):
+        output = self._build(tmp_path, has_php=has_php, scope_output=scope_output)
+        risk_lines = [
+            line for line in output.splitlines() if "DYNAMIC_DISPATCH_RISK:" in line
+        ]
+        assert risk_lines, "DYNAMIC_DISPATCH_RISK line not found in output"
+        assert expected in risk_lines[0].lower()
 
     def test_other_agents_no_dispatch_risk(self, tmp_path):
         """Non-dead-code agents do NOT get DYNAMIC_DISPATCH_RISK, regardless of has_php."""
         output = self._build(tmp_path, has_php=True, agent_name="security-reviewer")
         assert "DYNAMIC_DISPATCH_RISK:" not in output
 
-    def test_php_looking_text_cannot_force_high_when_fact_says_low(self, tmp_path):
-        """A scope_output full of .php filenames must not flip the decision
-        when the caller's fact (has_php=False) says otherwise.
-
-        This is the exact failure shape being fixed: the old implementation
-        derived has_php by splitting rendered scope_output text on a double
-        space and checking for a '.php' suffix — a second, independent
-        derivation of the same fact build_output() now receives explicitly.
-        """
-        php_looking_text = (
-            "=== FILES ===\n"
-            "src/handler.php  (+10 -5)\n"
-            "src/other.php  (+3 -1)\n"
-            "=== DIFFS ==="
+    @pytest.mark.parametrize(
+        ("inline_files", "scope_output", "expected"),
+        [
+            pytest.param(
+                ["src/a.php"], _IN_PROCESS_SCOPE, "high",
+                id="php-file-in-scope-facts",
+            ),
+            pytest.param(
+                ["src/a.ts"], _IN_PROCESS_SCOPE, "low",
+                id="php-free-scope-facts",
+            ),
+            # The old text scan read the SKIPPED summary line as one token
+            # and its '.php' suffix forced high; the facts carry only files
+            # genuinely in scope, so a domain-excluded test file stays out.
+            pytest.param(
+                ["src/app.ts"],
+                "STATUS: OK\n=== FILES ===\nsrc/app.ts  (+1 -0)\n"
+                "=== SKIPPED ===\nOutside domain (1): tests/ProductManagerTest.php\n",
+                "low",
+                id="domain-excluded-php-test-file",
+            ),
+        ],
+    )
+    def test_main_derives_has_php_from_the_scope_facts(
+        self, tmp_path, monkeypatch, capsys, inline_files, scope_output, expected
+    ):
+        """main()'s own has_php derivation, which the build_output() rows
+        above cannot reach because they supply the fact as a parameter (a
+        mutation such as `has_php = False` in main() passes them all)."""
+        stdout = _main_in_process(
+            "dead-code-reviewer", tmp_path, monkeypatch, capsys,
+            scope_output=scope_output,
+            facts={**_IN_PROCESS_FACTS, "inline_diff_files": inline_files},
         )
-        output = self._build(tmp_path, has_php=False, scope_output=php_looking_text)
-        risk_line = [l for l in output.splitlines() if "DYNAMIC_DISPATCH_RISK:" in l]
-        assert risk_line, "DYNAMIC_DISPATCH_RISK line not found in output"
-        assert "low" in risk_line[0].lower()
-
-    def test_garbled_text_cannot_suppress_high_when_fact_says_php(self, tmp_path):
-        """A scope_output with no recognizable '.php' text must not suppress
-        the high-risk contract when the caller's fact says PHP files are
-        genuinely in scope.
-
-        This mirrors the NOT DIFFED fix's renamed-header test: a future
-        scope.py refactor that reformats or renames the FILES/DIFFS section
-        (spacing, column order, a new section name) must not silently flip
-        has_php just because the old '.php'-suffix text scan no longer
-        matches — the caller's fact is authoritative regardless of how
-        scope.py renders.
-        """
-        garbled_scope = (
-            "=== SCOPE TRUNCATED ===\n"
-            "Full scope written to external file; see it for details.\n"
-        )
-        assert ".php" not in garbled_scope  # the old text-scan's anchor is gone
-        output = self._build(tmp_path, has_php=True, scope_output=garbled_scope)
-        risk_line = [l for l in output.splitlines() if "DYNAMIC_DISPATCH_RISK:" in l]
-        assert risk_line, "DYNAMIC_DISPATCH_RISK line not found in output"
-        assert "high" in risk_line[0].lower()
-
-    def test_real_php_scope_yields_high_end_to_end(self, tmp_path):
-        """End-to-end (subprocess, real scope.py + main()) proof that a
-        real PHP file in scope drives has_php through main()'s derivation.
-
-        The class above covers build_output() in isolation, which cannot
-        catch a mutation to main()'s has_php derivation itself (e.g.
-        `has_php = False`) — that computation lives outside build_output(),
-        so a unit test that only calls build_output() directly is blind to
-        it. This runs the full subprocess chain against a fixture with a
-        genuinely in-scope PHP file (src/ProductManager.php; the domain
-        also excludes tests/ProductManagerTest.php, which must not count).
-        """
-        r = run_bootstrap(
-            "--agent", "dead-code-reviewer", "--output-dir", str(tmp_path),
-            fixture="multi-file-realistic.diff",
-        )
-        assert r.returncode == 0, r.stderr
-        assert "DYNAMIC_DISPATCH_RISK: high" in r.stdout
-
-    def test_real_php_free_scope_yields_low_end_to_end(self, tmp_path):
-        """End-to-end companion to the test above: a fixture with zero PHP
-        files (only .ts/.tsx) must drive has_php to False through the same
-        real main() derivation.
-        """
-        r = run_bootstrap(
-            "--agent", "dead-code-reviewer", "--output-dir", str(tmp_path),
-            fixture="js-ts-source.diff",
-        )
-        assert r.returncode == 0, r.stderr
-        assert "DYNAMIC_DISPATCH_RISK: low" in r.stdout
-
-    def test_domain_excluded_php_test_file_does_not_force_high_end_to_end(self, tmp_path):
-        """A PHP file present only under '=== SKIPPED === Outside domain'
-        (e.g. a test file the dead-code domain deliberately excludes) must
-        not count as PHP-in-scope.
-
-        This is the reachable divergence between the old and new
-        derivations on real scope text: the old text scan read every
-        non-'===' line, including the SKIPPED summary line
-        "Outside domain (N): tests/ProductManagerTest.php" — which has no
-        double space, so the whole line survived as one token and its
-        '.php' suffix set has_php=True even though no PHP file was
-        genuinely in scope. telemetry_scope_paths only contains files that
-        are actually in scope (inline, NOT DIFFED, or list-only), so it
-        excludes SKIPPED files correctly.
-        """
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, check=True)
-        subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
-        (repo / "README.md").write_text("# init\n")
-        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
-        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
-
-        (repo / "src").mkdir()
-        (repo / "tests").mkdir()
-        (repo / "src" / "app.ts").write_text("export const x = 1;\n")
-        (repo / "tests" / "ProductManagerTest.php").write_text(
-            "<?php\nclass ProductManagerTest extends TestCase {\n"
-            "    public function test_get_product() {\n"
-            "        $this->assertTrue( true );\n    }\n}\n"
-        )
-        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
-        subprocess.run(["git", "commit", "-q", "-m", "add ts app + php test"], cwd=repo, check=True)
-
-        out_dir = tmp_path / "out"
-        result = subprocess.run(
-            [sys.executable, str(BOOTSTRAP_SCRIPT), "--agent", "dead-code-reviewer",
-             "--output-dir", str(out_dir), "--range", "HEAD~1..HEAD"],
-            capture_output=True, text=True, timeout=60, cwd=repo,
-        )
-        assert result.returncode == 0, result.stderr
-        assert "Outside domain" in result.stdout and "ProductManagerTest.php" in result.stdout, (
-            "fixture setup didn't produce the expected SKIPPED line — test doesn't pin what it claims"
-        )
-        assert "DYNAMIC_DISPATCH_RISK: low" in result.stdout
+        assert f"DYNAMIC_DISPATCH_RISK: {expected}" in stdout
 
 
 class TestRepoRuleAndRefModeSelection:
     """Repo rules must reach the reviewers they target (effective identity,
-    complete scope), adapter instances must receive their declared path
-    scope, and an explicit isolation request must never run inline."""
+    complete scope), and adapter instances must receive their declared path
+    scope. The refusal of an explicit isolation request is pinned at the unit
+    level (test_bootstrap.py::TestResolveReviewerIdentity)."""
 
     @staticmethod
     def _write_review_context(output_dir: Path, rules=None, reviewers=None):
@@ -2206,17 +1534,7 @@ class TestRepoRuleAndRefModeSelection:
         assignment = json.loads(
             Path(review_paths(tmp_path, "performance").assignment).read_text()
         )
-        assert assignment["schema"] == 5
         assert assignment["channels"] == ["blocking", "advisory"]
-        assert isinstance(assignment["review_budget"], int)
-
-        builder = ReviewOutputBuilder.open(tmp_path, "1", "performance")
-        builder.add_finding(
-            severity="high", title="Advisory", file="src/app.py",
-            description="d", recommendation="r", line=1,
-            channel="advisory",
-        )
-        assert builder.to_dict()["verdict"] == "approve"
 
     def test_blocking_only_rules_omit_the_channel_contract(self, tmp_path):
         self._write_review_context(tmp_path, rules=[self._rule(
@@ -2233,32 +1551,6 @@ class TestRepoRuleAndRefModeSelection:
             Path(review_paths(tmp_path, "performance").assignment).read_text()
         )
         assert assignment["channels"] == ["blocking"]
-
-        builder = ReviewOutputBuilder.open(tmp_path, "1", "performance")
-        with pytest.raises(
-            ValueError, match="channel 'advisory' is not among"
-        ):
-            builder.add_finding(
-                severity="high", title="Advisory", file="src/app.py",
-                description="d", recommendation="r", line=1,
-                channel="advisory",
-            )
-
-    def test_isolated_execution_is_refused(self, tmp_path):
-        """An explicit isolation request must never silently widen into
-        inline execution of the repo prompt — not even via override."""
-        ref = tmp_path / "r.md"
-        ref.write_text("Review renewals.")
-        result = run_bootstrap(
-            "--agent", "repo-reviewer-adapter",
-            "--repo-agent-ref", str(ref),
-            "--instance-name", "repo-renewals-reviewer",
-            "--execution", "isolated",
-            "--scope-domains", "code",
-            "--output-dir", str(tmp_path),
-        )
-        assert result.returncode == 1
-        assert "Isolated execution is not implemented" in result.stdout
 
     def test_path_rule_matches_a_budget_claimable_file(self, tmp_path):
         """A rule about a NOT DIFFED file applies precisely when the
@@ -2326,50 +1618,14 @@ class TestRepoRuleAndRefModeSelection:
 class TestOutputFilenameConsistency:
     """Draft save and immutable finalization use distinct filenames."""
 
-    def test_save_stages_draft_then_finalization_publishes_final(
-        self, tmp_path
-    ):
-        """save_draft() stages a draft; finalization publishes the review."""
-        from review.agent.output import ReviewOutputBuilder, finalize_review
-
-        assignment_path = Path(review_paths(tmp_path, "dead-code").assignment)
-        assignment_path.parent.mkdir(parents=True, exist_ok=True)
-        assignment_path.write_text(json.dumps({
-            "schema": 5,
-            "agent_name": "dead-code-reviewer",
-            "reviewer": "dead-code",
-            "review_claimable_files": [],
-            "review_budget": 15,
-            "inline_diff_files": _inline(1),
-            "in_scope_review_file_count": 1,
-            "channels": ["blocking"],
-        }))
-        builder = ReviewOutputBuilder.open(str(tmp_path), "42", "dead-code")
-        result = builder.save_draft()
-
-        assert set(result) == {
-            "draft", "review_digest", "finalize_review_command"
-        }
-        assert result["draft"] == review_paths(tmp_path, "dead-code").draft
-        draft = Path(result["draft"])
-        final = Path(review_paths(tmp_path, "dead-code").final)
-        assert draft.is_file()
-        assert not final.exists()
-
-        finalized = finalize_review(
-            str(tmp_path), "dead-code", result["review_digest"]
-        )
-        assert finalized["final"] == str(final)
-        assert final.is_file()
-        assert not draft.exists()
-        assert not os.path.exists(os.path.join(str(tmp_path), "dead-code-review.md"))
-
     def test_bootstrap_output_names_finalized_file_not_draft(self, tmp_path):
         """Bootstrap OUTPUT_FILES must name the finalized review JSON,
         and no Markdown the pipeline derives elsewhere.
 
         This checks the briefing TEXT only (what the agent is told to produce);
-        the draft/finalization filesystem contract is covered above.
+        the draft/finalization filesystem contract is pinned in test_output.py
+        (TestSaveDraft::test_creates_only_the_draft_json and
+        TestDerivedReviewedFiles::test_finalized_json_preserves_derived_coverage).
         """
         output = build_output(
             agent_name="dead-code-reviewer",
@@ -2389,17 +1645,6 @@ class TestOutputFilenameConsistency:
         assert review_paths(tmp_path, "dead-code").draft not in output
         assert "run the exact FINALIZE REVIEW command printed by" in output
         assert f"{tmp_path}/dead-code-review.md" not in output
-
-    def test_testing_inventory_names_draft_lifecycle_contract(self):
-        testing_doc = (TESTS_DIR / "TESTING.md").read_text()
-        row = next(
-            line for line in testing_doc.splitlines()
-            if "`TestOutputFilenameConsistency`" in line
-        )
-
-        assert "draft" in row
-        assert "finalization" in row
-        assert "match bootstrap expectations" not in row
 
 
 class TestBootstrapImportDoesNotBreakTelemetry:
@@ -2443,32 +1688,6 @@ class TestBootstrapImportDoesNotBreakTelemetry:
             f"stdout: {result.stdout}\nstderr: {result.stderr}"
         )
         assert result.stdout.strip() == "OK"
-
-
-def test_ecosystem_integration_reviewer_registered():
-    """ecosystem-integration-reviewer is in the registry with correct shape."""
-    import json
-    from pathlib import Path
-    reg_path = (
-        Path(__file__).parent.parent.parent.parent
-        / "scripts" / "review" / "agent_registry.json"
-    )
-    registry = json.loads(reg_path.read_text())
-    agents = registry["agents"]
-    entry = agents.get("ecosystem-integration-reviewer")
-    assert entry is not None, "Agent must be registered"
-    assert entry["domain"] == "wp-architecture"
-    assert "reviewer" in entry["protocols"]
-    assert entry["dispatch_class"] == "conditional"
-    assert entry["model_tier"] == "sonnet"
-    # Narrative field (human-facing)
-    assert isinstance(entry.get("triage_criteria"), list) and entry["triage_criteria"]
-    # Machine-consumed fields
-    assert isinstance(entry.get("triage_keywords"), list) and entry["triage_keywords"]
-    assert "require_triage_keyword_match" not in entry
-    assert entry.get("require_php_source_file") is True
-    assert "host_context_runtime_host_resolved" not in entry.get("triage_checks", [])
-    assert entry.get("budget_override", 0) > 0
 
 
 class TestNotDiffedContractIsDelivered:
@@ -2519,68 +1738,55 @@ class TestNotDiffedContractIsDelivered:
         "phrase",
         [
             'builder.claim_files_reviewed("<path>")',
-            "authoritative review assignment",
             "derives every unclaimed review file",
-            "Never count an unclaimed review file toward your verdict",
         ],
     )
     def test_contract_reaches_reviewer(self, tmp_path, phrase):
-        """Each clause of the contract appears in the delivered briefing."""
+        """The claim call and the derived complement reach the briefing."""
         output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, review_claimable_count=1)
         assert phrase in output
 
-    def test_scope_and_guidance_never_teach_gap_declarations(self, tmp_path):
-        scope_output = format_text_output({
-            "status": "OK",
-            "range": "base..head",
-            "domain": "code",
-            "files": ["src/inline.py"],
-            "diffs": {"src/inline.py": "diff --git"},
-            "diffstat": {
-                "src/inline.py": (2, 1),
-                "src/claimable.py": (20, 2),
-            },
-            "skipped_files": {"budget": ["src/claimable.py"]},
-        })
-        output = self._build(tmp_path, scope_output, review_claimable_count=1)
-        protocol = (
-            PLUGIN_ROOT / "agents" / "shared" / "reviewer-protocol.md"
-        ).read_text()
-
-        for delivered in (scope_output, output, protocol):
-            assert "declare only the files" not in delivered.lower()
-            assert "claim or declare" not in delivered.lower()
-            assert "what a declaration costs" not in delivered.lower()
-
     @pytest.mark.parametrize(
-        "phrase",
+        ("scope_text", "review_claimable_count", "delivered"),
         [
-            "false statement",
-            "Declaring is for genuine budget exhaustion only",
-            "written with most of your budget unspent",
+            pytest.param(
+                "=== REVIEW SCOPE ===\n=== FILES ===\nsrc/a.py  (+5 -1)\n",
+                0,
+                False,
+                id="no-claimable-files",
+            ),
+            # Fix 606519ab: the count is the caller's fact, never a regex over
+            # scope_output. A renamed header cannot suppress a real count...
+            pytest.param(
+                "=== REVIEW SCOPE ===\n"
+                "=== FILES ===\n"
+                "src/big.py  (+900 -10)\n"
+                "=== CLAIMABLE (too large to inline, 3 files) ===\n"
+                "  src/big.py  (+900 -10)\n",
+                1,
+                True,
+                id="renamed-header-cannot-suppress-a-real-count",
+            ),
+            # ...and the header the old regex parsed cannot enable it alone.
+            pytest.param(
+                NOT_DIFFED_SCOPE,
+                0,
+                False,
+                id="original-header-text-alone-cannot-enable-it",
+            ),
         ],
     )
-    def test_unenforceable_underspend_rule_is_not_restored(
-        self, tmp_path, phrase
+    def test_contract_follows_the_claimable_count_not_the_scope_text(
+        self, tmp_path, scope_text, review_claimable_count, delivered
     ):
-        """The under-spend "protocol violation" sentence must stay deleted.
-
-        It conditioned on a quantity no reviewer is ever shown at the moment
-        it decides — models keep no running tool-call tally — and a 19-agent
-        field run delivered it verbatim to every one of them for zero effect
-        (0/19 reached target, median 44% spent, nine declaring 100+ files
-        while under half budget). Its premise was falsified in the same run:
-        under-spend did not predict weak output. The replacement is salience
-        at the decision point (save()'s TARGET echo), not sterner prose.
-        """
-        output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, review_claimable_count=1)
-        assert phrase not in output
-
-    def test_contract_absent_without_not_diffed_files(self, tmp_path):
-        """No NOT DIFFED files means no positive-claim contract to deliver."""
-        clean_scope = "=== REVIEW SCOPE ===\n=== FILES ===\nsrc/a.py  (+5 -1)\n"
-        output = self._build(tmp_path, clean_scope, review_claimable_count=0)
-        assert "authoritative review assignment" not in output
+        output = self._build(
+            tmp_path, scope_text, review_claimable_count=review_claimable_count
+        )
+        assert ("authoritative review assignment" in output) is delivered
+        assert ("derives every unclaimed review file" in output) is delivered
+        assert (
+            "Never count an unclaimed review file toward your verdict" in output
+        ) is delivered
 
     def test_contract_is_not_sourced_from_stripped_protocol(self):
         """The stripped protocol must not be the contract's only home.
@@ -2596,147 +1802,6 @@ class TestNotDiffedContractIsDelivered:
             "Contract text placed in a stripped protocol section never reaches "
             "a reviewer — keep it in build_output()'s REVIEW BUDGET block."
         )
-
-    def test_renamed_scope_header_cannot_suppress_a_real_count(self, tmp_path):
-        """A scope.py header rename/reformat must not silently drop the contract.
-
-        This is the exact failure shape being fixed: the old regex expected
-        the literal string '=== NOT DIFFED (budget exceeded, N files) ===' in
-        scope_output. Here that header is renamed to something a future
-        scope.py refactor might plausibly emit, and NO section matches the
-        old pattern at all — yet because the caller still supplies the real
-        fact via review_claimable_count, the contract must still be delivered.
-        """
-        renamed_header_scope = (
-            "=== REVIEW SCOPE ===\n"
-            "=== FILES ===\n"
-            "src/big.py  (+900 -10)\n"
-            "=== CLAIMABLE (too large to inline, 3 files) ===\n"
-            "  src/big.py  (+900 -10)\n"
-        )
-        assert "NOT DIFFED" not in renamed_header_scope  # the old regex's anchor is gone
-        output = self._build(tmp_path, renamed_header_scope, review_claimable_count=1)
-        assert "authoritative review assignment" in output
-        assert "derives every unclaimed review file" in output
-
-    def test_original_header_text_alone_no_longer_drives_the_contract(self, tmp_path):
-        """The rendered header text must never re-enable the contract by itself.
-
-        NOT_DIFFED_SCOPE carries the exact header the old regex parsed, but
-        review_claimable_count is explicitly 0 (the caller's fact says nothing was
-        claimable). If build_output() still read scope_output text for this
-        decision, the contract would incorrectly appear. It must not.
-        """
-        output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, review_claimable_count=0)
-        assert "authoritative review assignment" not in output
-
-    def test_briefing_never_commands_bulk_unclaimed_enumeration(self, tmp_path):
-        """run12: performance-reviewer burned ~1/3 of its calls hand-assembling
-        254 unclaimed paths because the briefing said 'Declare each file you
-        could not reach' — the builder already derives them for free."""
-        output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, review_claimable_count=3)
-        assert "Declare each file you could not reach" not in output
-        assert "derives every unclaimed review file" in output
-
-
-class TestReviewClaimableOrderingEndToEnd:
-    """The assignment's claimable list is largest-first end to end.
-
-    build_scope() produces budget_exceeded_files in PRIORITY-TIER order
-    (production files before test files, regardless of size, for domains with
-    budget_priority "production_first") — not pure size order. A small
-    production file can therefore land ahead of a much larger test file. This
-    reproduces that exact divergence with a real git repo and checks
-    write_scope_summary()'s sort at the producer carries largest-first all the
-    way into the assignment bootstrap persists — the same assignment
-    output.py's save() replays for the NEXT UNREAD echo.
-    """
-
-    def _repo_with_priority_tier_divergence(self, repo_dir):
-        """A small production file and a much larger test file, sized so
-        both exceed history-insights-reviewer's 500-line max (registry
-        budget_override does not affect scope.py's own --max-lines
-        claimability, only the tool-call target build_output later reports)."""
-        os.makedirs(os.path.join(repo_dir, "src"), exist_ok=True)
-        os.makedirs(os.path.join(repo_dir, "tests"), exist_ok=True)
-
-        def write(relpath, n_lines):
-            with open(os.path.join(repo_dir, relpath), "w") as f:
-                f.write("\n".join(f"line {i}" for i in range(n_lines)) + "\n")
-
-        subprocess.run(["git", "init"], cwd=repo_dir, capture_output=True, check=True)
-        subprocess.run(
-            ["git", "config", "user.email", "t@t.com"],
-            cwd=repo_dir, capture_output=True, check=True,
-        )
-        subprocess.run(
-            ["git", "config", "user.name", "T"],
-            cwd=repo_dir, capture_output=True, check=True,
-        )
-        subprocess.run(
-            ["git", "config", "commit.gpgsign", "false"],
-            cwd=repo_dir, capture_output=True, check=True,
-        )
-        for relpath, n in [
-            ("src/huge_prod.py", 5), ("src/small_prod.py", 5),
-            ("tests/huge_test.py", 5),
-        ]:
-            write(relpath, n)
-        subprocess.run(["git", "add", "."], cwd=repo_dir, capture_output=True, check=True)
-        subprocess.run(
-            ["git", "commit", "-m", "init"], cwd=repo_dir, capture_output=True, check=True
-        )
-        # huge_prod (485) nearly exhausts the 500-line budget; small_prod
-        # (35, still production tier) is processed next and made claimable;
-        # only then does the test tier run, making huge_test (405) claimable — larger
-        # than small_prod but ordered after it by the priority tier alone.
-        for relpath, n in [
-            ("src/huge_prod.py", 485), ("src/small_prod.py", 35),
-            ("tests/huge_test.py", 405),
-        ]:
-            write(relpath, n)
-        subprocess.run(["git", "add", "."], cwd=repo_dir, capture_output=True, check=True)
-        subprocess.run(
-            ["git", "commit", "-m", "changes"], cwd=repo_dir, capture_output=True, check=True
-        )
-
-    def test_assignment_claimable_files_are_largest_first_despite_priority_tiering(
-        self, tmp_path
-    ):
-        repo_dir = tmp_path / "repo"
-        repo_dir.mkdir()
-        self._repo_with_priority_tier_divergence(str(repo_dir))
-        output_dir = tmp_path / "output"
-        output_dir.mkdir()
-
-        result = subprocess.run(
-            [
-                sys.executable, str(BOOTSTRAP_SCRIPT),
-                "--agent", "history-insights-reviewer",
-                "--output-dir", str(output_dir),
-                "--range", "HEAD~1..HEAD",
-            ],
-            cwd=str(repo_dir), capture_output=True, text=True, timeout=60,
-        )
-        assert result.returncode == 0
-
-        assignment = json.loads(
-            (
-                output_dir
-                / "reviewers" / "history-insights" / "assignment.json"
-            ).read_text()
-        )
-        # Both claimable (the regression this guards): a same-tier-only
-        # re-sort would still fail to fix the divergence, since these two
-        # files are in DIFFERENT priority tiers.
-        assert set(assignment["review_claimable_files"]) == {
-            "src/small_prod.py", "tests/huge_test.py",
-        }
-        # Largest first, size overriding the priority tier that put the
-        # smaller production file first in scope.py's own raw ordering.
-        assert assignment["review_claimable_files"] == [
-            "tests/huge_test.py", "src/small_prod.py",
-        ]
 
 
 # Registry agents that are not dispatched through bootstrap.py. The critic

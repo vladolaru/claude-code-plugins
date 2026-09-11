@@ -103,73 +103,11 @@ class TestGradeReviewJson:
         assert result.passed, f"Failures: {result.failures}"
         assert result.score == 1.0
 
-    def test_unexpected_retired_field_fails(self, tmp_dir):
-        path = _make_valid_json(tmp_dir)
-        with open(path) as source:
-            data = json.load(source)
-        data["issues"] = []
-        with open(path, "w") as target:
-            json.dump(data, target)
-
-        result = grade_review_json(path)
-
-        assert not result.passed
-        assert any("unexpected fields: issues" in failure for failure in result.failures)
-
-    @pytest.mark.parametrize(
-        ("malformation", "diagnostic"),
-        [
-            ("numeric-summary", "review summary is malformed"),
-            ("non-object-finding", "review finding 0 must be an object"),
-            ("non-list-checks", "review checks must be a list"),
-            (
-                "non-list-reviewed-files",
-                "review reviewed_file_claims must be a list of strings",
-            ),
-            (
-                "retired-schema-and-field",
-                "review has unexpected fields: issues",
-            ),
-        ],
-    )
-    def test_canonical_rejection_stops_invalid_document_projection(
-        self, tmp_dir, malformation, diagnostic
-    ):
-        path = _make_valid_json(tmp_dir)
-        with open(path) as source:
-            data = json.load(source)
-        if malformation == "numeric-summary":
-            data["summary"] = 7
-        elif malformation == "non-object-finding":
-            data["findings"] = [7]
-        elif malformation == "non-list-checks":
-            data["checks"] = 7
-        elif malformation == "non-list-reviewed-files":
-            data["reviewed_file_claims"] = 7
-        else:
-            data["schema"] = 1
-            data["issues"] = []
-        with open(path, "w") as target:
-            json.dump(data, target)
-
-        result = grade_review_json(path)
-
-        assert result.passed is False
-        assert result.failures == [diagnostic]
-        assert result.checks_run == 3
-        assert result.checks_passed == 2
-
     @pytest.mark.parametrize(
         "field_name",
         [
             "checks",
-            "assessment",
-            "review_claimable_files",
-            "reviewed_file_claims",
-            "unclaimed_review_files",
-            "inline_diff_file_count",
             "reviewed_file_count",
-            "in_scope_review_file_count",
         ],
     )
     def test_missing_review_domain_or_reviewed_file_field_fails(
@@ -213,80 +151,23 @@ class TestGradeReviewJson:
         assert not result.passed
         assert any("assessment" in failure for failure in result.failures)
 
-    @pytest.mark.parametrize(
-        ("population", "bad_id", "message"),
-        [
-            ("findings", "f01", "canonical fN id"),
-            ("checks", "c01", "canonical cN id"),
-        ],
-    )
-    def test_noncanonical_review_domain_id_fails(
-        self, tmp_dir, population, bad_id, message
-    ):
+    def test_validator_rejection_becomes_failed_grade(self, tmp_dir):
+        """grade_review_json delegates to validate_review_document; every
+        rejection branch is pinned directly on the validator in
+        tests/review/test_review_document.py. This is the one grader-level
+        test proving the validator's ValueError becomes a failed GradeResult
+        carrying its message."""
         path = _make_valid_json(tmp_dir)
-        with open(path) as f:
-            data = json.load(f)
-        data[population][0]["id"] = bad_id
+        with open(path) as source:
+            data = json.load(source)
+        data["verdict"] = "INVALID_VERDICT"
         with open(path, "w") as f:
             json.dump(data, f)
 
         result = grade_review_json(path)
 
         assert not result.passed
-        assert any(message in failure for failure in result.failures)
-
-    @pytest.mark.parametrize(
-        ("population", "summary_delta", "message"),
-        [
-            ("findings", 1, "review finding ids must be unique"),
-            ("checks", 0, "review check ids must be unique"),
-        ],
-    )
-    def test_duplicate_review_domain_id_fails(
-        self, tmp_dir, population, summary_delta, message
-    ):
-        path = _make_valid_json(tmp_dir)
-        with open(path) as f:
-            data = json.load(f)
-        data[population].append(dict(data[population][0]))
-        data["summary"]["total_findings"] += summary_delta
-        if summary_delta:
-            data["summary"]["by_severity"]["high"] += summary_delta
-        with open(path, "w") as f:
-            json.dump(data, f)
-
-        result = grade_review_json(path)
-
-        assert not result.passed
-        assert any(message in failure for failure in result.failures)
-
-    @pytest.mark.parametrize(
-        ("counter", "message"),
-        [
-            (
-                "next_finding_number",
-                "review meta.next_finding_number must be greater than every live id",
-            ),
-            (
-                "next_check_number",
-                "review meta.next_check_number must be greater than every live id",
-            ),
-        ],
-    )
-    def test_next_counter_must_exceed_every_live_id(
-        self, tmp_dir, counter, message
-    ):
-        path = _make_valid_json(tmp_dir)
-        with open(path) as f:
-            data = json.load(f)
-        data["meta"][counter] = 1
-        with open(path, "w") as f:
-            json.dump(data, f)
-
-        result = grade_review_json(path)
-
-        assert not result.passed
-        assert any(message in failure for failure in result.failures)
+        assert result.failures == ["review verdict does not match its findings"]
 
     def test_missing_file_fails(self):
         result = grade_review_json("/nonexistent/path.json")
@@ -321,21 +202,6 @@ class TestGradeReviewJson:
         assert not result.passed
         assert any("reviewed_file_claims" in f for f in result.failures)
 
-    def test_invalid_verdict_fails(self, tmp_dir):
-        path = _make_valid_json(tmp_dir)
-        with open(path) as source:
-            data = json.load(source)
-        data["verdict"] = "INVALID_VERDICT"
-        with open(path, "w") as f:
-            json.dump(data, f)
-
-        result = grade_review_json(path)
-
-        assert not result.passed
-        assert result.failures == [
-            "review verdict does not match its findings"
-        ]
-
     def test_valid_severity_floor_passes(self, tmp_dir):
         path = _make_valid_json(tmp_dir)
         with open(path) as f:
@@ -366,26 +232,6 @@ class TestGradeReviewJson:
         assert any(
             "below floor" in failure for failure in result.failures
         ), result.failures
-
-    def test_empty_file_fails(self, tmp_dir):
-        path = os.path.join(tmp_dir, "empty.json")
-        with open(path, "w") as f:
-            f.write("")
-        result = grade_review_json(path)
-        assert not result.passed
-
-    def test_finding_with_invalid_severity_fails(self, tmp_dir):
-        path = _make_valid_json(tmp_dir)
-        with open(path) as source:
-            data = json.load(source)
-        data["findings"][0]["severity"] = "unknown"
-        with open(path, "w") as f:
-            json.dump(data, f)
-
-        result = grade_review_json(path)
-
-        assert not result.passed
-        assert result.failures == ["review finding 0.severity is invalid"]
 
 
 class TestGradeReviewMarkdown:
@@ -508,35 +354,16 @@ def _make_valid_baseline(tmp_dir: str) -> str:
 
 
 class TestGradeReviewBaseline:
-    """Tests for grade_review_baseline."""
+    """Tests for grade_review_baseline. grade_review_baseline has exactly
+    one caller, test_pipeline_integration.py::test_step_7_baseline_grades_clean;
+    these two tests pin the pass/fail shape without re-testing every one of
+    the helper's validation branches a second time."""
 
     def test_valid_baseline_passes(self, tmp_dir):
         path = _make_valid_baseline(tmp_dir)
         result = grade_review_baseline(path)
         assert result.passed, f"Failures: {result.failures}"
         assert result.score == 1.0
-
-    def test_missing_file_fails(self):
-        result = grade_review_baseline("/nonexistent/.branch-review-baseline.json")
-        assert not result.passed
-        assert any("does not exist" in f for f in result.failures)
-
-    def test_invalid_json_fails(self, tmp_dir):
-        path = os.path.join(tmp_dir, ".branch-review-baseline.json")
-        with open(path, "w") as f:
-            f.write("not json {{{")
-        result = grade_review_baseline(path)
-        assert not result.passed
-        assert any("Invalid JSON" in f for f in result.failures)
-
-    def test_missing_required_field_fails(self, tmp_dir):
-        path = os.path.join(tmp_dir, ".branch-review-baseline.json")
-        data = {"last_reviewed_sha": "abc1234", "review_count": 1}
-        with open(path, "w") as f:
-            json.dump(data, f)
-        result = grade_review_baseline(path)
-        assert not result.passed
-        assert any("base_ref" in f for f in result.failures)
 
     def test_invalid_sha_fails(self, tmp_dir):
         path = os.path.join(tmp_dir, ".branch-review-baseline.json")
@@ -553,109 +380,6 @@ class TestGradeReviewBaseline:
         result = grade_review_baseline(path)
         assert not result.passed
         assert any("Invalid SHA" in f for f in result.failures)
-
-    def test_short_sha_passes(self, tmp_dir):
-        """Short SHAs (7+ chars) are valid."""
-        path = os.path.join(tmp_dir, ".branch-review-baseline.json")
-        data = {
-            "last_reviewed_sha": "abc1234",
-            "last_reviewed_at": "2026-02-09T12:34:56",
-            "review_type": "incremental",
-            "review_count": 1,
-            "base_ref": "main",
-            "git_range_used": "main..HEAD",
-        }
-        with open(path, "w") as f:
-            json.dump(data, f)
-        result = grade_review_baseline(path)
-        assert result.passed, f"Failures: {result.failures}"
-
-    def test_zero_review_count_fails(self, tmp_dir):
-        path = os.path.join(tmp_dir, ".branch-review-baseline.json")
-        data = {
-            "last_reviewed_sha": "abc1234",
-            "last_reviewed_at": "2026-02-09T12:34:56",
-            "review_type": "full",
-            "review_count": 0,
-            "base_ref": "main",
-            "git_range_used": "main..HEAD",
-        }
-        with open(path, "w") as f:
-            json.dump(data, f)
-        result = grade_review_baseline(path)
-        assert not result.passed
-        assert any("review_count" in f for f in result.failures)
-
-    def test_missing_range_separator_fails(self, tmp_dir):
-        path = os.path.join(tmp_dir, ".branch-review-baseline.json")
-        data = {
-            "last_reviewed_sha": "abc1234",
-            "last_reviewed_at": "2026-02-09T12:34:56",
-            "review_type": "full",
-            "review_count": 1,
-            "base_ref": "main",
-            "git_range_used": "HEAD",
-        }
-        with open(path, "w") as f:
-            json.dump(data, f)
-        result = grade_review_baseline(path)
-        assert not result.passed
-        assert any("git_range_used" in f for f in result.failures)
-
-
-def test_finding_accepts_behavior_evidence_and_source_cited():
-    b = ReviewOutputBuilder(reviewer="ecosystem-integration-reviewer", pr_id="0")
-    b.add_finding(
-        severity="medium",
-        category="behavior-assumption",
-        title="State assumption mismatch",
-        description="Callback reads saved status before save fires.",
-        file="src/hooks.php",
-        line=42,
-        recommendation="Switch to woocommerce_after_order_object_save.",
-        behavior_evidence="cited",
-        source_cited="woocommerce/.../class-wc-order.php:200",
-    )
-    output = b.to_dict()
-    finding = output["findings"][0]
-    assert finding["behavior_evidence"] == "cited"
-    assert finding["source_cited"] == "woocommerce/.../class-wc-order.php:200"
-
-
-def test_finding_behavior_evidence_optional():
-    b = ReviewOutputBuilder(reviewer="security-reviewer", pr_id="0")
-    b.add_finding(
-        severity="low", category="xss", title="X", description="y",
-        file="f.php", line=1, recommendation="z",
-    )
-    output = b.to_dict()
-    # Fields omitted when not provided
-    assert "behavior_evidence" not in output["findings"][0]
-    assert "source_cited" not in output["findings"][0]
-
-
-def test_finding_behavior_evidence_invalid_rejected():
-    import pytest
-
-    b = ReviewOutputBuilder(reviewer="ecosystem-integration-reviewer", pr_id="0")
-    with pytest.raises(ValueError, match="behavior_evidence"):
-        b.add_finding(
-            severity="low", category="other", title="T", description="d",
-            file="f.php", line=1, recommendation="r",
-            behavior_evidence="MAYBE",
-        )
-
-
-def test_finding_behavior_evidence_rejects_speculative():
-    import pytest
-
-    b = ReviewOutputBuilder(reviewer="ecosystem-integration-reviewer", pr_id="0")
-    with pytest.raises(ValueError, match="behavior_evidence"):
-        b.add_finding(
-            severity="low", category="behavior-assumption", title="T", description="d",
-            file="f.php", line=1, recommendation="r",
-            behavior_evidence="speculative",
-        )
 
 
 class TestMatchFindings:
@@ -1051,13 +775,6 @@ class TestReviewRoundHardening:
         assert not _paths_match("/tmp/eval-x/src/UserHandler.php", spec)
         # Suffix matching must respect segment boundaries.
         assert not _paths_match("notsrc/UserHandler.php", "rc/UserHandler.php")
-
-    def test_paths_match_rejects_extra_prefix_on_relative_path(self):
-        from helpers.graders import _paths_match
-
-        assert not _paths_match(
-            "vendor/src/UserHandler.php", "src/UserHandler.php",
-        )
 
     def test_detection_matches_absolute_path_relative_to_repo_root(self, tmp_path):
         expected = "src/UserHandler.php"

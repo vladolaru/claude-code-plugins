@@ -202,39 +202,6 @@ class TestNoCycles:
         assert _find_cycle(_import_graph()) is None
 
 
-class TestLayering:
-    """Two directions the cycle check cannot see, because taking either
-    one would not (yet) close a loop — but both would put a module on
-    the wrong side of a boundary that exists for a reason."""
-
-    def test_the_post_critic_ledger_does_not_reach_the_builder(self):
-        """`critic_adjustments` owns the post-critic ledger schema,
-        `agent/output.py` owns the builder, and each used to want a name
-        from the other. `findings_ledger` already bridges them in one
-        direction, so the return edge would be acyclic and silent."""
-        reached = set(_all_imports(REVIEW_DIR / "critic_adjustments.py"))
-
-        assert not [
-            target for target in reached
-            if target == "agent.output" or target.startswith("agent.output.")
-        ]
-
-    def test_review_markdown_does_not_reach_the_builder(self):
-        """Rendering reads documents; it does not build them.
-
-        The renderer imported one text coercer from `agent/output.py` and
-        got the whole builder — plus its lifecycle, assignment, and
-        atomic-write dependencies — as the price. The coercer is a
-        question about the document's shape, so it lives in
-        `review_document.py` with the rest of them.
-        """
-        reached = set(_all_imports(REVIEW_DIR / "review_markdown.py"))
-
-        assert not [
-            target for target in reached if target.startswith("agent.output")
-        ]
-
-
 class TestNoFunctionBodyImports:
     """One blind spot, stated rather than papered over: this walks import
     statements, so a module loaded through

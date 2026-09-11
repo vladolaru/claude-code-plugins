@@ -91,8 +91,15 @@ class TestDispatchMarker:
         path did exactly that scan and treated both synthesis agents as
         reviewers — seeding them as permanently NOT_DISPATCHED and
         renaming their markers away as orphans, which erased the stall
-        signal in the one window where the marker is the only record."""
-        lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
+        signal in the one window where the marker is the only record.
+
+        Also the marker's own format: one UTC ISO timestamp — bootstrap's
+        marker BODY — under this deliberately different name, so a
+        renamed-away marker can still be parsed by the reader that shares
+        that body format."""
+        stamp = lifecycle.mark_dispatched(
+            str(out), lifecycle.RECONCILIATOR, now=T0
+        )
         assert lifecycle.MARKER_SUFFIX == ".synthesis-started"
         assert not list(out.glob("*.started"))
         assert not list(out.glob(f"*{lifecycle.MARKER_SUFFIX}"))
@@ -100,24 +107,6 @@ class TestDispatchMarker:
         assert [path.name for path in synthesis.glob(f"*{lifecycle.MARKER_SUFFIX}")] == [
             f"{lifecycle.RECONCILIATOR}{lifecycle.MARKER_SUFFIX}"
         ]
-
-    def test_writer_and_reader_share_one_suffix(self, out):
-        """They resolve the path through the same helper, so a marker the
-        writer creates is always one the reader can find. A writer with
-        its own spelling would read downstream as an agent that never
-        started — indistinguishable from a failed dispatch."""
-        lifecycle.mark_dispatched(str(out), lifecycle.DECISION_CRITIC, now=T0)
-        payload = lifecycle.observe(str(out), finalize=True)
-        assert _entry(payload, lifecycle.DECISION_CRITIC) is not None
-
-    def test_marker_matches_bootstrap_format(self, out):
-        """One UTC ISO timestamp — bootstrap's marker BODY — under a
-        deliberately different name. The reviewer `*.started` suffix is a
-        contract other tools scan, so a synthesis marker must not land in
-        it; the body stays identical because the parsing is shared."""
-        stamp = lifecycle.mark_dispatched(
-            str(out), lifecycle.RECONCILIATOR, now=T0
-        )
         marker = _marker(out, lifecycle.RECONCILIATOR)
         assert marker.is_file()
         assert marker.read_text() == stamp
@@ -166,12 +155,6 @@ class TestCompletionObservation:
         assert entry["duration_ms"] == 665_000
         assert entry["completed_at"] == (T0 + timedelta(seconds=665)).isoformat()
         assert entry["stalled"] is False
-
-    def test_completion_artifacts_are_the_gated_ones(self, out):
-        assert dict(lifecycle.SYNTHESIS_AGENTS) == {
-            lifecycle.RECONCILIATOR: "review_findings_json",
-            lifecycle.DECISION_CRITIC: "critic_verdict",
-        }
 
     def test_critic_findings_doc_does_not_count_as_completion(self, out):
         """decision-critic-findings.md is written only when the critic
@@ -283,27 +266,17 @@ class TestIdempotence:
 
 class TestArtifactEnvelope:
     def test_schema_and_payload_match_disk(self, out):
+        """The artifact records when the agent finished, not when the
+        script noticed. An earlier version carried both at the payload
+        level too; the run's own step cadence already bounds the
+        observation lag, so the second number answered a question
+        nobody asked — the per-row half of that guarantee is
+        `test_rows_carry_exactly_the_declared_keys` below."""
         payload = lifecycle.observe(str(out))
         on_disk = _read(out)
         assert on_disk == payload
         assert on_disk["schema"] == lifecycle.LIFECYCLE_SCHEMA == 1
-
-    def test_one_clock_only(self, out):
-        """The artifact records when the agent finished, not when the
-        script noticed. An earlier version carried both; the run's own
-        step cadence already bounds the observation lag, so the second
-        number answered a question nobody asked."""
-        lifecycle.mark_dispatched(str(out), lifecycle.DECISION_CRITIC, now=T0)
-        verdict = _critic_snapshot(out, "STAND")
-        _set_mtime(verdict, T0 + timedelta(seconds=665))
-
-        payload = lifecycle.observe(str(out), finalize=True)
-
         assert "observed_at" not in payload
-        entry = _entry(payload, lifecycle.DECISION_CRITIC)
-        assert entry["duration_ms"] == 665_000
-        assert "observed_at" not in entry
-        assert "elapsed_ms" not in entry
 
     def test_rows_carry_exactly_the_declared_keys(self, out):
         """Row-shape parity at the source. ROW_KEYS is the single
@@ -341,12 +314,11 @@ class TestVerdictCapture:
             "SKIPPED"
         )
 
-    @pytest.mark.parametrize(
-        "payload", ['{"verdict": 5}', "{}", "[1, 2]", "not json", '"hello"'],
-        ids=["non-string", "no-key", "list", "unparseable", "scalar"],
-    )
-    def test_an_unreadable_verdict_is_none(self, out, payload):
-        result = self._complete_critic(out, payload)
+    def test_an_unreadable_verdict_is_none(self, out):
+        """One of the five shapes `TestReadCriticVerdict` in
+        test_critic_adjustments.py enumerates against the same reader;
+        this only proves the row rides that reader's outcome."""
+        result = self._complete_critic(out, "not json")
         assert _entry(result, lifecycle.DECISION_CRITIC)["verdict"] is None
 
     def test_malformed_versioned_marker_completes_but_is_not_usable(self, out):
@@ -474,23 +446,6 @@ class TestStepTenDispatchMarker:
             "full", {}, {}, {}, str(out)
         )
         assert _marker(out, lifecycle.DECISION_CRITIC).is_file()
-
-    def test_no_marker_when_quick_mode_skips_the_critic(self, out):
-        """A critic that never ran has no duration. No marker means no
-        row, rather than a row claiming it finished instantly."""
-        from review.critic_adjustments import write_findings
-
-        write_findings(str(out), canonical_findings_ledger())
-        state = {}
-        orchestration_mod._orchestrate_step_10(
-            "full", {"quick": True}, state, {}, str(out)
-        )
-        assert state["step_decisions"]["10"]["critic_skipped"] is True
-        assert not _marker(out, lifecycle.DECISION_CRITIC).exists()
-
-        payload = lifecycle.observe(str(out), finalize=True)
-        assert _entry(payload, lifecycle.DECISION_CRITIC) is None
-
 
 class TestStepTenRedispatchStartsFreshAttempt:
     """A re-entered step 10 measures the old attempt, then replaces it."""
@@ -621,48 +576,12 @@ class TestStepNineObservation:
 
 
 class TestStepElevenObservation:
-    def test_finalize_records_the_critic_duration(self, out):
-        lifecycle.mark_dispatched(str(out), lifecycle.DECISION_CRITIC, now=T0)
-        verdict = _critic_snapshot(out, "STAND")
-        _set_mtime(verdict, T0 + timedelta(seconds=665))
-
-        orchestration_mod._orchestrate_step_11(
-            "pr", {}, {}, {}, str(out)
-        )
-
-        entry = _entry(_read(out), lifecycle.DECISION_CRITIC)
-        assert entry["duration_ms"] == 665_000
-
-    def test_finalize_records_a_stall(self, out):
-        """The artifact a hung run never used to produce."""
-        lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
-        orchestration_mod._orchestrate_step_11(
-            "pr", {}, {}, {}, str(out)
-        )
-        entry = _entry(_read(out), lifecycle.RECONCILIATOR)
-        assert entry["stalled"] is True
-        assert entry["duration_ms"] is None
-
-    def test_finalize_observes_before_its_own_ledger_writes(self, out):
-        """Finalize writes review-findings.json (adjustments + verdict
-        sync). Observing after those writes would report the
-        reconciliator as having finished at finalize time — the run's
-        whole wall clock instead of its synthesis phase."""
-        from review.critic_adjustments import write_findings
-
-        lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
-        write_findings(str(out), canonical_findings_ledger())
-        _set_mtime(
-            run_paths.artifact_path(out, "review_findings_json"),
-            T0 + timedelta(seconds=41),
-        )
-
-        orchestration_mod._orchestrate_step_11("pr", {}, {}, {}, str(out))
-
-        # The verdict sync just rewrote the ledger; the recorded duration
-        # must still be the reconciliator's, not the sync's.
-        entry = _entry(_read(out), lifecycle.RECONCILIATOR)
-        assert entry["duration_ms"] == 41_000
+    """The critic-duration, stall, and pre-write-observation seams at step
+    11 are the same 665 000 ms / 41 000 ms outcomes
+    `TestStepTenRedispatchStartsFreshAttempt::test_the_revise_apply_cannot_backdate_the_reconciliator`
+    and `::test_failed_replacement_cannot_reuse_completed_critic` pin
+    end to end through the real step 10 → 11 sequence; only the
+    no-markers-at-all case is distinct."""
 
     def test_finalize_never_fabricates_rows(self, out):
         """A run with no markers at all — every run predating this

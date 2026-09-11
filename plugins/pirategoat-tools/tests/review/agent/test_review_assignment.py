@@ -37,7 +37,9 @@ def _assignment(**overrides):
 
 def test_derives_reviewed_files_from_normalized_claims_in_authoritative_order():
     reviewed_files = derive_reviewed_files(
-        _assignment(), ["./src/d.py", "src/b.py", "src/b.py"], reviewer="code"
+        _assignment(channels=["blocking", "advisory"]),
+        ["./src/d.py", "src/b.py", "src/b.py"],
+        reviewer="code",
     )
 
     assert reviewed_files.agent_name == "code-reviewer"
@@ -53,6 +55,8 @@ def test_derives_reviewed_files_from_normalized_claims_in_authoritative_order():
     assert reviewed_files.inline_diff_file_count == 2
     assert reviewed_files.reviewed_file_count == 4
     assert reviewed_files.in_scope_review_file_count == 5
+    assert reviewed_files.review_budget == 15
+    assert reviewed_files.channels == ("blocking", "advisory")
 
 
 def test_rejects_claim_outside_review_claimable_files_as_one_batch():
@@ -153,23 +157,29 @@ def test_validates_schema_identity_paths_and_conserved_counts(payload, message):
     "path",
     ["/etc/passwd", "../src/b.py", "src/../b.py", "C:\\src\\b.py", "."],
 )
+def test_rejects_paths_outside_repository_relative_grammar(path):
+    """The full grammar, pinned once at the claim call site — every path
+    location normalizes through the same `_normalize_path`, so the other
+    two call sites only need one representative violation each (below)."""
+    with pytest.raises(ReviewAssignmentError):
+        derive_reviewed_files(_assignment(), [path], reviewer="code")
+
+
 @pytest.mark.parametrize(
-    "location", ["review_claimable_files", "inline_diff_files", "claim"]
+    "location", ["review_claimable_files", "inline_diff_files"]
 )
-def test_rejects_paths_outside_repository_relative_grammar(path, location):
+def test_other_call_sites_share_the_claim_path_grammar(location):
     payload = _assignment()
-    claims = []
+    bad = "/etc/passwd"
     if location == "review_claimable_files":
-        payload["review_claimable_files"] = [path]
+        payload["review_claimable_files"] = [bad]
         payload["in_scope_review_file_count"] = 3
-    elif location == "inline_diff_files":
-        payload["inline_diff_files"] = [path]
-        payload["in_scope_review_file_count"] = 4
     else:
-        claims = [path]
+        payload["inline_diff_files"] = [bad]
+        payload["in_scope_review_file_count"] = 4
 
     with pytest.raises(ReviewAssignmentError):
-        derive_reviewed_files(payload, claims, reviewer=payload["reviewer"])
+        derive_reviewed_files(payload, [], reviewer=payload["reviewer"])
 
 
 def test_rejects_non_object_input_and_non_iterable_claims():
@@ -192,14 +202,6 @@ def _input(**overrides):
     }
     payload.update(overrides)
     return payload
-
-
-def test_assignment_carries_budget_and_channels():
-    reviewed_files = derive_reviewed_files(
-        _input(channels=["blocking", "advisory"]), [], reviewer="security"
-    )
-    assert reviewed_files.review_budget == 15
-    assert reviewed_files.channels == ("blocking", "advisory")
 
 
 @pytest.mark.parametrize("value", rejected_schema_values(5))
@@ -231,27 +233,9 @@ def test_schema_five_rejects_retired_or_malformed_input(overrides):
         derive_reviewed_files(_input(**overrides), [], reviewer="security")
 
 
-def test_accounting_vocabulary_is_retired():
-    scripts = PLUGIN_ROOT / "scripts"
-    offenders = []
-    for path in scripts.rglob("*.py"):
-        text = path.read_text()
-        for needle in (
-            "review" + "_accounting",
-            "Review" + "Accounting",
-            "accounting" + "_input",
-            "review" + "_accounted_file_count",
-            "accounting" + "-input",
-        ):
-            if needle in text:
-                offenders.append(f"{path.relative_to(PLUGIN_ROOT)}: {needle}")
-    assert offenders == []
-
-
 def test_assignment_sidecar_path():
     paths = review_paths("/out", "security")
     assert paths.assignment == "/out/reviewers/security/assignment.json"
-    assert not hasattr(paths, "accounting" + "_input")
 
 
 def test_assignment_bound_to_another_reviewer_is_refused():

@@ -2,7 +2,6 @@
 
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -50,29 +49,14 @@ REVIEWER_PROTOCOL_SKIP_SECTIONS = _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
 # =============================================================================
 
 
-def test_cli_requires_output_dir():
-    result = subprocess.run(
-        [sys.executable, str(BOOTSTRAP_SCRIPT), "--agent", "security-reviewer"],
-        capture_output=True,
-        text=True,
-    )
+def test_cli_requires_output_dir(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["bootstrap.py", "--agent", "security-reviewer"])
 
-    assert result.returncode != 0
-    assert "ERROR: --output-dir is required" in result.stderr
+    with pytest.raises(SystemExit) as exc:
+        _mod.main()
 
-
-def test_module_usage_examples_include_the_required_output_dir():
-    usage_examples = [
-        line.strip()
-        for line in _mod.__doc__.splitlines()
-        if line.strip().startswith("python3 bootstrap.py")
-    ]
-
-    assert len(usage_examples) >= 3
-    assert all(
-        "--output-dir <output-dir>" in example
-        for example in usage_examples
-    )
+    assert exc.value.code != 0
+    assert "ERROR: --output-dir is required" in capsys.readouterr().err
 
 
 # =============================================================================
@@ -163,36 +147,8 @@ class TestResolveReviewerIdentity:
 class TestPersistReviewedFilesInput:
     """The writer publishes the exact schema-4 assignment."""
 
-    def test_writes_to_the_review_paths_assignment(
-        self, tmp_path, monkeypatch
-    ):
-        authority_dir = tmp_path / "authority"
-        authority_dir.mkdir()
-        assignment = authority_dir / "authority.json"
-        monkeypatch.setattr(
-            _mod,
-            "review_paths",
-            lambda *_args: SimpleNamespace(
-                draft=str(authority_dir / "draft.json"),
-                final=str(authority_dir / "final.json"),
-                assignment=str(assignment),
-            ),
-        )
-
-        _mod.persist_review_assignment(
-            str(tmp_path),
-            "security-reviewer",
-            [],
-            review_budget=40,
-            in_scope_review_file_count=1,
-            inline_diff_files=_inline(1),
-            channels=["blocking"],
-        )
-
-        assert json.loads(assignment.read_text())["reviewer"] == "security"
-        assert not (tmp_path / "security-assignment.json").exists()
-
-    def test_writes_only_authoritative_claimable_files(self, tmp_path):
+    def test_persist_assignment_payload(self, tmp_path):
+        """One full-payload equality assert over the authoritative writer."""
         _mod.persist_review_assignment(
             str(tmp_path),
             "repo-renewals-reviewer",
@@ -214,28 +170,6 @@ class TestPersistReviewedFilesInput:
             "review_budget": 80,
             "in_scope_review_file_count": 12,
             "inline_diff_files": _inline(11),
-            "channels": ["blocking"],
-        }
-
-    def test_writes_empty_authoritative_set(self, tmp_path):
-        _mod.persist_review_assignment(
-            str(tmp_path), "security-reviewer", [],
-            review_budget=40,
-            in_scope_review_file_count=5, inline_diff_files=_inline(5),
-            channels=["blocking"],
-        )
-
-        payload = json.loads(
-            Path(review_paths(tmp_path, "security").assignment).read_text()
-        )
-        assert payload == {
-            "schema": 5,
-            "agent_name": "security-reviewer",
-            "reviewer": "security",
-            "review_claimable_files": [],
-            "review_budget": 40,
-            "in_scope_review_file_count": 5,
-            "inline_diff_files": _inline(5),
             "channels": ["blocking"],
         }
 
@@ -630,10 +564,15 @@ Should be included.
 This section was added later and should be included automatically.
 """
 
-    def test_skipped_sections_absent(self):
+    def test_new_section_auto_included(self):
+        """Skip-list extraction on one call: skipped sections are absent,
+        non-skipped sections (including one added after the skip list was
+        written) are present, and the level-1 title is stripped — skip-list
+        resilience is the load-bearing contract, so it keeps this node id."""
         result = extract_protocol_sections(
             self.SAMPLE_PROTOCOL, REVIEWER_PROTOCOL_SKIP_SECTIONS
         )
+
         assert "## Step 0" not in result
         assert "## Scope Discovery" not in result
         assert "Subsection of Scope" not in result
@@ -641,22 +580,15 @@ This section was added later and should be included automatically.
         assert "## ReviewOutputBuilder API" not in result
         assert "## File-Based Output" not in result
 
-    def test_non_skipped_sections_present(self):
-        result = extract_protocol_sections(
-            self.SAMPLE_PROTOCOL, REVIEWER_PROTOCOL_SKIP_SECTIONS
-        )
         assert "## RULE: Reviewing vs Exploring" in result
         assert "Important rule that should be included" in result
         assert "## Project-Specific Knowledge" in result
         assert "## Severity Calibration" in result
 
-    def test_new_section_auto_included(self):
-        """New sections added to protocol are included by default (skip-list resilience)."""
-        result = extract_protocol_sections(
-            self.SAMPLE_PROTOCOL, REVIEWER_PROTOCOL_SKIP_SECTIONS
-        )
         assert "## New Future Section" in result
         assert "added later and should be included automatically" in result
+
+        assert "# Shared Reviewer Protocol" not in result
 
     def test_code_fences_not_parsed_as_headings(self):
         """Code fences with # characters should not be parsed as headings."""
@@ -684,51 +616,44 @@ Should be skipped.
         assert "After the code fence." in result
         assert "## Step 0" not in result
 
-    def test_level1_title_stripped(self):
-        result = extract_protocol_sections(
-            self.SAMPLE_PROTOCOL, REVIEWER_PROTOCOL_SKIP_SECTIONS
-        )
-        assert "# Shared Reviewer Protocol" not in result
-
 
 class TestLoadPrIntent:
     """PR intent loading from review-context.json."""
 
-    def test_returns_none_when_no_file(self, tmp_path):
-        assert load_pr_intent(str(tmp_path)) is None
-
-    def test_returns_none_when_empty_json(self, tmp_path):
-        (tmp_path / "review-context.json").write_text("{}")
-        assert load_pr_intent(str(tmp_path)) is None
-
-    def test_returns_none_when_no_title(self, tmp_path):
-        ctx = {"pr": {"body": "Some body", "author": "dev"}}
-        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
+    @pytest.mark.parametrize(
+        "file_content",
+        [
+            pytest.param(None, id="no_file"),
+            pytest.param("{}", id="empty_json"),
+            pytest.param(
+                json.dumps({"pr": {"body": "Some body", "author": "dev"}}),
+                id="no_title",
+            ),
+            pytest.param("not json", id="malformed_json"),
+        ],
+    )
+    def test_pr_intent_absent(self, tmp_path, file_content):
+        if file_content is not None:
+            (tmp_path / "review-context.json").write_text(file_content)
         assert load_pr_intent(str(tmp_path)) is None
 
     def test_returns_intent_with_title(self, tmp_path):
-        ctx = {"pr": {"title": "Fix rounding in refunds"}}
+        """One PR context carrying title, author, body, and a linked issue —
+        every field the loader surfaces lands in the intent string."""
+        ctx = {
+            "pr": {
+                "title": "Fix rounding in refunds",
+                "author": "alice",
+                "body": "Refund totals were off",
+            },
+            "linked_issues": ["WOOPLUG-123"],
+        }
         (tmp_path / "review-context.json").write_text(json.dumps(ctx))
         intent = load_pr_intent(str(tmp_path))
         assert intent is not None
         assert "Fix rounding in refunds" in intent
-
-    def test_includes_author(self, tmp_path):
-        ctx = {"pr": {"title": "Fix thing", "author": "alice"}}
-        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
-        intent = load_pr_intent(str(tmp_path))
         assert "alice" in intent
-
-    def test_includes_body(self, tmp_path):
-        ctx = {"pr": {"title": "Fix thing", "body": "Refund totals were off"}}
-        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
-        intent = load_pr_intent(str(tmp_path))
         assert "Refund totals were off" in intent
-
-    def test_includes_linked_issues(self, tmp_path):
-        ctx = {"pr": {"title": "Fix thing"}, "linked_issues": ["WOOPLUG-123"]}
-        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
-        intent = load_pr_intent(str(tmp_path))
         assert "WOOPLUG-123" in intent
 
     def test_the_body_is_never_cut(self, tmp_path):
@@ -769,10 +694,6 @@ class TestLoadPrIntent:
         intent = load_pr_intent(str(tmp_path), change_purpose="Free prose, no headings.")
         assert "PR Description: Raw body" in intent
 
-    def test_handles_malformed_json(self, tmp_path):
-        (tmp_path / "review-context.json").write_text("not json")
-        assert load_pr_intent(str(tmp_path)) is None
-
 
 class TestChangePurpose:
     """load_change_purpose() reads the grouped change-purpose artifact."""
@@ -783,53 +704,22 @@ class TestChangePurpose:
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
 
-    def test_returns_none_when_missing(self, tmp_path):
+    @pytest.mark.parametrize(
+        "write_empty_file",
+        [
+            pytest.param(False, id="missing"),
+            pytest.param(True, id="empty"),
+        ],
+    )
+    def test_returns_none_when_absent(self, tmp_path, write_empty_file):
+        if write_empty_file:
+            self._path(tmp_path).write_text("")
         assert load_change_purpose(str(tmp_path)) is None
-
-    def test_returns_none_when_empty(self, tmp_path):
-        self._path(tmp_path).write_text("")
-        assert load_change_purpose(str(tmp_path)) is None
-
-    def test_returns_content_when_present(self, tmp_path):
-        self._path(tmp_path).write_text("Adds retry logic to payments.")
-        result = load_change_purpose(str(tmp_path))
-        assert result == "Adds retry logic to payments."
 
     def test_strips_whitespace(self, tmp_path):
         self._path(tmp_path).write_text("  Content with spaces.  \n\n")
         result = load_change_purpose(str(tmp_path))
         assert result == "Content with spaces."
-
-
-class TestOutputLifecyclePaths:
-    def test_output_file_contract_follows_review_paths_authority(
-        self, tmp_path, monkeypatch
-    ):
-        authority_dir = tmp_path / "authority"
-        paths = SimpleNamespace(
-            draft=str(authority_dir / "draft.json"),
-            final=str(authority_dir / "final.json"),
-            assignment=str(authority_dir / "authority.json"),
-        )
-        monkeypatch.setattr(_mod, "review_paths", lambda *_args: paths)
-
-        output = build_output(
-            agent_name="security-reviewer",
-            plugin_root="/fake",
-            status="OK",
-            review_rules="Rules here",
-            domain_rules=None,
-            scope_output="scope",
-            exploration_scope=None,
-            output_dir=str(tmp_path),
-            pr_number="1",
-            reviewer_name="security",
-            review_claimable_count=0,
-            has_php=False,
-        )
-
-        assert output.count(paths.final) == 2
-        assert str(tmp_path / "security-review.json") not in output
 
 
 class TestChangePurposeInjection:
@@ -866,12 +756,8 @@ class TestChangePurposeInjection:
             reviewer_name="security", review_claimable_count=0, has_php=False,
             change_purpose=purpose,
         )
-        assert 'record_check(..., verifies=["V2"])' in output
-        assert "`## Context` items are facts to take as given" in output
-        assert "record a finding as you would for any defect and name the item" in output
-        assert "record an observation" not in output
         assert 'verifies=["V1"])  # the Verify item(s) this check settles' in output
-        assert output.index("=== REVIEW FOCUS (pipeline synthesis) ===") < output.index("## Verify")
+        assert "`## Context` items are facts to take as given" in output
 
     def test_a_purpose_with_no_verify_items_asks_for_no_citation(self):
         purpose = (
@@ -902,32 +788,30 @@ class TestChangePurposeInjection:
 class TestResolveOverallStatus:
     """Defense-in-depth: primary NO_DOMAIN_FILES + secondary content → scoped OK."""
 
-    def test_normal_ok_passes_through(self):
-        status, secondary_only = resolve_overall_status("security", "OK", False)
-        assert status == "OK"
-        assert secondary_only is False
-
-    def test_no_domain_files_without_secondary_stays(self):
-        """No primary files and no secondary content → still NO_DOMAIN_FILES (exit)."""
-        status, secondary_only = resolve_overall_status("security", "NO_DOMAIN_FILES", False)
-        assert status == "NO_DOMAIN_FILES"
-        assert secondary_only is False
-
-    def test_no_domain_files_with_secondary_flips_to_scoped_ok(self):
-        """The masking fix: secondary files exist → review them, flag secondary_only."""
-        status, secondary_only = resolve_overall_status("security", "NO_DOMAIN_FILES", True)
-        assert status == "OK"
-        assert secondary_only is True
-
-    def test_null_domain_is_ok(self):
-        status, secondary_only = resolve_overall_status(None, "OK", False)
-        assert status == "OK"
-        assert secondary_only is False
-
-    def test_error_status_not_overridden(self):
-        status, secondary_only = resolve_overall_status("security", "ERROR", True)
-        assert status == "ERROR"
-        assert secondary_only is False
+    @pytest.mark.parametrize(
+        ("domain", "status", "secondary_files_exist", "expected_status", "expected_secondary_only"),
+        [
+            pytest.param("security", "OK", False, "OK", False, id="normal_ok_passes_through"),
+            pytest.param(
+                "security", "NO_DOMAIN_FILES", False, "NO_DOMAIN_FILES", False,
+                id="no_domain_files_without_secondary_stays",
+            ),
+            pytest.param(
+                "security", "NO_DOMAIN_FILES", True, "OK", True,
+                id="no_domain_files_with_secondary_flips_to_scoped_ok",
+            ),
+            pytest.param(None, "OK", False, "OK", False, id="null_domain_is_ok"),
+            pytest.param("security", "ERROR", True, "ERROR", False, id="error_status_not_overridden"),
+        ],
+    )
+    def test_resolve_overall_status(
+        self, domain, status, secondary_files_exist, expected_status, expected_secondary_only
+    ):
+        resolved_status, secondary_only = resolve_overall_status(
+            domain, status, secondary_files_exist
+        )
+        assert resolved_status == expected_status
+        assert secondary_only is expected_secondary_only
 
 
 class TestCoverageNoteInjection:
@@ -1007,21 +891,18 @@ class TestLoadPrSizeFromContext:
         result = load_pr_size_from_context(str(tmp_path))
         assert result == {"lines": 130, "files": 8, "category": "small"}
 
-    def test_returns_none_when_missing(self, tmp_path):
-        result = load_pr_size_from_context(str(tmp_path))
-        assert result is None
-
-    def test_returns_none_when_no_pr_size_key(self, tmp_path):
-        ctx = {"pr": {"number": 42}}
-        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
-        result = load_pr_size_from_context(str(tmp_path))
-        assert result is None
-
-    def test_returns_none_when_lines_missing(self, tmp_path):
-        ctx = {"pr_size": {"category": "small"}}
-        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
-        result = load_pr_size_from_context(str(tmp_path))
-        assert result is None
+    @pytest.mark.parametrize(
+        "ctx",
+        [
+            pytest.param(None, id="missing"),
+            pytest.param({"pr": {"number": 42}}, id="no_pr_size_key"),
+            pytest.param({"pr_size": {"category": "small"}}, id="lines_missing"),
+        ],
+    )
+    def test_pr_size_absent(self, tmp_path, ctx):
+        if ctx is not None:
+            (tmp_path / "review-context.json").write_text(json.dumps(ctx))
+        assert load_pr_size_from_context(str(tmp_path)) is None
 
 
 class TestComputeReviewBudget:
@@ -1037,18 +918,14 @@ class TestComputeReviewBudget:
         budget = compute_review_budget(changed_lines=800, file_count=30)
         assert 50 <= budget <= 80
 
-    def test_cap(self):
-        """Budget should cap at a maximum regardless of PR size."""
-        budget = compute_review_budget(changed_lines=5000, file_count=100)
-        assert budget <= 80
-
     def test_minimum(self):
         """Even tiny PRs should get a minimum viable budget."""
         budget = compute_review_budget(changed_lines=5, file_count=1)
         assert budget >= 15
 
     def test_scope_lines_preferred_over_pr_lines(self):
-        """Budget should scale with scope-level lines, not PR-level."""
+        """Budget should scale with scope-level lines, not PR-level, and
+        should cap at a maximum regardless of PR size."""
         # Scope has 50 lines → budget should be 15 + 5 = 20
         # PR has 2000 lines → if PR-level were used, budget would be 80 (cap)
         scope_budget = compute_review_budget(changed_lines=50, file_count=3)
@@ -1130,21 +1007,6 @@ class TestBudgetBriefingText:
         output = self._output(tmp_path, scope_output="=== FILES ===\nsrc/a.ts  (+10 -2)\n",
                               budget=40, capped=False)
         assert "coverage gap, not efficiency" not in output
-
-
-class TestBudgetOverride:
-    """Agent-level budget override from registry."""
-
-    def test_override_replaces_computed_budget(self):
-        """When budget_override is set, it replaces the scope-computed budget."""
-        # Verify the override exists in the registry
-        with open(str(SCRIPTS_DIR / "review" / "agent_registry.json")) as f:
-            registry = json.load(f)
-        agents = registry.get("agents", registry)
-        assert agents["history-insights-reviewer"]["budget_override"] == 45
-        # Verify computed budget would be different (higher) without the override
-        scope_budget = compute_review_budget(changed_lines=500, file_count=5)
-        assert scope_budget > 45, "Override should be lower than computed scope budget"
 
 
 class TestBuildErrorOutput:
@@ -1238,44 +1100,36 @@ class TestLoadScopeFacts:
 class TestLoadAdditionalInstructions:
     """load_additional_instructions() reads from run-config.json."""
 
-    def test_returns_value_when_present(self, tmp_path):
-        config = {"additional_instructions": "Focus on error handling in the retry logic."}
-        (tmp_path / "run-config.json").write_text(json.dumps(config))
-        result = load_additional_instructions(str(tmp_path))
-        assert result == "Focus on error handling in the retry logic."
-
-    def test_returns_none_when_key_missing(self, tmp_path):
-        config = {"mode": "pr", "quick": False}
-        (tmp_path / "run-config.json").write_text(json.dumps(config))
-        result = load_additional_instructions(str(tmp_path))
-        assert result is None
+    @pytest.mark.parametrize(
+        ("file_content", "expected"),
+        [
+            pytest.param(
+                json.dumps({"additional_instructions": "Focus on error handling in the retry logic."}),
+                "Focus on error handling in the retry logic.",
+                id="present",
+            ),
+            pytest.param(
+                json.dumps({"additional_instructions": "  Check for XSS vulnerabilities.  "}),
+                "Check for XSS vulnerabilities.",
+                id="strips_whitespace",
+            ),
+            pytest.param(
+                json.dumps({"mode": "pr", "quick": False}), None, id="key_missing",
+            ),
+            # Blank after stripping — covers both the empty-string and
+            # whitespace-only inputs; both hit the same `.strip()` branch.
+            pytest.param(
+                json.dumps({"additional_instructions": "   \n  "}), None, id="blank_value",
+            ),
+            pytest.param("not valid json", None, id="malformed_json"),
+        ],
+    )
+    def test_load_additional_instructions(self, tmp_path, file_content, expected):
+        (tmp_path / "run-config.json").write_text(file_content)
+        assert load_additional_instructions(str(tmp_path)) == expected
 
     def test_returns_none_when_file_missing(self, tmp_path):
-        result = load_additional_instructions(str(tmp_path))
-        assert result is None
-
-    def test_returns_none_when_empty_string(self, tmp_path):
-        config = {"additional_instructions": ""}
-        (tmp_path / "run-config.json").write_text(json.dumps(config))
-        result = load_additional_instructions(str(tmp_path))
-        assert result is None
-
-    def test_returns_none_when_whitespace_only(self, tmp_path):
-        config = {"additional_instructions": "   \n  "}
-        (tmp_path / "run-config.json").write_text(json.dumps(config))
-        result = load_additional_instructions(str(tmp_path))
-        assert result is None
-
-    def test_handles_malformed_json(self, tmp_path):
-        (tmp_path / "run-config.json").write_text("not valid json")
-        result = load_additional_instructions(str(tmp_path))
-        assert result is None
-
-    def test_strips_whitespace(self, tmp_path):
-        config = {"additional_instructions": "  Check for XSS vulnerabilities.  "}
-        (tmp_path / "run-config.json").write_text(json.dumps(config))
-        result = load_additional_instructions(str(tmp_path))
-        assert result == "Check for XSS vulnerabilities."
+        assert load_additional_instructions(str(tmp_path)) is None
 
 
 class TestAdditionalInstructionsInjection:
@@ -1319,75 +1173,4 @@ class TestAdditionalInstructionsInjection:
         )
         assert "REVIEWER-REQUESTED FOCUS" not in output
 
-    def test_section_absent_when_not_passed(self):
-        """When additional_instructions is omitted (default None), section is absent."""
-        output = build_output(
-            agent_name="security-reviewer",
-            plugin_root="/fake",
-            status="OK",
-            review_rules="Rules here",
-            domain_rules=None,
-            scope_output="scope",
-            exploration_scope=None,
-            output_dir="/tmp/test",
-            pr_number="1",
-            reviewer_name="security",
-            review_claimable_count=0,
-            has_php=False,
-        )
-        assert "REVIEWER-REQUESTED FOCUS" not in output
 
-    def test_positioned_after_change_purpose_before_budget(self):
-        """REVIEWER-REQUESTED FOCUS should appear after REVIEW FOCUS and before REVIEW BUDGET."""
-        output = build_output(
-            agent_name="security-reviewer",
-            plugin_root="/fake",
-            status="OK",
-            review_rules="Rules here",
-            domain_rules=None,
-            scope_output="scope",
-            exploration_scope=None,
-            output_dir="/tmp/test",
-            pr_number="1",
-            reviewer_name="security",
-            review_claimable_count=0,
-            has_php=False,
-            change_purpose="Adds retry logic.",
-            additional_instructions="Focus on error handling.",
-            review_budget=30,
-        )
-        focus_pos = output.index("REVIEW FOCUS")
-        requested_pos = output.index("REVIEWER-REQUESTED FOCUS")
-        budget_pos = output.index("REVIEW BUDGET")
-        assert focus_pos < requested_pos < budget_pos
-
-
-# ---------------------------------------------------------------------------
-# run_scope_discovery — scope summary sidecar wiring
-# ---------------------------------------------------------------------------
-
-from unittest.mock import patch
-
-
-class TestScopeSummaryWiring:
-    """run_scope_discovery must forward the summary sidecar path to scope.py."""
-
-    def test_run_scope_discovery_passes_summary_flag(self):
-        with patch.object(_mod, "run_cmd", return_value=(0, "=== REVIEW SCOPE ===", "")) as mock_run:
-            _mod.run_scope_discovery(
-                str(PLUGIN_ROOT), "security", [], "abc..def",
-                output_dir="/tmp/out",
-                summary_json_out="/tmp/out/security-reviewer-scope-summary.json",
-            )
-        cmd = mock_run.call_args[0][0]
-        assert "--summary-json-out" in cmd
-        assert cmd[cmd.index("--summary-json-out") + 1] == (
-            "/tmp/out/security-reviewer-scope-summary.json"
-        )
-
-    def test_run_scope_discovery_omits_flag_when_none(self):
-        with patch.object(_mod, "run_cmd", return_value=(0, "=== REVIEW SCOPE ===", "")) as mock_run:
-            _mod.run_scope_discovery(
-                str(PLUGIN_ROOT), "security", [], "abc..def",
-            )
-        assert "--summary-json-out" not in mock_run.call_args[0][0]

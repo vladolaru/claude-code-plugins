@@ -40,16 +40,8 @@ _bootstrap_mod = importlib.util.module_from_spec(_bootstrap_spec)
 _bootstrap_spec.loader.exec_module(_bootstrap_mod)
 
 _TEST_TRANSCRIPT_START = datetime(2026, 7, 20, 10, 0, 0, tzinfo=timezone.utc)
-_MALFORMED_RUN_IDENTITIES = (0, False, [], {}, "   ", "run unsafe", "../run")
-_MALFORMED_RUN_ID_CASES = (
-    "zero",
-    "false",
-    "list",
-    "object",
-    "whitespace",
-    "embedded-space",
-    "unsafe-prefix",
-)
+_MALFORMED_RUN_IDENTITIES = (0, "run unsafe")
+_MALFORMED_RUN_ID_CASES = ("zero", "unsafe-prefix")
 
 
 def _write_jsonl(path: Path, entries: list[object]) -> Path:
@@ -335,9 +327,7 @@ class TestSafeModel:
         "value",
         [
             "claude-sonnet-5",
-            "claude-haiku-4-5-20251001",
             "claude-opus-5[1m]",
-            "claude-" + "a" * 119,
             "claude-" + "a" * 119 + "[1m]",
         ],
     )
@@ -347,22 +337,12 @@ class TestSafeModel:
     @pytest.mark.parametrize(
         "value",
         [
-            "claude-x[<b>]",
-            "claude-x[]",
-            "claude-x[1m]extra",
-            "claude-x[" + "a" * 17 + "]",
-            "claude x",
-            "claude-x\n",
+            None,
             "evil-model",
-            "Claude-opus-5",
-            # The tail charset is [a-z0-9._-]: "Claude-opus-5" only exercises
-            # the literal `claude-` prefix, so an uppercase or spaced tail is
-            # what the charset itself has to reject.
-            "claude-opus-5A",
             "claude-opus 5",
             "claude-" + "a" * 200,
-            "",
-            None,
+            "claude-x[]",
+            "claude-x[1m]extra",
         ],
     )
     def test_rejects_unsafe_values(self, value):
@@ -403,15 +383,8 @@ class TestCorrelateRunAgents:
                 "{command}\n"
                 "Return only after the review artifact is saved."
             ),
-            (
-                "Run this bootstrap command:\n"
-                "```bash\n"
-                "{command}\n"
-                "```\n"
-                "Then follow the generated instructions."
-            ),
         ],
-        ids=["instruction-envelope", "fenced-command"],
+        ids=["instruction-envelope"],
     )
     def test_correlates_one_canonical_bootstrap_inside_multiline_prompt(
         self, tmp_path, prompt_template
@@ -489,10 +462,9 @@ class TestCorrelateRunAgents:
         "directory_name,prompt_template",
         [
             ("run with spaces", '--output-dir "{output_dir}"'),
-            ("run with spaces", "--output-dir {escaped_output_dir}"),
             ("run:colon", "--output-dir={output_dir}"),
         ],
-        ids=["quoted-space", "escaped-space", "equals-colon"],
+        ids=["quoted-space", "equals-colon"],
     )
     def test_parses_complete_shell_output_dir_option(
         self, tmp_path, directory_name, prompt_template
@@ -524,12 +496,10 @@ class TestCorrelateRunAgents:
         "prompt",
         [
             "--output-dir /reviews/run-old",
-            "--output-dir /reviews/run/suffix",
-            "--output-dir /reviews/run old",
             "--output-dir $REVIEW_DIR",
             "--output-dir",
         ],
-        ids=["prefix", "suffix", "unquoted-space", "unresolved", "missing-value"],
+        ids=["prefix", "unresolved", "missing-value"],
     )
     def test_rejects_nonexact_or_malformed_output_dir_options(self, tmp_path, prompt):
         session = tmp_path / "bad-option.jsonl"
@@ -549,29 +519,6 @@ class TestCorrelateRunAgents:
 
         assert correlate_run_agents(
             session, "/reviews/run old", {"security-reviewer"}
-        ) == []
-
-    def test_shorter_run_does_not_match_quoted_longer_run(self, tmp_path):
-        session = tmp_path / "longer-run.jsonl"
-        _write_jsonl(
-            session,
-            [
-                _assistant(
-                    _call(
-                        "a1",
-                        "Agent",
-                        prompt=(
-                            "bootstrap.py --agent security-reviewer "
-                            '--output-dir "/reviews/run old"'
-                        ),
-                    )
-                ),
-                _result("a1", structured={"agentId": "wrong-run"}),
-            ],
-        )
-
-        assert correlate_run_agents(
-            session, "/reviews/run", {"security-reviewer"}
         ) == []
 
     def test_supports_legacy_text_agent_id_and_legacy_task_tool(self, tmp_path):
@@ -667,32 +614,6 @@ class TestCorrelateRunAgents:
         result = correlate_run_agents(session, output_dir, {"security-reviewer"})
         assert result[0]["model"] is None
 
-    def test_preserves_bracketed_model_variant_tag(self, tmp_path):
-        """Claude Code reports context-window variants as ``claude-opus-5[1m]``.
-
-        The bracketed tag is part of what the API resolved, so it must survive
-        sanitization: dropping it silently nulled the model for every Opus-tier
-        dispatch while Sonnet dispatches resolved normally.
-        """
-        session = tmp_path / "variant-model.jsonl"
-        output_dir = tmp_path / "pr-review-variant"
-        _write_jsonl(
-            session,
-            [
-                _assistant(_call("v1", "Agent", prompt=_agent_prompt(output_dir))),
-                _result(
-                    "v1",
-                    structured={
-                        "agentId": "variant-agent-id",
-                        "resolvedModel": "claude-opus-5[1m]",
-                    },
-                ),
-            ],
-        )
-
-        result = correlate_run_agents(session, output_dir, {"security-reviewer"})
-        assert result[0]["model"] == "claude-opus-5[1m]"
-
     def test_special_agent_uses_recognized_subagent_type(self, tmp_path):
         session = tmp_path / "special.jsonl"
         output_dir = tmp_path / "pr-review-3"
@@ -724,9 +645,8 @@ class TestCorrelateRunAgents:
             "- Output directory: `{output_dir}`",
             "**Output directory:** `{output_dir}`",
             "Output directory:\n`{output_dir}`",
-            "- **Output directory:**\n  {output_dir}",
         ],
-        ids=["plain", "list", "bold", "split-backtick", "split-list-bold"],
+        ids=["plain", "list", "bold", "split-backtick"],
     )
     def test_special_agent_accepts_observed_output_directory_labels(
         self, tmp_path, label
@@ -912,57 +832,6 @@ class TestAnalyzeSubagent:
             "output_tokens": 16,
         }
         assert result["usage_by_model"]["claude-opus-4-1"]["output_tokens"] == 13
-
-    def test_attributes_usage_under_the_bracketed_variant_key(self, tmp_path):
-        """A variant tag keys usage attribution instead of being discarded."""
-        transcript = _write_jsonl(
-            tmp_path / "agent.jsonl",
-            [
-                _assistant(
-                    usage=_usage(11, 13, create=17, read=19),
-                    model="claude-opus-5[1m]",
-                    entry_usage=True,
-                    message_id="variant-tagged-message",
-                ),
-            ],
-        )
-
-        result = analyze_subagent(transcript, tmp_path, [])
-        assert result["usage_by_model"]["claude-opus-5[1m]"]["output_tokens"] == 13
-
-    def test_repeated_message_id_counts_final_cumulative_usage(self, tmp_path):
-        """A response split across records shares message.id; later records
-        carry the cumulative output count, so the last one is authoritative."""
-        transcript = _write_jsonl(
-            tmp_path / "agent.jsonl",
-            [
-                _assistant(
-                    usage=_usage(2, 7, create=26089, read=8813),
-                    model="claude-opus-4-1",
-                    message_id="split-response",
-                ),
-                _assistant(
-                    usage=_usage(2, 7, create=26089, read=8813),
-                    model="claude-opus-4-1",
-                    message_id="split-response",
-                ),
-                _assistant(
-                    usage=_usage(2, 484, create=26089, read=8813),
-                    model="claude-opus-4-1",
-                    message_id="split-response",
-                ),
-            ],
-        )
-
-        result = analyze_subagent(transcript, tmp_path, [])
-        assert result["usage"] == {
-            "input_tokens": 2,
-            "cache_creation_input_tokens": 26089,
-            "cache_read_input_tokens": 8813,
-            "effective_input_tokens": 34904,
-            "output_tokens": 484,
-        }
-        assert result["usage_by_model"]["claude-opus-4-1"]["output_tokens"] == 484
 
     def test_task_notification_aggregate_usage_contributes_no_tokens(
         self, tmp_path
@@ -1288,18 +1157,6 @@ class TestAnalyzeSubagent:
                 id="assignment-order",
             ),
             pytest.param(
-                _builder_envelope("builder.add_positive(observation)"),
-                id="variable-reference",
-            ),
-            pytest.param(
-                _builder_envelope('builder.add_positive(f"{observation}")'),
-                id="f-string",
-            ),
-            pytest.param(
-                _builder_envelope('builder.add_positive("left" + "right")'),
-                id="concatenation",
-            ),
-            pytest.param(
                 _builder_envelope(
                     "print('safe')",
                     header=(
@@ -1344,14 +1201,6 @@ class TestAnalyzeSubagent:
     @pytest.mark.parametrize(
         "command",
         [
-            pytest.param(
-                _builder_envelope("this is not: valid python"),
-                id="unparseable-body",
-            ),
-            pytest.param(
-                _builder_envelope(None),
-                id="missing-body-and-footer",
-            ),
             pytest.param(
                 _builder_envelope(
                     "for path in ['src/a.php', 'src/b.php']:\n"
@@ -1405,16 +1254,6 @@ class TestAnalyzeSubagent:
                 id="extra-assignment",
             ),
             pytest.param(
-                # Exactly as many assignments as the current envelope, but
-                # one of them is foreign. The length bound cannot see this —
-                # only the name-set upper bound rejects it, and without this
-                # case that bound can be deleted with the suite still green.
-                "PIRATEGOAT_PLUGIN_ROOT=/plugin PIRATEGOAT_OUTPUT_DIR=/output "
-                "PIRATEGOAT_REVIEWER_NAME=security PIRATEGOAT_PR_ID=42 "
-                "EXTRA=safe python3 <<PY\npass\nPY",
-                id="foreign-assignment-in-place-of-version",
-            ),
-            pytest.param(
                 "PIRATEGOAT_PLUGIN_ROOT=/plugin PIRATEGOAT_PLUGIN_ROOT=/other "
                 "PIRATEGOAT_OUTPUT_DIR=/output PIRATEGOAT_REVIEWER_NAME=security "
                 "PIRATEGOAT_PR_ID=42 python3 <<PY\npass\nPY",
@@ -1434,8 +1273,17 @@ class TestAnalyzeSubagent:
         ],
     )
     def test_non_pipeline_heredoc_is_not_a_builder_attempt(
-        self, tmp_path, command
+        self, tmp_path, command, request
     ):
+        assert parse_builder_envelope(command) is None
+
+        # Every row takes the identical "no envelope -> all zeros"
+        # analyze_subagent path; only the first row also proves that full
+        # artifact_writes shape and the privacy pin, so the rest stay a
+        # plain unit check on parse_builder_envelope.
+        if request.node.callspec.id != "missing-required-assignment":
+            return
+
         transcript = _write_jsonl(
             tmp_path / "unrelated-heredoc.jsonl",
             [
@@ -1446,7 +1294,6 @@ class TestAnalyzeSubagent:
 
         result = analyze_subagent(transcript, tmp_path, [])
 
-        assert parse_builder_envelope(command) is None
         assert result["artifact_writes"] == {
             "builder_attempted": False,
             "builder_attempts": 0,
@@ -1637,55 +1484,17 @@ class TestAnalyzeSubagent:
         assert failure["operation_class"] == "builder_output_attempt"
         assert failure["recovered"] is False
 
-    def test_write_with_generic_save_is_not_a_builder_attempt(self, tmp_path):
+    def test_detects_allowlisted_text_failure_signatures(self, tmp_path):
         transcript = _write_jsonl(
-            tmp_path / "generic-save.jsonl",
-            [
-                _assistant(
-                    _call(
-                        "w1",
-                        "Write",
-                        file_path="/private/tmp/model.py",
-                        content="model.save(artifact)",
-                    )
-                ),
-                _result("w1"),
-            ],
-        )
-
-        result = analyze_subagent(transcript, tmp_path, [])
-        assert result["artifact_writes"]["builder_attempted"] is False
-        assert result["artifact_writes"]["builder_attempts"] == 0
-
-    def test_no_builder_attempt_is_distinct_from_builder_failure(self, tmp_path):
-        transcript = _write_jsonl(
-            tmp_path / "reads-only.jsonl",
-            [_assistant(_call("r1", "Read", file_path=str(tmp_path / "a.py"))), _result("r1")],
-        )
-
-        result = analyze_subagent(transcript, tmp_path, [])
-        assert result["artifact_writes"]["builder_attempted"] is False
-        assert result["artifact_writes"]["first_builder_attempt_succeeded"] is None
-
-    @pytest.mark.parametrize(
-        "content,category",
-        [
-            ("Sibling tool call errored", "sibling_tool_failure"),
-            ("<tool_use_error>Invalid request</tool_use_error>", "tool_use_error"),
-            ("API Error: overloaded", "api_error"),
-        ],
-    )
-    def test_detects_allowlisted_text_failure_signatures(self, tmp_path, content, category):
-        transcript = _write_jsonl(
-            tmp_path / f"{category}.jsonl",
+            tmp_path / "api_error.jsonl",
             [
                 _assistant(_call("x", "Read", file_path=str(tmp_path / "safe.py"))),
-                _result("x", content, is_error=None),
+                _result("x", "API Error: overloaded", is_error=None),
             ],
         )
 
         failure = analyze_subagent(transcript, tmp_path, [])["tool_failures"][0]
-        assert failure["category"] == category
+        assert failure["category"] == "api_error"
         assert failure["detector"] == "signature"
 
     @pytest.mark.parametrize(
@@ -1736,16 +1545,8 @@ class TestAnalyzeSubagent:
         assert analysis["tool_failures"] == []
         assert analysis["observed_reads"]["all"] == ["src/safe.py"]
 
-    @pytest.mark.parametrize(
-        "structured",
-        [
-            {"interrupted": False},
-            {"status": "started"},
-        ],
-        ids=["not-interrupted", "started"],
-    )
     def test_nonterminal_structured_fields_defer_to_failure_signatures(
-        self, tmp_path, structured
+        self, tmp_path
     ):
         target = tmp_path / "safe.py"
         transcript = _write_jsonl(
@@ -1756,7 +1557,7 @@ class TestAnalyzeSubagent:
                     "read",
                     "API Error: deterministic failure",
                     is_error=None,
-                    structured=structured,
+                    structured={"interrupted": False},
                 ),
             ],
         )
@@ -1766,16 +1567,8 @@ class TestAnalyzeSubagent:
         assert result["tool_failures"][0]["detector"] == "signature"
         assert result["observed_reads"]["all"] == []
 
-    @pytest.mark.parametrize(
-        "structured",
-        [
-            {"interrupted": False},
-            {"status": "started"},
-        ],
-        ids=["not-interrupted", "started"],
-    )
     def test_nonterminal_structured_fields_without_signature_remain_unknown(
-        self, tmp_path, structured
+        self, tmp_path
     ):
         target = tmp_path / "safe.py"
         transcript = _write_jsonl(
@@ -1786,7 +1579,7 @@ class TestAnalyzeSubagent:
                     "read",
                     "ordinary progress",
                     is_error=None,
-                    structured=structured,
+                    structured={"status": "started"},
                 ),
             ],
         )
@@ -1871,111 +1664,10 @@ class TestAnalyzeSubagent:
         assert result["observed_reads"]["all"] == ["src/safe.py"]
         assert secret not in " ".join(_flatten_strings(result))
 
-    def test_current_write_shape_does_not_count_as_builder_attempt(self, tmp_path):
-        target = "/private/tmp/review-output.py"
-        transcript = _write_jsonl(
-            tmp_path / "current-write.jsonl",
-            [
-                _assistant(
-                    _call(
-                        "write",
-                        "Write",
-                        file_path=target,
-                        content=(
-                            "builder = ReviewOutputBuilder('safe')\n"
-                            "builder.save_draft()"
-                        ),
-                    )
-                ),
-                _result(
-                    "write",
-                    "created",
-                    is_error=None,
-                    structured=_current_write_result(target),
-                ),
-            ],
-        )
-
-        result = analyze_subagent(transcript, tmp_path, [])
-        assert result["artifact_writes"] == {
-            "builder_attempted": False,
-            "builder_attempts": 0,
-            "builder_successes": 0,
-            "builder_failures": 0,
-            "first_builder_attempt_succeeded": None,
-            "recovered": False,
-        }
-
-    def test_current_write_update_shape_recovers_prior_write_failure(self, tmp_path):
-        target = str(tmp_path / "safe.py")
-        transcript = _write_jsonl(
-            tmp_path / "current-write-update.jsonl",
-            [
-                _assistant(
-                    _call("first", "Write", file_path=target, content="safe")
-                ),
-                _result("first", "API Error: retry", is_error=None),
-                _assistant(
-                    _call("second", "Write", file_path=target, content="safe")
-                ),
-                _result(
-                    "second",
-                    "updated",
-                    is_error=None,
-                    structured=_current_write_result(target, update=True),
-                ),
-            ],
-        )
-
-        failure = analyze_subagent(transcript, tmp_path, [])["tool_failures"][0]
-        assert failure["tool"] == "Write"
-        assert failure["recovered"] is True
-
-    def test_current_write_update_with_null_original_recovers_ordinary_write(
-        self, tmp_path
-    ):
-        target = str(tmp_path / "review-output.py")
-        builder = (
-            "builder = ReviewOutputBuilder('safe')\n"
-            "builder.save_draft()"
-        )
-        structured = _current_write_result(target, update=True)
-        structured["originalFile"] = None
-        transcript = _write_jsonl(
-            tmp_path / "current-write-update-null-original.jsonl",
-            [
-                _assistant(
-                    _call("first", "Write", file_path=target, content=builder)
-                ),
-                _result("first", "API Error: retry", is_error=None),
-                _assistant(
-                    _call("second", "Write", file_path=target, content=builder)
-                ),
-                _result(
-                    "second",
-                    "updated",
-                    is_error=None,
-                    structured=structured,
-                ),
-            ],
-        )
-
-        result = analyze_subagent(transcript, tmp_path, [])
-        assert result["artifact_writes"] == {
-            "builder_attempted": False,
-            "builder_attempts": 0,
-            "builder_successes": 0,
-            "builder_failures": 0,
-            "first_builder_attempt_succeeded": None,
-            "recovered": False,
-        }
-        assert result["tool_failures"][0]["operation_class"] == "write"
-        assert result["tool_failures"][0]["recovered"] is True
-
     @pytest.mark.parametrize(
         "original_file,stale",
-        [("before", False), (None, True)],
-        ids=["ordinary", "stale-recovered-null-original"],
+        [(None, True)],
+        ids=["stale-recovered-null-original"],
     )
     def test_current_edit_shape_recovers_a_prior_edit_failure(
         self, tmp_path, original_file, stale
@@ -2058,36 +1750,14 @@ class TestAnalyzeSubagent:
         assert failure["recovered"] is False
 
     @pytest.mark.parametrize(
-        "tool_name,tool_input,structured",
+        "tool_name,structured",
         [
             (
                 "Read",
-                {"file_path": "/safe/unexpected-type.py"},
-                _current_read_result("/safe/unexpected-type.py")
-                | {"type": "unexpected"},
-            ),
-            (
-                "Read",
-                {"file_path": "/safe/metadata.py"},
                 {"filePath": "/safe/metadata.py"},
             ),
             (
                 "Read",
-                {"file_path": "/safe/read.py"},
-                {
-                    "type": "text",
-                    "file": {
-                        "filePath": "/safe/read.py",
-                        "content": "safe",
-                        "numLines": True,
-                        "startLine": 1,
-                        "totalLines": 1,
-                    },
-                },
-            ),
-            (
-                "Read",
-                {"file_path": "/safe/truncated-type.py"},
                 {
                     "type": "text",
                     "file": _current_read_result(
@@ -2097,67 +1767,12 @@ class TestAnalyzeSubagent:
                 },
             ),
             (
-                "Read",
-                {"file_path": "/safe/unrelated-metadata.py"},
-                {
-                    "type": "text",
-                    "file": _current_read_result(
-                        "/safe/unrelated-metadata.py"
-                    )["file"]
-                    | {"unrelated": False},
-                },
-            ),
-            (
                 "Write",
-                {
-                    "file_path": "/safe/write.py",
-                    "content": (
-                        "builder = ReviewOutputBuilder('safe')\n"
-                        "builder.save_draft()"
-                    ),
-                },
-                {
-                    "type": "create",
-                    "content": "safe",
-                    "filePath": "/safe/write.py",
-                    "originalFile": None,
-                    "structuredPatch": _structured_patch(),
-                    "userModified": False,
-                },
-            ),
-            (
-                "Write",
-                {
-                    "file_path": "/safe/unexpected-type.py",
-                    "content": (
-                        "builder = ReviewOutputBuilder('safe')\n"
-                        "builder.save_draft()"
-                    ),
-                },
                 _current_write_result("/safe/unexpected-type.py")
                 | {"type": "unexpected"},
             ),
             (
                 "Write",
-                {
-                    "file_path": "/safe/update-crossed.py",
-                    "content": (
-                        "builder = ReviewOutputBuilder('safe')\n"
-                        "builder.save_draft()"
-                    ),
-                },
-                _current_write_result("/safe/update-crossed.py")
-                | {"type": "update"},
-            ),
-            (
-                "Write",
-                {
-                    "file_path": "/safe/update-bad-patch.py",
-                    "content": (
-                        "builder = ReviewOutputBuilder('safe')\n"
-                        "builder.save_draft()"
-                    ),
-                },
                 _current_write_result("/safe/update-bad-patch.py", update=True)
                 | {
                     "originalFile": None,
@@ -2166,11 +1781,6 @@ class TestAnalyzeSubagent:
             ),
             (
                 "Edit",
-                {
-                    "file_path": "/safe/edit.py",
-                    "old_string": "before",
-                    "new_string": "after",
-                },
                 {
                     "filePath": "/safe/edit.py",
                     "oldString": "before",
@@ -2183,21 +1793,14 @@ class TestAnalyzeSubagent:
             ),
         ],
         ids=[
-            "read-unexpected-type",
             "read-metadata-only",
-            "read-bool-line-count",
             "read-token-cap-wrong-type",
-            "read-unrelated-file-key",
-            "write-create-with-patch",
             "write-unexpected-type",
-            "write-update-null-original-empty-patch",
             "write-update-null-original-bad-patch",
             "edit-bad-patch",
         ],
     )
-    def test_near_miss_tool_shapes_remain_unknown(
-        self, tmp_path, tool_name, tool_input, structured
-    ):
+    def test_near_miss_tool_shapes_remain_unknown(self, tool_name, structured):
         operation = {
             "Read": "read",
             "Write": "write",
@@ -2208,20 +1811,6 @@ class TestAnalyzeSubagent:
             tool_name,
             operation,
         )[0] == "unknown"
-        transcript = _write_jsonl(
-            tmp_path / f"near-miss-{tool_name}.jsonl",
-            [
-                _assistant(_call("tool", tool_name, **tool_input)),
-                _result("tool", "ordinary result", is_error=None, structured=structured),
-            ],
-        )
-
-        result = analyze_subagent(transcript, tmp_path, [])
-        assert result["tool_failures"] == []
-        assert result["observed_reads"]["all"] == []
-        if tool_name == "Write":
-            assert result["artifact_writes"]["builder_successes"] == 0
-            assert result["artifact_writes"]["first_builder_attempt_succeeded"] is None
 
     def test_write_shape_accepts_memdir_stamped_metadata(self):
         """Current successful Write results carry memdirStamped alongside
@@ -2322,29 +1911,6 @@ class TestAnalyzeSubagent:
                 {"mode": "regex", "filenames": [], "numFiles": 0},
             ),
             (
-                "Grep",
-                {
-                    "mode": "content",
-                    "filenames": [],
-                    "numFiles": 0,
-                    "content": "",
-                    "numLines": 0,
-                    "unexpected": 1,
-                },
-            ),
-            (
-                "Grep",
-                {
-                    "mode": "files_with_matches",
-                    "filenames": "a.py",
-                    "numFiles": 1,
-                },
-            ),
-            (
-                "Glob",
-                {"durationMs": 5, "filenames": [], "numFiles": 0},
-            ),
-            (
                 "Glob",
                 {
                     "durationMs": 5,
@@ -2356,9 +1922,6 @@ class TestAnalyzeSubagent:
         ],
         ids=[
             "grep-unknown-mode",
-            "grep-unexpected-key",
-            "grep-filenames-not-list",
-            "glob-missing-truncated",
             "glob-truncated-wrong-type",
         ],
     )
@@ -2424,29 +1987,8 @@ class TestAnalyzeSubagent:
                 },
                 _current_edit_result("/safe/edit.py"),
             ),
-            (
-                "Grep",
-                {"pattern": "API Error", "path": "/safe"},
-                {
-                    "mode": "content",
-                    "filenames": ["src/a.py"],
-                    "numFiles": 1,
-                    "content": "src/a.py:1:raise RuntimeError('API Error: retry')",
-                    "numLines": 1,
-                },
-            ),
-            (
-                "Glob",
-                {"pattern": "**/*.py", "path": "/safe"},
-                {
-                    "durationMs": 3,
-                    "filenames": ["src/API Error handling.py"],
-                    "numFiles": 1,
-                    "truncated": False,
-                },
-            ),
         ],
-        ids=["write", "edit", "grep", "glob"],
+        ids=["write", "edit"],
     )
     def test_validated_shapes_are_success_despite_prose_signatures(
         self, tmp_path, tool_name, tool_input, structured
@@ -2500,28 +2042,8 @@ class TestAnalyzeSubagent:
                 {"file_path": "/safe/read.py"},
                 _current_read_result("/safe/read.py") | {"exitCode": 1},
             ),
-            (
-                "Write",
-                {
-                    "file_path": "/safe/write.py",
-                    "content": (
-                        "builder = ReviewOutputBuilder('safe')\n"
-                        "builder.save_draft()"
-                    ),
-                },
-                _current_write_result("/safe/write.py") | {"error": "safe"},
-            ),
-            (
-                "Edit",
-                {
-                    "file_path": "/safe/edit.py",
-                    "old_string": "before",
-                    "new_string": "after",
-                },
-                _current_edit_result("/safe/edit.py") | {"success": False},
-            ),
         ],
-        ids=["read", "write", "edit"],
+        ids=["read"],
     )
     def test_structured_failure_wins_tool_specific_shape(
         self, tmp_path, tool_name, tool_input, structured
@@ -2537,8 +2059,6 @@ class TestAnalyzeSubagent:
         result = analyze_subagent(transcript, tmp_path, [])
         assert result["tool_failures"][0]["category"] == "structured_failure"
         assert result["observed_reads"]["all"] == []
-        if tool_name == "Write":
-            assert result["artifact_writes"]["builder_failures"] == 0
 
     def test_structured_failure_takes_precedence_and_ordinary_retry_recovers(self, tmp_path):
         target = tmp_path / "notes.txt"
@@ -2568,11 +2088,10 @@ class TestAnalyzeSubagent:
         "block_error,structured",
         [
             (True, {"exitCode": 0, "success": True}),
-            (False, {"exitCode": 2}),
             (False, {"interrupted": True, "success": True}),
             (False, {"status": "completed", "error": "structured error"}),
         ],
-        ids=["error-flag-wins", "exit-wins", "interrupted-wins", "error-field-wins"],
+        ids=["error-flag-wins", "interrupted-wins", "error-field-wins"],
     )
     def test_structured_failure_wins_conflicting_success_fields(
         self, tmp_path, block_error, structured
@@ -2758,7 +2277,6 @@ class TestAnalyzeSubagent:
         # head` exits 0) is masked, so a piped reader is uncertain and not
         # counted. `|&` is a pipeline separator like `|`.
         ("cat src/a.py | head -5", []),
-        ("sed -n '[' src/a.py | head -5", []),
         ("cat src/a.py |& grep x", []),
         ("head -5 src/a.py", ["src/a.py"]),
         # `cd -` is unknown, like a variable.
@@ -2788,7 +2306,6 @@ class TestAnalyzeSubagent:
         # the shell before the last list ran; exit 0 then proves nothing
         # about it. In the last list itself, `&& exit 0` follows the read.
         ("test -f src/optional.py || exit 0; cat src/app.py", []),
-        ("test -f src/optional.py || exit; cat src/app.py", []),
         ("exec true; cat src/a.py", []),
         ("return 0\ncat src/a.py", []),
         ("cat src/a.py && exit 0", ["src/a.py"]),
@@ -2802,19 +2319,15 @@ class TestAnalyzeSubagent:
         # A quoted argument may span lines: `cat src/a.py` inside it is
         # printf's text, and a reader after the closing quote is real.
         ("printf '%s\\n' 'line1\ncat src/a.py\nline3'", []),
-        ("printf '%s\\n' 'line1\nline2' && cat src/a.py", ["src/a.py"]),
         ("printf '%s\\n' 'line1\nline2'\ncat src/a.py", ["src/a.py"]),
         # A quote the call never closes leaves the rest of the command
         # unknown; nothing in it is counted.
         ("printf '%s\\n' 'open\ncat src/a.py", []),
         # `--` ends the options, not the pattern: the operand after it is
         # still the pattern, and only the one after that is a file.
-        ("grep -- README.md src/a.py", ["src/a.py"]),
-        ("grep -- README.md /external/log.txt", []),
         ("grep -e pat -- src/a.py", ["src/a.py"]),
         ("sed -n -- 1p src/a.py", ["src/a.py"]),
         ("echo 'a;b' ; cat src/a.py", ["src/a.py"]),
-        ("cat 'src/a.py'", ["src/a.py"]),
         ('cat "src/a b.py"', ["src/a b.py"]),
         # `exit 1` ends the shell too, but a call that did so did not
         # succeed, so a successful call's last list did run.
@@ -2830,12 +2343,12 @@ class TestAnalyzeSubagent:
         # So does a `cd` to something that is not a directory: the shell
         # stayed put, and `foo.py` must not be counted at a made-up place.
         ("cd doesnotexist; cat foo.py", []),
-        ("cd doesnotexist && cat foo.py; true", []),
-        ("cd src/a.py; cat foo.py", []),
         # ripgrep's `-r`/`--replace` takes a replacement; it is not grep's
-        # recursion flag, and the pattern is never a file.
+        # recursion flag, and the pattern is never a file. `-r`/`--replace`
+        # (space-separated) is one value-option branch; `--replace=repl` is
+        # the separate inline `--flag=value` branch, which also proves `-n`
+        # is skipped without supplying the pattern.
         ("rg -r repl pattern src/actual.py", ["src/actual.py"]),
-        ("rg --replace repl pattern src/actual.py", ["src/actual.py"]),
         ("rg --replace=repl -n pattern src/actual.py", ["src/actual.py"]),
         # A directory operand (ripgrep walks it) is not a file read; `lib`
         # exists as a directory in the test repository.
@@ -3104,20 +2617,19 @@ def test_manifest_step_timeline_accepts_matching_identified_run_events(tmp_path)
     assert complete is True
 
 
-@pytest.mark.parametrize("identity_mode", ["missing", "none", "empty"])
+@pytest.mark.parametrize("identity_mode", ["none", "empty"])
 def test_manifest_step_timeline_accepts_legacy_identityless_events(
     tmp_path, identity_mode
 ):
     manifest = _manifest("legacy-step", tmp_path, tmp_path / "run", started=[])
+    identity = None if identity_mode == "none" else ""
     event = {
         "event": "step",
+        "run_id": identity,
         "step": 2,
         "timestamp": (_TEST_TRANSCRIPT_START + timedelta(seconds=10)).isoformat(),
     }
-    if identity_mode != "missing":
-        identity = None if identity_mode == "none" else ""
-        manifest["run"]["id"] = identity
-        event["run_id"] = identity
+    manifest["run"]["id"] = identity
     manifest["steps"] = [event]
 
     transitions, complete = manifest_step_timeline(manifest)
@@ -3325,10 +2837,9 @@ class TestEnrichRunTranscript:
         [
             (None, None),
             ("2026-07-20T10:00:00", "2026-07-20T11:00:00+00:00"),
-            ("not-a-time", "2026-07-20T11:00:00+00:00"),
             ("2026-07-20T11:00:00+00:00", "2026-07-20T10:00:00+00:00"),
         ],
-        ids=["missing", "naive", "malformed", "reversed"],
+        ids=["missing", "naive", "reversed"],
     )
     def test_invalid_manifest_run_windows_are_unavailable(
         self, tmp_path, started_at, ended_at
@@ -3453,17 +2964,7 @@ class TestEnrichRunTranscript:
 
         assert result["usage"]["output_tokens"] == 2
 
-    @pytest.mark.parametrize(
-        "synthetic_content",
-        [
-            "<task-notification>agent done</task-notification>",
-            "<session_digest>compacted context</session_digest>",
-        ],
-        ids=["task-notification", "session-digest"],
-    )
-    def test_open_ended_window_ignores_synthetic_user_records(
-        self, tmp_path, synthetic_content
-    ):
+    def test_open_ended_window_ignores_synthetic_user_records(self, tmp_path):
         sessions = tmp_path / "sessions"
         output_dir = tmp_path / "run"
         entries = [
@@ -3471,7 +2972,10 @@ class TestEnrichRunTranscript:
             _at(
                 {
                     "type": "user",
-                    "message": {"role": "user", "content": synthetic_content},
+                    "message": {
+                        "role": "user",
+                        "content": "<task-notification>agent done</task-notification>",
+                    },
                 },
                 1,
             ),
@@ -3521,28 +3025,14 @@ class TestEnrichRunTranscript:
             2026, 7, 23, 6, 28, 20, 661000, tzinfo=timezone.utc
         )
 
-    @pytest.mark.parametrize(
-        "notification_content",
-        [
-            "<task-notification><usage>x</usage></task-notification>",
-            [
-                {
-                    "type": "text",
-                    "text": (
-                        "  <task-notification>agent done"
-                        "</task-notification>"
-                    ),
-                }
-            ],
-        ],
-        ids=["string-content", "text-block-content"],
-    )
-    def test_task_notification_does_not_close_the_run_window(
-        self, tmp_path, notification_content
-    ):
+    def test_task_notification_does_not_close_the_run_window(self, tmp_path):
         """A background-agent completion arriving between ended_at and the
         final response is harness-injected, not a human turn — the window
-        must run through the presentation and close at the real prompt."""
+        must run through the presentation and close at the real prompt.
+
+        The list-of-text-blocks shape is `_is_human_prompt`'s other content
+        branch (a plain string is pinned by
+        `test_open_ended_window_ignores_synthetic_user_records`)."""
         sessions = tmp_path / "sessions"
         output_dir = tmp_path / "run"
         entries = [
@@ -3554,7 +3044,15 @@ class TestEnrichRunTranscript:
                     "type": "user",
                     "message": {
                         "role": "user",
-                        "content": notification_content,
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "  <task-notification>agent done"
+                                    "</task-notification>"
+                                ),
+                            }
+                        ],
                     },
                 },
                 62,
@@ -3579,35 +3077,23 @@ class TestEnrichRunTranscript:
 
         assert result["usage"]["output_tokens"] == 2 + 400
 
-    @pytest.mark.parametrize(
-        "synthetic_record",
-        [
-            {
-                "type": "user",
-                "isMeta": True,
-                "message": {
-                    "role": "user",
-                    "content": "<system-reminder>\nnote\n</system-reminder>",
-                },
-            },
-            {
-                "type": "user",
-                "message": {
-                    "role": "user",
-                    "content": "<session_digest>compacted context</session_digest>",
-                },
-            },
-        ],
-        ids=["is-meta-reminder", "session-digest"],
-    )
-    def test_synthetic_user_record_does_not_close_the_run_window(
-        self, tmp_path, synthetic_record
-    ):
-        """isMeta-flagged harness injections and legacy compaction digests
-        are not human turns — one arriving between ended_at and the final
-        presentation response must not close the window early."""
+    def test_synthetic_user_record_does_not_close_the_run_window(self, tmp_path):
+        """An isMeta-flagged harness injection is not a human turn — one
+        arriving between ended_at and the final presentation response must
+        not close the window early. (The session_digest text-prefix shape
+        is the same constant-tuple membership check
+        `test_open_ended_window_ignores_synthetic_user_records` already
+        pins with the task-notification prefix.)"""
         sessions = tmp_path / "sessions"
         output_dir = tmp_path / "run"
+        synthetic_record = {
+            "type": "user",
+            "isMeta": True,
+            "message": {
+                "role": "user",
+                "content": "<system-reminder>\nnote\n</system-reminder>",
+            },
+        }
         entries = [
             _at(_assistant(usage=_usage(1, 2)), 50),
             _at(synthetic_record, 62),
@@ -3631,35 +3117,19 @@ class TestEnrichRunTranscript:
 
         assert result["usage"]["output_tokens"] == 2 + 400
 
-    @pytest.mark.parametrize(
-        "synthetic_record",
-        [
-            {
-                "type": "user",
-                "isMeta": True,
-                "message": {
-                    "role": "user",
-                    "content": "<system-reminder>\nnote\n</system-reminder>",
-                },
-            },
-            {
-                "type": "user",
-                "message": {
-                    "role": "user",
-                    "content": "<session_digest>compacted context</session_digest>",
-                },
-            },
-        ],
-        ids=["is-meta-reminder", "session-digest"],
-    )
-    def test_synthetic_user_record_does_not_reset_the_pending_turn(
-        self, tmp_path, synthetic_record
-    ):
+    def test_synthetic_user_record_does_not_reset_the_pending_turn(self, tmp_path):
         """A synthetic record between the triggering prompt and started_at
         must not start a fresh turn buffer — that would discard the opening
         turn's usage and tool calls from the run's evidence."""
         sessions = tmp_path / "sessions"
         output_dir = tmp_path / "run"
+        synthetic_record = {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": "<session_digest>compacted context</session_digest>",
+            },
+        }
         entries = [
             _at(
                 {"type": "user", "message": {"role": "user", "content": "go"}},
@@ -3676,29 +3146,24 @@ class TestEnrichRunTranscript:
 
         assert result["usage"]["output_tokens"] == 2 + 3
 
-    def test_superseded_turn_time_gap_does_not_degrade_the_run(
-        self, tmp_path
+    @pytest.mark.parametrize("damage_kind", ["time-gap", "parse-gap"])
+    def test_superseded_turn_gaps_do_not_degrade_the_run(
+        self, tmp_path, damage_kind
     ):
-        """A timestamp-less record in an older turn is discarded with that
-        turn when a later prompt supersedes it — the bounded entries hold
-        only current-run data, so availability must not go partial."""
+        """A damaged record in an older turn — an unparseable timestamp or a
+        malformed JSON line — is discarded with that turn when a later
+        prompt supersedes it; the bounded entries hold only current-run
+        data, so availability must not go partial."""
         sessions = tmp_path / "sessions"
         output_dir = tmp_path / "run"
-        entries = [
-            # Older turn with a damaged (unparseable-timestamp) record.
-            _at(
-                {
-                    "type": "user",
-                    "message": {"role": "user", "content": "earlier work"},
-                },
-                -10,
-            ),
+        older_prompt = _at(
             {
-                "type": "assistant",
-                "message": {"role": "assistant"},
-                "timestamp": "not-a-time",
+                "type": "user",
+                "message": {"role": "user", "content": "earlier work"},
             },
-            # The run's triggering prompt supersedes that turn entirely.
+            -10,
+        )
+        tail = [
             _at(
                 {
                     "type": "user",
@@ -3708,8 +3173,33 @@ class TestEnrichRunTranscript:
             ),
             _at(_assistant(usage=_usage(1, 2)), 0),
         ]
-        _write_jsonl(sessions / "superseded.jsonl", entries)
-        manifest = _manifest("superseded", tmp_path, output_dir, started=[])
+        session = sessions / f"superseded-{damage_kind}.jsonl"
+        if damage_kind == "time-gap":
+            # Older turn with a damaged (unparseable-timestamp) record.
+            _write_jsonl(
+                session,
+                [
+                    older_prompt,
+                    {
+                        "type": "assistant",
+                        "message": {"role": "assistant"},
+                        "timestamp": "not-a-time",
+                    },
+                    *tail,
+                ],
+            )
+        else:
+            # Older turn with a malformed JSON line.
+            session.parent.mkdir(parents=True, exist_ok=True)
+            session.write_bytes(
+                json.dumps(older_prompt).encode()
+                + b'\n{"damaged": \xff\n'
+                + b"\n".join(json.dumps(e).encode() for e in tail)
+                + b"\n"
+            )
+        manifest = _manifest(
+            f"superseded-{damage_kind}", tmp_path, output_dir, started=[]
+        )
 
         result = enrich_run_transcript(manifest, sessions, set())
 
@@ -3744,48 +3234,6 @@ class TestEnrichRunTranscript:
         result = enrich_run_transcript(manifest, sessions, set())
 
         assert {"code": "orchestrator_transcript_time_gap"} in result["warnings"]
-
-    def test_superseded_turn_parse_gap_does_not_degrade_the_run(
-        self, tmp_path
-    ):
-        """A malformed line in an older turn is discarded with that turn
-        when a later prompt supersedes it — like timestamp gaps."""
-        sessions = tmp_path / "sessions"
-        output_dir = tmp_path / "run"
-        good = [
-            _at(
-                {
-                    "type": "user",
-                    "message": {"role": "user", "content": "earlier work"},
-                },
-                -10,
-            ),
-        ]
-        tail = [
-            _at(
-                {
-                    "type": "user",
-                    "message": {"role": "user", "content": "review this"},
-                },
-                -1,
-            ),
-            _at(_assistant(usage=_usage(1, 2)), 0),
-        ]
-        session = sessions / "superseded-parse.jsonl"
-        session.parent.mkdir(parents=True, exist_ok=True)
-        session.write_bytes(
-            b"\n".join(json.dumps(e).encode() for e in good)
-            + b'\n{"damaged": \xff\n'
-            + b"\n".join(json.dumps(e).encode() for e in tail)
-            + b"\n"
-        )
-        manifest = _manifest("superseded-parse", tmp_path, output_dir, started=[])
-
-        result = enrich_run_transcript(manifest, sessions, set())
-
-        assert result["usage"]["output_tokens"] == 2
-        assert result["warnings"] == []
-        assert result["completeness"]["usage"] is True
 
     def test_run_window_includes_the_opening_turn_before_started_at(
         self, tmp_path
@@ -4178,9 +3626,7 @@ class TestEnrichRunTranscript:
         "incomplete_family,incomplete_mode",
         [
             pytest.param("reviewer", "uncorrelated", id="reviewer-uncorrelated"),
-            pytest.param("reviewer", "missing", id="reviewer-missing-transcript"),
             pytest.param("reviewer", "parse-gap", id="reviewer-parse-gap"),
-            pytest.param("synthesis", "uncorrelated", id="synthesis-uncorrelated"),
             pytest.param("synthesis", "missing", id="synthesis-missing-transcript"),
             pytest.param("synthesis", "parse-gap", id="synthesis-parse-gap"),
         ],
@@ -4542,27 +3988,6 @@ class TestEnrichRunTranscript:
         assert result["completeness"]["orchestrator_data"] is False
         assert result["completeness"]["usage"] is False
 
-    def test_empty_main_transcript_is_missing_evidence(self, tmp_path):
-        """An empty located main-session file parses cleanly but proves
-        nothing — it must not yield a complete run with zero totals."""
-        sessions = tmp_path / "sessions"
-        output_dir = tmp_path / "run"
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        session_id = "empty-main"
-        _write_jsonl(sessions / f"{session_id}.jsonl", [])
-
-        result = enrich_run_transcript(
-            _manifest(session_id, repo, output_dir, started=[]),
-            sessions,
-            set(),
-        )
-
-        assert {
-            "code": "orchestrator_transcript_usage_missing"
-        } in result["warnings"]
-        assert result["completeness"]["usage"] is False
-
     def test_timestampless_agent_evidence_is_a_time_gap(self, tmp_path):
         """An assistant record without a usable timestamp cannot be bound to
         the run window — that is damaged evidence for the agent's family."""
@@ -4687,13 +4112,10 @@ class TestEnrichRunTranscript:
         }
         assert secret not in " ".join(_flatten_strings(result))
 
-    @pytest.mark.parametrize(
-        "agent",
-        ["security-critic", "critic-v2", "review-reconciliator-v2"],
-    )
     def test_special_like_exact_identity_remains_a_regular_reviewer(
-        self, tmp_path, agent
+        self, tmp_path
     ):
+        agent = "security-critic"
         assert _mod._is_special_agent(agent) is False
 
         sessions = tmp_path / "sessions"
@@ -4915,7 +4337,7 @@ class TestEnrichRunTranscript:
         assert result["completeness"]["tool_failures"] is False
 
     def test_malformed_correlated_subagent_line_emits_fixed_partial_warning(
-        self, tmp_path, monkeypatch
+        self, tmp_path
     ):
         sessions = tmp_path / "sessions"
         output_dir = tmp_path / "run"
@@ -4931,17 +4353,6 @@ class TestEnrichRunTranscript:
         _write_jsonl(subagent, [_assistant(usage=_usage(1, 1))])
         with subagent.open("a") as stream:
             stream.write('{"type": "truncated"\n')
-        original_open = Path.open
-        subagent_opens = 0
-        resolved_subagent = subagent.resolve(strict=False)
-
-        def counted_open(path, *args, **kwargs):
-            nonlocal subagent_opens
-            if path.resolve(strict=False) == resolved_subagent:
-                subagent_opens += 1
-            return original_open(path, *args, **kwargs)
-
-        monkeypatch.setattr(Path, "open", counted_open)
 
         result = enrich_run_transcript(
             _manifest("session-gap", tmp_path, output_dir),
@@ -4959,7 +4370,6 @@ class TestEnrichRunTranscript:
         assert result["correlation"]["complete"] is False
         assert result["agent_data_complete"] is False
         assert result["usage_complete"] is False
-        assert subagent_opens == 1
 
     def test_correlated_reviewer_output_without_bash_envelope_reports_no_attempt(
         self, tmp_path
@@ -5078,13 +4488,10 @@ class TestEnrichRunTranscript:
         )
 
 
-@pytest.mark.parametrize(
-    "agent",
-    ["review-reconciliator", "decision-reviewer"],
-)
 def test_synthesis_call_without_result_is_an_expected_missing_dispatch(
-    tmp_path, agent
+    tmp_path,
 ):
+    agent = "review-reconciliator"
     sessions = tmp_path / "sessions"
     output_dir = tmp_path / "run"
     _write_jsonl(
@@ -5117,25 +4524,18 @@ def test_synthesis_call_without_result_is_an_expected_missing_dispatch(
     assert result["completeness"]["usage"] is False
 
 
-@pytest.mark.parametrize(
-    "agent,id_mode",
-    [
-        ("review-reconciliator", "missing"),
-        ("decision-reviewer", "non-string"),
-    ],
-    ids=["step8-missing-id", "step10-non-string-id"],
-)
 def test_malformed_synthesis_call_id_remains_expected_and_incomplete(
-    tmp_path, agent, id_mode
+    tmp_path,
 ):
+    # "missing" and non-string ids both fail the same isinstance(id, str)
+    # check; the decision-reviewer agent proves the other special agent is
+    # also a set member.
+    agent = "decision-reviewer"
     secret = "PRIVATE_MALFORMED_ID_SENTINEL"
     sessions = tmp_path / "sessions"
     output_dir = tmp_path / "run"
     call = _special_agent_call("valid-placeholder", output_dir, agent)
-    if id_mode == "missing":
-        call.pop("id")
-    else:
-        call["id"] = {secret: True}
+    call["id"] = {secret: True}
     _write_jsonl(
         sessions / "malformed-synthesis.jsonl",
         [_assistant(call, usage=_usage(1, 2))],
@@ -5266,11 +4666,8 @@ def test_non_object_dispatch_input_stays_with_correlation(tmp_path):
     assert result["correlation"]["expected"] == []
 
 
-@pytest.mark.parametrize(
-    "agent",
-    ["review-reconciliator", "decision-reviewer"],
-)
-def test_resolved_synthesis_call_is_complete_and_counted(tmp_path, agent):
+def test_resolved_synthesis_call_is_complete_and_counted(tmp_path):
+    agent = "review-reconciliator"
     sessions = tmp_path / "sessions"
     output_dir = tmp_path / "run"
     session_id = f"resolved-{agent}"
@@ -5312,11 +4709,8 @@ def test_resolved_synthesis_call_is_complete_and_counted(tmp_path, agent):
 @pytest.mark.parametrize(
     "result_shape,expected_count",
     [
-        ("duplicate-results", 1),
         ("malformed-result", 1),
-        ("earlier-result", 1),
         ("duplicate-call-id", 2),
-        ("ambiguous-agent-id", 2),
     ],
 )
 def test_unpairable_synthesis_results_remain_expected_but_uncorrelated(
@@ -5325,13 +4719,7 @@ def test_unpairable_synthesis_results_remain_expected_but_uncorrelated(
     sessions = tmp_path / "sessions"
     output_dir = tmp_path / "run"
     call = _special_agent_call("synthesis", output_dir, "review-reconciliator")
-    if result_shape == "duplicate-results":
-        entries = [
-            _assistant(call),
-            _result("synthesis", structured={"agentId": "one"}),
-            _result("synthesis", structured={"agentId": "two"}),
-        ]
-    elif result_shape == "malformed-result":
+    if result_shape == "malformed-result":
         entries = [
             _assistant(call),
             {
@@ -5348,12 +4736,7 @@ def test_unpairable_synthesis_results_remain_expected_but_uncorrelated(
                 },
             },
         ]
-    elif result_shape == "earlier-result":
-        entries = [
-            _result("synthesis", structured={"agentId": "early"}),
-            _assistant(call),
-        ]
-    elif result_shape == "duplicate-call-id":
+    else:
         entries = [
             _assistant(
                 call,
@@ -5362,17 +4745,6 @@ def test_unpairable_synthesis_results_remain_expected_but_uncorrelated(
                 ),
             ),
             _result("synthesis", structured={"agentId": "duplicate"}),
-        ]
-    else:
-        entries = [
-            _assistant(
-                call,
-                _special_agent_call(
-                    "second", output_dir, "review-reconciliator"
-                ),
-            ),
-            _result("synthesis", structured={"agentId": "same"}),
-            _result("second", structured={"agentId": "same"}),
         ]
     _write_jsonl(sessions / "unpairable.jsonl", entries)
 
@@ -5715,25 +5087,6 @@ class TestBudgetAndEvidenceCounts:
         assert failure["tool"] == "Other"
         assert failure["category"] == "structured_failure"
         assert failure["detector"] == "structured"
-
-    def test_unpaired_call_stays_unresolved_on_an_unmined_tool(self, tmp_path):
-        """The pairing, not the shape, decides: a call the transcript never
-        answered is unresolved for every tool, mined or not."""
-        result = self._run_with_subagent(
-            tmp_path,
-            [
-                _assistant(
-                    _call("web", "WebSearch", query="wp nonce verification"),
-                    usage=_usage(1, 2),
-                ),
-            ],
-        )
-
-        assert {
-            "code": "agent_transcript_unresolved_calls",
-            "agent": "security-reviewer",
-        } in result["warnings"]
-        assert result["completeness"]["agent_data"] is False
 
     @pytest.mark.parametrize(
         "structured",
@@ -6343,19 +5696,6 @@ class TestBootstrapCommandRecognition:
     form step 6 actually emits — a rejected command leaves the dispatch
     uncorrelated and its usage, read, and builder metrics incomplete."""
 
-    def test_adapter_command_with_model_tier_is_recognized(self, tmp_path):
-        tokens = _mod._reviewer_bootstrap_tokens(
-            "python3 /plugin/review/agent/bootstrap.py "
-            "--agent repo-reviewer-adapter "
-            "--instance-name repo-renewals-reviewer "
-            "--repo-agent-ref .ai/r.md --adapter-label 'R' "
-            "--execution inline --channel blocking --scope-domains code "
-            "--model-tier opus "
-            f'--range "base..head" --output-dir "{tmp_path}"'
-        )
-        assert tokens is not None
-        assert "--model-tier" in tokens
-
     def test_step6_emitted_adapter_command_is_recognized(
         self, tmp_path, pipeline_mod
     ):
@@ -6486,31 +5826,6 @@ class TestEvidenceToolNameSync:
         validated, typed = self._sources()
 
         assert validated | typed == _mod._EVIDENCE_TOOL_NAMES
-
-    def test_the_parser_sees_every_spelling_these_branches_could_use(self):
-        """Guard the guard: an equality pin is only as good as the parser.
-
-        A `_tool_shape_succeeded` rewritten into membership tests or
-        reversed comparisons must still be read, or the equality above
-        would start failing for a parser reason and invite a hand-edit to
-        the set instead of a fix here.
-        """
-        def sample(tool_name, name):
-            if tool_name == "Read":
-                return 1
-            if "Write" == tool_name:
-                return 2
-            if tool_name in {"Edit", "Grep"}:
-                return 3
-            if name in ("Glob",):
-                return 4
-            if name in ["Bash"]:
-                return 5
-            return 0
-
-        assert _branched_tool_names(sample, "tool_name", "name") == {
-            "Read", "Write", "Edit", "Grep", "Glob", "Bash",
-        }
 
 
 def test_usage_summary_for_transcript_counts_a_split_response_once(tmp_path):

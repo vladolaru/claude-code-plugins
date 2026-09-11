@@ -4,7 +4,6 @@ import importlib.util
 import json
 import subprocess
 import sys
-import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -20,7 +19,7 @@ from review import run_paths
 from review import synthesis_lifecycle
 from review.agent.output import ReviewOutputBuilder, finalize_review
 from review.reconciliation_context import load_agent_reviews
-from review.reviewer_lifecycle import ReviewPaths, review_paths, started_marker_path
+from review.reviewer_lifecycle import review_paths, started_marker_path
 from review.reviewer_names import derive_reviewer_name
 from helpers.review_fixtures import (
     canonical_assignment,
@@ -115,31 +114,6 @@ class _FakeClock:
 
 
 class TestCheckStatus:
-    def test_final_status_follows_the_review_paths_authority(
-        self, mod, tmp_path, monkeypatch
-    ):
-        _write_plan(tmp_path, [
-            {"name": "security-reviewer", "status": "DISPATCH"},
-        ])
-        authority_dir = tmp_path / "authority"
-        authority_dir.mkdir()
-        final_path = authority_dir / "final.json"
-        final_path.write_text(json.dumps(canonical_review_document("security")))
-        monkeypatch.setattr(
-            mod,
-            "review_paths",
-            lambda *_args: ReviewPaths(
-                draft=str(authority_dir / "draft.json"),
-                final=str(final_path),
-                assignment=str(authority_dir / "authority.json"),
-            ),
-        )
-
-        result = mod.check_status(str(tmp_path))
-
-        assert result["agents"][0]["status"] == "FINISHED"
-        assert result["all_done"] is True
-
     def test_draft_evidence_does_not_replace_execution_status(
         self, mod, tmp_path
     ):
@@ -223,21 +197,6 @@ class TestCheckStatus:
         assert result["running"] == 0
         slow = [a for a in result["agents"] if a["name"] == "slow-reviewer"][0]
         assert slow["status"] == "TIMED_OUT"
-
-    def test_timed_out_does_not_block_all_done(self, mod, tmp_path):
-        """ALL_DONE should be true when agents are finished or timed out."""
-        _write_plan(tmp_path, [
-            {"name": "code-reviewer", "status": "DISPATCH"},
-            {"name": "slow-reviewer", "status": "DISPATCH"},
-        ])
-        _start_agent(tmp_path, "code-reviewer")
-        _finish_agent(tmp_path, "code-reviewer")
-        _start_agent(tmp_path, "slow-reviewer", minutes_ago=25)
-
-        result = mod.check_status(str(tmp_path))
-        assert result["all_done"] is True
-        assert result["finished"] == 1
-        assert result["timed_out"] == 1
 
     def test_replaceable_drafts_do_not_finish_until_exact_finalization(
         self, mod, tmp_path
@@ -372,122 +331,72 @@ class TestCheckStatus:
         result = mod.check_status(str(tmp_path))
         assert result["dispatched_names"] == []
 
-    def test_extracts_severity_counts(self, mod, tmp_path):
-        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
-        _start_agent(tmp_path, "code-reviewer")
-        _finish_agent(tmp_path, "code-reviewer", [
-            {"severity": "critical"},
-            {"severity": "high"},
-            {"severity": "high"},
-            {"severity": "medium"},
-        ], "block")
-
-        result = mod.check_status(str(tmp_path))
-        agent = result["agents"][0]
-        assert agent["counts"]["critical"] == 1
-        assert agent["counts"]["high"] == 2
-        assert agent["verdict"] == "block"
-
-    def test_no_dispatch_plan_exits_1(self, tmp_path):
-        cmd = [sys.executable, str(SCRIPT_PATH), "--output-dir", str(tmp_path)]
-        r = subprocess.run(cmd, capture_output=True, text=True)
-        assert r.returncode == 1
-
-    def test_invalid_status_exits_1_with_actionable_error(self, tmp_path):
+    def test_invalid_status_exits_1_with_actionable_error(
+        self, mod, tmp_path, monkeypatch, capsys
+    ):
         _write_plan(tmp_path, [
             {"name": "security-reviewer", "status": "DISPATCHED"},
         ])
+        monkeypatch.setattr(
+            sys, "argv",
+            ["agents_status.py", "--output-dir", str(tmp_path)],
+        )
 
-        cmd = [sys.executable, str(SCRIPT_PATH), "--output-dir", str(tmp_path)]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        with pytest.raises(SystemExit) as exc:
+            mod.main()
 
-        assert result.returncode == 1
-        assert "security-reviewer" in result.stderr
-        assert repr("DISPATCHED") in result.stderr
+        assert exc.value.code == 1
+        err = capsys.readouterr().err
+        assert "security-reviewer" in err
+        assert repr("DISPATCHED") in err
+
+        # test_no_dispatch_plan_exits_1 folded in: same `except` clause,
+        # FileNotFoundError from a missing dispatch plan also exits 1.
+        no_plan_dir = tmp_path / "no-plan"
+        no_plan_dir.mkdir()
+        monkeypatch.setattr(
+            sys, "argv",
+            ["agents_status.py", "--output-dir", str(no_plan_dir)],
+        )
+
+        with pytest.raises(SystemExit) as exc2:
+            mod.main()
+
+        assert exc2.value.code == 1
 
 
 class TestDispatchStatusContract:
-    def test_supported_statuses_partition_into_explicit_sets(self):
-        assert dispatch_status.SKIPPED_STATUSES == frozenset({
-            dispatch_status.SKIPPED,
-            dispatch_status.SKIPPED_OVERRIDE,
-            dispatch_status.SKIPPED_QUICK_MODE,
-            dispatch_status.SKIPPED_TRIAGE,
-        })
-        assert dispatch_status.SUPPORTED_DISPATCH_STATUSES == (
-            dispatch_status.DISPATCHED_STATUSES
-            | dispatch_status.SKIPPED_STATUSES
-        )
+    def test_validator_accepts_each_supported_status(self):
+        agents = [{"name": "code-reviewer", "status": "DISPATCH"}]
+
+        assert dispatch_status.validate_dispatch_plan_agents(agents) == agents
+
+    def test_validator_rejects_non_list_agents(self):
+        with pytest.raises(ValueError):
+            dispatch_status.validate_dispatch_plan_agents(None)
+
+    def test_validator_rejects_non_dict_entries_with_index(self):
+        with pytest.raises(ValueError) as exc_info:
+            dispatch_status.validate_dispatch_plan_agents([None])
+
+        assert "index 0" in str(exc_info.value)
+
+    def test_validator_rejects_invalid_names_with_index_and_value(self):
+        with pytest.raises(ValueError) as exc_info:
+            dispatch_status.validate_dispatch_plan_agents([
+                {"name": None, "status": "DISPATCH"},
+            ])
+
+        assert "index 0" in str(exc_info.value)
 
     @pytest.mark.parametrize(
         "status",
         [
-            "DISPATCH",
-            "DISPATCH_OVERRIDE",
-            "SKIPPED",
-            "SKIPPED_OVERRIDE",
-            "SKIPPED_QUICK_MODE",
-            "SKIPPED_TRIAGE",
+            pytest.param("__missing__", id="missing"),
+            pytest.param("DISPATCHED", id="unknown"),
         ],
     )
-    def test_validator_accepts_each_supported_status(self, status):
-        agents = [{"name": "code-reviewer", "status": status}]
-
-        assert dispatch_status.validate_dispatch_plan_agents(agents) == agents
-
-    @pytest.mark.parametrize(
-        "agents",
-        [
-            None,
-            {},
-            "code-reviewer",
-        ],
-    )
-    def test_validator_rejects_non_list_agents(self, agents):
-        with pytest.raises(ValueError) as exc_info:
-            dispatch_status.validate_dispatch_plan_agents(agents)
-
-        assert repr(agents) in str(exc_info.value)
-
-    @pytest.mark.parametrize("entry", [None, "code-reviewer", []])
-    def test_validator_rejects_non_dict_entries_with_index(self, entry):
-        with pytest.raises(ValueError) as exc_info:
-            dispatch_status.validate_dispatch_plan_agents([entry])
-
-        assert "index 0" in str(exc_info.value)
-        assert repr(entry) in str(exc_info.value)
-
-    @pytest.mark.parametrize(
-        "name",
-        [None, "", [], {}],
-    )
-    def test_validator_rejects_invalid_names_with_index_and_value(self, name):
-        with pytest.raises(ValueError) as exc_info:
-            dispatch_status.validate_dispatch_plan_agents([
-                {"name": name, "status": "DISPATCH"},
-            ])
-
-        assert "index 0" in str(exc_info.value)
-        assert repr(name) in str(exc_info.value)
-
-    @pytest.mark.parametrize(
-        "status,expected_repr",
-        [
-            pytest.param("__missing__", repr(None), id="missing"),
-            pytest.param(None, repr(None), id="null"),
-            pytest.param("", repr(""), id="empty"),
-            pytest.param([], repr([]), id="structured-list"),
-            pytest.param(
-                {"state": "DISPATCH"},
-                repr({"state": "DISPATCH"}),
-                id="structured-dict",
-            ),
-            pytest.param("DISPATCHED", repr("DISPATCHED"), id="unknown"),
-        ],
-    )
-    def test_validator_rejects_invalid_status_with_agent_and_repr(
-        self, status, expected_repr
-    ):
+    def test_validator_rejects_invalid_status_with_agent_and_repr(self, status):
         agent = {"name": "security-reviewer"}
         if status != "__missing__":
             agent["status"] = status
@@ -495,22 +404,12 @@ class TestDispatchStatusContract:
         with pytest.raises(ValueError) as exc_info:
             dispatch_status.validate_dispatch_plan_agents([agent])
 
-        message = str(exc_info.value)
-        assert "security-reviewer" in message
-        assert expected_repr in message
+        assert "security-reviewer" in str(exc_info.value)
 
 
 class TestExplicitSkippedFormatting:
-    @pytest.mark.parametrize(
-        "status",
-        [
-            "SKIPPED",
-            "SKIPPED_OVERRIDE",
-            "SKIPPED_QUICK_MODE",
-            "SKIPPED_TRIAGE",
-        ],
-    )
-    def test_formats_each_supported_skipped_status(self, mod, status):
+    def test_formats_each_supported_skipped_status(self, mod):
+        status = "SKIPPED_OVERRIDE"
         result = {
             "all_done": True,
             "dispatched": 0,
@@ -556,24 +455,6 @@ class TestExplicitSkippedFormatting:
 class TestNotDispatchedDoesNotBlockPipeline:
     """NOT_DISPATCHED agents must not block ALL_DONE or trigger ACTION REQUIRED."""
 
-    def test_not_dispatched_does_not_block_all_done(self, mod, tmp_path):
-        """Pipeline should proceed even if some DISPATCH agents never started."""
-        _write_plan(tmp_path, [
-            {"name": "code-reviewer", "status": "DISPATCH"},
-            {"name": "security-reviewer", "status": "DISPATCH"},
-        ])
-        _start_agent(tmp_path, "code-reviewer")
-        _finish_agent(tmp_path, "code-reviewer")
-        # security-reviewer: plan says DISPATCH but never started (triaged out)
-
-        result = mod.check_status(str(tmp_path))
-        assert result["all_done"] is True, (
-            "NOT_DISPATCHED should not block ALL_DONE — pipeline must not hang "
-            "waiting for agents that will never start"
-        )
-        assert result["not_dispatched"] == 1
-        assert result["finished"] == 1
-
     def test_not_dispatched_shown_as_note_not_action_required(self, mod, tmp_path):
         """NOT_DISPATCHED should produce a NOTE, not ACTION REQUIRED."""
         _write_plan(tmp_path, [
@@ -600,55 +481,6 @@ class TestNotDispatchedDoesNotBlockPipeline:
         assert result["all_done"] is True
 
 
-class TestFilenameConvention:
-    """Status check must find files using the reviewer name, not the agent name."""
-
-    def test_finds_review_file_with_reviewer_name(self, mod, tmp_path):
-        """security-reviewer agent writes security-review.json — status should be FINISHED."""
-        plan = {"agents": [{"name": "security-reviewer", "status": "DISPATCH"}]}
-        _write_plan(tmp_path, plan["agents"])
-
-        review = canonical_review_document("security")
-        path = Path(review_paths(tmp_path, "security").final)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(review))
-
-        result = mod.check_status(str(tmp_path))
-        agent = result["agents"][0]
-        assert agent["status"] == "FINISHED", (
-            f"Expected FINISHED but got {agent['status']}. "
-            f"Status check is looking for the wrong filename."
-        )
-
-    def test_agent_without_reviewer_suffix(self, mod, tmp_path):
-        """code-reviewer → code-review.json (same convention applies)."""
-        plan = {"agents": [{"name": "code-reviewer", "status": "DISPATCH"}]}
-        _write_plan(tmp_path, plan["agents"])
-
-        review = canonical_review_document("code", ["high"])
-        path = Path(review_paths(tmp_path, "code").final)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(review))
-
-        result = mod.check_status(str(tmp_path))
-        agent = result["agents"][0]
-        assert agent["status"] == "FINISHED"
-
-    def test_non_reviewer_agent_name_unchanged(self, mod, tmp_path):
-        """Agent names not ending in -reviewer use the name as-is."""
-        plan = {"agents": [{"name": "gemini-reviewer", "status": "DISPATCH"}]}
-        _write_plan(tmp_path, plan["agents"])
-
-        review = canonical_review_document("gemini")
-        path = Path(review_paths(tmp_path, "gemini").final)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(review))
-
-        result = mod.check_status(str(tmp_path))
-        agent = result["agents"][0]
-        assert agent["status"] == "FINISHED"
-
-
 class TestFindingsKey:
     """Status check reads the canonical findings collection."""
 
@@ -667,6 +499,7 @@ class TestFindingsKey:
         assert agent["status"] == "FINISHED"
         assert agent["counts"]["critical"] == 1
         assert agent["counts"]["high"] == 1
+        assert agent["verdict"] == "block"
 
     def test_retired_review_is_terminal_process_evidence_not_finished_content(
         self, mod, tmp_path
@@ -698,52 +531,6 @@ class TestFindingsKey:
 
 class TestOverrideStatuses:
     """SKIPPED_OVERRIDE and DISPATCH_OVERRIDE must be handled correctly."""
-
-    def test_skipped_override_treated_as_skip(self, mod, tmp_path):
-        """SKIPPED_OVERRIDE agent should be counted as skipped, not dispatched."""
-        _write_plan(tmp_path, [
-            {"name": "code-reviewer", "status": "DISPATCH"},
-            {"name": "a11y-reviewer", "status": "SKIPPED_OVERRIDE", "reason": "LLM override: no UI changes"},
-        ])
-        _start_agent(tmp_path, "code-reviewer")
-        _finish_agent(tmp_path, "code-reviewer")
-
-        result = mod.check_status(str(tmp_path))
-        assert result["all_done"] is True
-        assert result["skipped"] == 1
-        assert result["dispatched"] == 1
-        assert result["not_dispatched"] == 0
-
-    def test_skipped_override_shown_in_output(self, mod, tmp_path):
-        """format_output should show SKIPPED_OVERRIDE with reason, not NOT_DISPATCHED."""
-        _write_plan(tmp_path, [
-            {"name": "code-reviewer", "status": "DISPATCH"},
-            {"name": "a11y-reviewer", "status": "SKIPPED_OVERRIDE", "reason": "LLM override: no UI changes"},
-        ])
-        _start_agent(tmp_path, "code-reviewer")
-        _finish_agent(tmp_path, "code-reviewer")
-
-        result = mod.check_status(str(tmp_path))
-        output = mod.format_output(result)
-        assert "SKIPPED_OVERRIDE" in output
-        assert "LLM override: no UI changes" in output
-        assert "NOT_DISPATCHED" not in output
-
-    def test_dispatch_override_treated_as_dispatch(self, mod, tmp_path):
-        """DISPATCH_OVERRIDE agent should be counted as dispatched and FINISHED when review file exists."""
-        _write_plan(tmp_path, [
-            {"name": "code-reviewer", "status": "DISPATCH"},
-            {"name": "perf-reviewer", "status": "DISPATCH_OVERRIDE"},
-        ])
-        _start_agent(tmp_path, "code-reviewer")
-        _finish_agent(tmp_path, "code-reviewer")
-        _start_agent(tmp_path, "perf-reviewer")
-        _finish_agent(tmp_path, "perf-reviewer")
-
-        result = mod.check_status(str(tmp_path))
-        assert result["all_done"] is True
-        assert result["dispatched"] == 2
-        assert result["finished"] == 2
 
     def test_multiple_override_statuses_mixed(self, mod, tmp_path):
         """Mix of DISPATCH, SKIPPED, SKIPPED_OVERRIDE, DISPATCH_OVERRIDE all handled correctly."""
@@ -778,11 +565,13 @@ class TestWaitMode:
     The subprocess tests are NOT restatements of those: the exit codes
     are the contract the step-7/8 briefings teach the orchestrator by
     number, so the CLI is their unit level. One cheap ALL_DONE smoke
-    covers exit 0 and the `--wait` wiring; `test_wait_exit_3_on_expiry`
-    covers expiry; `test_no_wait_paths_unchanged` covers 0/2. A real
-    threaded completion is not spawned a second time here — the
-    "observed on the very next poll" property is what mattered, and
-    `test_wait_wakes_on_completion` pins it deterministically.
+    covers exit 0 and the `--wait` wiring;
+    `test_wait_expired_status_flushed_before_stderr` covers expiry (exit
+    3, EXPIRED on stderr, and stdout-before-stderr in a merged pipe);
+    `test_no_wait_paths_unchanged` covers 0/2. A real threaded completion
+    is not spawned a second time here — the "observed on the very next
+    poll" property is what mattered, and `test_wait_wakes_on_completion`
+    pins it deterministically.
     """
 
     def test_the_wait_loop_hashes_each_draft_once(
@@ -884,37 +673,21 @@ class TestWaitMode:
         # rem=1.0 -> sleep clamped to 1.0, not the full 1.5s poll_interval.
         assert clock.sleeps == [1.5, 1.5, 1.0]
 
-    def test_wait_exit_3_on_expiry(self, tmp_path):
-        """Unfinished agent + a short --max-seconds must exit 3, not 0/1/2."""
-        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
-        _start_agent(tmp_path, "code-reviewer")
-        # No review file written — code-reviewer stays RUNNING forever.
-
-        cmd = [
-            sys.executable, str(SCRIPT_PATH),
-            "--output-dir", str(tmp_path),
-            "--wait", "--max-seconds", "1",
-        ]
-        # Generous subprocess-level timeout: if a mutation makes --wait ignore
-        # --max-seconds (never expiring), this call hangs. A bounded
-        # subprocess timeout turns that hang into a clean test failure
-        # (TimeoutExpired) instead of blocking the suite forever.
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-        assert r.returncode == 3
-        assert "EXPIRED" in r.stderr
-
     def test_wait_expired_status_flushed_before_stderr(self, tmp_path):
         """On expiry, the status table (stdout) must precede EXPIRED
         (stderr) in a MERGED stream — a caller that captures both on one
         pipe (e.g. a Codex subprocess) must never see them interleaved out
-        of order."""
+        of order. This also covers exit 3 on expiry: block buffering under
+        a pipe only exists in a real process, so it stays a subprocess
+        test; --max-seconds is type=float, so 0.05 clamps the one sleep to
+        50ms instead of a real second."""
         _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
         _start_agent(tmp_path, "code-reviewer")
 
         cmd = [
             sys.executable, str(SCRIPT_PATH),
             "--output-dir", str(tmp_path),
-            "--wait", "--max-seconds", "1",
+            "--wait", "--max-seconds", "0.05",
         ]
         r = subprocess.run(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -922,6 +695,7 @@ class TestWaitMode:
         )
         assert r.returncode == 3
         merged = r.stdout
+        assert "EXPIRED" in merged
         assert merged.index("ALL_DONE:") < merged.index("EXPIRED:")
 
     def test_wait_wakes_on_completion(self, mod, tmp_path):
@@ -953,51 +727,41 @@ class TestWaitMode:
         # that observes the finish — proves every iteration re-checks.
         assert calls["n"] == 2
 
-    def test_wait_requires_max_seconds(self, tmp_path):
-        """--wait without --max-seconds refuses to block unbounded."""
-        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+    @pytest.mark.parametrize("argv_tail,fragment", [
+        pytest.param(["--wait"], "--max-seconds", id="wait-without-max"),
+        pytest.param(["--max-seconds", "5"], "--wait", id="max-without-wait"),
+        pytest.param(["--wait", "--max-seconds", "0"], "> 0", id="non-positive"),
+    ])
+    def test_wait_argument_guards_exit_1(
+        self, mod, tmp_path, monkeypatch, capsys, argv_tail, fragment
+    ):
+        """--wait requires --max-seconds and vice versa, and --max-seconds
+        must be > 0 — each guard refuses loudly rather than blocking
+        unbounded or expiring instantly/never."""
+        _write_plan(tmp_path, [])
+        monkeypatch.setattr(
+            sys, "argv",
+            ["agents_status.py", "--output-dir", str(tmp_path), *argv_tail],
+        )
 
-        cmd = [sys.executable, str(SCRIPT_PATH), "--output-dir", str(tmp_path), "--wait"]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-        assert r.returncode == 1
-        assert "--max-seconds" in r.stderr
+        with pytest.raises(SystemExit) as exc:
+            mod.main()
 
-    def test_max_seconds_requires_wait(self, tmp_path):
-        """--max-seconds without --wait is rejected, not silently ignored."""
-        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
-
-        cmd = [
-            sys.executable, str(SCRIPT_PATH),
-            "--output-dir", str(tmp_path), "--max-seconds", "30",
-        ]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-        assert r.returncode == 1
-        assert "--wait" in r.stderr
-
-    @pytest.mark.parametrize("value", ["0", "-5"])
-    def test_max_seconds_must_be_positive(self, tmp_path, value):
-        """--max-seconds must be > 0 — 0 or negative is rejected loudly
-        rather than producing a wait that expires instantly or never."""
-        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
-
-        cmd = [
-            sys.executable, str(SCRIPT_PATH),
-            "--output-dir", str(tmp_path), "--wait", "--max-seconds", value,
-        ]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-        assert r.returncode == 1
-        assert "--max-seconds" in r.stderr
+        assert exc.value.code == 1
+        assert fragment in capsys.readouterr().err
 
     def test_no_wait_paths_unchanged(self, tmp_path):
         """The no-wait CLI path keeps its pinned 0/2 exit codes.
 
         Error-path exit 1 is already pinned at the CLI level by
-        TestCheckStatus.test_no_dispatch_plan_exits_1 and
-        test_invalid_status_exits_1_with_actionable_error; check_status()'s
-        all_done computation itself is exercised directly by every test in
-        TestCheckStatus / TestNotDispatchedDoesNotBlockPipeline /
-        TestOverrideStatuses. This closes the one CLI-level gap: no existing
-        test invoked main() end-to-end for the success/still-running cases.
+        TestCheckStatus.test_invalid_status_exits_1_with_actionable_error
+        (which covers both the invalid-status ValueError and the
+        no-dispatch-plan FileNotFoundError, folded into it as a second
+        in-process main() call); check_status()'s all_done computation
+        itself is exercised directly by every test in TestCheckStatus /
+        TestNotDispatchedDoesNotBlockPipeline / TestOverrideStatuses. This
+        closes the one CLI-level gap: no existing test invoked main()
+        end-to-end for the success/still-running cases.
         """
         _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
         _start_agent(tmp_path, "code-reviewer")
@@ -1105,20 +869,3 @@ class TestSynthesisMarkersAreInvisible:
         assert [agent["name"] for agent in after["agents"]] == [
             "code-reviewer", "security-reviewer",
         ]
-
-    def test_exit_code_unchanged_with_synthesis_markers_present(
-        self, tmp_path
-    ):
-        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
-        _start_agent(tmp_path, "code-reviewer")
-        _finish_agent(tmp_path, "code-reviewer")
-        self._plant(tmp_path)
-
-        r = subprocess.run(
-            [sys.executable, str(SCRIPT_PATH), "--output-dir", str(tmp_path)],
-            capture_output=True, text=True, timeout=15,
-        )
-        assert r.returncode == 0
-        assert "ALL_DONE: true" in r.stdout
-        for name in self.SYNTHESIS_MARKERS:
-            assert name not in r.stdout

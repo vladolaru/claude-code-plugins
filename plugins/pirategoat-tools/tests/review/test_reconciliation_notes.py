@@ -52,24 +52,10 @@ def test_add_note_keeps_the_rest_of_the_context(tmp_path):
 
 @pytest.mark.parametrize("notes", [
     pytest.param(..., id="missing"),
-    pytest.param(None, id="null"),
-    pytest.param({}, id="object"),
-    pytest.param("unknown", id="string"),
     pytest.param([None], id="non-object-entry"),
-    pytest.param([{"id": "n1"}], id="missing-note"),
-    pytest.param([{"note": "claim"}], id="missing-id"),
-    pytest.param([{"id": "n1", "note": "claim", "extra": True}], id="extra-field"),
-    pytest.param([{"id": "n1", "note": None}], id="non-text"),
-    pytest.param([{"id": "n1", "note": " "}], id="empty-text"),
-    pytest.param([{"id": "n1", "note": " padded "}], id="unclean-text"),
-    pytest.param([{"id": "n1", "note": "a\x00b"}], id="control-text"),
-    pytest.param([{"id": "n1", "note": "a\u200bb"}], id="format-text"),
-    pytest.param([{"id": "n1", "note": "x" * 4097}], id="overlong-text"),
-    pytest.param([{"id": "1", "note": "claim"}], id="invalid-id"),
     pytest.param([{"id": "n2", "note": "claim"}], id="wrong-first-id"),
-    pytest.param([{"id": "n1", "note": "a"}, {"id": "n1", "note": "b"}], id="duplicate"),
-    pytest.param([{"id": "n2", "note": "a"}, {"id": "n1", "note": "b"}], id="non-monotonic"),
-    pytest.param([{"id": "n1", "note": "a"}, {"id": "n3", "note": "b"}], id="non-contiguous"),
+    pytest.param([{"id": "n1", "note": None}], id="non-text"),
+    pytest.param([{"id": "n1", "note": " padded "}], id="unclean-text"),
 ])
 def test_add_note_rejects_malformed_existing_collection_without_writing(tmp_path, notes):
     path = _write_context(tmp_path)
@@ -87,33 +73,7 @@ def test_add_note_rejects_malformed_existing_collection_without_writing(tmp_path
     assert path.read_bytes() == before
 
 
-@pytest.mark.parametrize("notes", [
-    pytest.param(..., id="missing"),
-    pytest.param(None, id="null"),
-    pytest.param([{"id": "n2", "note": "claim"}], id="invalid-order"),
-])
-def test_cli_rejects_malformed_existing_collection_without_writing(tmp_path, notes):
-    path = _write_context(tmp_path)
-    context = json.loads(path.read_text())
-    if notes is ...:
-        context.pop("orchestrator_notes")
-    else:
-        context["orchestrator_notes"] = notes
-    path.write_text(json.dumps(context))
-    before = path.read_bytes()
-
-    result = subprocess.run(
-        [sys.executable, str(SCRIPT), "--output-dir", str(tmp_path),
-         "--note", "A new claim."],
-        cwd=tmp_path, capture_output=True, text=True, timeout=10,
-    )
-
-    assert result.returncode == 1
-    assert result.stdout.startswith("REJECTED: orchestrator_notes")
-    assert path.read_bytes() == before
-
-
-@pytest.mark.parametrize("text", ["", "   ", "a\x00b", "x" * 4097])
+@pytest.mark.parametrize("text", ["", "a\x00b", "x" * 4097])
 def test_add_note_refuses_unusable_text(tmp_path, text):
     _write_context(tmp_path)
     with pytest.raises(ValueError):

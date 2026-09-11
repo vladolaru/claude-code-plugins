@@ -86,27 +86,38 @@ class TestGapFilling:
 
 
 class TestHelpers:
-    def test_categorize_human(self, mod):
-        assert mod.categorize_reviewer("octocat") == "human"
+    @pytest.mark.parametrize(
+        ("username", "expected"),
+        [
+            pytest.param("octocat", "human", id="human"),
+            pytest.param("dependabot[bot]", "bot", id="bot"),
+            pytest.param("coderabbitai", "ai", id="ai"),
+        ],
+    )
+    def test_categorize_reviewer(self, mod, username, expected):
+        assert mod.categorize_reviewer(username) == expected
 
-    def test_categorize_bot(self, mod):
-        assert mod.categorize_reviewer("dependabot[bot]") == "bot"
-
-    def test_categorize_ai(self, mod):
-        assert mod.categorize_reviewer("coderabbitai") == "ai"
-
-    def test_extract_linear_ids(self, mod):
-        ids = mod.extract_linked_issues("Fixes WOOPLUG-1234 and WOOPRD-56")
-        assert "WOOPLUG-1234" in ids
-        assert "WOOPRD-56" in ids
-
-    def test_extract_github_refs(self, mod):
-        ids = mod.extract_linked_issues("Closes #99, refs #100")
-        assert "99" in ids
-        assert "100" in ids
-
-    def test_extract_empty_body(self, mod):
-        assert mod.extract_linked_issues("") == []
+    @pytest.mark.parametrize(
+        ("body", "expected_ids"),
+        [
+            pytest.param(
+                "Fixes WOOPLUG-1234 and WOOPRD-56",
+                ["WOOPLUG-1234", "WOOPRD-56"],
+                id="linear-ids",
+            ),
+            pytest.param(
+                "Closes #99, refs #100", ["99", "100"], id="github-refs",
+            ),
+            pytest.param("", [], id="empty-body"),
+        ],
+    )
+    def test_extract_linked_issues(self, mod, body, expected_ids):
+        ids = mod.extract_linked_issues(body)
+        if expected_ids:
+            for expected_id in expected_ids:
+                assert expected_id in ids
+        else:
+            assert ids == []
 
     def test_bucket_size(self, mod):
         assert mod.bucket_pr_size(15) == "tiny"
@@ -287,14 +298,6 @@ class TestCLI:
     def _run(self, *args):
         cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
         return subprocess.run(cmd, capture_output=True, text=True)
-
-    def test_pr_mode_succeeds_with_existing_context(self, mod, tmp_path):
-        """Complete context file loads and fills without error."""
-        ctx_file = tmp_path / "review-context.json"
-        ctx_file.write_text(json.dumps(COMPLETE_CONTEXT))
-        result = mod.load_and_fill(str(ctx_file), pr_number="42")
-        assert result is not None
-        assert result["git"]["merge_base"] == "abc123"
 
     def test_exits_1_without_pr_or_branch(self, tmp_path):
         r = self._run("--output-dir", str(tmp_path))
@@ -562,21 +565,6 @@ class TestRefreshHostContextMode:
         expected = {**ctx, "host_context": json.loads(r.stdout)}
         assert updated == expected
 
-    def test_refresh_does_not_require_branch_or_pr_number(self, tmp_path):
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        self._init_repo(repo)
-        out_dir = tmp_path / "out"
-        out_dir.mkdir()
-        (out_dir / "review-context.json").write_text("{}")
-
-        r = self._run("--refresh-host-context",
-                      "--output-dir", str(out_dir),
-                      "--repo-path", str(repo),
-                      cwd=repo)
-
-        assert r.returncode == 0
-
     def test_refresh_with_corrupt_context_fails_without_overwriting(self, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -597,32 +585,13 @@ class TestRefreshHostContextMode:
         assert "refusing to overwrite" in r.stderr
         assert ctx_path.read_bytes() == original
 
-    def test_refresh_with_missing_context_fails_without_creating_file(
-        self, tmp_path
-    ):
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        self._init_repo(repo)
-        out_dir = tmp_path / "out"
-        out_dir.mkdir()
-        ctx_path = out_dir / "review-context.json"
-
-        r = self._run("--refresh-host-context",
-                      "--output-dir", str(out_dir),
-                      "--repo-path", str(repo),
-                      cwd=repo)
-
-        assert r.returncode != 0
-        assert "ERROR:" in r.stderr
-        assert "refusing to overwrite" in r.stderr
-        assert not ctx_path.exists()
-
     def test_refresh_with_non_object_context_fails_without_overwriting(
         self, tmp_path
     ):
+        # No `_init_repo`: this refusal fires before host discovery, on a
+        # plain directory, same as `test_host_context_filled_when_missing`.
         repo = tmp_path / "repo"
         repo.mkdir()
-        self._init_repo(repo)
         out_dir = tmp_path / "out"
         out_dir.mkdir()
         ctx_path = out_dir / "review-context.json"
@@ -672,28 +641,6 @@ class TestBaseFetch:
             "shallow": None,
         }
         assert ctx["git"]["merge_base"] == "56e4e8c2" + "0" * 32
-
-    def test_pr_mode_fetches_a_stacked_prs_parent_branch(self, mod):
-        """A stacked PR declares another PR's branch as its base. PR mode
-        already anchors on whatever `baseRefName` GitHub returns, so the
-        only thing that broke stacked PRs was `origin/<parent>` not being
-        in the local clone — a colleague's branch is rarely fetched. The
-        base fetch is what makes them work; nothing else is needed here."""
-        calls, mock_run_cmd = self._calls_and_mock([
-            ("pr view", "feat/parent-pr feat/child-pr"),
-            ("fetch --no-tags origin +refs/heads/feat/parent-pr:refs/remotes/origin/feat/parent-pr", ""),
-            ("rev-parse --verify origin/feat/parent-pr", "aa" + "0" * 38),
-            ("merge-base origin/feat/parent-pr feat/child-pr", "aa" + "0" * 38),
-        ])
-        ctx = {"github_cli_command": "gh"}
-        from unittest.mock import patch
-        with patch.object(mod, "_run_cmd", side_effect=mock_run_cmd):
-            mod._fill_git_context(ctx, pr_number="66901")
-
-        assert any("+refs/heads/feat/parent-pr:refs/remotes/origin/feat/parent-pr" in c for c in calls)
-        assert ctx["git"]["base_ref"] == "feat/parent-pr"
-        assert ctx["git"]["merge_base"] == "aa" + "0" * 38
-        assert ctx["git"]["base_fetch"]["ref"] == "origin/feat/parent-pr"
 
     def test_records_a_shallow_clone_beside_the_fetch(self, mod):
         """Verified on a depth-1 single-branch clone: the refspec fetch brings
@@ -814,26 +761,6 @@ class TestBaseFetch:
         assert not any("fetch" in c for c in calls)
         assert "base_fetch" not in ctx["git"]
 
-    def test_fetch_uses_a_longer_timeout_than_the_default(self, mod):
-        seen = {}
-
-        def mock_run_cmd(cmd, cwd=None, **kwargs):
-            cmd_str = " ".join(cmd)
-            if "fetch --no-tags origin +refs/heads/trunk:" in cmd_str:
-                seen["timeout"] = kwargs.get("timeout")
-                return ""
-            if "pr view" in cmd_str:
-                return "trunk fix/topic"
-            return None
-
-        ctx = {"github_cli_command": "gh"}
-        from unittest.mock import patch
-        with patch.object(mod, "_run_cmd", side_effect=mock_run_cmd):
-            mod._fill_git_context(ctx, pr_number="1")
-
-        assert seen["timeout"] == mod.FETCH_TIMEOUT_SECONDS
-        assert mod.FETCH_TIMEOUT_SECONDS > 30
-
 
 class TestChangedFilesQuoting:
     def test_run_cmd_can_return_stdout_verbatim(self, mod):
@@ -851,37 +778,23 @@ class TestChangedFilesQuoting:
         import os
         assert os.fsencode(out.rstrip("\0")) == b"bad\xff.py"
 
-    def test_file_list_is_read_verbatim(self, mod):
-        seen = {}
-
+    def test_file_list_is_read_nul_delimited_and_verbatim(self, mod):
+        """git C-quotes non-ASCII, backslash and control-character paths in
+        newline output; NUL output spells every path as GitHub does, and
+        leading whitespace on the first entry survives (the default strip
+        would remove it)."""
         def mock_run_cmd(cmd, cwd=None, **kwargs):
             if "--name-only" in cmd:
-                seen["strip"] = kwargs.get("strip")
-                return " lead.php\0b.php\0"
+                return " lead.php\0café.php\0back\\slash.php\0"
             return None
 
         ctx = {}
         from unittest.mock import patch
         with patch.object(mod, "_run_cmd", side_effect=mock_run_cmd):
             mod._fill_git_context(ctx, git_range="main..HEAD")
-        assert seen["strip"] is False
-        assert ctx["git"]["changed_files"] == [" lead.php", "b.php"]
-
-    def test_file_list_is_read_nul_delimited(self, mod):
-        """git C-quotes non-ASCII, backslash and control-character paths in
-        newline output; NUL output spells every path as GitHub does."""
-        calls = []
-
-        def mock_run_cmd(cmd, cwd=None, **kwargs):
-            calls.append(" ".join(cmd))
-            return "café.php\0back\\slash.php\0b.php\0" if "--name-only" in cmd else None
-
-        ctx = {}
-        from unittest.mock import patch
-        with patch.object(mod, "_run_cmd", side_effect=mock_run_cmd):
-            mod._fill_git_context(ctx, git_range="main..HEAD")
-        assert any("-c diff.renames=true diff --name-only -z main..HEAD" in c for c in calls)
-        assert ctx["git"]["changed_files"] == ["café.php", "back\\slash.php", "b.php"]
+        assert ctx["git"]["changed_files"] == [
+            " lead.php", "café.php", "back\\slash.php",
+        ]
 
 
 class TestScopeCheckAgainstGithub:

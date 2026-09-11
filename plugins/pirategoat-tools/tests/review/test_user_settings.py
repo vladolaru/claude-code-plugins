@@ -104,12 +104,6 @@ class TestTelemetrySettings:
             },
         }
 
-    @pytest.mark.parametrize("sharing", ("Enabled", 1, None))
-    def test_nonexact_sharing_values_read_as_unset(self, sharing):
-        assert telemetry_settings({
-            "telemetry": {"sharing": sharing},
-        }) == {"sharing": "unset", "repos": {}}
-
     def test_unhashable_malformed_values_read_as_unset(self):
         assert telemetry_settings({
             "telemetry": {

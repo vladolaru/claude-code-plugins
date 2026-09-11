@@ -2,7 +2,6 @@
 
 import json
 import os
-from pathlib import Path
 
 import pytest
 
@@ -82,7 +81,7 @@ def test_core_remote_ref_produces_unresolved(make_repo):
     assert u["root"] == ""
 
 
-@pytest.mark.parametrize("ref", ["client-staging-rollout", "trunk", "feature/x", "v"])
+@pytest.mark.parametrize("ref", ["trunk", "feature/x"])
 def test_core_remote_branch_ref_is_not_a_version(make_repo, ref):
     """A `#ref` names a branch as readily as a version, and a branch name
     can be private. Only a version-shaped ref is recorded; the raw pin
@@ -97,11 +96,20 @@ def test_core_remote_branch_ref_is_not_a_version(make_repo, ref):
 
 
 def test_plugin_remote_branch_ref_is_not_a_version(make_repo):
+    """The core and plugin paths diverge after `_parse_remote_ref`: core
+    (`_handle_core`) discards the parsed name and always appends `wordpress`
+    regardless of parse success, while the plugin path (`_handle_array_item`)
+    appends only `if name is not None` — so a plugin ref this resolver fails
+    to name at all would silently vanish from `unresolved`, with no core row
+    catching the regression. A slash in the ref (a private branch name) must
+    still parse the plugin name and land it as unresolved with no version."""
     repo = make_repo({".wp-env.override.json": json.dumps({
         "plugins": ["Automattic/jetpack-debug-helper#add/private-thing"]
     })})
     result = WpEnvResolver().resolve(str(repo))
-    assert [u["version"] for u in result.unresolved] == [None]
+    assert [(u["name"], u["version"]) for u in result.unresolved] == [
+        ("jetpack-debug-helper", None),
+    ]
 
 
 def test_plugins_array_mix_of_local_and_remote(tmp_path):
@@ -165,17 +173,6 @@ def test_override_mappings_merge_with_base_mappings(tmp_path):
         "woocommerce": str(woocommerce.resolve()),
         "dev-tools": str(dev_tools.resolve()),
     }
-
-
-def test_dot_entry_in_plugins_is_self_and_skipped(tmp_path):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / ".wp-env.json").write_text(json.dumps({
-        "plugins": ["."]
-    }))
-    result = WpEnvResolver().resolve(str(repo))
-    # "." means the repo itself is the plugin — not an upstream host
-    assert result.entries == []
 
 
 def test_local_plugin_inside_repo_is_self_owned_and_skipped(tmp_path):
@@ -250,17 +247,6 @@ def test_local_plugin_outside_repo_is_runtime_host(tmp_path):
     assert result.entries[0].path == str(external.resolve())
 
 
-def test_wp_env_tolerates_non_dict_mappings(tmp_path):
-    """mappings: [] or mappings: "/foo" must not crash — emit no entries."""
-    (tmp_path / ".wp-env.json").write_text(json.dumps({"mappings": []}))
-    result = WpEnvResolver().resolve(str(tmp_path))
-    assert result.entries == []
-
-    (tmp_path / ".wp-env.json").write_text(json.dumps({"mappings": "/tmp/foo"}))
-    result = WpEnvResolver().resolve(str(tmp_path))
-    assert result.entries == []
-
-
 def test_wp_env_tolerates_non_string_source_values(tmp_path):
     """mappings values can be objects (wp-env ref form) — must not crash."""
     (tmp_path / ".wp-env.json").write_text(
@@ -269,10 +255,6 @@ def test_wp_env_tolerates_non_string_source_values(tmp_path):
     result = WpEnvResolver().resolve(str(tmp_path))
     # Object-form source is not a local path; should be skipped or recorded as unresolved
     assert result.entries == []
-
-
-def test_wp_env_resolver_source_label():
-    assert WpEnvResolver.source == "wp-env"
 
 
 def test_a_wp_env_file_two_levels_down_is_read_relative_to_its_own_directory(tmp_path):

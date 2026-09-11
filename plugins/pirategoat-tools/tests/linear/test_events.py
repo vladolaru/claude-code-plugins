@@ -48,12 +48,6 @@ def _read_events(tmp_path):
 # ---------------------------------------------------------------------------
 
 class TestEmitterBasics:
-    def test_creates_file_on_first_emit(self, mod, tmp_path):
-        emitter = mod.PipelineEventEmitter(str(tmp_path))
-        emitter.emit("step_started", {"step": 1, "title": "Parse Input"})
-        path = os.path.join(str(tmp_path), "pipeline-events.jsonl")
-        assert os.path.isfile(path)
-
     def test_appends_jsonl_lines(self, mod, tmp_path):
         emitter = mod.PipelineEventEmitter(str(tmp_path))
         emitter.emit("step_started", {"step": 1})
@@ -85,54 +79,51 @@ class TestEmitterBasics:
         assert events[0]["event"] == "test"
 
 
-class TestMilestoneHelper:
-    def test_emits_milestone_event(self, mod, tmp_path):
+# Each helper method builds an event dict from its own args/kwargs; one row
+# per method proves the dict shape. Extra-kwargs passthrough is one contract,
+# already pinned once by TestEmitterBasics::test_preserves_extra_fields.
+EMITTER_HELPER_ROWS = [
+    pytest.param(
+        lambda emitter: emitter.milestone("investigation_complete", step=6, summary="Issue is valid"),
+        {"event": "milestone", "milestone": "investigation_complete", "step": 6, "summary": "Issue is valid"},
+        id="milestone",
+    ),
+    pytest.param(
+        lambda emitter: emitter.deliverable("draft_pr_created", pr_url="https://github.com/Org/repo/pull/999"),
+        {"event": "deliverable", "type": "draft_pr_created", "pr_url": "https://github.com/Org/repo/pull/999"},
+        id="deliverable",
+    ),
+    pytest.param(
+        lambda emitter: emitter.step_started(step=1, title="Parse Input"),
+        {"event": "step_started", "step": 1, "title": "Parse Input"},
+        id="step_started",
+    ),
+    pytest.param(
+        lambda emitter: emitter.step_completed(step=1, title="Parse Input"),
+        {"event": "step_completed"},
+        id="step_completed",
+    ),
+    pytest.param(
+        lambda emitter: emitter.pipeline_complete(status="success", mode="investigate"),
+        {"event": "pipeline_complete", "status": "success", "mode": "investigate"},
+        id="pipeline_complete",
+    ),
+    pytest.param(
+        lambda emitter: emitter.pipeline_failed(step=5, error="Linear MCP unavailable"),
+        {"event": "pipeline_failed", "step": 5, "error": "Linear MCP unavailable"},
+        id="pipeline_failed",
+    ),
+]
+
+
+class TestEmitterHelpers:
+    @pytest.mark.parametrize("call,expected_fields", EMITTER_HELPER_ROWS)
+    def test_helper_emits_expected_fields(self, mod, tmp_path, call, expected_fields):
         emitter = mod.PipelineEventEmitter(str(tmp_path))
-        emitter.milestone("investigation_complete", step=6, summary="Issue is valid")
+        call(emitter)
         events = _read_events(tmp_path)
-        assert events[0]["event"] == "milestone"
-        assert events[0]["milestone"] == "investigation_complete"
-        assert events[0]["step"] == 6
-        assert events[0]["summary"] == "Issue is valid"
-
-    def test_milestone_with_extra_kwargs(self, mod, tmp_path):
-        emitter = mod.PipelineEventEmitter(str(tmp_path))
-        emitter.milestone("plan_written", step=8, summary="5 tasks", task_count=5)
-        events = _read_events(tmp_path)
-        assert events[0]["task_count"] == 5
-
-
-class TestDeliverableHelper:
-    def test_emits_deliverable_event(self, mod, tmp_path):
-        emitter = mod.PipelineEventEmitter(str(tmp_path))
-        emitter.deliverable("draft_pr_created", pr_url="https://github.com/Org/repo/pull/999")
-        events = _read_events(tmp_path)
-        assert events[0]["event"] == "deliverable"
-        assert events[0]["type"] == "draft_pr_created"
-        assert events[0]["pr_url"] == "https://github.com/Org/repo/pull/999"
-
-    def test_deliverable_with_multiple_fields(self, mod, tmp_path):
-        emitter = mod.PipelineEventEmitter(str(tmp_path))
-        emitter.deliverable("investigation_report", path="/tmp/report.md", verdict="valid")
-        events = _read_events(tmp_path)
-        assert events[0]["path"] == "/tmp/report.md"
-        assert events[0]["verdict"] == "valid"
-
-
-class TestStepHelpers:
-    def test_step_started(self, mod, tmp_path):
-        emitter = mod.PipelineEventEmitter(str(tmp_path))
-        emitter.step_started(step=1, title="Parse Input")
-        events = _read_events(tmp_path)
-        assert events[0]["event"] == "step_started"
-        assert events[0]["step"] == 1
-        assert events[0]["title"] == "Parse Input"
-
-    def test_step_completed(self, mod, tmp_path):
-        emitter = mod.PipelineEventEmitter(str(tmp_path))
-        emitter.step_completed(step=1, title="Parse Input")
-        events = _read_events(tmp_path)
-        assert events[0]["event"] == "step_completed"
+        for key, value in expected_fields.items():
+            assert events[0][key] == value
 
 
 class TestErrorResilience:
@@ -148,21 +139,3 @@ class TestErrorResilience:
         # Sets are not JSON-serializable
         emitter.emit("test", {"bad": {1, 2, 3}})
         # Should not raise — just silently skip
-
-
-class TestPipelineCompleteHelper:
-    def test_emits_pipeline_complete(self, mod, tmp_path):
-        emitter = mod.PipelineEventEmitter(str(tmp_path))
-        emitter.pipeline_complete(status="success", mode="investigate")
-        events = _read_events(tmp_path)
-        assert events[0]["event"] == "pipeline_complete"
-        assert events[0]["status"] == "success"
-        assert events[0]["mode"] == "investigate"
-
-    def test_pipeline_failed(self, mod, tmp_path):
-        emitter = mod.PipelineEventEmitter(str(tmp_path))
-        emitter.pipeline_failed(step=5, error="Linear MCP unavailable")
-        events = _read_events(tmp_path)
-        assert events[0]["event"] == "pipeline_failed"
-        assert events[0]["step"] == 5
-        assert events[0]["error"] == "Linear MCP unavailable"

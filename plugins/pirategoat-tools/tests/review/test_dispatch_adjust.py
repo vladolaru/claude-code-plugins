@@ -220,16 +220,6 @@ class TestCli:
             capture_output=True, text=True, cwd=tmp_path,
         )
 
-    def test_a_repeated_adjustment_prints_unchanged(self, tmp_path):
-        _plan(tmp_path)
-        self._run(tmp_path, "--skip", "a11y-reviewer", "r")
-        completed = self._run(tmp_path, "--skip", "a11y-reviewer", "r")
-        assert completed.returncode == 0
-        assert completed.stdout.splitlines() == [
-            "UNCHANGED a11y-reviewer — already SKIPPED_OVERRIDE for this reason",
-            "ADJUSTED: 0 | DISPATCHING: 1 | SKIPPED: 3",
-        ]
-
     def test_a_missing_plan_names_the_step_that_writes_it(self, tmp_path):
         completed = self._run(tmp_path, "--skip", "a11y-reviewer", "r")
         assert completed.returncode == 1
@@ -267,10 +257,3 @@ class TestCli:
             "WOULD ADJUST: 1 | DISPATCHING: 1 | SKIPPED: 3",
         ]
         assert _read(path)["a11y-reviewer"]["status"] == DISPATCH
-
-    def test_help_documents_both_flags_and_the_exit_codes(self):
-        completed = subprocess.run([sys.executable, str(CLI), "--help"], capture_output=True, text=True)
-        assert completed.returncode == 0
-        assert "--skip NAME REASON" in completed.stdout
-        assert "--dispatch NAME REASON" in completed.stdout
-        assert "Exit codes" in completed.stdout

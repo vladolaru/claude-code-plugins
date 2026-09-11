@@ -143,6 +143,10 @@ class TestGradeOnlyMode:
     def test_rejected_final_review_reports_canonical_diagnostic(
         self, tmp_path, malformation, diagnostic
     ):
+        """The subprocess half of this test duplicated
+        test_reports_a_failing_review_pair's `--grade-only` CLI coverage;
+        the in-process `run_grade_only` call is the one that pins the
+        per-malformation diagnostic."""
         _write_review_pair(tmp_path)
         bad = Path(review_paths(tmp_path, "security").final)
         data = json.loads(bad.read_text())
@@ -156,7 +160,6 @@ class TestGradeOnlyMode:
         bad.write_text(json.dumps(data))
 
         grade = run_grade_only(str(tmp_path))["security"]
-        result = _run_eval("--grade-only", str(tmp_path), cwd=tmp_path)
 
         assert grade.passed is False
         assert grade.failures == [
@@ -165,9 +168,6 @@ class TestGradeOnlyMode:
         ]
         assert grade.checks_run == 4
         assert grade.checks_passed == 2
-        assert "Traceback" not in result.stderr, result.stderr
-        assert result.returncode == 0
-        assert diagnostic in result.stdout
 
     def test_grade_only_materializes_missing_markdown(self, tmp_path):
         """Finalized runs may lack derived Markdown until materialization."""
@@ -201,26 +201,37 @@ class TestGradeOnlyMode:
 
 
 class TestCliModes:
-    def test_explicit_empty_report_path_is_rejected(self, tmp_path):
-        result = _run_eval("--report-out", "", cwd=tmp_path)
+    def test_explicit_empty_report_path_is_rejected(self, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "argv", [str(EVAL_SCRIPT), "--report-out", ""])
 
-        assert result.returncode == 2
-        assert "--report-out" in result.stderr
-        assert "empty" in result.stderr
+        with pytest.raises(SystemExit) as exc:
+            _eval_mod.main()
 
-    def test_explicit_default_trials_requires_dispatch(self, tmp_path):
-        result = _run_eval("--trials", "1", cwd=tmp_path)
+        assert exc.value.code == 2
+        stderr = capsys.readouterr().err
+        assert "--report-out" in stderr
+        assert "empty" in stderr
 
-        assert result.returncode == 2
-        assert "require --dispatch" in result.stderr
+    def test_explicit_default_trials_requires_dispatch(self, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "argv", [str(EVAL_SCRIPT), "--trials", "1"])
 
-    def test_grade_only_rejects_explicit_default_trials(self, tmp_path):
-        result = _run_eval(
-            "--grade-only", str(tmp_path), "--trials", "1", cwd=tmp_path,
+        with pytest.raises(SystemExit) as exc:
+            _eval_mod.main()
+
+        assert exc.value.code == 2
+        assert "require --dispatch" in capsys.readouterr().err
+
+    def test_grade_only_rejects_explicit_default_trials(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(
+            sys, "argv",
+            [str(EVAL_SCRIPT), "--grade-only", str(tmp_path), "--trials", "1"],
         )
 
-        assert result.returncode == 2
-        assert "--grade-only cannot be combined" in result.stderr
+        with pytest.raises(SystemExit) as exc:
+            _eval_mod.main()
+
+        assert exc.value.code == 2
+        assert "--grade-only cannot be combined" in capsys.readouterr().err
 
     def test_empty_report_path_is_rejected_before_dispatch(
         self, tmp_path, monkeypatch,
@@ -410,13 +421,6 @@ class TestDispatchReportMetadata:
         entry = json.loads(report_path.read_text())["results"][0]
         assert entry["status"] == "harness_error"
         assert entry["passed"] is False
-
-    def test_status_vocabulary_is_pinned(self):
-        assert _eval_mod.ENTRY_STATUSES == {
-            "graded", "bootstrap_only", "agent_missing", "routing_drift",
-            "bootstrap_failed", "cli_missing", "timed_out", "dispatch_error",
-            "model_mismatch", "harness_error", "degraded",
-        }
 
     def test_out_of_vocabulary_status_reports_as_harness_error(self):
         # ENTRY_STATUSES is load-bearing: a typo'd stamp or a leaked internal

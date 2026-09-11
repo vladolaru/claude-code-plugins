@@ -1,10 +1,14 @@
 """
 CLI-level tests for the Codex analysis scripts.
 
-These run the scripts as subprocesses so the argparse surface and the
-output contract are both covered.
+Both scripts' main() are plain argparse over sys.argv with sys.exit() on the
+error paths, so the same argparse and output contract a subprocess spawn
+would prove is available in-process via monkeypatch(sys.argv) + capsys +
+pytest.raises(SystemExit). Two tests stay real subprocess invocations — one
+JSON call per script — as the seam pin proving each still runs as a script.
 """
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -21,6 +25,17 @@ ANALYZER = PLUGIN_ROOT / "scripts" / "analysis" / "codex_session_analyzer.py"
 METRICS = PLUGIN_ROOT / "scripts" / "analysis" / "codex_session_metrics.py"
 
 STALE_OFFSET = 3600  # comfortably outside the active-rollout window
+
+
+def _load(path, name):
+    spec = importlib.util.spec_from_file_location(name, str(path))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+analyzer_mod = _load(ANALYZER, "codex_session_analyzer")
+metrics_mod = _load(METRICS, "codex_session_metrics")
 
 
 def _meta(thread_id, cwd="/work/project", agent_path=None, role=None):
@@ -108,6 +123,7 @@ def _run(script, *args):
 
 
 def test_analyzer_json_reports_the_tree(sessions_dir):
+    """The one real-subprocess smoke for the analyzer script."""
     result = _run(
         ANALYZER, "--sessions-dir", str(sessions_dir), "--since", "3650", "--format", "json"
     )
@@ -118,36 +134,36 @@ def test_analyzer_json_reports_the_tree(sessions_dir):
     assert data["thread"]["agent_role"] == "root"
     assert [child["thread_id"] for child in data["children"]] == ["child-thread"]
     assert data["children"][0]["agent_role"] == "code-reviewer"
-
-
-def test_analyzer_reports_command_failures(sessions_dir):
-    result = _run(
-        ANALYZER, "--sessions-dir", str(sessions_dir), "--since", "3650", "--format", "json"
-    )
-    data = json.loads(result.stdout)
-
     assert data["children"][0]["failed_commands"] == 1
     assert data["thread"]["failed_commands"] == 0
 
 
-def test_analyzer_selects_an_explicit_thread_id(sessions_dir):
-    result = _run(
-        ANALYZER,
-        "--sessions-dir",
-        str(sessions_dir),
-        "--since",
-        "3650",
-        "--thread-id",
-        "child-thread",
-        "--format",
-        "json",
+def test_analyzer_selects_an_explicit_thread_id(sessions_dir, monkeypatch, capsys):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "codex_session_analyzer.py",
+            "--sessions-dir",
+            str(sessions_dir),
+            "--since",
+            "3650",
+            "--thread-id",
+            "child-thread",
+            "--format",
+            "json",
+        ],
     )
-    data = json.loads(result.stdout)
+    analyzer_mod.main()
+    data = json.loads(capsys.readouterr().out)
 
     assert data["thread"]["thread_id"] == "child-thread"
+    # Naming a thread also names its session, so a caller holding only a
+    # subagent id can pivot to the whole run.
+    assert data["session_id"] == "sess-1"
 
 
-def test_analyzer_prefers_a_root_over_a_newer_subagent(sessions_dir):
+def test_analyzer_prefers_a_root_over_a_newer_subagent(sessions_dir, monkeypatch, capsys):
     """Defaulting to the newest thread outright can land on a leaf, which has no tree."""
     day_dir = sessions_dir / "2026" / "08" / "22"
     newer_child = day_dir / "rollout-2026-08-22T10-00-02-newer-child.jsonl"
@@ -158,54 +174,88 @@ def test_analyzer_prefers_a_root_over_a_newer_subagent(sessions_dir):
     newer = time.time() - STALE_OFFSET + 120
     os.utime(newer_child, (newer, newer))
 
-    result = _run(
-        ANALYZER, "--sessions-dir", str(sessions_dir), "--since", "3650", "--format", "json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["codex_session_analyzer.py", "--sessions-dir", str(sessions_dir), "--since", "3650", "--format", "json"],
     )
-    data = json.loads(result.stdout)
+    analyzer_mod.main()
+    data = json.loads(capsys.readouterr().out)
 
     assert data["thread"]["thread_id"] == "root-thread"
 
 
-def test_analyzer_falls_back_to_newest_match_when_no_root_qualifies(sessions_dir):
-    result = _run(
-        ANALYZER,
-        "--sessions-dir",
-        str(sessions_dir),
-        "--since",
-        "3650",
-        "--agent",
-        "code-reviewer",
-        "--format",
-        "json",
+def test_analyzer_falls_back_to_newest_match_when_no_root_qualifies(sessions_dir, monkeypatch, capsys):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "codex_session_analyzer.py",
+            "--sessions-dir",
+            str(sessions_dir),
+            "--since",
+            "3650",
+            "--agent",
+            "code-reviewer",
+            "--format",
+            "json",
+        ],
     )
-    data = json.loads(result.stdout)
+    analyzer_mod.main()
+    data = json.loads(capsys.readouterr().out)
 
     assert data["thread"]["thread_id"] == "child-thread"
 
 
-def test_analyzer_text_output_is_human_readable(sessions_dir):
-    result = _run(ANALYZER, "--sessions-dir", str(sessions_dir), "--since", "3650")
+def test_analyzer_text_output_is_human_readable(sessions_dir, monkeypatch, capsys):
+    monkeypatch.setattr(
+        sys, "argv", ["codex_session_analyzer.py", "--sessions-dir", str(sessions_dir), "--since", "3650"]
+    )
+    analyzer_mod.main()
+    out = capsys.readouterr().out
 
-    assert result.returncode == 0, result.stderr
-    assert "root-thread" in result.stdout
-    assert "code-reviewer" in result.stdout
-
-
-def test_analyzer_exits_nonzero_when_sessions_dir_missing(tmp_path):
-    result = _run(ANALYZER, "--sessions-dir", str(tmp_path / "nope"))
-
-    assert result.returncode != 0
-    assert "not found" in result.stderr.lower()
+    assert "root-thread" in out
+    assert "code-reviewer" in out
 
 
-def test_analyzer_reports_when_nothing_matches(sessions_dir):
-    result = _run(ANALYZER, "--sessions-dir", str(sessions_dir), "--since", "3650", "--cwd", "/nowhere")
+def test_exits_nonzero_when_sessions_dir_missing(tmp_path, monkeypatch, capsys):
+    missing = tmp_path / "nope"
 
-    assert result.returncode != 0
-    assert "no threads" in result.stderr.lower()
+    monkeypatch.setattr(sys, "argv", ["codex_session_analyzer.py", "--sessions-dir", str(missing)])
+    with pytest.raises(SystemExit) as exc:
+        analyzer_mod.main()
+    assert exc.value.code == 1
+    assert "not found" in capsys.readouterr().err.lower()
+
+    monkeypatch.setattr(sys, "argv", ["codex_session_metrics.py", "--sessions-dir", str(missing)])
+    with pytest.raises(SystemExit) as exc:
+        metrics_mod.main()
+    assert exc.value.code == 1
+    assert "not found" in capsys.readouterr().err.lower()
+
+
+def test_analyzer_reports_when_nothing_matches(sessions_dir, monkeypatch, capsys):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "codex_session_analyzer.py",
+            "--sessions-dir",
+            str(sessions_dir),
+            "--since",
+            "3650",
+            "--cwd",
+            "/nowhere",
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        analyzer_mod.main()
+    assert exc.value.code == 1
+    assert "no threads" in capsys.readouterr().err.lower()
 
 
 def test_metrics_json_has_one_row_per_thread(sessions_dir):
+    """The one real-subprocess smoke for the metrics script."""
     result = _run(
         METRICS, "--sessions-dir", str(sessions_dir), "--since", "3650", "--format", "json"
     )
@@ -215,85 +265,77 @@ def test_metrics_json_has_one_row_per_thread(sessions_dir):
     ids = sorted(row["thread_id"] for row in data["threads"])
     assert ids == ["child-thread", "root-thread"]
 
-
-def test_metrics_rolls_up_by_agent_role(sessions_dir):
-    result = _run(
-        METRICS, "--sessions-dir", str(sessions_dir), "--since", "3650", "--format", "json"
-    )
-    data = json.loads(result.stdout)
-
     by_role = {entry["agent_role"]: entry for entry in data["by_role"]}
     assert by_role["code-reviewer"]["threads"] == 1
     assert by_role["code-reviewer"]["total_tokens"] == 250
     assert by_role["code-reviewer"]["failed_commands"] == 1
 
 
-def test_metrics_filters_by_agent(sessions_dir):
-    result = _run(
-        METRICS,
-        "--sessions-dir",
-        str(sessions_dir),
-        "--since",
-        "3650",
-        "--agent",
-        "code-reviewer",
-        "--format",
-        "json",
+def test_metrics_filters_by_agent(sessions_dir, monkeypatch, capsys):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "codex_session_metrics.py",
+            "--sessions-dir",
+            str(sessions_dir),
+            "--since",
+            "3650",
+            "--agent",
+            "code-reviewer",
+            "--format",
+            "json",
+        ],
     )
-    data = json.loads(result.stdout)
+    metrics_mod.main()
+    data = json.loads(capsys.readouterr().out)
 
     assert [row["thread_id"] for row in data["threads"]] == ["child-thread"]
 
 
-def test_metrics_markdown_renders_a_table(sessions_dir):
-    result = _run(
-        METRICS, "--sessions-dir", str(sessions_dir), "--since", "3650", "--format", "markdown"
+def test_metrics_markdown_renders_a_table(sessions_dir, monkeypatch, capsys):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "codex_session_metrics.py",
+            "--sessions-dir",
+            str(sessions_dir),
+            "--since",
+            "3650",
+            "--format",
+            "markdown",
+        ],
     )
+    metrics_mod.main()
+    out = capsys.readouterr().out
 
-    assert result.returncode == 0, result.stderr
-    assert "| thread |" in result.stdout
-    assert "code-reviewer" in result.stdout
-
-
-def test_metrics_exits_nonzero_when_sessions_dir_missing(tmp_path):
-    result = _run(METRICS, "--sessions-dir", str(tmp_path / "nope"))
-
-    assert result.returncode != 0
-    assert "not found" in result.stderr.lower()
+    assert "| thread |" in out
+    assert "code-reviewer" in out
 
 
-def test_metrics_reports_empty_result_without_crashing(sessions_dir):
-    result = _run(
-        METRICS,
-        "--sessions-dir",
-        str(sessions_dir),
-        "--since",
-        "3650",
-        "--cwd",
-        "/nowhere",
-        "--format",
-        "json",
+def test_metrics_reports_empty_result_without_crashing(sessions_dir, monkeypatch, capsys):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "codex_session_metrics.py",
+            "--sessions-dir",
+            str(sessions_dir),
+            "--since",
+            "3650",
+            "--cwd",
+            "/nowhere",
+            "--format",
+            "json",
+        ],
     )
+    metrics_mod.main()
 
-    assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)["threads"] == []
-
-
-@pytest.mark.skipif(
-    not (Path.home() / ".codex" / "sessions").is_dir(),
-    reason="no real Codex sessions on this machine",
-)
-def test_scripts_run_against_real_sessions():
-    """Smoke test: the real schema still parses. Skipped where Codex is absent."""
-    for script in (ANALYZER, METRICS):
-        result = _run(script, "--since", "2", "--limit", "3", "--format", "json")
-        # Exit 1 is legitimate when nothing was recorded in the window.
-        assert result.returncode in (0, 1), result.stderr
-        if result.returncode == 0 and result.stdout.strip():
-            json.loads(result.stdout)
+    assert json.loads(capsys.readouterr().out)["threads"] == []
 
 
-def test_analyzer_text_truncates_long_command_lines(sessions_dir):
+def test_analyzer_text_truncates_long_command_lines(sessions_dir, monkeypatch, capsys):
     """argv for a Codex shell call can hold a whole multi-line script.
 
     Printed verbatim, a handful of failures buries the report — a real 30-day
@@ -314,19 +356,29 @@ def test_analyzer_text_truncates_long_command_lines(sessions_dir):
     stale = time.time() - STALE_OFFSET + 120
     os.utime(noisy, (stale, stale))
 
-    result = _run(
-        ANALYZER, "--sessions-dir", str(sessions_dir), "--since", "3650",
-        "--thread-id", "noisy-thread",
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "codex_session_analyzer.py",
+            "--sessions-dir",
+            str(sessions_dir),
+            "--since",
+            "3650",
+            "--thread-id",
+            "noisy-thread",
+        ],
     )
+    analyzer_mod.main()
+    out = capsys.readouterr().out
 
-    assert result.returncode == 0, result.stderr
-    failure_lines = [ln for ln in result.stdout.splitlines() if ln.strip().startswith("exit 1:")]
+    failure_lines = [ln for ln in out.splitlines() if ln.strip().startswith("exit 1:")]
     assert len(failure_lines) == 1
     assert len(failure_lines[0]) < 200
     assert "\n" not in failure_lines[0]
 
 
-def test_analyzer_json_keeps_the_full_command(sessions_dir):
+def test_analyzer_json_keeps_the_full_command(sessions_dir, monkeypatch, capsys):
     """Truncation is a text-rendering concern; JSON stays full fidelity."""
     day_dir = sessions_dir / "2026" / "08" / "22"
     script = "set -eu\n" + "\n".join(f"echo line-{i}" for i in range(200))
@@ -337,11 +389,23 @@ def test_analyzer_json_keeps_the_full_command(sessions_dir):
     stale = time.time() - STALE_OFFSET + 120
     os.utime(noisy, (stale, stale))
 
-    result = _run(
-        ANALYZER, "--sessions-dir", str(sessions_dir), "--since", "3650",
-        "--thread-id", "noisy2", "--format", "json",
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "codex_session_analyzer.py",
+            "--sessions-dir",
+            str(sessions_dir),
+            "--since",
+            "3650",
+            "--thread-id",
+            "noisy2",
+            "--format",
+            "json",
+        ],
     )
-    data = json.loads(result.stdout)
+    analyzer_mod.main()
+    data = json.loads(capsys.readouterr().out)
 
     assert "line-199" in str(data["failures"][0]["command"])
 
@@ -381,7 +445,7 @@ def _root_meta(thread_id, session_id):
     return json.dumps({"timestamp": "2026-08-22T10:00:00.000Z", "type": "session_meta", "payload": payload})
 
 
-def test_analyzer_presents_a_resumed_session_as_one_session(sessions_dir):
+def test_analyzer_presents_a_resumed_session_as_one_session(sessions_dir, monkeypatch, capsys):
     """A resume continues the session; it must not appear as a separate root."""
     day_dir = sessions_dir / "2026" / "08" / "22"
     base = time.time() - STALE_OFFSET - 500
@@ -390,18 +454,30 @@ def test_analyzer_presents_a_resumed_session_as_one_session(sessions_dir):
         path.write_text("\n".join([_root_meta(tid, "sess-x"), _command(), _tokens(50)]) + "\n")
         os.utime(path, (base + offset, base + offset))
 
-    result = _run(
-        ANALYZER, "--sessions-dir", str(sessions_dir), "--since", "3650",
-        "--thread-id", "sess-x", "--format", "json",
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "codex_session_analyzer.py",
+            "--sessions-dir",
+            str(sessions_dir),
+            "--since",
+            "3650",
+            "--thread-id",
+            "sess-x",
+            "--format",
+            "json",
+        ],
     )
-    data = json.loads(result.stdout)
+    analyzer_mod.main()
+    data = json.loads(capsys.readouterr().out)
 
     assert data["session_id"] == "sess-x"
     assert data["thread"]["thread_id"] == "sess-x"
     assert sorted(r["thread_id"] for r in data["resumes"]) == ["rx1", "rx2"]
 
 
-def test_analyzer_does_not_sum_resume_tokens_into_the_session(sessions_dir):
+def test_analyzer_does_not_sum_resume_tokens_into_the_session(sessions_dir, monkeypatch, capsys):
     """A resume replays prior context, so its tokens are re-sent, not new work."""
     day_dir = sessions_dir / "2026" / "08" / "22"
     base = time.time() - STALE_OFFSET - 500
@@ -412,45 +488,51 @@ def test_analyzer_does_not_sum_resume_tokens_into_the_session(sessions_dir):
     res.write_text("\n".join([_root_meta("ry1", "sess-y"), _tokens(9000)]) + "\n")
     os.utime(res, (base + 100, base + 100))
 
-    data = json.loads(
-        _run(ANALYZER, "--sessions-dir", str(sessions_dir), "--since", "3650",
-             "--thread-id", "sess-y", "--format", "json").stdout
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "codex_session_analyzer.py",
+            "--sessions-dir",
+            str(sessions_dir),
+            "--since",
+            "3650",
+            "--thread-id",
+            "sess-y",
+            "--format",
+            "json",
+        ],
     )
+    analyzer_mod.main()
+    data = json.loads(capsys.readouterr().out)
 
     assert data["thread"]["total_tokens"] == 100
     assert data["resumes"][0]["total_tokens"] == 9000
 
 
-def test_analyzer_explains_why_threads_were_excluded(sessions_dir):
-    """Silently analyzing nothing is confusing; say what was skipped."""
-    day_dir = sessions_dir / "2026" / "08" / "22"
-    stray = day_dir / "rollout-2026-08-22T10-00-05-stray.jsonl"
-    stray.write_text("\n".join([_stray_meta("stray", "other-session"), _tokens(5)]) + "\n")
-    stale = time.time() - STALE_OFFSET
-    os.utime(stray, (stale, stale))
-
-    data = json.loads(
-        _run(ANALYZER, "--sessions-dir", str(sessions_dir), "--since", "3650",
-             "--format", "json").stdout
-    )
-
-    assert any("widen --since" in note for note in data["notes"])
-
-
-def test_metrics_reports_skip_notes(sessions_dir):
+def test_metrics_reports_skip_notes(sessions_dir, monkeypatch, capsys):
+    """The "widen --since" note reaches the JSON. The analyzer's own notes
+    path (a thread stranded outside the session it belongs to) is covered
+    by test_analyzer_reports_when_nothing_matches and the codex_rollout unit
+    tests; one CLI test proves notes flow through to either script."""
     day_dir = sessions_dir / "2026" / "08" / "22"
     stray = day_dir / "rollout-2026-08-22T10-00-06-stray2.jsonl"
     stray.write_text("\n".join([_stray_meta("stray2", "other-session-2"), _tokens(5)]) + "\n")
     stale = time.time() - STALE_OFFSET
     os.utime(stray, (stale, stale))
 
-    result = _run(METRICS, "--sessions-dir", str(sessions_dir), "--since", "3650", "--format", "json")
-    data = json.loads(result.stdout)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["codex_session_metrics.py", "--sessions-dir", str(sessions_dir), "--since", "3650", "--format", "json"],
+    )
+    metrics_mod.main()
+    data = json.loads(capsys.readouterr().out)
 
     assert any("widen --since" in note for note in data["notes"])
 
 
-def test_analyzer_caps_the_failed_command_list(sessions_dir):
+def test_analyzer_caps_the_failed_command_list(sessions_dir, monkeypatch, capsys):
     """A real 30-day run had 36 failures; printing every one buries the report."""
     day_dir = sessions_dir / "2026" / "08" / "22"
     lines = [_meta("many-failures")]
@@ -460,66 +542,91 @@ def test_analyzer_caps_the_failed_command_list(sessions_dir):
     stale = time.time() - STALE_OFFSET
     os.utime(path, (stale, stale))
 
-    result = _run(
-        ANALYZER, "--sessions-dir", str(sessions_dir), "--since", "3650", "--thread-id", "many-failures"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "codex_session_analyzer.py",
+            "--sessions-dir",
+            str(sessions_dir),
+            "--since",
+            "3650",
+            "--thread-id",
+            "many-failures",
+        ],
     )
+    analyzer_mod.main()
+    out = capsys.readouterr().out
 
-    assert "… and 15 more" in result.stdout
-    shown = [ln for ln in result.stdout.splitlines() if ln.strip().startswith("exit 1:")]
+    assert "… and 15 more" in out
+    shown = [ln for ln in out.splitlines() if ln.strip().startswith("exit 1:")]
     assert len(shown) == 10
 
 
-def test_thread_id_ignores_the_window_entirely(sessions_dir):
+def test_thread_id_ignores_the_window_entirely(sessions_dir, monkeypatch, capsys):
     """Naming a session says which one you want; a date filter can only hide it.
 
     Digging into a specific session is the skill's primary use, and the session
     is often older than any window you would pick for a recent-work sweep.
     """
-    result = _run(
-        ANALYZER, "--sessions-dir", str(sessions_dir),
-        "--thread-id", "root-thread", "--since", "1", "--format", "json",
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "codex_session_analyzer.py",
+            "--sessions-dir",
+            str(sessions_dir),
+            "--thread-id",
+            "root-thread",
+            "--since",
+            "1",
+            "--format",
+            "json",
+        ],
     )
+    analyzer_mod.main()
+    out = capsys.readouterr()
 
-    assert result.returncode == 0, result.stderr
-    assert "--since is ignored" in result.stderr
-    assert json.loads(result.stdout)["thread"]["thread_id"] == "root-thread"
-
-
-def test_naming_a_subagent_reports_that_subagent_and_names_its_session(sessions_dir):
-    """Asking for a thread and getting a different one would be surprising."""
-    result = _run(
-        ANALYZER, "--sessions-dir", str(sessions_dir),
-        "--thread-id", "child-thread", "--format", "json",
-    )
-    data = json.loads(result.stdout)
-
-    assert data["thread"]["thread_id"] == "child-thread"
-    assert data["session_id"] == "sess-1"
+    assert "--since is ignored" in out.err
+    assert json.loads(out.out)["thread"]["thread_id"] == "root-thread"
 
 
-def test_scope_must_be_explicit(sessions_dir):
+def test_scope_must_be_explicit(sessions_dir, monkeypatch, capsys):
     """A silently applied window looks exactly like having done no work."""
-    result = _run(ANALYZER, "--sessions-dir", str(sessions_dir))
+    monkeypatch.setattr(sys, "argv", ["codex_session_analyzer.py", "--sessions-dir", str(sessions_dir)])
+    with pytest.raises(SystemExit) as exc:
+        analyzer_mod.main()
+    assert exc.value.code == 2
+    assert "specify a scope" in capsys.readouterr().err
 
-    assert result.returncode == 2
-    assert "specify a scope" in result.stderr
+    monkeypatch.setattr(sys, "argv", ["codex_session_metrics.py", "--sessions-dir", str(sessions_dir)])
+    with pytest.raises(SystemExit) as exc:
+        metrics_mod.main()
+    assert exc.value.code == 2
+    assert "specify a scope" in capsys.readouterr().err
 
-    metrics = _run(METRICS, "--sessions-dir", str(sessions_dir))
-    assert metrics.returncode == 2
-    assert "specify a scope" in metrics.stderr
 
-
-def test_metrics_reports_a_single_session_by_id(sessions_dir):
-    result = _run(
-        METRICS, "--sessions-dir", str(sessions_dir),
-        "--thread-id", "root-thread", "--format", "json",
+def test_metrics_reports_a_single_session_by_id(sessions_dir, monkeypatch, capsys):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "codex_session_metrics.py",
+            "--sessions-dir",
+            str(sessions_dir),
+            "--thread-id",
+            "root-thread",
+            "--format",
+            "json",
+        ],
     )
-    data = json.loads(result.stdout)
+    metrics_mod.main()
+    data = json.loads(capsys.readouterr().out)
 
     assert sorted(r["thread_id"] for r in data["threads"]) == ["child-thread", "root-thread"]
 
 
-def test_analyzer_caps_subagents_scanned(sessions_dir):
+def test_analyzer_caps_subagents_scanned(sessions_dir, monkeypatch, capsys):
     """A real session has 621 subagents totalling 11 GB — 85s to scan them all."""
     day_dir = sessions_dir / "2026" / "08" / "22"
     stale = time.time() - STALE_OFFSET
@@ -531,10 +638,23 @@ def test_analyzer_caps_subagents_scanned(sessions_dir):
         )
         os.utime(path, (stale, stale))
 
-    data = json.loads(
-        _run(ANALYZER, "--sessions-dir", str(sessions_dir), "--thread-id", "root-thread",
-             "--children", "2", "--format", "json").stdout
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "codex_session_analyzer.py",
+            "--sessions-dir",
+            str(sessions_dir),
+            "--thread-id",
+            "root-thread",
+            "--children",
+            "2",
+            "--format",
+            "json",
+        ],
     )
+    analyzer_mod.main()
+    data = json.loads(capsys.readouterr().out)
 
     assert data["children_total"] == 6
     assert len(data["children"]) == 2

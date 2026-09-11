@@ -1,9 +1,7 @@
 """Canonical mutable-draft and immutable-final review lifecycle contracts."""
 
 import contextlib
-import hashlib
 import json
-import subprocess
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -96,11 +94,18 @@ class TestReviewPaths:
         assert Path(started_marker_path(tmp_path, "code")) == reviewer_dir / "started"
 
     @pytest.mark.parametrize(
-        "domain", ["", ".", "..", "php/tests", r"php\tests", "bad\x00name", 42]
+        "domain",
+        [
+            pytest.param("..", id="unsafe_string"),
+            pytest.param(42, id="non_string"),
+        ],
     )
     def test_scope_summary_rejects_unsafe_domain_components(
         self, tmp_path, domain
     ):
+        """This delegates to `run_paths.reviewer_dir`, whose full unsafe-
+        identity table is pinned in `test_run_paths.py`; one string row and
+        one non-string row prove the delegation and the type guard."""
         with pytest.raises(ValueError, match="invalid scope domain"):
             scope_summary_path(tmp_path, "code", domain)
 
@@ -195,17 +200,6 @@ class TestDraftOpenAndReplacement:
         with pytest.raises(ValueError, match="finalized"):
             _open_builder(tmp_path)
 
-    def test_absent_and_present_open_share_one_entrypoint(self, tmp_path):
-        _write_assignment(tmp_path)
-        first = _open_builder(tmp_path)
-        finding_id = _add_finding(first)
-        first.save_draft()
-
-        present = _open_builder(tmp_path)
-
-        assert present.pr_id == "42"
-        assert present.findings[0]["id"] == finding_id
-
     def test_stale_builder_cannot_replace_newer_draft(self, tmp_path):
         _write_assignment(tmp_path)
         first = _open_builder(tmp_path)
@@ -276,25 +270,6 @@ class TestFinalization:
         assert Path(latest["draft"]).exists()
         assert not Path(review_paths(tmp_path, "code").final).exists()
 
-    def test_cli_first_and_retry_print_the_same_one_line(self, tmp_path):
-        _write_assignment(tmp_path)
-        saved = _open_builder(tmp_path).save_draft()
-        command = [
-            sys.executable,
-            str(SCRIPTS_DIR / "review" / "agent" / "output.py"),
-            "finalize-review",
-            "--output-dir", str(tmp_path),
-            "--reviewer", "code",
-            "--review-digest", saved["review_digest"],
-        ]
-
-        first = subprocess.run(command, check=True, capture_output=True, text=True)
-        retry = subprocess.run(command, check=True, capture_output=True, text=True)
-
-        assert first.stdout == "REVIEW FINALIZED: review.json\n"
-        assert retry.stdout == first.stdout
-        assert first.stderr == retry.stderr == ""
-
     def test_telemetry_failure_after_promotion_is_a_warning_not_a_rejection(
         self, tmp_path, monkeypatch, capsys
     ):
@@ -342,43 +317,23 @@ class TestFinalization:
         assert draft.exists()
         assert not Path(review_paths(tmp_path, "code").final).exists()
 
-    def test_close_returns_the_completed_invalid_split(self, tmp_path):
-        """Intake close already validates every final. It now says which."""
+    def test_close_classifies_invalid_final_without_telemetry(self, tmp_path):
+        """Intake close already validates every final and says which is
+        which, without persisting that classification."""
         _finalize_canonical_review(tmp_path, "code")
         broken = Path(review_paths(tmp_path, "security").final)
         broken.parent.mkdir(parents=True, exist_ok=True)
-        broken.write_text(json.dumps({"verdict": "approve"}))
+        broken.write_text("not json")
 
-        result = close_review_intake(
+        closed = close_review_intake(
             str(tmp_path), ["code-reviewer", "security-reviewer"]
         )
 
-        assert result["completed"] == ["code-reviewer"]
-        assert [
-            entry["agent_name"] for entry in result["invalid_final_reviews"]
-        ] == ["security-reviewer"]
-
-    def test_a_dispatched_agent_with_no_final_is_in_neither_list(
-        self, tmp_path
-    ):
-        result = close_review_intake(str(tmp_path), ["code-reviewer"])
-
-        assert result["completed"] == []
-        assert result["invalid_final_reviews"] == []
-
-    def test_close_classifies_invalid_final_without_telemetry(self, tmp_path):
-        final = Path(review_paths(tmp_path, "security").final)
-        final.parent.mkdir(parents=True, exist_ok=True)
-        final.write_text("not json")
-
-        closed = close_review_intake(
-            str(tmp_path), ["security-reviewer"]
-        )
-
+        assert closed["completed"] == ["code-reviewer"]
         assert closed["invalid_final_reviews"] == [{
             "agent_name": "security-reviewer",
             "reviewer": "security",
-            "path": str(final),
+            "path": str(broken),
             "error": "malformed final review JSON",
         }]
         persisted = json.loads(

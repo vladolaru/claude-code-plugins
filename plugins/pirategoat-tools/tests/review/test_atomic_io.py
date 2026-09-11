@@ -121,44 +121,14 @@ class TestAtomicWriteText:
     JSON shape to serialize."""
 
     def test_writes_the_text_verbatim(self, tmp_path):
+        """Crash-safety, no-temp-file-left-behind, and same-directory
+        staging are `_atomic_write`'s contract, already pinned once for
+        JSON in TestCrashSafety and TestSameDirectoryTempFile above; this
+        proves the text writer routes through the same primitive rather
+        than re-proving each of its guarantees a second time."""
         path = tmp_path / "target.md"
         atomic_write_text(str(path), "# Decision Critic Findings\n")
         assert path.read_text(encoding="utf-8") == "# Decision Critic Findings\n"
-
-    def test_replaces_not_truncates_on_failure(self, tmp_path, monkeypatch):
-        path = tmp_path / "target.md"
-        path.write_text("original")
-
-        def _boom(*args, **kwargs):
-            raise OSError("simulated os.replace failure")
-
-        monkeypatch.setattr(os, "replace", _boom)
-
-        with pytest.raises(OSError):
-            atomic_write_text(str(path), "new")
-
-        assert path.read_text() == "original"
-        assert list(tmp_path.iterdir()) == [path]
-
-    def test_successful_write_leaves_no_temp_file(self, tmp_path):
-        path = tmp_path / "target.md"
-        atomic_write_text(str(path), "content")
-        assert list(tmp_path.iterdir()) == [path]
-
-    def test_temp_file_in_same_directory(self, tmp_path, monkeypatch):
-        target = tmp_path / "target.md"
-        seen_dirs = []
-        real_named_temp_file = tempfile.NamedTemporaryFile
-
-        def _spy(*args, **kwargs):
-            seen_dirs.append(kwargs.get("dir"))
-            return real_named_temp_file(*args, **kwargs)
-
-        monkeypatch.setattr(tempfile, "NamedTemporaryFile", _spy)
-
-        atomic_write_text(str(target), "content")
-
-        assert seen_dirs == [str(tmp_path)]
 
 
 class TestNoStrayAtomicSpellings:

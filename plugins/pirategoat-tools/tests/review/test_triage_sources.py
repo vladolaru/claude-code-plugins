@@ -78,78 +78,74 @@ class TestFindPrTemplate:
         assert "root template" in text and "bug template" in text and "docs template" in text
 
     def test_absent_template_is_empty(self, tmp_path):
+        """No template in the checkout, and no checkout at all."""
         assert ts.find_pr_template(tmp_path) == ""
-
-    def test_unreadable_template_is_empty(self, tmp_path):
         assert ts.find_pr_template(tmp_path / "missing") == ""
 
-    @pytest.mark.parametrize(
-        "template_directory",
-        [
-            ".github/PULL_REQUEST_TEMPLATE",
-            "PULL_REQUEST_TEMPLATE",
-            "docs/PULL_REQUEST_TEMPLATE",
-        ],
-    )
-    def test_reads_templates_from_every_supported_multiple_template_directory(
-        self, tmp_path, template_directory
-    ):
-        directory = tmp_path / template_directory
-        directory.mkdir(parents=True)
-        (directory / "bug.md").write_text("security template\n")
-        assert ts.find_pr_template(tmp_path) == "security template\n"
+    def test_reads_templates_from_every_supported_multiple_template_directory(self, tmp_path):
+        for template_directory, text in (
+            (".github/PULL_REQUEST_TEMPLATE", "github directory template\n"),
+            ("PULL_REQUEST_TEMPLATE", "root directory template\n"),
+            ("docs/PULL_REQUEST_TEMPLATE", "docs directory template\n"),
+        ):
+            directory = tmp_path / template_directory
+            directory.mkdir(parents=True)
+            (directory / "bug.md").write_text(text)
+        combined = ts.find_pr_template(tmp_path)
+        for label in ("github", "root", "docs"):
+            assert f"{label} directory template" in combined, label
+
+
+TRAILER_CASES = [
+    pytest.param(
+        "fix: keep the keyboard closed\n"
+        "The input is a dropdown.\n"
+        "\n"
+        "Co-Authored-By: Claude <noreply@example.com>\n"
+        "Claude-Session: https://example.com/session_1\n"
+        "\x00"
+        "docs: note the change\n"
+        "Refs #53136\n"
+        "\x00",
+        "fix: keep the keyboard closed\nThe input is a dropdown.\n"
+        "docs: note the change",
+        id="final-trailer-paragraph-dropped-per-commit",
+    ),
+    pytest.param(
+        "fix: x\nBody.\n\nCo-Authored-By:  Two Spaces <a@b>\nSigned-off-by:\tTab <t@b>\n\x00",
+        "fix: x\nBody.",
+        id="whitespace-after-the-colon-is-git-s",
+    ),
+    pytest.param(
+        "fix: y\nBody.\n\nRefs WOOPLUG-1, WOOPLUG-2.\nfixes #7\n\x00",
+        "fix: y\nBody.",
+        id="reference-list-with-a-period-is-a-trailer",
+    ),
+    pytest.param(
+        "feat: add auth\nNote: this changes the login flow.\nAnd more prose.\n\x00",
+        "feat: add auth\nNote: this changes the login flow.\nAnd more prose.",
+        id="prose-paragraph-with-one-colon-line-kept",
+    ),
+    # `git interpret-trailers --parse` classifies a lone final `Token: value`
+    # line as a trailer; the planner follows git rather than guessing which
+    # tokens are prose.
+    pytest.param(
+        "fix: z\nBody.\n\nNote: token handling changed.\n\x00",
+        "fix: z\nBody.",
+        id="one-line-final-note-paragraph-is-a-trailer",
+    ),
+    pytest.param("chore: bump\n\x00", "chore: bump", id="subject-only-commit-kept"),
+    pytest.param("fix: x\nRefs #1\n\x00", "fix: x", id="only-trailers-keeps-its-subject"),
+    pytest.param(
+        "fix: add guard\nDetails.\n\nFixes #123 by enforcing authentication and sanitization.\n\x00",
+        "fix: add guard\nDetails.\n\nFixes #123 by enforcing authentication and sanitization.",
+        id="reference-line-with-an-explanation-is-prose",
+    ),
+    pytest.param("", "", id="empty-log"),
+]
 
 
 class TestCommitTrailers:
-    def test_final_trailer_paragraph_is_dropped_per_commit(self):
-        log = (
-            "fix: keep the keyboard closed\n"
-            "The input is a dropdown.\n"
-            "\n"
-            "Co-Authored-By: Claude <noreply@example.com>\n"
-            "Claude-Session: https://example.com/session_1\n"
-            "\x00"
-            "docs: note the change\n"
-            "Refs #53136\n"
-            "\x00"
-        )
-        assert ts.strip_commit_trailers(log) == (
-            "fix: keep the keyboard closed\nThe input is a dropdown.\n"
-            "docs: note the change"
-        )
-
-    def test_whitespace_after_the_colon_is_git_s_not_ours(self):
-        log = "fix: x\nBody.\n\nCo-Authored-By:  Two Spaces <a@b>\nSigned-off-by:\tTab <t@b>\n\x00"
-        assert ts.strip_commit_trailers(log) == "fix: x\nBody."
-
-    def test_a_reference_list_with_a_period_is_a_trailer(self):
-        log = "fix: y\nBody.\n\nRefs WOOPLUG-1, WOOPLUG-2.\nfixes #7\n\x00"
-        assert ts.strip_commit_trailers(log) == "fix: y\nBody."
-
-    def test_a_prose_paragraph_with_one_colon_line_is_kept(self):
-        log = "feat: add auth\nNote: this changes the login flow.\nAnd more prose.\n\x00"
-        assert ts.strip_commit_trailers(log) == (
-            "feat: add auth\nNote: this changes the login flow.\nAnd more prose."
-        )
-
-    def test_a_one_line_final_note_paragraph_is_a_trailer_to_git_and_to_us(self):
-        """`git interpret-trailers --parse` classifies a lone final
-        `Token: value` line as a trailer; the planner follows git rather
-        than guessing which tokens are prose."""
-        log = "fix: z\nBody.\n\nNote: token handling changed.\n\x00"
-        assert ts.strip_commit_trailers(log) == "fix: z\nBody."
-
-    def test_a_subject_only_commit_is_kept(self):
-        assert ts.strip_commit_trailers("chore: bump\n\x00") == "chore: bump"
-
-    def test_a_commit_that_is_only_trailers_keeps_its_subject(self):
-        assert ts.strip_commit_trailers("fix: x\nRefs #1\n\x00") == "fix: x"
-
-    def test_reference_line_with_an_explanation_is_author_prose(self):
-        log = "fix: add guard\nDetails.\n\nFixes #123 by enforcing authentication and sanitization.\n\x00"
-        assert ts.strip_commit_trailers(log) == (
-            "fix: add guard\nDetails.\n\nFixes #123 by enforcing authentication and sanitization."
-        )
-
-    def test_empty_log_is_empty(self):
-        assert ts.strip_commit_trailers("") == ""
+    @pytest.mark.parametrize("log, expected", TRAILER_CASES)
+    def test_strips_trailer_paragraphs(self, log, expected):
+        assert ts.strip_commit_trailers(log) == expected

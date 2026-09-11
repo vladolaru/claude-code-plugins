@@ -3,7 +3,7 @@
 import os
 from typing import Any, Dict, Iterable, List
 
-from hosts.cache.manager import KNOWN_ECOSYSTEM_NAMES, cache_dir_for, cache_root, ensure_fresh, slot_identity
+from hosts.cache.manager import KNOWN_ECOSYSTEM_NAMES, cache_dir_for, ensure_fresh, slot_identity
 from hosts.resolvers.base import HostResolver, ResolverResult
 from hosts.types import HostEntry
 
@@ -37,19 +37,13 @@ class EcosystemCacheResolver(HostResolver):
     source = "ecosystem-cache"
 
     def resolve(self, repo_path: str, scan=None) -> ResolverResult:
-        cache_root_path = str(cache_root())
-        if not os.path.isdir(cache_root_path):
-            return ResolverResult(
-                entries=[], unresolved=[],
-                notes={"state": "cache_missing", "path": cache_root_path},
-            )
+        """Ambient mode — required by the abstract base, never called.
 
-        entries: List[HostEntry] = []
-        for host in sorted(KNOWN_ECOSYSTEM_NAMES):
-            path = str(cache_dir_for(host))
-            if os.path.isdir(path):
-                entries.append(_slot_entry(host, path, "medium", {}))
-        return ResolverResult(entries=entries, unresolved=[], notes={})
+        `chain.py` never puts this resolver in its chain; fulfillment goes
+        through `resolve_for_names`, called only for names an earlier
+        resolver signalled the repo needs (see `chain.py::_fulfill_from_cache`).
+        """
+        return ResolverResult(entries=[], unresolved=[], notes={})
 
     def resolve_for_names(self, names: Iterable[str]) -> ResolverResult:
         """Fulfillment mode — emit cache entries for explicitly requested

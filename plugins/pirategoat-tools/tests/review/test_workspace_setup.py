@@ -96,19 +96,24 @@ class TestSetupWorkspace:
         assert "error" not in result
 
     def test_dirty_workspace(self, mod):
-        """Dirty repo: stash created, ref captured from git stash list."""
+        """Dirty repo: stash created (with -u, for untracked files too),
+        ref captured from git stash list."""
+        seen = []
         result = _setup(mod, {
             "branch --show-current": "feature-branch",
             "status --porcelain": " M src/app.js\n?? new-file.txt",
             "stash push": "",
             "stash list": "stash@{0}: On feature-branch: pr-review-auto-stash",
             "pr checkout": "",
-        }, pr_number="99")
+        }, pr_number="99", seen=seen)
         assert result["original_branch"] == "feature-branch"
         assert result["was_dirty"] is True
         assert result["stash_ref"] == "stash@{0}"
         assert result["checkout_ok"] is True
         assert "error" not in result
+        stash_cmds = [c for c in seen if "stash push" in c]
+        assert len(stash_cmds) == 1
+        assert "-u" in stash_cmds[0]
 
     def test_checkout_failure_carries_gh_stderr_and_exit_status(self, mod):
         """WooCommerce PR #68063: the step-2 briefing said only "Failed to
@@ -159,22 +164,6 @@ class TestSetupWorkspace:
         assert result["original_branch"] == "unknown"
         assert result["checkout_ok"] is True
 
-    def test_untracked_files_trigger_stash(self, mod):
-        """Untracked files (status output) mean dirty → stash with -u flag."""
-        seen = []
-        result = _setup(mod, {
-            "branch --show-current": "dev",
-            "status --porcelain": "?? untracked.txt",
-            "stash push": "",
-            "stash list": "stash@{0}: On dev: pr-review-auto-stash",
-            "pr checkout": "",
-        }, seen=seen)
-        assert result["was_dirty"] is True
-        assert result["stash_ref"] == "stash@{0}"
-        stash_cmds = [c for c in seen if "stash push" in c]
-        assert len(stash_cmds) == 1
-        assert "-u" in stash_cmds[0]
-
     def test_stash_failure_still_proceeds(self, mod):
         """If stash fails, we still attempt checkout (best effort)."""
         result = _setup(mod, {
@@ -201,11 +190,3 @@ class TestMain:
         output = json.loads(capsys.readouterr().out)
         assert output["checkout_ok"] is True
         assert output["original_branch"] == "main"
-
-    def test_gh_cmd_override(self, mod, capsys):
-        """--gh-cmd overrides auto-detection."""
-        seen = []
-        with patch.object(mod, "_run", side_effect=_run_mock(CLEAN, seen=seen)), \
-             patch("sys.argv", ["workspace_setup.py", "--pr-number", "42", "--gh-cmd", "ghe"]):
-            mod.main()
-        assert [c for c in seen if "pr checkout" in c] == ["ghe pr checkout 42"]

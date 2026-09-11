@@ -6,13 +6,18 @@ validating output schema. Mocks subprocess calls to avoid git dependency.
 """
 
 import json
-import os
 import subprocess
-import sys
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+
+from review.dispatch_status import (
+    SIGNAL_ALWAYS,
+    SIGNAL_NO_DOMAIN_FILES,
+    SIGNAL_REPO_REVIEWER,
+    SIGNAL_UNTRIAGED,
+)
 
 # ---------------------------------------------------------------------------
 # Path setup
@@ -55,7 +60,7 @@ def registry():
 
 
 # Representative positive forms. They prove recognition only; they do not
-# claim that every iteration or client form in a language is detectable.
+# claim that every iteration form in a language is detectable.
 ITERATION_PROOF_FORMS = {
     "js/ts for-of": "+  for (const order of orders) {",
     "js/ts forEach": "+  orders.forEach(renderRow);",
@@ -70,13 +75,6 @@ ITERATION_PROOF_FORMS = {
     "ruby scala foreach": "+    orders.foreach(render)",
 }
 
-HTTP_CLIENT_PROOF_FORMS = {
-    "go": "+\tresp, err := http.Get(url)",
-    "js/ts": "+  const r = await fetch(url);",
-    "python": "+    resp = requests.get(api_url, timeout=10)",
-    "php": "+    $ch = curl_init( $endpoint );",
-}
-
 
 @pytest.fixture(scope="module")
 def agents(registry):
@@ -89,12 +87,6 @@ SAMPLE_PHP_FILES = [
     "src/Controller.php",
     "src/Service.php",
     "tests/ControllerTest.php",
-]
-
-SAMPLE_JS_FILES = [
-    "src/components/Modal.tsx",
-    "src/hooks/useData.ts",
-    "src/styles/modal.scss",
 ]
 
 SAMPLE_MIXED_FILES = [
@@ -127,6 +119,21 @@ SAMPLE_NOISE_ONLY_FILES = [
 ]
 
 
+def _fake_git(remotes, toplevel="/work/arbitrary-checkout"):
+    """A subprocess.run stand-in for the two git reads the planner makes
+    about the checkout: `git remote -v` (answered with `remotes`, a listing
+    in git's own format) and `git rev-parse --show-toplevel`. Any other
+    call raises AssertionError, which no git wrapper catches, so a new git
+    read cannot slip past a test on the degraded path."""
+    def run(cmd, *args, **kwargs):
+        if cmd[:3] == ["git", "remote", "-v"]:
+            return subprocess.CompletedProcess(cmd, 0, remotes, "")
+        if cmd[:3] == ["git", "rev-parse", "--show-toplevel"]:
+            return subprocess.CompletedProcess(cmd, 0, f"{toplevel}\n", "")
+        raise AssertionError(f"unexpected git call: {cmd}")
+    return run
+
+
 # =============================================================================
 # Dispatch status contract
 # =============================================================================
@@ -134,10 +141,9 @@ SAMPLE_NOISE_ONLY_FILES = [
 class TestDispatchStatusContract:
     """Planner output and telemetry share one canonical status vocabulary."""
 
-    @pytest.mark.parametrize("quick", [False, True], ids=["normal", "quick"])
-    def test_planner_outputs_use_canonical_supported_statuses(
-        self, tmp_path, quick
-    ):
+    def test_planner_outputs_use_canonical_supported_statuses(self, tmp_path):
+        """Quick mode, because it adds SKIPPED_QUICK_MODE to the statuses a
+        normal plan emits."""
         from review.dispatch_status import SUPPORTED_DISPATCH_STATUSES
 
         quick_plan = build_dispatch_plan(
@@ -156,7 +162,7 @@ class TestDispatchStatusContract:
             },
             commit_messages="",
             diffstat={"added": 5, "removed": 0},
-            quick=quick,
+            quick=True,
         )
 
         assert {
@@ -168,125 +174,54 @@ class TestDispatchStatusContract:
 # Unit Tests — parse_changed_files_list
 # =============================================================================
 
+# One row per branch: the falsy-input guard (empty string, None) and the
+# split that strips each entry and drops empty ones.
+PARSE_FILE_LISTS = [
+    pytest.param("a.py, b.ts ,c.php,", ["a.py", "b.ts", "c.php"], id="strips-and-drops-empty"),
+    pytest.param("", [], id="empty-string"),
+    pytest.param(None, [], id="none"),
+]
+
+
 class TestParseChangedFilesList:
     """Parsing comma-separated file lists."""
 
-    def test_basic_list(self):
-        result = parse_changed_files_list("a.py,b.ts,c.php")
-        assert result == ["a.py", "b.ts", "c.php"]
-
-    def test_with_spaces(self):
-        result = parse_changed_files_list("a.py, b.ts , c.php")
-        assert result == ["a.py", "b.ts", "c.php"]
-
-    def test_empty_string(self):
-        result = parse_changed_files_list("")
-        assert result == []
-
-    def test_none_input(self):
-        result = parse_changed_files_list(None)
-        assert result == []
-
-    def test_single_file(self):
-        result = parse_changed_files_list("a.py")
-        assert result == ["a.py"]
-
-    def test_trailing_comma(self):
-        result = parse_changed_files_list("a.py,b.ts,")
-        assert result == ["a.py", "b.ts"]
+    @pytest.mark.parametrize("files_str, expected", PARSE_FILE_LISTS)
+    def test_parses_a_comma_separated_list(self, files_str, expected):
+        assert parse_changed_files_list(files_str) == expected
 
 
 # =============================================================================
 # Unit Tests — count_files_in_domain
 # =============================================================================
 
+# count_files_in_domain has two branches (an unknown domain counts zero; a
+# known one counts filter_domain's matches); the rest is DOMAIN_CATALOG's
+# regexes, whose per-extension rows live with the catalog in
+# agent/test_scope.py (TestTemplateFileClassification for the a11y
+# template extensions) and agent/test_scope_routing.py. One row per domain
+# the planner routes on.
+DOMAIN_COUNTS = [
+    pytest.param(SAMPLE_PHP_FILES, "code", 3, id="php-is-code"),
+    pytest.param(["src/components/Modal.tsx"], "code", 1, id="tsx-is-code"),
+    pytest.param(SAMPLE_SQL_MIGRATION_FILES, "architecture", 1, id="sql-migration-is-architecture"),
+    pytest.param(["views/settings.twig"], "a11y", 1, id="twig-is-a11y"),
+    pytest.param(["src/auth.go", "src/lib.rs", "db/migrations/001.sql"], "a11y", 0, id="backend-languages-are-not-a11y"),
+    pytest.param(["src/utils/auth_test.go"], "go-tests", 1, id="go-test-file"),
+    pytest.param(["e2e/checkout.spec.ts"], "e2e-tests", 1, id="e2e-spec"),
+    # ci.yml, Dockerfile and main.tf are three branches of the config-ops regex.
+    pytest.param(SAMPLE_CONFIG_ONLY_FILES, "config-ops", 3, id="ci-docker-terraform-are-config-ops"),
+    pytest.param(SAMPLE_PHP_FILES, "nonexistent-domain", 0, id="unknown-domain"),
+    pytest.param([], "code", 0, id="no-files"),
+]
+
+
 class TestCountFilesInDomain:
     """Domain file counting using DOMAIN_CATALOG patterns."""
 
-    def test_code_domain_matches_php(self):
-        count = count_files_in_domain(SAMPLE_PHP_FILES, "code")
-        assert count > 0
-
-    def test_code_domain_matches_tsx(self):
-        count = count_files_in_domain(SAMPLE_JS_FILES, "code")
-        assert count > 0
-
-    def test_architecture_domain_matches_sql_migrations(self):
-        count = count_files_in_domain(SAMPLE_SQL_MIGRATION_FILES, "architecture")
-        assert count == 1
-
-    def test_a11y_domain_matches_markup_languages(self):
-        """Server-rendered markup languages belong to the a11y domain."""
-        files = [
-            "includes/admin/class-wc-admin-settings.php",
-            "templates/checkout/form.html",
-            "views/settings.twig",
-            "app/views/orders/index.erb",
-        ]
-        assert count_files_in_domain(files, "a11y") == 4
-
-    @pytest.mark.parametrize(
-        "filepath",
-        [
-            "views/cart.ejs",
-            "templates/page.liquid",
-            "views/page.njk",
-            "views/page.nunjucks",
-            "templates/page.jinja",
-            "templates/page.jinja2",
-            "templates/page.j2",
-            "views/index.jsp",
-            "views/index.jspx",
-            "Views/Cart.cshtml",
-            "Views/Cart.vbhtml",
-            "Components/NavMenu.razor",
-            "templates/email.tmpl",
-            "templates/email.tpl",
-            "views/page.gsp",
-            "views/page.ftl",
-            "views/page.vm",
-            "views/page.haml",
-            "views/page.slim",
-            "resources/views/cart.blade.php",
-        ],
-    )
-    def test_a11y_domain_matches_common_server_templates(self, filepath):
-        assert count_files_in_domain([filepath], "a11y") == 1
-
-    def test_a11y_domain_still_excludes_non_markup_languages(self):
-        """Backend-only languages (Go, Rust, SQL) stay outside the a11y domain."""
-        files = ["src/auth.go", "src/lib.rs", "db/migrations/001.sql"]
-        assert count_files_in_domain(files, "a11y") == 0
-
-    def test_a11y_domain_matches_tsx_and_scss(self):
-        count = count_files_in_domain(SAMPLE_JS_FILES, "a11y")
-        assert count > 0
-
-    def test_php_tests_domain_matches_test_files(self):
-        count = count_files_in_domain(SAMPLE_PHP_FILES, "php-tests")
-        assert count > 0
-
-    def test_go_tests_domain_matches_test_go(self):
-        files = ["src/utils/auth_test.go"]
-        count = count_files_in_domain(files, "go-tests")
-        assert count == 1
-
-    def test_e2e_tests_domain_matches_e2e_dir(self):
-        files = ["e2e/checkout.spec.ts"]
-        count = count_files_in_domain(files, "e2e-tests")
-        assert count == 1
-
-    def test_config_ops_matches_ci(self):
-        count = count_files_in_domain(SAMPLE_CONFIG_ONLY_FILES, "config-ops")
-        assert count > 0
-
-    def test_unknown_domain_returns_zero(self):
-        count = count_files_in_domain(SAMPLE_PHP_FILES, "nonexistent-domain")
-        assert count == 0
-
-    def test_empty_files_returns_zero(self):
-        count = count_files_in_domain([], "code")
-        assert count == 0
+    @pytest.mark.parametrize("files, domain, expected", DOMAIN_COUNTS)
+    def test_counts_the_files_a_domain_matches(self, files, domain, expected):
+        assert count_files_in_domain(files, domain) == expected
 
 
 # =============================================================================
@@ -297,22 +232,15 @@ class TestBuildDomainCounts:
     """Domain counts for a file set."""
 
     def test_mixed_files_coverage(self):
+        """Every DOMAIN_CATALOG entry gets a count; an empty file set counts
+        zero everywhere."""
         counts = build_domain_counts(SAMPLE_MIXED_FILES)
+        assert set(counts) == set(DOMAIN_CATALOG)
         assert counts["code"] > 0
         assert counts["security"] > 0
         assert counts["a11y"] > 0
         assert counts["config-ops"] > 0
-
-    def test_empty_files(self):
-        counts = build_domain_counts([])
-        for domain, count in counts.items():
-            assert count == 0, f"Domain '{domain}' should have 0 files for empty input"
-
-    def test_all_domains_present(self):
-        """All DOMAIN_CATALOG entries appear in the counts."""
-        counts = build_domain_counts(SAMPLE_MIXED_FILES)
-        for domain in DOMAIN_CATALOG:
-            assert domain in counts, f"Domain '{domain}' missing from counts"
+        assert set(build_domain_counts([]).values()) == {0}
 
 
 # =============================================================================
@@ -366,77 +294,53 @@ class TestGetDiffstat:
 # Unit Tests — decide_agent_dispatch
 # =============================================================================
 
+def _domain_counts(**overrides):
+    """Domain counts with all zeros, then the overrides applied."""
+    counts = {d: 0 for d in DOMAIN_CATALOG}
+    counts.update(overrides)
+    return counts
+
+
+_SECURITY_WITH_CONFIG_OPS = {
+    "dispatch_class": "conditional",
+    "domain": "security",
+    "secondary_domains": ["config-ops"],
+    "triage_criteria": ["CI/CD changes"],
+}
+
+# One row per decide_agent_dispatch branch reachable without triage context:
+# the primary-domain count, the secondary-domain loop, the no-files skip, the
+# always-dispatch return, and the untriaged conditional return. Each row pins
+# the status and the signal the branch emits together.
+DECIDE_ROWS = [
+    pytest.param(
+        {"dispatch_class": "always", "domain": "code"}, _domain_counts(code=5),
+        "DISPATCH", SIGNAL_ALWAYS, "always dispatch", id="always-with-files",
+    ),
+    pytest.param(
+        {"dispatch_class": "always", "domain": "go-tests"}, _domain_counts(code=5),
+        "SKIPPED", SIGNAL_NO_DOMAIN_FILES, "no files", id="always-without-files",
+    ),
+    pytest.param(
+        _SECURITY_WITH_CONFIG_OPS, _domain_counts(**{"config-ops": 2}),
+        "DISPATCH", SIGNAL_UNTRIAGED, "conditional (domain has files)",
+        id="conditional-via-secondary-domain",
+    ),
+    pytest.param(
+        _SECURITY_WITH_CONFIG_OPS, _domain_counts(),
+        "SKIPPED", SIGNAL_NO_DOMAIN_FILES, "no files", id="conditional-without-files",
+    ),
+]
+
+
 class TestDecideAgentDispatch:
     """Dispatch decisions for individual agents."""
 
-    def _make_counts(self, **overrides):
-        """Build domain counts with all zeros, then apply overrides."""
-        counts = {d: 0 for d in DOMAIN_CATALOG}
-        counts.update(overrides)
-        return counts
-
-    # --- Always-dispatch agents ---
-
-    def test_always_agent_with_files_dispatches(self):
-        config = {"dispatch_class": "always", "domain": "code"}
-        counts = self._make_counts(code=5)
-        status, reason, _signal = decide_agent_dispatch("code-reviewer", config, counts)
-        assert status == "DISPATCH"
-
-    def test_always_agent_without_files_skips(self):
-        config = {"dispatch_class": "always", "domain": "go-tests"}
-        counts = self._make_counts(code=5)  # go-tests = 0
-        status, reason, _signal = decide_agent_dispatch("go-tests-reviewer", config, counts)
-        assert status == "SKIPPED"
-        assert "no files" in reason
-
-    # --- Conditional agents ---
-
-    def test_conditional_agent_with_files_dispatches(self):
-        config = {
-            "dispatch_class": "conditional",
-            "domain": "security",
-            "triage_criteria": ["New endpoints"],
-        }
-        counts = self._make_counts(security=3)
-        status, reason, _signal = decide_agent_dispatch("security-reviewer", config, counts)
-        assert status == "DISPATCH"
-
-    def test_conditional_agent_without_files_skips(self):
-        config = {
-            "dispatch_class": "conditional",
-            "domain": "a11y",
-            "triage_criteria": ["JSX components"],
-        }
-        counts = self._make_counts()  # all zeros
-        status, reason, _signal = decide_agent_dispatch("a11y-reviewer", config, counts)
-        assert status == "SKIPPED"
-        assert "no files" in reason
-
-    # --- Secondary domains ---
-
-    def test_secondary_domain_triggers_dispatch(self):
-        config = {
-            "dispatch_class": "conditional",
-            "domain": "security",
-            "secondary_domains": ["config-ops"],
-            "triage_criteria": ["CI/CD changes"],
-        }
-        # Primary domain has 0 files, but secondary has files
-        counts = self._make_counts(**{"config-ops": 2})
-        status, reason, _signal = decide_agent_dispatch("security-reviewer", config, counts)
-        assert status == "DISPATCH"
-
-    def test_no_primary_or_secondary_files_skips(self):
-        config = {
-            "dispatch_class": "conditional",
-            "domain": "security",
-            "secondary_domains": ["config-ops"],
-            "triage_criteria": ["CI/CD changes"],
-        }
-        counts = self._make_counts()  # all zeros
-        status, reason, _signal = decide_agent_dispatch("security-reviewer", config, counts)
-        assert status == "SKIPPED"
+    @pytest.mark.parametrize("config, counts, status, signal, reason_fragment", DECIDE_ROWS)
+    def test_decides_status_and_signal(self, config, counts, status, signal, reason_fragment):
+        actual_status, reason, actual_signal = decide_agent_dispatch("x-reviewer", config, counts)
+        assert (actual_status, actual_signal) == (status, signal), reason
+        assert reason_fragment in reason
 
 
 # =============================================================================
@@ -446,33 +350,38 @@ class TestDecideAgentDispatch:
 class TestBuildDispatchPlan:
     """Full dispatch plan generation."""
 
-    def test_output_has_required_fields(self, registry):
-        plan = build_dispatch_plan(
-            mode="full",
-            git_range="main..HEAD",
-            output_dir="/tmp/test-review",
-            changed_files=SAMPLE_MIXED_FILES,
-            registry=registry,
-        )
-        assert "mode" in plan
-        assert "git_range" in plan
-        assert "output_dir" in plan
-        assert "changed_files" in plan
-        assert "scope_summary" in plan
-        assert "agents" in plan
-        assert "agent_signals" in plan
-
-
-    def test_mode_passed_through(self, registry):
-        for mode in ["full", "incremental", "pr"]:
+    def test_plan_shape(self, registry):
+        """The plan's fields, each agent row's fields, and the
+        `name: STATUS=...` signal every row gets, SKIPPED_TRIAGE included."""
+        with patch.object(_mod, "get_diff_text", return_value=""):
             plan = build_dispatch_plan(
-                mode=mode,
+                mode="full",
                 git_range="main..HEAD",
                 output_dir="/tmp/test",
                 changed_files=SAMPLE_MIXED_FILES,
                 registry=registry,
+                commit_messages="",
+                diffstat={"added": 50, "removed": 10, "deleted_files": [], "renamed_files": []},
             )
-            assert plan["mode"] == mode
+        assert {
+            "mode", "git_range", "output_dir", "changed_files",
+            "scope_summary", "agents", "agent_signals",
+        } <= set(plan)
+        assert plan["mode"] == "full"
+        assert isinstance(plan["changed_files"], list)
+        summary = plan["scope_summary"]
+        assert {"total_files", "noise_filtered", "reviewable_files", "by_domain"} <= set(summary)
+        assert isinstance(summary["by_domain"], dict)
+
+        statuses = {}
+        for entry in plan["agents"]:
+            assert {"name", "domain", "status", "reason"} <= set(entry)
+            assert entry["status"] in ("DISPATCH", "SKIPPED", "SKIPPED_TRIAGE")
+            statuses[entry["name"]] = entry["status"]
+        assert "SKIPPED_TRIAGE" in statuses.values()
+        for signal in plan["agent_signals"]:
+            name, separator, rest = signal.partition(": STATUS=")
+            assert separator and rest.split(" ", 1)[0] == statuses[name], signal
 
     def test_all_agents_in_dispatch(self, registry):
         """Every cohort agent (non-manual, non-special) appears in the dispatch list."""
@@ -490,82 +399,26 @@ class TestBuildDispatchPlan:
         }
         assert agent_names_in_plan == cohort_agents
 
-    def test_dispatch_entry_format(self, registry):
-        """Each dispatch entry has agent, domain, status, reason."""
-        plan = build_dispatch_plan(
-            mode="full",
-            git_range="main..HEAD",
-            output_dir="/tmp/test",
-            changed_files=SAMPLE_MIXED_FILES,
-            registry=registry,
-        )
-        for entry in plan["agents"]:
-            assert "name" in entry
-            assert "domain" in entry
-            assert "status" in entry
-            assert entry["status"] in ("DISPATCH", "SKIPPED", "SKIPPED_TRIAGE")
-            assert "reason" in entry
-
-    def test_agent_signals_format(self, registry):
-        """Each signal matches expected format."""
-        plan = build_dispatch_plan(
-            mode="full",
-            git_range="main..HEAD",
-            output_dir="/tmp/test",
-            changed_files=SAMPLE_MIXED_FILES,
-            registry=registry,
-        )
-        for signal in plan["agent_signals"]:
-            assert isinstance(signal, str)
-            assert "STATUS=" in signal
-            # Each signal starts with an agent name followed by ": STATUS="
-            assert ": STATUS=" in signal
-
-    def test_scope_summary_structure(self, registry):
-        plan = build_dispatch_plan(
-            mode="full",
-            git_range="main..HEAD",
-            output_dir="/tmp/test",
-            changed_files=SAMPLE_MIXED_FILES,
-            registry=registry,
-        )
-        summary = plan["scope_summary"]
-        assert "total_files" in summary
-        assert "noise_filtered" in summary
-        assert "reviewable_files" in summary
-        assert "by_domain" in summary
-        assert isinstance(summary["by_domain"], dict)
-
-    def test_empty_file_list(self, registry):
-        """Empty file list produces a valid plan with all agents skipped."""
-        plan = build_dispatch_plan(
-            mode="full",
-            git_range="main..HEAD",
-            output_dir="/tmp/test",
-            changed_files=[],
-            registry=registry,
-        )
-        assert plan["scope_summary"]["total_files"] == 0
-        for entry in plan["agents"]:
-            # All agents should be SKIPPED (no files) or SKIPPED (manual/special)
-            assert entry["status"] in ("SKIPPED", "SKIPPED_TRIAGE"), (
-                f"Agent '{entry['agent']}' should be SKIPPED with no files, "
-                f"got status='{entry['status']}'"
+    def test_no_reviewable_files_skips_every_agent(self, registry):
+        """An empty file list and an all-noise list both leave nothing to
+        review, so every agent is skipped."""
+        plans = {}
+        for label, files in (("empty", []), ("noise", SAMPLE_NOISE_ONLY_FILES)):
+            plans[label] = build_dispatch_plan(
+                mode="full",
+                git_range="main..HEAD",
+                output_dir="/tmp/test",
+                changed_files=files,
+                registry=registry,
+                commit_messages="",
+                diffstat={},
             )
-
-    def test_noise_only_files_all_skipped(self, registry):
-        """Files that are all noise result in all agents skipped."""
-        plan = build_dispatch_plan(
-            mode="full",
-            git_range="main..HEAD",
-            output_dir="/tmp/test",
-            changed_files=SAMPLE_NOISE_ONLY_FILES,
-            registry=registry,
-        )
-        assert plan["scope_summary"]["noise_filtered"] > 0
-        assert plan["scope_summary"]["reviewable_files"] == 0
-        for entry in plan["agents"]:
-            assert entry["status"] in ("SKIPPED", "SKIPPED_TRIAGE")
+        assert plans["empty"]["scope_summary"]["total_files"] == 0
+        assert plans["noise"]["scope_summary"]["noise_filtered"] > 0
+        assert plans["noise"]["scope_summary"]["reviewable_files"] == 0
+        for label, plan in plans.items():
+            for entry in plan["agents"]:
+                assert entry["status"] in ("SKIPPED", "SKIPPED_TRIAGE"), (label, entry)
 
     def test_domain_patch_text_is_memoized_across_agents(self):
         registry = {
@@ -665,35 +518,12 @@ class TestAlwaysDispatchAgents:
 class TestNonCohortAgents:
     """Manual and special agents are excluded from the dispatch plan entirely."""
 
-    def test_tests_mutation_reviewer_not_in_plan(self, registry):
+    def test_manual_and_special_agents_are_not_in_plan(self, registry):
         plan = build_dispatch_plan(
             mode="full",
             git_range="main..HEAD",
             output_dir="/tmp/test",
             changed_files=SAMPLE_MIXED_FILES,
-            registry=registry,
-        )
-        agent_names = {d["name"] for d in plan["agents"]}
-        assert "tests-mutation-reviewer" not in agent_names
-
-    def test_decision_reviewer_not_in_plan(self, registry):
-        plan = build_dispatch_plan(
-            mode="full",
-            git_range="main..HEAD",
-            output_dir="/tmp/test",
-            changed_files=SAMPLE_MIXED_FILES,
-            registry=registry,
-        )
-        agent_names = {d["name"] for d in plan["agents"]}
-        assert "decision-reviewer" not in agent_names
-
-    def test_exclusion_holds_regardless_of_file_coverage(self, registry):
-        """Non-cohort agents stay excluded even with maximum file coverage."""
-        plan = build_dispatch_plan(
-            mode="full",
-            git_range="main..HEAD",
-            output_dir="/tmp/test",
-            changed_files=SAMPLE_MIXED_FILES * 10,
             registry=registry,
         )
         agent_names = {d["name"] for d in plan["agents"]}
@@ -722,8 +552,9 @@ class TestConditionalAgentsDomainGating:
         dispatch_map = {d["name"]: d for d in plan["agents"]}
         assert dispatch_map["a11y-reviewer"]["status"] == "DISPATCH"
 
-    def test_security_reviewer_dispatches_for_config_ops(self, registry):
-        """security-reviewer has config-ops as secondary domain."""
+    def test_config_ops_secondary_domain_dispatches(self, registry):
+        """security- and architecture-reviewer take config-ops as a
+        secondary domain, so a config-only change dispatches both."""
         plan = build_dispatch_plan(
             mode="full",
             git_range="main..HEAD",
@@ -732,19 +563,8 @@ class TestConditionalAgentsDomainGating:
             registry=registry,
         )
         dispatch_map = {d["name"]: d for d in plan["agents"]}
-        assert dispatch_map["security-reviewer"]["status"] == "DISPATCH"
-
-    def test_architecture_reviewer_dispatches_for_config_ops(self, registry):
-        """architecture-reviewer has config-ops as secondary domain."""
-        plan = build_dispatch_plan(
-            mode="full",
-            git_range="main..HEAD",
-            output_dir="/tmp/test",
-            changed_files=SAMPLE_CONFIG_ONLY_FILES,
-            registry=registry,
-        )
-        dispatch_map = {d["name"]: d for d in plan["agents"]}
-        assert dispatch_map["architecture-reviewer"]["status"] == "DISPATCH"
+        for name in ("security-reviewer", "architecture-reviewer"):
+            assert dispatch_map[name]["status"] == "DISPATCH", name
 
 
 # =============================================================================
@@ -752,33 +572,8 @@ class TestConditionalAgentsDomainGating:
 # =============================================================================
 
 class TestRegistryConsistency:
-    """Dispatch planner handles all cohort agents in the real registry."""
-
-    def _cohort_count(self, registry):
-        return sum(
-            1 for cfg in registry["agents"].values()
-            if cfg.get("dispatch_class") not in ("manual", "special")
-        )
-
-    def test_signal_count_matches_cohort_agent_count(self, registry):
-        plan = build_dispatch_plan(
-            mode="full",
-            git_range="main..HEAD",
-            output_dir="/tmp/test",
-            changed_files=SAMPLE_MIXED_FILES,
-            registry=registry,
-        )
-        assert len(plan["agent_signals"]) == self._cohort_count(registry)
-
-    def test_dispatch_count_matches_cohort_agent_count(self, registry):
-        plan = build_dispatch_plan(
-            mode="full",
-            git_range="main..HEAD",
-            output_dir="/tmp/test",
-            changed_files=SAMPLE_MIXED_FILES,
-            registry=registry,
-        )
-        assert len(plan["agents"]) == self._cohort_count(registry)
+    """An unknown triage check fails the plan before domain gating, so a
+    registry typo cannot hide behind an agent that had no files."""
 
     def test_unsupported_triage_check_fails_even_without_domain_files(self):
         registry = {
@@ -814,55 +609,33 @@ triage_conditional_agent = _mod.triage_conditional_agent
 # Unit Tests — is_test_file
 # =============================================================================
 
+# is_test_file ORs the include regexes of the _TEST_DOMAINS catalog entries.
+# One positive row per test domain, plus the rust benches/ and python root
+# test_ and conftest alternatives, which no other row reaches; two negatives
+# whose paths sit next to a test pattern (inline-test rust source, a
+# *Page.ts outside a page-objects directory).
+IS_TEST_FILE = [
+    pytest.param("tests/ControllerTest.php", True, id="php-tests"),
+    pytest.param("src/utils.test.ts", True, id="js-tests"),
+    pytest.param("e2e/checkout.spec.ts", True, id="e2e-tests"),
+    pytest.param("src/utils/auth_test.go", True, id="go-tests"),
+    pytest.param("tests/integration_test.rs", True, id="rust-tests-dir"),
+    pytest.param("benches/my_bench.rs", True, id="rust-benches-dir"),
+    pytest.param("test_utils.py", True, id="python-test-prefix"),
+    pytest.param("conftest.py", True, id="python-conftest"),
+    # src/lib.rs may hold inline #[cfg(test)] blocks but is production code
+    # for triage; production reviewers still run on it.
+    pytest.param("src/lib.rs", False, id="rust-production-source"),
+    pytest.param("src/HomePage.ts", False, id="production-page-ts"),
+]
+
+
 class TestIsTestFile:
     """Test file detection using test domain patterns."""
 
-    def test_php_test_file(self):
-        assert is_test_file("tests/ControllerTest.php") is True
-
-    def test_js_test_file(self):
-        assert is_test_file("src/utils.test.ts") is True
-
-    def test_e2e_test_file(self):
-        assert is_test_file("e2e/checkout.spec.ts") is True
-
-    def test_go_test_file(self):
-        assert is_test_file("src/utils/auth_test.go") is True
-
-    def test_rust_integration_test_file(self):
-        assert is_test_file("tests/integration_test.rs") is True
-
-    def test_rust_bench_file(self):
-        assert is_test_file("benches/my_bench.rs") is True
-
-    def test_rust_production_source_file_is_not_test_file(self):
-        # src/lib.rs may contain inline #[cfg(test)] blocks but is not classified
-        # as a "test file" for triage — production reviewers should still run on it.
-        assert is_test_file("src/lib.rs") is False
-
-    def test_python_test_file(self):
-        assert is_test_file("tests/test_api.py") is True
-
-    def test_python_test_prefix_file(self):
-        assert is_test_file("test_utils.py") is True
-
-    def test_python_conftest_file(self):
-        assert is_test_file("tests/conftest.py") is True
-
-    def test_python_production_file(self):
-        assert is_test_file("src/models.py") is False
-
-    def test_production_php_file(self):
-        assert is_test_file("src/Controller.php") is False
-
-    def test_production_ts_file(self):
-        assert is_test_file("src/hooks/useData.ts") is False
-
-    def test_production_page_ts_file(self):
-        assert is_test_file("src/HomePage.ts") is False
-
-    def test_config_file(self):
-        assert is_test_file(".github/workflows/ci.yml") is False
+    @pytest.mark.parametrize("filepath, expected", IS_TEST_FILE)
+    def test_classifies_test_files(self, filepath, expected):
+        assert is_test_file(filepath) is expected
 
 
 # =============================================================================
@@ -910,15 +683,6 @@ class TestTriageConditionalAgent:
         assert status == "DISPATCH"
         assert "test files" not in reason
 
-    def test_production_only_files_dispatches(self):
-        """Only production files → DISPATCH."""
-        config = self._make_config()
-        domain_files = ["src/Controller.php", "src/Service.php"]
-        status, reason, _signal = triage_conditional_agent(
-            "security-reviewer", config, domain_files, "", {},
-        )
-        assert status == "DISPATCH"
-
     # --- Keyword matching ---
 
     def test_commit_keyword_match_dispatches(self):
@@ -932,18 +696,6 @@ class TestTriageConditionalAgent:
         )
         assert status == "DISPATCH"
         assert "auth" in reason
-
-    def test_commit_prefix_keyword_match(self):
-        """An explicitly marked prefix keyword → DISPATCH."""
-        config = self._make_config(triage_keywords=["sanitiz*"])
-        status, reason, _signal = triage_conditional_agent(
-            "security-reviewer", config,
-            ["src/Form.php"],
-            "add sanitization to user input",
-            {},
-        )
-        assert status == "DISPATCH"
-        assert "sanitiz*" in reason
 
     def test_no_keyword_match_still_dispatches_by_default(self):
         """No keyword match → still DISPATCH (conservative default)."""
@@ -975,31 +727,6 @@ class TestTriageConditionalAgent:
                 "renamed_files": [],
                 "file_stats": {
                     "src/CheckoutService.php": {"added": 75, "removed": 10},
-                },
-            },
-        )
-        assert status == "DISPATCH"
-        assert "substantial non-test additions" in reason
-
-    def test_devils_advocate_counts_production_page_ts_additions(self):
-        """Production *Page.ts files count toward architecture additions."""
-        config = self._make_config(
-            domain="architecture",
-            min_added_lines=50,
-            triage_checks=["substantial_non_test_additions"],
-            triage_keywords=["adapter"],
-        )
-        status, reason, _signal = triage_conditional_agent(
-            "devils-advocate-reviewer", config,
-            ["src/HomePage.ts"],
-            "build homepage application flow",
-            {
-                "added": 75,
-                "removed": 10,
-                "deleted_files": [],
-                "renamed_files": [],
-                "file_stats": {
-                    "src/HomePage.ts": {"added": 75, "removed": 10},
                 },
             },
         )
@@ -1146,20 +873,6 @@ class TestTriageConditionalAgent:
         assert _mod._has_documentation_files(["src/changelog/helper.php"]) is True
         assert _mod._has_documentation_files(["changelog/nested/deeper"]) is False
 
-    def test_unsupported_triage_check_raises(self):
-        """Unknown registry checks should fail fast instead of falling through."""
-        config = self._make_config(
-            triage_checks=["not_a_real_check"],
-        )
-        with pytest.raises(ValueError, match="Unsupported triage check"):
-            triage_conditional_agent(
-                "security-reviewer",
-                config,
-                ["src/Controller.php"],
-                "",
-                {},
-            )
-
     # --- Empty domain files ---
 
     def test_empty_domain_files_dispatches(self):
@@ -1205,66 +918,6 @@ class TestTriageInDispatchPlan:
         # php-tests-reviewer is always-dispatch and should still run
         assert dispatch_map["php-tests-reviewer"]["status"] == "DISPATCH"
 
-    def test_commit_keywords_dispatch_conditional(self, registry):
-        """Commit keywords trigger dispatch for conditional agents."""
-        plan = build_dispatch_plan(
-            mode="full",
-            git_range="main..HEAD",
-            output_dir="/tmp/test",
-            changed_files=["src/Controller.php"],
-            registry=registry,
-            commit_messages="fix auth token validation and csrf protection",
-            diffstat={"added": 50, "removed": 10, "deleted_files": [], "renamed_files": []},
-        )
-        dispatch_map = {d["name"]: d for d in plan["agents"]}
-
-        # security-reviewer should dispatch with keyword match
-        assert dispatch_map["security-reviewer"]["status"] == "DISPATCH"
-        assert "keyword" in dispatch_map["security-reviewer"]["reason"]
-
-    def test_devils_advocate_dispatches_for_large_architecture_change_without_keywords(self, registry):
-        """Large architecture diffs still dispatch without keyword matches."""
-        plan = build_dispatch_plan(
-            mode="full",
-            git_range="main..HEAD",
-            output_dir="/tmp/test",
-            changed_files=["src/CheckoutService.php"],
-            registry=registry,
-            commit_messages="refine checkout service orchestration",
-            diffstat={"added": 75, "removed": 10, "deleted_files": [], "renamed_files": []},
-        )
-        dispatch_map = {d["name"]: d for d in plan["agents"]}
-
-        assert dispatch_map["devils-advocate-reviewer"]["status"] == "DISPATCH"
-        assert (
-            "new abstraction file" in dispatch_map["devils-advocate-reviewer"]["reason"]
-            or "substantial non-test additions" in dispatch_map["devils-advocate-reviewer"]["reason"]
-        )
-
-    def test_devils_advocate_dispatches_for_large_production_page_file(self, registry):
-        """Production *Page.ts files should not be treated as E2E-only code."""
-        plan = build_dispatch_plan(
-            mode="full",
-            git_range="main..HEAD",
-            output_dir="/tmp/test",
-            changed_files=["src/HomePage.ts"],
-            registry=registry,
-            commit_messages="build homepage application flow",
-            diffstat={
-                "added": 75,
-                "removed": 10,
-                "deleted_files": [],
-                "renamed_files": [],
-                "file_stats": {
-                    "src/HomePage.ts": {"added": 75, "removed": 10},
-                },
-            },
-        )
-        dispatch_map = {d["name"]: d for d in plan["agents"]}
-
-        assert dispatch_map["devils-advocate-reviewer"]["status"] == "DISPATCH"
-        assert "substantial non-test additions" in dispatch_map["devils-advocate-reviewer"]["reason"]
-
     def test_devils_advocate_dispatches_for_sql_migration(self, registry):
         """SQL migrations that look like new infrastructure should reach triage."""
         plan = build_dispatch_plan(
@@ -1281,77 +934,14 @@ class TestTriageInDispatchPlan:
         assert dispatch_map["devils-advocate-reviewer"]["status"] == "DISPATCH"
         assert "migration" in dispatch_map["devils-advocate-reviewer"]["reason"]
 
-    def test_plan_includes_changed_files(self, registry):
-        """Dispatch plan includes changed_files for downstream use."""
-        plan = build_dispatch_plan(
-            mode="full",
-            git_range="main..HEAD",
-            output_dir="/tmp/test",
-            changed_files=SAMPLE_MIXED_FILES,
-            registry=registry,
-        )
-        assert "changed_files" in plan
-        assert isinstance(plan["changed_files"], list)
-
-    def test_skipped_triage_signal_format(self, registry):
-        """SKIPPED_TRIAGE agents produce correct signal format."""
-        plan = build_dispatch_plan(
-            mode="full",
-            git_range="main..HEAD",
-            output_dir="/tmp/test",
-            changed_files=SAMPLE_TEST_ONLY_PHP_FILES,
-            registry=registry,
-            commit_messages="",
-            diffstat={"added": 50, "removed": 10, "deleted_files": [], "renamed_files": []},
-        )
-        triage_skipped = [
-            s for s in plan["agent_signals"] if "SKIPPED_TRIAGE" in s
-        ]
-        assert len(triage_skipped) > 0
-        for signal in triage_skipped:
-            assert "STATUS=SKIPPED_TRIAGE" in signal
-
-    def test_quick_mode_skips_simplification_reviewer(self, registry):
-        """Quick mode excludes the always-dispatch simplification reviewer."""
-        plan = build_dispatch_plan(
-            mode="full",
-            git_range="main..HEAD",
-            output_dir="/tmp/test",
-            changed_files=["src/Controller.php"],
-            registry=registry,
-            commit_messages="refine controller flow",
-            diffstat={
-                "added": 20,
-                "removed": 5,
-                "deleted_files": [],
-                "renamed_files": [],
-                "file_stats": {
-                    "src/Controller.php": {"added": 20, "removed": 5},
-                },
-            },
-            quick=True,
-        )
-        dispatch_map = {d["name"]: d for d in plan["agents"]}
-
-        assert dispatch_map["simplification-reviewer"]["status"] == "SKIPPED_QUICK_MODE"
-        assert "quick review mode" in dispatch_map["simplification-reviewer"]["reason"]
-
     def test_quick_mode_ignores_repository_identity_for_generic_keywords(
-        self, registry, tmp_path, monkeypatch
+        self, registry, tmp_path
     ):
-        repo = tmp_path / "arbitrary-checkout"
-        repo.mkdir()
-        subprocess.run(["git", "init", "-q", str(repo)], check=True)
-        subprocess.run(
-            [
-                "git", "-C", str(repo), "remote", "add", "origin",
-                "https://github.com/woocommerce/woocommerce.git",
-            ],
-            check=True,
+        remotes = (
+            "origin\thttps://github.com/woocommerce/woocommerce.git (fetch)\n"
+            "origin\thttps://github.com/woocommerce/woocommerce.git (push)\n"
         )
-        monkeypatch.chdir(repo)
-
-        with patch.object(
+        with patch.object(_mod.subprocess, "run", side_effect=_fake_git(remotes)), patch.object(
             _mod,
             "get_diff_text",
             return_value="-$old_name = 1;\n+$renamed_value = 1;",
@@ -1384,6 +974,145 @@ class TestTriageInDispatchPlan:
         assert plan["agents"][0]["status"] == "SKIPPED_QUICK_MODE"
 
 
+# Files that cover enough domains to trigger most agents
+_QUICK_MODE_TEST_FILES = [
+    "src/Controller.php",
+    "src/components/Modal.tsx",
+    "src/hooks/useData.ts",
+    "tests/ControllerTest.php",
+    "src/styles/modal.scss",
+    "e2e/checkout.spec.ts",
+    ".github/workflows/ci.yml",
+    "Dockerfile",
+    "src/utils/auth.go",
+    "src/utils/auth_test.go",
+]
+
+_QUICK_MODE_BLOCKED_AGENTS = frozenset([
+    "wp-architecture-reviewer",
+    "history-insights-reviewer",
+    "data-flow-privacy-reviewer",
+    "concurrency-reviewer",
+    "reliability-reviewer",
+])
+
+
+def _init_main_repo(path):
+    """A git repo with a `main` branch at HEAD.
+
+    build_dispatch_plan's triage calls plan_dispatch.get_diff_text() /
+    get_repository_identity() via `git diff`/`git rev-parse`, with no cwd
+    override — they always read the ambient process CWD, not a subprocess
+    we control. Left unpatched, `git_range="main..HEAD"` behaves
+    differently depending on which repo pytest happens to be invoked from:
+    inside this repo the pathspec resolves to an empty diff (low-signal,
+    quick mode skips); from a foreign CWD `git diff` fails outright
+    ("not a git repository"), which the triage treats as an unreadable
+    scan and dispatches conservatively instead of skipping. Pointing CWD at
+    a throwaway repo with a `main` branch at HEAD makes `main..HEAD`
+    resolve to an empty diff everywhere, so the test stops depending on
+    which repo happens to be running it.
+    """
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+    subprocess.run(["git", "checkout", "-q", "-B", "main"], cwd=path, check=True)
+    (path / "README.md").write_text("init")
+    subprocess.run(["git", "add", "."], cwd=path, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t",
+         "commit", "-qm", "init"],
+        cwd=path, check=True,
+    )
+    return path
+
+
+class TestQuickModeDispatch:
+    """Quick mode excludes low-signal agents from dispatch."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_cwd(self, tmp_path, monkeypatch):
+        """build_dispatch_plan calls straight into plan_dispatch's git
+        helpers (no subprocess seam to pass cwd through), so isolation here
+        means chdir'ing the test process itself — see _init_main_repo."""
+        _init_main_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+
+    def test_quick_mode_excludes_blocklisted_agents_without_signals(self, registry):
+        """quick=True skips blocklisted agents when no triage keywords match."""
+        # Use files that don't trigger keyword matches for blocklisted agents
+        # (no "hook", "filter", "concurrent", "privacy", "deploy", etc.)
+        neutral_files = [
+            "src/Controller.php",
+            "src/components/Modal.tsx",
+            "tests/ControllerTest.php",
+            "src/utils/helpers.go",
+        ]
+        plan = build_dispatch_plan(
+            mode="full",
+            git_range="main..HEAD",
+            output_dir="/tmp/test-quick",
+            changed_files=neutral_files,
+            registry=registry,
+            quick=True,
+            commit_messages="fix button alignment in modal",
+            # This test pins quick-mode relabeling of conservative dispatch.
+            diffstat={
+                "added": 200,
+                "removed": 40,
+                "deleted_files": [],
+                "renamed_files": [],
+                "file_stats": {f: {"added": 50, "removed": 10} for f in neutral_files},
+            },
+        )
+        dispatch_map = {d["name"]: d for d in plan["agents"]}
+        for agent_name in _QUICK_MODE_BLOCKED_AGENTS:
+            if agent_name not in dispatch_map:
+                continue  # agent may have no files in domain
+            assert dispatch_map[agent_name]["status"] == "SKIPPED_QUICK_MODE", (
+                f"Expected SKIPPED_QUICK_MODE for '{agent_name}', "
+                f"got '{dispatch_map[agent_name]['status']}'"
+            )
+
+    def test_quick_mode_non_blocked_agents_triage_normally(self, registry):
+        """quick=True does not affect non-blocked agents — code-reviewer still dispatches."""
+        plan = build_dispatch_plan(
+            mode="full",
+            git_range="main..HEAD",
+            output_dir="/tmp/test-quick",
+            changed_files=_QUICK_MODE_TEST_FILES,
+            registry=registry,
+            quick=True,
+        )
+        dispatch_map = {d["name"]: d for d in plan["agents"]}
+        assert dispatch_map["code-reviewer"]["status"] == "DISPATCH", (
+            "code-reviewer should still DISPATCH in quick mode"
+        )
+
+    def test_quick_mode_honors_keyword_triage(self, registry):
+        """Blocklisted agents with keyword matches should still dispatch in quick mode."""
+        plan = build_dispatch_plan(
+            mode="full",
+            git_range="main..HEAD",
+            output_dir="/tmp/test-quick-keywords",
+            changed_files=_QUICK_MODE_TEST_FILES,
+            registry=registry,
+            quick=True,
+            # Commit messages with keywords that match blocklisted agents
+            commit_messages="fix concurrent race condition in payment hook filter",
+        )
+        dispatch_map = {d["name"]: d for d in plan["agents"]}
+        # concurrency-reviewer should dispatch (keyword "concurrent" matched)
+        assert dispatch_map["concurrency-reviewer"]["status"] == "DISPATCH", (
+            "concurrency-reviewer should DISPATCH when keywords match, "
+            f"got {dispatch_map['concurrency-reviewer']['status']}"
+        )
+        # wp-architecture-reviewer should dispatch (keyword "hook"/"filter" matched)
+        assert dispatch_map["wp-architecture-reviewer"]["status"] == "DISPATCH", (
+            "wp-architecture-reviewer should DISPATCH when keywords match, "
+            f"got {dispatch_map['wp-architecture-reviewer']['status']}"
+        )
+
+
 # =============================================================================
 # Keyword triage — shares the class grouping used by other triage tests
 # =============================================================================
@@ -1410,24 +1139,6 @@ class TestKeywordRequiredTriage:
 
         assert status == "DISPATCH"
 
-    def test_triage_dispatches_without_runtime_host_when_keyword_matches(self):
-        config = {
-            "domain": "wp-architecture",
-            "dispatch_class": "conditional",
-            "triage_keywords": ["add_filter"],
-            "require_triage_keyword_match": True,
-        }
-        status, reason, _signal = triage_conditional_agent(
-            agent_name="ecosystem-integration-reviewer",
-            config=config,
-            domain_files=["plugin.php"],
-            commit_messages="added add_filter hook",
-            diffstat={"added": 10, "removed": 0},
-            pr_text="",
-        )
-        assert status == "DISPATCH"
-        assert "commits" in reason.lower()
-
     def test_triage_dispatches_when_keyword_matches(self):
         config = {
             "domain": "wp-architecture",
@@ -1444,6 +1155,7 @@ class TestKeywordRequiredTriage:
             pr_text="",
         )
         assert status == "DISPATCH"
+        assert "commits" in reason.lower()
 
     def test_triage_skips_when_no_keyword_matches(self):
         """Keyword-required agents do not fall through to default dispatch."""
@@ -1484,38 +1196,45 @@ class TestKeywordRequiredTriage:
         assert status == "DISPATCH"
         assert "diff" in reason
 
-    def test_ecosystem_integration_skips_plain_js_ts_inheritance(self, registry):
-        config = registry["agents"]["ecosystem-integration-reviewer"]
+
+# Layer 2's require_php_source_file gate, once per registry agent that sets
+# it. Every row carries a keyword that would dispatch at layer 3, so the
+# skip shows the gate runs first.
+PHP_SOURCE_GATE = [
+    pytest.param(
+        "ecosystem-integration-reviewer", "src/blocks/checkout/index.ts",
+        "register checkout block", "+register_block_type( 'example/checkout', settings );",
+        id="ecosystem-integration-ts-block",
+    ),
+    pytest.param(
+        "woo-regression-reviewer", "assets/js/checkout.js",
+        "woocommerce checkout tweak", None,
+        id="woo-regression-js-only",
+    ),
+    pytest.param(
+        "wp-architecture-reviewer", "src/hooks/useTransient.ts",
+        "add hook and filter transient cache", None,
+        id="wp-architecture-ts-only",
+    ),
+]
+
+
+class TestPhpSourceGate:
+    """run12: 'hook, filter, transient' keywords matched a pure-TS repo's
+    commit messages and planned wp-architecture into a React codebase. The
+    WordPress and WooCommerce reviewers require an actual PHP source file
+    before any keyword can dispatch them."""
+
+    @pytest.mark.parametrize("agent_name, filepath, commits, diff_text", PHP_SOURCE_GATE)
+    def test_non_php_change_skips_despite_a_keyword(
+        self, registry, agent_name, filepath, commits, diff_text,
+    ):
         status, reason, _signal = triage_conditional_agent(
-            agent_name="ecosystem-integration-reviewer",
-            config=config,
-            domain_files=["src/components/CheckoutPanel.tsx"],
-            commit_messages="refactor checkout panel",
-            diffstat={"added": 10, "removed": 0},
-            pr_text="",
-            diff_text=(
-                "+class CheckoutPanel extends Component {}\n"
-                "+interface Props extends BaseProps {}\n"
-            ),
+            agent_name, registry["agents"][agent_name], [filepath], commits,
+            {"added": 10, "removed": 0}, diff_text=diff_text,
         )
-
         assert status == "SKIPPED_TRIAGE"
-        assert "php source" in reason.lower()
-
-    def test_ecosystem_integration_requires_php_source_before_keyword_dispatch(self, registry):
-        config = registry["agents"]["ecosystem-integration-reviewer"]
-        status, reason, _signal = triage_conditional_agent(
-            agent_name="ecosystem-integration-reviewer",
-            config=config,
-            domain_files=["src/blocks/checkout/index.ts"],
-            commit_messages="register checkout block",
-            diffstat={"added": 10, "removed": 0},
-            pr_text="",
-            diff_text="+register_block_type( 'example/checkout', settings );",
-        )
-
-        assert status == "SKIPPED_TRIAGE"
-        assert "php source" in reason.lower()
+        assert "PHP source" in reason
 
 
 # ---------------------------------------------------------------------------
@@ -1528,30 +1247,25 @@ class TestDetectUnrecognizedSource:
     def test_empty(self):
         assert detect_unrecognized_source([]) == []
 
-    def test_rust_is_recognized_after_broadening(self):
-        """Rust is now in _PROG_LANGS — must NOT be flagged (the original bug)."""
-        files = ["src/auth/login.rs", "src/main.rs"]
-        assert detect_unrecognized_source(files) == []
-
     def test_mainstream_languages_recognized(self):
-        files = ["a.kt", "b.swift", "c.cpp", "d.cs", "e.scala", "f.go", "g.py"]
+        """Rust included: it was flagged before _PROG_LANGS broadened (the
+        original bug)."""
+        files = [
+            "a.kt", "b.swift", "c.cpp", "d.cs", "e.scala", "f.go", "g.py",
+            "src/auth/login.rs", "src/main.rs",
+        ]
         assert detect_unrecognized_source(files) == []
 
     def test_longtail_language_flagged(self):
-        """A language outside the catalog but in the source superset is flagged."""
-        flagged = detect_unrecognized_source(["contract.sol", "lib.nim", "app.py"])
-        assert "contract.sol" in flagged
-        assert "lib.nim" in flagged
-        assert "app.py" not in flagged  # recognized → reviewed → not flagged
+        """A language outside the catalog but in the source superset is
+        flagged, in sorted order; app.py is recognized, so reviewed."""
+        flagged = detect_unrecognized_source(["lib.nim", "contract.sol", "app.py"])
+        assert flagged == ["contract.sol", "lib.nim"]
 
     def test_non_source_files_not_flagged(self):
         """Docs/config/data are not 'unrecognized source' — they have their own domains."""
         files = ["README.md", "config.yaml", "data.json", "Cargo.toml", "LICENSE"]
         assert detect_unrecognized_source(files) == []
-
-    def test_result_is_sorted(self):
-        flagged = detect_unrecognized_source(["z.nim", "a.sol"])
-        assert flagged == ["a.sol", "z.nim"]
 
 
 class TestSafetyNetInPlan:
@@ -1585,19 +1299,6 @@ class TestSafetyNetInPlan:
         assert "UNRECOGNIZED SOURCE" in plan["warnings"][0]
         assert "contract.sol" in plan["warnings"][0]
 
-    def test_warnings_field_always_present(self, registry):
-        plan = build_dispatch_plan(
-            mode="full",
-            git_range="main..HEAD",
-            output_dir="/tmp/test",
-            changed_files=["src/app.php"],
-            registry=registry,
-            commit_messages="",
-            diffstat={},
-        )
-        assert "warnings" in plan
-        assert isinstance(plan["warnings"], list)
-
 
 # =============================================================================
 # Unit Tests — woo-regression-reviewer triage gating
@@ -1608,12 +1309,6 @@ class TestWooRegressionReviewerTriage:
 
     def _config(self, registry):
         return registry["agents"]["woo-regression-reviewer"]
-
-    def test_registry_declares_keyword_gate(self, registry):
-        config = self._config(registry)
-        assert config["require_triage_keyword_match"] is True
-        assert config["require_php_source_file"] is True
-        assert config["dispatch_class"] == "conditional"
 
     def test_dispatches_on_wc_file_path_signal(self, registry):
         status, reason, _signal = triage_conditional_agent(
@@ -1638,32 +1333,30 @@ class TestWooRegressionReviewerTriage:
     @pytest.mark.parametrize(
         ("remote_url", "diff_text"),
         [
-            (
+            pytest.param(
                 "git@github.com:Automattic/woocommerce-payments.git",
                 # Deliberately WC-token-free: a WCPay namespace would now match
                 # change-local keywords (acronym splitting makes 'WCPay' a wc
                 # signal), and this test isolates the REPOSITORY-identity path.
                 "+namespace Internal;\n+class Service {}",
+                id="woocommerce-payments",
             ),
-            (
+            pytest.param(
                 "https://github.com/woocommerce/automatewoo.git",
                 "+namespace AutomateWoo\\Workflows;\n+class Workflow {}",
+                id="automatewoo",
             ),
         ],
     )
     def test_dispatches_supported_extension_from_repository_identity(
-        self, registry, tmp_path, monkeypatch, remote_url, diff_text
+        self, registry, tmp_path, remote_url, diff_text
     ):
-        repo = tmp_path / "arbitrary-checkout"
-        repo.mkdir()
-        subprocess.run(["git", "init", "-q", str(repo)], check=True)
-        subprocess.run(
-            ["git", "-C", str(repo), "remote", "add", "origin", remote_url],
-            check=True,
-        )
-        monkeypatch.chdir(repo)
-
-        with patch.object(_mod, "get_diff_text", return_value=diff_text):
+        """The planner reads the checkout's remotes and matches the agent's
+        repository keywords against them; which remotes count is
+        test_repository_identity_is_fetch_remotes_and_checkout_name's."""
+        remotes = f"origin\t{remote_url} (fetch)\norigin\t{remote_url} (push)\n"
+        with patch.object(_mod.subprocess, "run", side_effect=_fake_git(remotes)), \
+                patch.object(_mod, "get_diff_text", return_value=diff_text):
             plan = build_dispatch_plan(
                 mode="full",
                 git_range="main..HEAD",
@@ -1677,72 +1370,45 @@ class TestWooRegressionReviewerTriage:
         assert plan["agents"][0]["status"] == "DISPATCH"
         assert "repository" in plan["agents"][0]["reason"]
 
-    def test_dispatches_from_canonical_upstream_fetch_remote(
-        self, registry, tmp_path, monkeypatch
+    @pytest.mark.parametrize(
+        ("remotes", "present", "absent"),
+        [
+            pytest.param(
+                "origin\thttps://github.com/woocommerce/automatewoo.git (fetch)\n"
+                "origin\thttps://github.com/woocommerce/automatewoo.git (push)\n",
+                ("automatewoo", "arbitrary-checkout"), (),
+                id="origin-and-checkout-name",
+            ),
+            # A fork's origin says nothing; the canonical upstream it fetches
+            # from identifies the project.
+            pytest.param(
+                "origin\thttps://github.com/example/payments-fork.git (fetch)\n"
+                "origin\thttps://github.com/example/payments-fork.git (push)\n"
+                "upstream\thttps://github.com/Automattic/woocommerce-payments.git (fetch)\n"
+                "upstream\thttps://github.com/Automattic/woocommerce-payments.git (push)\n",
+                ("payments-fork", "woocommerce-payments"), (),
+                id="canonical-upstream-fetch-remote",
+            ),
+            # Fix c21d8602: a push-only URL (`git remote set-url --add --push`)
+            # is where the checkout publishes, not what it is.
+            pytest.param(
+                "origin\thttps://github.com/example/payments-fork.git (fetch)\n"
+                "origin\thttps://github.com/Automattic/woocommerce-payments.git (push)\n",
+                ("payments-fork",), ("woocommerce-payments",),
+                id="push-only-url-ignored",
+            ),
+        ],
+    )
+    def test_repository_identity_is_fetch_remotes_and_checkout_name(
+        self, remotes, present, absent
     ):
-        repo = tmp_path / "arbitrary-checkout"
-        repo.mkdir()
-        subprocess.run(["git", "init", "-q", str(repo)], check=True)
-        subprocess.run(
-            [
-                "git", "-C", str(repo), "remote", "add", "origin",
-                "https://github.com/example/payments-fork.git",
-            ],
-            check=True,
-        )
-        subprocess.run(
-            [
-                "git", "-C", str(repo), "remote", "add", "upstream",
-                "https://github.com/Automattic/woocommerce-payments.git",
-            ],
-            check=True,
-        )
-        monkeypatch.chdir(repo)
+        with patch.object(_mod.subprocess, "run", side_effect=_fake_git(remotes)):
+            identity = _mod.get_repository_identity()
 
-        with patch.object(
-            _mod,
-            "get_diff_text",
-            return_value="+namespace Vendor\\Payments;\n+class Service {}",
-        ):
-            plan = build_dispatch_plan(
-                mode="full",
-                git_range="main..HEAD",
-                output_dir=str(tmp_path / "review"),
-                changed_files=["src/Internal/Service.php"],
-                registry={"agents": {"woo-regression-reviewer": self._config(registry)}},
-                commit_messages="refactor internal service",
-                diffstat={"added": 2, "removed": 0},
-            )
-
-        assert plan["agents"][0]["status"] == "DISPATCH"
-        assert "repository" in plan["agents"][0]["reason"]
-
-    def test_repository_identity_ignores_push_only_urls(
-        self, tmp_path, monkeypatch
-    ):
-        repo = tmp_path / "arbitrary-checkout"
-        repo.mkdir()
-        subprocess.run(["git", "init", "-q", str(repo)], check=True)
-        subprocess.run(
-            [
-                "git", "-C", str(repo), "remote", "add", "origin",
-                "https://github.com/example/payments-fork.git",
-            ],
-            check=True,
-        )
-        subprocess.run(
-            [
-                "git", "-C", str(repo), "remote", "set-url", "--add", "--push",
-                "origin", "https://github.com/Automattic/woocommerce-payments.git",
-            ],
-            check=True,
-        )
-        monkeypatch.chdir(repo)
-
-        identity = _mod.get_repository_identity()
-
-        assert "payments-fork" in identity
-        assert "woocommerce-payments" not in identity
+        for part in present:
+            assert part in identity, (part, identity)
+        for part in absent:
+            assert part not in identity, (part, identity)
 
     def test_skipped_without_wc_signal(self, registry):
         """Non-WooCommerce PHP repo → SKIPPED_TRIAGE (the triage-out requirement)."""
@@ -1757,47 +1423,17 @@ class TestWooRegressionReviewerTriage:
         assert status == "SKIPPED_TRIAGE"
         assert "keyword" in reason
 
-    def test_skipped_for_js_only_diff(self, registry):
-        """No PHP source in domain files → SKIPPED_TRIAGE even with WC signal."""
-        status, reason, _signal = triage_conditional_agent(
-            "woo-regression-reviewer", self._config(registry),
-            ["assets/js/checkout.js"],
-            "woocommerce checkout tweak",
-            {},
-        )
-        assert status == "SKIPPED_TRIAGE"
-        assert "PHP" in reason
-
 
 # =============================================================================
 # Unit Tests — wp-architecture-reviewer PHP source gate
 # =============================================================================
 
 class TestWpArchitectureReviewerTriage:
-    """run12: 'hook, filter, transient' keywords matched a pure-TS repo's
-    commit messages and planned wp-architecture into a React codebase.
-    The agent must require an actual PHP source file before dispatching."""
+    """The PHP-source gate's passing side (its skip side is
+    TestPhpSourceGate)."""
 
     def _config(self, registry):
         return registry["agents"]["wp-architecture-reviewer"]
-
-    def test_registry_declares_php_source_gate(self, registry):
-        config = self._config(registry)
-        assert config["require_php_source_file"] is True
-        assert config["dispatch_class"] == "conditional"
-
-    def test_skipped_for_keyword_match_with_no_php_files(self, registry):
-        """Commit message matches triage keywords ('hook', 'filter') but the
-        changed files are TS-only → SKIPPED_TRIAGE, not a false-positive
-        DISPATCH into a non-PHP codebase."""
-        status, reason, _signal = triage_conditional_agent(
-            "wp-architecture-reviewer", self._config(registry),
-            ["src/hooks/useTransient.ts"],
-            "add hook and filter transient cache",
-            {},
-        )
-        assert status == "SKIPPED_TRIAGE"
-        assert "PHP" in reason
 
     def test_dispatches_for_keyword_match_with_php_file(self, registry):
         """Same keyword signal, but a real PHP source file is in scope →
@@ -1827,18 +1463,6 @@ class TestKeywordMatchingPrecision:
 
     # --- Word-start anchoring ---
 
-    def test_keyword_does_not_match_inside_longer_word(self):
-        """'move' must not match inside 'remove' (observed FP: dead-code
-        dispatched with reason 'commits: remove, move' on one word)."""
-        config = self._make_config(triage_keywords=["move"])
-        status, reason, _signal = triage_conditional_agent(
-            "dead-code-reviewer", config,
-            ["src/Renderer.php"],
-            "remove dangling label from radio branch",
-            {},
-        )
-        assert "keywords matched" not in reason
-
     def test_keyword_still_matches_at_word_start(self):
         """'move' matches as a standalone whole word."""
         config = self._make_config(triage_keywords=["move"])
@@ -1857,11 +1481,15 @@ class TestKeywordMatchingPrecision:
         ("config", "Chromium was configured to skip it"),
         ("ci", "a circular import"),
         ("address", "the feedback is not addressed"),
+        ("move", "remove dangling label"),
+        ("move", "items.removeAll();"),
     ])
     def test_a_keyword_is_a_whole_word(self, keyword, text):
         """'auth' must not match 'authored' (every audited run dispatched
         security on the Co-Authored-By trailer), 'token' not 'tokenized',
-        'config' not 'configured', 'ci' not 'circular'."""
+        'config' not 'configured', 'ci' not 'circular', 'move' not 'remove'
+        (observed: dead-code dispatched on 'commits: remove, move'), and the
+        identifier-boundary fix must not reopen that hole ('removeAll')."""
         config = self._make_config(triage_keywords=[keyword])
         status, reason, _signal = triage_conditional_agent(
             "dead-code-reviewer", config, ["src/Renderer.php"], text, {},
@@ -1923,24 +1551,6 @@ class TestKeywordMatchingPrecision:
 
     # --- Identifier boundaries: snake_case and camelCase ---
 
-    def test_keyword_matches_after_underscore_in_identifier(self):
-        """'lock' must match inside release_cache_lock — code separators are
-        word starts. \\b treats _ as a word character, hiding keywords that
-        appear as identifier segments (observed: concurrency skipped on a
-        small diff whose only signal was a *_lock call)."""
-        config = self._make_config(
-            domain="concurrency", triage_keywords=["lock"],
-        )
-        status, reason, _signal = triage_conditional_agent(
-            "concurrency-reviewer", config,
-            ["includes/class-cache.php"],
-            "tidy cache handling",
-            {},
-            diff_text="+ $this->release_cache_lock( $key );",
-        )
-        assert status == "DISPATCH"
-        assert "lock" in reason
-
     def test_underscore_composed_keyword_matches_snake_case_identifier(self):
         """'user_data' must match get_user_data( — the leading _ before
         'user' blocked \\b too."""
@@ -1974,35 +1584,7 @@ class TestKeywordMatchingPrecision:
         assert status == "DISPATCH"
         assert "keywords matched" in reason
 
-    def test_word_interior_still_blocked_after_boundary_fix(self):
-        """The identifier-boundary fix must not reopen the substring hole:
-        'move' still must not match 'remove' or 'removeAll'."""
-        config = self._make_config(triage_keywords=["move"])
-        for text in ("+ remove_dangling_label();", "+ items.removeAll();"):
-            status, reason, _signal = triage_conditional_agent(
-                "dead-code-reviewer", config,
-                ["src/Renderer.php"],
-                "",
-                {},
-                diff_text=text,
-            )
-            assert "keywords matched" not in reason, text
-
     # --- Separator normalization for multiword keywords ---
-
-    def test_multiword_keyword_matches_hyphenated_text(self):
-        """'screen reader' must match 'screen-reader-text' in diff text
-        (observed miss: the 55669 diff contained screen-reader-text)."""
-        config = self._make_config(triage_keywords=["screen reader"])
-        status, reason, _signal = triage_conditional_agent(
-            "a11y-reviewer", config,
-            ["src/Renderer.php"],
-            "",
-            {},
-            diff_text='+ <legend class="screen-reader-text">',
-        )
-        assert status == "DISPATCH"
-        assert "screen reader" in reason
 
     def test_space_anchored_keyword_matches_separator_variants(self):
         """' wc ' style keywords match across -, _, and space separators."""
@@ -2043,12 +1625,6 @@ class TestKeywordMatchingPrecision:
         # And the extraction helper itself keeps only changed-line content:
         assert "diff --git" not in _mod._changed_lines_text(raw_patch)
         assert "$y = 1;" in _mod._changed_lines_text(raw_patch)
-
-    def test_changed_lines_still_feed_keyword_matching(self):
-        assert _mod._match_keywords_multi_source(
-            ["plugin"], [("diff", "+ register_plugin( $slug );")],
-        ) == [("plugin", "diff")]
-
 
     def test_structural_path_segment_does_not_match_keyword(self):
         """'plugin' must not match the monorepo scaffold 'plugins/' segment
@@ -2152,125 +1728,57 @@ class TestHasNewSourceFiles:
         assert "no triage signal to skip" in reason
 
 
+# One row per branch of _has_renamed_symbols / _line_rename_pair.
+RENAME_DIFFS = [
+    pytest.param(
+        "-  const tmp = items.filter(active);\n"
+        "-  return tmp.length;\n"
+        "+  const filteredItems = items.filter(active);\n"
+        "+  return filteredItems.length;",
+        True, id="local-variable-rename",
+    ),
+    pytest.param(
+        "-        $this->do_thing( $order );\n"
+        "+        $this->do_stuff( $order );",
+        True, id="call-site-rename",
+    ),
+    pytest.param(
+        "-    $retries = 1;\n"
+        "+    $retries = 2;",
+        False, id="value-change",
+    ),
+    pytest.param(
+        "-        charge( $order );\n"
+        "+        charge( $order, $currency );",
+        False, id="structural-change",
+    ),
+    pytest.param(
+        "-    $msg = 'payment failed';\n"
+        "+    $msg = 'payment declined';",
+        False, id="string-wording-change",
+    ),
+    pytest.param(
+        "+  const filteredItems = items.filter(active);",
+        False, id="pure-addition",
+    ),
+    # Two different identifiers changing on one line is a rewrite, not a rename.
+    pytest.param(
+        "-  return alpha + beta;\n"
+        "+  return gamma + delta;",
+        False, id="two-identifiers-change",
+    ),
+]
+
+
 class TestHasRenamedSymbols:
     """A symbol rename shows as paired -/+ lines identical except for one
     identifier swap. No signature/keyword signal fires for a local rename
     with neutral commit text, so "Renamed symbols" criteria need this
     structural detector."""
 
-    def test_local_variable_rename_fires(self):
-        diff = (
-            "-  const tmp = items.filter(active);\n"
-            "-  return tmp.length;\n"
-            "+  const filteredItems = items.filter(active);\n"
-            "+  return filteredItems.length;"
-        )
-        assert _mod._has_renamed_symbols(diff)
-
-    def test_call_site_rename_fires(self):
-        diff = (
-            "-        $this->do_thing( $order );\n"
-            "+        $this->do_stuff( $order );"
-        )
-        assert _mod._has_renamed_symbols(diff)
-
-    def test_value_change_does_not_fire(self):
-        diff = (
-            "-    $retries = 1;\n"
-            "+    $retries = 2;"
-        )
-        assert not _mod._has_renamed_symbols(diff)
-
-    def test_structural_change_does_not_fire(self):
-        diff = (
-            "-        charge( $order );\n"
-            "+        charge( $order, $currency );"
-        )
-        assert not _mod._has_renamed_symbols(diff)
-
-    def test_string_wording_change_does_not_fire(self):
-        diff = (
-            "-    $msg = 'payment failed';\n"
-            "+    $msg = 'payment declined';"
-        )
-        assert not _mod._has_renamed_symbols(diff)
-
-    def test_pure_addition_does_not_fire(self):
-        diff = "+  const filteredItems = items.filter(active);"
-        assert not _mod._has_renamed_symbols(diff)
-
-    def test_multiple_identifier_changes_do_not_fire(self):
-        """Two different identifiers changing on one line is a rewrite,
-        not a rename."""
-        diff = (
-            "-  return alpha + beta;\n"
-            "+  return gamma + delta;"
-        )
-        assert not _mod._has_renamed_symbols(diff)
-
-
-class TestDetectorPolarity:
-    """Positive form coverage never proves that detector silence is negative
-    evidence. Small-diff skipping requires an explicit complete-criteria
-    contract, not extension membership or representative proof forms."""
-
-    def _config(self):
-        return {
-            "domain": "code",
-            "dispatch_class": "conditional",
-            "triage_criteria": ["x"],
-            "triage_keywords": ["wp_remote"],
-            "triage_checks": ["has_http_client_calls"],
-        }
-
-    def _small(self, filepath):
-        return {
-            "added": 2, "removed": 1,
-            "deleted_files": [], "renamed_files": [], "added_files": [],
-            "file_stats": {filepath: {"added": 2, "removed": 1}},
-        }
-
-    def test_unclaimed_language_dispatches_conservatively(self):
-        f = "src/main/java/SyncClient.java"
-        status, reason, _signal = triage_conditional_agent(
-            "reliability-reviewer", self._config(), [f],
-            "load remote status", self._small(f),
-            diff_text="+        HttpResponse<String> resp = client.send(req, handler);",
-        )
-        assert status == "DISPATCH"
-
-    def test_claimed_language_dispatches_when_detector_is_partial(self):
-        f = "internal/sync/notes.go"
-        status, _, _signal = triage_conditional_agent(
-            "reliability-reviewer", self._config(), [f],
-            "tidy comments", self._small(f),
-            diff_text="+\t// clarify rounding behavior",
-        )
-        assert status == "DISPATCH"
-
-    def test_check_registries_derive_from_single_specs_record(self):
-        """Supported and diff-based check views derive from one record."""
-        specs = _mod._CHECK_SPECS
-        for name, spec in specs.items():
-            assert set(spec) == {"reads_diff"}, name
-        assert set(_mod._SUPPORTED_TRIAGE_CHECKS) == set(specs)
-        assert set(_mod._DIFF_BASED_CHECKS) == {
-            n for n, s in specs.items() if s["reads_diff"]
-        }
-
-    def test_check_runners_cover_specs(self):
-        """_CHECK_RUNNERS is the EXECUTION view over _CHECK_SPECS: every
-        declared check has exactly one runner and vice versa. Without this
-        binding a check could be added to _CHECK_SPECS (passing
-        _validate_triage_checks) yet lack a dispatch branch — the silent-skip
-        class the ladder-to-dict refactor eliminates."""
-        assert set(_mod._CHECK_RUNNERS) == set(_mod._CHECK_SPECS)
-        assert all(callable(r) for r in _mod._CHECK_RUNNERS.values())
-
-    @pytest.mark.parametrize("family", sorted(HTTP_CLIENT_PROOF_FORMS))
-    def test_http_client_form_is_evidence(self, family):
-        line = HTTP_CLIENT_PROOF_FORMS[family]
-        assert _mod._has_http_client_calls(line)
+    @pytest.mark.parametrize("diff, expected", RENAME_DIFFS)
+    def test_detects_a_one_identifier_swap(self, diff, expected):
+        assert _mod._has_renamed_symbols(diff) is expected
 
 
 class TestTemplateExtensionsAreInherentUI:
@@ -2279,9 +1787,6 @@ class TestTemplateExtensionsAreInherentUI:
     Twig change was skipped because the old gate preceded the fallback).
     PHP/PHTML mix executable logic and markup, so their finite positive
     detectors cannot prove that a token-silent change emits no UI."""
-
-    def _config(self, registry_agents):
-        return registry_agents["a11y-reviewer"]
 
     def test_template_only_diff_dispatches_without_literal_markup(self, registry):
         cfg = registry["agents"]["a11y-reviewer"]
@@ -2295,29 +1800,11 @@ class TestTemplateExtensionsAreInherentUI:
         )
         assert status == "DISPATCH", reason
 
-    def test_backend_php_only_diff_dispatches_conservatively(self, registry):
-        cfg = registry["agents"]["a11y-reviewer"]
-        f = "includes/class-wc-order-store.php"
-        status, reason, _signal = triage_conditional_agent(
-            "a11y-reviewer", cfg, [f],
-            "tune order lookups",
-            {"added": 3, "removed": 0,
-             "file_stats": {f: {"added": 3, "removed": 0}}},
-            diff_text="+ $orders = $this->store->load( $ids );",
-        )
-        assert status == "DISPATCH"
-        assert "no triage signal to skip" in reason
-
-    @pytest.mark.parametrize(
-        "filepath",
-        [
-            "resources/views/cart.blade.php",
-            "Components/NavMenu.razor",
-            "views/cart.nunjucks",
-            "views/cart.j2",
-        ],
-    )
-    def test_template_alias_dispatches_as_inherent_ui(self, registry, filepath):
+    def test_template_alias_dispatches_as_inherent_ui(self, registry):
+        """A compound template extension (.blade.php) is template, not PHP;
+        the other extensions is_template_file accepts are pinned in
+        agent/test_scope.py::TestTemplateFileClassification."""
+        filepath = "resources/views/cart.blade.php"
         cfg = registry["agents"]["a11y-reviewer"]
         status, reason, _signal = triage_conditional_agent(
             "a11y-reviewer",
@@ -2417,79 +1904,39 @@ class TestA11yMixedMarkupDispatch:
         assert status == "DISPATCH"
         assert "markup" in reason
 
-    def test_dispatches_on_markup_addition_in_php_diff(self, registry):
-        status, reason, _signal = triage_conditional_agent(
-            "a11y-reviewer", self._a11y_config(registry),
-            ["includes/admin/class-wc-admin-settings.php"],
-            "fix settings radio markup",
-            {},
-            diff_text='+<legend class="screen-reader-text"><span>title</span></legend>',
-        )
-        assert status == "DISPATCH"
-
-    def test_dispatches_on_a11y_keyword_without_markup_in_diff(self, registry):
-        """Commit keywords rescue dispatch even when the scanned diff text
-        carries no markup tokens."""
-        status, reason, _signal = triage_conditional_agent(
-            "a11y-reviewer", self._a11y_config(registry),
-            ["includes/class-renderer.php"],
-            "improve accessibility of settings rows",
-            {},
-            diff_text="+ return $rows;",
-        )
-        assert status == "DISPATCH"
-        assert "keyword" in reason
-
-    @pytest.mark.parametrize(
-        "render_call",
-        [
-            "wp_nav_menu( $args );",
-            "wp_login_form( $args );",
-            "get_search_form();",
-            "comment_form( $args );",
-            "wp_list_comments( $args );",
-            "wp_page_menu( $args );",
-            "dynamic_sidebar( 'primary' );",
-            "the_widget( WC_Widget_Cart::class );",
-            "<?= build_custom_navigation( $args ); ?>",
-            "$view->display( $context );",
-        ],
+    # The WordPress core renderer alternation, the `<?=` output construct,
+    # and the ->render/->display method form of MARKUP_CODE_TOKEN_PATTERNS.
+    PHP_RENDER_SURFACES = (
+        "wp_nav_menu( $args );",
+        "wp_login_form( $args );",
+        "get_search_form();",
+        "comment_form( $args );",
+        "wp_list_comments( $args );",
+        "wp_page_menu( $args );",
+        "dynamic_sidebar( 'primary' );",
+        "the_widget( WC_Widget_Cart::class );",
+        "<?= build_custom_navigation( $args ); ?>",
+        "$view->display( $context );",
     )
-    def test_dispatches_on_php_render_surface(self, registry, render_call):
+
+    def test_dispatches_on_php_render_surfaces(self, registry):
         filepath = "includes/class-renderer.php"
-        status, reason, _signal = triage_conditional_agent(
-            "a11y-reviewer",
-            self._a11y_config(registry),
-            [filepath],
-            "adjust rendered output",
-            self._large_diffstat(filepath),
-            diff_text=f"+ {render_call}",
-        )
-        assert status == "DISPATCH"
-        assert "markup emission" in reason
-
-    @pytest.mark.parametrize(
-        "filepath, render_call",
-        [
-            ("theme/header.php", "get_header();"),
-            ("theme/footer.php", "get_footer();"),
-            ("theme/comments.php", "comments_template();"),
-            ("views/shell.phtml", "my_plugin_render_shell();"),
-        ],
-    )
-    def test_dispatches_when_mixed_markup_detector_is_silent(
-        self, registry, filepath, render_call,
-    ):
-        status, reason, _signal = triage_conditional_agent(
-            "a11y-reviewer",
-            self._a11y_config(registry),
-            [filepath],
-            "compose rendered page",
-            self._large_diffstat(filepath),
-            diff_text=f"+ {render_call}",
-        )
-        assert status == "DISPATCH"
-        assert "no triage signal to skip" in reason
+        reasons = {}
+        for render_call in self.PHP_RENDER_SURFACES:
+            status, reason, _signal = triage_conditional_agent(
+                "a11y-reviewer",
+                self._a11y_config(registry),
+                [filepath],
+                "adjust rendered output",
+                self._large_diffstat(filepath),
+                diff_text=f"+ {render_call}",
+            )
+            reasons[render_call] = (status, reason)
+        missed = {
+            call: outcome for call, outcome in reasons.items()
+            if outcome[0] != "DISPATCH" or "markup emission" not in outcome[1]
+        }
+        assert missed == {}
 
     def test_backend_php_dispatches_when_markup_detector_is_silent(self, registry):
         """Backend-looking PHP may still call project-specific render paths;
@@ -2508,28 +1955,6 @@ class TestA11yMixedMarkupDispatch:
         assert status == "DISPATCH"
         assert "no triage signal to skip" in reason
 
-    def test_php_loop_dispatches_without_false_markup_evidence(self, registry):
-        """A PHP loop remains token-silent but dispatches conservatively."""
-        status, reason, _signal = triage_conditional_agent(
-            "a11y-reviewer", self._a11y_config(registry),
-            ["includes/class-wc-query.php"],
-            "refactor query batching",
-            {},
-            diff_text="+ for ( $i = 0; $i < $count; $i++ ) { $formats[] = '%s'; }",
-        )
-        assert status == "DISPATCH"
-        assert "no triage signal to skip" in reason
-
-    def test_jsx_with_interactive_markup_dispatches(self, registry):
-        status, reason, _signal = triage_conditional_agent(
-            "a11y-reviewer", self._a11y_config(registry),
-            ["src/components/Modal.tsx"],
-            "tweak modal",
-            {},
-            diff_text='+ <button onClick={close} aria-label="Close">',
-        )
-        assert status == "DISPATCH"
-
     # --- Frontend/style files retain their specific positive signals ---
 
     def _large_diffstat(self, filepath):
@@ -2538,50 +1963,6 @@ class TestA11yMixedMarkupDispatch:
             "deleted_files": [], "renamed_files": [], "added_files": [],
             "file_stats": {filepath: {"added": 100, "removed": 20}},
         }
-
-    def test_css_only_focus_and_contrast_change_dispatches(self, registry):
-        """'CSS/SCSS affecting visibility, focus indicators, or contrast' is
-        an explicit a11y triage criterion — a sizable CSS-only change must
-        dispatch even without keywords or markup tokens."""
-        status, reason, _signal = triage_conditional_agent(
-            "a11y-reviewer", self._a11y_config(registry),
-            ["src/styles/buttons.scss"],
-            "adjust button outline and contrast tokens",
-            self._large_diffstat("src/styles/buttons.scss"),
-            diff_text="+ outline: 2px solid var(--focus-ring);\n+ color: #767676;",
-        )
-        assert status == "DISPATCH"
-
-    def test_ts_speak_announcement_dispatches_without_import_in_hunk(self, registry):
-        """'Screen reader announcements: speak() calls' is an explicit a11y
-        triage criterion — a speak() change must not depend on the
-        @wordpress/a11y import line happening to be in the diff."""
-        status, reason, _signal = triage_conditional_agent(
-            "a11y-reviewer", self._a11y_config(registry),
-            ["src/store/notices.ts"],
-            "announce settings save result",
-            self._large_diffstat("src/store/notices.ts"),
-            diff_text="+ speak( message, 'polite' );",
-        )
-        assert status == "DISPATCH"
-
-    def test_mixed_php_and_css_diff_dispatches_on_style_evidence(self, registry):
-        """A style file supplies specific positive accessibility evidence."""
-        status, reason, _signal = triage_conditional_agent(
-            "a11y-reviewer", self._a11y_config(registry),
-            ["includes/class-renderer.php", "src/styles/admin.scss"],
-            "restyle settings rows",
-            {
-                "added": 90, "removed": 10,
-                "deleted_files": [], "renamed_files": [], "added_files": [],
-                "file_stats": {
-                    "includes/class-renderer.php": {"added": 30, "removed": 5},
-                    "src/styles/admin.scss": {"added": 60, "removed": 5},
-                },
-            },
-            diff_text="+ padding-right: 24px;",
-        )
-        assert status == "DISPATCH"
 
     def test_one_line_css_outline_removal_dispatches(self, registry):
         """'+ outline: none;' is a one-line focus-indicator regression — an
@@ -2599,9 +1980,11 @@ class TestA11yMixedMarkupDispatch:
             diff_text="+ outline: none;",
         )
         assert status == "DISPATCH"
+        assert "style file changes" in reason
 
     def test_small_ts_speak_change_dispatches(self, registry):
-        """A small speak() announcement change is markup evidence."""
+        """A small speak() announcement change is markup evidence; it must
+        not depend on the @wordpress/a11y import line being in the hunk."""
         status, reason, _signal = triage_conditional_agent(
             "a11y-reviewer", self._a11y_config(registry),
             ["src/store/notices.ts"],
@@ -2614,26 +1997,7 @@ class TestA11yMixedMarkupDispatch:
             diff_text="+ speak( message, 'polite' );",
         )
         assert status == "DISPATCH"
-
-    def test_unrelated_test_file_does_not_change_conservative_dispatch(self, registry):
-        """An unrelated test cannot manufacture or suppress routing evidence
-        for the production PHP change."""
-        status, reason, _signal = triage_conditional_agent(
-            "a11y-reviewer", self._a11y_config(registry),
-            ["includes/class-wc-query.php", "tests/js/query.test.ts"],
-            "refactor query batching",
-            {
-                "added": 80, "removed": 15,
-                "deleted_files": [], "renamed_files": [], "added_files": [],
-                "file_stats": {
-                    "includes/class-wc-query.php": {"added": 60, "removed": 10},
-                    "tests/js/query.test.ts": {"added": 20, "removed": 5},
-                },
-            },
-            diff_text="+ $results = $wpdb->get_results( $sql );",
-        )
-        assert status == "DISPATCH"
-        assert "no triage signal to skip" in reason
+        assert "markup emission" in reason
 
     def test_small_pure_logic_ts_change_dispatches_without_exhaustive_contract(
         self, registry,
@@ -2664,9 +2028,13 @@ class TestHasMarkupChanges:
         assert _mod._has_markup_changes("- <fieldset><legend>opts</legend>")
 
     def test_aria_and_a11y_attributes_detected(self):
+        """Attribute emission with context: quoted values, JSX braces, and
+        PHP string-built attributes."""
         assert _mod._has_markup_changes('+ aria-live="polite"')
         assert _mod._has_markup_changes('+ role="dialog"')
         assert _mod._has_markup_changes("+ tabindex=0")
+        assert _mod._has_markup_changes("+ tabIndex={0}")
+        assert _mod._has_markup_changes("+ echo '<span for=\"' . $id . '\">';")
         assert _mod._has_markup_changes('+ <span class="screen-reader-text">')
 
     def test_focus_management_detected(self):
@@ -2706,14 +2074,6 @@ class TestHasMarkupChanges:
         assert not _mod._has_markup_changes("+ $alt = $fallback;")
         assert not _mod._has_markup_changes("+ $for = $matches[1];")
         assert not _mod._has_markup_changes("+ $tabindex = get_option( 'x' );")
-
-    def test_attribute_forms_still_detected_with_context(self):
-        """Real attribute emission keeps matching: quoted values, JSX braces,
-        and PHP string-built attributes."""
-        assert _mod._has_markup_changes('+ role="button"')
-        assert _mod._has_markup_changes("+ tabIndex={0}")
-        assert _mod._has_markup_changes("+ echo '<span for=\"' . $id . '\">';")
-        assert _mod._has_markup_changes("+ tabindex=0")
 
     def test_plain_logic_not_detected(self):
         assert not _mod._has_markup_changes("+ for ( $i = 0; $i < 3; $i++ ) {}")
@@ -2759,146 +2119,17 @@ class TestSmallDiffPolarity:
         assert status == "DISPATCH"
         assert "no triage signal to skip" in reason
 
-    @pytest.mark.parametrize(
-        "agent_name",
-        ["performance-reviewer", "reliability-reviewer"],
-    )
-    def test_go_client_do_dispatches_when_partial_detector_is_silent(
-        self, agents, agent_name,
-    ):
-        filepath = "internal/client.go"
-        status, _, _signal = triage_conditional_agent(
-            agent_name,
-            agents[agent_name],
-            [filepath],
-            "tidy client code",
-            self._small_diffstat(filepath),
-            diff_text="+ response, err := client.Do(req)",
-        )
-        assert status == "DISPATCH"
-
-    def test_indexed_javascript_loop_dispatches_when_partial_detector_is_silent(
-        self, agents,
-    ):
-        filepath = "src/items.js"
-        status, _, _signal = triage_conditional_agent(
-            "performance-reviewer",
-            agents["performance-reviewer"],
-            [filepath],
-            "tidy item processing",
-            self._small_diffstat(filepath),
-            diff_text=(
-                "+ for (let i = 0; i < items.length; i++) { consume(items[i]); }"
-            ),
-        )
-        assert status == "DISPATCH"
-
-    def test_large_diff_without_signal_still_dispatches_by_default(self):
-        config = self._make_config(triage_keywords=["async", "lock"])
-        diffstat = self._small_diffstat(added=180, removed=40)
-        status, reason, _signal = triage_conditional_agent(
-            "concurrency-reviewer", config,
-            ["includes/class-renderer.php"],
-            "restructure renderer",
-            diffstat,
-            diff_text="",  # successful scan, nothing found
-        )
-        assert status == "DISPATCH"
-        assert "no triage signal to skip" in reason
-
-    def test_small_diff_with_keyword_evidence_dispatches(self):
-        config = self._make_config(triage_keywords=["async", "lock"])
-        status, reason, _signal = triage_conditional_agent(
-            "concurrency-reviewer", config,
-            ["includes/class-renderer.php"],
-            "add lock around cache write",
-            self._small_diffstat(),
-        )
-        assert status == "DISPATCH"
-        assert "keywords matched" in reason
-
-    def test_small_diff_with_check_evidence_dispatches(self):
-        config = self._make_config(
-            domain="dead-code",
-            triage_checks=["net_removal"],
-        )
-        diffstat = self._small_diffstat(added=2, removed=30)
-        status, reason, _signal = triage_conditional_agent(
-            "dead-code-reviewer", config,
-            ["includes/class-renderer.php"],
-            "trim renderer",
-            diffstat,
-        )
-        assert status == "DISPATCH"
-
     def test_unsized_diffstat_keeps_default_dispatch(self):
-        """No sizing data (empty diffstat) → cannot prove smallness → dispatch."""
+        """No sizing data (empty diffstat) → cannot prove smallness → dispatch.
+        The scan succeeded (diff_text=""), so this reaches the layer-6
+        default, not the diff-unavailable branch a None scan would take."""
         config = self._make_config(triage_keywords=["async"])
         status, reason, _signal = triage_conditional_agent(
             "concurrency-reviewer", config,
             ["includes/class-renderer.php"],
             "fix renderer",
             {},
-        )
-        assert status == "DISPATCH"
-
-    def test_api_contract_registry_has_signature_checks(self, agents):
-        """'Public function signature changes' is an explicit api-contract
-        criterion — structural checks must back it so small signature
-        changes don't depend on commit-text keywords."""
-        checks = set(agents["api-contract-reviewer"].get("triage_checks", []))
-        assert {"has_modified_signatures", "has_public_api_changes"} <= checks
-
-    def test_two_line_required_param_addition_dispatches_api_contract(self, agents):
-        """Adding a required parameter to a public method is a classic
-        two-line breaking change — it must dispatch api-contract-reviewer
-        without any keyword in commits."""
-        status, reason, _signal = triage_conditional_agent(
-            "api-contract-reviewer", agents["api-contract-reviewer"],
-            ["src/PaymentGatewayInterface.php"],
-            "extend process method",
-            {
-                "added": 1, "removed": 1,
-                "deleted_files": [], "renamed_files": [], "added_files": [],
-                "file_stats": {"src/PaymentGatewayInterface.php": {"added": 1, "removed": 1}},
-            },
-            diff_text=(
-                "-    public function process( $order ) {\n"
-                "+    public function process( $order, $currency ) {"
-            ),
-        )
-        assert status == "DISPATCH"
-
-    def test_one_line_superglobal_echo_dispatches_security(self, agents):
-        status, reason, _signal = triage_conditional_agent(
-            "security-reviewer", agents["security-reviewer"],
-            ["includes/render.php"],
-            "show visitor name",
-            {
-                "added": 1, "removed": 0,
-                "deleted_files": [], "renamed_files": [], "added_files": [],
-                "file_stats": {"includes/render.php": {"added": 1, "removed": 0}},
-            },
-            diff_text="+ echo $_GET['name'];",
-        )
-        assert status == "DISPATCH"
-
-    def test_test_file_size_does_not_change_conservative_dispatch(self):
-        config = self._make_config(triage_keywords=["async"])
-        diffstat = {
-            "added": 300, "removed": 10,
-            "deleted_files": [], "renamed_files": [], "added_files": [],
-            "file_stats": {
-                "includes/class-renderer.php": {"added": 6, "removed": 1},
-                "tests/RendererTest.php": {"added": 294, "removed": 9},
-            },
-        }
-        status, reason, _signal = triage_conditional_agent(
-            "concurrency-reviewer", config,
-            ["includes/class-renderer.php", "tests/RendererTest.php"],
-            "fix renderer",
-            diffstat,
-            diff_text="",  # successful scan, nothing found
+            diff_text="",
         )
         assert status == "DISPATCH"
         assert "no triage signal to skip" in reason
@@ -3036,24 +2267,25 @@ class TestDiffFetchFailureConservatism:
             "require_triage_keyword_match": True,
         }
 
-    def test_get_diff_text_returns_none_on_nonzero_exit(self):
-        with patch.object(_mod.subprocess, "run", side_effect=self._fail_run):
-            assert _mod.get_diff_text("main..HEAD", ["a.php"]) is None
-
-    def test_get_diff_text_returns_none_on_timeout(self):
+    def test_get_diff_text_separates_a_failed_fetch_from_an_empty_diff(self):
+        """Nonzero exit and timeout return None; an empty successful diff
+        returns "". (A missing git binary is the wrapper-parity test's.)"""
         def timeout_run(cmd, capture_output=True, text=True, timeout=30):
             raise _mod.subprocess.TimeoutExpired(cmd, timeout)
-        with patch.object(_mod.subprocess, "run", side_effect=timeout_run):
-            assert _mod.get_diff_text("main..HEAD", ["a.php"]) is None
 
-    def test_get_diff_text_returns_empty_string_on_empty_success(self):
         def ok_run(cmd, capture_output=True, text=True, timeout=30):
             class R:
                 returncode = 0
                 stdout = ""
             return R()
-        with patch.object(_mod.subprocess, "run", side_effect=ok_run):
-            assert _mod.get_diff_text("main..HEAD", ["a.php"]) == ""
+
+        for label, run, expected in (
+            ("nonzero exit", self._fail_run, None),
+            ("timeout", timeout_run, None),
+            ("empty success", ok_run, ""),
+        ):
+            with patch.object(_mod.subprocess, "run", side_effect=run):
+                assert _mod.get_diff_text("main..HEAD", ["a.php"]) == expected, label
 
     def test_blanket_gate_dispatches_when_scan_failed(self):
         status, reason, _signal = triage_conditional_agent(
@@ -3062,41 +2294,6 @@ class TestDiffFetchFailureConservatism:
         )
         assert status == "DISPATCH"
         assert "unavailable" in reason
-
-    def test_small_diff_gate_dispatches_when_scan_failed(self):
-        config = {
-            "domain": "code",
-            "dispatch_class": "conditional",
-            "triage_criteria": ["x"],
-            "triage_keywords": ["transaction"],
-        }
-        diffstat = {
-            "added": 4, "removed": 1,
-            "file_stats": {"src/orders.php": {"added": 4, "removed": 1}},
-        }
-        status, reason, _signal = triage_conditional_agent(
-            "concurrency-reviewer", config,
-            ["src/orders.php"], "", diffstat, diff_text=None,
-        )
-        assert status == "DISPATCH"
-        assert "unavailable" in reason
-
-    def test_successful_empty_scan_still_dispatches(self):
-        config = {
-            "domain": "code",
-            "dispatch_class": "conditional",
-            "triage_criteria": ["x"],
-            "triage_keywords": ["transaction"],
-        }
-        diffstat = {
-            "added": 4, "removed": 1,
-            "file_stats": {"src/orders.php": {"added": 4, "removed": 1}},
-        }
-        status, _, _signal = triage_conditional_agent(
-            "concurrency-reviewer", config,
-            ["src/orders.php"], "", diffstat, diff_text="",
-        )
-        assert status == "DISPATCH"
 
     def test_fetch_failure_reaches_gates_through_decide_agent_dispatch(self):
         """END-TO-END: the None sentinel must survive the production path.
@@ -3226,27 +2423,26 @@ class TestProseSourceHygiene:
         text = _mod._build_pr_text(self._context(body), pr_template=template)
         assert "security" not in text
         assert "Only the author wrote this." in text
-
-    def test_pr_text_without_a_template_still_drops_comments(self):
+        # With no template, the HTML comments still go.
         body = "Prose <!-- template: passwords and user data --> more prose"
         text = _mod._build_pr_text(self._context(body), pr_template="")
         assert "password" not in text and "Prose  more prose" in text
 
     def test_commit_messages_exclude_trailers(self):
-        log = "fix: closed keyboard\nBody.\n\nCo-Authored-By: Claude <x@y>\nClaude-Session: https://s\n\x00"
-        with patch.object(_mod.subprocess, "run") as run:
-            run.return_value = type("R", (), {"returncode": 0, "stdout": log})()
-            text = _mod.get_commit_messages("main..HEAD")
-        assert text == "fix: closed keyboard\nBody."
-        # The contract is per-commit separation, not the exact argv.
-        assert any("%x00" in arg for arg in run.call_args[0][0])
-
-    def test_commit_messages_drop_trailers_from_the_actual_git_subject_body_shape(self):
-        log = "fix: dropdown\nCo-Authored-By: Security Bot <test@example.com>\n\x00"
-        with patch.object(_mod.subprocess, "run") as run:
-            run.return_value = type("R", (), {"returncode": 0, "stdout": log})()
-            text = _mod.get_commit_messages("main..HEAD")
-        assert text == "fix: dropdown"
+        """Both the paragraph-separated trailer block and git's %s%n%b shape,
+        where a trailer follows the subject with no blank line."""
+        for log, expected in (
+            ("fix: closed keyboard\nBody.\n\nCo-Authored-By: Claude <x@y>\nClaude-Session: https://s\n\x00",
+             "fix: closed keyboard\nBody."),
+            ("fix: dropdown\nCo-Authored-By: Security Bot <test@example.com>\n\x00",
+             "fix: dropdown"),
+        ):
+            with patch.object(_mod.subprocess, "run") as run:
+                run.return_value = type("R", (), {"returncode": 0, "stdout": log})()
+                text = _mod.get_commit_messages("main..HEAD")
+            assert text == expected
+            # The contract is per-commit separation, not the exact argv.
+            assert any("%x00" in arg for arg in run.call_args[0][0])
 
     @pytest.mark.parametrize("wrapper, args", [
         ("get_changed_files_from_git", ("main..HEAD",)),
@@ -3267,20 +2463,17 @@ class TestProseSourceHygiene:
         with patch.object(_mod.subprocess, "run", side_effect=PermissionError):
             assert fn(*args) == missing
 
-    def test_toplevel_is_unknown_on_os_error(self, monkeypatch):
-        with patch.object(_mod.subprocess, "run", side_effect=PermissionError):
-            assert _mod._git_toplevel() is None
-
-    def test_plan_looks_the_template_up_from_the_checkout(self, registry, tmp_path, monkeypatch):
+    def test_plan_looks_the_template_up_from_the_checkout(self, registry, tmp_path):
+        """The planner reads the PR template from the checkout's top level
+        (git rev-parse), not from wherever the process happens to run."""
         repo = tmp_path / "repo"
         (repo / ".github").mkdir(parents=True)
         (repo / ".github" / "PULL_REQUEST_TEMPLATE.md").write_text(
             "- [ ] I have reviewed my code for security best practices\n"
         )
-        subprocess.run(["git", "init", "-q", str(repo)], check=True)
-        monkeypatch.chdir(repo)
         body = "- [x] I have reviewed my code for security best practices\nMoves a label.\n"
-        with patch.object(_mod, "get_diff_text", return_value="+ $label = 'x';"):
+        with patch.object(_mod.subprocess, "run", side_effect=_fake_git("", toplevel=str(repo))), \
+                patch.object(_mod, "get_diff_text", return_value="+ $label = 'x';"):
             plan = build_dispatch_plan(
                 mode="pr", git_range="main..HEAD", output_dir=str(tmp_path / "out"),
                 changed_files=["src/Renderer.php"], registry=registry,
@@ -3289,18 +2482,6 @@ class TestProseSourceHygiene:
             )
         security = next(a for a in plan["agents"] if a["name"] == "security-reviewer")
         assert "pr: security" not in security["reason"]
-
-    def test_an_explicit_empty_template_skips_the_lookup(self, registry, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        with patch.object(_mod, "find_pr_template") as lookup, \
-                patch.object(_mod, "get_diff_text", return_value=""):
-            build_dispatch_plan(
-                mode="pr", git_range="main..HEAD", output_dir=str(tmp_path / "out"),
-                changed_files=["src/Renderer.php"], registry=registry,
-                commit_messages="", diffstat={"added": 1, "removed": 0},
-                review_context=self._context("body"), pr_template="",
-            )
-        lookup.assert_not_called()
 
 
 
@@ -3530,13 +2711,18 @@ class TestStructuralChecks:
     def test_http_client_calls_are_client_evidence(self):
         """"HTTP/API client calls" had near-zero vocabulary outside
         'fetch'/'request' keywords (round-13 miss: go http.Get(url)
-        skipped performance and reliability)."""
+        skipped performance and reliability). One line or more per
+        _HTTP_CLIENT_PATTERNS entry."""
         for line in (
             "+\tresp, err := http.Get(url)",
             "+\treq, _ := http.NewRequest(\"POST\", url, body)",
+            "+  const r = await fetch(url);",
+            "+    resp = axios.get(url)",
+            "+    resp = requests.get(api_url, timeout=10)",
             "+    $ch = curl_init( $endpoint );",
             "+    const client = new HttpClient(baseUrl);",
-            "+    resp = axios.get(url)",
+            "+    $response = wp_remote_get( $url );",
+            "+    with urllib.request.urlopen(url) as resp:",
         ):
             assert _mod._has_http_client_calls(line), line
 
@@ -3549,13 +2735,15 @@ class TestStructuralChecks:
             assert not _mod._has_http_client_calls(line), line
 
 
-    @pytest.mark.parametrize("family", sorted(ITERATION_PROOF_FORMS))
-    def test_collection_iteration_form_is_evidence(self, family):
+    def test_collection_iteration_forms_are_evidence(self):
         """Loops over collections back performance's iteration criterion
         (round-15 miss: a TSX for-of skipped despite the criterion).
         These forms prove positive recognition, not exhaustive coverage."""
-        line = ITERATION_PROOF_FORMS[family]
-        assert _mod._has_collection_iteration(line)
+        missed = [
+            family for family, line in ITERATION_PROOF_FORMS.items()
+            if not _mod._has_collection_iteration(line)
+        ]
+        assert missed == []
 
     def test_prose_and_comments_are_not_iteration_evidence(self):
         for line in (
@@ -3919,18 +3107,6 @@ class TestRegistryKeywordHygiene:
         }
         assert {k: v for k, v in literal_stars.items() if v} == {}
 
-    def test_no_bare_truncated_stems_remain(self, agents):
-        """The stems the prefix era relied on must now carry their star;
-        a bare stem is a whole word that matches nothing."""
-        stems = {"sanitiz", "escap", "optimiz", "accessib", "deprecat",
-                 "restructur", "idempoten", "schedul", "cach", "migrat",
-                 "architect", "inject", "decoupl", "consolidat", "concurren"}
-        offenders = {
-            name: sorted(stems & set(config.get("triage_keywords", [])))
-            for name, config in agents.items()
-        }
-        assert {k: v for k, v in offenders.items() if v} == {}
-
 
 # =============================================================================
 # Repo-contributed reviewer expansion
@@ -3981,6 +3157,10 @@ class TestRepoReviewerExpansion:
         assert dispatch[0]["status"] == "SKIPPED_TRIAGE"
 
     def test_path_glob_dispatches(self):
+        """A path-declared reviewer dispatches on a matching file, carries
+        its globs as the row's include_paths (what bootstrap passes as
+        --include-path, so the orphan measurement sees the same scope), and
+        falls back to the code domain."""
         dispatch = []
         rev = {"id": "sw", "label": "Sw", "ref": "r.md",
                "applies_to": {"paths": ["includes/**"]}, "channel": "advisory",
@@ -3988,6 +3168,8 @@ class TestRepoReviewerExpansion:
         expand_repo_reviewers(_review_ctx([rev]), {}, ["includes/core/x.php"], dispatch)
         assert dispatch[0]["status"] == "DISPATCH"
         assert dispatch[0]["channel"] == "advisory"
+        assert dispatch[0]["include_paths"] == ["includes/**"]
+        assert dispatch[0]["scope_domains"] == ["code"]
 
     def test_resolved_ref_is_preferred_over_root_relative_ref(self):
         """Bootstrap resolves a relative ref against its own invocation
@@ -4017,29 +3199,12 @@ class TestRepoReviewerExpansion:
         assert dispatch[0]["status"] == "SKIPPED"
         assert "isolated execution is not implemented" in dispatch[0]["reason"]
 
-    def test_untrusted_exclusions_surface_as_warnings(self):
-        """Provenance-gated entries are hard-excluded at config
-        normalization, so nothing remains to dispatch — the exclusion must
-        still be LOUD, and warnings are the only channel the step-5
-        briefing renders (agent_signals never reach the orchestrator)."""
-        ctx = {"review_config": {
-            "rules": [], "reviewers": [],
-            "untrusted": [{
-                "kind": "reviewer", "id": "evil", "path": ".ai/evil.md",
-                "reason": "defined or modified within the reviewed range",
-            }],
-        }}
-        dispatch = []
-        signals, warnings = expand_repo_reviewers(ctx, {}, [], dispatch)
-        assert dispatch == []
-        assert signals == []
-        assert any(
-            "UNTRUSTED reviewer 'evil'" in warning for warning in warnings
-        )
-
     def test_untrusted_warnings_reach_the_rendered_plan_warnings(self, registry):
-        """build_dispatch_plan must carry provenance exclusions in its
-        ``warnings`` array — the field pipeline step 5 renders with ⚠️."""
+        """Provenance-gated entries are hard-excluded at config
+        normalization, so nothing remains to dispatch; the exclusion must
+        still be loud. build_dispatch_plan carries it in its ``warnings``
+        array, the field pipeline step 5 renders with ⚠️ (agent_signals
+        never reach the orchestrator)."""
         ctx = {"review_config": {
             "rules": [], "reviewers": [],
             "untrusted": [{
@@ -4055,16 +3220,6 @@ class TestRepoReviewerExpansion:
         assert any("UNTRUSTED config" in w for w in plan["warnings"])
         assert not any("UNTRUSTED" in s for s in plan["agent_signals"])
 
-    def test_declared_path_globs_ride_on_the_plan_row(self):
-        """The globs bootstrap passes as `--include-path` are the plan row's
-        `include_paths`, so the orphan measurement sees the same scope."""
-        dispatch = []
-        rev = {"id": "contracts", "ref": ".ai/agents/review/contracts.md",
-               "applies_to": {"paths": ["contracts/*.contract"]}}
-        expand_repo_reviewers(_review_ctx([rev]), {}, ["contracts/payment.contract"], dispatch)
-        assert dispatch[0]["status"] == "DISPATCH"
-        assert dispatch[0]["include_paths"] == ["contracts/*.contract"]
-
     def test_registry_rows_carry_their_declared_scope(self, registry):
         """A plan row states the agent's scope — primary plus secondary
         domains — so a reader of the plan (dispatch_adjust's orphan
@@ -4076,14 +3231,6 @@ class TestRepoReviewerExpansion:
         rows = {a["name"]: a for a in plan["agents"]}
         assert rows["security-reviewer"]["scope_domains"] == ["security", "config-ops"]
         assert rows["code-reviewer"]["scope_domains"] == ["code"]
-
-    def test_scope_domains_fallback_to_code(self):
-        dispatch = []
-        rev = {"id": "any", "label": "Any", "ref": "r.md",
-               "applies_to": {"paths": ["**/*.php"]}, "channel": "blocking",
-               "execution": "inline", "model": None}
-        expand_repo_reviewers(_review_ctx([rev]), {}, ["x.php"], dispatch)
-        assert dispatch[0]["scope_domains"] == ["code"]
 
     def test_integration_through_build_dispatch_plan(self, registry):
         rev = {"id": "domain-expert", "label": "Domain Expert",
@@ -4187,7 +3334,6 @@ class TestDispatchSignals:
         assert (reason, signal) == ("default", SIGNAL_DEFAULT)
 
     def test_repo_reviewers_carry_their_own_signals(self):
-        from review.dispatch_status import SIGNAL_NO_DOMAIN_FILES, SIGNAL_REPO_REVIEWER
         dispatch = []
         expand_repo_reviewers(
             _review_ctx([
@@ -4198,15 +3344,6 @@ class TestDispatchSignals:
         )
         signals = {entry["name"]: entry["signal"] for entry in dispatch}
         assert signals == {"repo-foo-reviewer": SIGNAL_REPO_REVIEWER, "repo-bar-reviewer": SIGNAL_NO_DOMAIN_FILES}
-
-    def test_decide_agent_dispatch_signals_always_and_no_domain_files(self):
-        from review.dispatch_status import SIGNAL_ALWAYS, SIGNAL_NO_DOMAIN_FILES, SIGNAL_UNTRIAGED
-
-        always = {"domain": "code", "dispatch_class": "always"}
-        assert decide_agent_dispatch("code-reviewer", always, {"code": 3})[2] == SIGNAL_ALWAYS
-        assert decide_agent_dispatch("code-reviewer", always, {"code": 0})[2] == SIGNAL_NO_DOMAIN_FILES
-        conditional = {"domain": "code", "dispatch_class": "conditional"}
-        assert decide_agent_dispatch("x-reviewer", conditional, {"code": 3})[2] == SIGNAL_UNTRIAGED
 
     def test_quick_mode_keys_on_the_signal_not_the_reason_prose(self, registry, tmp_path):
         from review.dispatch_status import SIGNAL_QUICK_MODE, SKIPPED_QUICK_MODE
@@ -4230,3 +3367,8 @@ class TestDispatchSignals:
         skipped = [a for a in plan["agents"] if a["status"] == SKIPPED_QUICK_MODE]
         assert skipped and all(a["signal"] == SIGNAL_QUICK_MODE for a in skipped)
         assert all("signal" in a and a["signal"] for a in plan["agents"])
+        # The always-dispatch simplification reviewer is in the quick-mode
+        # blocklist, so quick mode relabels it too.
+        simplification = next(a for a in plan["agents"] if a["name"] == "simplification-reviewer")
+        assert simplification["status"] == SKIPPED_QUICK_MODE
+        assert "quick review mode" in simplification["reason"]

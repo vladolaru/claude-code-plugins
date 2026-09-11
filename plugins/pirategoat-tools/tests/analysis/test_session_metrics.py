@@ -108,43 +108,31 @@ def _make_assistant_message(content: str) -> str:
 class TestStrategy1Bootstrap:
     """Strategy 1 detects bootstrap.py --agent <name> in first 15 lines (also matches legacy bootstrap-reviewer.py)."""
 
-    def test_bootstrap_with_suffix(self, tmp_path):
+    @pytest.mark.parametrize(
+        "user_message,agent_arg,expected",
+        [
+            # Agent name without a -reviewer suffix gets it appended.
+            pytest.param("Start", "patterns", "patterns-reviewer", id="without-suffix"),
+            # Bootstrap detection fires before keyword inference — the user
+            # message baits the wp-architecture keyword, but the bootstrap
+            # line still wins.
+            pytest.param(
+                "Review WordPress architecture quality",
+                "security-reviewer",
+                "security-reviewer",
+                id="takes-precedence",
+            ),
+        ],
+    )
+    def test_bootstrap_detection(self, tmp_path, user_message, agent_arg, expected):
         path = _write_jsonl(
             [
-                _make_user_message("Run the review"),
-                _make_assistant_message(
-                    "python3 bootstrap-reviewer.py --agent security-reviewer --range main..HEAD"
-                ),
+                _make_user_message(user_message),
+                _make_assistant_message(f"python3 bootstrap-reviewer.py --agent {agent_arg}"),
             ],
             str(tmp_path),
         )
-        assert identify_agent_type(path) == "security-reviewer"
-
-    def test_bootstrap_without_suffix(self, tmp_path):
-        """Agent name without -reviewer suffix gets it appended."""
-        path = _write_jsonl(
-            [
-                _make_user_message("Start"),
-                _make_assistant_message(
-                    "python3 bootstrap-reviewer.py --agent patterns"
-                ),
-            ],
-            str(tmp_path),
-        )
-        assert identify_agent_type(path) == "patterns-reviewer"
-
-    def test_bootstrap_takes_precedence(self, tmp_path):
-        """Bootstrap detection should fire before keyword inference."""
-        path = _write_jsonl(
-            [
-                _make_user_message("Review WordPress architecture quality"),
-                _make_assistant_message(
-                    "python3 bootstrap-reviewer.py --agent security-reviewer"
-                ),
-            ],
-            str(tmp_path),
-        )
-        assert identify_agent_type(path) == "security-reviewer"
+        assert identify_agent_type(path) == expected
 
 
 # =============================================================================
@@ -153,7 +141,13 @@ class TestStrategy1Bootstrap:
 
 
 class TestStrategy15Fingerprints:
-    """Strategy 1.5 detects non-reviewer agents (e.g. reconciliator) by prompt fingerprint."""
+    """Strategy 1.5 detects non-reviewer agents (e.g. reconciliator) by prompt
+    fingerprint — one regex with a (summary|focused) alternation, so one mode
+    is enough to pin it. The prompt below also carries
+    'wp-architecture-reviewer: STATUS=COMPLETED', which previously matched
+    the wp-architecture keyword pattern; the assertion that this still
+    resolves to "reconciliator" and not "wp-architecture-reviewer" is the
+    regression pin."""
 
     def test_reconciliator_summary_mode(self, tmp_path):
         content = (
@@ -162,29 +156,6 @@ class TestStrategy15Fingerprints:
             "\n"
             "security-reviewer: STATUS=COMPLETED\n"
             "wp-architecture-reviewer: STATUS=COMPLETED\n"
-        )
-        path = _write_jsonl([_make_user_message(content)], str(tmp_path))
-        assert identify_agent_type(path) == "reconciliator"
-
-    def test_reconciliator_focused_mode(self, tmp_path):
-        content = (
-            "Output Directory: /tmp/pr-review-99\n"
-            "Mode: focused\n"
-            "Focus: security\n"
-        )
-        path = _write_jsonl([_make_user_message(content)], str(tmp_path))
-        assert identify_agent_type(path) == "reconciliator"
-
-    def test_reconciliator_not_misidentified_as_wp_architecture(self, tmp_path):
-        """The reconciliator prompt contains 'wp-architecture-reviewer: STATUS=COMPLETED'
-        which previously matched the wp-architecture keyword pattern."""
-        content = (
-            "Output Directory: /tmp/pr-review-42\n"
-            "Mode: summary\n"
-            "\n"
-            "wp-architecture-reviewer: STATUS=COMPLETED\n"
-            "architecture-reviewer: STATUS=COMPLETED\n"
-            "security-reviewer: STATUS=COMPLETED\n"
         )
         path = _write_jsonl([_make_user_message(content)], str(tmp_path))
         result = identify_agent_type(path)
@@ -198,22 +169,25 @@ class TestStrategy15Fingerprints:
 
 
 class TestStrategy2Keywords:
-    """Strategy 2 infers agent type from prompt keywords."""
+    """Strategy 2 infers agent type from prompt keywords: AGENT_INFERENCE_PATTERNS
+    is a data table walked by one loop, so one genuine-keyword row is enough
+    to pin the walk; the wp-architecture and patterns keyword entries are
+    constants and not pinned individually here (test_mixed_signal_and_real_keyword
+    and test_list_content_format below already infer security-reviewer too)."""
 
-    def test_wp_architecture_genuine_prompt(self, tmp_path):
-        content = "Review the WordPress architecture of this PR"
+    @pytest.mark.parametrize(
+        "content,expected",
+        [
+            pytest.param(
+                "Check for security issues in the changed files",
+                "security-reviewer",
+                id="security",
+            ),
+        ],
+    )
+    def test_keyword_inference(self, tmp_path, content, expected):
         path = _write_jsonl([_make_user_message(content)], str(tmp_path))
-        assert identify_agent_type(path) == "wp-architecture-reviewer"
-
-    def test_security_genuine_prompt(self, tmp_path):
-        content = "Check for security issues in the changed files"
-        path = _write_jsonl([_make_user_message(content)], str(tmp_path))
-        assert identify_agent_type(path) == "security-reviewer"
-
-    def test_patterns_genuine_prompt(self, tmp_path):
-        content = "Review for pattern consistency"
-        path = _write_jsonl([_make_user_message(content)], str(tmp_path))
-        assert identify_agent_type(path) == "patterns-reviewer"
+        assert identify_agent_type(path) == expected
 
     def test_agent_signal_does_not_trigger_keyword_match(self, tmp_path):
         """Agent signal lines like 'wp-architecture-reviewer: STATUS=COMPLETED'
@@ -225,16 +199,6 @@ class TestStrategy2Keywords:
         )
         path = _write_jsonl([_make_user_message(content)], str(tmp_path))
         # Without the fix, this would match "wp-architecture" from the signal line
-        assert identify_agent_type(path) is None
-
-    def test_agent_signal_does_not_cause_false_wp_arch(self, tmp_path):
-        """Specifically test that wp-architecture-reviewer signal doesn't
-        trigger wp-architecture keyword inference."""
-        content = (
-            "Review the code changes.\n"
-            "wp-architecture-reviewer: STATUS=FINISHED\n"
-        )
-        path = _write_jsonl([_make_user_message(content)], str(tmp_path))
         assert identify_agent_type(path) is None
 
     def test_mixed_signal_and_real_keyword(self, tmp_path):
@@ -256,16 +220,20 @@ class TestStrategy2Keywords:
 class TestEdgeCases:
     """Edge cases for identify_agent_type."""
 
-    def test_empty_file(self, tmp_path):
-        path = _write_jsonl([], str(tmp_path))
-        assert identify_agent_type(path) is None
-
-    def test_nonexistent_file(self):
-        assert identify_agent_type("/nonexistent/path.jsonl") is None
-
-    def test_no_matching_content(self, tmp_path):
-        content = "Just some random text with no reviewer keywords."
-        path = _write_jsonl([_make_user_message(content)], str(tmp_path))
+    @pytest.mark.parametrize(
+        "lines,path_override",
+        [
+            pytest.param([], None, id="empty-file"),
+            pytest.param(None, "/nonexistent/path.jsonl", id="nonexistent-file"),
+            pytest.param(
+                [_make_user_message("Just some random text with no reviewer keywords.")],
+                None,
+                id="no-matching-content",
+            ),
+        ],
+    )
+    def test_identify_returns_none(self, tmp_path, lines, path_override):
+        path = path_override if path_override is not None else _write_jsonl(lines, str(tmp_path))
         assert identify_agent_type(path) is None
 
     def test_list_content_format(self, tmp_path):

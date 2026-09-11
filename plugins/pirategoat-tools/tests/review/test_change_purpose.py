@@ -3,6 +3,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 TESTS_DIR = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = TESTS_DIR.parent / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
@@ -71,8 +73,6 @@ class TestParse:
             "verify": [], "context": [], "author_description": "",
             "problems": [], "structured": False,
         }
-
-    def test_empty_text_is_unstructured(self):
         assert cp.parse_change_purpose("")["structured"] is False
         assert cp.parse_change_purpose(None)["structured"] is False
 
@@ -87,21 +87,65 @@ class TestProblems:
         assert "missing heading `## Author's description (extracted)`" in parsed["problems"]
         assert parsed["structured"] is True
 
-    def test_an_item_without_a_source_is_named(self):
-        parsed = cp.parse_change_purpose(self._with(verify="V1. claim with no provenance"))
-        assert parsed["problems"] == ["V1 names no source"]
+    # Each row: a verify/context body override (None keeps `_with`'s
+    # default) and the problems it produces, matched on the item id (or
+    # leading fragment) plus one keyword rather than the full sentence —
+    # the sentence is prose read by the reconciliator agent and the record.
+    PROBLEMS_CASES = (
+        pytest.param(
+            "V1. claim with no provenance", None,
+            [("V1", "no source")],
+            id="verify_item_without_a_source",
+        ),
+        pytest.param(
+            None, "C1. fact — source: inferred from the diff",
+            [("C1", "may not be Context")],
+            id="inferred_context_item_is_a_problem",
+        ),
+        pytest.param(
+            "V1. claim — source: inferred from the diff", None,
+            [],
+            id="inferred_verify_item_is_fine",
+        ),
+        pytest.param(
+            "V1. a — source: PR description\nV1. b — source: PR description",
+            None,
+            [("V1", "listed twice")],
+            id="duplicate_id",
+        ),
+        pytest.param(
+            None, "- a bare bullet",
+            [("Context section", "no `C<n>.` item")],
+            id="context_body_parses_to_no_item",
+        ),
+        pytest.param(
+            "\n".join(
+                f"V{n}. claim {n} — source: PR description"
+                for n in range(1, 10)
+            ),
+            None,
+            [("9 Verify items", "more than 8")],
+            id="more_than_eight_verify_items_warns",
+        ),
+    )
 
-    def test_an_inferred_context_item_is_a_problem(self):
-        parsed = cp.parse_change_purpose(self._with(context="C1. fact — source: inferred from the diff"))
-        assert parsed["problems"] == ["C1 is inferred from the diff and may not be Context"]
+    @pytest.mark.parametrize(
+        ("verify", "context", "expected_fragments"), PROBLEMS_CASES,
+    )
+    def test_problems(self, verify, context, expected_fragments):
+        kwargs = {}
+        if verify is not None:
+            kwargs["verify"] = verify
+        if context is not None:
+            kwargs["context"] = context
+        parsed = cp.parse_change_purpose(self._with(**kwargs))
 
-    def test_an_inferred_verify_item_is_fine(self):
-        parsed = cp.parse_change_purpose(self._with(verify="V1. claim — source: inferred from the diff"))
-        assert parsed["problems"] == []
-
-    def test_a_duplicate_id_is_named(self):
-        parsed = cp.parse_change_purpose(self._with(verify="V1. a — source: PR description\nV1. b — source: PR description"))
-        assert parsed["problems"] == ["V1 is listed twice"]
+        assert len(parsed["problems"]) == len(expected_fragments)
+        for problem, (id_fragment, keyword) in zip(
+            parsed["problems"], expected_fragments
+        ):
+            assert id_fragment in problem
+            assert keyword in problem
 
     def test_an_item_under_the_wrong_heading_is_named_and_not_tiered(self):
         parsed = cp.parse_change_purpose(self._with(context="V2. claim — source: PR description"))
@@ -124,22 +168,9 @@ class TestProblems:
             "the Verify section has 2 line(s) but no `V<n>.` item — write `None.` when the tier is empty"
         ]
 
-    def test_a_context_body_that_parses_to_no_item_is_named(self):
-        parsed = cp.parse_change_purpose(self._with(context="- a bare bullet"))
-        assert parsed["problems"] == [
-            "the Context section has 1 line(s) but no `C<n>.` item — write `None.` when the tier is empty"
-        ]
-
     def test_a_none_author_section_is_an_empty_description(self):
         text = "## Verify\nNone.\n## Context\nNone.\n## Author's description (extracted)\nNone.\n"
         assert cp.parse_change_purpose(text)["author_description"] == ""
-
-    def test_more_than_eight_verify_items_warns(self):
-        items = "\n".join(f"V{n}. claim {n} — source: PR description" for n in range(1, 10))
-        parsed = cp.parse_change_purpose(self._with(verify=items))
-        assert parsed["problems"] == [
-            "9 Verify items — more than 8 means the tiering is not doing its job"
-        ]
 
 
 class TestChecksSettling:
@@ -183,8 +214,6 @@ class TestChecksSettling:
             "V2": [{"reviewer": "review-reconciliator", "id": "n1", "result": "regenerated cleanly"}],
             "V3": [],
         }
-
-    def test_ledger_citations_tolerate_absent_collections(self):
         assert cp.ledger_citations({"checks": []}) == []
         assert cp.ledger_citations({}) == []
 

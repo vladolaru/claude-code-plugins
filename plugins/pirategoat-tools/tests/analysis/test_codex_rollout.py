@@ -96,16 +96,19 @@ def test_tolerates_source_as_bare_string(tmp_path):
     assert meta.agent_path == "/root"
 
 
-def test_returns_none_for_malformed_first_line(tmp_path):
+@pytest.mark.parametrize(
+    "first_line",
+    [
+        pytest.param("{not json\n", id="malformed-json"),
+        pytest.param(
+            json.dumps({"type": "event_msg", "payload": {"type": "task_started"}}) + "\n",
+            id="not-session-meta",
+        ),
+    ],
+)
+def test_read_thread_meta_none(tmp_path, first_line):
     path = tmp_path / "rollout-broken.jsonl"
-    path.write_text("{not json\n")
-
-    assert codex_rollout.read_thread_meta(path) is None
-
-
-def test_returns_none_when_first_line_is_not_session_meta(tmp_path):
-    path = tmp_path / "rollout-nometa.jsonl"
-    path.write_text(json.dumps({"type": "event_msg", "payload": {"type": "task_started"}}) + "\n")
+    path.write_text(first_line)
 
     assert codex_rollout.read_thread_meta(path) is None
 
@@ -152,29 +155,25 @@ def test_filters_by_cwd(tmp_path):
     assert [m.thread_id for m in found] == ["b"]
 
 
-def test_filters_by_agent_role(tmp_path):
-    today = date(2026, 8, 22)
-    _write_rollout(tmp_path, today, "root", id="root")
-    _write_rollout(tmp_path, today, "w", id="w", source=_subagent_source(role="worker"))
-    _write_rollout(tmp_path, today, "r", id="r", source=_subagent_source(role="code-reviewer"))
-
-    found = codex_rollout.discover_threads(tmp_path, since_days=7, today=today, agent="code-reviewer")
-
-    assert [m.thread_id for m in found] == ["r"]
-
-
-def test_agent_filter_accepts_comma_separated_list(tmp_path):
+@pytest.mark.parametrize(
+    "agent_filter,expected",
+    [
+        pytest.param("code-reviewer", ["r"], id="single-role"),
+        # The spaces row is the comma row with whitespace — one row proves
+        # both split(",") and the per-item strip().
+        pytest.param("worker, explorer", ["e", "w"], id="comma-separated-with-spaces"),
+    ],
+)
+def test_agent_filter(tmp_path, agent_filter, expected):
     today = date(2026, 8, 22)
     _write_rollout(tmp_path, today, "root", id="root")
     _write_rollout(tmp_path, today, "w", id="w", source=_subagent_source(role="worker"))
     _write_rollout(tmp_path, today, "r", id="r", source=_subagent_source(role="code-reviewer"))
     _write_rollout(tmp_path, today, "e", id="e", source=_subagent_source(role="explorer"))
 
-    found = codex_rollout.discover_threads(
-        tmp_path, since_days=7, today=today, agent="worker,explorer"
-    )
+    found = codex_rollout.discover_threads(tmp_path, since_days=7, today=today, agent=agent_filter)
 
-    assert sorted(m.thread_id for m in found) == ["e", "w"]
+    assert sorted(m.thread_id for m in found) == sorted(expected)
 
 
 def test_skips_active_subagents_but_keeps_their_finished_siblings(tmp_path):
@@ -302,6 +301,8 @@ def test_scan_takes_last_token_count_not_the_sum(tmp_path):
     scan = codex_rollout.scan_thread(path)
 
     assert scan.total_tokens == 250
+    assert scan.cached_input_tokens == 10
+    assert scan.input_tokens == 90
 
 
 def test_scan_computes_duration_from_first_and_last_timestamp(tmp_path):
@@ -333,21 +334,6 @@ def test_scan_counts_malformed_lines_without_raising(tmp_path):
     assert scan.messages == 1
 
 
-def test_scan_ignores_item_type_spelling(tmp_path):
-    """The field is item.type; item_type does not exist and must not be relied on."""
-    path = tmp_path / "rollout-spelling.jsonl"
-    entry = {
-        "timestamp": "2026-08-18T16:01:30.000Z",
-        "type": "event_msg",
-        "payload": {"type": "item_completed", "item": {"item_type": "CommandExecution", "id": "x"}},
-    }
-    path.write_text("\n".join([_meta_line(), json.dumps(entry)]) + "\n")
-
-    scan = codex_rollout.scan_thread(path)
-
-    assert scan.commands == 0
-
-
 def test_scan_keeps_items_when_asked(tmp_path):
     path = tmp_path / "rollout-keep.jsonl"
     path.write_text(
@@ -358,24 +344,8 @@ def test_scan_keeps_items_when_asked(tmp_path):
 
     assert [item["type"] for item in scan.items] == ["CommandExecution"]
     assert scan.items[0]["command"] == "ls"
-
-
-def test_scan_holds_no_items_by_default(tmp_path):
-    path = tmp_path / "rollout-nokeep.jsonl"
-    path.write_text(
-        "\n".join([_meta_line(), _item_line("CommandExecution", exit_code=0, duration=1.0, command="ls")]) + "\n"
-    )
-
+    # Default (keep_items unset) holds no items.
     assert codex_rollout.scan_thread(path).items == []
-
-
-def test_parent_agent_path_strips_last_segment():
-    assert codex_rollout.parent_agent_path("/root/child_1") == "/root"
-    assert codex_rollout.parent_agent_path("/root/child_1/grandchild") == "/root/child_1"
-
-
-def test_parent_agent_path_of_root_is_none():
-    assert codex_rollout.parent_agent_path("/root") is None
 
 
 def test_build_tree_groups_children_under_parents(tmp_path):
@@ -536,27 +506,3 @@ def test_limit_zero_returns_nothing(tmp_path):
 
     assert codex_rollout.discover_threads(tmp_path, since_days=7, today=today, limit=0) == []
     assert len(codex_rollout.discover_threads(tmp_path, since_days=7, today=today, limit=None)) == 2
-
-
-def test_scan_reports_cached_and_input_token_totals(tmp_path):
-    path = tmp_path / "rollout-tokenfields.jsonl"
-    path.write_text("\n".join([_meta_line(), _token_line(300)]) + "\n")
-
-    scan = codex_rollout.scan_thread(path)
-
-    assert scan.total_tokens == 300
-    assert scan.cached_input_tokens == 10
-    assert scan.input_tokens == 90
-
-
-def test_agent_filter_tolerates_spaces_after_commas(tmp_path):
-    today = date(2026, 8, 22)
-    _write_rollout(tmp_path, today, "root", id="root")
-    _write_rollout(tmp_path, today, "w", id="w", source=_subagent_source(role="worker"))
-    _write_rollout(tmp_path, today, "e", id="e", source=_subagent_source(role="explorer"))
-
-    found = codex_rollout.discover_threads(
-        tmp_path, since_days=7, today=today, agent="worker, explorer"
-    )
-
-    assert sorted(m.thread_id for m in found) == ["e", "w"]

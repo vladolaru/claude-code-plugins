@@ -1,6 +1,6 @@
 # Testing Framework
 
-Testing for pirategoat-tools uses fast, deterministic code-based graders — no model calls. All tests are pytest-based. The full suite takes roughly 80-95 seconds on a warm run (measured 2026-08-20, three runs) — re-measure both runtime and counts yourself (`time pytest plugins/pirategoat-tools/tests/ -q`, `pytest plugins/pirategoat-tools/tests/ --collect-only -q`) rather than trusting written numbers, here or in the class tables below.
+Testing for pirategoat-tools uses fast, deterministic code-based graders — no model calls. All tests are pytest-based. The full suite takes roughly 59-65 seconds on a warm run (measured 2026-09-11, three runs) — re-measure both runtime and counts yourself (`time pytest plugins/pirategoat-tools/tests/ -q`, `pytest plugins/pirategoat-tools/tests/ --collect-only -q`) rather than trusting written numbers, here or in the class tables below.
 
 ## Architecture Overview
 
@@ -40,8 +40,11 @@ tests/
 │   ├── test_report_assembly.py       # review-record.md assembler tests
 │   ├── test_registry_docs.py         # AGENTS.md registry reference pinned to the registry
 │   ├── test_review_config.py         # Repo-contributed review config loader tests
+│   ├── test_review_document.py       # review_document.py's validate_review_document rejection-branch tests
 │   ├── test_review_run_fixtures.py   # Sanitized audited-run capture/replay, privacy, and projection tests
 │   ├── test_reviewer_lifecycle.py    # Mutable draft, intake close, immutable finalization tests
+│   ├── test_reviewer_names.py        # agent_name_from_review_stem() inverse-derivation tests
+│   ├── test_step_11.py               # Step-11 orchestration: derived verdict, critic absence, adjudication state, findings-markdown re-render
 │   ├── test_synthesis_lifecycle.py   # Reconciliator/critic lifecycle measurement
 │   ├── test_telemetry.py             # Telemetry logging + manifest-section tests
 │   ├── test_telemetry_share.py       # Consent store, repository identity, redaction, upload tests
@@ -58,7 +61,7 @@ tests/
 │       ├── test_output.py            # ReviewOutputBuilder unit tests
 │       ├── test_review_assignment.py # Reviewer assignment + reviewed-file derivation tests
 │       ├── test_scope.py             # Scope filtering unit tests
-│       └── test_scope_routing.py     # Domain routing (direct function calls + branch freshness)
+│       └── test_scope_routing.py     # Domain routing (direct function calls, one 14-domain vector per fixture)
 ├── linear/                           # Tests for scripts/linear/
 │   ├── test_pipeline.py              # Linear issue pipeline tests
 │   ├── test_pipeline_guidance.py     # Linear pipeline briefing tests
@@ -94,7 +97,6 @@ tests/
 │       ├── test_ecosystem_cache.py   # ecosystem-cache resolver tests
 │       ├── test_explicit.py          # .pirategoat/config.json resolver tests
 │       ├── test_plugin_headers.py    # plugin-headers resolver tests
-│       ├── test_sibling.py           # sibling-convention resolver tests
 │       ├── test_vendor.py            # vendor/node_modules library-dep resolver tests
 │       └── test_wp_env.py            # wp-env resolver tests
 ├── commands/                         # Tests for commands/
@@ -113,7 +115,9 @@ tests/
 │   ├── telemetry_run.py              # Drives ReviewTelemetry through one complete run for redaction fixtures
 │   ├── triage_run_fixture.py         # Captures one audited run's planner inputs from a clone; replays them through build_dispatch_plan without git
 │   ├── review_run_fixture.py          # Captures sanitized complete audited runs for generated replay fixtures
-│   └── review_fixtures.py            # Canonical finalized-review/ledger fixtures for consumer-boundary tests
+│   ├── review_fixtures.py            # Canonical finalized-review/ledger fixtures for consumer-boundary tests
+│   ├── critic_seeds.py               # Ledger/proposal seed helpers shared by test_critic_adjustments.py and test_step_11.py
+│   └── ts_schema.py                  # Shared reader for schemas/review-output.ts, for TS-contract-lockstep tests
 └── fixtures/
     ├── no-code-changes.diff          # Docs-only diff for NO_DOMAIN_FILES tests
     ├── php-source.diff               # PHP source: SQL injection, tight coupling
@@ -169,7 +173,7 @@ Integration tests that run `review/agent/bootstrap.py` via subprocess against a 
 | Class | What it verifies |
 |---|---|
 | `TestCategoryRepresentatives` | One comprehensive test per agent category: standard, test-agent, exploration, null-domain, history+override. Each verifies section structure, conditional sections, personalization, and budget in one shot. |
-| `TestArchitecturalInvariants` | REVIEW RULES identical across 3 representative agents; DOMAIN RULES identical across 2 test agents |
+| `TestArchitecturalInvariants` | REVIEW RULES identical across 3 representative agents; DOMAIN RULES identical across 2 test agents; every `## `/`### ` heading of the real `reviewer-protocol.md` outside `REVIEWER_PROTOCOL_SKIP_SECTIONS` reaches the built prompt verbatim (replaces the former per-section delivery guards) |
 | `TestSmokeAllAgents` | Every registered agent exits 0 — the ONE legitimate ALL_AGENTS parameterization (validates registry correctness) |
 | `TestErrorCases` | Unknown agent exits 1 with structured error output |
 | `TestReviewOutputBuilderAPIExample` | Section 3 includes complete builder API usage example (direct `build_output()` call) |
@@ -181,19 +185,15 @@ Integration tests that run `review/agent/bootstrap.py` via subprocess against a 
 | `TestEmpiricalProbeContract` | The `pirategoat-probe` naming convention survives protocol stripping into built prompts, and the section is not on the skip-list. The step-11 residue sweep only ever fires on files an agent named this way, so a stripped section makes the enforcement half inert. |
 | `TestNotApplicableCompletionContract` | The shared protocol is the sole executable abstention recipe — a reviewer that finds nothing must abstain the one prescribed way. |
 | `TestRepoRuleAndRefModeSelection` | Repo rules reach the reviewers they target (effective identity, complete scope); adapter instances receive their declared path scope; an explicit isolation request never runs inline. |
-| `TestVerificationMethodContract` | Verification-method rules ported from ai-regression-review's triage.md — the half the 2026-07-15 dismissal port did not cover. |
-| `TestDismissalDisciplineContract` | Dismissal/mitigation verification applies to ALL findings, not a subset. |
 | `TestCanonicalExecutableBuilderSource` | Bootstrap is the sole executable `ReviewOutputBuilder` command source, and its envelope carries the producing plugin version (read from the run-config stamp, emitted empty when unknown so the envelope's five-assignment shape stays constant for the transcript analyzers). |
 
 ### Domain Routing Evals (`review/agent/test_scope_routing.py`)
 
-Deterministic pytest suite that verifies `review/agent/scope.py` domain routing logic by calling `filter_noise()` + `filter_domain()` directly (pure functions, no subprocess). For each fixture, creates a temp git repo, gets the changed file list via `git diff --name-only`, and runs the filter functions for each domain.
+Deterministic pytest suite that verifies `review/agent/scope.py` domain routing logic by calling `filter_noise()` + `filter_domain()` directly (pure functions, no subprocess, no temp git repo — each fixture's changed-file list is read straight from its `+++ b/` headers). One test asserts the whole 14-domain routing vector for each fixture in one row, rather than parameterizing per `(fixture, domain)` pair.
 
-Uses a `ROUTING_MATRIX` dict mapping fixture → expected domain results. Parameterized across all 14 domains and all 12 fixtures (168 test cases). Repos and file lists are cached per fixture.
+Merge-base detection, stale-branch warnings, and range rebasing (formerly `TestBranchFreshness`, a subprocess suite here) are now pinned by `review/agent/test_scope.py::TestMergeBaseGatingIntegration`, which drives `build_scope()` directly against real temp git repos.
 
-Also includes `TestBranchFreshness` — 6 integration tests that run `review/agent/scope.py` via subprocess to verify merge-base detection, stale branch warnings, and range rebasing (these need the full pipeline).
-
-**Fixture domain coverage:** See `ROUTING_MATRIX` dict in `review/agent/test_scope_routing.py` for the complete 12×14 matrix. Each entry maps `(fixture, domain) → "OK" | "NO_DOMAIN_FILES"`.
+**Fixture domain coverage:** See `ROUTING_MATRIX` dict in `review/agent/test_scope_routing.py` for the complete matrix — one 14-domain vector per fixture, across 10 fixtures. Each entry maps `(fixture, domain) → "OK" | "NO_DOMAIN_FILES"`.
 
 ### Command Structure Evals (`commands/test_commands.py`)
 
@@ -201,20 +201,17 @@ Deterministic pytest suite that validates structural properties of command files
 
 | Class | What it verifies |
 |---|---|
-| `TestFrontmatter` | All review commands have valid YAML frontmatter with a `description` field |
-| `TestAllCommandsStructural` | Every registered command file exists, has valid frontmatter with a real `description`, and is registered in `marketplace.json`; non-review commands are asserted absent from `ALL_REVIEW_COMMANDS` |
-| `TestScriptReferences` | Review commands reference `review/pipeline.py`, which exists on disk |
+| `TestAllCommandsStructural` | Every registered command file exists, has valid frontmatter with a real `description`, and is registered in `marketplace.json` — the superset that also covers review-command frontmatter |
+| `TestScriptReferences` | Review commands reference `review/pipeline.py` |
 | `TestReviewCommandsReferenceUnifiedScript` | Each review command passes the correct `--mode` to `review/pipeline.py` (`pr-review.md` → `pr`, `full-code-review.md` → `full`, `code-review.md` → computed incremental/full) |
 | `TestReviewRunIdentity` | Review commands link pipeline telemetry to the active Claude session |
-| `TestMarketplaceRegistration` | Review commands are registered in `marketplace.json` |
-| `TestCodeReviewIterative` | `code-review.md` has incremental mode, full/reset option, baseline reference |
-| `TestFullCodeReview` | `full-code-review.md` has full mode |
-| `TestUnifiedMission` | All review commands reference the unified pipeline mission |
+| `TestUnifiedMission` | Review commands share the "code review orchestrator" identity language |
 | `TestDependencyRefreshFlagDocumented` | Every review command documents the `--refresh-deps` opt-in |
+| `TestDurableReviewRunDirectories` | Interactive review commands allocate a distinct durable run directory through `run_paths.py` |
 
 ### ReviewOutputBuilder Unit Tests (`review/agent/test_output.py`)
 
-Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/output.py`, and — by decision, not by omission — on `scripts/review/review_document.py`'s validators too. **There is no `test_review_document.py`, and one should not be created.** The validators have two consumer boundaries: reviewer publication, which is this file, and ledger adjudication, which is `test_critic_adjustments.py`. Testing them where they are called is what keeps a validator change from passing its own suite while breaking the boundary that depends on it. `review_markdown.py`'s projection has its own suite below in `test_review_markdown.py`. Tests here cover the schema-2 findings/checks/assessment domain, mutable whole-state drafts, the six canonical reviewed-file fields, and verdict derivation.
+Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/output.py`, including the finding/check-shape validators (`validate_finding_shape`, `validate_check_shape`) exercised through `add_finding`/`record_check` — their real consumer boundary, so a validator change cannot pass its own suite while breaking the boundary that depends on it. Ledger adjudication's validator boundary is `test_critic_adjustments.py`. `review_markdown.py`'s projection has its own suite below in `test_review_markdown.py`. `validate_review_document`'s whole-document rejection branches live in `review/test_review_document.py` (see below), not here: a 2026-09 audit found those branches were pinned only through `grading/test_graders.py`'s `grade_review_json`, a test harness rather than a real caller, so nothing failed if the validator diverged from what publication and ledger adjudication actually enforce. Tests here cover the schema-2 findings/checks/assessment domain, mutable whole-state drafts, the six canonical reviewed-file fields, and verdict derivation.
 
 | Class | What it verifies |
 |---|---|
@@ -224,8 +221,7 @@ Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/
 | `TestAddRecommendation` | Valid priorities store, invalid silently ignored, multiple per bucket |
 | `TestNonStringFieldCoercion` | Finding/check free-form text fields coerce to strings where the runtime contract permits |
 | `TestSetConfidence` | Valid range works, invalid raises ValueError |
-| `TestRemovedToolMetadata` | Reviewer artifacts expose no tool-result metadata API or field |
-| `TestCalculateVerdict` | All 9 verdict boundaries (approve/comment/request_changes/block) |
+| `TestDerivedVerdict` | All 9 verdict boundaries (approve/comment/request_changes/block) |
 | `TestToDict` | Exact schema-2 top-level shape, summary, counters, reviewed-file placeholders before publication, and plugin-version resolution |
 | `TestSaveDraft` | `save_draft()` atomically replaces the complete mutable draft, emits exact totals/change receipt/finalization command, and never publishes final JSON or Markdown |
 | `TestFileScopedFindings` | `line=None` records a first-class file-scoped finding (`scope: "file"`) that still counts toward the verdict |
@@ -241,6 +237,10 @@ Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/
 | `TestTypeScriptContractLockstep` | `schemas/review-output.ts` and the Python validators describe one field set — a field added on either side without the other fails here |
 | `TestAssessment` | The reconciliator-owned nullable assessment serializes and renders, while raw reviewer use is blocked by protocol and bootstrap contracts |
 | `TestReviewerFilePartition` | The six-field reviewed-files envelope validates itself: a coherent claimed/unclaimed partition of the assignment's claimable files passes, and every incoherent variant (unknown claim, wrong unclaimed set, mismatched count, duplicate claim) is rejected |
+
+### Review Document Validator Tests (`review/test_review_document.py`)
+
+Raw-dict tests on `scripts/review/review_document.py`'s `validate_review_document`: build one structurally valid document with `helpers/review_fixtures.py::canonical_review_document`, mutate one field, and assert the exact `ValueError` message — no file round-trip and no grader in between. Covers malformed summaries, non-canonical or duplicate finding/check ids, exhausted id counters, unexpected top-level fields, invalid finding severities, and verdict/findings mismatches. `grading/test_graders.py` keeps exactly one test (`test_validator_rejection_becomes_failed_grade`) proving a validator `ValueError` becomes a failed `GradeResult` — everything else about the validator's own branches belongs here.
 
 ### Review Markdown Tests (`review/test_review_markdown.py`)
 
@@ -264,8 +264,7 @@ Direct tests for the mutable-draft/immutable-final state machine and schema-2 re
 |---|---|
 | `TestReviewPaths` | One safe reviewer identity maps to exactly one draft, final, and schema-4 assignment path |
 | `TestDraftOpenAndReplacement` | `open()` creates or completely rehydrates a draft; optimistic saves reject stale writers and preserve the prior bytes |
-| `TestFinalization` | Only the exact digest printed by `save_draft()` can atomically publish immutable final JSON, and finalization is idempotent only for that same content |
-| `TestReviewIntakeClose` | Synthesis closes schema-2 `review-intake.json`, records finalized and discarded-draft reviewers, and blocks every later save/finalize transition |
+| `TestFinalization` | Only the exact digest printed by `save_draft()` can atomically publish immutable final JSON, and finalization is idempotent only for that same content; also covers synthesis closing schema-2 `review-intake.json` — recording finalized and discarded-draft reviewers and blocking every later save/finalize transition (formerly a separate `TestReviewIntakeClose` class, merged here) |
 | `TestFinalizationTelemetry` | Draft saves and finalization emit distinct schema-3 lifecycle telemetry without treating a draft as reviewer completion |
 
 ### Reconciliation Context Tests (`review/test_reconciliation_context.py`)
@@ -277,14 +276,11 @@ Direct unit tests on `scripts/review/reconciliation_context.py` — finalized-re
 | `TestLoadAgentReviews` | Only immutable finalized reviewer JSON enters synthesis; drafts, the reconciled ledger, and pipeline artifacts are excluded |
 | `TestSeverityFloorNormalization` | The floor is the structured field only — description prose never promotes a finding, and the prose marker is stripped before the critic reads it |
 | `TestExtractReferences` | Source references are extracted only from canonical finding fields |
-| `TestReadSourceSnippets` | Repository reads stay bounded, normalized, and honest for missing or binary source |
-| `TestMergeWindows` | Overlapping source windows merge deterministically without losing referenced lines |
+| `TestReadSourceSnippets` | Repository reads stay bounded, normalized, and honest for missing or binary source; overlapping and boundary-clamped windows merge deterministically without losing referenced lines |
 | `TestCheckScope` | File and line scope annotations preserve the finding while describing its diff relationship |
 | `TestFilterInScopeReferences` | In-scope references are selected without mutating the reviewer record |
-| `TestCheckScopeHunkLevel` | Hunk proximity remains a review aid, not an automatic out-of-scope verdict |
+| `TestCheckScopeHunkLevel` | Hunk proximity remains a review aid, not an automatic out-of-scope verdict, through the public `diff_hunks=` parameter |
 | `TestParseDiffHunks` | Unified-diff hunk ranges and quoted paths parse into deterministic source coordinates |
-| `TestLineNearHunk` | The bounded line-proximity predicate handles absent and malformed line evidence |
-| `TestFindFileHunks` | File lookup distinguishes matching, missing, and metadata-only diff entries |
 | `TestFullScript` | The CLI writes exact schema-4 reconciliation context from finalized schema-2 reviews and canonical assignments, with the change purpose's `verify_items` carrying the reviewer checks that cite each |
 | `TestMissingAgentDetection` | Dispatched-minus-reporting is a measurement, with unknown dispatch (`null`) distinct from a measured-empty dispatch (`[]`), through the CLI and back |
 | `TestPrefilterAnnotation` | Structurally-certain out-of-scope findings are annotated in place with a checkable count, never deleted, and `not_in_hunk` is never annotated |
@@ -339,26 +335,29 @@ Direct contract tests for the three-owner lifecycle: `critic proposal -> critic.
 | `TestAdjustmentsSchemaValidation` | The adjustments doc accepts only the exact schema `decision-reviewer.md`'s template writes and rejects an out-of-template schema, a non-object document, a prepared entry carrying only its proposal fields, and duplicate adjustment ids |
 | `TestScopeLinePairing` | `scope`/`line` stay the pair `schemas/review-output.ts` declares and `output.py`'s renderer branches on: `add` without a line is file-scoped, rescoping toward or away from a line keeps the marker consistent, a patch that leaves `line` alone leaves `scope` alone, and an out-of-range line is rejected |
 | `TestReadCriticVerdict` | Unit coverage for the reader `adjudicate()`'s gate is built on: a missing file, malformed JSON, non-object payload, non-string or missing `verdict`, and a lifecycle field on a proposal entry all return `None` or fail closed |
-| `TestDerivedVerdict` | Step 11 derives the published verdict from `review-findings.json`: every canonical ledger verdict maps, casing/padding fail closed, a critical finding never publishes COMMENT, a critic ESCALATE overrides to COMMENT while STAND does not, and an unusable ledger falls back to COMMENT with a note |
-| `TestCriticAbsenceHonesty` | A critic that was DISPATCHED and produced no usable verdict (nothing written, or recorded SKIPPED) degrades the run; the pipeline's own quick skip and a critic that answered stay silent |
-| `TestCriticInputRoundTrip` | The stable id the critic reads off the handed ledger is the same one `adjudicate()` later mutates; the record offers no rival positional handle |
-| `TestStepElevenReportsUnadjudicatedProposal` | Step 11 does not adjudicate on the orchestrator's behalf — it reports: a pending REVISE proposal degrades the run stably across the publication handoff, an adjudicated proposal is silent, a non-REVISE verdict is never inspected, and an unreadable proposal or malformed ledger degrades instead of crashing |
-| `TestStepElevenRerendersFindingsMarkdown` | `review-findings.md` must describe the FINAL ledger: a demoted severity and the ledger's own verdict reach the re-rendered Markdown, a render failure is a degradation note not an exception, a run with no ledger renders nothing, and `report_path` resolves report → record → findings Markdown |
 | `TestAssessmentInvalidation` | A real applying batch withdraws the reconciler's assessment into the append-only `invalidated_assessments` audit; a refused, wholly refuted, or semantic no-op batch leaves it untouched |
-| `TestStepElevenWithdrawsContradictedProse` | End-to-end reproduction of the closed defect: a demoted finding is no longer described as critical in the rendered assessment |
 | `TestCheckPassthrough` | The ledger's `checks` survive adjudication and `write_findings()` unfiltered, and the rendered Markdown carries the checks section |
-| `TestReconciliatorCheckPin` | The reconciliator template teaches structural check recording, excludes void and correlated checks, and records uncontested checks rather than scoping the recipe to conflicts only |
-| `TestReconciliatorWritePathPin` | Writer #1 is an agent following a Markdown snippet, so a test is the only thing holding it to the sanctioned path: the snippet saves only through `findings_save.py`, builds the ledger with `FindingsLedgerBuilder`, and authors only the four judgments and nothing else |
+| `TestReconciliatorWritePathPin` | Writer #1 is an agent following a Markdown snippet, so a test is the only thing holding it to the sanctioned path: the snippet builds the ledger with `FindingsLedgerBuilder` and saves it only through `findings_save.py`, never a bare write |
 | `TestOutcomeVocabulary` | The per-entry `outcome` is script-derived and validated: every value in `OUTCOMES` is accepted, an unknown value rejects the ledger, an applied record may not claim `refuted`, and a rejected record must |
-| `TestOutcomeRecordedInTheLedger` | `applied_critic_adjustments` carries the orchestrator's per-id outcome: an omitted entry records `not_checked`, a verified one records `verified`, the adjustment id is always retained, and a legacy schema-1 string record is rejected |
 | `TestRevisedAssessment` | The orchestrator's post-critic assessment: a non-string value rejects the whole request without mutation, it becomes the ledger assessment only when an operation actually applies, and the withdrawal record survives the replacement |
-| `TestWithdrawnAssessmentRender` | An invalidated-and-unreplaced assessment renders an explicit absence rather than republishing retracted prose, and both applied and refuted outcomes render per id |
 | `TestLedgerVerdictRecompute` | Applied mutations recompute channel-aware summary counts and verdict through the shared authority; the pre-apply verdict is preserved only on the first change; a stale ledger verdict is refused at the reader |
 | `TestSchemaTwoTargetUnion` | Schema-2 proposals target the tagged finding/check union: mutations require kind and id, `add` never carries a caller-supplied id, and checks permit only correction or removal |
 | `TestProposalPreparation` | `prepare_proposal()` assigns unique stable ids (retrying an improbable UUID collision), rejects duplicate targets and lifecycle/non-proposal fields before assigning ids, and its digest covers every byte of the published proposal |
 | `TestAdjudicationRequest` | `adjudicate()` derives the `not_checked` complement of the ids it was handed; an invalid request, an unknown or duplicate ledger target, or a malformed ledger leaves the proposal and ledger byte-identical with nothing written |
 | `TestPublicationAndAdjudicationShareOneLock` | `critic.py --save` and `adjudicate()` hold the same output-directory lock, so a save and an adjudication can never interleave snapshots |
 | `TestAdjudicationCLI` | The `adjudicate` subcommand step 10's REVISE briefing shells out to: echoes the derived counts and the ledger verdict, reports an omitted assessment as absent, refuses a second adjudication on stdout, rejects invalid or unparseable stdin cleanly, and `adjudicate` is the only subcommand the CLI exposes |
+
+### Step 11 Tests (`review/test_step_11.py`)
+
+`orchestration._orchestrate_step_11`'s own module — derived verdict, critic absence, adjudication state, and the findings-Markdown re-render. Adjudication and ledger contracts stay in `test_critic_adjustments.py`; this file exists because those five classes cost most of that file's wall time exercising the same step-11 seam.
+
+| Class | What it verifies |
+|---|---|
+| `TestDerivedVerdict` | Step 11 derives the published verdict from `review-findings.json`: every canonical ledger verdict maps, casing/padding fail closed, a critic ESCALATE overrides to COMMENT while STAND does not, and an unusable ledger falls back to COMMENT with a note |
+| `TestCriticAbsenceHonesty` | A critic that was DISPATCHED and produced no usable verdict (nothing written, or recorded SKIPPED) degrades the run; the pipeline's own quick skip and a critic that answered stay silent |
+| `TestCriticInputRoundTrip` | The stable id the critic reads off the handed ledger is the same one `adjudicate()` later mutates and the same one the derived verdict reflects; the record offers no rival positional handle |
+| `TestStepElevenReportsUnadjudicatedProposal` | Step 11 does not adjudicate on the orchestrator's behalf — it reports: a pending REVISE proposal degrades the run stably across the publication handoff, and an unreadable proposal or malformed ledger degrades instead of crashing |
+| `TestStepElevenRerendersFindingsMarkdown` | `review-findings.md` must describe the FINAL ledger: a demoted severity and the ledger's own verdict reach the re-rendered Markdown, a render failure is a degradation note not an exception, a run with no ledger renders nothing, `report_path` resolves report → record → findings Markdown, and the private step-11 degradation-record merge keeps first-seen order, drops a malformed private record, and honors only one code's discriminator shape |
 
 ### Findings Ledger Tests (`review/test_findings_ledger.py`)
 
@@ -367,9 +366,9 @@ Direct unit tests on `FindingsLedgerBuilder` — the reconciliator's `ReviewOutp
 - `test_ledger_dict_is_content_plus_reconciliation` — `to_dict()` is exactly `REVIEW_CONTENT_FIELDS` at `LEDGER_SCHEMA`, carries no `reviewer` key, and nests the four judgment counts under `meta.reconciliation`
 - `test_ledger_content_validates_as_content` — the content half (with `reconciliation` stripped back out) passes `validate_review_content(schema=LEDGER_SCHEMA)`
 - `test_ledger_requires_reconciliation_before_serializing` — `to_dict()` without a prior `set_reconciliation()` call raises
-- `test_ledger_has_no_reviewer_lifecycle` / `test_ledger_has_no_open_classmethod` — `save_draft`, `claim_files_reviewed`, `retract_reviewed_file_claims`, `mark_not_applicable`, and `open()` all raise `TypeError` rather than silently inheriting reviewer behavior the ledger does not have
-- `test_ledger_pr_id_is_coerced_to_a_string`, `test_ledger_reads_plugin_version_from_the_bound_run`, `test_ledger_duration_spans_the_reconciliator_dispatch` — the ledger inherits the same run-bound facts a reviewer draft does, keyed on the `review-reconciliator` dispatch marker rather than the `reconciliator` actor name
-- `test_reconciliation_counts_must_be_non_negative_integers`, `test_reconciliation_judgments_must_partition_the_grouped_concerns` — `set_reconciliation()` rejects negative, boolean, or non-integer counts and any four that do not sum to `grouped_concern_count`
+- `test_ledger_has_no_reviewer_lifecycle` / `test_ledger_has_no_open_classmethod` — one representative lifecycle name (`save_draft`) and `open()` both raise `TypeError` rather than silently inheriting reviewer behavior the ledger does not have; the other three lifecycle names bind to the same `_no_lifecycle` function object
+- `test_ledger_reads_plugin_version_from_the_bound_run`, `test_ledger_duration_spans_the_reconciliator_dispatch` — the ledger inherits the same run-bound facts a reviewer draft does, keyed on the `review-reconciliator` dispatch marker rather than the `reconciliator` actor name
+- `test_reconciliation_counts_must_be_non_negative_integers`, `test_reconciliation_judgments_must_partition_the_grouped_concerns` — `set_reconciliation()` rejects a negative count and any four that do not sum to `grouped_concern_count`
 - `test_ledger_renders_without_a_reviewer_title` — the shared Markdown renderer produces a PR-titled report with no reviewer byline
 - `test_the_taught_snippet_calls_only_methods_the_builder_has` — every `builder.<method>()` call in `agents/review-reconciliator.md` resolves to a real, non-refusing `FindingsLedgerBuilder` method (never `open()` or a draft-lifecycle name), so a renamed or deleted builder method breaks the taught snippet loudly instead of at review time
 
@@ -435,16 +434,18 @@ Direct unit tests on `scripts/review/synthesis_lifecycle.py` and its five orches
 | `TestArtifactEnvelope` | `synthesis-agents.json` carries `schema: 1`, the returned payload is what landed on disk, and rows carry exactly `ROW_KEYS`. ONE clock is pinned as an absence: neither the row nor the section records when the script looked, only when the agent finished |
 | `TestVerdictCapture` | The completion artifact's own `verdict` rides the row because it changes what the duration beside it means. Current quick-mode `SKIPPED` commits have no dispatch marker and therefore no row; historical `SKIPPED` rows remain readable and excluded from critique-duration statistics. Unreadable, non-string, and verdict-less artifacts all yield `None`, and an artifact discarded as predating its dispatch contributes no verdict either — a stale conclusion must never be paired with a live phase |
 | `TestStepEightDispatchMarker` | The reconciliator marker is stamped only where step 8 actually hands off: not on the readiness gate's WAITING return, and not when the reconciliation-context gate raises — a marker on either path would make a run that dispatched nothing read as a stalled agent |
-| `TestStepTenDispatchMarker` | The critic marker is written on exactly the branch whose briefing dispatches one; the quick-mode skip branch commits `SKIPPED` but writes no marker, so the skipped critic earns no lifecycle row |
-| `TestStepTenRedispatchStartsFreshAttempt` | Step 10 observes a completed critic before re-entry, then retires that attempt's findings, proposal, verdict, and dispatch marker before starting the replacement. If the replacement never saves, finalize reports the current critic unavailable and stalled instead of borrowing the prior verdict; the same first observation closes the REVISE window on the reconciliator before critic adjustment rewrites its artifact. |
+| `TestStepTenDispatchMarker` | The critic marker is written on exactly the branch whose briefing dispatches one; the quick-mode skip branch (no marker, no lifecycle row) is `TestAvailability::test_undispatched_agent_absent_not_zero`'s contract, exercised through the real step here in `TestStepTenRedispatchStartsFreshAttempt::test_the_skip_branch_observes_too` |
+| `TestStepTenRedispatchStartsFreshAttempt` | Step 10 observes a completed critic before re-entry, then retires that attempt's findings, proposal, verdict, and dispatch marker before starting the replacement. If the replacement never saves, finalize reports the current critic unavailable and stalled instead of borrowing the prior verdict; the same first observation closes the REVISE window on the reconciliator before critic adjustment rewrites its artifact — these two tests are also where the step-11 critic-duration, stall, and pre-write-observation seams are pinned, end to end through the real step 10 → 11 sequence |
 | `TestStepNineObservation` | Step 9 records the reconciliator's completion — the earliest moment the script re-enters after step 8's handoff |
-| `TestStepElevenObservation` | Finalize records the critic's duration and adjudicates stalls, and it observes BEFORE its own write to `review-findings.json` (the adjustments apply): observing after them would report the reconciliator as having finished at finalize time — the run's whole wall clock instead of its synthesis phase |
+| `TestStepElevenObservation` | Finalize on a run with no markers at all records a measured emptiness, never a fabricated zero-duration row |
 
 ### Registry Documentation Tests (`review/test_registry_docs.py`)
 
 Two module-level guards pinning the plugin `AGENTS.md` agent-registry reference to `scripts/review/agent_registry.json` in both directions: every `model_tier` the registry actually uses must appear in the documented vocabulary, and the vocabulary must not teach a tier no agent uses. `"inherit"` is excepted as a routing keyword — legitimate to document with zero users. The row had drifted to `inherit`/`sonnet`/`haiku` while five agents ran at `opus`, so a cold agent reading the canonical reference learned a vocabulary the machine does not use.
 
 Three more module-level guards pin `README.md`'s "#### Model Tiers" section — the same drift, one level up: the README hand-summarizes registry `model_tier` counts and names example agents per tier in prose, and nothing tied that prose to the registry either. It drifted to `opus (4 agents)` while the registry carried five, silently omitting `woo-regression-reviewer` from the paragraph. The three guards parse the README's own agent tables (Domain Review / Pipeline / Cross-Validators / Utility) and its Model Tiers bullets, then check: every registry agent's README table row matches its registry `model_tier`; each tier's `(N agents)` figure equals what the README's own tables tag with that tier; and every registry agent at the `opus`/`haiku` tiers (small enough that the README names each one individually) is named by its exact slug in that tier's bullet prose. `sonnet` (22 agents) is deliberately written as category-grouped prose rather than an exhaustive per-agent listing, so only its count is checked — naming every one of 22 agents individually is not the convention this guard protects.
+
+The same file also carries an unrelated block, one pin per contract, under its own `# Agent-definition contract pins` heading comment: direct regression guards on `agents/*.md` prose and the shared protocols, not on the registry vocabulary. `test_reviewer_protocol_says_a_mounted_host_is_not_always_upstream`, `test_woo_invariant_rows` and `test_wp_architecture_reviewer_audits_half_deprecations` are plain functions (the last came in with PR #15 and pins each clause of the Deprecation Rule's half-deprecation paragraph, by its author's design); `TestAPIContractReviewerReturnSideHooks` (established runtime behavior is contract, not just the untouched `apply_filters()` call), `TestDismissalDisciplineContract` (dismissal/mitigation verification applies to every finding, not a floored subset), `TestVerificationMethodContract` (the reconciliator weighs checks by method, and reviewers record absence claims as checks), and `TestUnchangedCallerScopeContract` (an unchanged caller of a changed contract stays in scope, and a debug-only log is a resilience gap rather than detection) are classes. These four moved here from `review/agent/test_bootstrap_integration.py`, which now covers only protocol-delivery mechanics (see above).
 
 ### Shared Graders (`helpers/graders.py`)
 
@@ -667,7 +668,7 @@ higher for identical detection performance.
 
 ## Which tests to run
 
-The full plugin suite runs in about two minutes (`pytest plugins/pirategoat-tools/tests/ -q` from the repository root), so running it whole is always acceptable. This table is for focused iteration: it names the suites a change is most likely to break and, in parentheses, the coupling that makes a distant suite relevant.
+The full plugin suite runs in about a minute (`pytest plugins/pirategoat-tools/tests/ -q` from the repository root), so running it whole is always acceptable. This table is for focused iteration: it names the suites a change is most likely to break and, in parentheses, the coupling that makes a distant suite relevant.
 
 | Changed file | Run |
 |---|---|
@@ -679,7 +680,7 @@ The full plugin suite runs in about two minutes (`pytest plugins/pirategoat-tool
 | `scripts/review/pipeline_contract.py` | `pytest plugins/pirategoat-tools/tests/review/test_pipeline.py plugins/pirategoat-tools/tests/review/test_pipeline_infra.py plugins/pirategoat-tools/tests/review/test_pipeline_integration.py -v` |
 | `scripts/review/run_paths.py` | `pytest plugins/pirategoat-tools/tests/review/test_run_paths.py plugins/pirategoat-tools/tests/review/test_telemetry.py plugins/pirategoat-tools/tests/review/test_telemetry_share.py plugins/pirategoat-tools/tests/analysis/test_review_run_metrics.py -v` (`telemetry_log_path` is shared by the telemetry producer and the uploader; `SAFE_RUN_ID_SEGMENT_RE` by the uploader and the shared-clone reader) |
 | `scripts/review/briefings.py` | `pytest plugins/pirategoat-tools/tests/review/test_pipeline.py -v` |
-| `scripts/review/orchestration.py` | `pytest plugins/pirategoat-tools/tests/review/test_pipeline_integration.py plugins/pirategoat-tools/tests/review/test_orchestration_hygiene.py plugins/pirategoat-tools/tests/review/test_critic_adjustments.py plugins/pirategoat-tools/tests/review/test_synthesis_lifecycle.py plugins/pirategoat-tools/tests/review/test_report_assembly.py -v` (hygiene covers the step-3 baseline / step-11 sweep and the step-11 usage capture; critic-adjustments covers step 11's adjudication-state inspection and verdict sync; synthesis-lifecycle covers the step-8/10 dispatch markers and the step-9/11 observations; report-assembly covers the step-9/11 `review-record.md` assembly seams; hygiene also covers the step-9 reconciliation verification and the step-11 critic-prose path listing) |
+| `scripts/review/orchestration.py` | `pytest plugins/pirategoat-tools/tests/review/test_pipeline_integration.py plugins/pirategoat-tools/tests/review/test_orchestration_hygiene.py plugins/pirategoat-tools/tests/review/test_critic_adjustments.py plugins/pirategoat-tools/tests/review/test_step_11.py plugins/pirategoat-tools/tests/review/test_synthesis_lifecycle.py plugins/pirategoat-tools/tests/review/test_report_assembly.py -v` (hygiene covers the step-3 baseline / step-11 sweep and the step-11 usage capture; critic-adjustments covers step 11's adjudication-state inspection and verdict sync; step_11 covers derived-verdict, critic-absence, adjudication-state, and findings-Markdown re-render; synthesis-lifecycle covers the step-8/10 dispatch markers and the step-9/11 observations; report-assembly covers the step-9/11 `review-record.md` assembly seams; hygiene also covers the step-9 reconciliation verification and the step-11 critic-prose path listing) |
 | `scripts/review/orchestration.py` review-record assembler (`assemble_review_record`, `_render_run_notes`, `_render_record_verdict_line`) or `render_review_body` in `scripts/review/review_markdown.py` | `pytest plugins/pirategoat-tools/tests/review/test_report_assembly.py plugins/pirategoat-tools/tests/review/test_review_markdown.py -v` (the record's shared body IS `render_review_body`, so a change to either lands in both) |
 | `scripts/review/dispatch_adjust.py` | `pytest plugins/pirategoat-tools/tests/review/test_dispatch_adjust.py plugins/pirategoat-tools/tests/review/test_pipeline.py plugins/pirategoat-tools/tests/review/test_import_graph.py -v` (the step-5 briefing names the command and the step-6 briefing repeats what it recorded, reading the `planner_status` the CLI stamps) |
 | `scripts/review/dispatch_status.py` | `pytest plugins/pirategoat-tools/tests/review/test_agents_status.py plugins/pirategoat-tools/tests/review/test_pipeline.py plugins/pirategoat-tools/tests/review/test_pipeline_infra.py plugins/pirategoat-tools/tests/review/test_pipeline_integration.py plugins/pirategoat-tools/tests/review/test_plan_dispatch.py plugins/pirategoat-tools/tests/review/test_telemetry.py plugins/pirategoat-tools/tests/analysis/test_review_run_metrics.py plugins/pirategoat-tools/tests/review/test_review_run_fixtures.py plugins/pirategoat-tools/tests/review/test_evidence_manifest.py plugins/pirategoat-tools/tests/review/test_dispatch_adjust.py plugins/pirategoat-tools/tests/review/test_orchestration_hygiene.py -v` (`load_dispatch_plan` is the one plan reader: orchestration, agents_status, telemetry, the evidence manifest and dispatch_adjust all open the plan through it) |
@@ -697,24 +698,24 @@ The full plugin suite runs in about two minutes (`pytest plugins/pirategoat-tool
 | `scripts/review/dependency_refresh.py` | `pytest plugins/pirategoat-tools/tests/review/test_dependency_refresh.py -v` |
 | `scripts/review/user_settings.py` | `pytest plugins/pirategoat-tools/tests/review/test_user_settings.py plugins/pirategoat-tools/tests/review/test_telemetry_share.py plugins/pirategoat-tools/tests/review/test_pipeline_infra.py plugins/pirategoat-tools/tests/review/test_import_graph.py -v` |
 | `scripts/review/telemetry_share.py` | `pytest plugins/pirategoat-tools/tests/review/test_telemetry_share.py plugins/pirategoat-tools/tests/review/test_telemetry.py plugins/pirategoat-tools/tests/review/test_pipeline.py plugins/pirategoat-tools/tests/review/test_pipeline_integration.py plugins/pirategoat-tools/tests/analysis/test_review_run_metrics.py -v` (four importers: `telemetry.py` takes `repo_identity`, `pipeline.py` the upload seam and `UNOPTED_OUTCOMES`, `briefings.py` the consent disclosure, and the metrics contracts `LAYOUT_PREFIX`; the consent disclosure names the path-free host-context data) |
-| `scripts/review/reconciliation_context.py` | `pytest plugins/pirategoat-tools/tests/review/test_reconciliation_context.py plugins/pirategoat-tools/tests/review/test_reconciliation_notes.py plugins/pirategoat-tools/tests/review/test_findings_save.py plugins/pirategoat-tools/tests/review/test_report_assembly.py plugins/pirategoat-tools/tests/review/test_pipeline_integration.py plugins/pirategoat-tools/tests/review/test_file_review.py -v` (reconciliation_notes.py and findings_save.py share `RECONCILIATION_CONTEXT_SCHEMA` and `validate_orchestrator_notes`, and a rebuild must preserve the claims already registered — `TestRegisteredNotesSurviveARebuild`; report-assembly covers `strip_severity_floor_markers`; pipeline-integration's `TestStep9CoverageMeasurement`/`TestStep9Orchestration` and file-review cover `manifest_sections.aggregate_file_review`, which this module's callers still cross. The reconciliation context reads the complete local host map from `review-context.json` so host-qualified citations can be verified without argv transport or telemetry exposure). Changing `compute_missing_agents` or `annotate_prefiltered_findings` also means re-reading `agents/review-reconciliator.md`: the agent carries those measurements rather than recomputing them, so the contract and the computation are one change. |
+| `scripts/review/reconciliation_context.py` | `pytest plugins/pirategoat-tools/tests/review/test_reconciliation_context.py plugins/pirategoat-tools/tests/review/test_reconciliation_notes.py plugins/pirategoat-tools/tests/review/test_findings_save.py plugins/pirategoat-tools/tests/review/test_report_assembly.py plugins/pirategoat-tools/tests/review/test_pipeline_integration.py plugins/pirategoat-tools/tests/review/test_file_review.py -v` (reconciliation_notes.py and findings_save.py share `RECONCILIATION_CONTEXT_SCHEMA` and `validate_orchestrator_notes`, and a rebuild must preserve the claims already registered — `TestRegisteredNotesSurviveARebuild`; report-assembly covers `strip_severity_floor_markers`; pipeline-integration's `TestStep9CoverageMeasurement` and file-review cover `manifest_sections.aggregate_file_review`, which this module's callers still cross. The reconciliation context reads the complete local host map from `review-context.json` so host-qualified citations can be verified without argv transport or telemetry exposure). Changing `compute_missing_agents` or `annotate_prefiltered_findings` also means re-reading `agents/review-reconciliator.md`: the agent carries those measurements rather than recomputing them, so the contract and the computation are one change. |
 | `scripts/review/reconciliation_notes.py` | `pytest plugins/pirategoat-tools/tests/review/test_reconciliation_notes.py plugins/pirategoat-tools/tests/review/test_findings_save.py -v` (the notes it writes are what the save gate requires outcomes for) |
 | `scripts/review/agent/review_assignment.py` | `pytest plugins/pirategoat-tools/tests/review/agent/test_review_assignment.py plugins/pirategoat-tools/tests/review/agent/test_bootstrap_integration.py -v` |
 | `scripts/review/findings_ledger.py` | `pytest plugins/pirategoat-tools/tests/review/test_findings_ledger.py plugins/pirategoat-tools/tests/review/test_critic_adjustments.py plugins/pirategoat-tools/tests/review/test_findings_save.py plugins/pirategoat-tools/tests/review/test_reconciliation_notes.py -v` (`read_reconciliation_context` is the one reader of the context for the save gate, the notes CLI and the builder; findings_save.py imports `RECONCILIATION_PIPELINE_FIELDS`, `DROP_REASONS_FINDING` and `DROP_REASONS_CHECK`, and names an unknown drop reason in its own rejection; the reader-boundary validators in critic_adjustments.py import the provenance constants; the ledger's `sources` grammar — `normalized_sources` — is what critic_adjustments.py validates ledger provenance with) |
-| `scripts/review/reviewer_names.py` | `pytest plugins/pirategoat-tools/tests/review/agent/test_bootstrap_integration.py plugins/pirategoat-tools/tests/review/test_agents_status.py plugins/pirategoat-tools/tests/review/test_telemetry.py plugins/pirategoat-tools/tests/review/test_telemetry_share.py plugins/pirategoat-tools/tests/analysis/test_review_run_metrics.py -v` (bootstrap pins both derivations directly; `telemetry.py`, `telemetry_share.py`, and the metrics contracts import `agent_name_from_review_stem` to project ledger stems to registry names, and agents-status exercises `derive_reviewer_name` through `agents_status.py` and `manifest_sections.py`'s assignment builders) |
+| `scripts/review/reviewer_names.py` | `pytest plugins/pirategoat-tools/tests/review/test_reviewer_names.py plugins/pirategoat-tools/tests/review/agent/test_bootstrap_integration.py plugins/pirategoat-tools/tests/review/test_agents_status.py plugins/pirategoat-tools/tests/review/test_telemetry.py plugins/pirategoat-tools/tests/review/test_telemetry_share.py plugins/pirategoat-tools/tests/analysis/test_review_run_metrics.py -v` (`test_reviewer_names.py` pins the inverse derivation, `agent_name_from_review_stem`, directly; bootstrap pins the forward derivation, `derive_reviewer_name`, across every registered agent; `telemetry.py`, `telemetry_share.py`, and the metrics contracts import `agent_name_from_review_stem` to project ledger stems to registry names, and agents-status exercises `derive_reviewer_name` through `agents_status.py` and `manifest_sections.py`'s assignment builders) |
 | `scripts/review/agents_status.py` | `pytest plugins/pirategoat-tools/tests/review/test_agents_status.py -v` |
 | `scripts/review/agent/scope.py` | `pytest plugins/pirategoat-tools/tests/review/agent/test_scope.py plugins/pirategoat-tools/tests/review/agent/test_scope_routing.py plugins/pirategoat-tools/tests/review/test_plan_dispatch.py plugins/pirategoat-tools/tests/review/test_criteria_coverage.py -v` (`CHANGELOG_FRAGMENT_PATTERN` is shared with `plan_dispatch._has_documentation_files`, so run `test_plan_dispatch.py` and `test_criteria_coverage.py` too) |
 | `scripts/review/agent/diff_noise_filter.py` | `pytest plugins/pirategoat-tools/tests/review/agent/test_diff_noise_filter.py -v` |
 | `scripts/review/agent/output.py` | `pytest plugins/pirategoat-tools/tests/review/agent/test_output.py plugins/pirategoat-tools/tests/grading/test_graders.py -v` |
-| `scripts/review/review_document.py` | `pytest plugins/pirategoat-tools/tests/review/agent/test_output.py plugins/pirategoat-tools/tests/review/test_critic_adjustments.py plugins/pirategoat-tools/tests/grading/test_graders.py plugins/pirategoat-tools/tests/review/test_change_purpose.py -v` (the validators plus both of their consumer boundaries — reviewer publication and ledger adjudication; owns `VERIFY_ITEM_ID_RE`, the grammar of a check's optional `verifies` list, `HOST_CITATION_RE` and `cited_hosts`, the one parser of a host citation that the evidence manifest counts with, and `normalize_bounded_text`, the bounded-prose rule every ledger evidence, orchestrator note and dispatch-adjustment reason passes through — `dispatch_adjust.py` and `reconciliation_notes.py` import it, so `test_dispatch_adjust.py`'s and `test_reconciliation_notes.py`'s refusal fragments pin its message) |
+| `scripts/review/review_document.py` | `pytest plugins/pirategoat-tools/tests/review/test_review_document.py plugins/pirategoat-tools/tests/review/agent/test_output.py plugins/pirategoat-tools/tests/review/test_critic_adjustments.py plugins/pirategoat-tools/tests/grading/test_graders.py plugins/pirategoat-tools/tests/review/test_change_purpose.py -v` (`validate_review_document`'s own rejection branches, plus both of its consumer boundaries — reviewer publication and ledger adjudication; owns `VERIFY_ITEM_ID_RE`, the grammar of a check's optional `verifies` list, `HOST_CITATION_RE` and `cited_hosts`, the one parser of a host citation that the evidence manifest counts with, and `normalize_bounded_text`, the bounded-prose rule every ledger evidence, orchestrator note and dispatch-adjustment reason passes through — `dispatch_adjust.py` and `reconciliation_notes.py` import it, so `test_dispatch_adjust.py`'s and `test_reconciliation_notes.py`'s refusal fragments pin its message) |
 | `scripts/review/review_markdown.py` | `pytest plugins/pirategoat-tools/tests/review/test_review_markdown.py plugins/pirategoat-tools/tests/review/test_report_assembly.py -v` (the renderer's own suite plus the review-record assembler that shares `render_review_body`; rendered findings preserve `source_cited` upstream evidence) |
 | Any `scripts/review/**/*.py` import block, module-level or inside a function body | `pytest plugins/pirategoat-tools/tests/review/test_import_graph.py -v` (asserts the package's whole import graph — a depth-first walk of every module-level edge finds no cycle, the five documented leaf modules stay leaves, two layering directions an acyclic graph cannot expose stay one-way, and no undocumented function-body import exists; `review_document.py`'s, `review_markdown.py`'s, `critic_adjustments.py`'s, and `agent/output.py`'s rows above rely on this test for their import-graph invariants. `importlib.util.spec_from_file_location` loaders are invisible to it — `pipeline.py`, `agent/scope.py`, and `context.py` load modules that way, so those three are untracked here) |
 | `scripts/review/telemetry.py` | `pytest plugins/pirategoat-tools/tests/review/test_telemetry.py plugins/pirategoat-tools/tests/review/test_telemetry_share.py plugins/pirategoat-tools/tests/analysis/test_review_run_metrics.py plugins/pirategoat-tools/tests/review/test_review_run_fixtures.py -v` |
 | `scripts/review/synthesis_lifecycle.py` | `pytest plugins/pirategoat-tools/tests/review/test_synthesis_lifecycle.py -v` (the module plus its four orchestration seams) |
 | `scripts/review/manifest_sections.py` | `pytest plugins/pirategoat-tools/tests/review/test_telemetry.py plugins/pirategoat-tools/tests/review/test_file_review.py plugins/pirategoat-tools/tests/review/test_report_assembly.py plugins/pirategoat-tools/tests/review/test_pipeline_integration.py plugins/pirategoat-tools/tests/review/test_review_run_fixtures.py -v` (`aggregate_file_review` also measures `noise_filtered_files` from the dispatch plan's reviewable list; `summarize_host_context` is the one projection behind the record's host line and telemetry's `host_context` section; `describe_reconciliation_verification` is pinned through the step-9/10 briefings in `test_pipeline.py` and the record in `test_report_assembly.py`) |
 | `scripts/review/critic.py` | `pytest plugins/pirategoat-tools/tests/review/test_critic.py -v` |
-| `scripts/review/critic_adjustments.py` | `pytest plugins/pirategoat-tools/tests/review/test_critic_adjustments.py plugins/pirategoat-tools/tests/review/test_review_markdown.py plugins/pirategoat-tools/tests/review/test_findings_ledger.py -v` (the renderer shows `invalidated_recommendations`; the ledger tests round-trip provenance through the reader) |
-| `scripts/review/verdict_rules.py` | `pytest plugins/pirategoat-tools/tests/review/test_verdict_rules.py plugins/pirategoat-tools/tests/review/agent/test_output.py plugins/pirategoat-tools/tests/review/test_critic_adjustments.py -v` (the shared ladder plus both callers — output.py publishing a review and critic_adjustments recomputing the ledger verdict) |
+| `scripts/review/critic_adjustments.py` | `pytest plugins/pirategoat-tools/tests/review/test_critic_adjustments.py plugins/pirategoat-tools/tests/review/test_step_11.py plugins/pirategoat-tools/tests/review/test_review_markdown.py plugins/pirategoat-tools/tests/review/test_findings_ledger.py -v` (the renderer shows `invalidated_recommendations`; the ledger tests round-trip provenance through the reader; step_11 recomputes the published verdict from a live ledger) |
+| `scripts/review/verdict_rules.py` | `pytest plugins/pirategoat-tools/tests/review/test_verdict_rules.py plugins/pirategoat-tools/tests/review/agent/test_output.py plugins/pirategoat-tools/tests/review/test_step_11.py -v` (the shared ladder plus both callers — output.py publishing a review and step 11 recomputing the ledger verdict) |
 | `scripts/review/findings_save.py` | `pytest plugins/pirategoat-tools/tests/review/test_findings_save.py plugins/pirategoat-tools/tests/review/test_findings_ledger.py -v` (the accounting gate compares against the ledger builder's provenance vocabulary — `DROP_REASONS_*`, `NOTE_OUTCOMES`, `SOURCE_ENTRY_FIELDS` — and against reconciliation_context.py's schema constant, and enforces a merged check's `verifies` union) |
 | `scripts/review/workspace_setup.py` | `pytest plugins/pirategoat-tools/tests/review/test_workspace_setup.py -v` |
 | `scripts/linear/pipeline.py` (routing, state, CLI) | `pytest plugins/pirategoat-tools/tests/linear/test_pipeline.py -v` |
@@ -737,6 +738,7 @@ The full plugin suite runs in about two minutes (`pytest plugins/pirategoat-tool
 | `tests/helpers/graders.py` | `pytest plugins/pirategoat-tools/tests/grading/test_graders.py -v` |
 | `tests/helpers/triage_run_fixture.py` or `tests/fixtures/triage-runs/*.json` | `pytest plugins/pirategoat-tools/tests/review/test_triage_run_regressions.py -v` (never edit a fixture by hand — re-capture it with the helper's CLI from a clone that holds the range; the integrity tests pin file counts, patch coverage and the absence of session URLs) |
 | `tests/helpers/review_run_fixture.py` or `tests/fixtures/review-runs/**` | `pytest plugins/pirategoat-tools/tests/review/test_review_run_fixtures.py -v` (never edit a fixture by hand — re-capture it through the helper from the source run; capture output is generated-only, privacy-redacted, and digest-bound) |
+| `tests/helpers/critic_seeds.py` | `pytest plugins/pirategoat-tools/tests/review/test_critic_adjustments.py plugins/pirategoat-tools/tests/review/test_step_11.py -v` (both files build ledgers, proposals, and adjudications through these shared seed helpers rather than a per-file copy — import from here, never duplicate a helper's body into either test file) |
 | `agents/history-insights-reviewer.md` | `pytest plugins/pirategoat-tools/tests/review/agent/test_history_insights_reviewer.py -v` |
 | `tests/grading/eval_agent_compliance.py` | `pytest plugins/pirategoat-tools/tests/grading/test_eval_agent_compliance.py -v` |
 | Any `SCENARIOS` answer key or `tests/fixtures/*.diff` | `pytest plugins/pirategoat-tools/tests/grading/test_answer_keys.py -v` |
@@ -755,7 +757,7 @@ These principles guide all testing decisions. Follow them when adding or modifyi
 
 ### 1. Code-based graders, not model-based
 
-All graders are deterministic Python functions. No LLM calls in the grading path. This keeps tests fast (~80-95s for the full suite as of 2026-08-20 — see the header above), reproducible (same input = same result), and cheap (no API costs).
+All graders are deterministic Python functions. No LLM calls in the grading path. This keeps tests fast (see the header above for the current measured runtime), reproducible (same input = same result), and cheap (no API costs).
 
 ### 2. Grade outcomes, not paths
 

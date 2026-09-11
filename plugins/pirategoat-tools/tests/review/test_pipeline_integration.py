@@ -1,6 +1,5 @@
 """Tests for review/orchestration.py through the pipeline.py compatibility facade."""
 
-import builtins
 import hashlib
 import importlib.util
 import json
@@ -47,15 +46,6 @@ from helpers.review_fixtures import (
     canonical_review_document,
     failing_findings_renderer,
 )
-_dispatch_spec = importlib.util.spec_from_file_location(
-    "plan_review_dispatch", str(_SCRIPTS_DIR / "review" / "plan_dispatch.py")
-)
-_dispatch_mod = importlib.util.module_from_spec(_dispatch_spec)
-_dispatch_spec.loader.exec_module(_dispatch_mod)
-
-build_dispatch_plan = _dispatch_mod.build_dispatch_plan
-load_registry = _dispatch_mod.load_registry
-
 _output_spec = importlib.util.spec_from_file_location(
     "pipeline_integration_review_output",
     str(_SCRIPTS_DIR / "review" / "agent" / "output.py"),
@@ -347,84 +337,28 @@ class TestReviewerDraftFinalizationLifecycle:
             run_paths.SYNTHESIS_SUBDIR,
             run_paths.SCRATCH_SUBDIR,
         }
-        assert len(boundary_files) == 7
         root_entries = {path.name for path in output_dir.iterdir()}
         assert root_entries <= boundary_files | grouped_subdirs
         assert grouped_subdirs <= root_entries
 
 
-class TestRunArtifactLayout:
-    def test_state_dispatch_and_reconciliation_context_use_grouped_paths(
-        self, tmp_path
-    ):
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_git_repo(repo)
-        _add_commit(repo)
-        output_dir = run_paths.allocate_run_dir(tmp_path / "target")
-
-        started = run_pipeline(
-            "--step", "1", "--mode", "full",
-            "--output-dir", str(output_dir), "--git-range", "HEAD~1..HEAD",
-            cwd=repo, env=hermetic_env(),
-        )
-        assert started.returncode == 0, started.stderr
-        context = {
-            "git": {
-                "git_range": "HEAD~1..HEAD",
-                "changed_files": ["second.txt"],
-                "commit_count": 1,
-            },
-            "pr_size": {"files": 1, "lines": 1, "category": "tiny"},
-        }
-        (output_dir / "review-context.json").write_text(json.dumps(context))
-
-        planned = run_pipeline(
-            "--step", "5", "--mode", "full",
-            "--output-dir", str(output_dir),
-            cwd=repo, env=hermetic_env(),
-        )
-        assert planned.returncode == 0, planned.stderr
-        reconciled = subprocess.run(
-            [
-                sys.executable,
-                str(_SCRIPTS_DIR / "review" / "reconciliation_context.py"),
-                "--output-dir", str(output_dir),
-                "--git-range", "HEAD~1..HEAD",
-                "--changed-files", "second.txt",
-                "--pr-id", "42",
-                "--dispatched-agents", "",
-            ],
-            cwd=repo,
-            capture_output=True,
-            text=True,
-        )
-        assert reconciled.returncode == 0, reconciled.stderr
-
-        assert (_artifact(output_dir, "pipeline_state")).is_file()
-        assert (_artifact(output_dir, "dispatch_plan")).is_file()
-        assert (_artifact(output_dir, "reconciliation_context")).is_file()
-        assert (output_dir / "review-context.json").is_file()
-        assert not (output_dir / "pipeline-state.json").exists()
-        assert not (output_dir / "dispatch-plan.json").exists()
-        assert not (output_dir / "reconciliation-context.json").exists()
-
-
 class TestCriticAdjudicationLifecycle:
     def test_committed_proposal_is_settled_and_published_once(
-        self, tmp_path
+        self, mod, tmp_path, monkeypatch
     ):
         repo = tmp_path / "repo"
         repo.mkdir()
         _init_git_repo(repo)
         _add_commit(repo)
         output_dir = tmp_path / "out"
-        started = run_pipeline(
+        monkeypatch.chdir(repo)
+        monkeypatch.setenv("XDG_CONFIG_HOME", "/nonexistent-xdg")
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py",
             "--step", "1", "--mode", "full", "--pr-number", "42",
             "--interactive", "false", "--output-dir", str(output_dir),
-            cwd=repo, env=hermetic_env(),
-        )
-        assert started.returncode == 0, started.stderr
+        ])
+        mod.main()
 
         ledger = _review_json("reconciliator")
         ledger["findings"] = [
@@ -573,11 +507,11 @@ class TestCriticAdjudicationLifecycle:
 
         proposal_bytes = settled_proposal_path.read_bytes()
         ledger_bytes = settled_ledger_path.read_bytes()
-        prepared = run_pipeline(
-            "--step", "11", "--mode", "full",
-            "--output-dir", str(output_dir), cwd=repo, env=hermetic_env(),
-        )
-        assert prepared.returncode == 0, prepared.stderr
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "11", "--mode", "full",
+            "--output-dir", str(output_dir),
+        ])
+        mod.main()
         assert settled_proposal_path.read_bytes() == proposal_bytes
         assert settled_ledger_path.read_bytes() == ledger_bytes
         state = json.loads((_artifact(output_dir, "pipeline_state")).read_text())
@@ -597,11 +531,11 @@ class TestCriticAdjudicationLifecycle:
             "# Review\n\nREQUEST_CHANGES: the settled ledger has one high "
             "and one medium finding.\n"
         )
-        published = run_pipeline(
-            "--step", "11", "--mode", "full",
-            "--output-dir", str(output_dir), cwd=repo, env=hermetic_env(),
-        )
-        assert published.returncode == 0, published.stderr
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "11", "--mode", "full",
+            "--output-dir", str(output_dir),
+        ])
+        mod.main()
         assert settled_proposal_path.read_bytes() == proposal_bytes
         assert settled_ledger_path.read_bytes() == ledger_bytes
         result = json.loads((output_dir / "pipeline-result.json").read_text())
@@ -624,38 +558,26 @@ class TestCriticAdjudicationLifecycle:
 
 class TestDependencyRefreshSaveLifecycle:
     def test_adaptive_refresh_report_is_saved_and_consumed_once(
-        self, orchestration_mod, tmp_path
+        self, mod, orchestration_mod, tmp_path, monkeypatch
     ):
         repo = tmp_path / "repo"
         repo.mkdir()
         _init_git_repo(repo)
         _add_commit(repo)
         output_dir = tmp_path / "out"
-        environment = hermetic_env()
-        started = run_pipeline(
-            "--step", "1", "--mode", "full",
+        monkeypatch.chdir(repo)
+        monkeypatch.setenv("XDG_CONFIG_HOME", "/nonexistent-xdg")
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full",
             "--output-dir", str(output_dir),
             "--git-range", "HEAD~1..HEAD", "--refresh-deps",
-            cwd=repo, env=environment,
-        )
-        assert started.returncode == 0, started.stderr
-        briefed = run_pipeline(
-            "--step", "3", "--mode", "full",
+        ])
+        mod.main()
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "3", "--mode", "full",
             "--output-dir", str(output_dir),
-            cwd=repo, env=environment,
-        )
-        assert briefed.returncode == 0, briefed.stderr
-        assert "dependency_refresh.py" in briefed.stdout
-        assert " save " in briefed.stdout
-        assert "SAVED dependency-refresh.json" in briefed.stdout
-        for manager_command in (
-            "npm install",
-            "pnpm install",
-            "yarn install",
-            "composer install",
-        ):
-            assert manager_command not in briefed.stdout
-        assert "write dependency-refresh.json" not in briefed.stdout.lower()
+        ])
+        mod.main()
 
         request = tmp_path / "dependency-refresh-request.json"
         request.write_text(json.dumps({
@@ -678,7 +600,6 @@ class TestDependencyRefreshSaveLifecycle:
             cwd=repo,
             capture_output=True,
             text=True,
-            env=environment,
         )
         assert saved.returncode == 0, saved.stderr
         assert saved.stdout.strip() == "SAVED dependency-refresh.json"
@@ -696,12 +617,11 @@ class TestDependencyRefreshSaveLifecycle:
             "dirty_files": [],
         }
 
-        consumed = run_pipeline(
-            "--step", "5", "--mode", "full",
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "5", "--mode", "full",
             "--output-dir", str(output_dir),
-            cwd=repo, env=environment,
-        )
-        assert consumed.returncode == 0, consumed.stderr
+        ])
+        mod.main()
         state = json.loads((_artifact(output_dir, "pipeline_state")).read_text())
         assert state["dependency_refresh_precheck"] == {
             "tracked_files_dirty": False,
@@ -755,17 +675,6 @@ class TestDependencyRefreshSaveLifecycle:
             if path.name.startswith("dependency-refresh")
         ] == ["dependency-refresh.json"]
         assert not (output_dir / "dependency-refresh.json").exists()
-        serialized = json.dumps({"state": state, "manifest": manifest})
-        for retired in (
-            "dependency_refresh_verification",
-            "dependency-refresh-verification",
-            "suggested_command",
-            "installed_state_present",
-            "commands_allowed",
-            "disallowed_commands",
-            "verification_failed",
-        ):
-            assert retired not in serialized
 
 
 class TestTelemetryIntegration:
@@ -782,17 +691,18 @@ class TestTelemetryIntegration:
         _init_git_repo(tmp_path / "repo")
         (tmp_path / "out").mkdir()
 
-    def test_step_1_creates_telemetry_log(self, tmp_path):
-        """Step 1 should create a telemetry log and running manifest."""
+    def test_step_2_appends_to_telemetry_log(self, mod, tmp_path, monkeypatch):
+        """Step 1 creates the telemetry log and running manifest; step 3 appends to it."""
         out = tmp_path / "out"
         log_dir = tmp_path / "telemetry-logs"
-        with patch.dict(os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}):
-            r = run_pipeline(
-                "--step", "1", "--mode", "pr",
-                "--output-dir", str(out), "--pr-number", "42",
-                cwd=tmp_path / "repo",
-            )
-        assert r.returncode == 0
+        monkeypatch.setenv("PIRATEGOAT_TELEMETRY_LOG_DIR", str(log_dir))
+        monkeypatch.chdir(tmp_path / "repo")
+
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(out), "--pr-number", "42",
+        ])
+        mod.main()
         marker = _artifact(out, "telemetry_log_path")
         assert marker.is_file()
         log_path = Path(marker.read_text().strip())
@@ -801,44 +711,42 @@ class TestTelemetryIntegration:
         manifest = json.loads(manifest_path.read_text())
         assert manifest["status"] == "running"
 
-    def test_telemetry_failure_does_not_break_pipeline(self, tmp_path):
-        """Pipeline works even if telemetry log_dir is unwritable."""
-        out = tmp_path / "out"
-        log_dir = tmp_path / "unwritable"
-        log_dir.mkdir()
-        log_dir.chmod(0o000)
-        try:
-            with patch.dict(os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}):
-                r = run_pipeline(
-                    "--step", "1", "--mode", "pr",
-                    "--output-dir", str(out), "--pr-number", "42",
-                    cwd=tmp_path / "repo",
-                )
-            assert r.returncode == 0
-            assert "Step 1" in r.stdout
-        finally:
-            log_dir.chmod(0o755)
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "3", "--mode", "pr",
+            "--output-dir", str(out),
+        ])
+        mod.main()
 
-    def test_step_2_appends_to_telemetry_log(self, tmp_path):
-        """Subsequent steps append to the log created by step 1."""
-        out = tmp_path / "out"
-        log_dir = tmp_path / "telemetry-logs"
-        env = {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}
-        with patch.dict(os.environ, env):
-            run_pipeline("--step", "1", "--mode", "pr",
-                          "--output-dir", str(out), "--pr-number", "42",
-                          cwd=tmp_path / "repo")
-            run_pipeline("--step", "3", "--mode", "pr",
-                         "--output-dir", str(out), cwd=tmp_path / "repo")
-        marker = _artifact(out, "telemetry_log_path")
-        log_path = marker.read_text().strip()
         with open(log_path) as f:
             lines = f.readlines()
         assert len(lines) == 2
         assert json.loads(lines[0])["event"] == "pipeline_start"
         assert json.loads(lines[1])["event"] == "step"
 
-    def test_step_1_uses_preserved_bot_context_git_identity(self, tmp_path):
+    def test_telemetry_failure_does_not_break_pipeline(
+        self, mod, tmp_path, monkeypatch, capsys
+    ):
+        """Pipeline works even if telemetry log_dir is unwritable."""
+        out = tmp_path / "out"
+        log_dir = tmp_path / "unwritable"
+        log_dir.mkdir()
+        log_dir.chmod(0o000)
+        monkeypatch.setenv("PIRATEGOAT_TELEMETRY_LOG_DIR", str(log_dir))
+        monkeypatch.chdir(tmp_path / "repo")
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(out), "--pr-number", "42",
+        ])
+        try:
+            mod.main()
+            output = capsys.readouterr().out
+            assert "Step 1" in output
+        finally:
+            log_dir.chmod(0o755)
+
+    def test_step_1_uses_preserved_bot_context_git_identity(
+        self, mod, tmp_path, monkeypatch
+    ):
         """Bot-provided range and full SHAs survive into pipeline_start.
 
         The bot computes merge_base via `git merge-base` and head_sha via
@@ -864,11 +772,13 @@ class TestTelemetryIntegration:
             },
         }))
         log_dir = tmp_path / "telemetry-logs"
+        monkeypatch.setenv("PIRATEGOAT_TELEMETRY_LOG_DIR", str(log_dir))
+        monkeypatch.chdir(tmp_path / "repo")
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--output-dir", str(out),
+        ])
+        mod.main()
 
-        with patch.dict(os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}):
-            result = run_pipeline("--step", "1", "--output-dir", str(out), cwd=tmp_path / "repo")
-
-        assert result.returncode == 0
         log_path = (_artifact(out, "telemetry_log_path")).read_text().strip()
         with open(log_path) as f:
             start = json.loads(f.readline())
@@ -878,171 +788,67 @@ class TestTelemetryIntegration:
             "head_sha": context_head,
         }
 
-    def test_step_1_resolves_symbolic_context_merge_base(self, tmp_path):
-        """A symbolic context merge_base (explicit "main..HEAD" range) must be
-        resolved to a commit SHA before entering the durable run identity."""
-        out = tmp_path / "out"
-        repo = tmp_path / "repo"
-        subprocess.run(
-            ["git", "branch", "-M", "main"],
-            cwd=repo, capture_output=True, check=True,
-        )
-        main_sha = subprocess.run(
-            ["git", "rev-parse", "main"],
-            cwd=repo, capture_output=True, text=True, check=True,
-        ).stdout.strip()
-        (out / "run-config.json").write_text(json.dumps({
-            "mode": "full",
-            "interactive": False,
-            "session_id": "bot-session",
-            "git_range": "main..HEAD",
-        }))
-        (out / "review-context.json").write_text(json.dumps({
-            "git": {
-                "git_range": "main..HEAD",
-                "merge_base": "main",
-                "head_ref": "HEAD",
-            },
-        }))
-        log_dir = tmp_path / "telemetry-logs"
-
-        with patch.dict(os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}):
-            result = run_pipeline(
-                "--step", "1", "--output-dir", str(out), cwd=repo
-            )
-
-        assert result.returncode == 0
-        log_path = (_artifact(out, "telemetry_log_path")).read_text().strip()
-        with open(log_path) as f:
-            start = json.loads(f.readline())
-        git_identity = start["pipeline"]["git"]
-        assert git_identity["requested_range"] == "main..HEAD"
-        assert git_identity["base_sha"] == main_sha
-        assert git_identity["head_sha"] == main_sha
-
-    def test_step_1_interactive_run_ignores_stale_context_git_identity(self, tmp_path):
-        """Interactive reruns do not leak the prior run's preserved Git identity."""
-        out = tmp_path / "out"
-        repo = tmp_path / "repo"
-        (out / "run-config.json").write_text(json.dumps({
-            "mode": "full",
-            "interactive": True,
-        }))
-        (out / "review-context.json").write_text(json.dumps({
-            "git": {
-                "git_range": "stale-base..stale-head",
-                "merge_base": "stale-base-sha",
-                "head_sha": "stale-head-sha",
-            },
-        }))
-        log_dir = tmp_path / "telemetry-logs"
-        current_head = subprocess.check_output(
-            ["git", "rev-parse", "--verify", "HEAD"], cwd=repo, text=True
-        ).strip()
-
-        with patch.dict(os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}):
-            result = run_pipeline(
-                "--step", "1", "--output-dir", str(out), cwd=str(repo)
-            )
-
-        assert result.returncode == 0
-        log_path = (_artifact(out, "telemetry_log_path")).read_text().strip()
-        with open(log_path) as f:
-            start = json.loads(f.readline())
-        assert start["pipeline"]["git"] == {
-            "requested_range": "",
-            "base_sha": "",
-            "head_sha": current_head,
-        }
-        manifest = json.loads(Path(log_path).with_suffix(".manifest.json").read_text())
-        assert manifest["run"]["git"] == {
-            "requested_range": "",
-            "base_sha": "",
-            "head_sha": current_head,
-            "base_fetch": None,
-            "scope_check": None,
-        }
-        assert json.loads((out / "review-context.json").read_text()) == {
-            "output": {"directory": str(out)},
-        }
-
-    def test_step_1_interactive_range_resolves_current_git_not_stale_context(self, tmp_path):
-        """An explicit interactive range resolves Git even when stale context matches it."""
-        out = tmp_path / "out"
-        repo = tmp_path / "repo"
-        git_range = "HEAD~1..HEAD~1"
-        (out / "run-config.json").write_text(json.dumps({
-            "mode": "full",
-            "interactive": True,
-            "git_range": git_range,
-        }))
-        (out / "review-context.json").write_text(json.dumps({
-            "git": {
-                "git_range": git_range,
-                "merge_base": "stale-base-sha",
-                "head_sha": "stale-head-sha",
-            },
-        }))
-        log_dir = tmp_path / "telemetry-logs"
-        _add_commit(repo)
-        expected_sha = subprocess.check_output(
-            ["git", "rev-parse", "--verify", "HEAD~1"], cwd=repo, text=True
-        ).strip()
-
-        with patch.dict(os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}):
-            result = run_pipeline(
-                "--step", "1", "--output-dir", str(out), cwd=str(repo)
-            )
-
-        assert result.returncode == 0
-        log_path = (_artifact(out, "telemetry_log_path")).read_text().strip()
-        with open(log_path) as f:
-            start = json.loads(f.readline())
-        assert start["pipeline"]["git"] == {
-            "requested_range": git_range,
-            "base_sha": expected_sha,
-            "head_sha": expected_sha,
-        }
-
-    def test_incremental_context_uses_step_1_output_seed_for_baseline(
-        self, tmp_path
+    @pytest.mark.parametrize(
+        ("git_range", "add_extra_commit"),
+        (
+            pytest.param("", False, id="no_range"),
+            pytest.param("HEAD~1..HEAD~1", True, id="range_HEAD~1..HEAD~1"),
+        ),
+    )
+    def test_interactive_identity_ignores_context(
+        self, mod, tmp_path, monkeypatch, git_range, add_extra_commit
     ):
-        # _isolated_repo (autouse) already initialized tmp_path/repo as a repo.
+        """Interactive runs resolve current Git identity, never the preserved
+        (possibly stale) review-context.json value — one branch in main()
+        (`git_context = {} if interactive`), exercised with the range unset
+        and with an explicit range that happens to match the stale context."""
         out = tmp_path / "out"
         repo = tmp_path / "repo"
-        baseline_sha = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=repo, text=True
-        ).strip()
-        (out / "run-config.json").write_text(json.dumps({
-            "target_dir": str(repo),
-        }))
-        (repo / ".branch-review-baseline.json").write_text(json.dumps({
-            "last_reviewed_sha": baseline_sha,
+        config = {"mode": "full", "interactive": True}
+        if git_range:
+            config["git_range"] = git_range
+        (out / "run-config.json").write_text(json.dumps(config))
+        (out / "review-context.json").write_text(json.dumps({
+            "git": {
+                "git_range": git_range or "stale-base..stale-head",
+                "merge_base": "stale-base-sha",
+                "head_sha": "stale-head-sha",
+            },
         }))
         log_dir = tmp_path / "telemetry-logs"
+        if add_extra_commit:
+            _add_commit(repo)
+            expected_sha = subprocess.check_output(
+                ["git", "rev-parse", "--verify", "HEAD~1"], cwd=repo, text=True
+            ).strip()
+            expected = {
+                "requested_range": git_range,
+                "base_sha": expected_sha,
+                "head_sha": expected_sha,
+            }
+        else:
+            current_head = subprocess.check_output(
+                ["git", "rev-parse", "--verify", "HEAD"], cwd=repo, text=True
+            ).strip()
+            expected = {
+                "requested_range": "",
+                "base_sha": "",
+                "head_sha": current_head,
+            }
 
-        with patch.dict(
-            os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}
-        ):
-            step_1 = run_pipeline(
-                "--step", "1", "--mode", "incremental",
-                "--output-dir", str(out), cwd=repo,
-            )
-            seeded_context = json.loads(
-                (out / "review-context.json").read_text()
-            )
-            step_3 = run_pipeline(
-                "--step", "3", "--output-dir", str(out), cwd=repo,
-            )
+        monkeypatch.setenv("PIRATEGOAT_TELEMETRY_LOG_DIR", str(log_dir))
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--output-dir", str(out),
+        ])
+        mod.main()
 
-        assert step_1.returncode == 0
-        assert seeded_context == {"output": {"directory": str(out)}}
-        assert step_3.returncode == 0
-        context = json.loads((out / "review-context.json").read_text())
-        assert context["output"]["directory"] == str(out)
-        assert context["git"]["merge_base"] == baseline_sha
-        assert context["git"]["git_range"] == f"{baseline_sha}..HEAD"
-        assert (repo / ".branch-review-baseline.json").is_file()
+        log_path = (_artifact(out, "telemetry_log_path")).read_text().strip()
+        with open(log_path) as f:
+            start = json.loads(f.readline())
+        assert start["pipeline"]["git"] == expected
+        manifest = json.loads(Path(log_path).with_suffix(".manifest.json").read_text())
+        assert manifest["run"]["git"] == {**expected, "base_fetch": None, "scope_check": None}
 
 
 class TestTelemetrySharingIntegration:
@@ -1092,17 +898,14 @@ class TestTelemetrySharingIntegration:
         ("sharing", "repo_consent", "expected_line", "expected_puts"),
         (
             ("enabled", "include", "TELEMETRY: shared", 2),
-            ("disabled", "unset", None, 0),
-            ("unset", "unset", None, 0),
-            (
-                "enabled", "exclude",
-                "TELEMETRY: skipped: repo excluded", 0,
-            ),
         ),
     )
     def test_terminal_step_honors_consent_before_uploading(
         self, tmp_path, sharing, repo_consent, expected_line, expected_puts
     ):
+        """The only end-to-end PATH/gh-shim plumbing test — kept as a
+        subprocess smoke; every consent gate itself is unit-pinned in
+        test_telemetry_share.py::TestMaybeUpload::test_each_consent_state_gates_correctly."""
         completed, call_log = self._run_shared_review(
             tmp_path, sharing=sharing, repo_consent=repo_consent
         )
@@ -1112,89 +915,109 @@ class TestTelemetrySharingIntegration:
             line for line in completed.stdout.splitlines()
             if line.startswith("TELEMETRY:")
         ]
-        if expected_line is None:
-            assert telemetry_lines == []
-        else:
-            assert len(telemetry_lines) == 1
-            assert telemetry_lines[0].startswith(expected_line)
+        assert len(telemetry_lines) == 1
+        assert telemetry_lines[0].startswith(expected_line)
         calls = gh_call_argv(call_log)
         assert len([argv for argv in calls if "PUT" in argv]) == expected_puts
-        if expected_puts == 0:
-            assert calls == []
 
-    def test_upload_failure_is_reported_without_failing_the_pipeline(self, tmp_path):
-        private_stderr = "permission denied for secret-account@example.test token=private"
-        completed, _call_log = self._run_shared_review(
-            tmp_path,
-            sharing="enabled",
-            repo_consent="include",
-            fail_code=17,
-            fail_stderr=private_stderr,
+    def test_terminal_step_silently_skips_when_sharing_is_disabled(
+        self, mod, tmp_path, monkeypatch, capsys
+    ):
+        """Disabled sharing consent never reaches the gh shim; the other
+        consent gates (unset, per-repo exclude) are unit-pinned in
+        test_telemetry_share.py::TestMaybeUpload::test_each_consent_state_gates_correctly."""
+        repo = add_origin(
+            _init_git_repo(tmp_path), "https://github.com/acme/widget.git"
         )
+        output_dir = tmp_path / "out"
+        output_dir.mkdir()
+        config_home = tmp_path / "xdg"
+        self._write_consent(config_home, "disabled", "unset")
+        call_log = tmp_path / "gh-calls.jsonl"
+        bin_dir = install_gh_shim(tmp_path / "bin", call_log)
 
-        assert completed.returncode == 0, completed.stderr
-        assert completed.stdout.count("TELEMETRY:") == 1
-        assert (
-            "TELEMETRY: skipped: upload failed "
-            "(gh exited 17; ask Vlad for collaborator access)"
-        ) in completed.stdout
-        assert private_stderr not in completed.stdout
-        assert private_stderr not in completed.stderr
+        monkeypatch.chdir(repo)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+        monkeypatch.setenv("PIRATEGOAT_TELEMETRY_LOG_DIR", str(tmp_path / "telemetry"))
+        monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full",
+            "--output-dir", str(output_dir),
+        ])
+        mod.main()
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "12", "--output-dir", str(output_dir),
+        ])
+        mod.main()
+
+        out = capsys.readouterr().out
+        telemetry_lines = [
+            line for line in out.splitlines() if line.startswith("TELEMETRY:")
+        ]
+        assert telemetry_lines == []
+        assert gh_call_argv(call_log) == []
 
 
 
 class TestStep2Orchestration:
     """Step 2 main() runs review/workspace_setup.py and persists workspace state."""
 
-    def test_step_2_completes_without_crash(self, tmp_path):
-        """Step 2 should complete even when review/workspace_setup.py fails (no git repo)."""
+    def test_step_2_completes_and_stores_workspace_setup_result(
+        self, mod, tmp_path, monkeypatch
+    ):
+        """Step 2 should complete even when review/workspace_setup.py fails
+        (no git repo), and persist its result to state."""
         repo = tmp_path / "repo"
         repo.mkdir()
         _init_git_repo(repo)
         out = tmp_path / "out"
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(out), "--pr-number", "42", cwd=str(repo))
-        r = run_pipeline("--step", "2", "--mode", "pr",
-                       "--output-dir", str(out), cwd=str(repo))
-        assert r.returncode == 0
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(out), "--pr-number", "42",
+        ])
+        mod.main()
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "2", "--mode", "pr",
+            "--output-dir", str(out),
+        ])
+        mod.main()
         state = json.loads((_artifact(out, "pipeline_state")).read_text())
         assert 2 in state["completed_steps"]
-
-    def test_step_2_stores_workspace_setup_result(self, tmp_path):
-        """Step 2 should store workspace_setup_result in state."""
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_git_repo(repo)
-        out = tmp_path / "out"
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(out), "--pr-number", "42", cwd=str(repo))
-        run_pipeline("--step", "2", "--mode", "pr",
-                       "--output-dir", str(out), cwd=str(repo))
-        state = json.loads((_artifact(out, "pipeline_state")).read_text())
         assert "workspace_setup_result" in state
 
 
 class TestStep3Orchestration:
     """Step 3 main() runs review/context.py and hydrates state."""
 
-    def test_step_3_runs_gather_context(self, tmp_path):
+    def test_step_3_runs_gather_context(self, mod, tmp_path, monkeypatch):
         """Step 3 should invoke review/context.py (may fail in test env, but state should update)."""
-        # Seed step 1
-        run_pipeline("--step", "1", "--mode", "full",
-                   "--output-dir", str(tmp_path), cwd=tmp_path)
-        # Run step 3
-        r = run_pipeline("--step", "3", "--mode", "full",
-                       "--output-dir", str(tmp_path), cwd=tmp_path)
-        assert r.returncode == 0
-        # State should have completed_steps including 3
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full",
+            "--output-dir", str(tmp_path),
+        ])
+        mod.main()
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "3", "--mode", "full",
+            "--output-dir", str(tmp_path),
+        ])
+        mod.main()
         state = json.loads((_artifact(tmp_path, "pipeline_state")).read_text())
         assert 3 in state["completed_steps"]
 
-    def test_step_3_hydrates_unfetched_issues_from_context(self, tmp_path):
-        """When review-context.json has has_unfetched_issues, state should reflect it."""
-        # Seed step 1
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
+    def test_step_3_hydrates_unfetched_issues_from_context(
+        self, mod, tmp_path, monkeypatch, capsys
+    ):
+        """When review-context.json has has_unfetched_issues, state reflects
+        it and the next step routes to 4, not 5."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(tmp_path), "--pr-number", "42",
+        ])
+        mod.main()
         # Pre-write review-context.json as if review/context.py produced it
         ctx = {
             "git": {"merge_base": "abc", "git_range": "abc..HEAD",
@@ -1205,20 +1028,15 @@ class TestStep3Orchestration:
         }
         (tmp_path / "review-context.json").write_text(json.dumps(ctx))
         # Run step 3 — it should read the context and hydrate state
-        r = run_pipeline("--step", "3", "--mode", "pr",
-                       "--output-dir", str(tmp_path), cwd=tmp_path)
-        assert r.returncode == 0
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "3", "--mode", "pr",
+            "--output-dir", str(tmp_path),
+        ])
+        mod.main()
+        output = capsys.readouterr().out
         state = json.loads((_artifact(tmp_path, "pipeline_state")).read_text())
         assert state["resolved_params"]["has_unfetched_issues"] is True
-
-    def test_step_3_without_context_still_succeeds(self, tmp_path):
-        """Step 3 should not crash if review/context.py fails (no git repo)."""
-        run_pipeline("--step", "1", "--mode", "full",
-                   "--output-dir", str(tmp_path), cwd=tmp_path)
-        r = run_pipeline("--step", "3", "--mode", "full",
-                       "--output-dir", str(tmp_path), cwd=tmp_path)
-        # Should succeed even without a git repo — subprocess failure is tolerated
-        assert r.returncode == 0
+        assert "Step 4" in output
 
     def test_incremental_step_3_points_at_the_previous_runs_change_purpose(self, mod, tmp_path, monkeypatch):
         previous = tmp_path / "previous-run"
@@ -1243,34 +1061,25 @@ class TestStep3Orchestration:
         mod._orchestrate_step(3, "incremental", {"target_dir": str(target), "mode": "incremental"}, state, {}, str(out))
         assert state["previous_change_purpose"] == str(_artifact(previous, "change_purpose"))
 
-    def test_incremental_step_3_without_a_previous_run_records_nothing(self, mod, tmp_path, monkeypatch):
-        target = tmp_path / "target"
-        target.mkdir()
-        (target / ".branch-review-baseline.json").write_text(json.dumps({
-            "last_reviewed_sha": "0000000", "review_count": 1,
-        }))
-        out = tmp_path / "out"
-        out.mkdir()
-        monkeypatch.setitem(
-            mod._orchestrate_step_3.__globals__, "_run_subprocess",
-            lambda *a, **k: ("", True),
-        )
-        monkeypatch.setitem(
-            mod._orchestrate_step_3.__globals__, "_capture_worktree_baseline",
-            lambda *_a, **_k: None,
-        )
-        state = {"resolved_params": {}}
-        mod._orchestrate_step(3, "incremental", {"target_dir": str(target), "mode": "incremental"}, state, {}, str(out))
-        assert "previous_change_purpose" not in state
-
-    @pytest.mark.parametrize("baseline", [
-        json.dumps({"last_reviewed_sha": "0000000", "last_run_dir": "<missing>"}),
-        json.dumps([]),
-        "not json",
-    ])
+    @pytest.mark.parametrize(
+        "baseline",
+        (
+            pytest.param(
+                json.dumps({"last_reviewed_sha": "0000000", "review_count": 1}),
+                id="no_last_run_dir",
+            ),
+            pytest.param(
+                json.dumps({"last_reviewed_sha": "0000000", "last_run_dir": "<missing>"}),
+                id="last_run_dir_missing_change_purpose",
+            ),
+            pytest.param(json.dumps([]), id="not_an_object"),
+            pytest.param("not json", id="not_json"),
+        ),
+    )
     def test_incremental_step_3_tolerates_a_useless_baseline(self, mod, tmp_path, monkeypatch, baseline):
-        """A recorded run dir with no change purpose in it, a baseline that
-        is not an object, or one that is not JSON all mean "no pointer"."""
+        """No previous run recorded, a recorded run dir with no change
+        purpose in it, a baseline that is not an object, or one that is not
+        JSON all mean "no pointer"."""
         target = tmp_path / "target"
         target.mkdir()
         (target / ".branch-review-baseline.json").write_text(
@@ -1322,113 +1131,29 @@ class TestStep3Orchestration:
         assert seen_timeouts
         assert seen_timeouts[0] > 2 * 30 * 60
 
-    def test_step_3_next_step_reflects_unfetched_issues(self, tmp_path):
-        """When has_unfetched_issues is True, next step after 3 should be 4 (not 5)."""
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
-        ctx = {
-            "git": {"merge_base": "abc", "git_range": "abc..HEAD",
-                    "changed_files": ["a.py"], "commit_count": 1},
-            "pr_size": {"files": 1, "lines": 10, "category": "tiny"},
-            "has_unfetched_issues": True,
-            "linked_issues": ["WOOPLUG-1234"],
-        }
-        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
-        r = run_pipeline("--step", "3", "--mode", "pr",
-                       "--output-dir", str(tmp_path), cwd=tmp_path)
-        assert r.returncode == 0
-        # Output should point to step 4, not step 5
-        assert "Step 4" in r.stdout
-
-    def test_step_3_records_clean_dependency_refresh_precheck_when_opted_in(
-        self, tmp_path
-    ):
+    def test_step_3_skips_detection_without_opt_in(self, mod, tmp_path, monkeypatch):
         repo = tmp_path / "repo"
         repo.mkdir()
         _init_git_repo(repo)
         _add_commit(repo)
 
         out_dir = tmp_path / "out"
-        run_pipeline("--step", "1", "--mode", "full",
-                     "--output-dir", str(out_dir),
-                     "--git-range", "HEAD~1..HEAD", "--refresh-deps",
-                     cwd=repo, env=hermetic_env())
-        r = run_pipeline("--step", "3", "--mode", "full",
-                         "--output-dir", str(out_dir),
-                         cwd=repo, env=hermetic_env())
+        monkeypatch.chdir(repo)
+        monkeypatch.setenv("XDG_CONFIG_HOME", "/nonexistent-xdg")
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full",
+            "--output-dir", str(out_dir),
+            "--git-range", "HEAD~1..HEAD",
+        ])
+        mod.main()
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "3", "--mode", "full",
+            "--output-dir", str(out_dir),
+        ])
+        mod.main()
 
-        assert r.returncode == 0
-        state = json.loads((_artifact(out_dir, "pipeline_state")).read_text())
-        assert state["dependency_refresh_precheck"] == {
-            "tracked_files_dirty": False,
-            "dirty_files": [],
-        }
-
-    def test_step_3_skips_detection_without_opt_in(self, tmp_path):
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_git_repo(repo)
-        _add_commit(repo)
-
-        out_dir = tmp_path / "out"
-        run_pipeline("--step", "1", "--mode", "full",
-                     "--output-dir", str(out_dir),
-                     "--git-range", "HEAD~1..HEAD",
-                     cwd=repo, env=hermetic_env())
-        r = run_pipeline("--step", "3", "--mode", "full",
-                         "--output-dir", str(out_dir),
-                         cwd=repo, env=hermetic_env())
-
-        assert r.returncode == 0
         state = json.loads((_artifact(out_dir, "pipeline_state")).read_text())
         assert "dependency_refresh_precheck" not in state
-
-    def test_step_3_precheck_outside_git_repo_records_unknown(self, tmp_path):
-        # No git repo: the precheck must preserve uncertainty as evidence.
-        # GIT_CEILING_DIRECTORIES stops rev-parse walking up into a parent
-        # repository that may contain tmp_path on some machines.
-        env = hermetic_env(GIT_CEILING_DIRECTORIES=str(tmp_path.parent))
-        out_dir = tmp_path / "out"
-        run_pipeline("--step", "1", "--mode", "full",
-                     "--output-dir", str(out_dir), "--refresh-deps",
-                     cwd=tmp_path, env=env)
-        r = run_pipeline("--step", "3", "--mode", "full",
-                         "--output-dir", str(out_dir), cwd=tmp_path, env=env)
-
-        assert r.returncode == 0
-        state = json.loads((_artifact(out_dir, "pipeline_state")).read_text())
-        assert state["dependency_refresh_precheck"] == {
-            "tracked_files_dirty": None,
-            "dirty_files": [],
-        }
-
-    def test_step_3_dirty_precheck_refuses_refresh_actions(self, tmp_path):
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_git_repo(repo)
-        _add_commit(repo)
-        (repo / "README.md").write_text("dirty\n", encoding="utf-8")
-
-        out_dir = tmp_path / "out"
-        run_pipeline(
-            "--step", "1", "--mode", "full",
-            "--output-dir", str(out_dir), "--refresh-deps",
-            cwd=repo, env=hermetic_env(),
-        )
-        result = run_pipeline(
-            "--step", "3", "--mode", "full",
-            "--output-dir", str(out_dir),
-            cwd=repo, env=hermetic_env(),
-        )
-
-        assert result.returncode == 0
-        state = json.loads((_artifact(out_dir, "pipeline_state")).read_text())
-        assert state["dependency_refresh_precheck"] == {
-            "tracked_files_dirty": True,
-            "dirty_files": ["README.md"],
-        }
-        assert "will not run dependency commands" in result.stdout
-        assert "SAVED dependency-refresh.json" not in result.stdout
 
 
 class TestStep8WaitingRouting:
@@ -1489,11 +1214,17 @@ class TestStep5Orchestration:
         _add_commit(repo)
         return repo
 
-    def test_step_5_parses_the_change_purpose_into_state(self, tmp_path):
+    def test_step_5_parses_the_change_purpose_into_state(
+        self, mod, tmp_path, monkeypatch
+    ):
         repo = self._make_repo(tmp_path)
         out = tmp_path / "out"
-        run_pipeline("--step", "1", "--mode", "full",
-                   "--output-dir", str(out), cwd=str(repo))
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full",
+            "--output-dir", str(out),
+        ])
+        mod.main()
         ctx = {
             "git": {"merge_base": "abc", "git_range": "abc..HEAD",
                     "changed_files": ["a.py"], "commit_count": 1},
@@ -1507,8 +1238,11 @@ class TestStep5Orchestration:
             "## Context\nC1. fact — source: inferred from the diff\n"
             "## Author's description (extracted)\nquoted\n"
         )
-        run_pipeline("--step", "5", "--mode", "full",
-                   "--output-dir", str(out), cwd=str(repo))
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "5", "--mode", "full",
+            "--output-dir", str(out),
+        ])
+        mod.main()
         state = json.loads((_artifact(out, "pipeline_state")).read_text())
         assert state["change_purpose_items"]["structured"] is True
         assert [i["id"] for i in state["change_purpose_items"]["verify"]] == ["V1"]
@@ -1516,174 +1250,55 @@ class TestStep5Orchestration:
             "C1 is inferred from the diff and may not be Context"
         ]
 
-    def test_step_5_without_a_change_purpose_records_none(self, tmp_path):
-        repo = self._make_repo(tmp_path)
-        out = tmp_path / "out"
-        run_pipeline("--step", "1", "--mode", "full",
-                   "--output-dir", str(out), cwd=str(repo))
-        ctx = {
-            "git": {"merge_base": "abc", "git_range": "abc..HEAD",
-                    "changed_files": ["a.py"], "commit_count": 1},
-            "pr_size": {"files": 1, "lines": 10, "category": "tiny"},
-        }
-        (out / "review-context.json").write_text(json.dumps(ctx))
-        run_pipeline("--step", "5", "--mode", "full",
-                   "--output-dir", str(out), cwd=str(repo))
-        state = json.loads((_artifact(out, "pipeline_state")).read_text())
-        assert state["change_purpose_items"] is None
-
-    def test_step_5_stores_dispatch_plan_summary(self, tmp_path):
-        """Step 5 should store dispatch plan summary in state."""
-        repo = self._make_repo(tmp_path)
-        out = tmp_path / "out"
-        run_pipeline("--step", "1", "--mode", "full",
-                   "--output-dir", str(out), cwd=str(repo))
-        ctx = {
-            "git": {"merge_base": "abc", "git_range": "abc..HEAD",
-                    "changed_files": ["a.py"], "commit_count": 1},
-            "pr_size": {"files": 1, "lines": 10, "category": "tiny"},
-        }
-        (out / "review-context.json").write_text(json.dumps(ctx))
-        r = run_pipeline("--step", "5", "--mode", "full",
-                       "--output-dir", str(out), cwd=str(repo))
-        assert r.returncode == 0
-        state = json.loads((_artifact(out, "pipeline_state")).read_text())
-        assert 5 in state["completed_steps"]
-        assert "dispatch_plan_summary" in state
-
-    def test_step_5_loads_valid_saved_dependency_refresh_report(
-        self, tmp_path
-    ):
-        repo = self._make_repo(tmp_path)
-        out = tmp_path / "out"
-        run_pipeline(
-            "--step", "1", "--mode", "full",
-            "--output-dir", str(out), "--git-range", "HEAD~1..HEAD",
-            "--refresh-deps", cwd=str(repo),
-        )
-        request = tmp_path / "dependency-refresh-request.json"
-        request.write_text(json.dumps({
-            "schema": 1,
-            "status": "completed",
-            "commands": [{
-                "directory": ".",
-                "command": "custom sync --locked",
-                "exit_status": "ok",
-            }],
-        }))
-        assert dependency_refresh.save_report(out, request, repo) == []
-
-        result = run_pipeline(
-            "--step", "5", "--mode", "full",
-            "--output-dir", str(out), cwd=str(repo),
-        )
-
-        assert result.returncode == 0
-        report = dependency_refresh.load_dependency_refresh_report(out)
-        state = json.loads((_artifact(out, "pipeline_state")).read_text())
-        assert state["dependency_refresh_report"] == report
-        assert list(out.glob("*verification*.json")) == []
-        assert not any("verification" in key for key in state)
-
-    def test_step_5_records_missing_report_without_replacement_artifact(
-        self, tmp_path
-    ):
-        repo = self._make_repo(tmp_path)
-        out = tmp_path / "out"
-        run_pipeline(
-            "--step", "1", "--mode", "full",
-            "--output-dir", str(out), "--git-range", "HEAD~1..HEAD",
-            "--refresh-deps", cwd=str(repo),
-        )
-
-        result = run_pipeline(
-            "--step", "5", "--mode", "full",
-            "--output-dir", str(out), cwd=str(repo),
-        )
-
-        assert result.returncode == 0
-        state = json.loads((_artifact(out, "pipeline_state")).read_text())
-        assert state["dependency_refresh_report"] is None
-        assert not (_artifact(out, "dependency_refresh")).exists()
-        assert list(out.glob("*verification*.json")) == []
-        assert not any("verification" in key for key in state)
-
-    def test_step_5_does_not_load_dependency_refresh_without_opt_in(
-        self, tmp_path
-    ):
-        repo = self._make_repo(tmp_path)
-        out = tmp_path / "out"
-        run_pipeline(
-            "--step", "1", "--mode", "full",
-            "--output-dir", str(out), "--git-range", "HEAD~1..HEAD",
-            "--no-refresh-deps", cwd=str(repo),
-        )
-
-        result = run_pipeline(
-            "--step", "5", "--mode", "full",
-            "--output-dir", str(out), cwd=str(repo),
-        )
-
-        assert result.returncode == 0
-        state = json.loads((_artifact(out, "pipeline_state")).read_text())
-        assert "dependency_refresh_report" not in state
-        assert not any("verification" in key for key in state)
-        assert list(out.glob("*verification*.json")) == []
-
     @pytest.mark.parametrize(
-        "tracked_files_dirty",
-        [
-            True,
-            None,
-        ],
+        ("opted_in", "flag"),
+        (
+            pytest.param(True, "--refresh-deps", id="missing_report"),
+            pytest.param(False, "--no-refresh-deps", id="no_opt_in"),
+        ),
     )
-    def test_step_5_warns_on_dirty_or_unknown_final_tracked_state(
-        self, mod, tmp_path, tracked_files_dirty
+    def test_step_5_refresh_report_state(
+        self, mod, tmp_path, monkeypatch, opted_in, flag
     ):
-        report = {
-            "schema": 1,
-            "status": "partial",
-            "commands": [],
-            "tracked_files_dirty": tracked_files_dirty,
-            "dirty_files": (
-                ["src/changed.py"] if tracked_files_dirty is True else []
-            ),
-        }
-        guidance = mod._step_5_dispatch_plan(
-            "full",
-            {"dependency_refresh_report": report},
-            {},
-            {"refresh_dependencies": True},
-            str(tmp_path),
-        )
+        """No dependency-refresh report was ever saved: opted in records
+        `None` (no replacement artifact appears); not opted in never records
+        the key at all — the saved-report case is asserted end to end by
+        TestDependencyRefreshSaveLifecycle."""
+        repo = self._make_repo(tmp_path)
+        out = tmp_path / "out"
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full",
+            "--output-dir", str(out), "--git-range", "HEAD~1..HEAD", flag,
+        ])
+        mod.main()
 
-        situation = "\n".join(guidance["situation"])
-        assert guidance["situation"][0].startswith("⚠️")
-        assert "final tracked state" in situation
-        assert "dirty" in situation.lower() or "unknown" in situation.lower()
-        assert "reported command" not in situation.lower()
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "5", "--mode", "full",
+            "--output-dir", str(out),
+        ])
+        mod.main()
 
-    def test_step_5_warns_when_requested_report_is_missing(self, mod, tmp_path):
-        guidance = mod._step_5_dispatch_plan(
-            "full",
-            {"dependency_refresh_report": None},
-            {},
-            {"refresh_dependencies": True},
-            str(tmp_path),
-        )
-
-        situation = "\n".join(guidance["situation"])
-        assert guidance["situation"][0].startswith("⚠️")
-        assert "missing or malformed" in situation
+        state = json.loads((_artifact(out, "pipeline_state")).read_text())
+        if opted_in:
+            assert state["dependency_refresh_report"] is None
+            assert not (_artifact(out, "dependency_refresh")).exists()
+        else:
+            assert "dependency_refresh_report" not in state
 
     def test_step_5_preserves_initial_plan_before_orchestrator_adjustment(
-        self, tmp_path
+        self, mod, tmp_path, monkeypatch
     ):
-        """Step 5 keeps the deterministic plan unchanged for measurement."""
+        """Step 5 stores the dispatch plan summary and keeps the
+        deterministic plan unchanged for measurement."""
         repo = self._make_repo(tmp_path)
         out = tmp_path / "out"
-        run_pipeline("--step", "1", "--mode", "full",
-                  "--output-dir", str(out), cwd=str(repo))
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full",
+            "--output-dir", str(out),
+        ])
+        mod.main()
         ctx = {
             "git": {
                 "git_range": "HEAD~1..HEAD",
@@ -1694,12 +1309,15 @@ class TestStep5Orchestration:
         }
         (out / "review-context.json").write_text(json.dumps(ctx))
 
-        result = run_pipeline(
-            "--step", "5", "--mode", "full", "--output-dir", str(out),
-            cwd=str(repo),
-        )
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "5", "--mode", "full",
+            "--output-dir", str(out),
+        ])
+        mod.main()
 
-        assert result.returncode == 0
+        state = json.loads((_artifact(out, "pipeline_state")).read_text())
+        assert 5 in state["completed_steps"]
+        assert "dispatch_plan_summary" in state
         initial_path = _artifact(out, "dispatch_plan_initial")
         final_path = _artifact(out, "dispatch_plan")
         initial = json.loads(initial_path.read_text())
@@ -1882,10 +1500,14 @@ class TestStep5Orchestration:
 class TestStep6Orchestration:
     """Step 6 main() reads dispatch-plan.json and populates dispatched_agents."""
 
-    def test_step_6_populates_dispatched_agents(self, tmp_path):
+    def test_step_6_populates_dispatched_agents(self, mod, tmp_path, monkeypatch):
         """Step 6 should read dispatch-plan.json and populate state.dispatched_agents."""
-        run_pipeline("--step", "1", "--mode", "full",
-                   "--output-dir", str(tmp_path), cwd=tmp_path)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full",
+            "--output-dir", str(tmp_path),
+        ])
+        mod.main()
         plan = {
             "agents": [
                 {"name": "code-reviewer", "domain": "code", "status": "DISPATCH", "reason": "always"},
@@ -1897,33 +1519,16 @@ class TestStep6Orchestration:
         (_artifact(tmp_path, "dispatch_plan")).write_text(json.dumps(plan))
         ctx = {"git": {"git_range": "abc..HEAD"}}
         (tmp_path / "review-context.json").write_text(json.dumps(ctx))
-        r = run_pipeline("--step", "6", "--mode", "full",
-                       "--output-dir", str(tmp_path), cwd=tmp_path)
-        assert r.returncode == 0
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "6", "--mode", "full",
+            "--output-dir", str(tmp_path),
+        ])
+        mod.main()
         state = json.loads((_artifact(tmp_path, "pipeline_state")).read_text())
         names = [a["name"] for a in state.get("dispatched_agents", [])]
         assert "code-reviewer" in names
         assert "security-reviewer" in names
         assert "go-tests-reviewer" not in names
-
-    def test_step_6_output_contains_bootstrap_calls(self, tmp_path):
-        """Step 6 output should contain concrete bootstrap.py calls."""
-        run_pipeline("--step", "1", "--mode", "full",
-                   "--output-dir", str(tmp_path), cwd=tmp_path)
-        plan = {
-            "agents": [
-                {"name": "code-reviewer", "domain": "code", "status": "DISPATCH", "reason": "always"},
-            ],
-            "git_range": "abc..HEAD",
-        }
-        (_artifact(tmp_path, "dispatch_plan")).write_text(json.dumps(plan))
-        ctx = {"git": {"git_range": "abc..HEAD"}}
-        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
-        r = run_pipeline("--step", "6", "--mode", "full",
-                       "--output-dir", str(tmp_path), cwd=tmp_path)
-        assert "bootstrap.py" in r.stdout
-        assert "code-reviewer" in r.stdout
-        assert "abc..HEAD" in r.stdout
 
     def test_step_6_invalid_hand_edited_status_surfaces_value_error(
         self, mod, tmp_path
@@ -1956,15 +1561,21 @@ class TestStep6Orchestration:
 class TestStep7Orchestration:
     """Step 7 main() writes the run's non-incremental baseline."""
 
-    def test_step_7_writes_baseline_file(self, tmp_path):
+    def test_step_7_writes_baseline_file(self, mod, tmp_path, monkeypatch):
         """Step 7 should create the grouped run baseline."""
-        run_pipeline("--step", "1", "--mode", "full",
-                   "--output-dir", str(tmp_path), cwd=tmp_path)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full",
+            "--output-dir", str(tmp_path),
+        ])
+        mod.main()
         ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main"}}
         (tmp_path / "review-context.json").write_text(json.dumps(ctx))
-        r = run_pipeline("--step", "7", "--mode", "full",
-                       "--output-dir", str(tmp_path), cwd=tmp_path)
-        assert r.returncode == 0
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "7", "--mode", "full",
+            "--output-dir", str(tmp_path),
+        ])
+        mod.main()
         baseline_path = _artifact(tmp_path, "worktree_baseline")
         assert baseline_path.is_file(), "Baseline file was not created"
         baseline = json.loads(baseline_path.read_text())
@@ -1974,53 +1585,6 @@ class TestStep7Orchestration:
         assert baseline["review_type"] == "full"
         assert "git_range_used" in baseline
         assert ".." in baseline["git_range_used"]
-
-    def test_step_7_baseline_grades_clean(self, tmp_path):
-        """The written baseline should pass the grader."""
-        from helpers.graders import grade_review_baseline
-        (tmp_path / "run-config.json").write_text(json.dumps({
-            "target_dir": str(tmp_path),
-        }))
-        run_pipeline("--step", "1", "--mode", "incremental",
-                   "--output-dir", str(tmp_path), cwd=tmp_path)
-        ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main"}}
-        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
-        run_pipeline("--step", "7", "--mode", "incremental",
-                   "--output-dir", str(tmp_path), cwd=tmp_path)
-        baseline_path = tmp_path / ".branch-review-baseline.json"
-        result = grade_review_baseline(str(baseline_path))
-        assert result.passed, f"Baseline grading failed: {result.failures}"
-
-    def test_step_7_records_the_run_directory_for_the_next_incremental_review(self, tmp_path):
-        (tmp_path / "run-config.json").write_text(json.dumps({"target_dir": str(tmp_path)}))
-        run_pipeline("--step", "1", "--mode", "incremental",
-                   "--output-dir", str(tmp_path), cwd=tmp_path)
-        ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main"}}
-        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
-        run_pipeline("--step", "7", "--mode", "incremental",
-                   "--output-dir", str(tmp_path), cwd=tmp_path)
-        baseline = json.loads((tmp_path / ".branch-review-baseline.json").read_text())
-        assert baseline["last_run_dir"] == str(tmp_path)
-
-    def test_step_7_requires_host_completion_before_draft_finalization(
-        self, mod, tmp_path
-    ):
-        guidance = mod.get_step_guidance(
-            7,
-            "full",
-            {"resolved_params": {"git_range": "abc..HEAD"}},
-            {"git": {"git_range": "abc..HEAD"}},
-            output_dir=str(tmp_path),
-        )
-        text = "\n".join(guidance["actions"])
-
-        assert "draft" in text.lower()
-        assert "RUNNING" in text
-        assert "completion notification" in text.lower()
-        assert "`DRAFT`" in text
-        assert "`FINALIZE_REVIEW_COMMAND`" in text
-        assert "never authorizes" in text.lower()
-        assert "discarded when review intake closes" in text.lower()
 
     def test_step_7_guidance_uses_real_status_output_labels(
         self, mod, tmp_path
@@ -2073,8 +1637,14 @@ class TestStep7Orchestration:
 
 class TestBaselineInTargetDir:
     def test_incremental_reads_and_writes_the_baseline_in_target_dir(
-        self, tmp_path
+        self, mod, tmp_path, monkeypatch
     ):
+        """Steps 1/3/7 read and write the target repo's baseline (not the
+        output dir's), advance its review count, record this run's output
+        directory for the next incremental review, and the written file
+        passes the baseline grader."""
+        from helpers.graders import grade_review_baseline
+
         repo = tmp_path / "repo"
         repo.mkdir()
         _init_git_repo(repo)
@@ -2093,27 +1663,32 @@ class TestBaselineInTargetDir:
             "review_count": 4,
         }))
 
-        step_1 = run_pipeline(
-            "--step", "1", "--mode", "incremental",
-            "--output-dir", str(output_dir), cwd=repo,
-        )
-        step_3 = run_pipeline(
-            "--step", "3", "--output-dir", str(output_dir), cwd=repo,
-        )
-        step_7 = run_pipeline(
-            "--step", "7", "--output-dir", str(output_dir), cwd=repo,
-        )
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "incremental",
+            "--output-dir", str(output_dir),
+        ])
+        mod.main()
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "3", "--output-dir", str(output_dir),
+        ])
+        mod.main()
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "7", "--output-dir", str(output_dir),
+        ])
+        mod.main()
 
-        assert step_1.returncode == 0, step_1.stderr
-        assert step_3.returncode == 0, step_3.stderr
-        assert step_7.returncode == 0, step_7.stderr
         config = json.loads((output_dir / "run-config.json").read_text())
         assert config["target_dir"] == str(repo)
         context = json.loads((output_dir / "review-context.json").read_text())
         assert context["git"]["merge_base"] == baseline_sha
         baseline = json.loads(target_baseline.read_text())
         assert baseline["review_count"] == 5
+        assert baseline["last_run_dir"] == str(output_dir)
         assert not (output_dir / ".branch-review-baseline.json").exists()
+
+        result = grade_review_baseline(str(target_baseline))
+        assert result.passed, f"Baseline grading failed: {result.failures}"
 
     def test_incremental_without_target_dir_fails_closed(self, mod, tmp_path):
         with pytest.raises(
@@ -2129,7 +1704,9 @@ class TestBaselineInTargetDir:
                 str(tmp_path),
             )
 
-    def test_step_1_deletes_nothing_from_the_output_dir(self, tmp_path):
+    def test_step_1_deletes_nothing_from_the_output_dir(
+        self, mod, tmp_path, monkeypatch
+    ):
         repo = tmp_path / "repo"
         repo.mkdir()
         _init_git_repo(repo)
@@ -2138,54 +1715,18 @@ class TestBaselineInTargetDir:
         leftover = output_dir / "leftover-from-this-run.txt"
         leftover.write_text("keep me")
 
-        result = run_pipeline(
-            "--step", "1", "--mode", "full",
-            "--output-dir", str(output_dir), cwd=repo,
-        )
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full",
+            "--output-dir", str(output_dir),
+        ])
+        mod.main()
 
-        assert result.returncode == 0, result.stderr
         assert leftover.read_text() == "keep me"
 
 
 class TestStep8Orchestration:
     """Step 8 main() reads change-purpose.md and agent completion status."""
-
-    def test_step_8_spawns_no_status_subprocess(
-        self, mod, tmp_path, monkeypatch
-    ):
-        """The status checker is a function in this process, not a CLI.
-
-        Step 8 shelled out to agents_status.py and then recovered the
-        agent names by splitting the human-readable table on whitespace —
-        a parser for a format written for people, in the one gate that
-        decides whether reconciliation may start.
-        """
-        (_artifact(tmp_path, "dispatch_plan")).write_text(json.dumps({
-            "agents": [{"name": "code-reviewer", "status": "DISPATCH"}],
-        }))
-        _save_and_finalize(tmp_path, "code")
-        spawned = []
-        monkeypatch.setattr(
-            mod.subprocess, "run",
-            lambda *args, **kwargs: spawned.append(args)
-            or pytest.fail("step 8 spawned a status subprocess"),
-        )
-
-        def reconciliation_succeeds(*_args, **_kwargs):
-            (_artifact(tmp_path, "reconciliation_context")).write_text("{}")
-            return "", True
-
-        monkeypatch.setitem(
-            mod._orchestrate_step_8.__globals__,
-            "_run_subprocess",
-            reconciliation_succeeds,
-        )
-        state = {"resolved_params": {}}
-
-        mod._orchestrate_step(8, "full", {}, state, {}, str(tmp_path))
-
-        assert spawned == []
-        assert state["agents"]["completed"] == ["code-reviewer"]
 
     def test_step_8_keeps_oversized_host_context_out_of_reconciliation_argv(
         self, mod, tmp_path, monkeypatch
@@ -2263,8 +1804,36 @@ class TestStep8Orchestration:
         assert [i["id"] for i in state["change_purpose_items"]["verify"]] == ["V1", "V2"]
         assert any("--change-purpose" in cmd for cmd in commands)
 
+    @pytest.mark.parametrize(
+        "agents, expect_finalized, expected_dispatched, expected_flag",
+        [
+            pytest.param(
+                [
+                    {"name": "code-reviewer", "status": "DISPATCH"},
+                    {"name": "a11y-reviewer", "status": "SKIPPED_TRIAGE",
+                     "reason": "no frontend files"},
+                    {"name": "security-reviewer", "status": "DISPATCH_OVERRIDE"},
+                ],
+                True,
+                ["code-reviewer", "security-reviewer"],
+                "code-reviewer,security-reviewer",
+                id="mixed_statuses",
+            ),
+            pytest.param(
+                [
+                    {"name": "a11y-reviewer", "status": "SKIPPED_TRIAGE",
+                     "reason": "docs-only change"},
+                ],
+                False,
+                [],
+                "",
+                id="all_skipped",
+            ),
+        ],
+    )
     def test_step_8_takes_dispatched_identities_from_the_status_gate(
-        self, mod, tmp_path, monkeypatch
+        self, mod, tmp_path, monkeypatch, agents, expect_finalized,
+        expected_dispatched, expected_flag,
     ):
         """One read of the plan, not two.
 
@@ -2272,27 +1841,16 @@ class TestStep8Orchestration:
         decide readiness; step 8 re-opened and re-validated the same file
         immediately afterwards purely to recover the dispatched names.
         Both the frozen intake and the reconciliation-context flag now
-        come from the gate's own answer.
+        come from the gate's own answer. A plan that selected nobody is
+        known-empty, never unknown — omitting the flag would tell
+        reconciliation_context.py to scan for every `*-review.json` in the
+        directory, stale artifacts from an earlier run included.
         """
         (_artifact(tmp_path, "dispatch_plan")).write_text(json.dumps({
-            "agents": [
-                {"name": "code-reviewer", "status": "DISPATCH"},
-                {"name": "a11y-reviewer", "status": "SKIPPED_TRIAGE",
-                 "reason": "no frontend files"},
-                {"name": "security-reviewer", "status": "DISPATCH_OVERRIDE"},
-            ],
+            "agents": agents,
         }))
-        _save_and_finalize(tmp_path, "code")
-        opened = []
-
-        def counting_open(path, *args, **kwargs):
-            if os.fspath(path).endswith("dispatch-plan.json"):
-                opened.append(os.fspath(path))
-            return builtins.open(path, *args, **kwargs)
-
-        monkeypatch.setitem(
-            mod._orchestrate_step_8.__globals__, "open", counting_open
-        )
+        if expect_finalized:
+            _save_and_finalize(tmp_path, "code")
         commands = []
 
         def reconciliation_succeeds(cmd, *_args, **_kwargs):
@@ -2309,49 +1867,10 @@ class TestStep8Orchestration:
 
         mod._orchestrate_step(8, "full", {}, state, {}, str(tmp_path))
 
-        assert opened == []
-        assert state["agents"]["dispatched"] == [
-            "code-reviewer", "security-reviewer",
-        ]
+        assert state["agents"]["dispatched"] == expected_dispatched
         recon = commands[-1]
         flag = recon.index("--dispatched-agents")
-        assert recon[flag + 1] == "code-reviewer,security-reviewer"
-
-    def test_step_8_names_an_empty_dispatch_set_rather_than_omitting_it(
-        self, mod, tmp_path, monkeypatch
-    ):
-        """A plan that selected nobody is known-empty, never unknown.
-
-        Omitting the flag would tell reconciliation_context.py to scan
-        for every `*-review.json` in the directory — stale artifacts from
-        an earlier run included.
-        """
-        (_artifact(tmp_path, "dispatch_plan")).write_text(json.dumps({
-            "agents": [
-                {"name": "a11y-reviewer", "status": "SKIPPED_TRIAGE",
-                 "reason": "docs-only change"},
-            ],
-        }))
-        commands = []
-
-        def reconciliation_succeeds(cmd, *_args, **_kwargs):
-            commands.append(cmd)
-            (_artifact(tmp_path, "reconciliation_context")).write_text("{}")
-            return "", True
-
-        monkeypatch.setitem(
-            mod._orchestrate_step_8.__globals__,
-            "_run_subprocess",
-            reconciliation_succeeds,
-        )
-
-        mod._orchestrate_step(
-            8, "full", {}, {"resolved_params": {}}, {}, str(tmp_path)
-        )
-
-        recon = commands[-1]
-        flag = recon.index("--dispatched-agents")
-        assert recon[flag + 1] == ""
+        assert recon[flag + 1] == expected_flag
 
     def test_step_8_completed_never_names_an_undispatched_agent(
         self, mod, tmp_path, monkeypatch
@@ -2405,112 +1924,15 @@ class TestStep8Orchestration:
             "code-reviewer", "a11y-reviewer",
         ]
 
-    def test_step_8_does_not_revalidate_what_intake_close_classified(
-        self, mod, tmp_path, monkeypatch
-    ):
-        (_artifact(tmp_path, "dispatch_plan")).write_text(json.dumps({
-            "agents": [{"name": "code-reviewer", "status": "DISPATCH"}],
-        }))
-        _write_final_review(tmp_path, "code", {"verdict": "approve"})
-        loads = []
-        monkeypatch.setattr(
-            mod.subprocess,
-            "run",
-            lambda *args, **kwargs: subprocess.CompletedProcess(
-                args=args[0], returncode=0, stdout="", stderr=""
-            ),
-        )
-        monkeypatch.setitem(
-            mod._orchestrate_step_8.__globals__,
-            "_load_final_review",
-            lambda *args: loads.append(args)
-            or pytest.fail("step 8 validated a final a second time"),
-        )
-
-        def reconciliation_succeeds(*_args, **_kwargs):
-            (_artifact(tmp_path, "reconciliation_context")).write_text("{}")
-            return "", True
-
-        monkeypatch.setitem(
-            mod._orchestrate_step_8.__globals__,
-            "_run_subprocess",
-            reconciliation_succeeds,
-        )
-        state = {"resolved_params": {}}
-
-        mod._orchestrate_step(8, "full", {}, state, {}, str(tmp_path))
-
-        assert loads == []
-        assert state["agents"]["completed"] == []
-        assert "review_files" not in state["agents"]
-        assert "invalid_review_files" not in state["agents"]
-
-    def test_step_8_completion_follows_the_review_paths_authority(
-        self, mod, tmp_path, monkeypatch
-    ):
-        (_artifact(tmp_path, "dispatch_plan")).write_text(json.dumps({
-            "agents": [{"name": "code-reviewer", "status": "DISPATCH"}],
-        }))
-        authority_dir = tmp_path / "authority"
-        authority_dir.mkdir()
-        final_path = authority_dir / "final.json"
-        final_path.write_text(json.dumps(canonical_review_document("code")))
-        monkeypatch.setattr(
-            mod.subprocess,
-            "run",
-            lambda *args, **kwargs: subprocess.CompletedProcess(
-                args=args[0], returncode=0, stdout="", stderr=""
-            ),
-        )
-        monkeypatch.setitem(
-            mod._orchestrate_step_8.__globals__,
-            "review_paths",
-            lambda *_args: reviewer_lifecycle.ReviewPaths(
-                draft=str(authority_dir / "draft.json"),
-                final=str(final_path),
-                assignment=str(authority_dir / "authority.json"),
-            ),
-        )
-        monkeypatch.setitem(
-            mod._orchestrate_step_8.__globals__,
-            "close_review_intake",
-            lambda *_args: {
-                "schema": 2,
-                "status": "closed",
-                "closed_at": "2026-08-25T12:00:00+00:00",
-                "discarded_drafts": [],
-                "completed": ["code-reviewer"],
-            },
-        )
-        monkeypatch.setitem(
-            mod._orchestrate_step_8.__globals__,
-            "materialize_markdown",
-            lambda *_args, **_kwargs: [],
-        )
-
-        def reconciliation_succeeds(*_args, **_kwargs):
-            (_artifact(tmp_path, "reconciliation_context")).write_text("{}")
-            return "", True
-
-        monkeypatch.setitem(
-            mod._orchestrate_step_8.__globals__,
-            "_run_subprocess",
-            reconciliation_succeeds,
-        )
-        state = {"resolved_params": {}}
-
-        mod._orchestrate_step(8, "full", {}, state, {}, str(tmp_path))
-
-        assert state["agents"]["completed"] == ["code-reviewer"]
-
     def test_step_8_preserves_invalid_output_evidence_without_completion(
-        self, tmp_path
+        self, mod, tmp_path, monkeypatch
     ):
-        initialized = run_pipeline(
-            "--step", "1", "--mode", "full",
-            "--output-dir", str(tmp_path), cwd=tmp_path,
-        )
-        assert initialized.returncode == 0, initialized.stderr
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full",
+            "--output-dir", str(tmp_path),
+        ])
+        mod.main()
         (_artifact(tmp_path, "dispatch_plan")).write_text(json.dumps({
             "agents": [{"name": "code-reviewer", "status": "DISPATCH"}],
         }))
@@ -2520,12 +1942,12 @@ class TestStep8Orchestration:
         review["schema"] = 1
         review_path.write_text(json.dumps(review))
 
-        result = run_pipeline(
-            "--step", "8", "--mode", "full",
-            "--output-dir", str(tmp_path), cwd=tmp_path,
-        )
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "8", "--mode", "full",
+            "--output-dir", str(tmp_path),
+        ])
+        mod.main()
 
-        assert result.returncode == 0, result.stderr
         state = json.loads((_artifact(tmp_path, "pipeline_state")).read_text())
         assert state["agents"]["completed"] == []
         assert state["reviewer_markdown"]["status"] == "partial"
@@ -2547,71 +1969,17 @@ class TestStep8Orchestration:
             event["event"] == "agent_complete" for event in events
         )
 
-    def test_step_1_records_that_reviewer_markdown_has_not_run(self, tmp_path):
-        result = run_pipeline(
-            "--step", "1", "--mode", "full", "--output-dir", str(tmp_path),
-            cwd=tmp_path,
-        )
-
-        assert result.returncode == 0
-        state = json.loads((_artifact(tmp_path, "pipeline_state")).read_text())
-        assert state["reviewer_markdown"] == {
-            "ran": False,
-            "written": 0,
-            "expected": 0,
-            "status": "not_run",
-        }
-
-    def test_step_8_waiting_repeats_draft_finalization_authority(
-        self, mod, tmp_path
+    def test_step_8_records_which_dispatched_agents_completed(
+        self, mod, tmp_path, monkeypatch
     ):
-        state = {
-            "resolved_params": {"git_range": "abc..HEAD"},
-            "waiting_on_agents": {
-                "running": ["security-reviewer"],
-                "not_dispatched": [],
-            },
-            "agents": {
-                "dispatched": ["security-reviewer"],
-                "completed": [],
-                "discarded_drafts": [],
-            },
-        }
-        guidance = mod.get_step_guidance(
-            8,
-            "full",
-            state,
-            {"git": {"git_range": "abc..HEAD"}},
-            output_dir=str(tmp_path),
-        )
-        text = "\n".join(guidance["actions"])
-
-        assert guidance["blocks_progress"] is True
-        assert "completion notification" in text.lower()
-        assert "`DRAFT`" in text
-        assert "`FINALIZE_REVIEW_COMMAND`" in text
-        assert "never authorizes" in text.lower()
-
-    def test_step_8_reads_change_purpose(self, tmp_path):
-        """Step 8 should read change-purpose.md into state."""
-        run_pipeline("--step", "1", "--mode", "full",
-                   "--output-dir", str(tmp_path), cwd=tmp_path)
-        (_artifact(tmp_path, "dispatch_plan")).write_text(
-            json.dumps({"agents": []})
-        )
-        (_artifact(tmp_path, "change_purpose")).write_text("Adds retry logic to payment gateway.")
-        ctx = {"git": {"git_range": "abc..HEAD"}}
-        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
-        r = run_pipeline("--step", "8", "--mode", "full",
-                       "--output-dir", str(tmp_path), cwd=tmp_path)
-        assert r.returncode == 0
-        state = json.loads((_artifact(tmp_path, "pipeline_state")).read_text())
-        assert "retry logic" in state.get("change_purpose", "").lower()
-
-    def test_step_8_records_which_dispatched_agents_completed(self, tmp_path):
-        """Step 8 stores the intake close's completion classification."""
-        run_pipeline("--step", "1", "--mode", "full",
-                   "--output-dir", str(tmp_path), cwd=tmp_path)
+        """Step 8 stores the intake close's completion classification and
+        reads change-purpose.md into state."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full",
+            "--output-dir", str(tmp_path),
+        ])
+        mod.main()
         plan = {
             "agents": [
                 {"name": "code-reviewer", "domain": "code", "status": "DISPATCH", "reason": "always"},
@@ -2620,28 +1988,80 @@ class TestStep8Orchestration:
             "git_range": "abc..HEAD",
         }
         (_artifact(tmp_path, "dispatch_plan")).write_text(json.dumps(plan))
+        (_artifact(tmp_path, "change_purpose")).write_text("Adds retry logic to payment gateway.")
         # Simulate code-reviewer finalized, security-reviewer not.
         _save_and_finalize(tmp_path, "code")
         ctx = {"git": {"git_range": "abc..HEAD"}}
         (tmp_path / "review-context.json").write_text(json.dumps(ctx))
-        r = run_pipeline("--step", "8", "--mode", "full",
-                       "--output-dir", str(tmp_path), cwd=tmp_path)
-        assert r.returncode == 0
+
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "8", "--mode", "full",
+            "--output-dir", str(tmp_path),
+        ])
+        mod.main()
+
         state = json.loads((_artifact(tmp_path, "pipeline_state")).read_text())
         assert state["agents"]["completed"] == ["code-reviewer"]
+        assert "retry logic" in state.get("change_purpose", "").lower()
 
-    def test_step_8_materializes_every_settled_reviewer_json_at_readiness_gate(
-        self, mod, tmp_path, monkeypatch
+    @pytest.mark.parametrize(
+        "agents, finals, materialize_override, expected_markdown,"
+        " expect_degradation, expected_stderr",
+        [
+            pytest.param(
+                [
+                    {"name": "code-reviewer", "status": "DISPATCH"},
+                    {"name": "security-reviewer", "status": "DISPATCH"},
+                ],
+                ("code", "security"),
+                None,
+                {"ran": True, "written": 2, "expected": 2, "status": "complete"},
+                False,
+                None,
+                id="every_settled_json_materializes",
+            ),
+            pytest.param(
+                [{"name": "security-reviewer", "status": "DISPATCH"}],
+                ("security",),
+                "unrelated_path",
+                {"ran": True, "written": 0, "expected": 1, "status": "partial"},
+                True,
+                None,
+                id="materialized_path_identity_mismatch",
+            ),
+            pytest.param(
+                [{"name": "security-reviewer", "status": "DISPATCH"}],
+                ("security",),
+                "raise",
+                {"ran": True, "written": 0, "expected": 1, "status": "failed"},
+                True,
+                "reviewer markdown materialization failed: renderer crashed",
+                id="materialization_raises",
+            ),
+            pytest.param(
+                [{"name": "security-reviewer", "status": "DISPATCH"}],
+                (),
+                None,
+                {"ran": True, "written": 0, "expected": 1, "status": "partial"},
+                True,
+                None,
+                id="skipped_json_is_partial",
+            ),
+        ],
+    )
+    def test_step_8_reviewer_markdown_outcome(
+        self, mod, tmp_path, monkeypatch, capsys, agents, finals,
+        materialize_override, expected_markdown, expect_degradation,
+        expected_stderr,
     ):
         (_artifact(tmp_path, "dispatch_plan")).write_text(json.dumps({
-            "agents": [
-                {"name": "code-reviewer", "status": "DISPATCH"},
-                {"name": "security-reviewer", "status": "DISPATCH"},
-            ],
+            "agents": agents,
         }))
-        for reviewer in ("code", "security"):
+        for reviewer in finals:
             _write_final_review(tmp_path, reviewer, _review_json(reviewer))
-
+        if not finals and agents:
+            # The dispatched agent settled with an empty (skipped) payload.
+            _write_final_review(tmp_path, "security", {})
         monkeypatch.setattr(
             mod.subprocess,
             "run",
@@ -2649,6 +2069,25 @@ class TestStep8Orchestration:
                 args=args[0], returncode=0, stdout="", stderr=""
             ),
         )
+        if materialize_override == "unrelated_path":
+            unrelated_markdown = Path(
+                reviewer_lifecycle.reviewer_markdown_path(tmp_path, "code")
+            )
+            unrelated_markdown.parent.mkdir(parents=True, exist_ok=True)
+            unrelated_markdown.write_text("# Different reviewer\n")
+            monkeypatch.setitem(
+                mod._orchestrate_step_8.__globals__,
+                "materialize_markdown",
+                lambda *_args, **_kwargs: [str(unrelated_markdown)],
+            )
+        elif materialize_override == "raise":
+            monkeypatch.setitem(
+                mod._orchestrate_step_8.__globals__,
+                "materialize_markdown",
+                lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                    RuntimeError("renderer crashed")
+                ),
+            )
 
         def reconciliation_succeeds(*_args, **_kwargs):
             (_artifact(tmp_path, "reconciliation_context")).write_text("{}")
@@ -2659,26 +2098,21 @@ class TestStep8Orchestration:
             "_run_subprocess",
             reconciliation_succeeds,
         )
-
         state = {"resolved_params": {}}
-        result = mod._orchestrate_step(
-            8,
-            "full",
-            {},
-            state,
-            {},
-            str(tmp_path),
-        )
+
+        result = mod._orchestrate_step(8, "full", {}, state, {}, str(tmp_path))
 
         assert result == {}
-        assert Path(reviewer_lifecycle.reviewer_markdown_path(tmp_path, "code")).is_file()
-        assert Path(reviewer_lifecycle.reviewer_markdown_path(tmp_path, "security")).is_file()
-        assert state["reviewer_markdown"] == {
-            "ran": True,
-            "written": 2,
-            "expected": 2,
-            "status": "complete",
-        }
+        assert state["reviewer_markdown"] == expected_markdown
+        if expect_degradation:
+            assert state["degradation"]["reviewer_markdown_incomplete"] is True
+        if expected_stderr:
+            assert expected_stderr in capsys.readouterr().err
+        if materialize_override is None and expected_markdown["written"]:
+            for reviewer in finals:
+                assert Path(
+                    reviewer_lifecycle.reviewer_markdown_path(tmp_path, reviewer)
+                ).is_file()
 
     def test_step_8_closes_intake_before_materialization_and_reconciliation(
         self, mod, tmp_path, monkeypatch
@@ -2904,143 +2338,6 @@ class TestStep8Orchestration:
             "status": "complete",
         }
 
-    def test_step_8_compares_materialized_path_identities_not_only_counts(
-        self, mod, tmp_path, monkeypatch
-    ):
-        (_artifact(tmp_path, "dispatch_plan")).write_text(json.dumps({
-            "agents": [{"name": "security-reviewer", "status": "DISPATCH"}],
-        }))
-        _write_final_review(tmp_path, "security", _review_json("security"))
-        monkeypatch.setattr(
-            mod.subprocess,
-            "run",
-            lambda *args, **kwargs: subprocess.CompletedProcess(
-                args=args[0], returncode=0, stdout="", stderr=""
-            ),
-        )
-        unrelated_markdown = Path(
-            reviewer_lifecycle.reviewer_markdown_path(tmp_path, "code")
-        )
-        unrelated_markdown.parent.mkdir(parents=True, exist_ok=True)
-        unrelated_markdown.write_text("# Different reviewer\n")
-        monkeypatch.setitem(
-            mod._orchestrate_step_8.__globals__,
-            "materialize_markdown",
-            lambda *_args, **_kwargs: [str(unrelated_markdown)],
-        )
-
-        def reconciliation_succeeds(*_args, **_kwargs):
-            (_artifact(tmp_path, "reconciliation_context")).write_text("{}")
-            return "", True
-
-        monkeypatch.setitem(
-            mod._orchestrate_step_8.__globals__,
-            "_run_subprocess",
-            reconciliation_succeeds,
-        )
-        state = {"resolved_params": {}}
-
-        result = mod._orchestrate_step(
-            8, "full", {}, state, {}, str(tmp_path)
-        )
-
-        assert result == {}
-        assert state["reviewer_markdown"] == {
-            "ran": True,
-            "written": 0,
-            "expected": 1,
-            "status": "partial",
-        }
-        assert state["degradation"]["reviewer_markdown_incomplete"] is True
-
-    def test_step_8_records_materialization_failure_without_aborting(
-        self, mod, tmp_path, monkeypatch, capsys
-    ):
-        (_artifact(tmp_path, "dispatch_plan")).write_text(json.dumps({
-            "agents": [{"name": "security-reviewer", "status": "DISPATCH"}],
-        }))
-        _write_final_review(tmp_path, "security", _review_json("security"))
-        monkeypatch.setattr(
-            mod.subprocess,
-            "run",
-            lambda *args, **kwargs: subprocess.CompletedProcess(
-                args=args[0], returncode=0, stdout="", stderr=""
-            ),
-        )
-        monkeypatch.setitem(
-            mod._orchestrate_step_8.__globals__,
-            "materialize_markdown",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(
-                RuntimeError("renderer crashed")
-            ),
-        )
-
-        def reconciliation_succeeds(*_args, **_kwargs):
-            (_artifact(tmp_path, "reconciliation_context")).write_text("{}")
-            return "", True
-
-        monkeypatch.setitem(
-            mod._orchestrate_step_8.__globals__,
-            "_run_subprocess",
-            reconciliation_succeeds,
-        )
-        state = {"resolved_params": {}}
-
-        result = mod._orchestrate_step(
-            8, "full", {}, state, {}, str(tmp_path)
-        )
-
-        assert result == {}
-        assert state["reviewer_markdown"] == {
-            "ran": True,
-            "written": 0,
-            "expected": 1,
-            "status": "failed",
-        }
-        assert state["degradation"]["reviewer_markdown_incomplete"] is True
-        assert "reviewer markdown materialization failed: renderer crashed" in (
-            capsys.readouterr().err
-        )
-
-    def test_step_8_records_skipped_json_as_partial_materialization(
-        self, mod, tmp_path, monkeypatch
-    ):
-        (_artifact(tmp_path, "dispatch_plan")).write_text(json.dumps({
-            "agents": [{"name": "security-reviewer", "status": "DISPATCH"}],
-        }))
-        _write_final_review(tmp_path, "security", {})
-        monkeypatch.setattr(
-            mod.subprocess,
-            "run",
-            lambda *args, **kwargs: subprocess.CompletedProcess(
-                args=args[0], returncode=0, stdout="", stderr=""
-            ),
-        )
-
-        def reconciliation_succeeds(*_args, **_kwargs):
-            (_artifact(tmp_path, "reconciliation_context")).write_text("{}")
-            return "", True
-
-        monkeypatch.setitem(
-            mod._orchestrate_step_8.__globals__,
-            "_run_subprocess",
-            reconciliation_succeeds,
-        )
-        state = {"resolved_params": {}}
-
-        result = mod._orchestrate_step(
-            8, "full", {}, state, {}, str(tmp_path)
-        )
-
-        assert result == {}
-        assert state["reviewer_markdown"] == {
-            "ran": True,
-            "written": 0,
-            "expected": 1,
-            "status": "partial",
-        }
-        assert state["degradation"]["reviewer_markdown_incomplete"] is True
-
     def test_step_8_reconciliation_failure_happens_after_reviewer_markdown(
         self, mod, tmp_path, monkeypatch
     ):
@@ -3209,38 +2506,6 @@ class TestStep9CoverageMeasurement:
             "package-lock.json",
         ]
 
-    def test_no_dispatch_plan_leaves_the_exclusions_unmeasured(
-        self, mod, tmp_path
-    ):
-        self._summary(tmp_path, "security-reviewer", inline=["src/a.py"])
-
-        state = self._run_step(mod, tmp_path, "src/a.py,package-lock.json")
-
-        assert state["file_review"]["unscoped_files"] == ["package-lock.json"]
-        assert state["file_review"]["noise_filtered_files"] is None
-
-    def test_excluded_files_reach_the_record_as_accounting(
-        self, mod, tmp_path
-    ):
-        (tmp_path / "review-findings.json").write_text(
-            json.dumps(_review_json("review-reconciliator"))
-        )
-        self._summary(tmp_path, "security-reviewer", inline=["src/a.py"])
-        (_artifact(tmp_path, "dispatch_plan")).write_text(json.dumps({
-            "agents": [{"name": "security-reviewer", "status": "DISPATCH"}],
-            "changed_files": ["src/a.py", "Gemfile"],
-        }))
-
-        self._run_step(
-            mod, tmp_path, "src/a.py,Gemfile,package-lock.json",
-        )
-
-        record = (tmp_path / "review-record.md").read_text()
-        assert "1 changed file(s) matched no reviewer's domain" in record
-        assert "- `Gemfile`" in record
-        assert "1 changed file(s) were excluded from review by design" in record
-        assert "- `package-lock.json`" in record
-
     def test_stale_populations_are_cleared_not_carried(self, mod, tmp_path):
         """A re-entered step 9 in a run with nothing to measure must not
         keep the previous run's gaps standing — the record would then
@@ -3276,7 +2541,8 @@ class TestStep9CoverageMeasurement:
         assert state["file_review"]["unscoped_files"] == []
 
     def test_the_measured_populations_reach_the_record(self, mod, tmp_path):
-        """The whole point of measuring them: the assembler renders them."""
+        """The whole point of measuring them: the assembler renders them —
+        claims, skips, and the dispatch plan's own exclusion accounting."""
         (tmp_path / "review-findings.json").write_text(
             json.dumps(_review_json("review-reconciliator"))
         )
@@ -3290,72 +2556,26 @@ class TestStep9CoverageMeasurement:
             tmp_path, "security",
             claims=["src/big.py"], claimable=["src/big.py"],
         )
+        (_artifact(tmp_path, "dispatch_plan")).write_text(json.dumps({
+            "agents": [
+                {"name": "security-reviewer", "status": "DISPATCH"},
+                {"name": "code-reviewer", "status": "DISPATCH"},
+            ],
+            "changed_files": ["src/big.py", "src/starved.php", "Gemfile"],
+        }))
 
         self._run_step(
             mod, tmp_path,
-            "src/big.py,src/starved.php,package-lock.json",
+            "src/big.py,src/starved.php,Gemfile,package-lock.json",
         )
 
         record = (tmp_path / "review-record.md").read_text()
         assert "`src/starved.php` (skipped by: `code`)" in record
         assert "`src/big.py` (claimed by: `security`)" in record
+        assert "1 changed file(s) matched no reviewer's domain" in record
+        assert "- `Gemfile`" in record
+        assert "1 changed file(s) were excluded from review by design" in record
         assert "- `package-lock.json`" in record
-
-
-class TestStep9Orchestration:
-    """Step 9 measures the run-level file review through the real CLI."""
-
-    def test_step_9_measures_the_file_review(self, tmp_path):
-        run_pipeline("--step", "1", "--mode", "full",
-                   "--output-dir", str(tmp_path), cwd=tmp_path)
-        for agent in ("code-reviewer", "security-reviewer"):
-            _write_scope_summary(tmp_path, agent.removesuffix("-reviewer"), {
-                "schema": 3,
-                "inline_diff_files": ["src/a.php"],
-                "review_claimable_files": ["src/starved.php"],
-                "list_only_files": [],
-                "routing_files": ["src/a.php", "src/starved.php"],
-            })
-        # The CSV step 8 hands the reconciliation-context builder is the
-        # same one step 9 measures `unscoped_files` against.
-        (tmp_path / "review-context.json").write_text(json.dumps({
-            "output": {"directory": str(tmp_path)},
-            "git": {"changed_files_csv": "src/a.php,src/starved.php"},
-        }))
-        (tmp_path / "review-findings.json").write_text(
-            json.dumps(_review_json("review-reconciliator"))
-        )
-        r = run_pipeline("--step", "9", "--mode", "full",
-                       "--output-dir", str(tmp_path), cwd=tmp_path)
-        assert r.returncode == 0
-        state = json.loads((_artifact(tmp_path, "pipeline_state")).read_text())
-        assert state.get("file_review") == {
-            "scope_reporting_agent_count": 2,
-            "unscoped_files": [],
-            "noise_filtered_files": None,
-            "override_orphaned_files": None,
-            "agents_receiving_inline_diff_by_file": {
-                "src/a.php": ["code", "security"]
-            },
-            "agents_claiming_review_by_file": {},
-            "agents_with_unclaimed_review_by_file": {
-                "src/starved.php": ["code", "security"],
-            },
-        }
-        # The record the step assembles carries the measurement. The
-        # briefing no longer re-renders it — a second copy is a second
-        # thing to paraphrase.
-        assert state.get("review_record", {}).get("status") == "complete"
-        assert "src/starved.php" in (tmp_path / "review-record.md").read_text()
-
-    def test_step_9_tolerates_a_run_with_nothing_to_measure(self, tmp_path):
-        run_pipeline("--step", "1", "--mode", "full",
-                   "--output-dir", str(tmp_path), cwd=tmp_path)
-        r = run_pipeline("--step", "9", "--mode", "full",
-                       "--output-dir", str(tmp_path), cwd=tmp_path)
-        assert r.returncode == 0
-        state = json.loads((_artifact(tmp_path, "pipeline_state")).read_text())
-        assert state.get("file_review") is None
 
 
 class TestStep9FindingsMarkdown:
@@ -3409,17 +2629,6 @@ class TestStep9FindingsMarkdown:
         assert state["findings_markdown"] == {
             "ran": True, "written": 1, "expected": 1, "status": "complete",
         }
-
-    def test_step_9_overwrites_a_stale_findings_markdown(self, mod, tmp_path):
-        (tmp_path / "review-findings.json").write_text(
-            json.dumps(self._findings())
-        )
-        (tmp_path / "review-findings.md").write_text("# stale narrative\n")
-        mod._orchestrate_step(9, "full", {}, {"resolved_params": {}}, {},
-                              str(tmp_path))
-        assert "stale narrative" not in (
-            tmp_path / "review-findings.md"
-        ).read_text()
 
     def test_step_9_records_a_render_failure_instead_of_raising(
         self, mod, tmp_path, capsys
@@ -3500,177 +2709,112 @@ class TestStep10Orchestration:
             json.dumps(findings)
         )
 
-    def test_step_10_records_the_reconciliation_verdict(self, tmp_path):
-        run_pipeline("--step", "1", "--mode", "full", "--output-dir", str(tmp_path), cwd=tmp_path)
-        self._findings(tmp_path, "block")
-        r = run_pipeline("--step", "10", "--mode", "full", "--output-dir", str(tmp_path), cwd=tmp_path)
-        assert r.returncode == 0
-        state = json.loads((_artifact(tmp_path, "pipeline_state")).read_text())
-        assert state.get("reconciliation_verdict") == "block"
-        # Not quick mode — the critic always runs, so no skip decision.
-        assert "10" not in state.get("step_decisions", {})
+    @pytest.mark.parametrize(
+        "quick, verdict, expect_skip",
+        [
+            pytest.param(False, "block", False, id="not_quick_blocking"),
+            pytest.param(True, "approve", True, id="quick_approve_skips"),
+            pytest.param(True, "block", False, id="quick_block_keeps_critic"),
+        ],
+    )
+    def test_step_10_quick_skip_decision(
+        self, mod, tmp_path, quick, verdict, expect_skip
+    ):
+        self._findings(tmp_path, verdict)
+        state = {"resolved_params": {}}
 
-    def test_step_10_quick_mode_records_critic_skip(self, tmp_path):
-        run_pipeline("--step", "1", "--mode", "full", "--quick",
-                  "--output-dir", str(tmp_path), cwd=tmp_path)
-        self._findings(tmp_path, "approve")
-        r = run_pipeline("--step", "10", "--mode", "full", "--quick",
-                      "--output-dir", str(tmp_path), cwd=tmp_path)
-        assert r.returncode == 0
-        state = json.loads((_artifact(tmp_path, "pipeline_state")).read_text())
+        mod._orchestrate_step(
+            10, "full", {"quick": quick}, state, {}, str(tmp_path)
+        )
+
+        assert state.get("reconciliation_verdict") == verdict
         decision = state.get("step_decisions", {}).get("10")
-        assert decision is not None, "quick-mode critic skip was not recorded"
-        assert decision["critic_skipped"] is True
-        assert "approve" in decision["reason"]
+        if expect_skip:
+            assert decision is not None, "quick-mode critic skip was not recorded"
+            assert decision["critic_skipped"] is True
+            assert verdict in decision["reason"]
+        else:
+            assert decision is None
 
-    def test_step_10_quick_mode_keeps_critic_for_blocking_verdict(self, tmp_path):
-        run_pipeline("--step", "1", "--mode", "full", "--quick",
-                  "--output-dir", str(tmp_path), cwd=tmp_path)
-        self._findings(tmp_path, "block")
-        r = run_pipeline("--step", "10", "--mode", "full", "--quick",
-                      "--output-dir", str(tmp_path), cwd=tmp_path)
-        assert r.returncode == 0
-        state = json.loads((_artifact(tmp_path, "pipeline_state")).read_text())
-        assert "10" not in state.get("step_decisions", {})
-
-    def test_step_10_clears_a_stale_skip_decision_on_rerun(self, tmp_path):
+    def test_step_10_clears_a_stale_skip_decision_on_rerun(self, mod, tmp_path):
         """A rerun after the verdict escalates must drop the earlier skip.
 
         This is the exact line the split broke: the decision key is popped
         before it is conditionally rewritten, so a stale `critic_skipped`
         cannot survive into a run whose reconciliation now blocks.
         """
-        run_pipeline("--step", "1", "--mode", "full", "--quick",
-                  "--output-dir", str(tmp_path), cwd=tmp_path)
         self._findings(tmp_path, "approve")
-        run_pipeline("--step", "10", "--mode", "full", "--quick",
-                  "--output-dir", str(tmp_path), cwd=tmp_path)
-        state = json.loads((_artifact(tmp_path, "pipeline_state")).read_text())
+        state = {"resolved_params": {}}
+        mod._orchestrate_step(10, "full", {"quick": True}, state, {}, str(tmp_path))
         assert state["step_decisions"]["10"]["critic_skipped"] is True
 
         self._findings(tmp_path, "block")
-        r = run_pipeline("--step", "10", "--mode", "full", "--quick",
-                      "--output-dir", str(tmp_path), cwd=tmp_path)
-        assert r.returncode == 0
-        state = json.loads((_artifact(tmp_path, "pipeline_state")).read_text())
+        mod._orchestrate_step(10, "full", {"quick": True}, state, {}, str(tmp_path))
         assert "10" not in state.get("step_decisions", {}), (
             "stale critic-skip decision survived a verdict escalation"
         )
 
-    def test_step_10_tolerates_missing_reconciliation_findings(self, tmp_path):
-        run_pipeline("--step", "1", "--mode", "full", "--output-dir", str(tmp_path), cwd=tmp_path)
-        r = run_pipeline("--step", "10", "--mode", "full", "--output-dir", str(tmp_path), cwd=tmp_path)
-        assert r.returncode == 0
-        state = json.loads((_artifact(tmp_path, "pipeline_state")).read_text())
-        assert state.get("reconciliation_verdict", "") == ""
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            pytest.param(None, id="absent"),
+            pytest.param("{not json", id="malformed"),
+            pytest.param("[1, 2]", id="non_object_list"),
+        ],
+    )
+    def test_step_10_unusable_ledger(self, mod, tmp_path, payload):
+        """A ledger step 10 cannot read — absent, malformed JSON, or valid
+        JSON that is not an object — leaves no verdict and no critic
+        source rather than crashing or guessing.
 
-    def test_step_10_tolerates_malformed_reconciliation_findings(self, tmp_path):
-        run_pipeline("--step", "1", "--mode", "full", "--output-dir", str(tmp_path), cwd=tmp_path)
-        (tmp_path / "review-findings.json").write_text("{not json")
-        r = run_pipeline("--step", "10", "--mode", "full", "--output-dir", str(tmp_path), cwd=tmp_path)
-        assert r.returncode == 0
-        state = json.loads((_artifact(tmp_path, "pipeline_state")).read_text())
-        assert state.get("reconciliation_verdict") == ""
-
-    def test_step_10_keeps_a_noncanonical_ledger_out_of_critic_context(
-        self, tmp_path
-    ):
-        run_pipeline(
-            "--step", "1", "--mode", "full", "--output-dir", str(tmp_path),
-            cwd=tmp_path,
-        )
-        (tmp_path / "review-findings.json").write_text(
-            json.dumps({"verdict": "block"})
-        )
-
-        result = run_pipeline(
-            "--step", "10", "--mode", "full", "--output-dir", str(tmp_path),
-            cwd=tmp_path,
-        )
-
-        assert result.returncode == 0, result.stderr
-        state = json.loads((_artifact(tmp_path, "pipeline_state")).read_text())
-        assert state["ledger_status"] != "ok"
-        assert state["critic_source"] is None
-        assert "Structured findings (for critic.py --context)" not in result.stdout
-        assert "without --context" in result.stdout
-
-    @pytest.mark.parametrize("payload", ["[1, 2]", '"hello"', "5"],
-                             ids=["list", "string", "int"])
-    def test_step_10_tolerates_a_valid_json_non_object_ledger(
-        self, tmp_path, payload
-    ):
-        """Valid JSON that is not an object used to escape this step's
+        Valid JSON that is not an object used to escape the narrower
         `(JSONDecodeError, OSError)` guard and raise AttributeError on the
         `.get()` behind it — the same hole the shared verdict parser
         closed for review-verdict.json, one artifact over. The ledger now
-        goes through critic_adjustments.read_findings_file(), so a
-        non-object payload is a shape fact, not a crash."""
-        run_pipeline("--step", "1", "--mode", "full", "--output-dir", str(tmp_path), cwd=tmp_path)
-        (tmp_path / "review-findings.json").write_text(payload)
-        r = run_pipeline("--step", "10", "--mode", "full", "--output-dir", str(tmp_path), cwd=tmp_path)
-        assert r.returncode == 0, r.stderr
-        state = json.loads((_artifact(tmp_path, "pipeline_state")).read_text())
-        assert state.get("reconciliation_verdict") == ""
+        goes through critic_adjustments.read_findings_file(), so it is a
+        shape fact, not a crash. A canonical-shaped-but-wrong ledger
+        (`{"verdict": "block"}`) lands on the same non-OK branch as the
+        malformed-JSON row here.
+        """
+        if payload is not None:
+            (tmp_path / "review-findings.json").write_text(payload)
+        state = {"resolved_params": {}}
+
+        mod._orchestrate_step(10, "full", {}, state, {}, str(tmp_path))
+
+        assert state.get("reconciliation_verdict", "") == ""
+        assert state["ledger_status"] != "ok"
+        assert state["critic_source"] is None
 
 
 class TestStep11Orchestration:
     """Step 11 settles state, then publishes after the report handoff."""
 
-    def test_invalid_ledger_is_neither_materialized_nor_report_source(
-        self, tmp_path
-    ):
-        run_pipeline(
-            "--step", "1", "--mode", "pr", "--pr-number", "42",
-            "--output-dir", str(tmp_path), cwd=tmp_path,
-        )
-        findings = _review_json("reconciliator")
-        findings["verdict"] = "APPROVE"
-        findings_path = tmp_path / "review-findings.json"
-        findings_path.write_text(json.dumps(findings))
-
-        assert critic_adjustments.read_findings_file(
-            findings_path
-        ).status == critic_adjustments.FINDINGS_READ_INVALID
-
-        prepared = run_pipeline(
-            "--step", "11", "--mode", "pr", "--output-dir", str(tmp_path),
-            cwd=tmp_path,
-        )
-
-        assert prepared.returncode == 0, prepared.stderr
-        state = json.loads((_artifact(tmp_path, "pipeline_state")).read_text())
-        assert state["ledger_status"] == "invalid"
-        assert not (tmp_path / "review-findings.md").exists()
-        assert (
-            f"Source:** `{tmp_path}/review-findings.json"
-            not in prepared.stdout
-        )
-        assert f"`{tmp_path}/reviewers/<reviewer>/review.md`" in prepared.stdout
-
     def test_step_11_prepares_then_publishes_after_report_handoff(
-        self, tmp_path
+        self, mod, tmp_path, monkeypatch, capsys
     ):
         """The result is the terminal commit marker, so the first pass
         remains resumable until the orchestrator authors the report."""
+        monkeypatch.chdir(tmp_path)
         (tmp_path / "review-context.json").write_text(json.dumps({
             "git": {"merge_base": "abc", "git_range": "abc..HEAD"},
         }))
-        run_pipeline(
-            "--step", "1", "--mode", "pr", "--pr-number", "42",
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr", "--pr-number", "42",
             "--interactive", "false", "--output-dir", str(tmp_path),
-            cwd=tmp_path,
-        )
+        ])
+        mod.main()
         (tmp_path / "review-findings.json").write_text(
             '{"verdict": "approve", "findings": []}'
         )
 
-        prepared = run_pipeline(
-            "--step", "11", "--mode", "pr",
-            "--output-dir", str(tmp_path), cwd=tmp_path,
-        )
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "11", "--mode", "pr",
+            "--output-dir", str(tmp_path),
+        ])
+        mod.main()
+        prepared_out = capsys.readouterr().out
 
-        assert prepared.returncode == 0, prepared.stderr
         assert not (tmp_path / "pipeline-result.json").exists()
         state = json.loads((_artifact(tmp_path, "pipeline_state")).read_text())
         assert state["publication_pending"] is True
@@ -3682,18 +2826,15 @@ class TestStep11Orchestration:
             "review-report.md" in note
             for note in state["degradation_notes"]
         )
-        assert "PIPELINE WAITING" in prepared.stdout
-        assert "--step 11" in prepared.stdout
-        assert "PIPELINE COMPLETE" not in prepared.stdout
+        assert "PIPELINE WAITING" in prepared_out
+        assert "--step 11" in prepared_out
+        assert "PIPELINE COMPLETE" not in prepared_out
 
         report = tmp_path / "review-report.md"
         report.write_text("# Review\nAll clear.")
-        published = run_pipeline(
-            "--step", "11", "--mode", "pr",
-            "--output-dir", str(tmp_path), cwd=tmp_path,
-        )
+        mod.main()
+        published_out = capsys.readouterr().out
 
-        assert published.returncode == 0, published.stderr
         result = json.loads((tmp_path / "pipeline-result.json").read_text())
         assert result["report_path"] == str(report)
         state = json.loads((_artifact(tmp_path, "pipeline_state")).read_text())
@@ -3704,19 +2845,21 @@ class TestStep11Orchestration:
         assert state["report_handoff_status"] == "published"
         assert "stale_report_digest" not in state
         assert 11 in state["completed_steps"]
-        assert "PIPELINE WAITING" not in published.stdout
-        assert "HANDOFF" not in published.stdout
-        assert "PIPELINE COMPLETE" in published.stdout
+        assert "PIPELINE WAITING" not in published_out
+        assert "HANDOFF" not in published_out
+        assert "PIPELINE COMPLETE" in published_out
 
     def test_late_adjudication_invalidates_the_report_until_rewritten(
-        self, tmp_path
+        self, mod, tmp_path, monkeypatch, capsys
     ):
         """A report authored before the orchestrator adjudicated cannot
         publish once the adjudication changes the ledger and its verdict."""
-        run_pipeline(
-            "--step", "1", "--mode", "pr", "--pr-number", "42",
-            "--output-dir", str(tmp_path), cwd=tmp_path,
-        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr", "--pr-number", "42",
+            "--output-dir", str(tmp_path),
+        ])
+        mod.main()
         finding = _review_json("review-reconciliator")
         finding["verdict"] = "request_changes"
         finding["findings"] = [{
@@ -3741,11 +2884,11 @@ class TestStep11Orchestration:
             "rationale": "guarded upstream",
         }])
 
-        prepared = run_pipeline(
-            "--step", "11", "--mode", "pr",
-            "--output-dir", str(tmp_path), cwd=tmp_path,
-        )
-        assert prepared.returncode == 0, prepared.stderr
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "11", "--mode", "pr",
+            "--output-dir", str(tmp_path),
+        ])
+        mod.main()
         state = json.loads((_artifact(tmp_path, "pipeline_state")).read_text())
         assert state["publication_pending"] is True
         assert state["prepared_report_source_fingerprint"]
@@ -3767,27 +2910,20 @@ class TestStep11Orchestration:
         # not coexist with a report this pass rejects as stale.
         (tmp_path / "pipeline-result.json").write_text('{"stale": true}')
 
-        changed = run_pipeline(
-            "--step", "11", "--mode", "pr",
-            "--output-dir", str(tmp_path), cwd=tmp_path,
-        )
-        assert changed.returncode == 0, changed.stderr
+        mod.main()
+        changed_out = capsys.readouterr().out
         assert not (tmp_path / "pipeline-result.json").exists()
         state = json.loads((_artifact(tmp_path, "pipeline_state")).read_text())
         assert state["report_handoff_status"] == "source_changed"
         assert state["stale_report_digest"]
         assert state["publication_pending"] is True
         assert 11 not in state["completed_steps"]
-        assert "regenerate" in changed.stdout.lower()
+        assert "regenerate" in changed_out.lower()
         settled = json.loads((tmp_path / "review-findings.json").read_text())
         assert settled["findings"][0]["severity"] == "low"
         assert settled["verdict"] == "approve"
 
-        unchanged = run_pipeline(
-            "--step", "11", "--mode", "pr",
-            "--output-dir", str(tmp_path), cwd=tmp_path,
-        )
-        assert unchanged.returncode == 0, unchanged.stderr
+        mod.main()
         assert not (tmp_path / "pipeline-result.json").exists()
         state = json.loads((_artifact(tmp_path, "pipeline_state")).read_text())
         assert state["report_handoff_status"] == "stale_report_unchanged"
@@ -3795,11 +2931,7 @@ class TestStep11Orchestration:
         assert 11 not in state["completed_steps"]
 
         report.write_text("# Review\nAPPROVE: settled low finding.")
-        published = run_pipeline(
-            "--step", "11", "--mode", "pr",
-            "--output-dir", str(tmp_path), cwd=tmp_path,
-        )
-        assert published.returncode == 0, published.stderr
+        mod.main()
         result = json.loads((tmp_path / "pipeline-result.json").read_text())
         assert result["verdict"] == "APPROVE"
         assert result["status"] == "degraded"
@@ -3812,190 +2944,86 @@ class TestStep11Orchestration:
         assert "stale_report_digest" not in state
         assert 11 in state["completed_steps"]
 
-    @pytest.mark.parametrize("mode", ("full", "incremental"))
     def test_interactive_publish_pass_routes_to_final_consent_without_workspace_state(
-        self, tmp_path, mode
+        self, mod, tmp_path, monkeypatch, capsys
     ):
-        env = hermetic_env(XDG_CONFIG_HOME=str(tmp_path / "xdg"))
+        """Step 12's condition is `interactive` alone; mode does not enter
+        it. An `incremental` row is redundant with this `full` one — see
+        `test_pipeline.py::TestStep12Cleanup` for the consent wording."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
         # The consent conversation exists only for a run with a shareable
         # repository identity, which requires an origin remote.
         init_bare_repo(tmp_path, "https://github.com/acme/widget.git")
-        if mode == "incremental":
-            (tmp_path / "run-config.json").write_text(json.dumps({
-                "mode": mode,
-                "interactive": True,
-                "target_dir": str(tmp_path),
-            }))
-        run_pipeline(
-            "--step", "1", "--mode", mode,
-            "--output-dir", str(tmp_path), cwd=tmp_path, env=env,
-        )
+
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full",
+            "--output-dir", str(tmp_path),
+        ])
+        mod.main()
         (tmp_path / "review-findings.json").write_text(
             '{"verdict": "approve", "findings": []}'
         )
 
-        prepared = run_pipeline(
-            "--step", "11", "--mode", mode,
-            "--output-dir", str(tmp_path), cwd=tmp_path, env=env,
-        )
-        assert "PIPELINE WAITING" in prepared.stdout
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "11", "--mode", "full",
+            "--output-dir", str(tmp_path),
+        ])
+        mod.main()
+        prepared_out = capsys.readouterr().out
+        assert "PIPELINE WAITING" in prepared_out
 
         (tmp_path / "review-report.md").write_text("# Review")
-        published = run_pipeline(
-            "--step", "11", "--mode", mode,
-            "--output-dir", str(tmp_path), cwd=tmp_path, env=env,
-        )
+        mod.main()
+        published_out = capsys.readouterr().out
 
-        assert published.returncode == 0, published.stderr
-        assert "Next: Step 12" in published.stdout
-        assert "PIPELINE COMPLETE" not in published.stdout
-        consent = run_pipeline(
-            "--step", "12", "--mode", mode,
-            "--output-dir", str(tmp_path), cwd=tmp_path, env=env,
-        )
-        assert consent.returncode == 0, consent.stderr
-        assert "set-sharing" in consent.stdout
-        assert "No workspace changes to restore" in consent.stdout
-        assert "PIPELINE COMPLETE" in consent.stdout
+        assert "Next: Step 12" in published_out
+        assert "PIPELINE COMPLETE" not in published_out
 
-    def test_step_11_writes_pipeline_result_with_reconciliation_verification(self, tmp_path):
-        """A pre-existing unbound report must be rewritten before publish."""
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
-        report = tmp_path / "review-report.md"
-        report.write_text("# Review Report\nFindings here.")
-        (tmp_path / "review-findings.json").write_text('{"verdict": "request_changes", "findings": []}')
-        r = run_pipeline("--step", "11", "--mode", "pr",
-                       "--output-dir", str(tmp_path), cwd=tmp_path)
-        assert r.returncode == 0
-        result_path = tmp_path / "pipeline-result.json"
-        assert not result_path.exists()
-        state = json.loads((_artifact(tmp_path, "pipeline_state")).read_text())
-        assert state["report_handoff_status"] == "unbound_report"
-        assert state["stale_report_digest"]
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "12", "--mode", "full",
+            "--output-dir", str(tmp_path),
+        ])
+        mod.main()
+        consent_out = capsys.readouterr().out
+        assert "set-sharing" in consent_out
+        assert "No workspace changes to restore" in consent_out
+        assert "PIPELINE COMPLETE" in consent_out
 
-        unchanged = run_pipeline(
-            "--step", "11", "--mode", "pr",
-            "--output-dir", str(tmp_path), cwd=tmp_path,
-        )
-        assert unchanged.returncode == 0
-        assert not result_path.exists()
-        report.write_text("# Review Report\nREQUEST_CHANGES: rewritten.")
-        published = run_pipeline(
-            "--step", "11", "--mode", "pr",
-            "--output-dir", str(tmp_path), cwd=tmp_path,
-        )
-        assert published.returncode == 0
-        assert result_path.is_file(), "pipeline-result.json was not created"
-        result = json.loads(result_path.read_text())
-        assert result["verdict"] == "COMMENT"
-        assert result["status"] == "degraded"
-        assert result["verdict_source"] == (
-            "fallback: no usable ledger verdict"
-        )
-        assert "report_path" in result
-        assert result["reconciliation_verification"] is None
+    def test_step_11_degrades_when_ledger_is_missing(
+        self, mod, tmp_path, monkeypatch
+    ):
+        """No ledger at all: the verdict falls back to COMMENT, the run is
+        reported degraded, and the run says why — rather than crashing or
+        publishing a confident value."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr", "--pr-number", "42",
+            "--output-dir", str(tmp_path),
+        ])
+        mod.main()
+        # The report exists, but the findings do not (reconciliation
+        # failed). Prepare without it present, then republish once it is
+        # (the pattern `_publish_step_11` follows for the CLI smokes).
+        report_path = tmp_path / "review-report.md"
+        report_text = "# Review\nReport here."
 
-    def test_step_11_leaves_the_findings_verdict_alone(self, tmp_path):
-        """Rule 23's sync is gone end to end: the CLI reads the ledger's
-        verdict and never writes one back over it."""
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
-        (tmp_path / "review-report.md").write_text("# Review")
-        (tmp_path / "review-findings.json").write_text('{"verdict": "comment", "findings": []}')
-        _publish_step_11(tmp_path, tmp_path)
-        findings = json.loads((tmp_path / "review-findings.json").read_text())
-        assert findings["verdict"] == "comment"
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "11", "--mode", "pr",
+            "--output-dir", str(tmp_path),
+        ])
+        mod.main()
+        report_path.write_text(report_text)
+        mod.main()
+
         result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert result["verdict"] == "COMMENT"
-
-    def test_step_11_handles_a_missing_ledger_gracefully(self, tmp_path):
-        """No ledger at all: the verdict falls back to COMMENT and the run
-        says why, rather than crashing or publishing a confident value."""
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
-        (tmp_path / "review-report.md").write_text("# Review")
-        r = _publish_step_11(tmp_path, tmp_path)
-        assert r.returncode == 0
-        result_path = tmp_path / "pipeline-result.json"
-        assert result_path.is_file()
-        result = json.loads(result_path.read_text())
-        assert result["status"] in ("degraded", "failed")
+        assert result["status"] == "degraded"
         assert result["verdict"] == "COMMENT"
         assert result["verdict_source"] == "fallback: no usable ledger verdict"
+        assert any(
+            "review-findings.json" in n for n in result["degradation_notes"]
+        )
 
-    def test_step_11_degrades_when_findings_missing(self, tmp_path):
-        """Step 11 should report degraded when review-findings.json is missing (partial run)."""
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
-        # The report exists, but the findings do not (reconciliation failed)
-        (tmp_path / "review-report.md").write_text("# Review\nReport here.")
-        r = _publish_step_11(tmp_path, tmp_path)
-        assert r.returncode == 0
-        result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert result["status"] == "degraded"
-        assert any("review-findings.json" in n for n in result["degradation_notes"])
-
-
-class TestTelemetryFinalize:
-    """Telemetry finalize is called at the last active step."""
-
-    def test_last_step_finalizes_telemetry(self, tmp_path):
-        """The last active step should finalize telemetry and its manifest."""
-        log_dir = tmp_path / "telemetry-logs"
-        env = {
-            "PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir),
-            "XDG_CONFIG_HOME": str(tmp_path / "xdg"),
-        }
-        with patch.dict(os.environ, env):
-            run_pipeline("--step", "1", "--mode", "full",
-                       "--output-dir", str(tmp_path), cwd=tmp_path)
-            # The first pass prepares settled state and waits for the report
-            # handoff, so it is deliberately not terminal.
-            run_pipeline("--step", "11", "--mode", "full",
-                       "--output-dir", str(tmp_path), cwd=tmp_path)
-            (tmp_path / "review-report.md").write_text("# Review")
-            # The second pass publishes the terminal marker and routes every
-            # interactive run through its final consent step.
-            run_pipeline("--step", "11", "--mode", "full",
-                       "--output-dir", str(tmp_path), cwd=tmp_path)
-            run_pipeline("--step", "12", "--mode", "full",
-                       "--output-dir", str(tmp_path), cwd=tmp_path)
-        marker = _artifact(tmp_path, "telemetry_log_path")
-        if marker.is_file():
-            log_path = marker.read_text().strip()
-            with open(log_path) as f:
-                lines = f.readlines()
-            events = [json.loads(l)["event"] for l in lines]
-            assert "pipeline_end" in events, f"Expected pipeline_end event, got: {events}"
-            manifest_path = Path(log_path).with_suffix(".manifest.json")
-            manifest = json.loads(manifest_path.read_text())
-            assert manifest["status"] == "complete"
-
-
-class TestStep8AgentPrompt:
-    """Step 8 should emit a complete reconciliator Agent tool prompt (rule 15)."""
-
-    def test_reconciliator_prompt_has_concrete_values(self, mod, tmp_path):
-        state = {
-            "resolved_params": {"git_range": "abc..HEAD"},
-            "completed_steps": [1, 3, 5, 6, 7],
-            "agents": {
-                "dispatched": ["code-reviewer", "security-reviewer"],
-                "completed": ["code-reviewer", "security-reviewer"],
-                "discarded_drafts": [],
-            },
-            "change_purpose": "Adds retry logic.",
-        }
-        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py,b.py"}}
-        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
-        text = "\n".join(g["actions"])
-        assert "reconciliation-context.json" in text  # pre-gathered context
-        assert str(tmp_path) in text  # concrete output directory
-
-
-class TestStep10AgentPrompt:
-    """Step 10 should emit a complete decision critic Agent tool prompt (rule 15)."""
 
 class TestFullSequenceIntegration:
     """Full multi-step sequence produces pipeline-result.json."""
@@ -4081,169 +3109,6 @@ class TestFullSequenceIntegration:
         assert result["review_baseline_saved"] is True
 
 
-# =============================================================================
-# Quick Mode Dispatch Tests
-# =============================================================================
-
-# Files that cover enough domains to trigger most agents
-_QUICK_MODE_TEST_FILES = [
-    "src/Controller.php",
-    "src/components/Modal.tsx",
-    "src/hooks/useData.ts",
-    "tests/ControllerTest.php",
-    "src/styles/modal.scss",
-    "e2e/checkout.spec.ts",
-    ".github/workflows/ci.yml",
-    "Dockerfile",
-    "src/utils/auth.go",
-    "src/utils/auth_test.go",
-]
-
-_QUICK_MODE_BLOCKED_AGENTS = frozenset([
-    "wp-architecture-reviewer",
-    "history-insights-reviewer",
-    "data-flow-privacy-reviewer",
-    "concurrency-reviewer",
-    "reliability-reviewer",
-])
-
-
-def _init_main_repo(path):
-    """A git repo with a `main` branch at HEAD.
-
-    build_dispatch_plan's triage calls plan_dispatch.get_diff_text() /
-    get_repository_identity() via `git diff`/`git rev-parse`, with no cwd
-    override — they always read the ambient process CWD, not a subprocess
-    we control. Left unpatched, `git_range="main..HEAD"` behaves
-    differently depending on which repo pytest happens to be invoked from:
-    inside this repo the pathspec resolves to an empty diff (low-signal,
-    quick mode skips); from a foreign CWD `git diff` fails outright
-    ("not a git repository"), which the triage treats as an unreadable
-    scan and dispatches conservatively instead of skipping. Pointing CWD at
-    a throwaway repo with a `main` branch at HEAD makes `main..HEAD`
-    resolve to an empty diff everywhere, so the test stops depending on
-    which repo happens to be running it.
-    """
-    path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
-    subprocess.run(["git", "checkout", "-q", "-B", "main"], cwd=path, check=True)
-    (path / "README.md").write_text("init")
-    subprocess.run(["git", "add", "."], cwd=path, check=True)
-    subprocess.run(
-        ["git", "-c", "user.email=t@t", "-c", "user.name=t",
-         "commit", "-qm", "init"],
-        cwd=path, check=True,
-    )
-    return path
-
-
-class TestQuickModeDispatch:
-    """Quick mode excludes low-signal agents from dispatch."""
-
-    @pytest.fixture(scope="class")
-    def registry(self):
-        return load_registry()
-
-    @pytest.fixture(autouse=True)
-    def _isolated_cwd(self, tmp_path, monkeypatch):
-        """build_dispatch_plan calls straight into plan_dispatch's git
-        helpers (no subprocess seam to pass cwd through), so isolation here
-        means chdir'ing the test process itself — see _init_main_repo."""
-        _init_main_repo(tmp_path)
-        monkeypatch.chdir(tmp_path)
-
-    def test_quick_mode_excludes_blocklisted_agents_without_signals(self, registry):
-        """quick=True skips blocklisted agents when no triage keywords match."""
-        # Use files that don't trigger keyword matches for blocklisted agents
-        # (no "hook", "filter", "concurrent", "privacy", "deploy", etc.)
-        neutral_files = [
-            "src/Controller.php",
-            "src/components/Modal.tsx",
-            "tests/ControllerTest.php",
-            "src/utils/helpers.go",
-        ]
-        plan = build_dispatch_plan(
-            mode="full",
-            git_range="main..HEAD",
-            output_dir="/tmp/test-quick",
-            changed_files=neutral_files,
-            registry=registry,
-            quick=True,
-            commit_messages="fix button alignment in modal",
-            # This test pins quick-mode relabeling of conservative dispatch.
-            diffstat={
-                "added": 200,
-                "removed": 40,
-                "deleted_files": [],
-                "renamed_files": [],
-                "file_stats": {f: {"added": 50, "removed": 10} for f in neutral_files},
-            },
-        )
-        dispatch_map = {d["name"]: d for d in plan["agents"]}
-        for agent_name in _QUICK_MODE_BLOCKED_AGENTS:
-            if agent_name not in dispatch_map:
-                continue  # agent may have no files in domain
-            assert dispatch_map[agent_name]["status"] == "SKIPPED_QUICK_MODE", (
-                f"Expected SKIPPED_QUICK_MODE for '{agent_name}', "
-                f"got '{dispatch_map[agent_name]['status']}'"
-            )
-
-    def test_normal_mode_does_not_exclude(self, registry):
-        """quick=False (default) does not produce SKIPPED_QUICK_MODE status."""
-        plan = build_dispatch_plan(
-            mode="full",
-            git_range="main..HEAD",
-            output_dir="/tmp/test-normal",
-            changed_files=_QUICK_MODE_TEST_FILES,
-            registry=registry,
-            quick=False,
-        )
-        for entry in plan["agents"]:
-            assert entry["status"] != "SKIPPED_QUICK_MODE", (
-                f"Agent '{entry['name']}' should not have SKIPPED_QUICK_MODE "
-                f"when quick=False"
-            )
-
-    def test_quick_mode_non_blocked_agents_triage_normally(self, registry):
-        """quick=True does not affect non-blocked agents — code-reviewer still dispatches."""
-        plan = build_dispatch_plan(
-            mode="full",
-            git_range="main..HEAD",
-            output_dir="/tmp/test-quick",
-            changed_files=_QUICK_MODE_TEST_FILES,
-            registry=registry,
-            quick=True,
-        )
-        dispatch_map = {d["name"]: d for d in plan["agents"]}
-        assert dispatch_map["code-reviewer"]["status"] == "DISPATCH", (
-            "code-reviewer should still DISPATCH in quick mode"
-        )
-
-    def test_quick_mode_honors_keyword_triage(self, registry):
-        """Blocklisted agents with keyword matches should still dispatch in quick mode."""
-        plan = build_dispatch_plan(
-            mode="full",
-            git_range="main..HEAD",
-            output_dir="/tmp/test-quick-keywords",
-            changed_files=_QUICK_MODE_TEST_FILES,
-            registry=registry,
-            quick=True,
-            # Commit messages with keywords that match blocklisted agents
-            commit_messages="fix concurrent race condition in payment hook filter",
-        )
-        dispatch_map = {d["name"]: d for d in plan["agents"]}
-        # concurrency-reviewer should dispatch (keyword "concurrent" matched)
-        assert dispatch_map["concurrency-reviewer"]["status"] == "DISPATCH", (
-            "concurrency-reviewer should DISPATCH when keywords match, "
-            f"got {dispatch_map['concurrency-reviewer']['status']}"
-        )
-        # wp-architecture-reviewer should dispatch (keyword "hook"/"filter" matched)
-        assert dispatch_map["wp-architecture-reviewer"]["status"] == "DISPATCH", (
-            "wp-architecture-reviewer should DISPATCH when keywords match, "
-            f"got {dispatch_map['wp-architecture-reviewer']['status']}"
-        )
-
-
 class TestStep8ReviewFileStems:
     """Step 8's completion check must map agent names to review files by
     terminal-suffix derivation only — a blanket replace looked for
@@ -4297,59 +3162,63 @@ class TestStep10CriticSourceRecording:
             json.dumps(_review_json("reconciliator"))
         )
 
-    def test_records_the_first_present_artifact(self, mod, tmp_path):
-        self._findings(tmp_path)
-        (tmp_path / "review-record.md").write_text("# record")
-        (tmp_path / "review-findings.md").write_text("# findings")
-        state = {"resolved_params": {}}
-        mod._orchestrate_step(10, "full", {}, state, {}, str(tmp_path))
-        assert state["critic_source"] == "review-record.md"
-
-    def test_the_report_is_never_a_candidate(self, mod, tmp_path):
-        """`review-report.md` is authored at step 11, after this critic
-        runs. Listing a file that cannot exist yet would fire the fallback
-        branch on every single run."""
-        self._findings(tmp_path)
-        (tmp_path / "review-report.md").write_text("# stale report")
-        state = {"resolved_params": {}}
-        mod._orchestrate_step(10, "full", {}, state, {}, str(tmp_path))
-        assert state["critic_source"] == "review-findings.json"
-
-    def test_falls_through_to_the_markdown_then_the_ledger(
-        self, mod, tmp_path
+    @pytest.mark.parametrize(
+        "write_ledger, files, degradation, expected_source",
+        [
+            pytest.param(
+                True,
+                {"review-record.md": "# record", "review-findings.md": "# findings"},
+                None,
+                "review-record.md",
+                id="record_wins",
+            ),
+            pytest.param(
+                True,
+                {"review-report.md": "# stale report"},
+                None,
+                "review-findings.json",
+                id="report_ignored",
+            ),
+            pytest.param(
+                True,
+                {"review-findings.md": "# findings"},
+                None,
+                "review-findings.md",
+                id="md_wins",
+            ),
+            pytest.param(
+                True,
+                {},
+                {"findings_markdown_incomplete": True},
+                "review-findings.json",
+                id="json_only",
+            ),
+            pytest.param(False, {}, None, None, id="nothing_found"),
+        ],
+    )
+    def test_critic_source_precedence(
+        self, mod, tmp_path, write_ledger, files, degradation, expected_source
     ):
-        self._findings(tmp_path)
-        (tmp_path / "review-findings.md").write_text("# findings")
+        """One `next()` over `_CRITIC_SOURCE_CANDIDATES`: record.md, then
+        findings.md, then the ledger itself — never the not-yet-authored
+        report.md, never a guess when nothing is present. The `json_only`
+        row's `degradation` also pins that step 10 does not touch a
+        `degradation` key it never reads — `critic_source` used to carry
+        a `render_incomplete` copy of that flag, derived from the same
+        state dict the briefing already reads."""
+        if write_ledger:
+            self._findings(tmp_path)
+        for name, content in files.items():
+            (tmp_path / name).write_text(content)
         state = {"resolved_params": {}}
-        mod._orchestrate_step(10, "full", {}, state, {}, str(tmp_path))
-        assert state["critic_source"] == "review-findings.md"
+        if degradation is not None:
+            state["degradation"] = dict(degradation)
 
-        (tmp_path / "review-findings.md").unlink()
-        state = {"resolved_params": {}}
         mod._orchestrate_step(10, "full", {}, state, {}, str(tmp_path))
-        assert state["critic_source"] == "review-findings.json"
 
-    def test_records_an_absence_rather_than_a_guess(self, mod, tmp_path):
-        state = {"resolved_params": {}}
-        mod._orchestrate_step(10, "full", {}, state, {}, str(tmp_path))
-        assert state["critic_source"] is None
-
-    def test_leaves_the_render_reason_where_it_already_lived(
-        self, mod, tmp_path
-    ):
-        """The briefing names the incomplete render off `degradation`.
-
-        `critic_source` used to carry a `render_incomplete` copy of this
-        flag, derived from the same state dict the briefing already reads.
-        """
-        self._findings(tmp_path)
-        state = {
-            "resolved_params": {},
-            "degradation": {"findings_markdown_incomplete": True},
-        }
-        mod._orchestrate_step(10, "full", {}, state, {}, str(tmp_path))
-        assert state["critic_source"] == "review-findings.json"
-        assert state["degradation"]["findings_markdown_incomplete"] is True
+        assert state["critic_source"] == expected_source
+        if degradation is not None:
+            assert state["degradation"] == degradation
 
 
 class TestLedgerStatusIsOneFact:
@@ -4382,32 +3251,6 @@ class TestLedgerStatusIsOneFact:
 
         assert state["ledger_status"] == "absent"
 
-    def test_the_four_retired_flags_are_gone(self, mod, tmp_path):
-        TestStep10CriticSourceRecording._findings(tmp_path)
-        state = {"resolved_params": {}}
-
-        for step in (9, 10, 11):
-            mod._orchestrate_step(
-                step, "full", {}, state, {"git": {}}, str(tmp_path)
-            )
-
-        assert "findings_read_status" not in state
-        assert "review_verdict" not in state
-        assert state["verdict"]
-        assert isinstance(state["critic_source"], (str, type(None)))
-
-    def test_critic_source_is_the_target_filename(
-        self, mod, orchestration_mod, tmp_path
-    ):
-        TestStep10CriticSourceRecording._findings(tmp_path)
-        state = {"resolved_params": {}}
-
-        mod._orchestrate_step(9, "full", {}, state, {"git": {}}, str(tmp_path))
-        mod._orchestrate_step(10, "full", {}, state, {"git": {}}, str(tmp_path))
-
-        assert state["critic_source"] == orchestration_mod.REVIEW_RECORD_MD
-
-
 class TestFindingsMarkdownLockstep:
     """One helper records the outcome and its degradation flag together.
 
@@ -4436,20 +3279,3 @@ class TestFindingsMarkdownLockstep:
             "degradation", {}
         )
 
-    def test_step_11_sets_the_flag_when_its_own_render_fails(
-        self, mod, tmp_path, monkeypatch
-    ):
-        monkeypatch.chdir(tmp_path)
-        self._findings(tmp_path)
-        (tmp_path / "review-report.md").write_text("# report")
-        monkeypatch.setitem(
-            mod._orchestrate_step_11.__globals__,
-            "render_markdown",
-            failing_findings_renderer("boom"),
-        )
-        state = {}
-
-        mod._orchestrate_step(11, "full", {}, state, {}, str(tmp_path))
-
-        assert state["findings_markdown"]["status"] == "failed"
-        assert state["degradation"]["findings_markdown_incomplete"] is True

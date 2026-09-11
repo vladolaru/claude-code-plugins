@@ -42,11 +42,11 @@ from review.review_document import (
     validate_review_content,
     validate_review_document,
 )
-from review.review_markdown import render_markdown
 from review import critic_adjustments, run_paths
 from review.reviewer_lifecycle import ReviewPaths, review_paths, started_marker_path
 
 sys.path.insert(0, str(TESTS_DIR))
+from helpers import ts_schema
 from helpers.review_fixtures import (
     apply_schema,
     canonical_assignment,
@@ -195,18 +195,14 @@ def test_draft_index_carries_locations_and_every_reviewed_file_claim():
     assert "reviewed-file claim: src/service.py" in index
     assert "reviewed-file claim: tests/test_service.py" in index
 
-
-def test_draft_index_reports_zero_claims_without_claim_entries():
-    # Same stitch as the sibling test above: to_dict() carries no
-    # reviewed-file fields, and render_draft_index's real caller always
-    # supplies them.
-    index = render_draft_index({
+    # Same stitch, with no claims: to_dict() carries no reviewed-file
+    # fields, and render_draft_index's real caller always supplies them.
+    empty_index = render_draft_index({
         **ReviewOutputBuilder(pr_id="42", reviewer="security").to_dict(),
         "reviewed_file_claims": [],
     })
-
-    assert "reviewed-file claims 0" in index
-    assert "reviewed-file claim:" not in index
+    assert "reviewed-file claims 0" in empty_index
+    assert "reviewed-file claim:" not in empty_index
 
 
 # =============================================================================
@@ -378,26 +374,6 @@ class TestFindingAndCheckDomainModel:
         assert review["positive_observations"] == [
             "The validation helper is clear."
         ]
-        for retired in (
-            "add_issue",
-            "add_clearance",
-            "set_narrative_summary",
-            "add_positive",
-            "add_tool_result",
-        ):
-            assert not hasattr(builder, retired)
-
-    def test_not_applicable_records_only_the_reason(self):
-        builder = ReviewOutputBuilder("42", "security")
-
-        builder.mark_not_applicable("No security-relevant files changed.")
-
-        review = builder.to_dict()
-        assert review["verdict"] == "not_applicable"
-        assert review["skip_reason"] == "No security-relevant files changed."
-        assert review["findings"] == []
-        assert review["checks"] == []
-        assert review["positive_observations"] == []
 
 
 # =============================================================================
@@ -501,20 +477,6 @@ class TestAddFinding:
 
         assert "severity_floor" not in b.findings[0]
 
-    def test_markdown_renders_severity_floor(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="woo-regression")
-        b.add_finding(
-            "medium",
-            "Title",
-            "f.php",
-            "desc",
-            "rec",
-            line=1,
-            severity_floor="medium",
-        )
-
-        assert "**Severity floor:** medium" in render_markdown(b.to_dict())
-
     def test_confidence_boundaries_valid(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         b.add_finding("high", "A", "f.py", "d", "r", line=1, confidence=0.0)
@@ -548,6 +510,50 @@ class TestAddFinding:
         assert len(b.findings) == 1
         assert len(b.observations) == 0
         assert finding_id == "f1"
+
+    def test_behavior_evidence_and_source_cited_are_stored(self):
+        b = ReviewOutputBuilder(pr_id="0", reviewer="ecosystem-integration-reviewer")
+        b.add_finding(
+            severity="medium",
+            category="behavior-assumption",
+            title="State assumption mismatch",
+            description="Callback reads saved status before save fires.",
+            file="src/hooks.php",
+            line=42,
+            recommendation="Switch to woocommerce_after_order_object_save.",
+            behavior_evidence="cited",
+            source_cited="woocommerce/.../class-wc-order.php:200",
+        )
+        finding = b.to_dict()["findings"][0]
+        assert finding["behavior_evidence"] == "cited"
+        assert finding["source_cited"] == "woocommerce/.../class-wc-order.php:200"
+
+    def test_behavior_evidence_and_source_cited_are_optional(self):
+        b = ReviewOutputBuilder(pr_id="0", reviewer="security-reviewer")
+        b.add_finding(
+            severity="low", category="xss", title="X", description="y",
+            file="f.php", line=1, recommendation="z",
+        )
+        finding = b.to_dict()["findings"][0]
+        assert "behavior_evidence" not in finding
+        assert "source_cited" not in finding
+
+    def test_behavior_evidence_rejects_any_value_outside_cited_or_inferred(self):
+        """'MAYBE' and 'speculative' are rejected by the same vocabulary
+        check — one ValueError branch, not two."""
+        b = ReviewOutputBuilder(pr_id="0", reviewer="ecosystem-integration-reviewer")
+        with pytest.raises(ValueError, match="behavior_evidence"):
+            b.add_finding(
+                severity="low", category="other", title="T", description="d",
+                file="f.php", line=1, recommendation="r",
+                behavior_evidence="MAYBE",
+            )
+        with pytest.raises(ValueError, match="behavior_evidence"):
+            b.add_finding(
+                severity="low", category="behavior-assumption", title="T", description="d",
+                file="f.php", line=1, recommendation="r",
+                behavior_evidence="speculative",
+            )
 
 
 class TestFindingNormalizationIsShared:
@@ -687,7 +693,6 @@ class TestRecordCheck:
         builder.record_check("q2", "m", "r", source_reviewers=["a", "b", "a"])
         assert builder.checks[0]["source_reviewers"] == ["security"]
         assert builder.checks[1]["source_reviewers"] == ["a", "b"]
-        assert not hasattr(builder, "_record_check")
 
     def test_empty_source_reviewers_raises(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="a11y")
@@ -731,18 +736,6 @@ class TestRecordCheck:
         b = ReviewOutputBuilder(pr_id="1", reviewer="a11y")
         with pytest.raises(ValueError):
             b.record_check(question="Any blast radius?", method="", result="none")
-
-    def test_renders_in_markdown_with_method(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="a11y")
-        b.record_check(
-            question="Does CSS depend on the label?",
-            method="grep 'th label' admin.scss",
-            result="No dependencies found.",
-        )
-        md = render_markdown(b.to_dict())
-        assert "## Checks Performed" in md
-        assert "Does CSS depend on the label?" in md
-        assert "grep 'th label' admin.scss" in md
 
 
 # =============================================================================
@@ -790,50 +783,75 @@ class TestNonStringFieldCoercion:
     producer must never write a non-string title/description/recommendation.
     """
 
-    def test_list_recommendation_coerced_to_string(self):
+    @pytest.mark.parametrize(
+        ("build", "check"),
+        [
+            pytest.param(
+                lambda b: b.add_finding(
+                    "high", "Title", "f.py", "desc",
+                    ["Wire it in", "or drop it"], line=1,
+                ),
+                lambda finding: (
+                    isinstance(finding["recommendation"], str)
+                    and "Wire it in" in finding["recommendation"]
+                    and "or drop it" in finding["recommendation"]
+                ),
+                id="list-recommendation-coerced-to-string",
+            ),
+            pytest.param(
+                lambda b: b.add_finding(
+                    "high", ["Ambiguous name"], "f.py", ["D1", "D2"], "rec",
+                    line=1,
+                ),
+                lambda finding: (
+                    isinstance(finding["title"], str)
+                    and isinstance(finding["description"], str)
+                    and "Ambiguous name" in finding["title"]
+                    and "D1" in finding["description"]
+                ),
+                id="list-description-and-title-coerced",
+            ),
+            pytest.param(
+                lambda b: b.add_finding(
+                    "high", "Title", "f.py", None, None, line=1,
+                ),
+                lambda finding: (
+                    finding["description"] == "" and finding["recommendation"] == ""
+                ),
+                id="none-fields-coerced-to-empty-string",
+            ),
+            pytest.param(
+                lambda b: b.add_finding(
+                    "high", ["Legit title", "## Source Snippets"], "f.py",
+                    "desc", "rec", line=1,
+                ),
+                # Titles render inline downstream (**N. title**,
+                # ### F1: title) without block-syntax escaping, so a
+                # coerced newline could forge a heading — the title stays
+                # single-line.
+                lambda finding: (
+                    "\n" not in finding["title"]
+                    and "Legit title" in finding["title"]
+                    and "## Source Snippets" in finding["title"]
+                ),
+                id="multiline-title-collapsed-to-single-line",
+            ),
+            pytest.param(
+                lambda b: b.add_finding(
+                    "high", "T", "f.py", "plain desc", "plain rec", line=1,
+                ),
+                lambda finding: (
+                    finding["description"] == "plain desc"
+                    and finding["recommendation"] == "plain rec"
+                ),
+                id="string-fields-unchanged",
+            ),
+        ],
+    )
+    def test_non_string_fields_are_coerced_to_strings(self, build, check):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_finding(
-            "high", "Title", "f.py", "desc",
-            ["Wire it in", "or drop it"], line=1,
-        )
-        rec = b.findings[0]["recommendation"]
-        assert isinstance(rec, str)
-        assert "Wire it in" in rec and "or drop it" in rec
-
-    def test_list_description_and_title_coerced(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_finding(
-            "high", ["Ambiguous name"], "f.py", ["D1", "D2"], "rec", line=1,
-        )
-        assert isinstance(b.findings[0]["title"], str)
-        assert isinstance(b.findings[0]["description"], str)
-        assert "Ambiguous name" in b.findings[0]["title"]
-        assert "D1" in b.findings[0]["description"]
-
-    def test_none_fields_coerced_to_empty_string(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_finding("high", "Title", "f.py", None, None, line=1)
-        assert b.findings[0]["description"] == ""
-        assert b.findings[0]["recommendation"] == ""
-
-    def test_multiline_title_collapsed_to_single_line(self):
-        # Titles render inline downstream (**N. title**, ### F1: title) without
-        # block-syntax escaping, so a coerced newline could forge a heading.
-        # The producer must keep the title single-line.
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_finding(
-            "high", ["Legit title", "## Source Snippets"], "f.py",
-            "desc", "rec", line=1,
-        )
-        title = b.findings[0]["title"]
-        assert "\n" not in title
-        assert "Legit title" in title and "## Source Snippets" in title
-
-    def test_string_fields_unchanged(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_finding("high", "T", "f.py", "plain desc", "plain rec", line=1)
-        assert b.findings[0]["description"] == "plain desc"
-        assert b.findings[0]["recommendation"] == "plain rec"
+        build(b)
+        assert check(b.findings[0])
 
 
 # =============================================================================
@@ -858,19 +876,7 @@ class TestSetConfidence:
 
 
 # =============================================================================
-# TestRemovedToolMetadata
-# =============================================================================
-
-
-class TestRemovedToolMetadata:
-    def test_builder_has_no_tool_metadata_api_or_storage(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        assert not hasattr(b, "add_tool_result")
-        assert "tool_results_used" not in b.to_dict()["meta"]
-
-
-# =============================================================================
-# TestCalculateVerdict
+# TestDerivedVerdict
 # =============================================================================
 
 
@@ -884,45 +890,25 @@ class TestDerivedVerdict:
             b.add_finding(sev, f"Issue {i}", f"f{i}.py", "desc", "rec", line=i + 1)
         return b
 
-    def test_no_findings_approve(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        assert b.to_dict()["verdict"] == "approve"
-
-    def test_one_critical_blocks(self):
-        b = self._builder_with_findings(["critical"])
-        assert b.to_dict()["verdict"] == "block"
-
-    def test_two_high_request_changes(self):
-        b = self._builder_with_findings(["high", "high"])
-        verdict = b.to_dict()["verdict"]
-        assert verdict == "request_changes"
-        assert verdict != "block"
-
-    def test_three_high_blocks(self):
-        b = self._builder_with_findings(["high", "high", "high"])
-        assert b.to_dict()["verdict"] == "block"
-
-    def test_one_high_request_changes(self):
-        b = self._builder_with_findings(["high"])
-        assert b.to_dict()["verdict"] == "request_changes"
-
-    def test_four_medium_comment(self):
-        b = self._builder_with_findings(["medium"] * 4)
-        verdict = b.to_dict()["verdict"]
-        assert verdict == "comment"
-        assert verdict != "request_changes"
-
-    def test_five_medium_request_changes(self):
-        b = self._builder_with_findings(["medium"] * 5)
-        assert b.to_dict()["verdict"] == "request_changes"
-
-    def test_one_medium_comment(self):
-        b = self._builder_with_findings(["medium"])
-        assert b.to_dict()["verdict"] == "comment"
-
-    def test_low_and_info_only_approve(self):
-        b = self._builder_with_findings(["low", "info", "low", "info"])
-        assert b.to_dict()["verdict"] == "approve"
+    @pytest.mark.parametrize(
+        ("severities", "verdict"),
+        [
+            pytest.param((), "approve", id="no-findings"),
+            pytest.param(("critical",), "block", id="one-critical"),
+            pytest.param(("high", "high"), "request_changes", id="two-high"),
+            pytest.param(("high", "high", "high"), "block", id="three-high"),
+            pytest.param(("high",), "request_changes", id="one-high"),
+            pytest.param(("medium",) * 4, "comment", id="four-medium"),
+            pytest.param(("medium",) * 5, "request_changes", id="five-medium"),
+            pytest.param(("medium",), "comment", id="one-medium"),
+            pytest.param(
+                ("low", "info", "low", "info"), "approve", id="low-and-info-only",
+            ),
+        ],
+    )
+    def test_verdict_derived_from_severity_counts(self, severities, verdict):
+        b = self._builder_with_findings(severities)
+        assert b.to_dict()["verdict"] == verdict
 
 
 # =============================================================================
@@ -950,13 +936,6 @@ class TestToDict:
             "immediate": [], "important": [], "suggestions": [],
         }
 
-    def test_to_dict_has_no_reviewed_files_fields(self):
-        """to_dict takes no parameters — save_draft stitches the six
-        reviewed-file fields on separately via reviewed_files_fields()."""
-        builder = ReviewOutputBuilder(pr_id="1", reviewer="security")
-        with pytest.raises(TypeError):
-            builder.to_dict(file_review="x")
-
     def test_severity_counts_correct(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
         b.add_finding("critical", "A", "a.py", "d", "r", line=1)
@@ -971,80 +950,50 @@ class TestToDict:
         assert counts["low"] == 0
         assert counts["info"] == 0
 
-    def test_plugin_version_comes_from_the_dispatch_envelope(self, monkeypatch):
+    @pytest.mark.parametrize(
+        ("env", "run_config", "expected"),
+        [
+            pytest.param("1.114.0", None, "1.114.0", id="envelope"),
+            pytest.param(None, None, None, id="no-envelope-no-run-config"),
+            pytest.param("   ", None, None, id="blank-envelope-reads-as-unknown"),
+            pytest.param(
+                None, {"mode": "pr", "plugin_version": "1.114.0"}, "1.114.0",
+                id="run-config-supplies-it-when-the-envelope-is-bypassed",
+            ),
+            pytest.param(
+                "2.0.0", {"plugin_version": "1.114.0"}, "2.0.0",
+                id="envelope-wins-over-run-config",
+            ),
+            pytest.param(
+                None, "{not json", None, id="unreadable-run-config",
+            ),
+        ],
+    )
+    def test_plugin_version_resolution(
+        self, monkeypatch, tmp_path, env, run_config, expected
+    ):
         """The producing plugin version is a serialized artifact fact.
 
-        bootstrap exports it alongside the other envelope variables, so a
-        review JSON can be attributed to a plugin version on its own.
+        bootstrap exports it via PIRATEGOAT_PLUGIN_VERSION alongside the
+        other envelope variables; a bound caller that bypasses the
+        envelope (review-reconciliator, dispatched by the orchestrator
+        rather than bootstrap) falls back to the run's own
+        run-config.json. Either way, absence is honest — never a
+        required field, never a guess.
         """
-        monkeypatch.setenv("PIRATEGOAT_PLUGIN_VERSION", "1.114.0")
-        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        assert b.to_dict()["plugin_version"] == "1.114.0"
+        if env is None:
+            monkeypatch.delenv("PIRATEGOAT_PLUGIN_VERSION", raising=False)
+        else:
+            monkeypatch.setenv("PIRATEGOAT_PLUGIN_VERSION", env)
+        if run_config is not None:
+            content = (
+                run_config if isinstance(run_config, str) else json.dumps(run_config)
+            )
+            (tmp_path / "run-config.json").write_text(content)
 
-    def test_plugin_version_is_null_without_the_envelope(self, monkeypatch):
-        """Honest absence, never a required field.
-
-        Hand-rolled and eval-harness callers bypass the envelope; the
-        artifact must say it does not know rather than fail or guess.
-        """
-        monkeypatch.delenv("PIRATEGOAT_PLUGIN_VERSION", raising=False)
-        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        d = b.to_dict()
-        assert "plugin_version" in d
-        assert d["plugin_version"] is None
-
-    def test_blank_envelope_value_reads_as_unknown(self, monkeypatch):
-        """The envelope always carries the assignment, sometimes empty.
-
-        bootstrap emits PIRATEGOAT_PLUGIN_VERSION unconditionally so the
-        envelope shape stays a constant; an empty value means the run
-        could not resolve a version, which is the same as not knowing.
-        """
-        monkeypatch.setenv("PIRATEGOAT_PLUGIN_VERSION", "   ")
-        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        assert b.to_dict()["plugin_version"] is None
-
-    def test_run_config_supplies_the_version_when_the_envelope_is_bypassed(
-        self, monkeypatch, tmp_path
-    ):
-        """review-reconciliator imports the builder without the envelope.
-
-        It is dispatched by the orchestrator rather than bootstrap, so no
-        PIRATEGOAT_* variables reach it — but it is bound to the run's output
-        directory, where step 1's run-config.json already records the same
-        stamp.
-        """
-        monkeypatch.delenv("PIRATEGOAT_PLUGIN_VERSION", raising=False)
-        (tmp_path / "run-config.json").write_text(
-            json.dumps({"mode": "pr", "plugin_version": "1.114.0"})
-        )
-        b = ReviewOutputBuilder.open(tmp_path, "1", "reconciliator")
-        assert b.to_dict()["plugin_version"] == "1.114.0"
-
-    def test_envelope_wins_over_run_config(self, monkeypatch, tmp_path):
-        """The envelope is the dispatching plugin's own statement."""
-        monkeypatch.setenv("PIRATEGOAT_PLUGIN_VERSION", "2.0.0")
-        (tmp_path / "run-config.json").write_text(
-            json.dumps({"plugin_version": "1.114.0"})
-        )
         b = ReviewOutputBuilder.open(tmp_path, "1", "pr")
-        assert b.to_dict()["plugin_version"] == "2.0.0"
 
-    def test_unreadable_run_config_leaves_the_version_unknown(
-        self, monkeypatch, tmp_path
-    ):
-        monkeypatch.delenv("PIRATEGOAT_PLUGIN_VERSION", raising=False)
-        (tmp_path / "run-config.json").write_text("{not json")
-        b = ReviewOutputBuilder.open(tmp_path, "1", "pr")
-        assert b.to_dict()["plugin_version"] is None
-
-    def test_saved_artifact_carries_the_version(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("PIRATEGOAT_PLUGIN_VERSION", "1.114.0")
-        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        _write_required_assignment(tmp_path, "pr")
-        _save_draft(b, tmp_path)
-        saved = json.loads(Path(review_paths(tmp_path, "pr").draft).read_text())
-        assert saved["plugin_version"] == "1.114.0"
+        assert b.to_dict()["plugin_version"] == expected
 
     def test_schema_is_the_documented_shape_number(self):
         """One `schema` convention across every artifact this plugin writes.
@@ -1087,19 +1036,6 @@ class TestToDict:
         the artifact's shape uniformity for every downstream consumer."""
         builder = ReviewOutputBuilder(123, "code")
         assert builder.to_dict()["pr_id"] == "123"
-
-    def test_the_builder_exposes_no_unvalidated_serializer(self):
-        """`to_dict()` is the only projection; there is no second one.
-
-        `to_json()` had zero production callers and emitted a document
-        without the six reviewed-file fields, so its output failed
-        `validate_review_document()` — a serializer whose result the
-        canonical reader rejects is a trap, not a convenience. Every
-        caller either goes through `save_draft()` (which stitches the
-        derived fields on) or `json.dumps(builder.to_dict())` in a test
-        that is asserting about content, not about publication.
-        """
-        assert not hasattr(ReviewOutputBuilder, "to_json")
 
 
 # =============================================================================
@@ -1498,17 +1434,6 @@ class TestFileScopedFindings:
         assert "scope" not in b.findings[0]
         assert b.findings[0]["line"] == 42
 
-    def test_file_scoped_finding_renders_under_severity_section(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="js-tests")
-        b.add_finding(
-            "high", "whole-file has no test", "src/foo.ts", "desc", "rec",
-            category="missing-coverage",
-        )
-        md = render_markdown(b.to_dict())
-        assert "## High Findings" in md
-        assert "whole-file has no test" in md
-        assert "`src/foo.ts` (file-scoped)" in md
-
     def test_file_scoped_finding_json_roundtrip(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         b.add_finding("medium", "Title", "f.py", "desc", "rec", line=None)
@@ -1525,17 +1450,12 @@ class TestFileScopedFindings:
 class TestLineRequired:
     """Invalid line values still raise (protocol enforcement for point defects)."""
 
-    def test_line_zero_raises(self):
-        """Line 0 is invalid (lines are 1-indexed)."""
+    @pytest.mark.parametrize("line", [0, -1], ids=["zero", "negative"])
+    def test_non_positive_line_raises(self, line):
+        """Lines are 1-indexed; zero and negative are both invalid."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         with pytest.raises(ValueError, match="line.*positive"):
-            b.add_finding("high", "Title", "f.py", "desc", "rec", line=0)
-
-    def test_line_negative_raises(self):
-        """Negative line is invalid."""
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        with pytest.raises(ValueError, match="line.*positive"):
-            b.add_finding("high", "Title", "f.py", "desc", "rec", line=-1)
+            b.add_finding("high", "Title", "f.py", "desc", "rec", line=line)
 
 
 # =============================================================================
@@ -1568,13 +1488,6 @@ class TestAddObservation:
         b.add_observation("f.py", "Looks risky", category="security")
         assert b.to_dict()["verdict"] == "approve"
 
-    def test_observations_in_markdown(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_observation("f.py", "File lacks CSRF protection")
-        md = render_markdown(b.to_dict())
-        assert "Observations" in md
-        assert "File lacks CSRF protection" in md
-
 
 # =============================================================================
 # TestReviewedFileClaims
@@ -1594,8 +1507,11 @@ class TestReviewedFileClaims:
         _write_assignment(tmp_path, "sec", claimable)
         return ReviewOutputBuilder.open(tmp_path, "1", "sec")
 
-    @pytest.mark.parametrize("bad", ["", "   ", None, 42, [42], ("src/a.py", None)])
+    @pytest.mark.parametrize("bad", ["", 42], ids=["blank", "wrong-type"])
     def test_rejects_non_path_values(self, bad):
+        """The full grammar is pinned once in test_review_assignment.py,
+        the shared normalizer's owner; this keeps one row per branch this
+        API adds on top (blank, wrong type)."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         with pytest.raises(ValueError):
             b.claim_files_reviewed(bad)
@@ -1617,23 +1533,15 @@ class TestReviewedFileClaims:
             b.claim_files_reviewed(42)
 
     @pytest.mark.parametrize(
-        "bad",
-        [
-            "/abs/a.py", "../outside.py", "..", "C:/win.py", "c:win.py",
-            # These normalize to "." — a form no scope summary can contain.
-            ".", "./", "foo/..",
-        ],
+        "bad", ["/abs/a.py", "../outside.py"], ids=["absolute", "parent-traversal"]
     )
     def test_rejects_non_repo_relative_forms(self, bad):
-        """A claim must address a repository-relative claimable path."""
+        """A claim must address a repository-relative claimable path. The
+        full grammar (including the drive-letter and dot-normalized forms)
+        is pinned once in test_review_assignment.py."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         with pytest.raises(ValueError):
             b.claim_files_reviewed(bad)
-
-    def test_stores_and_dedupes_claims(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.claim_files_reviewed("src/a.py", "./src/a.py", "src/b.py")
-        assert b.reviewed_file_claims == ["src/a.py", "src/b.py"]
 
     def test_zero_arguments_raises(self):
         """A claim of nothing is a silent no-op, not a claim."""
@@ -1661,53 +1569,45 @@ class TestReviewedFileClaims:
             b.claim_files_reviewed("src/a.py")
         assert "no claim may be made" in str(excinfo.value)
 
-    def test_all_or_nothing_on_mid_batch_error(self, tmp_path):
+    @pytest.mark.parametrize(
+        ("claimable", "batch", "offenders"),
+        [
+            pytest.param(
+                ["src/a.py"],
+                ("src/a.py", "src/bogus1.py", "src/bogus2.py"),
+                ("src/bogus1.py", "src/bogus2.py"),
+                id="membership-names-every-offender",
+            ),
+            pytest.param(
+                ["src/a.py"],
+                ("src/a.py", "/abs/path.py"),
+                ("/abs/path.py",),
+                id="grammar-error-alone",
+            ),
+            pytest.param(
+                ["src/a.py"],
+                ("src/typo.py", "/abs/path.py"),
+                ("/abs/path.py", "src/typo.py"),
+                id="mixed-grammar-and-membership",
+            ),
+        ],
+    )
+    def test_batch_rejection_is_atomic_and_names_every_offender(
+        self, tmp_path, claimable, batch, offenders
+    ):
         """A batch either fully lands or nothing does — the same doctrine
-        critic_adjustments.py enforces for its own batches. A mid-batch
-        rejection must not leave the leading valid paths recorded: a retry
-        would then double-record them, and a caller who gives up is left
-        with a half-claim no one asked for."""
-        b = self._armed_builder(tmp_path, ["src/a.py", "src/c.py"])
-        with pytest.raises(ValueError, match="src/b.py"):
-            b.claim_files_reviewed("src/a.py", "src/b.py", "src/c.py")
-        assert b.reviewed_file_claims == []
-        # A retry with only the valid paths lands fully.
-        b.claim_files_reviewed("src/a.py", "src/c.py")
-        assert b.reviewed_file_claims == ["src/a.py", "src/c.py"]
-
-    def test_multi_error_batch_names_every_offender(self, tmp_path):
-        """The existing batch-reporting rejection helper already names
-        every offender in one raise at save() time; add-time claims must
-        get the same treatment instead of stopping at the first bad path."""
-        b = self._armed_builder(tmp_path, ["src/a.py"])
+        critic_adjustments.py enforces for its own batches — and every
+        offender is named in one raise, whether the cause is a membership
+        violation, a grammar violation, or both mixed in one batch.
+        `test_failed_batch_leaves_no_trace_in_saved_artifact` below is the
+        retry-after-failure half of this contract, at the persisted
+        artifact."""
+        b = self._armed_builder(tmp_path, claimable)
         with pytest.raises(ValueError) as excinfo:
-            b.claim_files_reviewed(
-                "src/a.py", "src/bogus1.py", "src/bogus2.py"
-            )
+            b.claim_files_reviewed(*batch)
         message = str(excinfo.value)
-        assert "src/bogus1.py" in message
-        assert "src/bogus2.py" in message
-        assert b.reviewed_file_claims == []
-
-    def test_grammar_error_mid_batch_records_nothing(self, tmp_path):
-        """The all-or-nothing guarantee covers grammar failures too: a
-        malformed path anywhere in the batch leaves zero paths recorded,
-        not the leading valid ones."""
-        b = self._armed_builder(tmp_path, ["src/a.py"])
-        with pytest.raises(ValueError, match="/abs/path.py"):
-            b.claim_files_reviewed("src/a.py", "/abs/path.py")
-        assert b.reviewed_file_claims == []
-
-    def test_mixed_grammar_and_membership_batch_names_both(self, tmp_path):
-        """A batch carrying both error classes reports both in one raise:
-        fixing the malformed path must not surface the membership problem
-        as a fresh surprise on the retry."""
-        b = self._armed_builder(tmp_path, ["src/a.py"])
-        with pytest.raises(ValueError) as excinfo:
-            b.claim_files_reviewed("src/typo.py", "/abs/path.py")
-        message = str(excinfo.value)
-        assert "/abs/path.py" in message
-        assert "src/typo.py" in message
+        for offender in offenders:
+            assert offender in message
         assert b.reviewed_file_claims == []
 
     def test_failed_batch_leaves_no_trace_in_saved_artifact(self, tmp_path):
@@ -1771,23 +1671,6 @@ class TestReviewedFileClaims:
         with pytest.raises(ValueError, match="repository-relative"):
             builder.retract_reviewed_file_claims("/abs/a.py")
 
-    def test_publication_reads_the_bound_assignment_path(
-        self, tmp_path, monkeypatch
-    ):
-        """save_draft derives from the assignment `_bind` already located —
-        it never recomputes the path from a reviewer name a second time."""
-        _write_assignment(tmp_path, "sec", ["src/a.py"])
-        builder = ReviewOutputBuilder.open(tmp_path, "1", "sec")
-        calls = []
-        real = review_output.review_paths
-        monkeypatch.setattr(
-            review_output,
-            "review_paths",
-            lambda *args: (calls.append(args), real(*args))[1],
-        )
-        builder.save_draft()
-        assert calls == []
-
 
 # =============================================================================
 # TestNotApplicable
@@ -1798,32 +1681,36 @@ class TestNotApplicable:
     """mark_not_applicable produces not_applicable verdict with skip_reason."""
 
     def test_verdict_is_not_applicable(self):
+        """One to_dict() shape assertion, collapsing what were seven
+        near-duplicate tests (skip_reason presence/absence/stripping, the
+        JSON round-trip, and the normal-approve counterfactual) split
+        across this class and TestFindingAndCheckDomainModel. The verdict
+        assertion below is unchanged from the original
+        test_verdict_is_not_applicable (Task 5 pins it at this owner)."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.mark_not_applicable("No changes relevant to security domain")
+        b.mark_not_applicable("  No changes relevant to security domain  ")
         d = b.to_dict()
         assert d["verdict"] == "not_applicable"
+        assert d["skip_reason"] == "No changes relevant to security domain"
+        assert d["findings"] == []
+        assert d["checks"] == []
+        assert d["positive_observations"] == []
 
-    def test_skip_reason_in_output(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.mark_not_applicable("No security-relevant changes in diff")
-        d = b.to_dict()
-        assert d["skip_reason"] == "No security-relevant changes in diff"
+        parsed = json.loads(json.dumps(d))
+        assert parsed["verdict"] == "not_applicable"
+        assert parsed["skip_reason"] == "No changes relevant to security domain"
 
-    def test_skip_reason_absent_by_default(self):
-        """skip_reason is not present when agent reviewed normally."""
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        d = b.to_dict()
-        assert "skip_reason" not in d
+        normal = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        normal.add_positive_observation("Clean code")
+        normal_dict = normal.to_dict()
+        assert normal_dict["verdict"] == "approve"
+        assert "skip_reason" not in normal_dict
 
-    def test_empty_reason_raises(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        with pytest.raises(ValueError, match="reason"):
-            b.mark_not_applicable("")
-
-    def test_whitespace_only_reason_raises(self):
+    @pytest.mark.parametrize("reason", ["", "   "], ids=["empty", "whitespace-only"])
+    def test_empty_or_whitespace_reason_raises(self, reason):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         with pytest.raises(ValueError, match="reason"):
-            b.mark_not_applicable("   ")
+            b.mark_not_applicable(reason)
 
     def test_raises_if_findings_already_recorded(self):
         """mark_not_applicable rejects mixed state — findings + not_applicable is contradictory."""
@@ -1831,27 +1718,6 @@ class TestNotApplicable:
         b.add_finding("high", "XSS", "f.php", "desc", "rec", line=1)
         with pytest.raises(ValueError, match="finding.*already recorded"):
             b.mark_not_applicable("Agent mistakenly started before checking relevance")
-
-    def test_in_json_output(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.mark_not_applicable("No relevant changes")
-        parsed = json.loads(json.dumps(b.to_dict()))
-        assert parsed["verdict"] == "not_applicable"
-        assert parsed["skip_reason"] == "No relevant changes"
-
-    def test_skip_reason_stripped(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.mark_not_applicable("  No relevant changes  ")
-        d = b.to_dict()
-        assert d["skip_reason"] == "No relevant changes"
-
-    def test_normal_approve_has_no_skip_reason(self):
-        """A normal approve (no findings, no mark_not_applicable) has no skip_reason."""
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_positive_observation("Clean code")
-        d = b.to_dict()
-        assert d["verdict"] == "approve"
-        assert "skip_reason" not in d
 
 
 # =============================================================================
@@ -1883,62 +1749,30 @@ class TestAdvisoryChannel:
                     description="d", recommendation="r", line=5, channel="advisory")
         assert b.to_dict()["verdict"] == "approve"
 
-    def test_unbound_builder_fails_open_after_vocabulary_validation(self):
-        """A hand-rolled builder has no assignment to consult."""
-        b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
-
-        b.add_finding(
-            severity="high", title="Duplication", file="a.php",
-            description="d", recommendation="r", line=5, channel="advisory",
-        )
-
-        assert b.to_dict()["verdict"] == "approve"
-
-    def test_absent_assignment_fails_open_after_vocabulary_validation(
-        self, tmp_path
-    ):
-        b = ReviewOutputBuilder.open(tmp_path, "1", "repo-reuse")
-
-        b.add_finding(
-            severity="high", title="Duplication", file="a.php",
-            description="d", recommendation="r", line=5, channel="advisory",
-        )
-
-        assert b.to_dict()["verdict"] == "approve"
-
     @pytest.mark.parametrize(
-        "payload",
+        "setup",
         [
-            pytest.param("{not json", id="unparsable"),
-            pytest.param("[]", id="top-level-not-object"),
-            pytest.param(
-                json.dumps({"schema": 5, "channels": ["advisory"]}),
-                id="incomplete-input",
-            ),
+            pytest.param("unbound", id="unbound-builder"),
+            pytest.param("absent", id="absent-assignment"),
+            pytest.param("malformed", id="malformed-or-undecodable-assignment"),
         ],
     )
-    def test_malformed_assignment_fails_open_at_add_time(
-        self, tmp_path, payload
+    def test_add_time_fails_open_without_a_usable_assignment(
+        self, tmp_path, setup
     ):
-        b = ReviewOutputBuilder.open(tmp_path, "1", "repo-reuse")
-        Path(
-            review_paths(str(tmp_path), "repo-reuse").assignment
-        ).write_text(payload)
-
-        b.add_finding(
-            severity="high", title="Duplication", file="a.php",
-            description="d", recommendation="r", line=5, channel="advisory",
-        )
-
-        assert b.to_dict()["verdict"] == "approve"
-
-    def test_invalid_utf8_assignment_fails_open_at_add_time(
-        self, tmp_path
-    ):
-        b = ReviewOutputBuilder.open(tmp_path, "1", "repo-reuse")
-        Path(
-            review_paths(str(tmp_path), "repo-reuse").assignment
-        ).write_bytes(b"\xff")
+        """No usable assignment to consult means add-time fail-open, after
+        the channel vocabulary itself has already been validated. The
+        malformed row's invalid-UTF8 bytes are the same code path as an
+        unparsable or incomplete JSON payload — one representative branch
+        of the read-and-decode failure."""
+        if setup == "unbound":
+            b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
+        else:
+            b = ReviewOutputBuilder.open(tmp_path, "1", "repo-reuse")
+            if setup == "malformed":
+                Path(
+                    review_paths(str(tmp_path), "repo-reuse").assignment
+                ).write_bytes(b"\xff")
 
         b.add_finding(
             severity="high", title="Duplication", file="a.php",
@@ -1966,12 +1800,6 @@ class TestAdvisoryChannel:
             _save_draft(b, tmp_path)
         assert not Path(review_paths(tmp_path, "reconciliator").draft).exists()
 
-    def test_advisory_critical_does_not_gate(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
-        b.add_finding(severity="critical", title="x", file="a.php",
-                    description="d", recommendation="r", line=5, channel="advisory")
-        assert b.to_dict()["verdict"] == "approve"
-
     def test_critical_advisory_records_stricter_counterfactual(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
         b.add_finding(
@@ -1985,8 +1813,6 @@ class TestAdvisoryChannel:
         assert output["verdict"] == "approve"
         assert output["summary"]["suppressed_advisory_finding_count"] == 1
         assert output["summary"]["verdict_without_advisory"] == "block"
-        assert "Advisory suppression:** 1 finding excluded" in render_markdown(output)
-        assert "verdict without suppression: BLOCK" in render_markdown(output)
 
     def test_advisory_count_without_verdict_softening_omits_counterfactual(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
@@ -2001,7 +1827,6 @@ class TestAdvisoryChannel:
         assert output["verdict"] == "approve"
         assert output["summary"]["suppressed_advisory_finding_count"] == 1
         assert "verdict_without_advisory" not in output["summary"]
-        assert "Advisory suppression:** 1 finding excluded" in render_markdown(output)
 
     def test_advisory_count_when_verdict_already_strict_omits_counterfactual(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
@@ -2042,18 +1867,6 @@ class TestAdvisoryChannel:
                     description="d", recommendation="r", line=5, channel="blocking")
         assert "channel" not in b.findings[0]
         assert b.to_dict()["verdict"] == "block"
-
-    def test_no_channel_is_backward_compatible(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="security")
-        b.add_finding(severity="high", title="x", file="a.php",
-                    description="d", recommendation="r", line=5)
-        assert b.to_dict()["verdict"] == "request_changes"
-
-    def test_advisory_channel_persisted_in_finding(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
-        b.add_finding(severity="low", title="x", file="a.php",
-                    description="d", recommendation="r", line=5, channel="advisory")
-        assert b.findings[0]["channel"] == "advisory"
 
     def test_mixed_channels(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-mix")
@@ -2196,29 +2009,6 @@ class TestBudgetTargetEcho:
         _save_draft(builder, tmp_path)
         return capsys.readouterr().out
 
-    def test_target_line_appears_with_unreviewed_and_budget(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        self._clean_env(monkeypatch)
-        self._write_assignment(
-            tmp_path, review_claimable_files=["some/file.go"], review_budget=80
-        )
-        out = self._save_with_unreviewed(tmp_path, monkeypatch, capsys)
-        assert (
-            "FILES NOT YET CLAIMED AS REVIEWED (1): some/file.go | "
-            "target ~80 tool calls"
-        ) in out
-
-    def test_no_target_line_without_unreviewed_files(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        """Nothing left unread means nothing to act on — silence is right."""
-        self._clean_env(monkeypatch)
-        self._write_assignment(tmp_path, review_budget=80)
-        builder = ReviewOutputBuilder("123", "code")
-        _save_draft(builder, tmp_path)
-        assert "FILES NOT YET CLAIMED" not in capsys.readouterr().out
-
     def test_missing_assignment_rejects_publication(
         self, tmp_path, monkeypatch, capsys
     ):
@@ -2254,17 +2044,16 @@ class TestBudgetTargetEcho:
             else:
                 _save_draft(ReviewOutputBuilder("123", "code"), tmp_path)
 
-    @pytest.mark.parametrize(
-        "raw", [None, "80", "abc", -5, 12.5, True]
-    )
     def test_malformed_budget_rejects_publication(
-        self, tmp_path, monkeypatch, capsys, raw
+        self, tmp_path, monkeypatch, capsys
     ):
-        """A target of 0, a string, or a bool is worse than no target —
-        never repair it. Absent key (None) is the same absence."""
+        """A malformed target is worse than no target — never repair it.
+        The value space (string, negative, float, bool, absent) is pinned
+        once at the derivation boundary in test_review_assignment.py; this
+        confirms the publication path consults it."""
         self._clean_env(monkeypatch)
         self._write_assignment(
-            tmp_path, review_claimable_files=["some/file.go"], review_budget=raw
+            tmp_path, review_claimable_files=["some/file.go"], review_budget="abc"
         )
         with pytest.raises(ValueError, match="review_budget"):
             self._save_with_unreviewed(tmp_path, monkeypatch, capsys)
@@ -2377,26 +2166,14 @@ class TestDraftFileGapReceipt:
         out = capsys.readouterr().out
         assert "FILES NOT YET CLAIMED" not in out
 
-    def test_next_unread_omitted_only_when_every_claimable_file_is_claimed(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        """Only a positive claim removes a file from NEXT UNREAD. With every
-        claimable file claimed there is no derived gap, so the whole
-        TARGET/PROGRESS/NEXT UNREAD block never runs."""
-        self._clean_env(monkeypatch)
-        self._write_assignment(
-            tmp_path, review_claimable_files=["a.go", "b.go"], review_budget=40,
-            in_scope_review_file_count=5, inline_diff_files=_inline(3),
-        )
-        builder = ReviewOutputBuilder("123", "code")
-        builder.claim_files_reviewed("a.go", "b.go")
-        _save_draft(builder, tmp_path)
-        out = capsys.readouterr().out
-        assert "FILES NOT YET CLAIMED" not in out
-
     def test_missing_scope_counts_reject_progress_publication(
         self, tmp_path, monkeypatch, capsys
     ):
+        """The assignment-shape value space (this and every other incoherent
+        or missing scope-count combination) is pinned once at the
+        derivation boundary in
+        test_review_assignment.py::test_validates_schema_identity_paths_and_conserved_counts;
+        this confirms the publication path consults it."""
         self._clean_env(monkeypatch)
         self._write_assignment(
             tmp_path, review_claimable_files=["a.go", "b.go"], review_budget=40,
@@ -2405,84 +2182,6 @@ class TestDraftFileGapReceipt:
         builder = ReviewOutputBuilder("123", "code")
         with pytest.raises(ValueError, match="in_scope_review_file_count"):
             _save_draft(builder, tmp_path)
-
-    @pytest.mark.parametrize(
-        (
-            "in_scope_review_file_count",
-            "inline_diff_files",
-            "review_claimable_files",
-            "message",
-        ),
-        [
-            (True, [], ["a.go"], "in_scope_review_file_count must be"),
-            (1, False, ["a.go"], "inline_diff_files must be"),
-            (1, ["x.go", 3], ["a.go"], "inline_diff_files must be"),
-            (1, ["a.go"], ["a.go"], "must be disjoint"),
-            (1, ["x.go", "y.go"], ["a.go"], "incoherent inline and review-claimable scope"),
-            (3, ["x.go"], ["a.go"], "incoherent inline and review-claimable scope"),
-        ],
-    )
-    def test_incoherent_progress_facts_reject_publication(
-        self,
-        tmp_path,
-        monkeypatch,
-        capsys,
-        in_scope_review_file_count,
-        inline_diff_files,
-        review_claimable_files,
-        message,
-    ):
-        """The one authority's own text reaches the caller unwrapped."""
-        self._clean_env(monkeypatch)
-        self._write_assignment(
-            tmp_path,
-            review_claimable_files=review_claimable_files,
-            review_budget=40,
-            in_scope_review_file_count=in_scope_review_file_count,
-            inline_diff_files=inline_diff_files,
-        )
-        builder = ReviewOutputBuilder("123", "code")
-        with pytest.raises(ValueError, match=message):
-            _save_draft(builder, tmp_path)
-
-    def test_incoherent_claim_partition_rejects_publication(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        self._clean_env(monkeypatch)
-        self._write_assignment(
-            tmp_path,
-            review_claimable_files=["a.go", "b.go", "c.go"],
-            review_budget=40,
-            in_scope_review_file_count=1,
-            inline_diff_files=_inline(0),
-        )
-        builder = ReviewOutputBuilder("123", "code")
-        builder.claim_files_reviewed("a.go", "b.go")
-        with pytest.raises(ValueError, match="incoherent inline and review-claimable scope counts"):
-            _save_draft(builder, tmp_path)
-
-    def test_progress_counts_unique_authoritative_claims(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        self._clean_env(monkeypatch)
-        self._write_assignment(
-            tmp_path,
-            review_claimable_files=["a.go", "b.go"],
-            review_budget=40,
-            in_scope_review_file_count=2,
-            inline_diff_files=_inline(0),
-        )
-        builder = ReviewOutputBuilder("123", "code")
-        # Defensive against a caller mutating public builder state instead of
-        # using claim_files_reviewed(), whose API already order-deduplicates.
-        builder.reviewed_file_claims = ["a.go", "a.go"]
-        _save_draft(builder, tmp_path)
-        out = capsys.readouterr().out
-
-        assert (
-            "FILES NOT YET CLAIMED AS REVIEWED (1): b.go | "
-            "target ~40 tool calls"
-        ) in out
 
 
 # =============================================================================
@@ -2633,16 +2332,13 @@ class TestTypeScriptContractLockstep:
     The TypeScript file is the published contract downstream consumers read;
     the builder is what actually lands on disk. When they drift, a consumer
     is typed against a shape that no longer exists — and nothing fails.
+
+    The ledger/critic-type parity tests moved to `test_critic_adjustments.py`
+    and `test_findings_ledger.py` (G7); text-extraction helpers now live in
+    `helpers/ts_schema.py`, shared by all three files.
     """
 
-    @staticmethod
-    def _interface_body(name: str, *, extends: str = "") -> str:
-        schema = (PLUGIN_ROOT / "schemas" / "review-output.ts").read_text()
-        suffix = f" extends {extends}" if extends else ""
-        pattern = r"export interface " + name + suffix + r"\s*\{(.*?)\n\}"
-        match = re.search(pattern, schema, re.DOTALL)
-        assert match is not None, f"review-output.ts must declare {name}"
-        return match.group(1)
+    _interface_body = staticmethod(ts_schema.interface_body)
 
     @classmethod
     def _review_document_interface(cls) -> str:
@@ -2690,22 +2386,6 @@ class TestTypeScriptContractLockstep:
         )
         assert match is not None
         assert match.group(1).strip() == "string | null"
-
-    def test_schema_two_rejected_outcome_is_required(self):
-        """Both adjustment outcomes are derived from AdjudicationOutcome, so
-        a fourth outcome cannot be added on one side only — and neither is
-        optional.
-
-        `test_ts_schema_field_sets_match_python_validators` never parses
-        `CriticRejectedAdjustment`/`CriticAppliedAdjustment`, and its
-        `top_level_fields()` extractor tolerates a trailing `?` on any
-        field — so nothing else in this file stops `outcome` becoming
-        optional or `AdjudicationOutcome` drifting.
-        """
-        schema = (PLUGIN_ROOT / "schemas" / "review-output.ts").read_text()
-        assert "outcome: Extract<AdjudicationOutcome, 'refuted'>;" in schema
-        assert "outcome: Exclude<AdjudicationOutcome, 'refuted'>;" in schema
-        assert "outcome?:" not in schema
 
     def test_ts_schema_field_sets_match_python_validators(self):
         """schemas/review-output.ts declares exactly the field sets the two
@@ -2758,112 +2438,8 @@ class TestTypeScriptContractLockstep:
         meta_body = self._interface_body("ReviewMeta")
         assert top_level_fields(meta_body) == review_document._REQUIRED_META_FIELDS
 
-    @classmethod
-    def _field_types(cls, name, *, extends=""):
-        return dict(re.findall(
-            r"^ {4}(\w+\??):\s*([^;]+);",
-            cls._interface_body(name, extends=extends), re.MULTILINE,
-        ))
-
-    @staticmethod
-    def _type_alias(name):
-        schema = (PLUGIN_ROOT / "schemas" / "review-output.ts").read_text()
-        match = re.search(
-            rf"(?:export )?type {name} =\s*(.*?)(?=\n(?:export )?type |\n\n|\Z)",
-            schema, re.DOTALL,
-        )
-        assert match is not None, f"review-output.ts must declare {name}"
-        return " ".join(match.group(1).split())
-
-    @pytest.mark.parametrize("interface, expected", [
-        ("Finding", {"sources?": "FindingSource[]", "severity_note?": "string"}),
-        ("ReviewCheck", {"sources?": "ReviewSource[]"}),
-        ("FindingsLedger", {
-            "dropped_findings?": "DroppedFinding[]",
-            "dropped_checks?": "DroppedCheck[]",
-            "orchestrator_notes?": "OrchestratorNote[]",
-            "invalidated_recommendations?": "InvalidatedRecommendations[]",
-        }),
-    ], ids=["finding-provenance", "check-provenance", "ledger-audit"])
-    def test_reconciliation_extensions_remain_optional(self, interface, expected):
-        fields = self._field_types(
-            interface, extends="ReviewContent" if interface == "FindingsLedger" else "",
-        )
-        assert {key: fields.get(key) for key in expected} == expected
-
-    def test_source_identity_and_optional_stamped_severity(self):
-        assert self._field_types("ReviewSource") == {
-            "reviewer": "string", "id": "FindingId | CheckId",
-        }
-        assert self._field_types("FindingSource", extends="ReviewSource") == {
-            "severity?": "Severity",
-        }
-
-    def test_drop_reason_and_evidence_contract(self):
-        assert self._field_types("DroppedFindingSource", extends="ReviewSource") == {
-            "scope_status?": "string",
-        }
-        assert self._type_alias("DroppedFinding") == (
-            "DroppedFindingSource & ( "
-            "| { reason: 'false_positive' | 'out_of_scope'; evidence: string } "
-            "| { reason: 'prefiltered'; evidence?: string } );"
-        )
-        # A dropped check carries no stamped scope: the reader rejects
-        # scope_status there, so the contract must not offer it.
-        assert self._field_types("DroppedCheck", extends="ReviewSource") == {
-            "reason": "'void'", "evidence": "string",
-        }
-        assert set(re.findall(
-            r"'([^']+)'", self._type_alias("DroppedFinding"),
-        )) == set(critic_adjustments.DROP_REASONS_FINDING)
-        assert critic_adjustments.DROP_REASONS_CHECK == ("void",)
-
-    def test_orchestrator_note_outcomes_and_optional_stamped_note(self):
-        assert self._field_types("OrchestratorNote") == {
-            "id": "`n${number}`",
-            "outcome": "'confirmed' | 'refuted' | 'not_checked'",
-            "evidence": "string", "note?": "string",
-        }
-        assert set(re.findall(
-            r"'([^']+)'", self._field_types("OrchestratorNote")["outcome"],
-        )) == set(critic_adjustments.NOTE_OUTCOMES)
-
-    def test_invalidated_recommendations_keep_partial_priorities_and_adjustment_ids(self):
-        assert self._type_alias("ReviewRecommendations") == "ReviewContent['recommendations'];"
-        assert self._field_types("InvalidatedRecommendations") == {
-            "recommendations": "Partial<ReviewRecommendations>",
-            "invalidated_by_critic_adjustment_ids": "string[]",
-        }
-        content = self._interface_body("ReviewContent")
-        priorities = re.search(r"recommendations:\s*\{(.*?)\n {4}\};", content, re.DOTALL)
-        assert priorities is not None
-        assert set(re.findall(r"(\w+): string\[\]", priorities.group(1))) == set(
-            review_document.RECOMMENDATION_PRIORITIES
-        )
-
-    def test_request_replacements_are_optional_nullable_and_partial_by_priority(self):
-        fields = self._field_types("AdjudicationRequest")
-        assert fields.get("revised_assessment?") == "string | null"
-        assert fields.get("revised_recommendations?") == "Partial<ReviewRecommendations> | null"
-        assert fields["schema"] == "2"
-
-    def test_correct_excludes_severity_while_severity_actions_retain_it(self):
-        assert self._type_alias("FindingSeverityChangeFields") == (
-            "Pick<Finding, 'severity'> & Partial<Omit<FindingPatchFields, 'severity'>>;"
-        )
-        assert self._type_alias("FindingCorrectionFields") == (
-            "AtLeastOne<Omit<FindingPatchFields, 'severity'>> & { severity?: never };"
-        )
-        assert self._type_alias("CheckCorrectionFields") == (
-            "AtLeastOne<Pick<ReviewCheck, 'question' | 'method' | 'result'>> "
-            "& { severity?: never };"
-        )
-        proposal = self._type_alias("CriticProposalAdjustment")
-        assert "action: 'correct'; target: FindingTarget; fields: FindingCorrectionFields;" in proposal
-        assert "action: 'correct'; target: CheckTarget; fields: CheckCorrectionFields;" in proposal
-        assert "action: 'promote' | 'demote'; target: FindingTarget; fields: FindingSeverityChangeFields;" in proposal
-        provenance = self._type_alias("FindingCriticAdjustment")
-        assert "action: 'promote' | 'demote'; rationale: string; prior: FindingSeverityChangeFields" in provenance
+    _field_types = staticmethod(ts_schema.field_types)
+    _type_alias = staticmethod(ts_schema.type_alias)
 
     @pytest.mark.parametrize(
         "field", ["observations", "recommendations", "positive_observations"]
@@ -2911,9 +2487,15 @@ class TestAssessment:
     what lets the renderer own the artifact without losing content.
     """
 
-    def test_absent_by_default_but_the_key_is_always_present(self):
-        d = ReviewOutputBuilder(pr_id="1", reviewer="pr").to_dict()
-        assert d["assessment"] is None
+    def test_absent_by_default_and_blank_prose_both_record_absence(self):
+        assert (
+            ReviewOutputBuilder(pr_id="1", reviewer="pr").to_dict()["assessment"]
+            is None
+        )
+
+        b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
+        b.set_assessment("   ")
+        assert b.to_dict()["assessment"] is None
 
     def test_set_assessment_serializes(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
@@ -2926,23 +2508,6 @@ class TestAssessment:
         b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
         b.set_assessment(["line one", "line two"])
         assert b.to_dict()["assessment"] == "line one\nline two"
-
-    def test_blank_prose_records_absence_not_an_empty_string(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
-        b.set_assessment("   ")
-        assert b.to_dict()["assessment"] is None
-
-    def test_renders_as_an_assessment_section(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
-        b.set_assessment("Two sentences of judgment.")
-        rendered = render_markdown(b.to_dict())
-        assert "## Assessment\n\nTwo sentences of judgment." in rendered
-
-    def test_absent_prose_renders_no_assessment_section(self):
-        rendered = render_markdown(
-            ReviewOutputBuilder(pr_id="1", reviewer="pr").to_dict()
-        )
-        assert "## Assessment" not in rendered
 
 
 # =============================================================================

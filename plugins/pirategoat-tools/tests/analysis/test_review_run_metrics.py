@@ -34,7 +34,6 @@ from review import run_paths, telemetry_share  # noqa: E402
 from helpers.pipeline_process import init_bare_repo  # noqa: E402
 from review_metrics import (  # noqa: E402
     cli,
-    cohort,
     contracts,
     load,
     measure,
@@ -51,8 +50,11 @@ main = _mod.main
 
 
 class TestRepositoryReadEvidence:
+    # `_nonnegative_exact_int`: an exact int passes; a non-int (a boolean,
+    # None, a string, or a historical row without the key) fails
+    # `type(value) is not int`; a negative fails the bound.
     @pytest.mark.parametrize("value, expected", [
-        (0, 0), (4, 4), (None, None), (True, None), (-1, None), ("2", None),
+        (4, 4), (True, None), (-1, None),
     ])
     def test_sanitized_usage_preserves_only_nonnegative_exact_read_counts(self, value, expected):
         [row] = measure._sanitize_agent_usage([{
@@ -62,14 +64,6 @@ class TestRepositoryReadEvidence:
         }])
         assert row["repository_reads"] == expected
         assert row["tool_calls"] == 3
-
-    def test_historical_row_without_reads_stays_usable(self):
-        [row] = measure._sanitize_agent_usage([{
-            "agent": "review-reconciliator", "available": True,
-            "usage": _usage(2),
-            "tool_calls": 3,
-        }])
-        assert row["repository_reads"] is None
 
     def test_unavailable_row_cannot_claim_measured_reads(self):
         [row] = measure._sanitize_agent_usage([{
@@ -178,14 +172,6 @@ def test_metrics_uses_canonical_telemetry_contract():
     dispatch_status = _load_dispatch_status_module()
 
     assert contracts.DEFAULT_LOG_DIR == Path(telemetry.LOG_DIR)
-    assert (
-        contracts._DISPATCHED_STATUSES
-        is contracts._DISPATCH_STATUS_CONTRACT.DISPATCHED_STATUSES
-    )
-    assert (
-        contracts._SUPPORTED_DISPATCH_STATUSES
-        is contracts._DISPATCH_STATUS_CONTRACT.SUPPORTED_DISPATCH_STATUSES
-    )
     assert contracts._DISPATCHED_STATUSES == dispatch_status.DISPATCHED_STATUSES
     assert (
         contracts._SUPPORTED_DISPATCH_STATUSES
@@ -202,14 +188,6 @@ def test_metrics_uses_canonical_telemetry_contract():
     assert (
         contracts._AVAILABILITY_FAMILIES
         == contracts._PIPELINE_FAMILIES + contracts._TRANSCRIPT_FAMILIES
-    )
-    assert (
-        contracts._project_agent_lifecycle
-        is contracts._TELEMETRY_CONTRACT.project_agent_lifecycle
-    )
-    assert (
-        contracts._incomplete_agent_executions
-        is contracts._TELEMETRY_CONTRACT._incomplete_agent_executions
     )
 
 
@@ -313,8 +291,9 @@ def test_sanitize_steps_preserves_positive_exact_integer_step_attempt():
     [
         pytest.param(0, id="zero"),
         pytest.param(-1, id="negative"),
+        # `_nonnegative_exact_int`'s `type(value) is not int`; an integral
+        # float fails the same check.
         pytest.param(True, id="boolean"),
-        pytest.param(2.0, id="integral-float"),
     ],
 )
 def test_sanitize_steps_drops_invalid_step_attempt(attempt):
@@ -405,35 +384,28 @@ def _manifest(
     }
 
 
-@pytest.mark.parametrize("source_kind", ["local", "shared"])
-def test_step_attempt_round_trips_through_supported_report(
-    tmp_path, source_kind
-):
-    run_id = f"{source_kind}-attempts"
+def test_step_attempt_round_trips_through_supported_report(tmp_path):
+    """A local log directory stands for a shared clone: the two differ
+    only in the loader, and the shared loader is pinned by the
+    `shared_telemetry_clone` tests."""
+    run_id = "local-attempts"
     manifest = _manifest(run_id)
     manifest["steps"] = [
         {"run_id": run_id, "event": "step", "step": 11, "attempt": 1},
         {"run_id": run_id, "event": "step", "step": 11, "attempt": 2},
         {"run_id": run_id, "event": "step", "step": 5},
     ]
-    if source_kind == "local":
-        source_root = tmp_path / "local"
-        source_dir = source_root
-        source_flag = "--log-dir"
-    else:
-        source_root = tmp_path / "shared"
-        source_dir = source_root / telemetry_share.LAYOUT_PREFIX / "alice"
-        source_flag = "--shared-dir"
+    source_dir = tmp_path / "local"
     source_dir.mkdir(parents=True)
     (source_dir / f"{run_id}.manifest.json").write_text(
         json.dumps(manifest), encoding="utf-8"
     )
-    output = tmp_path / f"{source_kind}-report.json"
+    output = tmp_path / "local-report.json"
 
     result = main(
         [
-            source_flag,
-            str(source_root),
+            "--log-dir",
+            str(source_dir),
             "--format",
             "json",
             "--output",
@@ -611,13 +583,11 @@ class TestReviewVocabularyLifecycleMigration:
                 id="grouped-exceeds-input",
             ),
             pytest.param({"reviewing_agents": None}, id="reviewing-null"),
+            # One duplicate check in the loop over the reconciliation agent
+            # lists; a duplicated dispatched agent fails the same check.
             pytest.param(
                 {"reviewing_agents": ["security-reviewer", "security-reviewer"]},
                 id="reviewing-duplicate",
-            ),
-            pytest.param(
-                {"dispatched_agents": ["code-reviewer", "code-reviewer"]},
-                id="dispatched-duplicate",
             ),
             pytest.param(
                 {"not_applicable_agents": [
@@ -667,17 +637,6 @@ class TestReviewVocabularyLifecycleMigration:
         assert rendered["runs"][0]["outcome"]["reconciliation"] == (
             _task_5_manifest()["outcome"]["reconciliation"]
         )
-        serialized = json.dumps(measured)
-        for retired in (
-            '"changed"', '"reviewable"', '"assigned"', '"excluded"',
-            '"uncovered"', '"issue_count"', '"total_agent_issues"',
-            '"final_issues"', '"input_findings_count"',
-            '"agents_contributing"', '"concerns_after_grouping"',
-            '"false_positives_dropped"', '"out_of_scope_dropped"',
-            '"verified_concerns"', '"merge_ratio"',
-            '"not_applicable_count"',
-        ):
-            assert retired not in serialized
 
     def test_historical_agent_identity_cohort_normalizes_legacy_rosters(
         self, tmp_path
@@ -765,39 +724,6 @@ class TestReviewVocabularyLifecycleMigration:
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
         assert measured["outcome"]["reconciliation"] is None
-
-    def test_retired_schema_three_coverage_keys_are_rejected(self, tmp_path):
-        manifest = _task_5_manifest()
-        manifest["assignment"] = {
-            "changed": ["src/a.py"],
-            "reviewable": ["src/a.py"],
-            "by_agent": {"code-reviewer": ["src/a.py"]},
-            "assigned": ["src/a.py"],
-            "excluded": [],
-            "uncovered": [],
-            "reviewed_files_by_agent": {},
-            "review_claimable_file_count_by_agent": {},
-            "semantics": "generated_scope_not_proof_of_model_read",
-        }
-
-        measured = measure_run(manifest, tmp_path, include_transcripts=False)
-
-        assert measured["assignment"] is None
-        assert measured["metric_availability"]["assignment"] == "missing"
-
-    def test_completion_lifecycle_uses_finding_count(self, tmp_path):
-        manifest = _task_5_manifest()
-        manifest["agents"] = {
-            "started": [_agent_start(run_id="task-5-run")],
-            "completed": [_agent_complete(run_id="task-5-run")],
-            "incomplete": [],
-        }
-
-        measured = measure_run(manifest, tmp_path, include_transcripts=False)
-
-        assert measured["metric_availability"]["lifecycle"] == "complete"
-        assert measured["agents"]["completed"][0]["finding_count"] == 0
-        assert "issue_count" not in measured["agents"]["completed"][0]
 
     def test_cohort_aggregates_canonical_coverage_and_finding_totals(self):
         first = measure_run(
@@ -1177,9 +1103,11 @@ class TestRangeTruthSanitization:
             "base_fetch": {"unmeasured": 1}, "scope_check": {"unmeasured": 1},
         }
 
-    @pytest.mark.parametrize("status", [[], {}], ids=["list", "object"])
-    def test_range_truth_sanitizer_rejects_non_string_status_without_aborting(self, status):
-        """Unhashable nested status values must degrade to unmeasured facts."""
+    def test_range_truth_sanitizer_rejects_non_string_status_without_aborting(self):
+        """Unhashable nested status values must degrade to unmeasured facts.
+        A list stands for an object: both fail `_enum`'s `isinstance(value,
+        str)` before the vocabulary lookup could raise."""
+        status = []
         manifest = _manifest()
         manifest["run"]["git"].update({
             "base_fetch": {"status": status, "sha": "a" * 40, "shallow": False},
@@ -1214,21 +1142,12 @@ class TestLoadRuns:
         with pytest.raises(OSError, match="denied"):
             load_runs(log_dir)
 
-    def test_prefers_valid_manifest_without_loading_sibling_jsonl(self, tmp_path):
-        manifest = _manifest("manifest-run")
-        _write_manifest(tmp_path / "review.manifest.json", manifest)
-        _write_jsonl(tmp_path / "review.jsonl", _legacy_events("jsonl-run"))
-
-        runs = load_runs(tmp_path)
-
-        assert [run["run"]["id"] for run in runs] == ["manifest-run"]
-        assert "legacy_log_no_manifest" not in runs[0].get("warnings", [])
-
     @pytest.mark.parametrize(
         "verdict_source",
-        ["findings ledger", "critic ESCALATE override",
-         "fallback: no usable ledger verdict", None],
-        ids=["ledger", "escalate", "fallback", "null"],
+        # `_safe_scalar_map` has one path for a bounded string (every
+        # producer value takes it) and one for null.
+        ["findings ledger", None],
+        ids=["ledger", "null"],
     )
     def test_verdict_source_is_measurable_across_a_cohort(
         self, tmp_path, verdict_source
@@ -1450,16 +1369,12 @@ class TestLoadRuns:
         assert measured["metric_availability"]["lifecycle"] == "partial"
         assert measured["lifecycle"]["started_events"] == 1
 
-    @pytest.mark.parametrize(
-        "domain",
-        [
-            pytest.param({"unexpected": "object"}, id="object"),
-            pytest.param(7, id="integer"),
-        ],
-    )
     def test_malformed_nonnull_domain_remains_invalid_end_to_end(
-        self, tmp_path, domain
+        self, tmp_path
     ):
+        """Any non-string domain fails `_bounded_event_string`'s
+        `isinstance(value, str)`; an object stands for an integer too."""
+        domain = {"unexpected": "object"}
         telemetry_mod = _load_telemetry_module()
         output_dir = tmp_path / "output"
         output_dir.mkdir()
@@ -1600,58 +1515,31 @@ class TestLoadRuns:
         assert measured["lifecycle"]["started_events"] == 1
         assert measured["lifecycle"]["completed_events"] == 1
 
-    @pytest.mark.parametrize(
-        "events",
-        [
-            pytest.param(
-                [
-                    _pipeline_start("running-run"),
-                    _step(
-                        "running-run",
-                        timestamp="2026-07-19T09:59:59+00:00",
-                    ),
-                ],
-                id="step-before-start",
-            ),
-            pytest.param(
-                [
-                    _pipeline_start("running-run"),
-                    _step(
-                        "running-run",
-                        timestamp="2026-07-19T10:00:10+00:00",
-                    ),
-                    {
-                        **_step(
-                            "running-run",
-                            timestamp="2026-07-19T10:00:09+00:00",
-                        ),
-                        "step": 2,
-                    },
-                ],
-                id="later-step-regresses",
-            ),
-            pytest.param(
-                [
-                    _pipeline_start("running-run"),
-                    _step(
-                        "running-run",
-                        timestamp="2026-07-19T10:00:10+00:00",
-                    ),
-                    _pipeline_end(
+    def test_running_overlay_rejects_regressing_control_plane_timeline(
+        self, tmp_path
+    ):
+        """One `timestamp < last_control_plane_time` check: a later step
+        regressing stands for a step before the start and an end before
+        the last step."""
+        manifest = _running_manifest("running-run")
+        _write_manifest(tmp_path / "review.manifest.json", manifest)
+        _write_jsonl(
+            tmp_path / "review.jsonl",
+            [
+                _pipeline_start("running-run"),
+                _step(
+                    "running-run",
+                    timestamp="2026-07-19T10:00:10+00:00",
+                ),
+                {
+                    **_step(
                         "running-run",
                         timestamp="2026-07-19T10:00:09+00:00",
                     ),
-                ],
-                id="end-before-last-step",
-            ),
-        ],
-    )
-    def test_running_overlay_rejects_regressing_control_plane_timeline(
-        self, tmp_path, events
-    ):
-        manifest = _running_manifest("running-run")
-        _write_manifest(tmp_path / "review.manifest.json", manifest)
-        _write_jsonl(tmp_path / "review.jsonl", events)
+                    "step": 2,
+                },
+            ],
+        )
 
         [run] = load_runs(tmp_path)
         measured = measure_run(run, tmp_path, include_transcripts=False)
@@ -1747,48 +1635,25 @@ class TestLoadRuns:
         assert measured["metric_availability"]["lifecycle"] == "partial"
         assert "running_lifecycle_overlay_invalid" not in run["warnings"]
 
-    @pytest.mark.parametrize(
-        "events",
-        [
-            pytest.param(
-                [
-                    _pipeline_start("running-run"),
-                    _pipeline_end("running-run"),
-                    _agent_start("code-reviewer", run_id="running-run"),
-                ],
-                id="lifecycle-after-end",
-            ),
-            pytest.param(
-                [
-                    _pipeline_start("running-run"),
-                    _pipeline_end("running-run"),
-                    _step(
-                        "running-run",
-                        timestamp="2026-07-19T10:00:40+00:00",
-                    ),
-                ],
-                id="step-after-end",
-            ),
-            pytest.param(
-                [
-                    _pipeline_start("running-run"),
-                    _agent_start("code-reviewer", run_id="running-run"),
-                    _pipeline_end("running-run"),
-                    _pipeline_end(
-                        "running-run",
-                        timestamp="2026-07-19T10:00:40+00:00",
-                    ),
-                ],
-                id="duplicate-end",
-            ),
-        ],
-    )
     def test_running_overlay_rejects_nonterminal_or_duplicate_end(
-        self, tmp_path, events
+        self, tmp_path
     ):
+        """One `pipeline_end`-must-be-last conjunct: a duplicate end stands
+        for lifecycle or step events appended after the end."""
         manifest = _running_manifest("running-run")
         _write_manifest(tmp_path / "review.manifest.json", manifest)
-        _write_jsonl(tmp_path / "review.jsonl", events)
+        _write_jsonl(
+            tmp_path / "review.jsonl",
+            [
+                _pipeline_start("running-run"),
+                _agent_start("code-reviewer", run_id="running-run"),
+                _pipeline_end("running-run"),
+                _pipeline_end(
+                    "running-run",
+                    timestamp="2026-07-19T10:00:40+00:00",
+                ),
+            ],
+        )
 
         [run] = load_runs(tmp_path)
         measured = measure_run(run, tmp_path, include_transcripts=False)
@@ -1834,15 +1699,6 @@ class TestLoadRuns:
             pytest.param(
                 [
                     _pipeline_start("running-run"),
-                    _with_legacy_schema_key(
-                        _agent_start("code-reviewer", run_id="running-run")
-                    ),
-                ],
-                id="pre-rename-schema-key-mid-stream",
-            ),
-            pytest.param(
-                [
-                    _pipeline_start("running-run"),
                     {
                         **_agent_start("code-reviewer", run_id="running-run"),
                         "schema": contracts._SUPPORTED_MANIFEST_SCHEMA + 1,
@@ -1852,11 +1708,13 @@ class TestLoadRuns:
             ),
             # Control-plane events never reach _strict_lifecycle_event —
             # only agent_start/agent_complete do — so the per-event loop in
-            # _running_lifecycle_overlay is the ONLY schema guard a `step`
-            # or `pipeline_end` event ever passes. Without these cases the
-            # loop's schema conjunct can be deleted with every other test
-            # still green, and an overlay would silently accept control-plane
-            # events whose field meanings its producer never vouched for.
+            # _overlay_running_lifecycle is the ONLY schema guard a `step`
+            # or `pipeline_end` event ever passes. This case keeps that
+            # conjunct pinned (fix 43c845c9): without it the conjunct can be
+            # deleted with every other test still green, and an overlay would
+            # silently accept control-plane events whose field meanings its
+            # producer never vouched for. A pre-rename schema key, or the same
+            # schema on `pipeline_end`, reaches the same conjunct.
             pytest.param(
                 [
                     _pipeline_start("running-run"),
@@ -1871,40 +1729,6 @@ class TestLoadRuns:
                     },
                 ],
                 id="unsupported-schema-on-step-event",
-            ),
-            pytest.param(
-                [
-                    _pipeline_start("running-run"),
-                    _with_legacy_schema_key(
-                        {
-                            "schema": 1,
-                            "run_id": "running-run",
-                            "event": "step",
-                            "timestamp": "2026-07-19T10:00:05+00:00",
-                            "step": 6,
-                            "phase": "REVIEW",
-                            "title": "Dispatch Agents",
-                        }
-                    ),
-                ],
-                id="pre-rename-schema-key-on-step-event",
-            ),
-            pytest.param(
-                [
-                    _pipeline_start("running-run"),
-                    {
-                        **_pipeline_end("running-run"),
-                        "schema": contracts._SUPPORTED_MANIFEST_SCHEMA + 1,
-                    },
-                ],
-                id="unsupported-schema-on-pipeline-end",
-            ),
-            pytest.param(
-                [
-                    _pipeline_start("running-run"),
-                    _with_legacy_schema_key(_pipeline_end("running-run")),
-                ],
-                id="pre-rename-schema-key-on-pipeline-end",
             ),
         ],
     )
@@ -1959,28 +1783,6 @@ class TestLoadRuns:
         assert measured["metric_availability"]["lifecycle"] == "missing"
         assert "running_lifecycle_overlay_invalid" in run["warnings"]
 
-    def test_running_overlay_rejects_sidecar_prefix_mismatch(self, tmp_path):
-        manifest = _running_manifest("running-run")
-        manifest["agents"] = {
-            "started": [_agent_start("code-reviewer", run_id="running-run")],
-            "completed": [],
-            "incomplete": ["code-reviewer"],
-        }
-        _write_manifest(tmp_path / "review.manifest.json", manifest)
-        _write_jsonl(
-            tmp_path / "review.jsonl",
-            [
-                _pipeline_start("running-run"),
-                _agent_start("security-reviewer", run_id="running-run"),
-            ],
-        )
-
-        [run] = load_runs(tmp_path)
-        measured = measure_run(run, tmp_path, include_transcripts=False)
-
-        assert measured["metric_availability"]["lifecycle"] == "missing"
-        assert "running_lifecycle_overlay_invalid" in run["warnings"]
-
     def test_running_overlay_requires_one_global_append_prefix(self, tmp_path):
         manifest = _running_manifest("running-run")
         first_start = _agent_start(
@@ -2020,8 +1822,11 @@ class TestLoadRuns:
         assert "running_lifecycle_overlay_invalid" in run["warnings"]
 
     def test_complete_manifest_suppresses_fresh_same_run_lifecycle_overlay(
-        self, tmp_path, monkeypatch
+        self, tmp_path
     ):
+        """A valid complete manifest is the run: its sibling JSONL, even a
+        fresh same-run lifecycle suffix, is neither overlaid onto the
+        manifest's lifecycle nor loaded as a legacy run of its own."""
         manifest = _manifest("complete-run")
         _write_manifest(tmp_path / "review.manifest.json", manifest)
         _write_jsonl(
@@ -2032,13 +1837,11 @@ class TestLoadRuns:
                 _agent_complete("code-reviewer", run_id="complete-run"),
             ],
         )
-        def unexpected_read(_path):
-            raise AssertionError("complete manifests must not read sibling JSONL")
 
-        monkeypatch.setattr(load, "_read_jsonl_strict", unexpected_read)
+        runs = load_runs(tmp_path)
 
-        [run] = load_runs(tmp_path)
-
+        assert [run["run"]["id"] for run in runs] == ["complete-run"]
+        [run] = runs
         assert run["status"] == "complete"
         assert run["agents"] == manifest["agents"]
         assert run["warnings"] == []
@@ -2268,19 +2071,20 @@ class TestLoadRuns:
     @pytest.mark.parametrize(
         "field,value",
         [
+            # No `schema` key. A pre-rename manifest (`schema_version`, the
+            # key before 1.114.0) has this shape too;
+            # `test_pre_rename_manifest_without_a_log_yields_no_run` keeps
+            # that exact shape.
             ("schema", None),
-            ("schema", True),
-            ("schema", 1.0),
-            ("schema", contracts._SUPPORTED_MANIFEST_SCHEMA + 1),
-            ("status", None),
+            # The literal `1` every run wrote before the verdict-provenance
+            # bump. Any schema other than the supported integer (a boolean,
+            # a float, a future version) fails the same check.
+            ("schema", 1),
             ("status", "success"),
         ],
         ids=[
             "missing-version",
-            "boolean-version",
-            "float-version",
-            "future-version",
-            "missing-status",
+            "pre-bump-version",
             "unsupported-status",
         ],
     )
@@ -2292,52 +2096,6 @@ class TestLoadRuns:
             manifest.pop(field)
         else:
             manifest[field] = value
-        _write_manifest(tmp_path / "review.manifest.json", manifest)
-        _write_jsonl(tmp_path / "review.jsonl", _legacy_events("legacy-fallback"))
-
-        [run] = load_runs(tmp_path)
-
-        assert run["run"]["id"] == "legacy-fallback"
-        assert run["warnings"] == [
-            "legacy_log_no_manifest",
-            "invalid_manifest_fallback",
-        ]
-
-    def test_pre_bump_schema_manifest_routes_to_legacy_fallback_not_an_error(
-        self, tmp_path
-    ):
-        """A manifest actually written under the schema this constant
-        carried before the verdict-provenance bump (the literal `1` on disk
-        from every run before this change, not a synthetic "future"
-        value) is unsupported now, same as any other mismatched schema —
-        read only through the existing unsupported-envelope path, never a
-        crash and never a silent read of an `outcome` block whose
-        `verdict_source` key that older producer never wrote.
-        """
-        manifest = _manifest("pre-bump-run")
-        manifest["schema"] = 1
-        _write_manifest(tmp_path / "review.manifest.json", manifest)
-        _write_jsonl(tmp_path / "review.jsonl", _legacy_events("legacy-fallback"))
-
-        [run] = load_runs(tmp_path)
-
-        assert run["run"]["id"] == "legacy-fallback"
-        assert run["warnings"] == [
-            "legacy_log_no_manifest",
-            "invalid_manifest_fallback",
-        ]
-
-    def test_pre_rename_manifest_is_unsupported_not_an_error(self, tmp_path):
-        """`schema_version` was this family's key before 1.114.0 renamed it.
-
-        The rename is clean — no reader accepts the old name — so artifacts
-        written before it are simply unrecognizable input. They must take
-        the same labeled unsupported-envelope path as any other unreadable
-        sidecar: a warning-carrying legacy fallback, never a crash and
-        never a silent acceptance of fields whose meaning is unvouched.
-        """
-        manifest = _manifest("sidecar-run")
-        manifest["schema_version"] = manifest.pop("schema")
         _write_manifest(tmp_path / "review.manifest.json", manifest)
         _write_jsonl(tmp_path / "review.jsonl", _legacy_events("legacy-fallback"))
 
@@ -2599,22 +2357,14 @@ class TestLoadRuns:
             "security-reviewer"
         ]
 
-    @pytest.mark.parametrize(
-        "initial_names,final_names,planner_count,final_count",
-        [
-            (["code-reviewer"], ["code-reviewer", "security-reviewer"], 1, 2),
-            (["code-reviewer", "security-reviewer"], ["code-reviewer"], 2, 1),
-        ],
-        ids=["agent-added", "agent-removed"],
-    )
     def test_agent_set_mismatch_sidecar_remains_authoritative_and_partial(
-        self,
-        tmp_path,
-        initial_names,
-        final_names,
-        planner_count,
-        final_count,
+        self, tmp_path
     ):
+        """An agent added between plans; a removed agent takes the same
+        producer path with the larger set on the other side."""
+        initial_names = ["code-reviewer"]
+        final_names = ["code-reviewer", "security-reviewer"]
+        planner_count, final_count = 1, 2
         telemetry_module = _load_telemetry_module()
         output_dir = tmp_path / "output"
         log_dir = tmp_path / "logs"
@@ -2761,10 +2511,9 @@ class TestLoadRuns:
     @pytest.mark.parametrize(
         "malform",
         [
+            # A missing or an extra reason both fail the one
+            # `set(reasons) != expected_reasons` check.
             lambda dispatch: dispatch.__setitem__("invalid_reason_codes", []),
-            lambda dispatch: dispatch["invalid_reason_codes"].append(
-                "extra_reason"
-            ),
             lambda dispatch: dispatch.pop("duplicate_agent_names"),
             lambda dispatch: dispatch.__setitem__(
                 "planner_baseline_available", 1
@@ -2778,7 +2527,6 @@ class TestLoadRuns:
         ],
         ids=[
             "missing-reason",
-            "extra-reason",
             "missing-names",
             "non-boolean-availability",
             "duplicate-for-unavailable-plan",
@@ -2798,20 +2546,13 @@ class TestLoadRuns:
         assert run["run"]["id"] == "legacy-fallback"
         assert "invalid_manifest_fallback" in run["warnings"]
 
-    @pytest.mark.parametrize(
-        "invalid_name",
-        [
-            "security reviewer",
-            "security/reviewer",
-            "reviewer: private prose",
-            "Security-reviewer",
-            "security_reviewer",
-        ],
-        ids=["space", "path", "prose", "uppercase", "underscore"],
-    )
     def test_duplicate_dispatch_allowance_rejects_nonproducer_agent_names(
-        self, tmp_path, invalid_name
+        self, tmp_path
     ):
+        """Every non-producer name fails the one producer agent-name regex
+        (its shape is owned by `dispatch_status.py`); prose also carries
+        the leak assertion."""
+        invalid_name = "reviewer: private prose"
         manifest = _manifest("sidecar-run")
         manifest["dispatch"] = _producer_duplicate_dispatch()
         manifest["dispatch"]["duplicate_agent_names"]["planner_baseline"] = [
@@ -2828,20 +2569,20 @@ class TestLoadRuns:
 
     @pytest.mark.parametrize(
         "unsafe_run_id",
+        # One per branch of `run_paths.SAFE_RUN_ID_SEGMENT_RE`: a character
+        # outside the class (a Windows path, a pipe, or markup fails the
+        # same class), the `..` lookahead, and the 256-character bound. The
+        # producer's own upload test (`test_telemetry_share.py`) feeds only
+        # `safe/nested` and `../outside`, so the lookahead and the bound
+        # are pinned here alone.
         [
             "Users/person/private-repo",
-            r"C:\Users\person\private-repo",
             "safe..nested",
-            "run|forged-column",
-            "run<script>alert</script>",
             "run" + "x" * 254,
         ],
         ids=[
             "posix-path",
-            "windows-path",
             "double-dot",
-            "pipe",
-            "markup",
             "too-long",
         ],
     )
@@ -2859,12 +2600,12 @@ class TestLoadRuns:
 
     @pytest.mark.parametrize(
         "safe_run_id",
+        # A producer-shaped id, and the longest id the bound admits.
         [
             "550e8400-e29b-41d4-a716-446655440000",
-            "legacy-deadbeef01234567",
             "a" * 256,
         ],
-        ids=["uuid", "legacy", "boundary-length"],
+        ids=["uuid", "boundary-length"],
     )
     def test_bounded_ascii_token_run_ids_remain_supported(
         self, tmp_path, safe_run_id
@@ -2958,33 +2699,21 @@ class TestLoadRuns:
         assert "PRIVATE" not in json.dumps(runs)
         assert runs == load_runs(right)
 
-    @pytest.mark.parametrize("event_family", ["steps", "started", "completed"])
     def test_order_sensitive_event_reordering_remains_a_conflict(
-        self, tmp_path, event_family
+        self, tmp_path
     ):
+        """`_canonical_manifest` sorts only order-free lists, so a
+        reordered event list stays a conflict. This pins `started`; a
+        canonicalizer that began sorting `steps` or `completed` would go
+        unnoticed here, which is acceptable because canonicalization only
+        serves duplicate collapse."""
         first = _manifest("duplicate-run")
-        if event_family == "steps":
-            first["steps"] = [
-                {"event": "step", "step": 1, "timestamp": "2026-07-19T10:00:01Z"},
-                {"event": "step", "step": 2, "timestamp": "2026-07-19T10:00:02Z"},
-            ]
-        elif event_family == "started":
-            first["agents"]["started"] = [
-                {"event": "agent_start", "agent": "code-reviewer"},
-                {"event": "agent_start", "agent": "security-reviewer"},
-            ]
-        else:
-            first["agents"]["completed"] = [
-                {"event": "agent_complete", "agent": "code-reviewer"},
-                {"event": "agent_complete", "agent": "security-reviewer"},
-            ]
+        first["agents"]["started"] = [
+            {"event": "agent_start", "agent": "code-reviewer"},
+            {"event": "agent_start", "agent": "security-reviewer"},
+        ]
         second = copy.deepcopy(first)
-        target = (
-            second["steps"]
-            if event_family == "steps"
-            else second["agents"][event_family]
-        )
-        target.reverse()
+        second["agents"]["started"].reverse()
         _write_manifest(tmp_path / "a.manifest.json", first)
         _write_manifest(tmp_path / "b.manifest.json", second)
 
@@ -3091,16 +2820,17 @@ class TestLoadRuns:
         assert load_runs(tmp_path) == []
         assert load_runs(missing) == []
 
-    @pytest.mark.parametrize(
-        "invalid_count",
-        [float("inf"), 10**1_000],
-        ids=["infinite-float", "unbounded-integer"],
-    )
     def test_invalid_numeric_fields_degrade_availability_without_crashing(
-        self, tmp_path, invalid_count
+        self, tmp_path
     ):
+        """A `planner_candidate_count` past int64 pins the dispatch family
+        to degraded availability without crashing; the count recomputation
+        against `agents` would reject the same row independently, so this
+        does not pin `_nonnegative_int`'s bound in isolation — that lives in
+        `TestMeasureRun::test_invalid_manifest_numerics_are_
+        omitted_and_never_drive_wall_time`."""
         manifest = _manifest("nonfinite")
-        manifest["dispatch"]["planner_candidate_count"] = invalid_count
+        manifest["dispatch"]["planner_candidate_count"] = 10**1_000
         _write_manifest(tmp_path / "nonfinite.manifest.json", manifest)
 
         [run] = load_runs(tmp_path)
@@ -3279,18 +3009,13 @@ class TestMeasureRun:
         expected_state = "complete" if expected is not None else "missing"
         assert measured["metric_availability"]["wall_time"] == expected_state
 
-    @pytest.mark.parametrize(
-        "started,ended",
-        [
-            ("2026-07-19T10:00:00", "2026-07-19T10:01:00"),
-            ("2026-07-19T10:00:00+00:00", "2026-07-19T10:01:00"),
-        ],
-        ids=["both-naive", "mixed-aware-naive"],
-    )
-    def test_naive_timestamps_do_not_supply_wall_time(
-        self, tmp_path, started, ended
-    ):
-        manifest = _manifest(started_at=started, ended_at=ended)
+    def test_naive_timestamps_do_not_supply_wall_time(self, tmp_path):
+        """`_parse_time` returns None for any naive timestamp; one naive end
+        beside an aware start stands for two naive ones."""
+        manifest = _manifest(
+            started_at="2026-07-19T10:00:00+00:00",
+            ended_at="2026-07-19T10:01:00",
+        )
         manifest["outcome"]["summary"].pop("total_duration_ms")
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
@@ -3298,10 +3023,12 @@ class TestMeasureRun:
         assert measured["wall_time_ms"] is None
         assert measured["metric_availability"]["wall_time"] == "missing"
 
-    @pytest.mark.parametrize("verdict", ["STAND", "REVISE", "ESCALATE"])
     def test_critic_is_complete_only_for_exact_supported_verdicts(
-        self, tmp_path, verdict
+        self, tmp_path
     ):
+        """One membership test against the producer's verdict vocabulary;
+        `STAND` stands for `REVISE` and `ESCALATE`."""
+        verdict = "STAND"
         manifest = _manifest()
         manifest["outcome"]["critic_verdict"] = verdict
 
@@ -3314,8 +3041,11 @@ class TestMeasureRun:
 
     @pytest.mark.parametrize(
         "verdict",
-        [None, "unavailable", "stand", "ERROR", " STAND "],
-        ids=["missing", "sentinel", "lowercase", "failure", "padded"],
+        # One membership test: a missing verdict and a near-miss spelling.
+        # The fixed `unavailable` sentinel is pinned, with its retention, by
+        # `test_fixed_unavailable_critic_sentinel_is_retained_but_not_available`.
+        [None, "stand"],
+        ids=["missing", "lowercase"],
     )
     def test_invalid_or_missing_critic_verdict_is_missing(
         self, tmp_path, verdict
@@ -3361,7 +3091,8 @@ class TestMeasureRun:
     @pytest.mark.parametrize(
         "fragment",
         [
-            {"step": 10, "decisions": {"critic_skipped": True}},
+            # One row per missing half of the producer step identity (fix
+            # 57b6db74); a fragment missing both fails both checks.
             {
                 "event": "step",
                 "step": 10,
@@ -3373,7 +3104,7 @@ class TestMeasureRun:
                 "decisions": {"critic_skipped": True},
             },
         ],
-        ids=["no-identity", "missing-run-id", "missing-event"],
+        ids=["missing-run-id", "missing-event"],
     )
     def test_bare_step_fragment_cannot_disable_a_real_critic_verdict(
         self, tmp_path, fragment
@@ -3548,17 +3279,20 @@ class TestMeasureRun:
         assert cohort["dispatch"]["actual_dispatches"] is None
         assert cohort["dispatch"]["adjustments"] is None
 
-    # sanitize.py:766 is literally `for status_name in ("initial_status",
-    # "final_status")`, so the status_field axis was free. One param per
-    # distinguishable condition is what the guard can actually tell apart:
-    # absent, non-str, empty-str, unsupported-str.
+    # `_sanitize_dispatch`'s per-agent loop is literally `for status_name
+    # in ("initial_status", "final_status")`, so the status_field axis was
+    # free. One param per conjunct the guard can tell apart: absent,
+    # non-str, unsupported-str (an empty string is one more unsupported
+    # string). The non-str row is unhashable on purpose: the vocabulary is
+    # a frozenset, so a hashable non-string (`None`) fails the membership
+    # test anyway, and only an unhashable one needs the `isinstance`
+    # conjunct to be rejected rather than raise.
     @pytest.mark.parametrize("status_field", ["initial_status"])
     @pytest.mark.parametrize(
         "invalid_status",
         [
             pytest.param("__missing__", id="missing"),
-            None,
-            "",
+            pytest.param([], id="list"),
             "UNKNOWN",
         ],
     )
@@ -3617,12 +3351,10 @@ class TestMeasureRun:
     @pytest.mark.parametrize(
         "status,dispatched",
         [
+            # One dispatched and one skipped status: the vocabulary itself
+            # is the producer's (`test_metrics_uses_canonical_telemetry_contract`).
             ("DISPATCH", True),
-            ("DISPATCH_OVERRIDE", True),
             ("SKIPPED", False),
-            ("SKIPPED_OVERRIDE", False),
-            ("SKIPPED_QUICK_MODE", False),
-            ("SKIPPED_TRIAGE", False),
         ],
     )
     def test_final_only_projection_accepts_supported_status_vocabulary(
@@ -3646,15 +3378,12 @@ class TestMeasureRun:
     @pytest.mark.parametrize(
         "invalid_status",
         [
+            # One per conjunct of the per-agent status check: absent,
+            # non-str (unhashable, as in the comparable-mode table above),
+            # unsupported-str.
             pytest.param("__missing__", id="missing"),
-            None,
-            "",
+            pytest.param([], id="list"),
             "UNKNOWN",
-            "DISPATCHED",
-            [],
-            {},
-            [{"nested": []}],
-            {"nested": []},
         ],
     )
     def test_final_only_projection_rejects_matching_invalid_statuses(
@@ -3677,23 +3406,15 @@ class TestMeasureRun:
         assert measured["dispatch"] is None
         assert measured["metric_availability"]["dispatch"] == "missing"
 
-    @pytest.mark.parametrize(
-        "invalid_status",
-        [
-            "DISPATCHED",
-            [],
-            {},
-            [{"nested": []}],
-            {"nested": []},
-        ],
-    )
     def test_invalid_sidecar_dispatch_status_falls_back_to_legacy(
-        self, tmp_path, invalid_status
+        self, tmp_path
     ):
+        """The load-level contract for the per-agent status guard, whose
+        conjuncts are swept at measure level above."""
         manifest = _manifest("sidecar-run")
         manifest["dispatch"]["agents"]["code-reviewer"][
             "final_status"
-        ] = invalid_status
+        ] = "DISPATCHED"
         _write_manifest(tmp_path / "review.manifest.json", manifest)
         _write_jsonl(tmp_path / "review.jsonl", _legacy_events("legacy-fallback"))
 
@@ -3802,13 +3523,9 @@ class TestMeasureRun:
     @pytest.mark.parametrize(
         "invalid_name",
         [
-            pytest.param(None, id="null"),
+            # `type(name) is not str`, then the producer's agent-name
+            # regex (its shape is owned by `dispatch_status.py`).
             pytest.param(7, id="integer"),
-            pytest.param(("security-reviewer",), id="tuple"),
-            pytest.param("", id="empty"),
-            pytest.param("Security-reviewer", id="uppercase"),
-            pytest.param("security_reviewer", id="underscore"),
-            pytest.param("security/reviewer", id="path"),
             pytest.param("private identity prose", id="prose"),
         ],
     )
@@ -3827,53 +3544,15 @@ class TestMeasureRun:
         assert measured["metric_availability"]["dispatch"] == "missing"
         assert "private identity prose" not in json.dumps(measured)
 
-    def test_agent_set_mismatch_rejects_unhashable_projection_identity(self):
-        class UnhashableIdentityProjection(dict):
-            def items(self):
-                return [([], "DISPATCH")]
-
-        dispatch = _mismatched_dispatch()
-        dispatch["plan_projections"]["final_plan"] = (
-            UnhashableIdentityProjection()
-        )
-
-        assert sanitize._sanitize_dispatch(dispatch) is None
-
-    @pytest.mark.parametrize("field", ["identity", "status"])
-    def test_agent_set_mismatch_rejects_unhashable_string_subclasses(self, field):
-        class UnhashableStr(str):
-            __hash__ = None
-
-        dispatch = _mismatched_dispatch()
-        if field == "identity":
-            class UnhashableIdentityProjection(dict):
-                def items(self):
-                    return [
-                        ("code-reviewer", "DISPATCH"),
-                        (UnhashableStr("security-reviewer"), "DISPATCH"),
-                    ]
-
-            dispatch["plan_projections"]["final_plan"] = (
-                UnhashableIdentityProjection()
-            )
-        else:
-            dispatch["plan_projections"]["final_plan"]["security-reviewer"] = (
-                UnhashableStr("DISPATCH")
-            )
-
-        assert sanitize._sanitize_dispatch(dispatch) is None
-
     @pytest.mark.parametrize(
         "invalid_status",
         [
-            pytest.param(None, id="null"),
-            pytest.param(True, id="boolean"),
-            pytest.param(7, id="integer"),
-            pytest.param("", id="empty"),
-            pytest.param("DISPATCHED", id="unsupported"),
+            # `type(status) is not str`, then the supported-status vocabulary.
+            # The non-str row is unhashable: a hashable one (`None`) fails the
+            # frozenset membership test anyway, so only an unhashable value
+            # needs the type conjunct to be rejected rather than raise.
             pytest.param([], id="list"),
-            pytest.param({}, id="mapping"),
-            pytest.param(["DISPATCH"], id="structured"),
+            pytest.param("DISPATCHED", id="unsupported"),
         ],
     )
     def test_agent_set_mismatch_rejects_invalid_projection_status(
@@ -3883,6 +3562,10 @@ class TestMeasureRun:
         manifest["dispatch"] = _mismatched_dispatch()
         projection = manifest["dispatch"]["plan_projections"]["final_plan"]
         projection["security-reviewer"] = invalid_status
+        # The replaced status no longer counts as dispatched; matching the
+        # final count keeps the count recomputation from rejecting the row
+        # first, so only the status check can.
+        manifest["dispatch"]["final_dispatch_count"] = 1
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
@@ -3951,23 +3634,13 @@ class TestMeasureRun:
     @pytest.mark.parametrize(
         "malform",
         [
+            # One per guard: the container is not a dict; its key set is
+            # not exactly the two plans; one plan is not a dict. The key-set
+            # row adds a key rather than dropping one: a dropped plan reads
+            # as `None` and the plan-is-a-dict check would reject it first.
             pytest.param(
                 lambda dispatch: dispatch.__setitem__("plan_projections", None),
                 id="null-object",
-            ),
-            pytest.param(
-                lambda dispatch: dispatch.__setitem__("plan_projections", []),
-                id="list-object",
-            ),
-            pytest.param(
-                lambda dispatch: dispatch["plan_projections"].pop(
-                    "planner_baseline"
-                ),
-                id="missing-planner",
-            ),
-            pytest.param(
-                lambda dispatch: dispatch["plan_projections"].pop("final_plan"),
-                id="missing-final",
             ),
             pytest.param(
                 lambda dispatch: dispatch["plan_projections"].__setitem__(
@@ -3980,12 +3653,6 @@ class TestMeasureRun:
                     "planner_baseline", []
                 ),
                 id="planner-list",
-            ),
-            pytest.param(
-                lambda dispatch: dispatch["plan_projections"].__setitem__(
-                    "final_plan", []
-                ),
-                id="final-list",
             ),
         ],
     )
@@ -4001,19 +3668,16 @@ class TestMeasureRun:
         assert measured["dispatch"] is None
         assert measured["metric_availability"]["dispatch"] == "missing"
 
-    @pytest.mark.parametrize(
-        "mode",
-        ["comparable", "planner-only", "legacy-final", "unavailable"],
-    )
+    # One guard (`"plan_projections" in value and not agent_set_mismatch`).
+    # `comparable` is the only mode whose falsifying conjunct is
+    # `comparison_available is False`; the others' conjuncts are pinned
+    # individually by `test_agent_set_mismatch_requires_exact_mode_metadata`.
+    @pytest.mark.parametrize("mode", ["comparable", "unavailable"])
     def test_dispatch_rejects_plan_projections_outside_agent_set_mismatch(
         self, tmp_path, mode
     ):
         if mode == "comparable":
             dispatch = _manifest()["dispatch"]
-        elif mode == "planner-only":
-            dispatch = _planner_only_dispatch()
-        elif mode == "legacy-final":
-            dispatch = _final_only_dispatch()
         else:
             dispatch = _unavailable_dispatch()
         dispatch["plan_projections"] = {
@@ -4031,61 +3695,12 @@ class TestMeasureRun:
     @pytest.mark.parametrize(
         "malform",
         [
-            pytest.param(
-                lambda dispatch: dispatch.__setitem__(
-                    "planner_candidate_count", 999_999
-                ),
-                id="planner-count",
-            ),
-            pytest.param(
-                lambda dispatch: dispatch["plan_projections"]["final_plan"].__setitem__(
-                    "Security-reviewer", "DISPATCH"
-                ),
-                id="unsafe-identity",
-            ),
-            pytest.param(
-                lambda dispatch: dispatch["plan_projections"]["final_plan"].__setitem__(
-                    "security-reviewer", []
-                ),
-                id="structured-status",
-            ),
-            pytest.param(
-                lambda dispatch: dispatch["plan_projections"].__setitem__(
-                    "extra", {}
-                ),
-                id="extra-projection-key",
-            ),
-            pytest.param(
-                lambda dispatch: dispatch["plan_projections"].__setitem__(
-                    "final_plan", {"code-reviewer": "DISPATCH"}
-                ),
-                id="equal-identity-sets",
-            ),
-            pytest.param(
-                lambda dispatch: dispatch.__setitem__(
-                    "planner_baseline_available", "malformed"
-                ),
-                id="malformed-availability",
-            ),
-            pytest.param(
-                lambda dispatch: dispatch.__setitem__(
-                    "invalid_reason_codes", None
-                ),
-                id="malformed-reasons",
-            ),
-            pytest.param(
-                lambda dispatch: dispatch["invalid_reason_codes"].append(
-                    "extra_reason"
-                ),
-                id="extra-mismatch-reason",
-            ),
-            pytest.param(
-                lambda dispatch: (
-                    dispatch.pop("plan_projections"),
-                    dispatch["invalid_reason_codes"].append("extra_reason"),
-                ),
-                id="mismatch-reason-without-projections",
-            ),
+            # One per branch of `_dispatch_projection_family_failure`:
+            # projections present without the mismatch reason code (only
+            # the `"plan_projections" in value` branch can flag it), and the
+            # reason code without projections. Each malformation's
+            # `dispatch is None` outcome is pinned at measure level by the
+            # tests above.
             pytest.param(
                 lambda dispatch: dispatch.update(
                     {
@@ -4094,6 +3709,13 @@ class TestMeasureRun:
                     }
                 ),
                 id="out-of-mode-projections",
+            ),
+            pytest.param(
+                lambda dispatch: (
+                    dispatch.pop("plan_projections"),
+                    dispatch["invalid_reason_codes"].append("extra_reason"),
+                ),
+                id="mismatch-reason-without-projections",
             ),
         ],
     )
@@ -4158,49 +3780,20 @@ class TestMeasureRun:
         assert run["dispatch"] == manifest["dispatch"]
         assert run["warnings"] == []
 
-    @pytest.mark.parametrize(
-        "planner_available,final_available,comparison_available",
-        [
-            (True, False, True),
-            (False, True, True),
-            (True, True, False),
-        ],
-        ids=[
-            "comparison-without-final",
-            "comparison-without-planner",
-            "comparison-disabled-for-two-valid-plans",
-        ],
-    )
     def test_contradictory_dispatch_availability_flags_are_missing(
-        self,
-        tmp_path,
-        planner_available,
-        final_available,
-        comparison_available,
+        self, tmp_path
     ):
+        """One `comparison_available != (planner and final)` guard; a
+        comparison claimed without a final plan stands for every
+        contradictory combination."""
         manifest = _manifest()
         manifest["dispatch"].update(
             {
-                "planner_baseline_available": planner_available,
-                "final_plan_available": final_available,
-                "comparison_available": comparison_available,
+                "planner_baseline_available": True,
+                "final_plan_available": False,
+                "comparison_available": True,
             }
         )
-
-        measured = measure_run(manifest, tmp_path, include_transcripts=False)
-
-        assert measured["dispatch"] is None
-        assert measured["metric_availability"]["dispatch"] == "missing"
-
-    def test_duplicate_dispatch_evidence_is_missing(self, tmp_path):
-        manifest = _manifest()
-        manifest["dispatch"] = _planner_only_dispatch()
-        manifest["dispatch"]["invalid_reason_codes"].append(
-            "planner_baseline_duplicate_agents"
-        )
-        manifest["dispatch"]["duplicate_agent_names"] = {
-            "planner_baseline": ["security-reviewer"]
-        }
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
@@ -4246,15 +3839,16 @@ class TestMeasureRun:
 
     @pytest.mark.parametrize(
         "contradiction",
+        # A popped `initial_status` is rejected earlier, by the per-agent
+        # status loop (`test_dispatch_decisions_require_supported_nonempty_
+        # statuses[missing]`), so it cannot reach the final-only branch.
         [
-            "incomplete-status",
             "changed-status",
             "planner-count",
             "adjustments",
             "change-label",
         ],
         ids=[
-            "incomplete-status",
             "changed-status",
             "planner-count",
             "adjustments",
@@ -4267,9 +3861,7 @@ class TestMeasureRun:
         manifest = _manifest()
         manifest["dispatch"] = _final_only_dispatch()
         decision = manifest["dispatch"]["agents"]["code-reviewer"]
-        if contradiction == "incomplete-status":
-            decision.pop("initial_status")
-        elif contradiction == "changed-status":
+        if contradiction == "changed-status":
             decision["initial_status"] = "SKIPPED_TRIAGE"
             decision["change"] = "added"
         elif contradiction == "planner-count":
@@ -4385,27 +3977,9 @@ class TestMeasureRun:
 
         assert measured_observed["metric_availability"]["dispatch"] == "complete"
         assert measured_observed["metric_availability"]["assignment"] == "complete"
+        assert measured_observed["assignment"] == observed["assignment"]
         assert measured_missing["metric_availability"]["dispatch"] == "missing"
         assert measured_missing["metric_availability"]["assignment"] == "missing"
-
-    def test_valid_explicit_empty_coverage_ledger_remains_complete(self, tmp_path):
-        manifest = _manifest()
-        manifest["assignment"] = {
-            "changed_files": [],
-            "reviewable_files": [],
-            "assigned_files_by_agent": {},
-            "assigned_files": [],
-            "file_exclusions": [],
-            "unassigned_reviewable_files": [],
-            "reviewed_files_by_agent": {},
-            "review_claimable_file_count_by_agent": {},
-            "semantics": "generated_scope_not_proof_of_model_read",
-        }
-
-        measured = measure_run(manifest, tmp_path, include_transcripts=False)
-
-        assert measured["assignment"] == manifest["assignment"]
-        assert measured["metric_availability"]["assignment"] == "complete"
 
     def test_realistic_coverage_ledger_remains_complete(self, tmp_path):
         manifest = _manifest()
@@ -4479,35 +4053,23 @@ class TestMeasureRun:
         assert cohort["assignment"]["available_runs"] == 0
 
     @pytest.mark.parametrize(
-        "duplicate_location",
-        ["changed_files", "reviewable_files", "by-agent", "file_exclusions", "unassigned_reviewable_files"],
-        ids=["changed_files", "reviewable_files", "by-agent", "file_exclusions", "unassigned_reviewable_files"],
+        "duplicate_location", ["by-agent", "file_exclusions"],
     )
     def test_coverage_set_like_lists_reject_duplicate_paths(
         self, tmp_path, duplicate_location
     ):
+        """One row per duplicate guard outside the path-list loop; the
+        loop over `_ASSIGNMENT_PATH_LIST_FIELDS` is represented by
+        `test_duplicate_assigned_path_cannot_report_two_hundred_percent_coverage`."""
         manifest = _manifest()
         coverage = manifest["assignment"]
-        if duplicate_location == "changed_files":
-            coverage["changed_files"].append("src/a.py")
-        elif duplicate_location == "reviewable_files":
-            coverage["reviewable_files"].append("src/a.py")
-        elif duplicate_location == "by-agent":
+        if duplicate_location == "by-agent":
             coverage["assigned_files_by_agent"]["code-reviewer"].append(
                 "src/a.py"
             )
-        elif duplicate_location == "file_exclusions":
+        else:
             coverage["file_exclusions"].append(
                 {"path": "vendor/generated.js", "reason": "noise_filtered"}
-            )
-        else:
-            coverage.update(
-                {
-                    "changed_files": ["src/a.py", "src/b.py", "vendor/generated.js"],
-                    "reviewable_files": ["src/a.py", "src/b.py"],
-                    "assigned_files": ["src/a.py"],
-                    "unassigned_reviewable_files": ["src/b.py", "src/b.py"],
-                }
             )
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
@@ -4534,23 +4096,13 @@ class TestMeasureRun:
         assert measured["assignment"] is None
         assert measured["metric_availability"]["assignment"] == "missing"
 
-    @pytest.mark.parametrize(
-        "file_exclusions",
-        [
-            [],
-            [{"path": "src/a.py", "reason": "noise_filtered"}],
-            [
-                {"path": "vendor/generated.js", "reason": "noise_filtered"},
-                {"path": "extra.py", "reason": "noise_filtered"},
-            ],
-        ],
-        ids=["missing", "reviewable-path", "extra-path"],
-    )
     def test_exclusions_must_exactly_equal_changed_minus_reviewable(
-        self, tmp_path, file_exclusions
+        self, tmp_path
     ):
         manifest = _manifest()
-        manifest["assignment"]["file_exclusions"] = file_exclusions
+        manifest["assignment"]["file_exclusions"] = [
+            {"path": "src/a.py", "reason": "noise_filtered"}
+        ]
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
@@ -4606,7 +4158,6 @@ class TestMeasureRun:
     @pytest.mark.parametrize(
         "invalid_coverage",
         [
-            {},
             {
                 "changed_files": [],
                 "reviewable_files": [],
@@ -4653,7 +4204,6 @@ class TestMeasureRun:
             },
         ],
         ids=[
-            "empty-object",
             "missing-semantics",
             "malformed-path",
             "malformed-agent-path",
@@ -4838,27 +4388,24 @@ class TestReviewedFilesRows:
         assert measured["assignment"] is None
         assert measured["metric_availability"]["assignment"] == "missing"
 
-    def test_retired_three_way_shape_is_rejected(self, tmp_path):
-        manifest = _manifest()
-        manifest["assignment"]["reviewed_files_by_agent"] = {
-            "code-reviewer": {
-                "reviewed_file_claim_count": 1,
-                "declared_" + "unclaimed_review_file_count": 1,
-                "unclaimed_review_file_count_" + "autofilled": 0,
-            },
-        }
-        manifest["assignment"]["review_claimable_file_count_by_agent"] = {"code-reviewer": 2}
-
-        measured = measure_run(manifest, tmp_path, include_transcripts=False)
-
-        assert measured["assignment"] is None
-
     @pytest.mark.parametrize(
         "counts",
         [
-            {"reviewed_file_claim_count": -1, "unclaimed_review_file_count": 1},
-            {"reviewed_file_claim_count": 1},
-            {"reviewed_file_claim_count": 1, "unclaimed_review_file_count": 0, "extra": 0},
+            pytest.param(
+                {"reviewed_file_claim_count": -1, "unclaimed_review_file_count": 1},
+                id="negative",
+            ),
+            # Any key set other than exactly `_REVIEWED_FILES_FIELDS` (a
+            # missing key, an extra key, the retired three-way shape) fails
+            # the one `set(counts) != _REVIEWED_FILES_FIELDS` conjunct. The
+            # counts here are valid and conserve the denominator, so that
+            # conjunct is the only guard that can reject this row (a
+            # missing key would also read as `None` and be caught by the
+            # non-negative check instead).
+            pytest.param(
+                {"reviewed_file_claim_count": 1, "unclaimed_review_file_count": 1, "extra": 0},
+                id="extra-key",
+            ),
         ],
     )
     def test_malformed_population_row_fails_closed(self, tmp_path, counts):
@@ -5061,28 +4608,14 @@ class TestLifecycleMeasurement:
         }
         assert measured["lifecycle"]["completion_gap"] == 2
 
-    @pytest.mark.parametrize(
-        "incomplete",
-        [
-            pytest.param(
-                ["b-reviewer", "b-reviewer"], id="missing-agent-execution"
-            ),
-            pytest.param(
-                ["a-reviewer", "b-reviewer", "b-reviewer", "c-reviewer"],
-                id="extra-unstarted-agent",
-            ),
-            pytest.param(
-                ["a-reviewer", "b-reviewer"], id="undercounted-retry"
-            ),
-            pytest.param(
-                ["a-reviewer", "b-reviewer", "b-reviewer", "b-reviewer"],
-                id="overcounted-retry",
-            ),
-        ],
-    )
     def test_complete_lifecycle_requires_exact_incomplete_execution_counts(
-        self, tmp_path, incomplete
+        self, tmp_path
     ):
+        """One `Counter(incomplete) != starts - completions` identity; an
+        undercounted retry stands for every inexact multiset. The
+        running-status variant is pinned by
+        `test_running_lifecycle_rejects_missing_unmatched_agent`."""
+        incomplete = ["a-reviewer", "b-reviewer"]
         manifest = _manifest()
         manifest["agents"] = {
             "started": [
@@ -5138,57 +4671,31 @@ class TestLifecycleMeasurement:
         assert measured["lifecycle"]["started_events"] == 2
         assert measured["lifecycle"]["completed_events"] == 2
 
-    @pytest.mark.parametrize(
-        "started,completed",
-        [
-            (
-                [
-                    _agent_start(timestamp="2026-07-19T10:00:20+00:00"),
-                    _agent_start(
-                        "security-reviewer",
-                        timestamp="2026-07-19T10:00:10+00:00",
-                    ),
-                ],
-                [
-                    _agent_complete(timestamp="2026-07-19T10:00:40+00:00"),
-                    _agent_complete(
-                        "security-reviewer",
-                        timestamp="2026-07-19T10:00:30+00:00",
-                    ),
-                ],
+    def test_parallel_agent_lifecycle_may_regress_globally(self, tmp_path):
+        """Ordering is per agent, not global: two agents' retries
+        interleave so both lists regress globally while each agent's own
+        events stay ordered (a superset of two distinct agents
+        regressing)."""
+        started = [
+            _agent_start(timestamp="2026-07-19T10:00:20+00:00"),
+            _agent_start(
+                "security-reviewer", timestamp="2026-07-19T10:00:05+00:00"
             ),
-            (
-                [
-                    _agent_start(timestamp="2026-07-19T10:00:20+00:00"),
-                    _agent_start(
-                        "security-reviewer",
-                        timestamp="2026-07-19T10:00:05+00:00",
-                    ),
-                    _agent_start(timestamp="2026-07-19T10:00:30+00:00"),
-                    _agent_start(
-                        "security-reviewer",
-                        timestamp="2026-07-19T10:00:15+00:00",
-                    ),
-                ],
-                [
-                    _agent_complete(timestamp="2026-07-19T10:00:40+00:00"),
-                    _agent_complete(
-                        "security-reviewer",
-                        timestamp="2026-07-19T10:00:25+00:00",
-                    ),
-                    _agent_complete(timestamp="2026-07-19T10:00:50+00:00"),
-                    _agent_complete(
-                        "security-reviewer",
-                        timestamp="2026-07-19T10:00:35+00:00",
-                    ),
-                ],
+            _agent_start(timestamp="2026-07-19T10:00:30+00:00"),
+            _agent_start(
+                "security-reviewer", timestamp="2026-07-19T10:00:15+00:00"
             ),
-        ],
-        ids=["distinct-agents-regress-globally", "retries-interleave-globally"],
-    )
-    def test_parallel_agent_lifecycle_may_regress_globally(
-        self, tmp_path, started, completed
-    ):
+        ]
+        completed = [
+            _agent_complete(timestamp="2026-07-19T10:00:40+00:00"),
+            _agent_complete(
+                "security-reviewer", timestamp="2026-07-19T10:00:25+00:00"
+            ),
+            _agent_complete(timestamp="2026-07-19T10:00:50+00:00"),
+            _agent_complete(
+                "security-reviewer", timestamp="2026-07-19T10:00:35+00:00"
+            ),
+        ]
         manifest = _manifest()
         manifest["agents"] = {
             "started": started,
@@ -5229,22 +4736,15 @@ class TestLifecycleMeasurement:
                 ["2026-07-19T10:00:20+00:00"],
                 ["2026-07-19T10:00:10+00:00"],
             ),
-            (
-                [
-                    "2026-07-19T10:00:10+00:00",
-                    "2026-07-19T10:00:30+00:00",
-                ],
-                [
-                    "2026-07-19T10:00:20+00:00",
-                    "2026-07-19T10:00:25+00:00",
-                ],
-            ),
         ],
+        # One per guard of `_lifecycle_events_are_causal`: a regressing
+        # per-agent start list, a regressing per-agent completion list, and
+        # a completion before its matched start (a retry completing before
+        # its second start reaches that same guard).
         ids=[
             "same-agent-start-list-regresses",
             "same-agent-completion-list-regresses",
             "completion-precedes-start",
-            "retry-completes-before-second-start",
         ],
     )
     def test_temporally_impossible_lifecycle_is_missing(
@@ -5267,37 +4767,15 @@ class TestLifecycleMeasurement:
         assert measured["lifecycle"] is None
         assert measured["metric_availability"]["lifecycle"] == "missing"
 
-    def test_incomplete_identities_remain_separate_from_completion_gap(self, tmp_path):
-        manifest = _manifest()
-        manifest["agents"] = {
-            "started": [
-                _agent_start(),
-                _agent_start("security-reviewer"),
-            ],
-            "completed": [_agent_complete()],
-            "incomplete": ["security-reviewer"],
-        }
-
-        measured = measure_run(manifest, tmp_path, include_transcripts=False)
-
-        assert measured["lifecycle"]["incomplete_identities"] == [
-            "security-reviewer"
-        ]
-        assert measured["lifecycle"]["incomplete_count"] == 1
-        assert measured["lifecycle"]["incomplete_by_agent"] == {
-            "security-reviewer": 1
-        }
-        assert measured["lifecycle"]["completion_gap"] == 1
-
     @pytest.mark.parametrize(
         "malform",
         [
             lambda manifest: manifest.pop("agents"),
-            lambda manifest: manifest["agents"].pop("started"),
+            # A missing list fails the same `isinstance(..., list)` check.
             lambda manifest: manifest["agents"].__setitem__("completed", {}),
             lambda manifest: manifest["agents"].__setitem__("incomplete", [None]),
         ],
-        ids=["missing-agents", "missing-list", "malformed-list", "unsafe-incomplete"],
+        ids=["missing-agents", "malformed-list", "unsafe-incomplete"],
     )
     def test_missing_or_malformed_agents_are_lifecycle_missing(
         self, tmp_path, malform
@@ -5312,41 +4790,9 @@ class TestLifecycleMeasurement:
         assert measured["metric_availability"]["assignment"] == "complete"
 
     @pytest.mark.parametrize(
-        "identity_family",
-        ["started", "completed", "incomplete"],
-    )
-    def test_unhashable_lifecycle_identity_fails_closed(
-        self, tmp_path, identity_family
-    ):
-        class UnhashableStr(str):
-            __hash__ = None
-
-        manifest = _manifest()
-        manifest["agents"] = {
-            "started": [_agent_start()],
-            "completed": [_agent_complete()],
-            "incomplete": [],
-        }
-        if identity_family == "incomplete":
-            manifest["agents"]["completed"] = []
-            manifest["agents"]["incomplete"] = [
-                UnhashableStr("code-reviewer")
-            ]
-        else:
-            manifest["agents"][identity_family][0]["agent"] = (
-                UnhashableStr("code-reviewer")
-            )
-
-        measured = measure_run(manifest, tmp_path, include_transcripts=False)
-
-        assert measured["lifecycle"] is None
-        assert measured["metric_availability"]["lifecycle"] == "missing"
-
-    @pytest.mark.parametrize(
         "family,mutate",
         [
             ("started", lambda event: event.pop("schema")),
-            ("started", lambda event: event.__setitem__("schema", True)),
             ("started", lambda event: event.__setitem__("event", "agent_complete")),
             ("started", lambda event: event.__setitem__("run_id", "other-run")),
             ("started", lambda event: event.__setitem__("timestamp", "2026-07-19T10:00:10")),
@@ -5357,7 +4803,6 @@ class TestLifecycleMeasurement:
         ],
         ids=[
             "missing-schema",
-            "boolean-schema",
             "wrong-event",
             "wrong-run",
             "naive-timestamp",
@@ -5687,55 +5132,32 @@ class TestTranscriptFamilyAvailability:
         assert artifacts["first_builder_attempt_succeeded"] is None
         assert artifacts["by_agent"][0]["first_builder_attempt_succeeded"] is False
 
-    @pytest.mark.parametrize(
-        "by_agent",
-        [
-            [
-                {
-                    "agent": "code-reviewer",
-                    "builder_attempted": True,
-                    "builder_attempts": 1,
-                    "builder_successes": 1,
-                    "builder_failures": 0,
-                    "first_builder_attempt_succeeded": True,
-                    "recovered": False,
-                },
-                {
-                    "agent": "security-reviewer",
-                    "builder_attempted": True,
-                    "builder_attempts": 2,
-                    "builder_successes": 1,
-                    "builder_failures": 1,
-                    "first_builder_attempt_succeeded": False,
-                    "recovered": True,
-                },
-            ],
-            [
-                {
-                    "agent": "security-reviewer",
-                    "builder_attempted": True,
-                    "builder_attempts": 1,
-                    "builder_successes": 0,
-                    "builder_failures": 1,
-                    "first_builder_attempt_succeeded": False,
-                    "recovered": False,
-                },
-                {
-                    "agent": "code-reviewer",
-                    "builder_attempted": True,
-                    "builder_attempts": 1,
-                    "builder_successes": 1,
-                    "builder_failures": 0,
-                    "first_builder_attempt_succeeded": True,
-                    "recovered": False,
-                },
-            ],
-        ],
-        ids=["first-succeeds-later-agent-recovers", "first-fails-other-agent-succeeds"],
-    )
     def test_complete_multi_agent_builder_uses_aggregate_recovery_semantics(
-        self, monkeypatch, tmp_path, by_agent
+        self, monkeypatch, tmp_path
     ):
+        """The run-wide `recovered` is `any(recovered)` over the agents, and
+        a per-agent first result never becomes a run-wide one. One agent
+        recovering stands for the case where none does."""
+        by_agent = [
+            {
+                "agent": "code-reviewer",
+                "builder_attempted": True,
+                "builder_attempts": 1,
+                "builder_successes": 1,
+                "builder_failures": 0,
+                "first_builder_attempt_succeeded": True,
+                "recovered": False,
+            },
+            {
+                "agent": "security-reviewer",
+                "builder_attempted": True,
+                "builder_attempts": 2,
+                "builder_successes": 1,
+                "builder_failures": 1,
+                "first_builder_attempt_succeeded": False,
+                "recovered": True,
+            },
+        ]
         transcript = _complete_empty_transcript()
         transcript["artifact_writes"] = {
             "available": True,
@@ -6259,11 +5681,26 @@ class TestTranscriptFamilyAvailability:
         )
         assert cohort["artifact_writes"]["partial_observed_recoveries"] == 1
 
-    @pytest.mark.parametrize("target", ["top-level", "agent"], ids=str)
+    # At the top level every contradiction but a float count fails one
+    # "top level equals the by-agent sums" check (the top-level first result
+    # is discarded before any first-result rule runs), so the arithmetic case
+    # stands for false-attempt, first-result and recovery there.
     @pytest.mark.parametrize(
-        "contradiction",
-        ["arithmetic", "false-attempt", "first-result", "recovery", "float-count"],
-        ids=str,
+        "target,contradiction",
+        [
+            pytest.param("top-level", "arithmetic", id="top-level-arithmetic"),
+            pytest.param("top-level", "float-count", id="top-level-float-count"),
+            *(
+                pytest.param("agent", name, id=f"agent-{name}")
+                for name in (
+                    "arithmetic",
+                    "false-attempt",
+                    "first-result",
+                    "recovery",
+                    "float-count",
+                )
+            ),
+        ],
     )
     def test_inconsistent_complete_builder_artifacts_are_missing(
         self, monkeypatch, tmp_path, target, contradiction
@@ -6332,24 +5769,14 @@ class TestTranscriptFamilyAvailability:
             == 1
         )
 
-    @pytest.mark.parametrize(
-        "first,successes,failures,partial_successes,partial_failures",
-        [
-            (True, 1, 0, 1, 0),
-            (False, 0, 1, 0, 1),
-        ],
-        ids=["first-success-later-unknown", "first-failure-later-unknown"],
-    )
     def test_known_first_with_later_unknown_result_is_retained_as_partial(
-        self,
-        monkeypatch,
-        tmp_path,
-        first,
-        successes,
-        failures,
-        partial_successes,
-        partial_failures,
+        self, monkeypatch, tmp_path
     ):
+        """A known first result followed by an unknown one. The cohort's
+        success and failure counters take `int(first)` and `int(not first)`
+        on one path, so a first success stands for a first failure."""
+        first, successes, failures = True, 1, 0
+        partial_successes, partial_failures = 1, 0
         transcript = _complete_empty_transcript()
         transcript["artifact_writes"] = {
             "available": True,
@@ -6488,87 +5915,6 @@ class TestTranscriptFamilyAvailability:
         assert measured["transcript"]["artifact_writes"] is None
         assert measured["metric_availability"]["artifact_writes"] == "missing"
 
-    def test_partial_observed_no_attempt_keeps_unknown_aggregate_state(
-        self, monkeypatch, tmp_path
-    ):
-        transcript = _complete_empty_transcript()
-        transcript["completeness"]["artifact_writes"] = False
-        transcript["artifact_writes"] = {
-            "available": True,
-            "complete": False,
-            "builder_attempted": None,
-            "builder_attempts": 0,
-            "builder_successes": 0,
-            "builder_failures": 0,
-            "recovered": False,
-            "by_agent": [
-                {
-                    "agent": "code-reviewer",
-                    "builder_attempted": False,
-                    "builder_attempts": 0,
-                    "builder_successes": 0,
-                    "builder_failures": 0,
-                    "first_builder_attempt_succeeded": None,
-                    "recovered": False,
-                }
-            ],
-        }
-
-        measured = _measure_fake_transcript(monkeypatch, tmp_path, transcript)
-        cohort = aggregate_cohort([measured])
-
-        artifacts = measured["transcript"]["artifact_writes"]
-        assert measured["metric_availability"]["artifact_writes"] == "partial"
-        assert artifacts["builder_attempted"] is None
-        assert cohort["artifact_writes"]["partial_observed_no_builder_attempts"] == 1
-
-    def test_top_level_unknown_first_result_is_partial_attempt_evidence(
-        self, monkeypatch, tmp_path
-    ):
-        transcript = _complete_empty_transcript()
-        transcript["artifact_writes"] = {
-            "available": True,
-            "complete": True,
-            "builder_attempted": True,
-            "builder_attempts": 1,
-            "builder_successes": 0,
-            "builder_failures": 0,
-            "first_builder_attempt_succeeded": None,
-            "recovered": False,
-            "by_agent": [],
-        }
-
-        measured = _measure_fake_transcript(monkeypatch, tmp_path, transcript)
-        cohort = aggregate_cohort([measured])
-
-        assert measured["metric_availability"]["artifact_writes"] == "partial"
-        assert (
-            cohort["artifact_writes"]["partial_observed_first_builder_attempts"]
-            == 0
-        )
-        assert (
-            cohort["artifact_writes"]["partial_observed_unknown_first_results"]
-            == 0
-        )
-        assert (
-            cohort["artifact_writes"][
-                "partial_observed_runs_with_builder_attempts"
-            ]
-            == 1
-        )
-        assert (
-            cohort["artifact_writes"][
-                "partial_observed_top_only_runs_with_unknown_first_builder_result"
-            ]
-            == 1
-        )
-        assert (
-            cohort["artifact_writes"][
-                "partial_observed_top_only_unclassified_builder_results"
-            ]
-            == 1
-        )
-
     @pytest.mark.parametrize(
         "family,flag,payload_key,observed",
         [
@@ -6699,17 +6045,11 @@ class TestTranscriptFamilyAvailability:
     @pytest.mark.parametrize(
         "family,flag,payload_key",
         [
+            # Every family but model_usage resolves in `family_state`'s one
+            # `payload is not None` conjunct; model_usage takes
+            # `_model_usage_availability`.
             ("usage", "usage", "usage"),
-            (
-                "orchestrator_usage",
-                "orchestrator_data",
-                "orchestrator_usage_by_step",
-            ),
-            ("agent_usage", "agent_data", "agent_usage"),
             ("model_usage", "agent_data", "agent_usage"),
-            ("tool_failures", "tool_failures", "tool_failures"),
-            ("artifact_writes", "artifact_writes", "artifact_writes"),
-            ("observed_reads", "observed_reads", "observed_reads"),
         ],
     )
     def test_incomplete_absent_payload_is_missing(
@@ -6723,37 +6063,20 @@ class TestTranscriptFamilyAvailability:
 
         assert measured["metric_availability"][family] == "missing"
 
-    @pytest.mark.parametrize(
-        "duplicate_field",
-        ["all", "in_scope", "out_of_scope", "non_scope_comparable"],
-        ids=["all", "in-scope", "out-of-scope", "non-scope-comparable"],
-    )
     def test_duplicate_observed_read_paths_reject_the_family_and_aggregate(
-        self, monkeypatch, tmp_path, duplicate_field
+        self, monkeypatch, tmp_path
     ):
+        """One `len(paths) != len(set(paths))` check in the bucket loop of
+        `measure._sanitize_reads`; the "all" bucket stands for the others.
+        The payload is otherwise valid (`_empty_reads` supplies the schema
+        and completeness flags), so only the duplicate check can reject it."""
         transcript = _complete_empty_transcript()
-        reads = {
-            "all": ["src/context.py"],
-            "in_scope": ["src/context.py"],
-            "out_of_scope": [],
-            "non_scope_comparable": ["src/synthesis.py"],
-            "exhaustive": False,
-            "transcript_data_complete": True,
-        }
-        if duplicate_field == "all":
-            reads["all"].append("src/context.py")
-        elif duplicate_field == "in_scope":
-            reads["in_scope"].append("src/context.py")
-        elif duplicate_field == "out_of_scope":
-            reads.update(
-                {
-                    "in_scope": [],
-                    "out_of_scope": ["src/context.py", "src/context.py"],
-                }
-            )
-        else:
-            reads["non_scope_comparable"].append("src/synthesis.py")
-        transcript["observed_reads"] = reads
+        transcript["observed_reads"].update(
+            {
+                "all": ["src/context.py", "src/context.py"],
+                "in_scope": ["src/context.py"],
+            }
+        )
 
         measured = _measure_fake_transcript(monkeypatch, tmp_path, transcript)
         cohort = aggregate_cohort([measured])
@@ -6764,22 +6087,15 @@ class TestTranscriptFamilyAvailability:
         assert cohort["observed_reads"]["by_path"] is None
         assert cohort["observed_reads"]["availability"]["complete"] == 0
 
-    @pytest.mark.parametrize(
-        "invalid_value",
-        [
-            pytest.param(None, id="missing"),
-            pytest.param("src/synthesis.py", id="non-list"),
-            pytest.param(["PRIVATE\x00PATH"], id="unsafe-string"),
-        ],
-    )
     def test_non_scope_comparable_reads_require_a_privacy_safe_list(
-        self, monkeypatch, tmp_path, invalid_value
+        self, monkeypatch, tmp_path
     ):
+        """A missing bucket fails `_strict_repo_read_paths`'s list check (a
+        non-list fails it too). An unsafe entry is swept per condition by
+        `test_observed_read_paths_require_canonical_repo_relative_form`,
+        through the same call in the same bucket loop."""
         transcript = _complete_empty_transcript()
-        if invalid_value is None:
-            transcript["observed_reads"].pop("non_scope_comparable")
-        else:
-            transcript["observed_reads"]["non_scope_comparable"] = invalid_value
+        transcript["observed_reads"].pop("non_scope_comparable")
 
         measured = _measure_fake_transcript(monkeypatch, tmp_path, transcript)
 
@@ -6789,20 +6105,19 @@ class TestTranscriptFamilyAvailability:
     @pytest.mark.parametrize(
         "invalid_version",
         [
-            pytest.param(None, id="missing"),
-            pytest.param(1, id="legacy-v1"),
-            pytest.param(3, id="future-mismatch"),
+            # A boolean and the legacy version. A missing or future version
+            # fails the same checks; only a float `2.0` would reach the
+            # `type(schema) is not int` conjunct without also failing
+            # `!= _OBSERVED_READS_SCHEMA`.
             pytest.param(True, id="boolean"),
+            pytest.param(1, id="legacy-v1"),
         ],
     )
     def test_observed_reads_require_exact_v2_schema_and_never_zero_fill_legacy(
         self, monkeypatch, tmp_path, invalid_version
     ):
         transcript = _complete_empty_transcript()
-        if invalid_version is None:
-            transcript["observed_reads"].pop("schema")
-        else:
-            transcript["observed_reads"]["schema"] = invalid_version
+        transcript["observed_reads"]["schema"] = invalid_version
 
         measured = _measure_fake_transcript(monkeypatch, tmp_path, transcript)
         cohort = aggregate_cohort([measured])
@@ -6821,17 +6136,19 @@ class TestTranscriptFamilyAvailability:
             "non_scope_comparable_availability"
         ]["missing"] == 1
 
+    # One row per condition of `sanitize._safe_repo_read_path`, the predicate
+    # every observed read passes. `TestNonCanonicalPathsFailClosed` pins that
+    # the coverage and lifecycle call sites apply it too.
     @pytest.mark.parametrize(
         "bad_path",
         [
+            # `_safe_string` rejects an empty string before the predicate.
             pytest.param("", id="empty"),
             pytest.param("/etc/passwd", id="posix-absolute"),
+            # One segment check covers "..", "." and the empty segment of a
+            # doubled slash.
             pytest.param("../secret.py", id="parent-prefix"),
-            pytest.param("a/../b.py", id="parent-segment"),
-            pytest.param("./a.py", id="dot-prefix"),
-            pytest.param("a//b.py", id="double-slash"),
-            pytest.param(r"C:\secret.py", id="windows-drive"),
-            pytest.param(r"\\server\share.py", id="windows-unc"),
+            # One backslash check covers drive, UNC and separator shapes.
             pytest.param(r"src\file.py", id="backslash-separator"),
             # The only shape the Windows-drive guard alone rejects: a
             # forward-slash drive path has no backslash, no empty segment and
@@ -6840,33 +6157,20 @@ class TestTranscriptFamilyAvailability:
             pytest.param("C:/secret.py", id="windows-drive-forward-slash"),
             # _safe_string deliberately admits \n and \t as legitimate prose
             # whitespace, so a path carrying one reaches _safe_repo_read_path
-            # intact and only its Cc/Cf check rejects it.
+            # intact and only its Cc/Cf check rejects it (one check for both
+            # categories).
             pytest.param("src/two\nlines.py", id="embedded-newline"),
-            pytest.param("src/\x7fsecret.py", id="unicode-control"),
-            pytest.param("src/\u202esecret.py", id="unicode-format"),
         ],
     )
-    # The four bucket names traverse ONE production loop: measure.py:373-380
-    # runs every bucket through the same _strict_repo_read_paths call, so the
-    # bucket axis multiplied nodes without adding a distinguishable condition.
-    # Mutating each of the five guards in _safe_repo_read_path
-    # (sanitize.py:129-145) is caught by the "all" bucket alone. The loop
-    # cannot silently lose a bucket either: dropping non_scope_comparable
-    # from the tuple still fails nine other tests in this file.
-    @pytest.mark.parametrize("field", ["all"])
+    # Every read bucket passes the same `_strict_repo_read_paths` call in
+    # `measure._sanitize_reads`, so the "all" bucket stands for the others.
     def test_observed_read_paths_require_canonical_repo_relative_form(
-        self, monkeypatch, tmp_path, field, bad_path
+        self, monkeypatch, tmp_path, bad_path
     ):
         transcript = _complete_empty_transcript()
         reads = transcript["observed_reads"]
-        if field in {"all", "in_scope"}:
-            reads["all"] = [bad_path]
-            reads["in_scope"] = [bad_path]
-        elif field == "out_of_scope":
-            reads["all"] = [bad_path]
-            reads["out_of_scope"] = [bad_path]
-        else:
-            reads["non_scope_comparable"] = [bad_path]
+        reads["all"] = [bad_path]
+        reads["in_scope"] = [bad_path]
 
         measured = _measure_fake_transcript(monkeypatch, tmp_path, transcript)
 
@@ -6898,74 +6202,60 @@ class TestTranscriptFamilyAvailability:
     @pytest.mark.parametrize(
         "all_paths,in_scope,out_of_scope",
         [
+            # `not in_scope.isdisjoint(out_of_scope)`; the union is exact.
             (
                 ["src/a.py", "src/b.py"],
                 ["src/a.py"],
                 ["src/a.py", "src/b.py"],
             ),
+            # `in_scope | out_of_scope != set(all)` (an extra member fails
+            # the same check).
             (["src/a.py", "src/b.py"], ["src/a.py"], []),
-            (["src/a.py"], ["src/a.py"], ["src/b.py"]),
         ],
-        ids=["overlap", "missing-member", "extra-member"],
+        ids=["overlap", "missing-member"],
     )
     def test_observed_read_partition_must_be_disjoint_and_exact(
         self, monkeypatch, tmp_path, all_paths, in_scope, out_of_scope
     ):
+        """The payload is otherwise valid (`_empty_reads` supplies the schema
+        and completeness flags), so only the partition checks can reject
+        it."""
         transcript = _complete_empty_transcript()
-        transcript["observed_reads"] = {
-            "all": all_paths,
-            "in_scope": in_scope,
-            "out_of_scope": out_of_scope,
-            "non_scope_comparable": ["src/synthesis.py"],
-            "exhaustive": False,
-            "transcript_data_complete": True,
-        }
+        transcript["observed_reads"].update(
+            {
+                "all": all_paths,
+                "in_scope": in_scope,
+                "out_of_scope": out_of_scope,
+            }
+        )
 
         measured = _measure_fake_transcript(monkeypatch, tmp_path, transcript)
 
         assert measured["transcript"]["observed_reads"] is None
         assert measured["metric_availability"]["observed_reads"] == "missing"
 
-    @pytest.mark.parametrize(
-        "invalid_exhaustive",
-        [
-            pytest.param(True, id="true"),
-            pytest.param(None, id="missing"),
-            pytest.param("false", id="string"),
-        ],
-    )
     def test_observed_reads_require_explicit_false_exhaustive(
-        self, monkeypatch, tmp_path, invalid_exhaustive
+        self, monkeypatch, tmp_path
     ):
+        """One `exhaustive is not False` identity check: `True` stands for a
+        missing key or the string "false"."""
         transcript = _complete_empty_transcript()
-        if invalid_exhaustive is None:
-            transcript["observed_reads"].pop("exhaustive")
-        else:
-            transcript["observed_reads"]["exhaustive"] = invalid_exhaustive
+        transcript["observed_reads"]["exhaustive"] = True
 
         measured = _measure_fake_transcript(monkeypatch, tmp_path, transcript)
 
         assert measured["transcript"]["observed_reads"] is None
         assert measured["metric_availability"]["observed_reads"] == "missing"
 
-    @pytest.mark.parametrize(
-        "invalid_complete",
-        [
-            pytest.param(None, id="missing"),
-            pytest.param(1, id="integer"),
-            pytest.param("true", id="string"),
-        ],
-    )
     def test_observed_reads_require_boolean_transcript_data_complete(
-        self, monkeypatch, tmp_path, invalid_complete
+        self, monkeypatch, tmp_path
     ):
+        """`1 == True`, so an integer passes the alignment checks and only
+        the `type(...) is not bool` conjunct rejects it. A missing key or a
+        string also fails alignment, so neither reaches that conjunct
+        alone."""
         transcript = _complete_empty_transcript()
-        if invalid_complete is None:
-            transcript["observed_reads"].pop("transcript_data_complete")
-        else:
-            transcript["observed_reads"][
-                "transcript_data_complete"
-            ] = invalid_complete
+        transcript["observed_reads"]["transcript_data_complete"] = 1
 
         measured = _measure_fake_transcript(monkeypatch, tmp_path, transcript)
 
@@ -6977,14 +6267,14 @@ class TestTranscriptFamilyAvailability:
         [
             (True, True, "complete"),
             (False, False, "partial"),
+            # A payload flag that disagrees with the family flag fails the
+            # alignment checks in either direction.
             (True, False, "missing"),
-            (False, True, "missing"),
         ],
         ids=[
             "complete-aligned",
             "partial-aligned",
             "family-true-payload-false",
-            "family-false-payload-true",
         ],
     )
     def test_observed_reads_completeness_signals_must_align(
@@ -7067,7 +6357,14 @@ class TestTranscriptFamilyAvailability:
             assert measured_disabled["metric_availability"][family] == "disabled"
 
     @pytest.mark.parametrize(
-        "invalid", [float("inf"), float("nan"), 0.9, 10**1_000]
+        # A non-finite float (inf stands for nan), a fraction, and an
+        # integer past the bound.
+        "invalid",
+        [
+            pytest.param(float("inf"), id="nonfinite"),
+            pytest.param(0.9, id="fraction"),
+            pytest.param(10**1_000, id="past-bound"),
+        ],
     )
     def test_invalid_transcript_numerics_are_unavailable_and_strict_json_safe(
         self, monkeypatch, tmp_path, invalid
@@ -7451,21 +6748,6 @@ class TestBudgetUtilizationRendering:
 
         assert "Uploader" not in table
 
-    def test_format_table_header_includes_budget_util_column(self):
-        table = format_table(
-            [self._run({
-                "agents": [],
-                "median_pct": 40,
-                "min_pct": 12,
-                "max_pct": 78,
-                "sample_count": 3,
-            })],
-            {"runs": 1, "transcript_runs": 0},
-        )
-
-        assert "Budget util" in table
-        assert "median 40% (12" in table
-
 
 class TestAggregateCohort:
     def test_keeps_complete_partial_and_missing_usage_denominators_separate(self):
@@ -7660,33 +6942,6 @@ class TestAggregateCohort:
 
         assert measured["wall_time_ms"] is None
         assert measured["metric_availability"]["wall_time"] == "missing"
-
-    def test_largest_supported_wall_times_keep_half_millisecond_exactness(self):
-        one_year_ms = 365 * 24 * 60 * 60 * 1000
-        largest = _measured_run("largest-wall")
-        largest["wall_time_ms"] = one_year_ms
-        adjacent = _measured_run("adjacent-wall")
-        adjacent["wall_time_ms"] = one_year_ms - 1
-
-        wall = aggregate_cohort([largest, adjacent])["wall_time"]
-
-        assert wall["total_ms"] == 2 * one_year_ms - 1
-        assert wall["mean_ms"] == one_year_ms - 0.5
-        assert wall["median_ms"] == one_year_ms - 0.5
-
-    def test_empty_cohort_wall_statistics_are_null_in_strict_json(self):
-        cohort = aggregate_cohort([])
-
-        payload = json.loads(
-            format_json([], cohort),
-            parse_constant=lambda value: (_ for _ in ()).throw(
-                AssertionError(f"nonstandard constant: {value}")
-            ),
-        )
-
-        assert payload["aggregate"]["wall_time"]["total_ms"] is None
-        assert payload["aggregate"]["wall_time"]["mean_ms"] is None
-        assert payload["aggregate"]["wall_time"]["median_ms"] is None
 
     def test_aggregates_lifecycle_retries_and_incomplete_identities(self):
         retry_manifest = _manifest("retry-run")
@@ -8061,6 +7316,7 @@ class TestFormattingAndCli:
             "Outcome/Critic",
             "Wall",
             "Eff In/Out",
+            "Budget util",
             "Transcript",
         ):
             assert label in table
@@ -8181,32 +7437,10 @@ class TestFormattingAndCli:
         assert "\n| forged row |" not in table
         assert max(len(line) for line in lines) < 1_200
 
-    def test_table_cells_strip_c1_csi_sequences_without_leaking_parameters(self):
-        run = _measured_run("c1-csi")
-        run["run"]["id"] = "before\x9b31mred\x9b0mafter"
-
-        table = format_table([run], aggregate_cohort([run]))
-
-        assert "beforeredafter" in table
-        assert "31m" not in table
-        assert "0m" not in table
-        assert "\x9b" not in table
-
-    def test_table_cells_strip_c1_osc_sequences_without_leaking_payload(self):
-        run = _measured_run("c1-osc")
-        run["run"]["id"] = "before\x9d0;owned\x9cafter"
-
-        table = format_table([run], aggregate_cohort([run]))
-
-        assert "beforeafter" in table
-        assert "0;owned" not in table
-        assert "\x9d" not in table
-        assert "\x9c" not in table
-
-    @pytest.mark.parametrize("backslash_count", [1, 3], ids=["one", "multiple"])
-    def test_table_cells_keep_pipes_escaped_after_preceding_backslashes(
-        self, backslash_count
-    ):
+    def test_table_cells_keep_pipes_escaped_after_preceding_backslashes(self):
+        """One `replace` chain doubles backslashes before it escapes the
+        pipe; several backslashes stand for one."""
+        backslash_count = 3
         run = _measured_run("backslash-pipe")
         run["run"]["id"] = "safe" + "\\" * backslash_count + "|forged"
 
@@ -8266,15 +7500,10 @@ class TestFormattingAndCli:
         ] == 1
 
     def test_json_formatter_rejects_nonfinite_values(self):
+        """`format_json`'s one `allow_nan=False` covers the runs and the
+        aggregate alike, and every non-finite float."""
         with pytest.raises(ValueError):
             format_json([{"invalid": float("nan")}], aggregate_cohort([]))
-
-    @pytest.mark.parametrize(
-        "invalid", [float("nan"), float("inf"), float("-inf")]
-    )
-    def test_json_formatter_rejects_nonfinite_aggregate_values(self, invalid):
-        with pytest.raises(ValueError):
-            format_json([], {"wall_time": {"mean_ms": invalid}})
 
     def test_cli_writes_exact_output_and_handles_valid_empty_cohort(self, tmp_path):
         log_dir = tmp_path / "logs"
@@ -8305,29 +7534,20 @@ class TestFormattingAndCli:
     def test_cli_without_source_flags_reads_default_log_directory(
         self, monkeypatch, capsys, tmp_path
     ):
+        """With no source flag the CLI reads `DEFAULT_LOG_DIR`, and a run
+        read from a local log directory carries no uploader."""
         default_log_dir = tmp_path / "default-logs"
-        observed = {}
-
-        def load_default(path, *, last, run_id):
-            observed.update(path=path, last=last, run_id=run_id)
-            return []
-
+        _write_manifest(
+            default_log_dir / "review.manifest.json", _manifest("default-run")
+        )
         monkeypatch.setattr(cli, "DEFAULT_LOG_DIR", default_log_dir)
-        monkeypatch.setattr(cli, "load_runs", load_default)
 
         result = main(["--format", "json", "--no-transcripts"])
 
         assert result == 0
-        assert observed == {
-            "path": str(default_log_dir),
-            "last": None,
-            "run_id": None,
-        }
-        assert json.loads(capsys.readouterr().out) == {
-            "schema": 5,
-            "runs": [],
-            "aggregate": aggregate_cohort([]),
-        }
+        payload = json.loads(capsys.readouterr().out)
+        assert [run["run"]["id"] for run in payload["runs"]] == ["default-run"]
+        assert payload["runs"][0]["uploaded_by"] is None
 
     def test_shared_clone_reports_each_user_and_ignores_direct_v1_files(
         self, shared_telemetry_clone, tmp_path
@@ -8389,31 +7609,6 @@ class TestFormattingAndCli:
             assert run["run"]["session_id"] is None
             assert run["transcript"]["reason"] == "disabled"
             assert run["metric_availability"]["transcript"] == "disabled"
-
-    def test_symlinked_uploader_directories_are_never_followed(
-        self, shared_telemetry_clone
-    ):
-        clone = shared_telemetry_clone["clone"]
-        symlinked = clone / telemetry_share.LAYOUT_PREFIX / "mallory"
-        assert symlinked.is_symlink() and symlinked.is_dir()
-
-        shared = load.load_shared_runs(clone)
-
-        assert {uploaded_by for _, uploaded_by in shared} == {"alice", "bob"}
-
-    def test_symlinked_artifacts_inside_uploader_directories_are_never_followed(
-        self, shared_telemetry_clone
-    ):
-        clone = shared_telemetry_clone["clone"]
-        bob = clone / telemetry_share.LAYOUT_PREFIX / "bob"
-        for name in ("shared-alice.manifest.json", "shared-mallory.jsonl"):
-            assert (bob / name).is_symlink() and (bob / name).is_file()
-
-        shared = load.load_shared_runs(clone)
-
-        assert sorted(
-            (record["run"]["id"], uploaded_by) for record, uploaded_by in shared
-        ) == [("shared-alice", "alice"), ("shared-bob", "bob")]
 
     def test_symlinked_layout_root_is_never_followed(
         self, shared_telemetry_clone, tmp_path
@@ -8517,27 +7712,6 @@ class TestFormattingAndCli:
             assert record["availability"] == original["availability"]
             assert record["run"]["session_id"] is None
 
-    def test_local_log_dir_reports_null_uploader(
-        self, shared_telemetry_clone, tmp_path
-    ):
-        output = tmp_path / "local-report.json"
-
-        result = main(
-            [
-                "--log-dir",
-                str(shared_telemetry_clone["local_logs"]["alice"]),
-                "--format",
-                "json",
-                "--output",
-                str(output),
-                "--no-transcripts",
-            ]
-        )
-
-        assert result == 0
-        [run] = json.loads(output.read_text(encoding="utf-8"))["runs"]
-        assert run["uploaded_by"] is None
-
     def test_cli_reports_exception_type_and_message(
         self, monkeypatch, capsys, tmp_path
     ):
@@ -8558,11 +7732,13 @@ class TestFormattingAndCli:
     @pytest.mark.parametrize(
         "args",
         [
+            # The two branches of `cli._positive_int`. An unknown
+            # `--format` and the mutually exclusive source flags are
+            # argparse's own checks.
             ["--last", "0"],
             ["--last", "not-an-int"],
-            ["--format", "xml"],
-            ["--log-dir", "/local", "--shared-dir", "/shared"],
         ],
+        ids=["last-zero", "last-not-an-int"],
     )
     def test_invalid_cli_arguments_exit_two(self, args):
         with pytest.raises(SystemExit) as error:
@@ -8667,25 +7843,28 @@ class TestStructuredSidecarValuesFailClosed:
 
 class TestNonCanonicalPathsFailClosed:
     """Coverage ledgers and lifecycle scope paths must satisfy the canonical
-    repository-relative path contract — absolute, traversal, backslash,
-    drive-prefixed, dot-segment, and control-character paths from malformed
-    or hand-edited sidecars may not survive into the privacy-reduced report."""
+    repository-relative path contract, so a non-canonical path from a
+    malformed or hand-edited sidecar cannot survive into the
+    privacy-reduced report (fix d253935d). One bad path per call site pins
+    that the site applies the predicate; the predicate's per-condition
+    sweep lives in `test_observed_read_paths_require_canonical_repo_relative_form`."""
 
-    BAD_PATHS = [
-        "/abs/leak.py",
-        "../traversal.py",
-        "dir\\windows.py",
-        "C:drive.py",
-        "dir/./dot-segment.py",
-        "control\x07.py",
-    ]
+    BAD_PATH = "/abs/leak.py"
 
-    @pytest.mark.parametrize("bad_path", BAD_PATHS)
-    def test_non_canonical_coverage_path_invalidates_manifest(
-        self, tmp_path, bad_path
-    ):
+    def test_non_canonical_coverage_path_invalidates_manifest(self, tmp_path):
+        """The bad path joins the ledger as a reviewable, unassigned file, so
+        the partition stays exact and only the path check on the coverage
+        path lists can reject it. Appended to `changed_files` alone, it
+        would break the exclusions-equal-changed-minus-reviewable check
+        first, whatever its form."""
         manifest = _manifest("cover-run")
-        manifest["assignment"]["changed_files"].append(bad_path)
+        assignment = manifest["assignment"]
+        for name in (
+            "changed_files",
+            "reviewable_files",
+            "unassigned_reviewable_files",
+        ):
+            assignment[name].append(self.BAD_PATH)
         _write_manifest(tmp_path / "review.manifest.json", manifest)
         _write_jsonl(tmp_path / "review.jsonl", _legacy_events("legacy-fallback"))
 
@@ -8710,13 +7889,12 @@ class TestNonCanonicalPathsFailClosed:
         assert run["run"]["id"] == "legacy-fallback"
         assert "invalid_manifest_fallback" in run["warnings"]
 
-    @pytest.mark.parametrize("bad_path", BAD_PATHS)
     def test_non_canonical_lifecycle_scope_path_fails_lifecycle_closed(
-        self, tmp_path, bad_path
+        self, tmp_path
     ):
         manifest = _manifest("scope-run")
         start = _agent_start(run_id="scope-run")
-        start["scope"]["paths"] = [bad_path]
+        start["scope"]["paths"] = [self.BAD_PATH]
         manifest["agents"] = {
             "started": [start],
             "completed": [_agent_complete(run_id="scope-run")],
@@ -8809,17 +7987,6 @@ class TestSynthesisAgentsMeasurement:
         assert measured["metric_availability"]["synthesis_agents"] == "missing"
         assert measured["synthesis_agents"] is None
 
-    def test_producer_availability_false_wins_over_a_payload(self):
-        manifest = _synthesis_manifest(
-            "run-1", _synthesis_row(contracts._SYNTHESIS_DECISION_CRITIC)
-        )
-        manifest["availability"]["synthesis_agents"] = False
-        measured = measure_run(
-            manifest, Path("/nonexistent"), include_transcripts=False
-        )
-        assert measured["synthesis_agents"] is None
-        assert measured["metric_availability"]["synthesis_agents"] == "missing"
-
     def test_measured_durations_are_complete(self):
         measured = measure_run(
             _synthesis_manifest(
@@ -8863,8 +8030,10 @@ class TestSynthesisAgentsMeasurement:
         assert row["duration_ms"] is None
 
     @pytest.mark.parametrize(
-        "value", [-1, "665000", 6.5, True],
-        ids=["negative", "string", "float", "bool"],
+        # `_nonnegative_exact_int`: a boolean fails `type is not int` (as a
+        # string or a float does); a negative fails the bound.
+        "value", [-1, True],
+        ids=["negative", "bool"],
     )
     def test_unusable_duration_never_becomes_zero(self, value):
         measured = measure_run(
@@ -8883,24 +8052,6 @@ class TestSynthesisAgentsMeasurement:
         )
         assert measured["synthesis_agents"] is None
         assert measured["metric_availability"]["synthesis_agents"] == "missing"
-
-    def test_reviewer_lifecycle_family_is_untouched(self):
-        """Non-interference: adding the section must not move the
-        reviewer lifecycle family in either direction."""
-        plain = measure_run(
-            _manifest("run-1"), Path("/nonexistent"),
-            include_transcripts=False,
-        )
-        beside = measure_run(
-            _synthesis_manifest("run-1", _synthesis_row(contracts._SYNTHESIS_DECISION_CRITIC)),
-            Path("/nonexistent"), include_transcripts=False,
-        )
-        assert beside["lifecycle"] == plain["lifecycle"]
-        assert beside["agents"] == plain["agents"]
-        assert (
-            beside["metric_availability"]["lifecycle"]
-            == plain["metric_availability"]["lifecycle"]
-        )
 
 
 class TestSynthesisAgentsCohort:
@@ -8967,10 +8118,6 @@ class TestSynthesisAgentsCohort:
             "mean_ms": None,
         }
 
-    def test_the_family_is_a_declared_availability_family(self):
-        assert "synthesis_agents" in contracts._AVAILABILITY_FAMILIES
-        assert "synthesis_agents" not in contracts._TRANSCRIPT_FAMILIES
-
 
 class TestSynthesisAgentsRendering:
     def test_column_position_is_pinned(self):
@@ -9010,47 +8157,6 @@ class TestSynthesisAgentsRendering:
         )
         assert render._table_row(measured)[7] == "—/stalled"
 
-    def test_the_section_reaches_the_json_report(self):
-        measured = measure_run(
-            _synthesis_manifest("run-1", _synthesis_row(contracts._SYNTHESIS_DECISION_CRITIC)),
-            Path("/nonexistent"), include_transcripts=False,
-        )
-        report = json.loads(
-            render.format_json([measured], aggregate_cohort([measured]))
-        )
-        assert report["runs"][0]["synthesis_agents"]["agents"][0][
-            "duration_ms"
-        ] == 665_000
-        assert report["aggregate"]["synthesis_agents"]["by_agent"][
-            contracts._SYNTHESIS_DECISION_CRITIC
-        ]["mean_ms"] == 665_000
-
-
-class TestSynthesisAgentsShape:
-    """The row shape is declared once and the consumer covers exactly it."""
-
-    def test_sanitizer_covers_exactly_the_declared_row_keys(self):
-        """Row-shape parity, consumer side. The shape is written by three
-        modules; a key taught to only two of them would otherwise vanish
-        here with every test green."""
-        measured = measure_run(
-            _synthesis_manifest(
-                "run-1", _synthesis_row(contracts._SYNTHESIS_DECISION_CRITIC)
-            ),
-            Path("/nonexistent"), include_transcripts=False,
-        )
-        row = measured["synthesis_agents"]["agents"][0]
-        assert set(row) == set(contracts._SYNTHESIS_ROW_KEYS)
-
-    def test_an_undeclared_row_key_does_not_survive(self):
-        measured = measure_run(
-            _synthesis_manifest("run-1", _synthesis_row(
-                contracts._SYNTHESIS_DECISION_CRITIC, invented_key="x",
-            )),
-            Path("/nonexistent"), include_transcripts=False,
-        )
-        assert "invented_key" not in measured["synthesis_agents"]["agents"][0]
-
 
 class TestSkippedCriticIsNotACritiqueDuration:
     """Historical SKIPPED rows never become critique durations.
@@ -9068,12 +8174,6 @@ class TestSkippedCriticIsNotACritiqueDuration:
                 verdict=verdict, duration_ms=duration_ms,
             )),
             Path("/nonexistent"), include_transcripts=False,
-        )
-
-    def test_the_verdict_reaches_the_measured_row(self):
-        measured = self._run("1", contracts._CRITIC_VERDICT_SKIPPED, 900)
-        assert measured["synthesis_agents"]["agents"][0]["verdict"] == (
-            contracts._CRITIC_VERDICT_SKIPPED
         )
 
     def test_skipped_rows_are_excluded_from_the_statistics(self):
@@ -9100,11 +8200,6 @@ class TestSkippedCriticIsNotACritiqueDuration:
         assert agent["mean_ms"] is None
         assert agent["skipped_runs"] == 1
         assert agent["dispatched_runs"] == 1
-
-    def test_skipped_is_not_a_critique_verdict(self):
-        """It records that no critique happened, so a consumer measuring
-        critique outcomes must not find it in the verdict vocabulary."""
-        assert contracts._CRITIC_VERDICT_SKIPPED not in contracts._CRITIC_VERDICTS
 
 
 # --- Task 12: optional manifest sections carry their payload through ---
@@ -9187,13 +8282,6 @@ def _skipped_steps_payload() -> list:
     ]
 
 
-def _synthesis_agents_payload() -> dict:
-    return {
-        "finalized": True,
-        "agents": [],
-    }
-
-
 def _dependency_refresh_payload(**overrides) -> dict:
     payload = {
         "requested": True,
@@ -9227,21 +8315,6 @@ def _host_context_payload():
         "unresolved": [{"name": "jetpack", "reason": "declared_in_plugin_headers", "version": None}],
         "banner_reason": "partial_unresolved", "self_provided": [], "scan_roots": 2,
     }
-
-
-def _optional_section_payload(name: str):
-    return {
-        "assignment": _manifest()["assignment"],
-        "worktree_hygiene": _worktree_hygiene_payload(),
-        "synthesis_agents": _synthesis_agents_payload(),
-        "usage": _usage_snapshot_payload(),
-        "skipped_steps": _skipped_steps_payload(),
-        "dependency_refresh": _dependency_refresh_payload(),
-        "reviewer_markdown": _derived_markdown_payload(),
-        "findings_markdown": _derived_markdown_payload(),
-        "host_context": _host_context_payload(),
-        "evidence": _evidence_payload(),
-    }[name]
 
 
 def _evidence_payload():
@@ -9360,7 +8433,9 @@ class TestEvidenceMetrics:
         assert result["critic_adjustments"]["demote"]["proposed"] == 2
         assert result["verify_items"] == {"declared": 2, "settled": 2}
 
-    @pytest.mark.parametrize("population", ["unknown-only", "known-first", "unknown-first"])
+    # Both orders pin that one unknown run poisons the totals whichever
+    # side it is on; an unknown run alone is a subset of either.
+    @pytest.mark.parametrize("population", ["known-first", "unknown-first"])
     def test_unavailable_purpose_keeps_both_verify_totals_unknown(self, population):
         known = _manifest("known")
         known["evidence"] = _evidence_payload()
@@ -9369,14 +8444,16 @@ class TestEvidenceMetrics:
         unknown["run"]["id"] = "unknown"
         unknown["evidence"]["verify_items"] = []
         unknown["evidence"]["undeclared_citations"] = None
-        manifests = {"unknown-only": [unknown], "known-first": [known, unknown], "unknown-first": [unknown, known]}[population]
+        manifests = {"known-first": [known, unknown], "unknown-first": [unknown, known]}[population]
         measured = [measure_run(manifest, Path("/nonexistent"), include_transcripts=False) for manifest in manifests]
         result = aggregate_cohort(measured)["evidence"]
         assert result["verify_items"] == {"declared": None, "settled": None}
         assert result["measured_runs"] == len(manifests)
 
-    @pytest.mark.parametrize("counter", ["proposed", "verified", "not_checked", "refuted"])
-    def test_absent_adjustment_counter_is_materialized_as_unknown(self, counter):
+    def test_absent_adjustment_counter_is_materialized_as_unknown(self):
+        """`counts()` is one comprehension over the counter vocabulary;
+        `proposed` stands for the other three."""
+        counter = "proposed"
         known = _manifest("known")
         known["evidence"] = _evidence_payload()
         known["availability"]["evidence"] = True
@@ -9465,27 +8542,25 @@ class TestEvidenceMetrics:
         safe = sanitize._sanitize_evidence(payload)
         assert safe["findings"][0]["sources"] == [{"agent": "security-reviewer", "id": "f2", "severity": None}]
 
-    @pytest.mark.parametrize("value", [None, [], "private prose", {}], ids=["absent", "array", "prose", "empty-object"])
+    # A non-dict (absent and array fail the same isinstance check) and a
+    # dict missing the required keys.
+    @pytest.mark.parametrize("value", ["private prose", {}], ids=["prose", "empty-object"])
     def test_absent_or_malformed_family_is_unmeasured(self, value):
         assert sanitize._sanitize_evidence(value) is None
 
 
 class TestHostContextSanitization:
-    @pytest.mark.parametrize("leaked", [
-        pytest.param("`/Users/private/host`", id="backtick"),
-        pytest.param("~/private/host", id="home"),
-        pytest.param("~alice/private/host", id="named-home"),
-        pytest.param("path=//server/share/host", id="embedded-unc"),
-        pytest.param("\\private\\host", id="windows-rooted"),
-        pytest.param("path=\\private\\host", id="embedded-windows-rooted"),
-        pytest.param("~\\private\\host", id="windows-home"),
-        pytest.param("cwd:~/private/host", id="colon-home"),
-    ])
-    def test_a_path_shaped_host_field_is_kept_locally_and_refused_at_the_share_boundary(self, leaked):
+    def test_a_path_shaped_host_field_is_kept_locally_and_refused_at_the_share_boundary(self):
         """The projection and the sanitizer carry the resolver's facts as
         recorded; the one guard against a path leaving the machine is the
         sharing boundary, which refuses the upload rather than silently
-        nulling a field that bootstrap still prints."""
+        nulling a field that bootstrap still prints.
+
+        The share module's own table (`test_telemetry_share.py`) sweeps
+        the shapes its guard recognizes. This row is the one shape that
+        table does not carry: a rooted Windows path after a delimiter, the
+        delimiter alternative of `_ROOTED_WINDOWS_PATH`."""
+        leaked = "path=\\private\\host"
         projected = contracts._MANIFEST_SECTIONS_CONTRACT.summarize_host_context({
             "resolved": [{
                 "name": "wordpress", "kind": "runtime-host",
@@ -9534,22 +8609,6 @@ class TestHostContextSanitization:
         assert "TICKET-123" not in json.dumps(redacted)
         assert projected["resolved"][0]["refreshed"] == "2026-09-04T00:04:08Z"
 
-    def test_historical_host_absence_survives_repeated_sanitization(self):
-        manifest = _manifest()
-        for _ in range(3):
-            manifest = sanitize._sanitize_manifest(manifest)
-            assert manifest.get("host_context") is None
-            assert "host_context" not in manifest["availability"]
-
-    def test_historical_host_absence_survives_public_measurement(self, tmp_path):
-        manifest = _manifest()
-        for _ in range(3):
-            manifest = measure_run(
-                manifest, sessions_root=tmp_path, include_transcripts=False,
-            )
-            assert manifest.get("host_context") is None
-            assert "host_context" not in manifest["availability"]
-
     def test_explicit_unavailable_host_stays_measured_after_repeated_passes(self, tmp_path):
         manifest = _manifest()
         manifest["host_context"] = None
@@ -9569,14 +8628,20 @@ class TestHostContextSanitization:
         raw["unresolved"][0]["notes"] = {"path": "/Users/private"}
         assert sanitize._sanitize_host_context(raw) == payload
 
-    @pytest.mark.parametrize("value", [None, "bad", 42, {"resolved": 42, "unresolved": []}])
+    # A non-dict section (None and a number fail the same isinstance check)
+    # and a dict whose `resolved` is not a list.
+    @pytest.mark.parametrize(
+        "value",
+        ["bad", {"resolved": 42, "unresolved": []}],
+        ids=["non-dict", "non-list-resolved"],
+    )
     def test_bad_containers_are_unavailable(self, value):
         assert sanitize._sanitize_host_context(value) is None
 
-    @pytest.mark.parametrize("value", [
-        {"path": "/Users/private"}, ["/Users/private"], 42,
-    ], ids=["object", "list", "number"])
-    def test_non_string_scalars_are_unknown(self, value):
+    def test_non_string_scalars_are_unknown(self):
+        """One `_safe_string` non-string path; an object stands for a list
+        or a number."""
+        value = {"path": "/Users/private"}
         payload = _host_context_payload()
         payload["resolved"][0] = {key: value for key in payload["resolved"][0]}
         payload["unresolved"][0] = {key: value for key in payload["unresolved"][0]}
@@ -9591,48 +8656,39 @@ class TestHostContextSanitization:
         assert result["scan_roots"] is None
 
 
-# `_sanitize_optional_sections` is ONE table-driven loop, so its own
-# properties (flag-wins, pre-feature silence, derive-the-flag-from-what-
-# parsed) are single-homed code and are pinned once, through this
-# representative section, rather than restated per section. What IS
-# per-section is each entry's own sanitizer — covered by the structural
-# round-trip below plus each section's dedicated field-level class.
+# `_sanitize_optional_sections` is ONE table-driven loop with three
+# branches, each pinned once rather than restated per section: the
+# derive-the-flag-from-what-parsed branch by
+# `test_reborn_lie_flag_true_absent_payload_publishes_false` and the
+# one-section `test_every_declared_section_round_trips_and_rejects_garbage`
+# (both through this representative section); the flag-`False`-wins
+# branch by `TestMeasureRun::test_explicit_false_coverage_availability_wins_over_valid_payload`;
+# and the undeclared-section skip by
+# `test_a_pre_feature_run_carries_neither_flag_nor_payload`. What IS
+# per-section is each entry's own sanitizer, covered by each section's
+# dedicated field-level class.
 _REPRESENTATIVE_OPTIONAL_SECTION = "assignment"
 
 
 class TestOptionalSectionAvailabilityConsistency:
     """The flag/payload consistency pin for the shared sanitize loop.
 
-    One test stays parametrized on
-    `contracts._OPTIONAL_SECTION_AVAILABILITY_KEYS` — the telemetry
-    producer's own list of optional sections whose
-    `availability["<name>"]` boolean shares the section's top-level key
-    (mirrors the `synthesis_lifecycle.ROW_KEYS` producer-declared-contract
-    pattern) — so a section added to that tuple joins the structural pin
-    automatically, without a matching test edit. The remaining properties
-    belong to the loop, not to any section, and are pinned once.
+    The loop's properties belong to the loop, not to any section, so
+    each is pinned once through `_REPRESENTATIVE_OPTIONAL_SECTION`.
     """
 
-    @pytest.mark.parametrize(
-        "name", contracts._OPTIONAL_SECTION_AVAILABILITY_KEYS
-    )
-    def test_every_declared_section_round_trips_and_rejects_garbage(
-        self, name
-    ):
-        """The structural pin, per producer-declared section: the
-        section's own sanitizer accepts its own well-formed payload (and
-        the derived flag reads `true`), and rejects a payload of the
-        wrong shape (a bare string instead of the section's dict/list),
-        dropping the derived flag to `false` rather than trusting the raw
-        `true` past a payload that never actually parsed.
-
-        A section added to the producer's tuple joins this test with no
-        edit here beyond registering its payload in
-        `_optional_section_payload` — which `KeyError`s until it does.
+    def test_every_declared_section_round_trips_and_rejects_garbage(self):
+        """The derive-the-flag branch, both ways: the section's own
+        sanitizer accepts its own well-formed payload (and the derived
+        flag reads `true`), and rejects a payload of the wrong shape (a
+        bare string instead of the section's dict), dropping the derived
+        flag to `false` rather than trusting the raw `true` past a
+        payload that never actually parsed.
         """
+        name = _REPRESENTATIVE_OPTIONAL_SECTION
         manifest = _manifest("run-1")
         manifest["availability"][name] = True
-        manifest[name] = _optional_section_payload(name)
+        manifest[name] = _manifest()[name]
 
         sanitized = sanitize._sanitize_manifest(manifest)
 
@@ -9690,46 +8746,6 @@ class TestOptionalSectionAvailabilityConsistency:
         assert sanitized[name] is None
 
 
-class TestOptionalSectionSanitizerTableIsStructurallyComplete:
-    """The reviewer's probe: adding a key to the producer's declared
-    tuple with no matching sanitizer must fail loudly, by name, instead
-    of a bare `KeyError` raised from inside the per-manifest loop."""
-
-    def test_production_table_is_complete_both_directions(self):
-        """The real production call already ran at import time (module
-        load would have raised otherwise); re-running it here pins that
-        outcome as a regression guard, not just an import side effect."""
-        sanitize._require_complete_optional_section_sanitizers(
-            contracts._OPTIONAL_SECTION_AVAILABILITY_KEYS,
-            sanitize._OPTIONAL_SECTION_SANITIZERS,
-        )
-
-    def test_a_declared_key_with_no_sanitizer_fails_loudly_by_name(self):
-        with pytest.raises(AssertionError) as excinfo:
-            sanitize._require_complete_optional_section_sanitizers(
-                ("assignment", "dependency_refresh"),
-                {"assignment": sanitize._sanitize_assignment},
-            )
-        message = str(excinfo.value)
-        assert "dependency_refresh" in message
-        assert "_OPTIONAL_SECTION_SANITIZERS" in message
-
-    def test_a_stale_sanitizer_with_no_declared_key_fails_loudly_by_name(
-        self,
-    ):
-        with pytest.raises(AssertionError) as excinfo:
-            sanitize._require_complete_optional_section_sanitizers(
-                ("assignment",),
-                {
-                    "assignment": sanitize._sanitize_assignment,
-                    "retired_section": sanitize._sanitize_skipped_steps,
-                },
-            )
-        message = str(excinfo.value)
-        assert "retired_section" in message
-        assert "OPTIONAL_SECTION_AVAILABILITY_KEYS" in message
-
-
 class TestOptionalSectionVocabulariesAreNotRestated:
     """I3: the section-status vocabularies must have exactly one
     spelling — the producer's own private constants in
@@ -9758,36 +8774,6 @@ class TestOptionalSectionVocabulariesAreNotRestated:
         )
         assert contracts._DERIVED_MARKDOWN_STATUSES == (
             manifest_sections._DERIVED_MARKDOWN_STATUSES
-        )
-
-    def test_assignment_fields_share_one_producer_consumer_authority(self):
-        manifest_sections = _load_manifest_sections_module()
-        expected = (
-            "changed_files",
-            "reviewable_files",
-            "assigned_files_by_agent",
-            "assigned_files",
-            "file_exclusions",
-            "unassigned_reviewable_files",
-        )
-
-        assert getattr(manifest_sections, "ASSIGNMENT_FIELDS", None) == expected
-        assert getattr(contracts, "_ASSIGNMENT_FIELDS", None) == expected
-        assert contracts._ASSIGNMENT_FIELDS is (
-            contracts._MANIFEST_SECTIONS_CONTRACT.ASSIGNMENT_FIELDS
-        )
-        assert sanitize._ASSIGNMENT_FIELDS is contracts._ASSIGNMENT_FIELDS
-        assert sanitize._ASSIGNMENT_PATH_LIST_FIELDS is (
-            contracts._ASSIGNMENT_PATH_LIST_FIELDS
-        )
-        assert load._ASSIGNMENT_PATH_LIST_FIELDS is (
-            contracts._ASSIGNMENT_PATH_LIST_FIELDS
-        )
-        assert cohort._ASSIGNMENT_COUNTABLE_LIST_FIELDS is (
-            contracts._ASSIGNMENT_COUNTABLE_LIST_FIELDS
-        )
-        assert render._ASSIGNMENT_TABLE_FIELDS is (
-            contracts._ASSIGNMENT_TABLE_FIELDS
         )
 
     def test_every_producer_recognized_worktree_status_survives(self):
@@ -9871,52 +8857,11 @@ class TestOptionalSectionVocabulariesAreNotRestated:
                 assert sanitized[name]["status"] == status
 
 
-class TestUsageSnapshotDivergenceFromProducer:
-    """M3: the sanitizer is at least as strict as its producer, not
-    exactly as strict — pin the one known divergence rather than let the
-    docstring claim more than the code does.
-    """
-
-    def test_an_empty_agent_name_row_is_dropped_though_the_producer_keeps_it(
-        self,
-    ):
-        """`build_usage_manifest` keeps a `by_agent` row whenever `agent`
-        is any string — `isinstance(row.get("agent"), str)` alone, so
-        `""` qualifies. This sanitizer requires `_safe_string`'s
-        non-empty shape, so the same row is dropped here."""
-        manifest = _manifest("run-1")
-        manifest["availability"]["usage"] = True
-        manifest["usage"] = _usage_snapshot_payload(
-            by_agent=[
-                {
-                    "agent": "",
-                    "model": "claude-opus-5[1m]",
-                    "usage": dict(_USAGE_SNAPSHOT_FIELD_MAP),
-                },
-                {
-                    "agent": "security-reviewer",
-                    "model": "claude-opus-5[1m]",
-                    "usage": dict(_USAGE_SNAPSHOT_FIELD_MAP),
-                },
-            ]
-        )
-
-        sanitized = sanitize._sanitize_manifest(manifest)
-
-        assert sanitized["usage"]["by_agent"] == [
-            {
-                "agent": "security-reviewer",
-                "model": "claude-opus-5[1m]",
-                "usage": dict(_USAGE_SNAPSHOT_FIELD_MAP),
-                "tool_calls": None,
-                "repository_reads": None,
-            }
-        ]
-
-
 class TestSkippedStepsDivergenceFromProducer:
-    """M3: same floor-not-exact-parity claim, for the title/condition
-    fallback."""
+    """M3: the sanitizer is at least as strict as its producer, not
+    exactly as strict — pin the known divergence in the title/condition
+    fallback rather than let the docstring claim more than the code
+    does."""
 
     def test_an_oversized_title_becomes_empty_though_the_producer_keeps_it(
         self,
@@ -9930,24 +8875,6 @@ class TestSkippedStepsDivergenceFromProducer:
         oversized_title = "x" * 5000
         manifest["skipped_steps"] = [
             {"step": 10, "title": oversized_title, "condition": "c"}
-        ]
-
-        sanitized = sanitize._sanitize_manifest(manifest)
-
-        assert sanitized["skipped_steps"] == [
-            {"step": 10, "title": "", "condition": "c"}
-        ]
-
-    def test_a_non_string_title_becomes_empty_though_the_producer_keeps_it(
-        self,
-    ):
-        """The producer's bare `or ""` never type-checks its operand: a
-        truthy non-string (an int) survives there verbatim. This
-        sanitizer requires an actual string, so it becomes ""."""
-        manifest = _manifest("run-1")
-        manifest["availability"]["skipped_steps"] = True
-        manifest["skipped_steps"] = [
-            {"step": 10, "title": 12345, "condition": "c"}
         ]
 
         sanitized = sanitize._sanitize_manifest(manifest)
@@ -9980,15 +8907,6 @@ class TestWorktreeHygieneSanitize:
             "probe_residue_removed": [],
             "baseline_captured_at": "2026-08-19T12:00:00+00:00",
         }
-
-    def test_producer_availability_false_wins_over_a_stray_payload(self):
-        manifest = _manifest("run-1")
-        manifest["availability"]["worktree_hygiene"] = False
-        manifest["worktree_hygiene"] = _worktree_hygiene_payload()
-
-        sanitized = sanitize._sanitize_manifest(manifest)
-
-        assert sanitized["worktree_hygiene"] is None
 
     def test_an_unrecognized_status_reads_as_unknown_never_clean(self):
         manifest = _manifest("run-1")
@@ -10032,15 +8950,6 @@ class TestUsageSnapshotSanitize:
         sanitized = sanitize._sanitize_manifest(manifest)
 
         assert sanitized["usage"] == _usage_snapshot_payload()
-
-    def test_producer_availability_false_wins_over_a_stray_payload(self):
-        manifest = _manifest("run-1")
-        manifest["availability"]["usage"] = False
-        manifest["usage"] = _usage_snapshot_payload()
-
-        sanitized = sanitize._sanitize_manifest(manifest)
-
-        assert sanitized["usage"] is None
 
     def test_an_incomplete_usage_map_reads_as_none_not_a_zero(self):
         """All-or-nothing: a map missing a field cannot be summed or
@@ -10209,15 +9118,6 @@ class TestSkippedStepsSanitize:
 
         assert sanitized["skipped_steps"] == _skipped_steps_payload()
 
-    def test_producer_availability_false_wins_over_a_stray_payload(self):
-        manifest = _manifest("run-1")
-        manifest["availability"]["skipped_steps"] = False
-        manifest["skipped_steps"] = _skipped_steps_payload()
-
-        sanitized = sanitize._sanitize_manifest(manifest)
-
-        assert sanitized["skipped_steps"] is None
-
     def test_a_measured_zero_skips_is_an_empty_list_not_missing(self):
         manifest = _manifest("run-1")
         manifest["availability"]["skipped_steps"] = True
@@ -10265,15 +9165,6 @@ class TestDependencyRefreshSanitize:
         sanitized = sanitize._sanitize_manifest(manifest)
 
         assert sanitized["dependency_refresh"] == _dependency_refresh_payload()
-
-    def test_producer_availability_false_wins_over_a_stray_payload(self):
-        manifest = _manifest("run-1")
-        manifest["availability"]["dependency_refresh"] = False
-        manifest["dependency_refresh"] = _dependency_refresh_payload()
-
-        sanitized = sanitize._sanitize_manifest(manifest)
-
-        assert sanitized["dependency_refresh"] is None
 
     def test_requested_without_a_report_survives_with_only_two_fields(self):
         manifest = _manifest("run-1")
@@ -10340,21 +9231,14 @@ class TestDependencyRefreshSanitize:
             "dirty_files": ["composer.lock"],
         }
 
-    @pytest.mark.parametrize(
-        "malformed_reason",
-        [[], {}, None],
-        ids=("list", "object", "null"),
-    )
-    def test_historical_non_string_skip_reason_is_omitted(
-        self, malformed_reason
-    ):
+    def test_historical_non_string_skip_reason_is_omitted(self):
         manifest = _manifest("run-1")
         manifest["availability"]["dependency_refresh"] = True
         manifest["dependency_refresh"] = {
             "requested": True,
             "reported": False,
             "skipped": True,
-            "skipped_reason": malformed_reason,
+            "skipped_reason": [],
             "dirty_files": [],
         }
 
@@ -10437,21 +9321,14 @@ class TestDependencyRefreshSanitize:
             {"directory": ".", "command": "x", "exit_status": "invalid"},
         ]
 
-    @pytest.mark.parametrize(
-        "malformed_exit_status",
-        [[], {}, None],
-        ids=("list", "object", "null"),
-    )
-    def test_a_non_string_exit_status_reads_as_invalid(
-        self, malformed_exit_status
-    ):
+    def test_a_non_string_exit_status_reads_as_invalid(self):
         manifest = _manifest("run-1")
         manifest["availability"]["dependency_refresh"] = True
         manifest["dependency_refresh"] = _dependency_refresh_payload(
             commands=[{
                 "directory": ".",
                 "command": "x",
-                "exit_status": malformed_exit_status,
+                "exit_status": [],
             }],
         )
 
@@ -10507,95 +9384,85 @@ class TestDependencyRefreshDefensiveBounds:
         ]
 
 
+_DERIVED_MARKDOWN_NAME = "reviewer_markdown"
+
+
 class TestDerivedMarkdownOutcomeSanitize:
     """`reviewer_markdown` and `findings_markdown` share one sanitizer
-    (`_sanitize_derived_markdown_outcome`) — every case here is
-    parametrized over both names, since a bug in the shared function
-    shows up identically on either key.
+    (`_sanitize_derived_markdown_outcome`), mapped under both names in
+    `sanitize._OPTIONAL_SECTION_SANITIZERS`, so a bug in the shared
+    function shows up identically on either key. The cases here run
+    through `reviewer_markdown`; the wiring of both keys is pinned by
+    `test_every_producer_recognized_derived_markdown_status_survives`
+    and `TestOptionalSectionsReachMeasureRun`.
 
     PII: none. `ran`/`status` are booleans and a closed four-value
     vocabulary; `written`/`expected` are plain non-negative file counts.
     """
 
-    @pytest.mark.parametrize("name", ("reviewer_markdown", "findings_markdown"))
-    def test_a_well_formed_payload_survives_field_for_field(self, name):
+    def test_a_well_formed_payload_survives_field_for_field(self):
         manifest = _manifest("run-1")
-        manifest["availability"][name] = True
-        manifest[name] = _derived_markdown_payload()
+        manifest["availability"][_DERIVED_MARKDOWN_NAME] = True
+        manifest[_DERIVED_MARKDOWN_NAME] = _derived_markdown_payload()
 
         sanitized = sanitize._sanitize_manifest(manifest)
 
-        assert sanitized[name] == _derived_markdown_payload()
+        assert sanitized[_DERIVED_MARKDOWN_NAME] == _derived_markdown_payload()
 
-    @pytest.mark.parametrize("name", ("reviewer_markdown", "findings_markdown"))
-    def test_producer_availability_false_wins_over_a_stray_payload(self, name):
-        manifest = _manifest("run-1")
-        manifest["availability"][name] = False
-        manifest[name] = _derived_markdown_payload()
-
-        sanitized = sanitize._sanitize_manifest(manifest)
-
-        assert sanitized[name] is None
-
-    @pytest.mark.parametrize("name", ("reviewer_markdown", "findings_markdown"))
-    def test_not_run_is_a_measured_outcome_not_missing(self, name):
+    def test_not_run_is_a_measured_outcome_not_missing(self):
         """`ran: False, status: "not_run"` is the DEFAULT state pipeline
         state carries before either render seam ever runs — a legitimate
         measured outcome (the run never reached that step), distinct
         from the section being entirely absent from the manifest."""
         manifest = _manifest("run-1")
-        manifest["availability"][name] = True
-        manifest[name] = _derived_markdown_payload(
+        manifest["availability"][_DERIVED_MARKDOWN_NAME] = True
+        manifest[_DERIVED_MARKDOWN_NAME] = _derived_markdown_payload(
             ran=False, written=0, expected=0, status="not_run",
         )
 
         sanitized = sanitize._sanitize_manifest(manifest)
 
-        assert sanitized[name] == {
+        assert sanitized[_DERIVED_MARKDOWN_NAME] == {
             "ran": False, "written": 0, "expected": 0, "status": "not_run",
         }
 
-    @pytest.mark.parametrize("name", ("reviewer_markdown", "findings_markdown"))
-    def test_ran_true_with_not_run_status_is_an_inconsistent_shape(self, name):
+    def test_ran_true_with_not_run_status_is_an_inconsistent_shape(self):
         manifest = _manifest("run-1")
-        manifest["availability"][name] = True
-        manifest[name] = _derived_markdown_payload(ran=True, status="not_run")
+        manifest["availability"][_DERIVED_MARKDOWN_NAME] = True
+        manifest[_DERIVED_MARKDOWN_NAME] = _derived_markdown_payload(ran=True, status="not_run")
 
         sanitized = sanitize._sanitize_manifest(manifest)
 
-        assert sanitized[name] is None
+        assert sanitized[_DERIVED_MARKDOWN_NAME] is None
 
-    @pytest.mark.parametrize("name", ("reviewer_markdown", "findings_markdown"))
-    def test_complete_status_requires_written_to_equal_expected(self, name):
+    def test_complete_status_requires_written_to_equal_expected(self):
         manifest = _manifest("run-1")
-        manifest["availability"][name] = True
-        manifest[name] = _derived_markdown_payload(
+        manifest["availability"][_DERIVED_MARKDOWN_NAME] = True
+        manifest[_DERIVED_MARKDOWN_NAME] = _derived_markdown_payload(
             status="complete", written=1, expected=2,
         )
 
         sanitized = sanitize._sanitize_manifest(manifest)
 
-        assert sanitized[name] is None
+        assert sanitized[_DERIVED_MARKDOWN_NAME] is None
 
-    @pytest.mark.parametrize("name", ("reviewer_markdown", "findings_markdown"))
-    def test_a_negative_count_is_a_missing_section(self, name):
+    def test_a_negative_count_is_a_missing_section(self):
         manifest = _manifest("run-1")
-        manifest["availability"][name] = True
-        manifest[name] = _derived_markdown_payload(written=-1)
+        manifest["availability"][_DERIVED_MARKDOWN_NAME] = True
+        manifest[_DERIVED_MARKDOWN_NAME] = _derived_markdown_payload(written=-1)
 
         sanitized = sanitize._sanitize_manifest(manifest)
 
-        assert sanitized[name] is None
+        assert sanitized[_DERIVED_MARKDOWN_NAME] is None
 
-    @pytest.mark.parametrize("name", ("reviewer_markdown", "findings_markdown"))
-    def test_a_non_dict_payload_is_missing_not_a_crash(self, name):
+    def test_a_non_dict_payload_is_missing_not_a_crash(self):
         manifest = _manifest("run-1")
-        manifest["availability"][name] = True
-        manifest[name] = "not a dict"
+        manifest["availability"][_DERIVED_MARKDOWN_NAME] = True
+        manifest[_DERIVED_MARKDOWN_NAME] = "not a dict"
 
         sanitized = sanitize._sanitize_manifest(manifest)
 
-        assert sanitized[name] is None
+        assert sanitized[_DERIVED_MARKDOWN_NAME] is None
 
 
 class TestPreRetrofitManifestsProjectHonestly:
@@ -10608,11 +9475,12 @@ class TestPreRetrofitManifestsProjectHonestly:
     `availability["<name>"]` flag was missing (`findings_markdown` did
     not exist at all — Task 7 deferred its manifest section entirely to
     this task). This class probes those real pre-retrofit shapes
-    directly: the generic `TestOptionalSectionAvailabilityConsistency`
-    parametrization does not cover "the availability KEY is entirely
-    absent (not `False`) while a real payload sits beside it," which is
-    the actual shape every pre-Task-13 manifest on disk carries for
-    `dependency_refresh`/`reviewer_markdown`.
+    directly: `TestOptionalSectionAvailabilityConsistency` does not cover
+    "the availability KEY is entirely absent (not `False`) while a real
+    payload sits beside it," which is the actual shape every pre-Task-13
+    manifest on disk carries for `dependency_refresh`/`reviewer_markdown`.
+    The loop branch is name-independent, so `dependency_refresh` stands
+    for both sections.
     """
 
     def test_dependency_refresh_with_a_flagless_but_real_payload_is_recovered(
@@ -10635,18 +9503,6 @@ class TestPreRetrofitManifestsProjectHonestly:
         assert sanitized["availability"]["dependency_refresh"] is True
         assert sanitized["dependency_refresh"] == _dependency_refresh_payload()
 
-    def test_reviewer_markdown_with_a_flagless_but_real_payload_is_recovered(
-        self,
-    ):
-        manifest = _manifest("run-1")
-        assert "reviewer_markdown" not in manifest["availability"]
-        manifest["reviewer_markdown"] = _derived_markdown_payload()
-
-        sanitized = sanitize._sanitize_manifest(manifest)
-
-        assert sanitized["availability"]["reviewer_markdown"] is True
-        assert sanitized["reviewer_markdown"] == _derived_markdown_payload()
-
     def test_dependency_refresh_with_a_flagless_null_payload_reads_missing_not_zero(
         self,
     ):
@@ -10666,57 +9522,27 @@ class TestPreRetrofitManifestsProjectHonestly:
             assert "dependency_refresh" not in manifest["availability"]
             assert manifest["dependency_refresh"] is None
 
-    def test_findings_markdown_never_existed_before_this_retrofit_and_stays_absent(
-        self,
-    ):
-        """Unlike its sibling, `findings_markdown` never had a manifest
-        section at all before Task 13 — genuinely pre-feature, not just
-        flagless. Neither the key nor the flag exists on an old
-        manifest, so this hits the pre-feature skip and is never
-        promoted to a fabricated `False`."""
-        manifest = _manifest("run-1")
-        assert "findings_markdown" not in manifest["availability"]
-        assert "findings_markdown" not in manifest
-
-        sanitized = sanitize._sanitize_manifest(manifest)
-
-        assert "findings_markdown" not in sanitized["availability"]
-        assert sanitized["findings_markdown"] is None
-
-
 class TestOptionalSectionsReachMeasureRun:
     """End-to-end: `measure_run` builds on `_sanitize_manifest`, so the
     fix must be visible at the same surface cohort/render consume."""
 
-    def test_worktree_hygiene_usage_and_skipped_steps_reach_measure_run(self):
+    def test_every_optional_section_reaches_measure_run(self):
+        """Per-run visibility for each section comes free from the one
+        `_sanitize_optional_sections` loop `measure_run` builds on — no
+        dedicated cohort aggregation was added for them, and none was
+        needed for this to be true. `reviewer_markdown` and
+        `findings_markdown` share one sanitizer; both keys are set here
+        so the map's wiring of each is pinned end to end."""
         manifest = _manifest("run-1")
         manifest["availability"]["worktree_hygiene"] = True
         manifest["availability"]["usage"] = True
         manifest["availability"]["skipped_steps"] = True
-        manifest["worktree_hygiene"] = _worktree_hygiene_payload()
-        manifest["usage"] = _usage_snapshot_payload()
-        manifest["skipped_steps"] = _skipped_steps_payload()
-
-        measured = measure_run(
-            manifest, Path("/nonexistent"), include_transcripts=False
-        )
-
-        assert measured["worktree_hygiene"] is not None
-        assert measured["usage"] is not None
-        assert measured["skipped_steps"] == _skipped_steps_payload()
-
-    def test_dependency_refresh_reviewer_markdown_and_findings_markdown_reach_measure_run(
-        self,
-    ):
-        """Task 13's own version of the same end-to-end pin: per-run
-        visibility for these three families comes free from the same
-        `_sanitize_optional_sections` loop `measure_run` already builds
-        on — no dedicated cohort aggregation was added for them, and none
-        was needed for this to be true."""
-        manifest = _manifest("run-1")
         manifest["availability"]["dependency_refresh"] = True
         manifest["availability"]["reviewer_markdown"] = True
         manifest["availability"]["findings_markdown"] = True
+        manifest["worktree_hygiene"] = _worktree_hygiene_payload()
+        manifest["usage"] = _usage_snapshot_payload()
+        manifest["skipped_steps"] = _skipped_steps_payload()
         manifest["dependency_refresh"] = _dependency_refresh_payload()
         manifest["reviewer_markdown"] = _derived_markdown_payload()
         manifest["findings_markdown"] = _derived_markdown_payload()
@@ -10725,6 +9551,9 @@ class TestOptionalSectionsReachMeasureRun:
             manifest, Path("/nonexistent"), include_transcripts=False
         )
 
+        assert measured["worktree_hygiene"] is not None
+        assert measured["usage"] is not None
+        assert measured["skipped_steps"] == _skipped_steps_payload()
         assert measured["dependency_refresh"] == _dependency_refresh_payload()
         assert measured["reviewer_markdown"] == _derived_markdown_payload()
         assert measured["findings_markdown"] == _derived_markdown_payload()

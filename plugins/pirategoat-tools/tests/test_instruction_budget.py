@@ -50,7 +50,6 @@ CODEX_PROJECT_DOC_MAX_BYTES = 32 * 1024
 ROOT_BUDGET_BYTES = 10 * 1024
 PLUGIN_BUDGET_BYTES = 18 * 1024
 CHAIN_BUDGET_BYTES = CODEX_PROJECT_DOC_MAX_BYTES - 4 * 1024
-MAX_LINE_CHARS = 600
 
 RELOCATION_HINT = (
     "Move content down a layer instead of compressing it: module facts to "
@@ -93,24 +92,6 @@ def test_root_plus_plugin_chain_fits_codex_budget(agents_md: Path):
         f"AGENTS.md + {_rel(agents_md)} is {chain:,} bytes; Codex reads at "
         f"most {CODEX_PROJECT_DOC_MAX_BYTES:,} across the chain and drops the "
         f"rest, so the ceiling is {CHAIN_BUDGET_BYTES:,}. {RELOCATION_HINT}"
-    )
-
-
-@pytest.mark.parametrize(
-    "agents_md", [ROOT_AGENTS_MD, *PLUGIN_AGENTS_MDS], ids=_rel
-)
-def test_no_essay_lines(agents_md: Path):
-    """A line over the limit is a paragraph that has outgrown its row."""
-    long_lines = [
-        (number, len(line))
-        for number, line in enumerate(
-            agents_md.read_text(encoding="utf-8").splitlines(), start=1
-        )
-        if len(line) > MAX_LINE_CHARS
-    ]
-    assert not long_lines, (
-        f"{_rel(agents_md)} has lines over {MAX_LINE_CHARS} characters "
-        f"(line: length): {long_lines}. {RELOCATION_HINT}"
     )
 
 

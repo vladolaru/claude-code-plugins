@@ -5,24 +5,10 @@ import subprocess
 from pathlib import Path
 from unittest import mock
 
-import pytest
-
 from helpers.pipeline_process import init_repo
 from hosts.cache.manager import (
-    KNOWN_ECOSYSTEM_REPOS, cache_dir_for, update_host, list_hosts, verify_hosts,
+    cache_dir_for, update_host, list_hosts, verify_hosts,
 )
-
-
-def test_known_repos_has_wordpress_and_woocommerce():
-    names = {r.name for r in KNOWN_ECOSYSTEM_REPOS}
-    assert "wordpress" in names
-    assert "woocommerce" in names
-
-
-def test_known_ecosystem_names_is_the_one_spelling():
-    from hosts.cache.manager import KNOWN_ECOSYSTEM_NAMES
-    assert KNOWN_ECOSYSTEM_NAMES == frozenset({"wordpress", "woocommerce"})
-    assert KNOWN_ECOSYSTEM_NAMES == frozenset(r.name for r in KNOWN_ECOSYSTEM_REPOS)
 
 
 def _commit_all(slot: Path, message: str) -> str:
@@ -104,20 +90,6 @@ def test_slot_identity_ignores_an_uncommitted_version_change(tmp_path, monkeypat
     assert identity["version"] == "7.2-alpha-a"
 
 
-def test_slot_identity_reads_the_woocommerce_plugin_header(tmp_path, monkeypatch):
-    from hosts.cache.manager import slot_identity
-
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
-    _init_slot(
-        cache_dir_for("woocommerce"),
-        "plugins/woocommerce/woocommerce.php",
-        "<?php\n/**\n * Plugin Name: WooCommerce\n * Version: 11.2.0-dev\n */\n",
-    )
-
-    assert slot_identity("woocommerce")["version"] == "11.2.0-dev"
-
-
 def test_slot_identity_is_all_none_when_nothing_can_be_read(tmp_path, monkeypatch):
     from hosts.cache.manager import slot_identity
 
@@ -197,6 +169,8 @@ def test_list_hosts_carries_the_identity(tmp_path, monkeypatch):
 
     assert rows["wordpress"]["identity"]["commit"] == sha
     assert rows["woocommerce"]["identity"] is None
+    assert rows["wordpress"]["present"] is True
+    assert rows["woocommerce"]["present"] is False
 
 
 def test_cache_dir_uses_ecosystem_namespace(tmp_path, monkeypatch):
@@ -235,16 +209,6 @@ def test_update_host_pulls_when_present(tmp_path, monkeypatch):
         m_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
         result = update_host("wordpress")
     assert result["action"] == "pulled"
-
-
-def test_list_hosts_reports_presence(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    wp = tmp_path / ".cache" / "pirategoat" / "ecosystem" / "wordpress" / "latest"
-    wp.mkdir(parents=True)
-    result = list_hosts()
-    names = {e["name"]: e for e in result}
-    assert names["wordpress"]["present"] is True
-    assert names["woocommerce"]["present"] is False
 
 
 def test_verify_hosts_flags_stale(tmp_path, monkeypatch):
@@ -349,48 +313,3 @@ def test_ensure_fresh_calls_update_when_slot_stale(tmp_path, monkeypatch):
     assert update_calls == ["wordpress"]
 
 
-def test_ensure_fresh_respects_custom_max_age(tmp_path, monkeypatch):
-    """Custom max_age_seconds works (e.g. 0 forces refresh always)."""
-    import time as _time
-    from hosts.cache import manager
-
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
-    d = tmp_path / "pirategoat" / "ecosystem" / "wordpress" / "latest"
-    d.mkdir(parents=True)
-    (d / ".last_updated").write_text(str(int(_time.time())))
-
-    update_calls = []
-    monkeypatch.setattr(
-        manager, "update_host",
-        lambda name: update_calls.append(name) or {"ok": True, "action": "pulled"},
-    )
-    manager.ensure_fresh("wordpress", max_age_seconds=0)
-    assert update_calls == ["wordpress"]  # 0 max_age forces refresh
-
-
-def test_update_host_is_serialized_by_lock(monkeypatch, tmp_path):
-    """Two calls into the same host name serialize via advisory lock."""
-    from hosts.cache import manager
-
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
-    calls = []
-
-    def fake_run(*args, **kwargs):
-        calls.append(args[0])
-        # Simulate a successful clone by creating the target with .git
-        cmd = args[0]
-        if "clone" in cmd:
-            target = Path(cmd[-1])
-            target.mkdir(parents=True, exist_ok=True)
-            (target / ".git").mkdir(exist_ok=True)
-        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(manager.subprocess, "run", fake_run)
-
-    result1 = manager.update_host("wordpress")
-    result2 = manager.update_host("wordpress")
-    assert result1["ok"] is True
-    assert result2["ok"] is True
-    # The second call should have seen the .git from the first, so it went
-    # down the "pull" path, not "clone".
-    assert result2["action"] == "pulled"

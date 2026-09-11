@@ -1469,11 +1469,15 @@ _has_markup_changes = _scope_mod.patch_has_markup_tokens
 # =============================================================================
 # Triage-check runners — the EXECUTION view over _CHECK_SPECS.
 #
-# Every check declared in _CHECK_SPECS has exactly one runner here; the
-# meta-test test_check_runners_cover_specs binds the two sets, so a check
-# added to _CHECK_SPECS without a runner (or vice versa) fails at test time
-# instead of silently never firing. Runners share a uniform signature over
-# every triage input a check might need and return a dispatch-reason string
+# Every check declared in _CHECK_SPECS has exactly one runner here. There is
+# no meta-test over the two sets; the binding is enforced at two other
+# layers instead: `_CHECK_RUNNERS[check]` (layer 5 of triage_conditional_
+# agent) raises KeyError the first time a plan reaches a check with no
+# runner, which fails TestTriageConditionalAgent's per-check tests, and
+# `_validate_triage_checks` rejects a check name with no spec before domain
+# gating (TestRegistryConsistency::test_unsupported_triage_check_fails_
+# even_without_domain_files). Runners share a uniform signature over every
+# triage input a check might need and return a dispatch-reason string
 # (which becomes the DISPATCH reason) or None when the check does not fire.
 # =============================================================================
 

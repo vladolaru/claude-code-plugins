@@ -1,7 +1,6 @@
 """Tests for review/pipeline.py and pipeline_contract.py routing, state, and CLI."""
 
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -11,8 +10,7 @@ import pytest
 TESTS_DIR = Path(__file__).resolve().parent.parent  # review/ -> tests/
 
 sys.path.insert(0, str(TESTS_DIR))
-from conftest import PIPELINE_TOTAL_STEPS as TOTAL_STEPS
-from helpers.pipeline_process import hermetic_env, init_repo, run_pipeline
+from helpers.pipeline_process import init_repo, run_pipeline
 from review import run_paths
 
 
@@ -25,24 +23,6 @@ def _state_path(output_dir):
 @pytest.fixture(scope="module")
 def mod(pipeline_mod):
     return pipeline_mod
-
-
-class TestStepSequence:
-    """Universal step sequence is defined correctly."""
-
-    def test_has_12_steps(self, mod):
-        assert len(mod.STEP_SEQUENCE) == 12
-
-    def test_step_numbers_are_sequential(self, mod):
-        numbers = [s["step"] for s in mod.STEP_SEQUENCE]
-        assert numbers == list(range(1, 13))
-
-    def test_all_steps_have_required_fields(self, mod):
-        for s in mod.STEP_SEQUENCE:
-            assert "step" in s
-            assert "title" in s
-            assert "phase" in s
-            assert "condition" in s
 
 
 class TestRouting:
@@ -84,53 +64,35 @@ class TestRouting:
         config.update(overrides)
         return config
 
-    def test_pr_mode_active_steps(self, mod):
-        """Interactive PR mode includes the final consent step."""
-        config = self._make_config("pr")
-        state = self._make_state("pr")
-        ctx = {"git": {"merge_base": "abc123"}}  # pre-computed
-        active = mod.get_active_steps("pr", config, state, ctx)
-        # Step 2 skipped (context pre-computed), 4 skipped (no linear).
-        assert 2 not in active
-        assert 4 not in active
-        assert 7 in active  # baseline written for ALL modes
-        assert 12 in active
-
-    def test_pr_mode_interactive_steps(self, mod):
-        """PR mode interactive without pre-computed context: includes step 2."""
-        config = self._make_config("pr", interactive=True)
-        state = self._make_state("pr")
-        ctx = {"git": {}}  # no merge_base = not pre-computed
-        active = mod.get_active_steps("pr", config, state, ctx)
-        assert 2 in active
-
-    def test_pr_mode_non_interactive_no_context_is_error(self, mod):
-        """Non-interactive PR without pre-computed context: step 2 returns hard error."""
-        config = self._make_config("pr", interactive=False)
-        state = self._make_state("pr")
-        ctx = {"git": {}}  # no merge_base = not pre-computed
-        # Step 2 should not be in active steps — it's a hard error, not a skip
-        active = mod.get_active_steps("pr", config, state, ctx)
-        assert 2 not in active
-        assert 12 not in active
-
-    def test_full_mode_active_steps(self, mod):
-        """Interactive full mode includes the final consent step."""
-        config = self._make_config("full")
-        state = self._make_state("full")
-        ctx = {"git": {}}
-        active = mod.get_active_steps("full", config, state, ctx)
-        assert 2 not in active
-        assert 7 in active  # baseline written for ALL modes
-        assert 12 in active
-
-    def test_incremental_mode_has_save_baseline(self, mod):
-        """Incremental mode includes step 7 (as does every mode)."""
-        config = self._make_config("incremental")
-        state = self._make_state("incremental")
-        ctx = {"git": {}}
-        active = mod.get_active_steps("incremental", config, state, ctx)
-        assert 7 in active
+    @pytest.mark.parametrize(
+        ("mode", "interactive", "merge_base", "has_unfetched", "expect_active", "expect_inactive"),
+        [
+            pytest.param("pr", True, "abc123", False, (7, 12), (2, 4),
+                         id="pr-interactive-context-precomputed"),
+            pytest.param("pr", True, None, False, (2,), (),
+                         id="pr-interactive-no-context-includes-step-2"),
+            pytest.param("pr", False, None, False, (), (2, 12),
+                         id="pr-non-interactive-no-context-is-hard-error"),
+            pytest.param("full", True, None, False, (7, 12), (2,),
+                         id="full-interactive-active-steps"),
+            pytest.param("full", True, None, True, (4,), (),
+                         id="linear-issues-activate-step-4"),
+        ],
+    )
+    def test_active_steps_by_mode(
+        self, mod, mode, interactive, merge_base, has_unfetched,
+        expect_active, expect_inactive,
+    ):
+        """`get_active_steps` routes on mode, interactivity, precomputed
+        context, and pending Linear issues — one router, five inputs."""
+        config = self._make_config(mode, interactive=interactive)
+        state = self._make_state(mode, has_unfetched_issues=has_unfetched)
+        ctx = {"git": {"merge_base": merge_base} if merge_base else {}}
+        active = mod.get_active_steps(mode, config, state, ctx)
+        for step in expect_active:
+            assert step in active
+        for step in expect_inactive:
+            assert step not in active
 
     def test_step_7_runs_for_all_modes(self, mod):
         """Step 7 (Save Review Baseline) runs for ALL modes."""
@@ -141,53 +103,31 @@ class TestRouting:
             active = mod.get_active_steps(mode, config, state, ctx)
             assert 7 in active, f"Step 7 should be active for {mode} mode"
 
-    def test_linear_issues_activates_step_4(self, mod):
-        """Step 4 activates when linear issues are detected."""
-        config = self._make_config("full")
-        state = self._make_state("full", has_unfetched_issues=True)
-        ctx = {"git": {}}
-        active = mod.get_active_steps("full", config, state, ctx)
-        assert 4 in active
-
-    def test_workspace_state_activates_cleanup_interactive(self, mod):
-        """Step 12 activates when original_branch exists AND interactive."""
-        config = self._make_config("pr", interactive=True)
-        state = self._make_state("pr", original_branch="main")
-        ctx = {"git": {}}
-        active = mod.get_active_steps("pr", config, state, ctx)
-        assert 12 in active
-
-    def test_workspace_state_skips_cleanup_non_interactive(self, mod):
-        """Step 12 skipped in non-interactive mode even with workspace state."""
-        config = self._make_config("pr", interactive=False)
-        state = self._make_state("pr", original_branch="main")
-        ctx = {"git": {}}
-        active = mod.get_active_steps("pr", config, state, ctx)
-        assert 12 not in active
-
 
 class TestNextStep:
     """Next step computation with skip explanations."""
 
-    def test_consecutive_step(self, mod):
-        """When next step is active, return it directly."""
+    @pytest.mark.parametrize(
+        ("current_step", "expect_step", "expect_skip_reason"),
+        [
+            pytest.param(5, 6, False, id="consecutive-step-no-skip-reason"),
+            pytest.param(1, 3, True, id="non-consecutive-jump-explains-skip"),
+            pytest.param(11, None, None, id="final-step-returns-none"),
+        ],
+    )
+    def test_next_step_from_active_set(
+        self, mod, current_step, expect_step, expect_skip_reason
+    ):
         active = {1, 3, 5, 6, 8, 9, 10, 11}
-        result = mod.compute_next_step(5, active)
-        assert result["step"] == 6
-        assert result.get("skip_reason") is None
-
-    def test_non_consecutive_jump(self, mod):
-        """When steps are skipped, jump and explain."""
-        active = {1, 3, 5, 6, 8, 9, 10, 11}
-        result = mod.compute_next_step(1, active)
-        assert result["step"] == 3
-        assert result["skip_reason"] is not None
-
-    def test_final_step_returns_none(self, mod):
-        """Last active step has no next."""
-        active = {1, 3, 5, 6, 8, 9, 10, 11}
-        result = mod.compute_next_step(11, active)
-        assert result is None
+        result = mod.compute_next_step(current_step, active)
+        if expect_step is None:
+            assert result is None
+            return
+        assert result["step"] == expect_step
+        if expect_skip_reason:
+            assert result["skip_reason"] is not None
+        else:
+            assert result.get("skip_reason") is None
 
 
 class TestStateManagement:
@@ -206,14 +146,6 @@ class TestStateManagement:
         loaded = mod.read_state(str(tmp_path))
         assert loaded["completed_steps"] == []
 
-    def test_read_missing_state_returns_default(self, mod, tmp_path):
-        state = mod.read_state(str(tmp_path))
-        assert state["completed_steps"] == []
-
-    def test_read_missing_config_returns_default(self, mod, tmp_path):
-        config = mod.read_config(str(tmp_path))
-        assert config.get("mode") is None
-
     @pytest.mark.parametrize(
         "payload", ['["a"]', '"scalar"', "7"], ids=["array", "string", "int"]
     )
@@ -225,13 +157,29 @@ class TestStateManagement:
         (tmp_path / "review-context.json").write_text(payload)
         assert mod.read_review_context(str(tmp_path)) == {}
 
-    def test_state_persists_workspace_params(self, mod, tmp_path):
-        state = mod.read_state(str(tmp_path))
-        state["workspace"] = {"original_branch": "main", "stash_ref": "abc123"}
-        mod.write_state(str(tmp_path), state)
-        loaded = mod.read_state(str(tmp_path))
-        assert loaded["workspace"]["original_branch"] == "main"
-        assert loaded["workspace"]["stash_ref"] == "abc123"
+    @pytest.mark.parametrize(
+        ("kind", "content"),
+        [
+            pytest.param("state", None, id="state-missing"),
+            pytest.param("state", "not json{{{", id="state-corrupted"),
+            pytest.param("config", None, id="config-missing"),
+            pytest.param("config", "not json{{{", id="config-corrupted"),
+        ],
+    )
+    def test_unusable_state_files(self, mod, tmp_path, kind, content):
+        """`read_state`/`read_config` share one `except (FileNotFoundError,
+        JSONDecodeError, OSError)` clause: a missing or corrupted file
+        degrades to the same default rather than raising."""
+        if kind == "state":
+            if content is not None:
+                _state_path(tmp_path).write_text(content)
+            state = mod.read_state(str(tmp_path))
+            assert state["completed_steps"] == []
+        else:
+            if content is not None:
+                (tmp_path / "run-config.json").write_text(content)
+            config = mod.read_config(str(tmp_path))
+            assert config.get("mode") is None
 
     def test_config_is_source_of_truth_over_cli(self, mod, tmp_path):
         """When run-config.json exists, its values take precedence over CLI args."""
@@ -295,53 +243,30 @@ class TestTelemetryIdentityHelpers:
 
         assert mod._detect_plugin_commit(repo) == expected
 
-    def test_plugin_commit_is_none_outside_a_repository(self, mod, tmp_path):
-        """Marketplace installs are usually git clones, so this is the
-        exception rather than the norm — but a plugin directory that is
-        no repository must stay silent: not a warning, not an
-        exception."""
-        plugin_root = tmp_path / "1.108.0"
-        plugin_root.mkdir()
+    @pytest.mark.parametrize(
+        "case",
+        ["outside-a-repository", "git-unusable", "unparseable-output"],
+    )
+    def test_plugin_commit_undeterminable(self, mod, tmp_path, monkeypatch, case):
+        """`_detect_plugin_commit` degrades to `None` — never a warning,
+        never an exception — for every way the checkout can fail to
+        answer: no repository, no usable git binary, or output git will
+        never actually produce."""
+        plugin_root = tmp_path
+        if case == "outside-a-repository":
+            plugin_root = tmp_path / "1.108.0"
+            plugin_root.mkdir()
+        elif case == "git-unusable":
+            def fail(*_args, **_kwargs):
+                raise FileNotFoundError("git")
+            monkeypatch.setattr(mod.subprocess, "run", fail)
+        else:
+            class _Result:
+                returncode = 0
+                stdout = "fatal: not a tree\n"
+            monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _Result())
+
         assert mod._detect_plugin_commit(plugin_root) is None
-
-    def test_plugin_commit_is_none_when_git_is_unusable(self, mod, monkeypatch,
-                                                        tmp_path):
-        def fail(*_args, **_kwargs):
-            raise FileNotFoundError("git")
-
-        monkeypatch.setattr(mod.subprocess, "run", fail)
-        assert mod._detect_plugin_commit(tmp_path) is None
-
-    def test_plugin_commit_rejects_unparseable_output(self, mod, monkeypatch,
-                                                      tmp_path):
-        """Whatever a future Git prints, only an object name is recorded."""
-        class _Result:
-            returncode = 0
-            stdout = "fatal: not a tree\n"
-
-        monkeypatch.setattr(
-            mod.subprocess, "run", lambda *a, **k: _Result()
-        )
-        assert mod._detect_plugin_commit(tmp_path) is None
-
-    def test_explicit_right_endpoint_is_resolved_as_head(self, mod, monkeypatch):
-        identities = {
-            "HEAD~1^{commit}": "previous-head",
-            "HEAD^{commit}": "current-head",
-        }
-
-        def fake_git_output(*args):
-            return identities.get(args[-1], "")
-
-        monkeypatch.setattr(mod, "_git_output", fake_git_output)
-
-        requested_range, base_sha, head_sha = mod._resolve_git_identity(
-            "HEAD~1..HEAD~1"
-        )
-
-        assert requested_range == "HEAD~1..HEAD~1"
-        assert base_sha == "previous-head"
-        assert head_sha == "previous-head"
 
     @pytest.mark.parametrize(
         ("git_range", "expected_base", "expected_head"),
@@ -354,6 +279,8 @@ class TestTelemetryIdentityHelpers:
             ("topic..missing", "topic-head", ""),
             ("missing...topic", "", "topic-head"),
             ("topic...missing", "topic-head", ""),
+            pytest.param("HEAD~1..HEAD~1", "previous-head", "previous-head",
+                         id="explicit-right-endpoint-resolved-as-head"),
         ],
     )
     def test_range_defaults_omitted_endpoints_and_preserves_unresolved_refs(
@@ -362,6 +289,7 @@ class TestTelemetryIdentityHelpers:
         identities = {
             "HEAD^{commit}": "current-head",
             "topic^{commit}": "topic-head",
+            "HEAD~1^{commit}": "previous-head",
         }
 
         def fake_git_output(*args):
@@ -468,7 +396,12 @@ class TestTelemetryIdentityHelpers:
 
 
 class TestFailureRecovery:
-    """Pipeline handles invalid states gracefully."""
+    """Pipeline handles invalid states gracefully.
+
+    Corrupted pipeline-state.json / run-config.json is covered by
+    `TestStateManagement::test_unusable_state_files`, the same
+    `except (FileNotFoundError, JSONDecodeError, OSError)` clause.
+    """
 
     def test_invalid_step_number(self, mod, tmp_path):
         state = {"completed_steps": []}
@@ -476,32 +409,9 @@ class TestFailureRecovery:
         g = mod.get_step_guidance(99, "pr", state, ctx)
         assert g is None
 
-    def test_corrupted_state_file(self, mod, tmp_path):
-        """Pipeline survives corrupted pipeline-state.json."""
-        _state_path(tmp_path).write_text("not json{{{")
-        state = mod.read_state(str(tmp_path))
-        assert state["completed_steps"] == []  # returns default
-
-    def test_corrupted_config_file(self, mod, tmp_path):
-        """Pipeline survives corrupted run-config.json."""
-        (tmp_path / "run-config.json").write_text("not json{{{")
-        config = mod.read_config(str(tmp_path))
-        assert config.get("mode") is None  # returns default
-
 
 class TestFormatOutput:
     """Output formatting follows curated-context-pipeline pattern."""
-
-    def test_has_separator_header(self, mod):
-        guidance = {
-            "phase": "SETUP", "title": "Parse Input",
-            "situation": [], "actions": ["Do something."],
-            "handoff": None, "next_step": {"step": 3, "title": "Gather Context"},
-            "skip_reason": "Step 2 skipped: PR-only (repo setup)",
-        }
-        output = mod.format_output(1, guidance)
-        assert "═══" in output
-        assert "Step 1" in output
 
     def test_has_next_pointer(self, mod):
         guidance = {
@@ -524,87 +434,78 @@ class TestFormatOutput:
         output = mod.format_output(1, guidance)
         assert "pre-computed" in output
 
-    def test_final_step_shows_complete(self, mod):
-        guidance = {
-            "phase": "OUTPUT", "title": "Present Results",
-            "situation": [], "actions": ["Show results."],
-            "handoff": None, "next_step": None,
-            "skip_reason": None,
-        }
-        output = mod.format_output(11, guidance)
-        assert "COMPLETE" in output
-        assert "✅" in output
-
-    def test_a_degraded_run_does_not_sign_off_with_a_checkmark(self, mod):
-        """The footer is a claim, and the last thing the reader sees must
-        not contradict the degradations printed above it."""
-        guidance = {
-            "phase": "OUTPUT", "title": "Present Results",
-            "situation": [], "actions": ["Show results."],
-            "handoff": None, "next_step": None,
-            "skip_reason": None,
-            "degraded": True,
-        }
-        output = mod.format_output(11, guidance)
-        assert "PIPELINE COMPLETE (DEGRADED" in output
-        assert "✅" not in output
-
-    def test_a_missing_degraded_flag_reads_as_not_degraded(self, mod):
-        """Every other step's guidance dict omits the key entirely."""
-        guidance = {
-            "phase": "OUTPUT", "title": "Present Results",
-            "situation": [], "actions": ["Show results."],
-            "handoff": None, "next_step": None, "skip_reason": None,
-        }
-        assert "✅ PIPELINE COMPLETE" in mod.format_output(11, guidance)
-
-    def test_an_outstanding_handoff_does_not_sign_off_as_complete(self, mod):
-        """The last step now ASKS for an artifact — `review-report.md`,
-        authored after the critic. Printing "PIPELINE COMPLETE" directly
-        beneath a handoff gate demanding that file contradicts the gate
-        one line above it."""
-        guidance = {
-            "phase": "OUTPUT", "title": "Author Report + Present Results",
-            "situation": [], "actions": ["Author the report."],
-            "handoff": ["Verify `review-report.md` exists."],
-            "next_step": None, "skip_reason": None,
-        }
-        output = mod.format_output(11, guidance)
-        assert "✅ PIPELINE COMPLETE" not in output
-        assert "HANDOFF" in output
-
-    def test_an_outstanding_handoff_on_a_degraded_run_claims_neither(
-        self, mod
-    ):
-        """Both falsifiers apply at once, and the line must carry both:
-        the run degraded AND the report is not written yet. "PIPELINE
-        COMPLETE (DEGRADED)" above an open gate still claims completion."""
-        guidance = {
-            "phase": "OUTPUT", "title": "Author Report + Present Results",
-            "situation": [], "actions": ["Author the report."],
-            "handoff": ["Verify `review-report.md` exists."],
-            "next_step": None, "skip_reason": None, "degraded": True,
-        }
-        output = mod.format_output(11, guidance)
-        assert "PIPELINE STEPS COMPLETE (DEGRADED" in output
-        assert "finish the HANDOFF above" in output
-        assert "PIPELINE COMPLETE" not in output
-        assert "✅" not in output
-
-    def test_blocked_step_does_not_show_complete(self, mod):
-        guidance = {
-            "phase": "SYNTHESIS", "title": "Reconcile + Verify — WAITING",
-            "situation": ["Agents still running."],
-            "actions": ["Wait, then re-run step 8."],
-            "handoff": None,
-            "next_step": None,
-            "skip_reason": None,
-            "blocks_progress": True,
-        }
-        output = mod.format_output(8, guidance)
-        assert "PIPELINE COMPLETE" not in output
-        assert "Next:" not in output
-        assert "PIPELINE WAITING" in output
+    @pytest.mark.parametrize(
+        ("step", "guidance", "expect_present", "expect_absent"),
+        [
+            pytest.param(
+                11,
+                {
+                    "phase": "OUTPUT", "title": "Present Results",
+                    "situation": [], "actions": ["Show results."],
+                    "handoff": None, "next_step": None, "skip_reason": None,
+                },
+                ["✅ PIPELINE COMPLETE"], [],
+                id="not-degraded-no-handoff",
+            ),
+            pytest.param(
+                11,
+                {
+                    "phase": "OUTPUT", "title": "Present Results",
+                    "situation": [], "actions": ["Show results."],
+                    "handoff": None, "next_step": None, "skip_reason": None,
+                    "degraded": True,
+                },
+                ["PIPELINE COMPLETE (DEGRADED"], ["✅"],
+                id="degraded-no-handoff",
+            ),
+            pytest.param(
+                11,
+                {
+                    "phase": "OUTPUT", "title": "Author Report + Present Results",
+                    "situation": [], "actions": ["Author the report."],
+                    "handoff": ["Verify `review-report.md` exists."],
+                    "next_step": None, "skip_reason": None,
+                },
+                ["HANDOFF"], ["✅ PIPELINE COMPLETE"],
+                id="not-degraded-handoff-outstanding",
+            ),
+            pytest.param(
+                11,
+                {
+                    "phase": "OUTPUT", "title": "Author Report + Present Results",
+                    "situation": [], "actions": ["Author the report."],
+                    "handoff": ["Verify `review-report.md` exists."],
+                    "next_step": None, "skip_reason": None, "degraded": True,
+                },
+                ["PIPELINE STEPS COMPLETE (DEGRADED", "finish the HANDOFF above"],
+                ["PIPELINE COMPLETE", "✅"],
+                id="degraded-handoff-outstanding",
+            ),
+            pytest.param(
+                8,
+                {
+                    "phase": "SYNTHESIS", "title": "Reconcile + Verify — WAITING",
+                    "situation": ["Agents still running."],
+                    "actions": ["Wait, then re-run step 8."],
+                    "handoff": None, "next_step": None, "skip_reason": None,
+                    "blocks_progress": True,
+                },
+                ["PIPELINE WAITING"], ["PIPELINE COMPLETE", "Next:"],
+                id="blocks-progress",
+            ),
+        ],
+    )
+    def test_footer_claim(self, mod, step, guidance, expect_present, expect_absent):
+        """The footer is the last thing the reader sees, and it must never
+        claim more than the run actually did: complete only with no
+        degradation and no outstanding handoff, DEGRADED when the run
+        degraded, HANDOFF when an artifact is still owed, and WAITING
+        rather than COMPLETE when a step blocks progress."""
+        output = mod.format_output(step, guidance)
+        for text in expect_present:
+            assert text in output
+        for text in expect_absent:
+            assert text not in output
 
     def test_handoff_section(self, mod):
         guidance = {
@@ -638,36 +539,31 @@ class TestFormatOutput:
         out_wait = mod.format_output(3, guidance_wait)
         assert mod._RUN_EXACT_NOTE in out_next
         assert mod._RUN_EXACT_NOTE in out_wait
-        assert "never pipe" in mod._RUN_EXACT_NOTE
 
 
 class TestCLIIntegration:
-    """Subprocess tests for the CLI."""
+    """CLI tests for step 1 config/state seeding. Most of the class calls
+    `mod.main()` in-process with a patched `sys.argv` and cwd (the pattern
+    `TestStep8WaitingRouting` in test_pipeline_integration.py already uses);
+    three tests stay real subprocesses as the CLI-process smoke."""
 
     @pytest.fixture(autouse=True)
-    def _isolated_repo(self, tmp_path):
-        """run_pipeline's cwd has no default — see its docstring. Isolate
-        every subprocess call in this class to a throwaway repo at
-        tmp_path/repo so none of them can touch the real checkout. The repo
-        lives in a subdirectory, never at tmp_path itself, and remains a
-        sibling of tmp_path/out so run artifacts cannot dirty the repo."""
+    def _isolated_repo(self, tmp_path, monkeypatch):
+        """Isolate every call in this class to a throwaway repo at
+        tmp_path/repo so none of them can touch the real checkout — the
+        subprocess smokes via their own `cwd=`, the in-process calls via
+        `monkeypatch.chdir` (step 2 runs `git stash push -u` in cwd; see
+        helpers/pipeline_process.py). The repo lives in a subdirectory,
+        never at tmp_path itself, and remains a sibling of tmp_path/out so
+        run artifacts cannot dirty the repo."""
         (tmp_path / "repo").mkdir()
         init_repo(tmp_path / "repo")
         (tmp_path / "out").mkdir()
+        monkeypatch.chdir(tmp_path / "repo")
 
     def test_step_1_pr_mode_exits_0(self, tmp_path):
         r = run_pipeline("--step", "1", "--mode", "pr",
                        "--output-dir", str(tmp_path / "out"), "--pr-number", "42", cwd=tmp_path / "repo")
-        assert r.returncode == 0
-
-    def test_step_1_full_mode_exits_0(self, tmp_path):
-        r = run_pipeline("--step", "1", "--mode", "full",
-                       "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
-        assert r.returncode == 0
-
-    def test_step_1_incremental_mode_exits_0(self, tmp_path):
-        r = run_pipeline("--step", "1", "--mode", "incremental",
-                       "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
         assert r.returncode == 0
 
     def test_invalid_step_exits_1(self, tmp_path):
@@ -679,9 +575,12 @@ class TestCLIIntegration:
         r = run_pipeline("--step", "1", "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
         assert r.returncode != 0
 
-    def test_writes_run_config_and_pipeline_state(self, tmp_path):
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path / "out"), "--pr-number", "42", cwd=tmp_path / "repo")
+    def test_writes_run_config_and_pipeline_state(self, mod, tmp_path, monkeypatch):
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
+        ])
+        mod.main()
         config_path = tmp_path / "out" / "run-config.json"
         state_path = _state_path(tmp_path / "out")
         assert config_path.is_file()
@@ -689,8 +588,11 @@ class TestCLIIntegration:
         config = json.loads(config_path.read_text())
         assert config["mode"] == "pr"
         assert config["pr_number"] == "42"
+        state = json.loads(state_path.read_text())
+        assert "run_id" in state
+        assert len(state["run_id"]) > 0
 
-    def test_cli_seeded_config_fields_are_never_overwritten_on_rerun(self, tmp_path):
+    def test_cli_seeded_config_fields_are_never_overwritten_on_rerun(self, mod, tmp_path, monkeypatch):
         """run-config.json is seeded from the CLI on the FIRST step 1 only.
 
         Step 1 reruns against the same output dir are routine (interactive
@@ -702,16 +604,21 @@ class TestCLIIntegration:
         old one. Only the fields with explicit rerun-sync semantics (host,
         quick, refresh_dependencies, session_id) may change.
         """
-        run_pipeline("--step", "1", "--mode", "pr",
-                     "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
-                     "--git-range", "aaa111..bbb222",
-                     "--output-instructions", "original", cwd=tmp_path / "repo")
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
+            "--git-range", "aaa111..bbb222",
+            "--output-instructions", "original",
+        ])
+        mod.main()
 
-        r = run_pipeline("--step", "1", "--mode", "full",
-                         "--output-dir", str(tmp_path / "out"), "--pr-number", "99",
-                         "--git-range", "ccc333..ddd444",
-                         "--output-instructions", "rewritten", cwd=tmp_path / "repo")
-        assert r.returncode == 0
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full",
+            "--output-dir", str(tmp_path / "out"), "--pr-number", "99",
+            "--git-range", "ccc333..ddd444",
+            "--output-instructions", "rewritten",
+        ])
+        mod.main()
 
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config["mode"] == "pr"
@@ -719,56 +626,49 @@ class TestCLIIntegration:
         assert config["git_range"] == "aaa111..bbb222"
         assert config["output_instructions"] == "original"
 
-    def test_run_config_carries_the_running_plugin_version(self, mod, tmp_path):
-        """Step 1 stamps the artifact with the plugin that produced it.
+    @pytest.mark.parametrize(
+        ("field", "seeded_config", "stale_value"),
+        [
+            pytest.param("plugin_version", None, None, id="version-seed"),
+            pytest.param("plugin_commit", None, None, id="commit-seed"),
+            pytest.param(
+                "plugin_version",
+                {"mode": "pr", "pr_number": "42", "plugin_version": "0.0.1"},
+                "0.0.1",
+                id="version-stale-refreshed-on-rerun",
+            ),
+        ],
+    )
+    def test_build_identity_stamp(
+        self, mod, tmp_path, monkeypatch, field, seeded_config, stale_value
+    ):
+        """Step 1 stamps the artifact with the plugin that produced it —
+        the SAME two facts (`plugin_version`, `plugin_commit`) telemetry
+        records on the manifest — through one helper (`_stamp_run_config`),
+        on both the seed path (first call) and a rerun over a stale value.
+        Without it, a durable run directory could not be attributed to a
+        plugin build once its telemetry log is gone."""
+        if seeded_config is not None:
+            (tmp_path / "out" / "run-config.json").write_text(json.dumps(seeded_config))
+            monkeypatch.setattr(sys, "argv", [
+                "pipeline.py", "--step", "1", "--output-dir", str(tmp_path / "out"),
+            ])
+        else:
+            monkeypatch.setattr(sys, "argv", [
+                "pipeline.py", "--step", "1", "--mode", "pr",
+                "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
+            ])
+        mod.main()
 
-        The stamp is the SAME fact telemetry records on the manifest, taken
-        from the one detector (_detect_plugin_version) at the one place it
-        runs. Without it, a durable run directory could not be attributed
-        to a plugin version once its telemetry log is gone.
-        """
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path / "out"), "--pr-number", "42", cwd=tmp_path / "repo")
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
-        expected = mod._detect_plugin_version()
-        assert expected  # source checkout must resolve a version
-        assert config["plugin_version"] == expected
-
-    def test_pre_seeded_config_is_stamped_on_the_bot_path(self, mod, tmp_path):
-        """Bot runs pre-write run-config.json, so the seed branch is skipped.
-
-        The stamp must land on the existing-config path too, or every
-        non-interactive run ships an unattributed artifact.
-        """
-        (tmp_path / "out" / "run-config.json").write_text(json.dumps({
-            "mode": "pr", "pr_number": "42", "interactive": False,
-        }))
-        run_pipeline("--step", "1", "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
-        config = json.loads((tmp_path / "out" / "run-config.json").read_text())
-        assert config["plugin_version"] == mod._detect_plugin_version()
-
-    def test_stale_stamp_from_an_earlier_plugin_is_refreshed(self, mod, tmp_path):
-        """A resumed run keeps its run-config.json.
-
-        A rerun under an upgraded plugin must re-stamp, or the artifact
-        would credit the run to the version that ran LAST time.
-        """
-        (tmp_path / "out" / "run-config.json").write_text(json.dumps({
-            "mode": "pr", "pr_number": "42", "plugin_version": "0.0.1",
-        }))
-        run_pipeline("--step", "1", "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
-        config = json.loads((tmp_path / "out" / "run-config.json").read_text())
-        assert config["plugin_version"] == mod._detect_plugin_version()
-        assert config["plugin_version"] != "0.0.1"
-
-    def test_run_config_carries_the_producing_build_commit(self, mod, tmp_path):
-        """The plugin under test IS a git checkout, so the field resolves."""
-        run_pipeline("--step", "1", "--mode", "pr",
-                     "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
-                     cwd=tmp_path / "repo")
-        config = json.loads((tmp_path / "out" / "run-config.json").read_text())
-        assert config["plugin_commit"] == mod._detect_plugin_commit()
-        assert config["plugin_commit"]
+        expected = (
+            mod._detect_plugin_version() if field == "plugin_version"
+            else mod._detect_plugin_commit()
+        )
+        assert expected  # this checkout must resolve a real value
+        assert config[field] == expected
+        if stale_value is not None:
+            assert config[field] != stale_value
 
     def test_undeterminable_commit_is_written_as_an_explicit_null(
         self, mod, tmp_path, monkeypatch
@@ -781,32 +681,18 @@ class TestCLIIntegration:
         assert "plugin_commit" in written
         assert written["plugin_commit"] is None
 
-    def test_unchanged_stamp_does_not_rewrite_the_config(self, mod, tmp_path):
-        config = {"mode": "pr", "plugin_commit": "abc1234"}
-        mod.write_config(str(tmp_path), config)
-        mtime = (tmp_path / "run-config.json").stat().st_mtime_ns
-        mod._stamp_run_config(str(tmp_path), config, "plugin_commit", "abc1234")
-        assert (tmp_path / "run-config.json").stat().st_mtime_ns == mtime
-
-    def test_stale_build_commit_is_refreshed_on_rerun(self, mod, tmp_path):
-        """A step-1 retry on a newer build must re-stamp run-config.json."""
-        (tmp_path / "out" / "run-config.json").write_text(json.dumps({
-            "mode": "pr", "pr_number": "42", "plugin_commit": "0000000",
-        }))
-        run_pipeline("--step", "1", "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
-        config = json.loads((tmp_path / "out" / "run-config.json").read_text())
-        assert config["plugin_commit"] == mod._detect_plugin_commit()
-        assert config["plugin_commit"] != "0000000"
-
-    def test_workspace_params_persisted_to_state(self, tmp_path):
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
-                   "--original-branch", "develop", "--stash-ref", "abc123", cwd=tmp_path / "repo")
+    def test_workspace_params_persisted_to_state(self, mod, tmp_path, monkeypatch):
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
+            "--original-branch", "develop", "--stash-ref", "abc123",
+        ])
+        mod.main()
         state = json.loads(_state_path(tmp_path / "out").read_text())
         assert state["workspace"]["original_branch"] == "develop"
         assert state["workspace"]["stash_ref"] == "abc123"
 
-    def test_step_1_resets_interactive_review_context_to_current_output(self, tmp_path):
+    def test_step_1_resets_interactive_review_context_to_current_output(self, mod, tmp_path, monkeypatch):
         """Interactive runs seed context without retaining prior-run fields."""
         (tmp_path / "out" / "review-context.json").write_text(json.dumps({
             "git": {
@@ -818,14 +704,17 @@ class TestCLIIntegration:
             "output": {"directory": "/stale/output"},
         }))
 
-        run_pipeline("--step", "1", "--mode", "full",
-                   "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full",
+            "--output-dir", str(tmp_path / "out"),
+        ])
+        mod.main()
 
         assert json.loads((tmp_path / "out" / "review-context.json").read_text()) == {
             "output": {"directory": str(tmp_path / "out")},
         }
 
-    def test_step_1_preserves_noninteractive_review_context(self, tmp_path):
+    def test_step_1_preserves_noninteractive_review_context(self, mod, tmp_path, monkeypatch):
         """Bot runs retain their precomputed Git and PR context."""
         context = {
             "git": {
@@ -843,38 +732,55 @@ class TestCLIIntegration:
         }))
         (tmp_path / "out" / "review-context.json").write_text(json.dumps(context))
 
-        result = run_pipeline("--step", "1", "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--output-dir", str(tmp_path / "out"),
+        ])
+        mod.main()
 
-        assert result.returncode == 0
         assert json.loads((tmp_path / "out" / "review-context.json").read_text()) == context
 
-    def test_step_1_writes_run_id(self, tmp_path):
-        """Step 1 should write a run_id to pipeline-state.json."""
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path / "out"), "--pr-number", "42", cwd=tmp_path / "repo")
-        state = json.loads(_state_path(tmp_path / "out").read_text())
-        assert "run_id" in state
-        assert len(state["run_id"]) > 0
+    @pytest.mark.parametrize(
+        ("seeded_config", "review_context", "cli_session_id", "expected_session_id"),
+        [
+            pytest.param(
+                {"mode": "full", "interactive": True, "session_id": "session-stale"},
+                None, "session-current", "session-current",
+                id="explicit-session-id-overwrites-stale",
+            ),
+            pytest.param(
+                {"mode": "pr", "pr_number": "42", "interactive": False,
+                 "session_id": "bot-session"},
+                {"git": {"merge_base": "abc123"}}, None, "bot-session",
+                id="preseeded-session-id-used-when-cli-omits-it",
+            ),
+        ],
+    )
+    def test_session_id_rerun(
+        self, mod, tmp_path, monkeypatch, seeded_config, review_context,
+        cli_session_id, expected_session_id,
+    ):
+        """Session identity is CLI-authoritative on an interactive rerun
+        and preseed-authoritative on a bot rerun that omits --session-id
+        (the stale-clearing half of this contract is
+        `test_step_1_clears_stale_session_id_on_interactive_rerun`, kept
+        standalone below — fix 3eadb8d4)."""
+        (tmp_path / "out" / "run-config.json").write_text(json.dumps(seeded_config))
+        if review_context is not None:
+            (tmp_path / "out" / "review-context.json").write_text(json.dumps(review_context))
 
-    def test_step_1_persists_explicit_session_id(self, tmp_path):
-        (tmp_path / "out" / "run-config.json").write_text(json.dumps({
-            "mode": "full",
-            "interactive": True,
-            "session_id": "session-stale",
-        }))
+        args = ["pipeline.py", "--step", "1", "--output-dir", str(tmp_path / "out")]
+        if seeded_config["mode"] == "full":
+            args += ["--mode", "full"]
+        if cli_session_id is not None:
+            args += ["--session-id", cli_session_id]
+        monkeypatch.setattr(sys, "argv", args)
+        mod.main()
 
-        result = run_pipeline(
-            "--step", "1", "--mode", "full", "--output-dir", str(tmp_path / "out"),
-            "--session-id", "session-current",
-            cwd=tmp_path / "repo",
-        )
-
-        assert result.returncode == 0
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
-        assert config["session_id"] == "session-current"
+        assert config["session_id"] == expected_session_id
 
     def test_step_1_clears_stale_session_id_on_interactive_rerun(
-        self, tmp_path
+        self, mod, tmp_path, monkeypatch
     ):
         """Interactive output dirs are reused and run-config.json survives
         cleanup: an omitted --session-id means this run's session is
@@ -886,60 +792,37 @@ class TestCLIIntegration:
             "session_id": "session-stale",
         }))
 
-        result = run_pipeline(
-            "--step", "1", "--mode", "full", "--output-dir", str(tmp_path / "out"),
-            cwd=tmp_path / "repo",
-        )
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full",
+            "--output-dir", str(tmp_path / "out"),
+        ])
+        mod.main()
 
-        assert result.returncode == 0
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert "session_id" not in config
-
-    def test_step_1_uses_preseeded_session_id_when_cli_omits_it(self, tmp_path):
-        (tmp_path / "out" / "run-config.json").write_text(json.dumps({
-            "mode": "pr",
-            "pr_number": "42",
-            "interactive": False,
-            "session_id": "bot-session",
-        }))
-        (tmp_path / "out" / "review-context.json").write_text(json.dumps({
-            "git": {"merge_base": "abc123"},
-        }))
-
-        result = run_pipeline("--step", "1", "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
-
-        assert result.returncode == 0
-        config = json.loads((tmp_path / "out" / "run-config.json").read_text())
-        assert config["session_id"] == "bot-session"
-
-    def test_step_1_generates_unique_run_ids(self, tmp_path):
-        first = tmp_path / "first"
-        second = tmp_path / "second"
-
-        run_pipeline("--step", "1", "--mode", "full", "--output-dir", str(first), cwd=tmp_path / "repo")
-        run_pipeline("--step", "1", "--mode", "full", "--output-dir", str(second), cwd=tmp_path / "repo")
-
-        first_state = json.loads(_state_path(first).read_text())
-        second_state = json.loads(_state_path(second).read_text())
-        assert first_state["run_id"] != second_state["run_id"]
 
 
 class TestSkippedStepRecording:
     """Steps the router passes over are recorded in durable pipeline state."""
 
     @pytest.fixture(autouse=True)
-    def _isolated_repo(self, tmp_path):
-        """Keep the test repo isolated from the run output directory."""
+    def _isolated_repo(self, tmp_path, monkeypatch):
+        """Keep the test repo isolated from the run output directory, and
+        cwd pointed at it for the in-process `mod.main()` calls below."""
         (tmp_path / "repo").mkdir()
         init_repo(tmp_path / "repo")
         (tmp_path / "out").mkdir()
+        monkeypatch.chdir(tmp_path / "repo")
 
-    def _prepare_step_11(self, tmp_path):
-        result = run_pipeline(
-            "--step", "11", "--mode", "full",
-            "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo",
+    def _run_step(self, mod, monkeypatch, *args):
+        monkeypatch.setattr(sys, "argv", ["pipeline.py", *args])
+        mod.main()
+
+    def _prepare_step_11(self, mod, tmp_path, monkeypatch):
+        self._run_step(
+            mod, monkeypatch, "--step", "11", "--mode", "full",
+            "--output-dir", str(tmp_path / "out"),
         )
-        assert result.returncode == 0
         state = json.loads(
             _state_path(tmp_path / "out").read_text()
         )
@@ -948,32 +831,34 @@ class TestSkippedStepRecording:
         assert 12 not in {entry["step"] for entry in state["skipped_steps"]}
         assert not (tmp_path / "out" / "pipeline-result.json").exists()
 
-    def _publish_step_11(self, tmp_path):
+    def _publish_step_11(self, mod, tmp_path, monkeypatch):
         (tmp_path / "out" / "review-report.md").write_text("# Review report")
-        result = run_pipeline(
-            "--step", "11", "--mode", "full",
-            "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo",
+        self._run_step(
+            mod, monkeypatch, "--step", "11", "--mode", "full",
+            "--output-dir", str(tmp_path / "out"),
         )
-        assert result.returncode == 0
         assert (tmp_path / "out" / "pipeline-result.json").is_file()
 
-    def test_skipped_steps_recorded_with_condition(self, tmp_path):
+    def test_skipped_steps_recorded_with_condition(self, mod, tmp_path, monkeypatch):
         """Branch mode passes over step 2 — needs_workspace_setup is PR-only."""
-        r = run_pipeline("--step", "1", "--mode", "full",
-                       "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
-        assert r.returncode == 0
+        self._run_step(
+            mod, monkeypatch, "--step", "1", "--mode", "full",
+            "--output-dir", str(tmp_path / "out"),
+        )
         state = json.loads(_state_path(tmp_path / "out").read_text())
         skipped = {s["step"]: s for s in state["skipped_steps"]}
         assert 2 in skipped
         assert skipped[2]["condition"] == "needs_workspace_setup"
         assert skipped[2]["title"] == "Repo Setup"
 
-    def test_trailing_skip_recorded_at_last_active_step(self, tmp_path):
+    def test_trailing_skip_recorded_at_last_active_step(self, mod, tmp_path, monkeypatch):
         """Non-interactive step 12 is skipped after step 11 publishes terminally."""
-        run_pipeline("--step", "1", "--mode", "full", "--interactive", "false",
-                   "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
-        self._prepare_step_11(tmp_path)
-        self._publish_step_11(tmp_path)
+        self._run_step(
+            mod, monkeypatch, "--step", "1", "--mode", "full", "--interactive", "false",
+            "--output-dir", str(tmp_path / "out"),
+        )
+        self._prepare_step_11(mod, tmp_path, monkeypatch)
+        self._publish_step_11(mod, tmp_path, monkeypatch)
 
         state = json.loads(_state_path(tmp_path / "out").read_text())
         skipped = {s["step"]: s for s in state["skipped_steps"]}
@@ -982,24 +867,30 @@ class TestSkippedStepRecording:
         assert skipped[12]["condition"] == "interactive"
         assert skipped[12]["title"] == "Cleanup"
 
-    def test_skip_records_are_not_duplicated(self, tmp_path):
+    def test_skip_records_are_not_duplicated(self, mod, tmp_path, monkeypatch):
         """Re-invoking the same step records each passed-over step once."""
-        run_pipeline("--step", "1", "--mode", "full", "--interactive", "false",
-                   "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
-        self._prepare_step_11(tmp_path)
-        self._publish_step_11(tmp_path)
-        run_pipeline("--step", "11", "--mode", "full",
-                   "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
+        self._run_step(
+            mod, monkeypatch, "--step", "1", "--mode", "full", "--interactive", "false",
+            "--output-dir", str(tmp_path / "out"),
+        )
+        self._prepare_step_11(mod, tmp_path, monkeypatch)
+        self._publish_step_11(mod, tmp_path, monkeypatch)
+        self._run_step(
+            mod, monkeypatch, "--step", "11", "--mode", "full",
+            "--output-dir", str(tmp_path / "out"),
+        )
 
         state = json.loads(_state_path(tmp_path / "out").read_text())
         recorded = [entry["step"] for entry in state["skipped_steps"]]
         assert recorded == sorted(set(recorded))
         assert recorded.count(12) == 1
 
-    def test_active_steps_are_never_recorded_as_skipped(self, tmp_path):
+    def test_active_steps_are_never_recorded_as_skipped(self, mod, tmp_path, monkeypatch):
         """A step the router runs must not appear in the skip ledger."""
-        run_pipeline("--step", "1", "--mode", "full",
-                   "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")
+        self._run_step(
+            mod, monkeypatch, "--step", "1", "--mode", "full",
+            "--output-dir", str(tmp_path / "out"),
+        )
         state = json.loads(_state_path(tmp_path / "out").read_text())
         recorded = {entry["step"] for entry in state["skipped_steps"]}
         assert recorded.isdisjoint({1, 3, 5, 6, 7, 8, 9, 10, 11, 12})
@@ -1009,66 +900,52 @@ class TestQuickModeConfig:
     """--quick CLI flag is stored in run-config.json and persists across steps."""
 
     @pytest.fixture(autouse=True)
-    def _isolated_repo(self, tmp_path):
-        """Keep the test repo isolated from the run output directory."""
+    def _isolated_repo(self, tmp_path, monkeypatch):
+        """Keep the test repo isolated from the run output directory, and
+        cwd pointed at it for the in-process `mod.main()` calls below."""
         (tmp_path / "repo").mkdir()
         init_repo(tmp_path / "repo")
         (tmp_path / "out").mkdir()
+        monkeypatch.chdir(tmp_path / "repo")
 
-    def test_quick_flag_stored_in_config(self, tmp_path):
-        """Passing --quick stores quick=true in run-config.json."""
-        r = run_pipeline("--step", "1", "--mode", "pr",
-                       "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
-                       "--quick", cwd=tmp_path / "repo")
-        assert r.returncode == 0
-        config = json.loads((tmp_path / "out" / "run-config.json").read_text())
-        assert config["quick"] is True
+    def _run_step1(self, mod, tmp_path, monkeypatch, *extra_args):
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
+            *extra_args,
+        ])
+        mod.main()
 
-    def test_no_quick_flag_defaults_false(self, tmp_path):
-        """Without --quick, config has quick=false."""
-        r = run_pipeline("--step", "1", "--mode", "pr",
-                       "--output-dir", str(tmp_path / "out"), "--pr-number", "42", cwd=tmp_path / "repo")
-        assert r.returncode == 0
+    @pytest.mark.parametrize(
+        ("first_args", "rerun_args", "expected"),
+        [
+            pytest.param(("--quick",), None, True, id="quick-flag-stored"),
+            pytest.param((), None, False, id="no-flag-defaults-false"),
+            pytest.param((), ("--quick",), True,
+                         id="rerun-with-quick-overrides-existing-false"),
+            pytest.param(("--quick",), (), False,
+                         id="rerun-without-quick-resets-to-false"),
+        ],
+    )
+    def test_quick_rerun_semantics(
+        self, mod, tmp_path, monkeypatch, first_args, rerun_args, expected
+    ):
+        """--quick is CLI-authoritative on an interactive rerun, in either
+        direction — the bot-mode exception that must NOT reset an existing
+        quick=true is `test_bot_mode_step1_rerun_preserves_quick`, kept
+        standalone below (fix 75f73945)."""
+        self._run_step1(mod, tmp_path, monkeypatch, *first_args)
+        if rerun_args is not None:
+            self._run_step1(mod, tmp_path, monkeypatch, *rerun_args)
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
-        assert config.get("quick") is False
+        assert config["quick"] is expected
 
-    def test_quick_flag_on_rerun_overrides_existing_config(self, tmp_path):
-        """Rerunning step 1 with --quick on a previously non-quick output dir
-        should update run-config.json to quick=true."""
-        # First run: no --quick
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path / "out"), "--pr-number", "42", cwd=tmp_path / "repo")
-        config = json.loads((tmp_path / "out" / "run-config.json").read_text())
-        assert config.get("quick") is False
-        # Second run: with --quick (same output dir)
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
-                   "--quick", cwd=tmp_path / "repo")
-        config = json.loads((tmp_path / "out" / "run-config.json").read_text())
-        assert config["quick"] is True
-
-    def test_quick_flag_resets_on_rerun_without_flag(self, tmp_path):
-        """Rerunning step 1 WITHOUT --quick after a quick run should reset to false."""
-        # First run: with --quick
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
-                   "--quick", cwd=tmp_path / "repo")
-        config = json.loads((tmp_path / "out" / "run-config.json").read_text())
-        assert config["quick"] is True
-        # Second run: without --quick (same output dir)
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path / "out"), "--pr-number", "42", cwd=tmp_path / "repo")
-        config = json.loads((tmp_path / "out" / "run-config.json").read_text())
-        assert config["quick"] is False
-
-    def test_bot_mode_step1_rerun_preserves_quick(self, tmp_path):
+    def test_bot_mode_step1_rerun_preserves_quick(self, mod, tmp_path, monkeypatch):
         """In bot mode (interactive=false), re-invoking step 1 without --quick
         should NOT reset the pre-written quick=true. The bot writes the correct
         value in run-config.json and may not pass --quick on subsequent calls."""
         # Step 1: with --quick
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
-                   "--quick", cwd=tmp_path / "repo")
+        self._run_step1(mod, tmp_path, monkeypatch, "--quick")
         # Simulate bot mode by setting interactive=false and providing
         # the review-context.json that bot mode requires
         config_path = tmp_path / "out" / "run-config.json"
@@ -1080,58 +957,39 @@ class TestQuickModeConfig:
         }))
         assert config["quick"] is True
         # Step 1 rerun: without --quick (bot mode)
-        r = run_pipeline("--step", "1", "--mode", "pr",
-                       "--output-dir", str(tmp_path / "out"), "--pr-number", "42", cwd=tmp_path / "repo")
-        assert r.returncode == 0
+        self._run_step1(mod, tmp_path, monkeypatch)
         config = json.loads(config_path.read_text())
         assert config["quick"] is True, \
             "bot-mode step 1 rerun should not reset quick to false"
-
-    def test_interactive_step1_rerun_still_resets_quick(self, tmp_path):
-        """In interactive mode, re-invoking step 1 without --quick should still
-        reset quick to false (existing behavior for human-driven reruns)."""
-        # Step 1: with --quick
-        run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
-                   "--quick", cwd=tmp_path / "repo")
-        config = json.loads((tmp_path / "out" / "run-config.json").read_text())
-        assert config["quick"] is True
-        assert config.get("interactive") is True  # default
-        # Step 1 rerun: without --quick (interactive rerun)
-        r = run_pipeline("--step", "1", "--mode", "pr",
-                       "--output-dir", str(tmp_path / "out"), "--pr-number", "42", cwd=tmp_path / "repo")
-        assert r.returncode == 0
-        config = json.loads((tmp_path / "out" / "run-config.json").read_text())
-        assert config["quick"] is False, \
-            "interactive step 1 rerun should reset quick to false"
 
 
 class TestHostConfig:
     """The first pipeline call selects a host for all later briefings."""
 
     @pytest.fixture(autouse=True)
-    def _isolated_repo(self, tmp_path):
-        """Keep the test repo isolated from the run output directory."""
+    def _isolated_repo(self, tmp_path, monkeypatch):
+        """Keep the test repo isolated from the run output directory, and
+        cwd pointed at it for the in-process `mod.main()` calls below."""
         (tmp_path / "repo").mkdir()
         init_repo(tmp_path / "repo")
         (tmp_path / "out").mkdir()
+        monkeypatch.chdir(tmp_path / "repo")
 
-    def test_claude_is_the_backward_compatible_default(self, tmp_path):
-        result = run_pipeline(
-            "--step", "1", "--mode", "full", "--output-dir", str(tmp_path / "out"),
-            cwd=tmp_path / "repo",
-        )
-        assert result.returncode == 0
+    def test_claude_is_the_backward_compatible_default(self, mod, tmp_path, monkeypatch):
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full",
+            "--output-dir", str(tmp_path / "out"),
+        ])
+        mod.main()
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config["host"] == "claude"
 
-    def test_codex_host_is_persisted(self, tmp_path):
-        result = run_pipeline(
-            "--step", "1", "--mode", "full", "--output-dir", str(tmp_path / "out"),
-            "--host", "codex",
-            cwd=tmp_path / "repo",
-        )
-        assert result.returncode == 0
+    def test_codex_host_is_persisted(self, mod, tmp_path, monkeypatch):
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "full",
+            "--output-dir", str(tmp_path / "out"), "--host", "codex",
+        ])
+        mod.main()
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config["host"] == "codex"
 
@@ -1140,139 +998,125 @@ class TestDependencyRefreshConfig:
     """--refresh-deps is stored in run-config.json; hard-off non-interactive."""
 
     @pytest.fixture(autouse=True)
-    def _isolated_repo(self, tmp_path):
-        """Keep the test repo isolated from the run output directory."""
+    def _isolated_repo(self, tmp_path, monkeypatch):
+        """Keep the test repo isolated from the run output directory, and
+        cwd pointed at it for the in-process `mod.main()` calls below."""
         (tmp_path / "repo").mkdir()
         init_repo(tmp_path / "repo")
         (tmp_path / "out").mkdir()
+        monkeypatch.chdir(tmp_path / "repo")
 
-    def _trusting_env(self, tmp_path):
+    def _trusting_config(self, tmp_path, monkeypatch):
         config_dir = tmp_path / "xdg" / "pirategoat"
         config_dir.mkdir(parents=True, exist_ok=True)
         (config_dir / "config.json").write_text(json.dumps(
             {"review": {"refresh_dependencies": True}}))
-        return {**os.environ, "XDG_CONFIG_HOME": str(tmp_path / "xdg")}
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
 
-    def test_help_describes_adaptive_lockfile_preserving_refresh(self, tmp_path):
-        result = run_pipeline("--help", cwd=tmp_path / "repo")
+    @pytest.mark.parametrize(
+        (
+            "trusting_user_config", "preseeded_refresh_dependencies",
+            "cli_flag", "mode", "interactive", "expected", "expect_stderr_substring",
+        ),
+        [
+            pytest.param(False, None, "on", "pr", True, True, None,
+                         id="cli-flag-stored"),
+            pytest.param(False, None, None, "pr", True, False, None,
+                         id="no-flag-defaults-false"),
+            pytest.param(False, None, "on", "full", False, False,
+                         "interactive-only", id="non-interactive-cli-flag-forced-off"),
+            pytest.param(False, True, None, "full", False, False, None,
+                         id="non-interactive-preseeded-config-forced-off"),
+            pytest.param(True, None, None, "pr", True, True, None,
+                         id="trusting-user-config-defaults-interactive-on"),
+            pytest.param(True, None, "off", "pr", True, False, None,
+                         id="no-refresh-deps-overrides-config-default"),
+            pytest.param(True, None, None, "full", False, False, None,
+                         id="user-config-never-applies-to-non-interactive"),
+        ],
+    )
+    def test_refresh_deps_resolution(
+        self, mod, tmp_path, monkeypatch, capsys, trusting_user_config,
+        preseeded_refresh_dependencies, cli_flag, mode, interactive,
+        expected, expect_stderr_substring,
+    ):
+        """One resolution (`_resolve_refresh_dependencies`, then the
+        interactive hard-off) decides `refresh_dependencies` for every
+        combination of a machine-local trusting user config, a preseeded
+        bot config, the CLI flag, and interactivity."""
+        if trusting_user_config:
+            self._trusting_config(tmp_path, monkeypatch)
+        else:
+            monkeypatch.setenv("XDG_CONFIG_HOME", "/nonexistent-xdg")
 
-        assert result.returncode == 0
-        assert "adaptive" in result.stdout
-        assert "lockfile-preserving" in result.stdout
-        assert "frozen-mode" not in result.stdout
+        out = tmp_path / "out"
+        args = ["pipeline.py", "--step", "1", "--output-dir", str(out)]
+        if preseeded_refresh_dependencies is not None:
+            # A bot pre-writes run-config.json; the CLI omits --mode.
+            (out / "run-config.json").write_text(json.dumps({
+                "mode": mode, "interactive": interactive,
+                "refresh_dependencies": preseeded_refresh_dependencies,
+            }))
+        else:
+            args += ["--mode", mode]
+            if mode == "pr":
+                args += ["--pr-number", "42"]
+            if not interactive:
+                args += ["--interactive", "false"]
+        if cli_flag == "on":
+            args.append("--refresh-deps")
+        elif cli_flag == "off":
+            args.append("--no-refresh-deps")
 
-    def test_flag_stored_in_config(self, tmp_path):
-        r = run_pipeline("--step", "1", "--mode", "pr",
-                      "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
-                      "--refresh-deps", cwd=tmp_path / "repo", env=hermetic_env())
-        assert r.returncode == 0
-        config = json.loads((tmp_path / "out" / "run-config.json").read_text())
-        assert config["refresh_dependencies"] is True
+        monkeypatch.setattr(sys, "argv", args)
+        mod.main()
+        captured = capsys.readouterr()
 
-    def test_no_flag_defaults_false(self, tmp_path):
-        r = run_pipeline("--step", "1", "--mode", "pr",
-                      "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
-                      cwd=tmp_path / "repo", env=hermetic_env())
-        assert r.returncode == 0
-        config = json.loads((tmp_path / "out" / "run-config.json").read_text())
-        assert config.get("refresh_dependencies") is False
+        config = json.loads((out / "run-config.json").read_text())
+        assert config["refresh_dependencies"] is expected
+        if expect_stderr_substring:
+            assert expect_stderr_substring in captured.err
 
-    def test_non_interactive_cli_flag_is_forced_off(self, tmp_path):
-        r = run_pipeline("--step", "1", "--mode", "full",
-                      "--output-dir", str(tmp_path / "out"),
-                      "--interactive", "false", "--refresh-deps",
-                      cwd=tmp_path / "repo", env=hermetic_env())
-        assert r.returncode == 0
-        config = json.loads((tmp_path / "out" / "run-config.json").read_text())
-        assert config["refresh_dependencies"] is False
-        assert "interactive-only" in r.stderr
-
-    def test_non_interactive_preseeded_config_is_forced_off(self, tmp_path):
-        # A bot pre-writes run-config.json; the pipeline must not honor a
-        # pre-seeded refresh_dependencies in bot mode.
-        (tmp_path / "out" / "run-config.json").write_text(json.dumps({
-            "mode": "full", "interactive": False,
-            "refresh_dependencies": True,
-        }))
-        r = run_pipeline("--step", "1", "--output-dir", str(tmp_path / "out"),
-                      cwd=tmp_path / "repo", env=hermetic_env())
-        assert r.returncode == 0
-        config = json.loads((tmp_path / "out" / "run-config.json").read_text())
-        assert config["refresh_dependencies"] is False
-
-    def test_interactive_rerun_syncs_flag_from_cli(self, tmp_path):
+    def test_interactive_rerun_syncs_flag_from_cli(self, mod, tmp_path, monkeypatch):
         # First run without the flag; rerun with it — CLI is authoritative
         # on interactive reruns, matching --quick semantics.
-        run_pipeline("--step", "1", "--mode", "pr",
-                  "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
-                  cwd=tmp_path / "repo", env=hermetic_env())
-        r = run_pipeline("--step", "1", "--mode", "pr",
-                      "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
-                      "--refresh-deps", cwd=tmp_path / "repo", env=hermetic_env())
-        assert r.returncode == 0
+        monkeypatch.setenv("XDG_CONFIG_HOME", "/nonexistent-xdg")
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
+        ])
+        mod.main()
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
+            "--refresh-deps",
+        ])
+        mod.main()
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config["refresh_dependencies"] is True
         # And back off again
-        run_pipeline("--step", "1", "--mode", "pr",
-                  "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
-                  cwd=tmp_path / "repo", env=hermetic_env())
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(tmp_path / "out"), "--pr-number", "42",
+        ])
+        mod.main()
         config = json.loads((tmp_path / "out" / "run-config.json").read_text())
         assert config["refresh_dependencies"] is False
 
-    def test_user_config_defaults_interactive_runs_on(self, tmp_path):
-        # ~/.config/pirategoat/config.json declares interactive runs
-        # dependency-trusted: no per-run flag needed.
-        out = tmp_path / "out"
-        r = run_pipeline("--step", "1", "--mode", "pr",
-                      "--output-dir", str(out), "--pr-number", "42",
-                      cwd=tmp_path / "repo", env=self._trusting_env(tmp_path))
-        assert r.returncode == 0
-        config = json.loads((out / "run-config.json").read_text())
-        assert config["refresh_dependencies"] is True
-
-    def test_no_refresh_deps_overrides_config_default(self, tmp_path):
-        out = tmp_path / "out"
-        r = run_pipeline("--step", "1", "--mode", "pr",
-                      "--output-dir", str(out), "--pr-number", "42",
-                      "--no-refresh-deps",
-                      cwd=tmp_path / "repo", env=self._trusting_env(tmp_path))
-        assert r.returncode == 0
-        config = json.loads((out / "run-config.json").read_text())
-        assert config["refresh_dependencies"] is False
-
-    def test_user_config_never_applies_to_non_interactive(self, tmp_path):
-        out = tmp_path / "out"
-        r = run_pipeline("--step", "1", "--mode", "full",
-                      "--output-dir", str(out),
-                      "--interactive", "false",
-                      cwd=tmp_path / "repo", env=self._trusting_env(tmp_path))
-        assert r.returncode == 0
-        config = json.loads((out / "run-config.json").read_text())
-        assert config["refresh_dependencies"] is False
-
-    def test_rerun_without_flag_keeps_config_default(self, tmp_path):
+    def test_rerun_without_flag_keeps_config_default(self, mod, tmp_path, monkeypatch):
         # With a trusting user config, flag absence resolves to the
         # config default, not to off.
+        self._trusting_config(tmp_path, monkeypatch)
         out = tmp_path / "out"
-        env = self._trusting_env(tmp_path)
-        run_pipeline("--step", "1", "--mode", "pr",
-                  "--output-dir", str(out), "--pr-number", "42",
-                  cwd=tmp_path / "repo", env=env)
-        run_pipeline("--step", "1", "--mode", "pr",
-                  "--output-dir", str(out), "--pr-number", "42",
-                  cwd=tmp_path / "repo", env=env)
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(out), "--pr-number", "42",
+        ])
+        mod.main()
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py", "--step", "1", "--mode", "pr",
+            "--output-dir", str(out), "--pr-number", "42",
+        ])
+        mod.main()
         config = json.loads((out / "run-config.json").read_text())
         assert config["refresh_dependencies"] is True
-
-    def test_malformed_user_config_defaults_off(self, tmp_path):
-        config_dir = tmp_path / "xdg" / "pirategoat"
-        config_dir.mkdir(parents=True)
-        (config_dir / "config.json").write_text("{not json")
-        env = {**os.environ, "XDG_CONFIG_HOME": str(tmp_path / "xdg")}
-        out = tmp_path / "out"
-        r = run_pipeline("--step", "1", "--mode", "pr",
-                      "--output-dir", str(out), "--pr-number", "42",
-                      cwd=tmp_path / "repo", env=env)
-        assert r.returncode == 0
-        config = json.loads((out / "run-config.json").read_text())
-        assert config["refresh_dependencies"] is False

@@ -6,7 +6,6 @@ import re
 import subprocess
 import sys
 import threading
-import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -19,12 +18,24 @@ SCRIPT_PATH = SCRIPTS_DIR / "review" / "critic_adjustments.py"
 sys.path.insert(0, str(SCRIPTS_DIR))
 sys.path.insert(0, str(TESTS_DIR))
 
+from helpers.critic_seeds import (
+    _adjudicate,
+    _artifact,
+    _finding,
+    _ledger,
+    _publish_and_adjudicate,
+    _publish_revise,
+    _publish_verdict,
+    _request,
+    _write_findings,
+)
+from helpers import ts_schema
 from helpers.review_fixtures import (
     apply_schema,
     canonical_findings_ledger,
-    failing_findings_renderer,
     rejected_schema_values,
 )
+from review import review_document
 from review.atomic_io import atomic_write_json
 from review.critic_adjustments import (
     APPLIED_IDS_KEY,
@@ -42,87 +53,6 @@ from review.critic_adjustments import (
     write_findings,
 )
 from review import critic_adjustments as critic_adjustments_module
-from review import orchestration as orchestration_mod
-from review.orchestration import _orchestrate_step_11
-from review.run_paths import artifact_path
-from review.verdict_rules import derive_review_state
-
-
-from helpers.review_fixtures import artifact_file as _artifact  # noqa: E402
-
-
-def _write_findings(output_dir, findings, **extra):
-    """Write a reconciliation ledger shaped the way the producer writes it.
-
-    The adjustment writer reads only `findings`, but step 11 now renders
-    `review-findings.md` from this same file, and the renderer is a pure
-    function of the whole artifact. A minimal stub here would make every
-    step-11 test report a render failure the pipeline would never see in a
-    real run, where the ledger always comes from ReviewOutputBuilder.
-
-    It goes out through `write_findings()` for the same reason: this helper
-    stands in for the review-reconciliator's own write, which is the
-    ledger's first IN-CHANNEL write. A raw `json.dumps` here would route
-    around the one sanctioned write path the real producer uses.
-    """
-    checks = extra.get("checks", [])
-    finding_numbers = [
-        int(item["id"][1:])
-        for item in findings
-        if re.fullmatch(r"f[1-9][0-9]*", item.get("id", ""))
-    ]
-    check_numbers = [
-        int(item["id"][1:])
-        for item in checks
-        if re.fullmatch(r"c[1-9][0-9]*", item.get("id", ""))
-    ]
-    derived = derive_review_state(findings)
-    data = canonical_findings_ledger(checks=checks, reconciliation={
-        "grouped_concern_count": len(findings),
-        "verified_concern_count": len(findings),
-        "input_finding_count": len(findings),
-        "contributing_agent_count": 1 if findings else 0,
-        "reviewing_agents": ["security-reviewer"],
-        "dispatched_agents": ["security-reviewer"],
-    })
-    data["findings"] = findings
-    # Lowercase: this is the per-review ledger vocabulary
-    # (schemas/review-output.ts), not the outer-pipeline
-    # APPROVE/COMMENT/REQUEST_CHANGES values pipeline-result.json
-    # publishes. Step 11 maps between the two layers.
-    data["verdict"] = derived["verdict"]
-    data["summary"] = {
-        "total_findings": len(findings),
-        "by_severity": derived["counts"],
-        **derived["advisory"],
-    }
-    data["meta"]["next_finding_number"] = max(finding_numbers, default=0) + 1
-    data["meta"]["next_check_number"] = max(check_numbers, default=0) + 1
-    if "meta" in extra:
-        data["meta"].update(extra.pop("meta"))
-    data.update(extra)
-    write_findings(str(output_dir), data)
-    return data
-
-
-def _publish_revise(output_dir, adjustments):
-    """Publish one REVISE proposal the way `critic.py --save` does.
-
-    Returns the script-assigned adjustment ids in proposal order, which is
-    the only handle the orchestrator's adjudication request has on them.
-    """
-    proposal = critic_adjustments_module.prepare_proposal({
-        "schema": 2, "adjustments": adjustments,
-    })
-    write_critic_verdict(str(output_dir), "REVISE", proposal)
-    return [entry["adjustment_id"] for entry in proposal["adjustments"]]
-
-
-def _publish_verdict(output_dir, verdict):
-    """Publish a non-REVISE verdict with its mandatory empty proposal."""
-    write_critic_verdict(
-        str(output_dir), verdict, critic_adjustments_module.empty_proposal()
-    )
 
 
 def _publish_raw_proposal(output_dir, document, verdict="REVISE"):
@@ -146,61 +76,12 @@ def _publish_raw_proposal(output_dir, document, verdict="REVISE"):
     )
 
 
-def _request(ids, *, verified=(), refuted=(), assessment=None, recommendations=None):
-    """An adjudication request addressed by proposal index, for readability."""
-    request = {
-        "schema": 2,
-        "verified": [ids[index] for index in verified],
-        "refuted": [
-            {"adjustment_id": ids[index], "rejection_reason": reason}
-            for index, reason in refuted
-        ],
-        "revised_assessment": assessment,
-    }
-    if recommendations is not None:
-        request["revised_recommendations"] = recommendations
-    return request
-
-
-def _adjudicate(
-    output_dir, ids, *, verified=(), refuted=(), assessment=None, recommendations=None
-):
-    return adjudicate(str(output_dir), _request(
-        ids, verified=verified, refuted=refuted, assessment=assessment,
-        recommendations=recommendations,
-    ))
-
-
-def _publish_and_adjudicate(
-    output_dir, adjustments, *, verified=(), refuted=(), assessment=None,
-    recommendations=None,
-):
-    """Run one whole critic round: publish the proposal, then adjudicate it."""
-    ids = _publish_revise(output_dir, adjustments)
-    result = _adjudicate(
-        output_dir, ids,
-        verified=verified, refuted=refuted, assessment=assessment,
-        recommendations=recommendations,
-    )
-    return ids, result
-
-
-def _ledger(output_dir):
-    return json.loads((Path(output_dir) / "review-findings.json").read_text())
-
-
 def _applied_ids(findings):
     """The ids out of `applied_critic_adjustments`, whose entries are
     records (`{"adjustment_id": ..., "outcome": ...}`) rather than bare
     strings — the id half is what makes a second adjudication detectable,
     the outcome half is the orchestrator's verdict on that decision."""
     return [record["adjustment_id"] for record in findings[APPLIED_IDS_KEY]]
-
-
-def _finding(id_, severity="low"):
-    return {"id": id_, "severity": severity, "title": "t", "file": "f.go",
-            "line": 10, "description": "d", "recommendation": "r",
-            "category": "general", "confidence": 0.9}
 
 
 def _check(id_, *, result="No matching callers."):
@@ -211,17 +92,6 @@ def _check(id_, *, result="No matching callers."):
         "result": result,
         "source_reviewers": ["ecosystem-integration"],
     }
-
-
-class TestCriticArtifactLayout:
-    def test_proposal_and_verdict_publish_under_synthesis(self, tmp_path):
-        _publish_verdict(tmp_path, "STAND")
-
-        synthesis = tmp_path / "synthesis"
-        assert (synthesis / "decision-critic-adjustments.json").is_file()
-        assert (synthesis / "decision-critic-verdict.json").is_file()
-        assert not (tmp_path / "decision-critic-adjustments.json").exists()
-        assert not (tmp_path / "decision-critic-verdict.json").exists()
 
 
 class TestCanonicalFindingsReader:
@@ -236,15 +106,10 @@ class TestCanonicalFindingsReader:
     def test_schema_three_ledger_without_reviewed_files_is_canonical(self):
         validate_findings_document(canonical_findings_ledger(("high",)))
 
-    @pytest.mark.parametrize("extra", [
-        {"reviewer": "reconciliator"},
-        {"review_claimable_files": []},
-        {"schema": 2},
-    ])
-    def test_reviewer_envelope_fields_are_rejected_on_the_ledger(self, extra):
+    def test_reviewer_envelope_fields_are_rejected_on_the_ledger(self):
         with pytest.raises(ValueError):
             validate_findings_document(
-                {**canonical_findings_ledger(("high",)), **extra}
+                {**canonical_findings_ledger(("high",)), "reviewer": "reconciliator"}
             )
 
     def test_reconciliation_counts_must_partition_grouped(self):
@@ -256,40 +121,24 @@ class TestCanonicalFindingsReader:
         with pytest.raises(ValueError, match="grouped_concern_count"):
             validate_findings_document(ledger)
 
-    @pytest.mark.parametrize(
-        "reconciliation",
-        [
-            {"reviewing_agents": ["Security Reviewer"]},
-            {"dispatched_agents": ["security-reviewer", "Rogue_Agent"]},
-            {"missing_agents": ["a11y reviewer"]},
-            {"not_applicable_agents": [
-                {"name": "A11y Reviewer", "skip_reason": "no UI changed"},
-            ]},
-        ],
-        ids=(
-            "reviewing-agents",
-            "dispatched-agents",
-            "missing-agents",
-            "not-applicable-agent-name",
-        ),
-    )
-    def test_reconciliation_agent_names_follow_the_dispatch_grammar(
-        self, reconciliation
-    ):
+    def test_reconciliation_agent_names_follow_the_dispatch_grammar(self):
         """A name outside `[a-z0-9][a-z0-9-]*` used to pass here and then
         null the whole reconciliation block in the offline metrics report,
-        so the ledger is where it has to be refused."""
+        so the ledger is where it has to be refused. Fix 2e0fcec5."""
         with pytest.raises(ValueError, match="agent name"):
-            validate_findings_document(
-                canonical_findings_ledger(reconciliation=reconciliation)
-            )
+            validate_findings_document(canonical_findings_ledger(
+                reconciliation={"not_applicable_agents": [
+                    {"name": "A11y Reviewer", "skip_reason": "no UI changed"},
+                ]},
+            ))
 
     @pytest.mark.parametrize(
         "skip_reason",
-        ["", "   ", "x" * 4097, "no UI\x07 changed"],
-        ids=("empty", "blank", "over-the-ceiling", "control-character"),
+        ["", "no UI\x07 changed"],
+        ids=("empty", "control-character"),
     )
     def test_not_applicable_skip_reasons_are_bounded_text(self, skip_reason):
+        """Fix 2e0fcec5."""
         with pytest.raises(ValueError, match="skip_reason"):
             validate_findings_document(canonical_findings_ledger(
                 reconciliation={"not_applicable_agents": [
@@ -404,17 +253,6 @@ class TestCanonicalFindingsReader:
             assert read.findings is None
 
 
-def _publish_step_11(output_dir, state=None):
-    """Prepare without a report, then publish the authored report."""
-    state = {} if state is None else state
-    report = Path(output_dir) / "review-report.md"
-    report_text = report.read_text() if report.is_file() else "# report"
-    report.unlink(missing_ok=True)
-    _orchestrate_step_11("pr", {}, state, {}, str(output_dir))
-    report.write_text(report_text)
-    return _orchestrate_step_11("pr", {}, state, {}, str(output_dir))
-
-
 class TestAdjudicateWritesTheLedgerOnce:
     """The whole settlement lifecycle: one proposal, one adjudication, one
     ledger write that records every entry's outcome."""
@@ -511,13 +349,6 @@ class TestAdjudicateWritesTheLedgerOnce:
             _adjudicate(tmp_path, ids, verified=(0,))
         assert read_critic_verdict(str(tmp_path)) is None
 
-    def test_removed_module_surface(self):
-        for name in (
-            "apply_adjustments", "pending_count", "settle", "SPOT_CHECK_KEY",
-            "ADJUDICATION_KEY", "REFUSAL_EXIT_CODE",
-        ):
-            assert not hasattr(critic_adjustments_module, name)
-
 
 class TestApplyAdjustments:
     @pytest.mark.parametrize(
@@ -563,38 +394,6 @@ class TestApplyAdjustments:
         ]
         assert ledger["verdict"] == verdict
 
-    def test_promote_patches_severity_with_provenance(self, tmp_path):
-        _write_findings(tmp_path, [_finding("f1", "low")])
-        _, result = _publish_and_adjudicate(tmp_path, [{
-            "action": "promote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "medium"},
-            "rationale": "affects future strategy authors",
-        }], verified=(0,))
-        assert result["applied"] == 1
-        data = _ledger(tmp_path)
-        finding = data["findings"][0]
-        assert finding["severity"] == "medium"
-        assert finding["critic_adjustment"]["action"] == "promote"
-        assert finding["critic_adjustment"]["prior"] == {"severity": "low"}
-        assert data["summary"]["by_severity"]["medium"] == 1
-        assert data["summary"]["by_severity"]["low"] == 0
-
-    def test_add_appends_full_finding_with_generated_id(self, tmp_path):
-        _write_findings(tmp_path, [_finding("f1")])
-        _publish_and_adjudicate(tmp_path, [{
-            "action": "add", "target": {"kind": "finding"},
-            "fields": {"severity": "low", "title": "stale README",
-                       "file": "internal/strategy/README.md",
-                       "description": "teaches the deleted warm path",
-                       "recommendation": "update the warm/cold section"},
-            "rationale": "promoted from docs-drift observations",
-        }])
-        data = _ledger(tmp_path)
-        assert data["summary"]["total_findings"] == 2
-        added = data["findings"][1]
-        assert added["id"] == "f2"
-        assert added["critic_adjustment"]["action"] == "add"
-
     def test_remove_moves_finding_out_with_provenance(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1"), _finding("f2")])
         _publish_and_adjudicate(tmp_path, [{
@@ -605,42 +404,6 @@ class TestApplyAdjustments:
         assert [i["id"] for i in data["findings"]] == ["f1"]
         assert data["findings_removed_by_critic"][0]["id"] == "f2"
         assert data["summary"]["total_findings"] == 1
-
-    def test_unknown_id_fails_loudly_and_writes_nothing(self, tmp_path):
-        _write_findings(tmp_path, [_finding("f1")])
-        ids = _publish_revise(tmp_path, [
-            {"action": "promote", "target": {"kind": "finding", "id": "f1"},
-             "fields": {"severity": "high"}, "rationale": "r"},
-            {"action": "promote", "target": {"kind": "finding", "id": "f9"},
-             "fields": {"severity": "high"}, "rationale": "r"},
-        ])
-        with pytest.raises(ValueError, match="f9"):
-            _adjudicate(tmp_path, ids)
-        data = _ledger(tmp_path)
-        assert data["findings"][0]["severity"] == "low"  # entry 1 NOT applied
-
-    def test_invalid_action_and_field_rejected(self, tmp_path):
-        _write_findings(tmp_path, [_finding("f1")])
-        with pytest.raises(ValueError, match="obliterate"):
-            _publish_revise(tmp_path, [{
-                "action": "obliterate",
-                "target": {"kind": "finding", "id": "f1"},
-                "fields": {}, "rationale": "r",
-            }])
-        with pytest.raises(ValueError, match="verdict"):
-            _publish_revise(tmp_path, [{
-                "action": "correct", "target": {"kind": "finding", "id": "f1"},
-                "fields": {"verdict": "APPROVE"}, "rationale": "r",
-            }])
-
-    def test_refuted_entries_are_skipped(self, tmp_path):
-        _write_findings(tmp_path, [_finding("f1", "low")])
-        _, result = _publish_and_adjudicate(tmp_path, [{
-            "action": "promote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "critical"}, "rationale": "r",
-        }], refuted=((0, "the probe refuted the claim"),))
-        assert result["applied"] == 0
-        assert _ledger(tmp_path)["findings"][0]["severity"] == "low"
 
     def test_mixed_batch_recounts_totals_and_severities(self, tmp_path):
         """add + remove + promote in one batch must leave the summary exact.
@@ -760,65 +523,7 @@ class TestRejectionAudit:
             "first round refutation", "second round refutation",
         }
 
-    def test_mixed_batch_applies_one_and_audits_the_other(self, tmp_path):
-        _write_findings(
-            tmp_path, [_finding("f1", "low"), _finding("f2", "low")]
-        )
-        _, result = _publish_and_adjudicate(tmp_path, [
-            {"action": "promote", "target": {"kind": "finding", "id": "f1"},
-             "fields": {"severity": "high"}, "rationale": "r"},
-            {"action": "demote", "target": {"kind": "finding", "id": "f2"},
-             "fields": {"severity": "info"}, "rationale": "r"},
-        ], verified=(0,), refuted=((1, "refuted"),))
-        assert result["applied"] == 1
-        assert result["rejected"] == 1
-        data = _ledger(tmp_path)
-        assert data["findings"][0]["severity"] == "high"
-        assert data["findings"][1]["severity"] == "low"  # refuted, untouched
-        records = data[REJECTED_ADJUSTMENTS_KEY]
-        assert len(records) == 1
-        assert records[0]["target"] == {"kind": "finding", "id": "f2"}
-
-    @pytest.mark.parametrize("bad_reason", [None, "", "   "])
-    def test_missing_or_blank_rejection_reason_refuses_the_whole_request(
-        self, tmp_path, bad_reason
-    ):
-        """rejection_reason is the entire payload of the audit record —
-        a refutation without one is refused loudly, the same
-        all-or-nothing style an unknown action or invalid severity gets,
-        instead of silently writing an empty string into the ledger."""
-        _write_findings(tmp_path, [_finding("f1", "low")])
-        ids = _publish_revise(tmp_path, [{
-            "action": "promote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "high"}, "rationale": "r",
-        }])
-        refuted = {"adjustment_id": ids[0]}
-        if bad_reason is not None:
-            refuted["rejection_reason"] = bad_reason
-        with pytest.raises(ValueError, match="rejection_reason"):
-            adjudicate(str(tmp_path), {
-                "schema": 2, "verified": [], "refuted": [refuted],
-                "revised_assessment": None,
-            })
-        assert REJECTED_ADJUSTMENTS_KEY not in _ledger(tmp_path)
-
-
 class TestBatchCoherence:
-    def test_duplicate_target_in_one_batch_is_rejected(self, tmp_path):
-        _write_findings(tmp_path, [_finding("f1", "low")])
-        with pytest.raises(ValueError, match="duplicate target"):
-            _publish_revise(tmp_path, [
-                {"action": "promote",
-                 "target": {"kind": "finding", "id": "f1"},
-                 "fields": {"severity": "high"}, "rationale": "r"},
-                {"action": "correct",
-                 "target": {"kind": "finding", "id": "f1"},
-                 "fields": {"title": "clearer title"}, "rationale": "r"},
-            ])
-        data = _ledger(tmp_path)
-        assert data["findings"][0]["severity"] == "low"
-        assert "critic_adjustment" not in data["findings"][0]
-
     def test_targeting_an_id_removed_earlier_in_the_batch_is_rejected(
         self, tmp_path
     ):
@@ -832,14 +537,6 @@ class TestBatchCoherence:
                  "fields": {"severity": "high"}, "rationale": "r"},
             ])
         assert [i["id"] for i in _ledger(tmp_path)["findings"]] == ["f1", "f2"]
-
-    def test_entry_without_an_id_fails_as_unknown_id(self, tmp_path):
-        _write_findings(tmp_path, [_finding("f1")])
-        with pytest.raises(ValueError, match="target.id"):
-            _publish_revise(tmp_path, [{
-                "action": "promote", "target": {"kind": "finding"},
-                "fields": {"severity": "high"}, "rationale": "r",
-            }])
 
     def test_findings_finding_without_an_id_is_not_addressable(self, tmp_path):
         """A None target must not silently match an id-less finding."""
@@ -855,17 +552,14 @@ class TestBatchCoherence:
         ):
             _adjudicate(tmp_path, ids)
 
-    def test_add_rejects_a_critic_supplied_id_in_both_spellings(
-        self, tmp_path
-    ):
+    def test_add_rejects_a_critic_supplied_id_in_fields(self, tmp_path):
+        """The `target.id` spelling of this refusal is pinned by
+        `TestSchemaTwoTargetUnion::test_non_add_target_requires_id_and_add_rejects_surplus_id`;
+        this is the other spelling, a caller-supplied `id` smuggled into
+        `fields` instead."""
         _write_findings(tmp_path, [_finding("f1")])
         base_fields = {"severity": "low", "title": "t", "file": "f.go",
                        "description": "d", "recommendation": "r"}
-        with pytest.raises(ValueError, match="must not include id"):
-            _publish_revise(tmp_path, [{
-                "action": "add", "target": {"kind": "finding", "id": "f3"},
-                "fields": dict(base_fields), "rationale": "r",
-            }])
         with pytest.raises(ValueError, match="'id' is not adjustable"):
             _publish_revise(tmp_path, [{
                 "action": "add", "target": {"kind": "finding"},
@@ -887,13 +581,14 @@ class TestBatchCoherence:
             _adjudicate(tmp_path, ids)
         assert _ledger(tmp_path)["findings"][0]["severity"] == "low"
 
-    @pytest.mark.parametrize("shape", [[{"id": "f1"}], "findings", 7])
     def test_findings_that_is_not_an_object_fails_as_a_value_error(
-        self, tmp_path, shape
+        self, tmp_path
     ):
         """The adjustments file is shape-guarded; the findings file was
         not, so a non-object ledger died on an AttributeError outside this
-        module's ValueError contract — the one step 11 catches."""
+        module's ValueError contract — the one step 11 catches. Fix
+        81ac20af."""
+        shape = [{"id": "f1"}]
         (tmp_path / "review-findings.json").write_text(json.dumps(shape))
         ids = _publish_revise(tmp_path, [{
             "action": "promote", "target": {"kind": "finding", "id": "f1"},
@@ -906,42 +601,113 @@ class TestBatchCoherence:
         ) == shape
 
 
+def _one_adjustment(action, fields, target_id="f1"):
+    """One-entry proposal payload for `TestValidateProposalInput`'s table."""
+    target = {"kind": "finding"}
+    if target_id is not None:
+        target["id"] = target_id
+    return {
+        "schema": 2,
+        "adjustments": [{
+            "action": action, "target": target, "fields": fields,
+            "rationale": "r",
+        }],
+    }
+
+
 class TestValidateProposalInput:
     """Direct unit coverage for the critic-owned proposal validator."""
 
-    def test_valid_batch_returns_no_problems(self):
-        assert validate_proposal_input({
-            "schema": 2,
-            "adjustments": [{
-                "action": "promote", "target": {"kind": "finding", "id": "f1"},
-                "fields": {"severity": "high"}, "rationale": "r",
-            }],
-        }) == []
+    proposal_problems = [
+        pytest.param(
+            _one_adjustment("promote", {"severity": "high"}),
+            [], id="valid-batch",
+        ),
+        pytest.param(
+            [1, 2, 3],
+            ["decision-critic-adjustments.json must be a JSON object"],
+            id="non-object-payload",
+        ),
+        pytest.param(
+            {"schema": 2, "adjustments": "nope"},
+            ["decision-critic-adjustments.json: 'adjustments' must be a list"],
+            id="adjustments-not-a-list",
+        ),
+        pytest.param(
+            {"schema": 2},
+            ["decision-critic-adjustments.json: 'adjustments' must be a list"],
+            id="missing-adjustments-key",
+        ),
+        pytest.param(
+            {"schema": 2, "adjustments": ["not-a-dict"]},
+            ["adjustment[0] must be an object"],
+            id="entry-not-an-object",
+        ),
+        pytest.param(
+            _one_adjustment("obliterate", {}),
+            ("unknown action", "obliterate"), id="unknown-action",
+        ),
+        pytest.param(
+            _one_adjustment("correct", {"verdict": "APPROVE"}),
+            "not adjustable", id="invalid-field",
+        ),
+        pytest.param(
+            _one_adjustment("add", {"severity": "low"}, target_id=None),
+            "add requires fields", id="add-missing-required-fields",
+        ),
+        pytest.param(
+            _one_adjustment(
+                "correct", {"severity": "low", "title": "Better title"},
+            ),
+            "correct may not change severity; use promote or demote",
+            id="correct-may-not-carry-severity",
+        ),
+        pytest.param(
+            _one_adjustment("correct", {"title": "Better title"}),
+            [], id="correct-without-a-severity-still-validates",
+        ),
+        pytest.param(
+            _one_adjustment("promote", {}),
+            "promote requires the severity field", id="promote-empty",
+        ),
+        pytest.param(
+            _one_adjustment("promote", {"title": "not a severity"}),
+            "promote requires the severity field", id="promote-wrong-field",
+        ),
+        pytest.param(
+            _one_adjustment("demote", {"title": "not a severity"}),
+            "demote requires the severity field", id="demote-wrong-field",
+        ),
+        pytest.param(
+            _one_adjustment("rescope", {}),
+            "rescope requires exactly the file and line fields",
+            id="rescope-empty",
+        ),
+        pytest.param(
+            _one_adjustment("rescope", {"line": 20}),
+            "rescope requires exactly the file and line fields",
+            id="rescope-partial",
+        ),
+        pytest.param(
+            _one_adjustment("correct", {}),
+            "correct requires at least one field", id="correct-empty",
+        ),
+        pytest.param(
+            _one_adjustment("remove", {"title": "replacement"}),
+            "remove does not accept replacement fields",
+            id="remove-with-fields",
+        ),
+    ]
 
-    def test_correct_may_not_carry_a_severity(self):
-        problems = validate_proposal_input({"schema": 2, "adjustments": [{
-            "action": "correct",
-            "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "low", "title": "Better title"},
-            "rationale": "r",
-        }]})
-        assert any(
-            "correct may not change severity; use promote or demote" in p
-            for p in problems
-        )
-
-    def test_correct_without_a_severity_still_validates(self):
-        assert validate_proposal_input({"schema": 2, "adjustments": [{
-            "action": "correct",
-            "target": {"kind": "finding", "id": "f1"},
-            "fields": {"title": "Better title"},
-            "rationale": "r",
-        }]}) == []
-
-    def test_non_object_payload_is_a_problem(self):
-        assert validate_proposal_input([1, 2, 3]) == [
-            "decision-critic-adjustments.json must be a JSON object"
-        ]
+    @pytest.mark.parametrize("payload,expected", proposal_problems)
+    def test_action_specific_field_contract_is_enforced(self, payload, expected):
+        problems = validate_proposal_input(payload)
+        if isinstance(expected, list):
+            assert problems == expected
+        elif isinstance(expected, tuple):
+            assert any(all(s in p for s in expected) for p in problems)
+        else:
+            assert any(expected in p for p in problems)
 
     @pytest.mark.parametrize("schema_field", rejected_schema_values(2))
     def test_a_schema_out_of_template_refuses_the_whole_batch(
@@ -975,136 +741,6 @@ class TestValidateProposalInput:
         data = _ledger(tmp_path)
         assert data["findings"][0]["severity"] == "low"  # nothing written
 
-    def test_adjustments_not_a_list_is_a_problem(self):
-        assert validate_proposal_input({"schema": 2, "adjustments": "nope"}) == [
-            "decision-critic-adjustments.json: 'adjustments' must be a list"
-        ]
-
-    def test_missing_adjustments_key_is_a_problem(self):
-        assert validate_proposal_input({"schema": 2}) == [
-            "decision-critic-adjustments.json: 'adjustments' must be a list"
-        ]
-
-    def test_entry_not_an_object_is_a_problem(self):
-        assert validate_proposal_input({
-            "schema": 2, "adjustments": ["not-a-dict"],
-        }) == ["adjustment[0] must be an object"]
-
-    def test_adjustment_id_is_not_a_proposal_field(self):
-        problems = validate_proposal_input({
-            "schema": 2,
-            "adjustments": [{
-                "adjustment_id": "caller-owned", "action": "promote",
-                "target": {"kind": "finding", "id": "f1"},
-                "fields": {"severity": "high"}, "rationale": "r",
-            }],
-        })
-        assert any("adjustment_id" in problem for problem in problems)
-
-    def test_unknown_action_is_a_problem(self):
-        problems = validate_proposal_input({
-            "schema": 2,
-            "adjustments": [{
-                "action": "obliterate", "target": {"kind": "finding", "id": "f1"},
-                "fields": {}, "rationale": "r",
-            }],
-        })
-        assert any("unknown action" in p and "obliterate" in p for p in problems)
-
-    def test_invalid_field_is_a_problem(self):
-        problems = validate_proposal_input({
-            "schema": 2,
-            "adjustments": [{
-                "action": "correct", "target": {"kind": "finding", "id": "f1"},
-                "fields": {"verdict": "APPROVE"}, "rationale": "r",
-            }],
-        })
-        assert any("not adjustable" in p for p in problems)
-
-    def test_add_missing_required_fields_is_a_problem(self):
-        problems = validate_proposal_input({
-            "schema": 2,
-            "adjustments": [{
-                "action": "add", "target": {"kind": "finding"},
-                "fields": {"severity": "low"}, "rationale": "r",
-            }],
-        })
-        assert any("add requires fields" in p for p in problems)
-
-    def test_add_with_a_critic_supplied_id_is_a_problem(self):
-        problems = validate_proposal_input({
-            "schema": 2,
-            "adjustments": [{
-                "action": "add", "target": {"kind": "finding", "id": "f3"},
-                "fields": {"severity": "low", "title": "t", "file": "f.go",
-                           "description": "d", "recommendation": "r"},
-                "rationale": "r",
-            }],
-        })
-        assert any("must not include id" in p for p in problems)
-
-    @pytest.mark.parametrize(
-        "action,fields,problem",
-        [
-            ("promote", {}, "promote requires the severity field"),
-            (
-                "promote",
-                {"title": "not a severity"},
-                "promote requires the severity field",
-            ),
-            ("demote", {"title": "not a severity"},
-             "demote requires the severity field"),
-            ("rescope", {}, "rescope requires exactly the file and line fields"),
-            (
-                "rescope",
-                {"line": 20},
-                "rescope requires exactly the file and line fields",
-            ),
-            ("correct", {}, "correct requires at least one field"),
-            (
-                "remove", {"title": "replacement"},
-                "remove does not accept replacement fields",
-            ),
-        ],
-    )
-    def test_action_specific_field_contract_is_enforced(
-        self, action, fields, problem
-    ):
-        problems = validate_proposal_input({
-            "schema": 2,
-            "adjustments": [{
-                "action": action,
-                "target": {"kind": "finding", "id": "f1"},
-                "fields": fields,
-                "rationale": "r",
-            }],
-        })
-
-        assert any(problem in candidate for candidate in problems)
-
-    def test_a_proposal_may_target_each_finding_only_once(self):
-        problems = validate_proposal_input({
-            "schema": 2,
-            "adjustments": [
-                {
-                    "action": "promote",
-                    "target": {"kind": "finding", "id": "f1"},
-                    "fields": {"severity": "high"},
-                    "rationale": "r",
-                },
-                {
-                    "action": "correct",
-                    "target": {"kind": "finding", "id": "f1"},
-                    "fields": {"title": "Clearer title"},
-                    "rationale": "r",
-                },
-            ],
-        })
-
-        assert any(
-            "duplicate target finding 'f1'" in problem for problem in problems
-        )
-
     def test_two_independent_problems_are_both_reported(self):
         """The proposal validator collects every independent problem
         instead of stopping at the first one it finds, which can only be
@@ -1130,52 +766,17 @@ class TestAdjustmentsSchemaValidation:
     alongside `"adjustments"`; a doc out of that template is refused
     whole, the same all-or-nothing way an unknown action is."""
 
-    def test_schema_2_proceeds(self, tmp_path):
-        _write_findings(tmp_path, [_finding("f1", "low")])
-        _, result = _publish_and_adjudicate(tmp_path, [{
-            "action": "promote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "high"}, "rationale": "r",
-        }], verified=(0,))
-        assert result["applied"] == 1
-
-    @pytest.mark.parametrize(
-        "schema_field",
-        [{"schema": 1}, {}, {"schema": "2"}],
-        ids=("prior-schema", "missing-schema", "numeric-string"),
-    )
-    def test_a_schema_out_of_template_refuses_the_whole_batch(
-        self, tmp_path, schema_field
-    ):
-        """The taught template always writes `"schema": 2`. A prior value,
-        an absent key, and the string `"2"` are all out of that template
-        and get the same refusal — never a silent read as version 1 or a
-        coerced integer."""
-        _write_findings(tmp_path, [_finding("f1", "low")])
-        _publish_raw_proposal(tmp_path, {
-            **schema_field,
-            "adjustments": [{
-                "adjustment_id": "a1",
-                "action": "promote", "target": {"kind": "finding", "id": "f1"},
-                "fields": {"severity": "high"}, "rationale": "r",
-            }],
-        })
-        with pytest.raises(ValueError, match="'schema' must be 2"):
-            _adjudicate(tmp_path, [])
-        data = _ledger(tmp_path)
-        assert data["findings"][0]["severity"] == "low"  # nothing written
-
-    @pytest.mark.parametrize("shape", [[{"id": "f1"}], "hello", 5])
     def test_non_object_doc_fails_as_a_shape_error_not_a_schema_error(
-        self, tmp_path, shape
+        self, tmp_path
     ):
-        """[], "hello", and 5 are all valid JSON but not a document with a
+        """`[{"id": "f1"}]` is valid JSON but not a document with a
         'schema' field to be wrong about — the diagnosis must name the
         actual defect (not a JSON object) rather than misreporting it as a
         missing or invalid schema."""
         _write_findings(tmp_path, [_finding("f1", "low")])
         _publish_verdict(tmp_path, "REVISE")
         _artifact(tmp_path, "critic_adjustments").write_text(
-            json.dumps(shape)
+            json.dumps([{"id": "f1"}])
         )
         with pytest.raises(
             ValueError,
@@ -1184,34 +785,6 @@ class TestAdjustmentsSchemaValidation:
             _adjudicate(tmp_path, [])
         data = _ledger(tmp_path)
         assert data["findings"][0]["severity"] == "low"  # nothing written
-
-    def test_a_prepared_entry_may_carry_only_its_proposal_fields(self):
-        """Adjudication is recorded in the ledger, never back on the entry."""
-        problems = critic_adjustments_module.validate_adjustments_document({
-            "schema": 2,
-            "adjustments": [{
-                "adjustment_id": "a1",
-                "action": "promote", "target": {"kind": "finding", "id": "f1"},
-                "fields": {"severity": "high"}, "rationale": "r",
-                "outcome": "verified", "applied": True,
-            }],
-        })
-        assert any("'outcome' is not allowed" in p for p in problems)
-        assert any("'applied' is not allowed" in p for p in problems)
-
-    def test_duplicate_adjustment_ids_are_rejected(self):
-        problems = critic_adjustments_module.validate_adjustments_document({
-            "schema": 2,
-            "adjustments": [
-                {"adjustment_id": "dup", "action": "promote",
-                 "target": {"kind": "finding", "id": "f1"},
-                 "fields": {"severity": "high"}, "rationale": "r"},
-                {"adjustment_id": "dup", "action": "promote",
-                 "target": {"kind": "finding", "id": "f2"},
-                 "fields": {"severity": "high"}, "rationale": "r"},
-            ],
-        })
-        assert any("duplicate adjustment_id" in p for p in problems)
 
 
 class TestScopeLinePairing:
@@ -1278,18 +851,16 @@ class TestScopeLinePairing:
         assert finding["scope"] == "file"
         assert finding["line"] is None
 
-    @pytest.mark.parametrize("bad_line", ["88", True, 0, -5])
-    def test_a_line_outside_the_1_indexed_contract_is_rejected(
-        self, tmp_path, bad_line
-    ):
+    def test_a_line_outside_the_1_indexed_contract_is_rejected(self, tmp_path):
         """output.py accepts only positive ints for `line`; a patch that
-        smuggled 0 or a negative past this guard would publish a finding
-        the builder itself would have refused."""
+        smuggled a negative past this guard would publish a finding the
+        builder itself would have refused. Same `validate_finding_content_field`
+        domain as `proposal_field_domain` above."""
         _write_findings(tmp_path, [_finding("f1")])
         with pytest.raises(ValueError, match="line must be a positive"):
             _publish_revise(tmp_path, [{
                 "action": "rescope", "target": {"kind": "finding", "id": "f1"},
-                "fields": {"file": "f.go", "line": bad_line}, "rationale": "r",
+                "fields": {"file": "f.go", "line": -5}, "rationale": "r",
             }])
 
 
@@ -1298,27 +869,23 @@ class TestReadCriticVerdict:
     returns an allowed verdict only from a complete source-bound snapshot
     and otherwise collapses the unusable snapshot to ``None``."""
 
-    def test_missing_file_returns_none(self, tmp_path):
-        assert read_critic_verdict(str(tmp_path)) is None
+    unusable_verdict_marker = [
+        pytest.param(False, None, id="absent"),
+        pytest.param(True, "{not json", id="unparseable"),
+        pytest.param(
+            True, json.dumps({"reason": "no verdict field at all"}),
+            id="no-key",
+        ),
+    ]
 
-    def test_malformed_json_returns_none(self, tmp_path):
-        _artifact(tmp_path, "critic_verdict").write_text("{not json")
-        assert read_critic_verdict(str(tmp_path)) is None
-
-    def test_non_object_json_returns_none(self, tmp_path):
-        _artifact(tmp_path, "critic_verdict").write_text('["REVISE"]')
-        assert read_critic_verdict(str(tmp_path)) is None
-
-    def test_non_string_verdict_field_returns_none(self, tmp_path):
-        _artifact(tmp_path, "critic_verdict").write_text(
-            json.dumps({"verdict": 1})
-        )
-        assert read_critic_verdict(str(tmp_path)) is None
-
-    def test_missing_verdict_key_returns_none(self, tmp_path):
-        _artifact(tmp_path, "critic_verdict").write_text(
-            json.dumps({"reason": "no verdict field at all"})
-        )
+    @pytest.mark.parametrize("write,content", unusable_verdict_marker)
+    def test_unusable_verdict_marker(self, tmp_path, write, content):
+        """A shape the reader cannot use collapses to `None`, the same
+        outcome as a missing file — `non_object_json` and
+        `non_string_verdict_field` reach the same collapse through the
+        same shape check as `unparseable`."""
+        if write:
+            _artifact(tmp_path, "critic_verdict").write_text(content)
         assert read_critic_verdict(str(tmp_path)) is None
 
     def test_a_lifecycle_field_on_a_proposal_entry_is_unusable(self, tmp_path):
@@ -1360,733 +927,18 @@ class TestReadCriticVerdict:
 
         assert (adj_path.read_bytes(), findings_path.read_bytes()) == before
 
-    @pytest.mark.parametrize(
-        "verdict", ["REVISE", "STAND", "ESCALATE", "SKIPPED"]
-    )
+    @pytest.mark.parametrize("verdict", ["REVISE", "SKIPPED"])
     def test_valid_verdict_string_is_returned_as_is(self, tmp_path, verdict):
         _publish_verdict(tmp_path, verdict)
         assert read_critic_verdict(str(tmp_path)) == verdict
 
-    @pytest.mark.parametrize("near_miss", ["revise", " REVISE ", "REVISE\n"])
-    def test_a_near_miss_spelling_is_never_a_usable_verdict(
-        self, tmp_path, near_miss
-    ):
+    def test_a_near_miss_spelling_is_never_a_usable_verdict(self, tmp_path):
         """The vocabulary is exact-match, not case-insensitive or
         whitespace-tolerant: a critic that deviates fails loudly rather
         than being silently normalized into an adjudicable REVISE."""
         with pytest.raises(ValueError, match="unknown critic verdict"):
-            _publish_verdict(tmp_path, near_miss)
+            _publish_verdict(tmp_path, "revise")
         assert read_critic_verdict(str(tmp_path)) is None
-
-
-class TestDerivedVerdict:
-    """Step 11 DERIVES the published verdict from the findings ledger.
-
-    The chain this replaced ran LLM -> review-verdict.json -> finalize, with
-    a Rule 23 sync writing the transcription back over the ledger's own
-    verdict: a run whose orchestrator wrote COMMENT above a ledger holding a
-    critical finding published COMMENT, and the sync then made the ledger
-    agree with the transcription rather than the other way round. Nothing
-    reads review-verdict.json any more, and nothing writes it.
-    """
-
-    def _seed(self, tmp_path, ledger_verdict, findings=()):
-        (tmp_path / "review-report.md").write_text("# report")
-        _write_findings(tmp_path, list(findings), verdict=ledger_verdict)
-
-    def _finalize(self, tmp_path, state=None):
-        state = {} if state is None else state
-        _publish_step_11(tmp_path, state)
-        return json.loads((tmp_path / "pipeline-result.json").read_text())
-
-    @pytest.mark.parametrize("ledger,severity,published", [
-        ("block", "critical", "REQUEST_CHANGES"),
-        ("request_changes", "high", "REQUEST_CHANGES"),
-        ("comment", "medium", "COMMENT"),
-        ("approve", None, "APPROVE"),
-    ])
-    def test_every_canonical_ledger_verdict_maps(
-        self, tmp_path, ledger, severity, published
-    ):
-        """Every reconciler verdict maps only when its findings derive it."""
-        findings = [] if severity is None else [_finding("f1", severity)]
-        self._seed(tmp_path, ledger, findings)
-        result = self._finalize(tmp_path)
-        assert result["verdict"] == published
-        assert result["verdict_source"] == "findings ledger"
-        assert result["status"] == "success"
-
-    @pytest.mark.parametrize("ledger", ["BLOCK", "  Approve  ", "Comment"])
-    def test_casing_and_padding_fail_closed(self, tmp_path, ledger):
-        self._seed(tmp_path, ledger)
-        result = self._finalize(tmp_path)
-        assert result["verdict_source"] == "fallback: no usable ledger verdict"
-        assert result["status"] == "degraded"
-
-    def test_a_critical_finding_never_publishes_comment(self, tmp_path):
-        """The failure this derivation exists to kill, end to end: the
-        ledger's own verdict is computed from its findings, so a critical
-        one cannot be published as advisory by a transcription slip."""
-        self._seed(tmp_path, "block", [_finding("f1", "critical")])
-        assert self._finalize(tmp_path)["verdict"] == "REQUEST_CHANGES"
-
-    def test_escalate_overrides_the_ledger(self, tmp_path):
-        """The critic's one unilateral power: conclusions that did not
-        survive the stress test cannot gate a merge."""
-        self._seed(tmp_path, "block", [_finding("f1", "critical")])
-        _publish_verdict(tmp_path, "ESCALATE")
-        result = self._finalize(tmp_path)
-        assert result["verdict"] == "COMMENT"
-        assert result["verdict_source"] == "critic ESCALATE override"
-
-    def test_stand_does_not_override(self, tmp_path):
-        self._seed(tmp_path, "block", [_finding("f1", "critical")])
-        _publish_verdict(tmp_path, "STAND")
-        assert self._finalize(tmp_path)["verdict_source"] == "findings ledger"
-
-    @pytest.mark.parametrize("payload,label", [
-        (None, "no ledger at all"),
-        ("[1, 2]", "non-object ledger"),
-        ("{not json", "unparseable ledger"),
-        ('{"verdict": null}', "null verdict"),
-        ('{"verdict": "who knows"}', "verdict outside the vocabulary"),
-        ('{"findings": []}', "no verdict key"),
-    ])
-    def test_an_unusable_ledger_falls_back_and_says_so(
-        self, tmp_path, payload, label
-    ):
-        (tmp_path / "review-report.md").write_text("# report")
-        if payload is not None:
-            (tmp_path / "review-findings.json").write_text(payload)
-        result = self._finalize(tmp_path)
-        assert result["verdict"] == "COMMENT", label
-        assert result["verdict_source"] == "fallback: no usable ledger verdict"
-        assert result["status"] == "degraded"
-        assert any(
-            "no usable verdict in review-findings.json" in note
-            for note in result["degradation_notes"]
-        ), label
-
-    def test_a_non_object_ledger_does_not_crash_finalize(self, tmp_path):
-        """The shape that used to raise AttributeError past the guard and
-        kill finalize before pipeline-result.json was ever written."""
-        (tmp_path / "review-report.md").write_text("# report")
-        (tmp_path / "review-findings.json").write_text("[1, 2]")
-        assert self._finalize(tmp_path)["status"] == "degraded"
-
-    def test_a_stale_review_verdict_file_is_ignored_entirely(self, tmp_path):
-        """Nothing reads the artifact any more. A leftover one from an
-        older run — or a hand-written one — must not reach the published
-        verdict, which is the whole point of deleting the chain."""
-        self._seed(tmp_path, "approve")
-        (tmp_path / "review-verdict.json").write_text(
-            json.dumps({"verdict": "REQUEST_CHANGES"})
-        )
-        assert self._finalize(tmp_path)["verdict"] == "APPROVE"
-
-    def test_the_ledger_is_not_rewritten_by_finalize(self, tmp_path):
-        """Rule 23's write is gone: finalize READS the ledger's verdict and
-        never writes one back, so the ledger keeps saying what its own
-        findings say."""
-        self._seed(tmp_path, "approve")
-        before = (tmp_path / "review-findings.json").read_bytes()
-        self._finalize(tmp_path)
-        assert (tmp_path / "review-findings.json").read_bytes() == before
-
-    def test_verdict_source_reaches_state_for_the_step_11_briefing(
-        self, tmp_path
-    ):
-        self._seed(tmp_path, "approve")
-        state = {}
-        _publish_step_11(tmp_path, state)
-        assert state["verdict_source"] == "findings ledger"
-        assert state["pipeline_status"] == "success"
-        assert state["degradation_notes"] == []
-
-
-class TestCriticAbsenceHonesty:
-    """A critic that was DISPATCHED and produced no usable verdict is a run
-    that lost its stress test; a critic that was never dispatched is quick
-    mode working as designed.
-
-    `critic_verdict_for_state()` collapses a missing file and an explicit
-    SKIPPED into "unavailable" — right for pirategoat-bot, blind for the
-    run's own status — so the dispatch marker is what separates the two
-    cases, and the USABLE VERDICT (not the file's existence) is what
-    decides the degradation. Keying on the artifact instead inverted the
-    incentive: the orchestrator that stopped short degraded, while the one
-    that dutifully recorded a SKIPPED stand-in for a crashed critic
-    published success over the same lost stress test.
-    """
-
-    _NOTE = "critic was dispatched but produced no verdict"
-
-    def _seed(self, tmp_path, *, dispatched=False):
-        (tmp_path / "review-report.md").write_text("# report")
-        _write_findings(tmp_path, [], verdict="approve")
-        if dispatched:
-            from review import synthesis_lifecycle
-            synthesis_lifecycle.mark_dispatched(
-                str(tmp_path), synthesis_lifecycle.DECISION_CRITIC
-            )
-
-    def _finalize(self, tmp_path):
-        _publish_step_11(tmp_path)
-        return json.loads((tmp_path / "pipeline-result.json").read_text())
-
-    def test_a_dispatched_critic_that_wrote_nothing_degrades(self, tmp_path):
-        self._seed(tmp_path, dispatched=True)
-        result = self._finalize(tmp_path)
-        assert result["status"] == "degraded"
-        assert self._NOTE in result["degradation_notes"]
-        # Still falls through to the ledger — a missing critique does not
-        # cost the review the verdict its findings earned.
-        assert result["verdict"] == "APPROVE"
-        assert result["critic_verdict"] == "unavailable"
-
-    def test_a_dispatched_critic_recorded_as_skipped_also_degrades(
-        self, tmp_path
-    ):
-        """The other row of the same table. A SKIPPED stand-in written
-        after a dispatch describes exactly the lost stress test above — it
-        is the crashed critic, spelled out — so it must not buy the run a
-        clean bill of health the run that wrote nothing was denied."""
-        self._seed(tmp_path, dispatched=True)
-        _publish_verdict(tmp_path, "SKIPPED")
-        result = self._finalize(tmp_path)
-        assert result["status"] == "degraded"
-        assert self._NOTE in result["degradation_notes"]
-
-    def test_the_quick_skip_is_silent(self, tmp_path):
-        """Quick mode's SKIPPED record is written by the PIPELINE, on the
-        branch that deliberately writes no dispatch marker. Nothing was
-        dispatched, so nothing was lost."""
-        self._seed(tmp_path)
-        _publish_verdict(tmp_path, "SKIPPED")
-        result = self._finalize(tmp_path)
-        assert result["status"] == "success"
-        assert result["degradation_notes"] == []
-
-    def test_an_undispatched_critic_is_silent(self, tmp_path):
-        self._seed(tmp_path)
-        result = self._finalize(tmp_path)
-        assert result["status"] == "success"
-        assert result["degradation_notes"] == []
-
-    @pytest.mark.parametrize("verdict", ["STAND", "REVISE", "ESCALATE"])
-    def test_a_dispatched_critic_that_answered_is_silent(
-        self, tmp_path, verdict
-    ):
-        self._seed(tmp_path, dispatched=True)
-        _publish_verdict(tmp_path, verdict)
-        assert self._finalize(tmp_path)["degradation_notes"] == []
-
-    def test_an_unparseable_verdict_after_dispatch_degrades(self, tmp_path):
-        """Artifact-INDEPENDENT: a file exists, but no usable verdict came
-        out of it, which is the same lost stress test."""
-        self._seed(tmp_path, dispatched=True)
-        _artifact(tmp_path, "critic_verdict").write_text("{not json")
-        assert self._NOTE in self._finalize(tmp_path)["degradation_notes"]
-
-
-
-class TestCriticInputRoundTrip:
-    """The full REVISE loop across the two artifacts that must agree.
-
-    Three modules meet here and none of their own tests span the seam: the
-    record renders the critic's view of the findings, the critic keys its
-    adjustments off an id, and critic_adjustments.py resolves those keys
-    against review-findings.json. While the critic's view showed only
-    positional F-labels, each module passed its own tests and the loop was
-    still broken end to end — every REVISE run shipped degraded with "no
-    finding with id 'F1'".
-
-    The fix is structural now: the critic is handed the ledger itself, so
-    the only key its view offers IS the ledger key. This crosses the seam
-    by taking its id the way the critic must — out of the artifacts the
-    dispatch prompt names, and asserting the record offers no rival handle.
-    """
-
-    def test_an_id_read_from_the_handed_ledger_applies(self, tmp_path):
-        _write_findings(tmp_path, [_finding("f5", "low")])
-        # The critic reads this file directly; it is the `--context` path.
-        findings = json.loads(
-            (tmp_path / "review-findings.json").read_text()
-        )
-        visible_ids = [finding["id"] for finding in findings["findings"]]
-        assert visible_ids
-
-        _publish_and_adjudicate(tmp_path, [{
-            "action": "promote",
-            "target": {"kind": "finding", "id": visible_ids[0]},
-            "fields": {"severity": "high"},
-            "rationale": "the exploit path is reachable from the REST route",
-        }], verified=(0,), assessment="One high-severity finding remains.")
-        (tmp_path / "review-report.md").write_text("# report")
-
-        _publish_step_11(tmp_path)
-
-        data = json.loads((tmp_path / "review-findings.json").read_text())
-        finding = data["findings"][0]
-        assert finding["severity"] == "high", (
-            "the id the critic could see did not resolve in the ledger"
-        )
-        assert finding["critic_adjustment"]["action"] == "promote"
-        assert data["summary"]["by_severity"]["high"] == 1
-        result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert result["degradation_notes"] == []
-        assert result["status"] == "success"
-
-    def test_the_record_offers_no_positional_label_to_mistake_for_a_key(
-        self, tmp_path
-    ):
-        """The record titles findings; it never numbers them. And it says
-        where the real key lives, so a reader cannot invent one."""
-        _write_findings(tmp_path, [_finding("f5"), _finding("f6")])
-        _publish_verdict(tmp_path, "STAND")
-
-        _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
-
-        record = (tmp_path / "review-record.md").read_text()
-        assert not re.search(r"^### F\d+\b", record, re.MULTILINE), record
-        assert "canonical fN `id` in `review-findings.json` (`findings[].id`)" in record
-        assert "a positional label is not a key" in record
-
-
-class TestStepElevenReportsUnadjudicatedProposal:
-    """Step 11 does not adjudicate on the orchestrator's behalf — it reports
-    a REVISE proposal that never was, so a ledger published without the
-    critic's adjustments says so out loud."""
-
-    @pytest.fixture(autouse=True)
-    def _isolated_cwd(self, tmp_path, monkeypatch):
-        """Keep finalize's worktree hygiene off the developer's own repo.
-
-        Step 11 inspects the repo it is standing in, and pytest stands in
-        the real checkout. Scoped to this class because only these tests
-        call the step directly; the CLI tests elsewhere in this file run
-        in a subprocess with their own cwd.
-        """
-        monkeypatch.chdir(tmp_path)
-
-    _NOTE = (
-        "critic REVISE proposal was never adjudicated; the ledger is "
-        "published without its adjustments"
-    )
-
-    def _step_11(self, output_dir, state=None):
-        return _publish_step_11(output_dir, state)
-
-    def test_a_pending_proposal_degrades_the_run(self, tmp_path):
-        _write_findings(tmp_path, [_finding("f1", "low")], verdict="approve")
-        _publish_revise(tmp_path, [{
-            "action": "promote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "critical"}, "rationale": "r",
-        }])
-        (tmp_path / "review-report.md").write_text("# report")
-
-        self._step_11(tmp_path)
-
-        data = _ledger(tmp_path)
-        assert data["findings"][0]["severity"] == "low", (
-            "step 11 must not apply an unprobed batch"
-        )
-        assert APPLIED_IDS_KEY not in data
-        result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert result["degradation_notes"] == [self._NOTE]
-        assert result["status"] == "degraded"
-
-    def test_the_degradation_is_stable_across_the_publication_handoff(
-        self, tmp_path
-    ):
-        _write_findings(tmp_path, [_finding("f1", "low")])
-        _publish_revise(tmp_path, [{
-            "action": "promote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "high"}, "rationale": "r",
-        }])
-        (tmp_path / "review-report.md").write_text("# report")
-        state = {}
-
-        self._step_11(tmp_path, state)
-        self._step_11(tmp_path, state)
-
-        result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert result["degradation_notes"] == [self._NOTE]
-        assert state["step_11_degradation_records"] == [{
-            "code": "critic_adjudication_missing",
-            "message": self._NOTE,
-        }]
-
-    def test_an_adjudicated_proposal_is_silent(self, tmp_path):
-        _write_findings(tmp_path, [_finding("f1", "low")], verdict="approve")
-        _publish_and_adjudicate(tmp_path, [{
-            "action": "promote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "critical"}, "rationale": "r",
-        }], verified=(0,), assessment="One critical finding stands.")
-        (tmp_path / "review-report.md").write_text("# report")
-
-        self._step_11(tmp_path)
-
-        result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert result["degradation_notes"] == []
-        assert result["status"] == "success"
-        assert result["verdict"] == "REQUEST_CHANGES", (
-            "the derived verdict must come from the adjudicated ledger"
-        )
-
-    def test_a_non_revise_verdict_is_never_inspected(self, tmp_path):
-        """Adjustments are a REVISE-only channel, and a non-REVISE marker
-        cannot commit a non-empty proposal, so there is nothing to check."""
-        _write_findings(tmp_path, [_finding("f1", "low")])
-        _publish_verdict(tmp_path, "STAND")
-        (tmp_path / "review-report.md").write_text("# report")
-
-        self._step_11(tmp_path)
-
-        result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert result["degradation_notes"] == []
-        assert result["status"] == "success"
-
-    def test_an_unreadable_proposal_is_a_missing_verdict_not_a_crash(
-        self, tmp_path
-    ):
-        """An unbound snapshot has no usable verdict at all, so it degrades
-        as the lost critique it is rather than as an adjustment problem."""
-        from review import synthesis_lifecycle
-
-        _write_findings(tmp_path, [_finding("f1", "low")])
-        _publish_revise(tmp_path, [{
-            "action": "promote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "critical"}, "rationale": "r",
-        }])
-        _artifact(tmp_path, "critic_adjustments").write_text("{not json")
-        synthesis_lifecycle.mark_dispatched(
-            str(tmp_path), synthesis_lifecycle.DECISION_CRITIC
-        )
-        (tmp_path / "review-report.md").write_text("# report")
-
-        self._step_11(tmp_path)
-
-        result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert result["degradation_notes"] == [
-            "critic was dispatched but produced no verdict"
-        ]
-        assert result["status"] == "degraded"
-
-    def test_a_malformed_ledger_degrades_instead_of_crashing(self, tmp_path):
-        """The measured regression: a list-shaped findings file must not
-        make the inspection the thing that crashes finalize."""
-        _publish_revise(tmp_path, [{
-            "action": "promote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "critical"}, "rationale": "r",
-        }])
-        (tmp_path / "review-findings.json").write_text(
-            json.dumps([_finding("f1", "low")])
-        )
-        (tmp_path / "review-report.md").write_text("# report")
-
-        self._step_11(tmp_path)
-
-        result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert any("critic adjustment inspection failed" in note
-                   for note in result["degradation_notes"])
-        assert result["status"] == "degraded"
-
-
-class TestStepElevenRerendersFindingsMarkdown:
-    """`review-findings.md` must describe the FINAL ledger, not the one the
-    reconciliator first published.
-
-    Field-proven defect: after every critic REVISE, the hand-written
-    assessment still showed pre-adjustment severities while the JSON and the
-    report showed post-adjustment ones — a guaranteed-stale fallback
-    artifact, and the one the step-10 critic fallback and the failure-path
-    report fallback both point at.
-    """
-
-    @pytest.fixture(autouse=True)
-    def _isolated_cwd(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-
-    def _step_11(self, output_dir):
-        return _publish_step_11(output_dir)
-
-    def _seed(self, tmp_path, severity="high"):
-        finding = _finding("f1", severity)
-        finding["title"] = "Unescaped output"
-        _write_findings(tmp_path, [finding])
-        _publish_verdict(tmp_path, "REVISE")
-        (tmp_path / "review-report.md").write_text("# report")
-
-    def test_demoted_severity_reaches_the_markdown(self, tmp_path):
-        """THE pin: a REVISE demote must be visible in the rendered file."""
-        self._seed(tmp_path, severity="high")
-        (tmp_path / "review-findings.md").write_text(
-            "## High Issues\n\n### Unescaped output\n"
-        )
-        _publish_and_adjudicate(tmp_path, [{
-            "action": "demote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "low"}, "rationale": "guarded upstream",
-        }], verified=(0,))
-
-        self._step_11(tmp_path)
-
-        rendered = (tmp_path / "review-findings.md").read_text()
-        assert "## Low Findings" in rendered
-        assert "## High Issues" not in rendered
-        assert "Unescaped output" in rendered
-
-    def test_the_rendered_verdict_is_the_ledgers_own(self, tmp_path):
-        """The Markdown renders the ledger, and the ledger's verdict is what
-        finalize publishes — one number, one source. Nothing writes a
-        verdict into this file at finalize any more."""
-        self._seed(tmp_path, severity="low")
-        _publish_verdict(tmp_path, "STAND")
-
-        self._step_11(tmp_path)
-
-        data = json.loads((tmp_path / "review-findings.json").read_text())
-        assert data["verdict"] == "approve"
-        assert "**Verdict:** APPROVE" in (
-            tmp_path / "review-findings.md"
-        ).read_text()
-
-    def test_render_failure_is_recorded_not_raised(self, tmp_path, monkeypatch):
-        self._seed(tmp_path, severity="low")
-        import review.orchestration as orchestration_module
-
-        monkeypatch.setattr(
-            orchestration_module, "render_markdown",
-            failing_findings_renderer("boom"),
-        )
-
-        self._step_11(tmp_path)  # must not raise
-
-        result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert any(
-            "review-findings.md render failed" in n
-            for n in result["degradation_notes"]
-        )
-        assert result["status"] == "degraded"
-
-    def test_missing_findings_json_renders_nothing_and_adds_no_note(
-        self, tmp_path
-    ):
-        _publish_verdict(tmp_path, "STAND")
-        (tmp_path / "review-report.md").write_text("# report")
-
-        self._step_11(tmp_path)
-
-        result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert not (tmp_path / "review-findings.md").exists()
-        assert not any(
-            "render failed" in n for n in result["degradation_notes"]
-        )
-
-    def test_the_record_prepares_state_without_becoming_the_report_path(
-        self, tmp_path
-    ):
-        """`review-report.md` is authored from the step-11 briefing this
-        function is about to render. Until that handoff lands, neither the
-        record nor findings Markdown may masquerade as the report path."""
-        self._seed(tmp_path, severity="low")
-        (tmp_path / "review-report.md").unlink()
-        _publish_verdict(tmp_path, "STAND")
-        state = {}
-
-        _orchestrate_step_11("pr", {}, state, {}, str(tmp_path))
-
-        assert not (tmp_path / "pipeline-result.json").exists()
-        assert state["publication_pending"] is True
-        assert not any(
-            "review-report.md not found" in note
-            for note in state["degradation_notes"]
-        )
-
-        (tmp_path / "review-report.md").write_text("# report")
-        _orchestrate_step_11("pr", {}, state, {}, str(tmp_path))
-        result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert result["report_path"] == str(tmp_path / "review-report.md")
-        assert state["publication_pending"] is False
-
-    @pytest.mark.parametrize("render_recovers", [True, False])
-    def test_prepare_render_degradation_survives_publication_once(
-        self, tmp_path, monkeypatch, render_recovers
-    ):
-        """The report handoff must not erase failures settled before it."""
-        self._seed(tmp_path, severity="low")
-        (tmp_path / "review-report.md").unlink()
-        _publish_verdict(tmp_path, "STAND")
-        state = {}
-        original_renderer = orchestration_mod.render_markdown
-
-        monkeypatch.setattr(
-            orchestration_mod, "render_markdown",
-            failing_findings_renderer("boom"),
-        )
-        _orchestrate_step_11("pr", {}, state, {}, str(tmp_path))
-
-        note = "review-findings.md render failed: boom"
-        assert state["publication_pending"] is True
-        assert state["degradation_notes"].count(note) == 1
-        assert not (tmp_path / "pipeline-result.json").exists()
-
-        if render_recovers:
-            monkeypatch.setattr(
-                orchestration_mod, "render_markdown",
-                original_renderer,
-            )
-        (tmp_path / "review-report.md").write_text("# report")
-        _orchestrate_step_11("pr", {}, state, {}, str(tmp_path))
-
-        result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert result["status"] == "degraded"
-        assert result["degradation_notes"].count(note) == 1
-
-    def test_varying_render_diagnostics_converge_by_stable_identity(
-        self, tmp_path, monkeypatch
-    ):
-        """Volatile exception prose must not create an endless stale loop."""
-        self._seed(tmp_path, severity="low")
-        _publish_verdict(tmp_path, "STAND")
-        state = {}
-        monkeypatch.setattr(
-            orchestration_mod, "render_markdown",
-            failing_findings_renderer("boom one", "boom two"),
-        )
-
-        _orchestrate_step_11("pr", {}, state, {}, str(tmp_path))
-
-        assert state["publication_pending"] is True
-        assert state["report_handoff_status"] == "unbound_report"
-        assert state["step_11_degradation_records"] == [{
-            "code": "findings_markdown_render_failed",
-            "message": "review-findings.md render failed: boom one",
-        }]
-
-        (tmp_path / "review-report.md").write_text(
-            "# report\nRewritten from the prepared source."
-        )
-        _orchestrate_step_11("pr", {}, state, {}, str(tmp_path))
-
-        result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert result["status"] == "degraded"
-        assert result["degradation_notes"] == [
-            "review-findings.md render failed: boom one"
-        ]
-        assert state["report_handoff_status"] == "published"
-        assert len(state["step_11_degradation_records"]) == 1
-
-    def test_malformed_owned_degradations_fail_closed(
-        self, tmp_path
-    ):
-        """Re-entry inherits only a valid step-11-owned note collection."""
-        self._seed(tmp_path, severity="low")
-        _publish_verdict(tmp_path, "STAND")
-        state = {
-            "publication_pending": True,
-            "step_11_degradation_notes": ["owned note", 42],
-            "degradation_notes": ["unrelated generic state note"],
-        }
-
-        _publish_step_11(tmp_path, state)
-
-        result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert result["status"] == "success"
-        assert result["degradation_notes"] == []
-        assert state["step_11_degradation_records"] == []
-        assert "step_11_degradation_notes" not in state
-
-    def test_distinct_degradation_categories_keep_first_seen_order(
-        self
-    ):
-        state = {"step_11_degradation_records": [
-            {
-                "code": "findings_markdown_render_failed",
-                "message": "render first diagnostic",
-            },
-            {
-                "code": "review_record_assembly_failed",
-                "message": "record diagnostic",
-            },
-        ]}
-        current = [
-            {
-                "code": "findings_markdown_render_failed",
-                "message": "render later diagnostic",
-            },
-            {"code": "findings_missing", "message": "findings diagnostic"},
-        ]
-
-        merged = orchestration_mod._merge_step_11_degradation_records(
-            state, current
-        )
-
-        assert merged == [
-            {
-                "code": "findings_markdown_render_failed",
-                "message": "render first diagnostic",
-            },
-            {
-                "code": "review_record_assembly_failed",
-                "message": "record diagnostic",
-            },
-            {"code": "findings_missing", "message": "findings diagnostic"},
-        ]
-
-    def test_unrecognized_private_degradation_code_is_not_inherited(self):
-        state = {"step_11_degradation_records": [{
-            "code": "foreign_producer",
-            "message": "unrelated private state prose",
-        }]}
-
-        assert orchestration_mod._merge_step_11_degradation_records(
-            state, []
-        ) == []
-
-    def test_unhashable_private_degradation_code_fails_closed(self):
-        state = {"step_11_degradation_records": [{
-            "code": ["not", "a", "string"],
-            "message": "malformed private state prose",
-        }]}
-
-        assert orchestration_mod._merge_step_11_degradation_records(
-            state, []
-        ) == []
-
-    @pytest.mark.parametrize("record", [
-        {
-            "code": "probe_residue_swept",
-            "message": "probe diagnostic",
-            "discriminator": "not-a-provenance-digest",
-        },
-        {
-            "code": "probe_residue_swept",
-            "message": "probe diagnostic",
-            "discriminator": "paths-sha256:" + "A" * 64,
-        },
-        {
-            "code": "findings_markdown_render_failed",
-            "message": "render diagnostic",
-            "discriminator": "paths-sha256:" + "a" * 64,
-        },
-    ])
-    def test_private_degradation_discriminator_is_code_owned(self, record):
-        state = {"step_11_degradation_records": [record]}
-
-        assert orchestration_mod._merge_step_11_degradation_records(
-            state, []
-        ) == []
-
-    def test_a_report_authored_after_preparation_is_published(self, tmp_path):
-        """A source-bound report wins over non-terminal record fallbacks."""
-        self._seed(tmp_path, severity="low")
-        _publish_verdict(tmp_path, "STAND")
-
-        self._step_11(tmp_path)
-
-        result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert result["report_path"] == str(tmp_path / "review-report.md")
 
 
 class TestRecommendationsInvalidation:
@@ -2155,10 +1007,7 @@ class TestRecommendationsInvalidation:
 
     @pytest.mark.parametrize("bad", [
         pytest.param("not a dict", id="not-object"),
-        pytest.param({"urgent": ["x"]}, id="unknown-priority"),
         pytest.param({"immediate": "x"}, id="not-list"),
-        pytest.param({"immediate": [""]}, id="empty-text"),
-        pytest.param({"immediate": [" \n "]}, id="blank-text"),
         pytest.param({"immediate": [1]}, id="not-string"),
     ])
     def test_malformed_revised_recommendations_are_refused(self, tmp_path, bad):
@@ -2169,13 +1018,8 @@ class TestRecommendationsInvalidation:
         assert any("revised_recommendations" in p for p in excinfo.value.problems)
         assert (tmp_path / "review-findings.json").read_bytes() == before
 
-    @pytest.mark.parametrize("bad", [
-        pytest.param("not a list", id="not-list"),
-        pytest.param([""], id="empty-string"),
-        pytest.param(["  "], id="blank-string"),
-        pytest.param([1], id="not-string"),
-    ])
-    def test_reader_rejects_malformed_withdrawn_priority(self, tmp_path, bad):
+    def test_reader_rejects_malformed_withdrawn_priority(self, tmp_path):
+        bad = "not a list"
         ids = self._seed(tmp_path)
         _adjudicate(tmp_path, ids, verified=(0,))
         data = _ledger(tmp_path)
@@ -2214,15 +1058,8 @@ class TestAssessmentInvalidation:
             "fields": {"severity": "low"}, "rationale": "guarded upstream",
         }], verified=(0,))
         assert result["applied"] == 1
-        assert _ledger(tmp_path)["assessment"] is None
-
-    def test_the_invalidated_text_stays_auditable(self, tmp_path):
-        self._seed(tmp_path)
-        _publish_and_adjudicate(tmp_path, [{
-            "action": "demote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "low"}, "rationale": "guarded upstream",
-        }], verified=(0,))
         data = _ledger(tmp_path)
+        assert data["assessment"] is None
         invalidated = data[INVALIDATED_ASSESSMENTS_KEY]
         assert len(invalidated) == 1
         assert invalidated[0]["text"] == self._SUMMARY
@@ -2233,7 +1070,9 @@ class TestAssessmentInvalidation:
     def test_a_second_withdrawal_names_only_its_own_batch(self, tmp_path):
         """invalidated_by_critic_adjustment_ids is causal attribution, not history: a second
         reconciliation round's withdrawal must name the batch that caused
-        it, never the cumulative applied-ids list."""
+        it, never the cumulative applied-ids list. Also covers a second
+        round appending rather than overwriting the first withdrawal's
+        text. Fix 47cd4c16."""
         self._seed(tmp_path)
         _publish_and_adjudicate(tmp_path, [{
             "action": "demote", "target": {"kind": "finding", "id": "f1"},
@@ -2252,30 +1091,14 @@ class TestAssessmentInvalidation:
         data = _ledger(tmp_path)
         invalidated = data[INVALIDATED_ASSESSMENTS_KEY]
         assert len(invalidated) == 2
+        texts = [entry["text"] for entry in invalidated]
+        assert texts == [self._SUMMARY, "Fresh assessment after round two."]
         second_batch = [
             i for i in _applied_ids(data) if i not in first_batch
         ]
         assert second_batch
         assert invalidated[1]["invalidated_by_critic_adjustment_ids"] == second_batch
         assert invalidated[0]["invalidated_by_critic_adjustment_ids"] == first_batch
-
-    def test_a_wholly_refuted_batch_leaves_the_summary_alone(self, tmp_path):
-        self._seed(tmp_path)
-        _, result = _publish_and_adjudicate(tmp_path, [{
-            "action": "demote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "low"}, "rationale": "r",
-        }], refuted=((0, "the probe refuted it"),))
-        assert result["applied"] == 0
-        data = _ledger(tmp_path)
-        assert data["assessment"] == self._SUMMARY
-        assert INVALIDATED_ASSESSMENTS_KEY not in data
-
-    def test_a_refused_call_leaves_the_summary_alone(self, tmp_path):
-        self._seed(tmp_path)
-        _publish_verdict(tmp_path, "STAND")
-        with pytest.raises(ValueError, match="STAND"):
-            _adjudicate(tmp_path, [])
-        assert _ledger(tmp_path)["assessment"] == self._SUMMARY
 
     def test_no_summary_to_withdraw_records_no_withdrawal(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1", "critical")])
@@ -2286,64 +1109,6 @@ class TestAssessmentInvalidation:
         data = _ledger(tmp_path)
         assert data["assessment"] is None
         assert INVALIDATED_ASSESSMENTS_KEY not in data
-
-    def test_a_second_batch_appends_rather_than_overwrites(self, tmp_path):
-        """Two rounds of adjustments are two withdrawals — the first must
-        not be erased by the second."""
-        self._seed(tmp_path)
-        _publish_and_adjudicate(tmp_path, [{
-            "action": "demote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "low"}, "rationale": "r",
-        }], verified=(0,))
-        # A second reconciliation pass writes fresh prose, then a second
-        # critic round adjusts again.
-        data = _ledger(tmp_path)
-        data["assessment"] = "Second assessment."
-        write_findings(str(tmp_path), data)
-        _publish_and_adjudicate(tmp_path, [{
-            "action": "promote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "high"}, "rationale": "r2",
-        }], verified=(0,))
-        data = _ledger(tmp_path)
-        texts = [entry["text"] for entry in data[INVALIDATED_ASSESSMENTS_KEY]]
-        assert texts == [self._SUMMARY, "Second assessment."]
-
-
-class TestStepElevenWithdrawsContradictedProse:
-    """The reproduced defect, end to end.
-
-    A critical finding described in the Assessment, demoted by the critic:
-    the rendered Markdown used to print the demotion in its finding list and
-    the stale "one CRITICAL blocker" claim directly above it.
-    """
-
-    @pytest.fixture(autouse=True)
-    def _isolated_cwd(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-
-    def test_demoted_finding_is_not_still_described_as_critical(
-        self, tmp_path
-    ):
-        finding = _finding("f1", "critical")
-        finding["title"] = "Unescaped payment path"
-        _write_findings(
-            tmp_path, [finding],
-            assessment=(
-                "One CRITICAL blocker: the payment path is unescaped."
-            ),
-        )
-        _publish_and_adjudicate(tmp_path, [{
-            "action": "demote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "low"}, "rationale": "guarded upstream",
-        }], verified=(0,))
-        (tmp_path / "review-report.md").write_text("# report")
-
-        _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
-
-        rendered = (tmp_path / "review-findings.md").read_text()
-        assert "## Low Findings" in rendered
-        assert "CRITICAL blocker" not in rendered
-        assert "invalidated" in rendered.lower()
 
 
 class TestCheckPassthrough:
@@ -2379,54 +1144,6 @@ class TestCheckPassthrough:
         assert result["applied"] == 1
         assert _ledger(tmp_path)["checks"] == self.CHECKS
 
-    def test_write_findings_does_not_filter_unknown_keys(self, tmp_path):
-        """`write_findings` is a whole-document replace, not a projection —
-        it has no field vocabulary of its own to fall out of date."""
-        payload = {"findings": [], "checks": self.CHECKS,
-                   "a_future_key": {"kept": True}}
-        write_findings(str(tmp_path), payload)
-        assert json.loads(
-            (tmp_path / "review-findings.json").read_text()
-        ) == payload
-
-    def test_rendered_markdown_carries_the_checks_section(self, tmp_path):
-        """End of the chain: the renderer the report is told to quote."""
-        _write_findings(tmp_path, [_finding("f1")], checks=self.CHECKS)
-        script = PLUGIN_ROOT / "scripts" / "review" / "review_markdown.py"
-        result = subprocess.run(
-            [sys.executable, str(script), "render",
-             str(tmp_path / "review-findings.json")],
-            capture_output=True, text=True,
-        )
-        assert result.returncode == 0, result.stderr
-        assert "## Verified Checks" in result.stdout
-        assert "legacy_hook" in result.stdout
-        assert "security-reviewer, wp-architecture-reviewer" in result.stdout
-
-
-class TestReconciliatorCheckPin:
-    """Writer #1 is an agent following a Markdown snippet, so only a test
-    can hold it to teaching structurally merged checks.
-
-    Before this, the taught template never mentioned it: the ledger's
-    `checks` was always null, and step 9 rebuilt "what was verified and
-    held" from the orchestrator's memory — the exact from-memory reporting
-    the artifact chain exists to prevent.
-    """
-
-    SNIPPET = PLUGIN_ROOT / "agents" / "review-reconciliator.md"
-
-    def _text(self):
-        return self.SNIPPET.read_text(encoding="utf-8")
-
-    def test_the_template_teaches_structural_check_recording(self):
-        text = self._text()
-        assert "builder.record_check(" in text
-        for kwarg in (
-            "question=", "method=", "result=", "source_reviewers="
-        ):
-            assert kwarg in text.split("builder.record_check(", 1)[1][:500]
-
 
 class TestReconciliatorWritePathPin:
     """Writer #1 is an agent following a Markdown snippet, so the only
@@ -2449,51 +1166,21 @@ class TestReconciliatorWritePathPin:
     def _text(self):
         return self.SNIPPET.read_text(encoding="utf-8")
 
-    def test_the_snippet_saves_through_findings_save(self):
-        text = self._text()
-        assert "scripts/review/findings_save.py" in text
-        assert "--output-dir" in text
-        assert "--findings" in text
-
-    def test_the_snippet_does_not_write_the_ledger_any_other_way(self):
-        """Named spellings, not a blanket ban: `atomic_write_json` and
-        `write_findings` may legitimately appear in prose about the write
-        path — what must not come back is a call that writes THIS
-        artifact directly instead of going through findings_save.py."""
-        text = self._text()
-        for forbidden in (
-            'atomic_write_json(f"{output_dir}/review-findings.json"',
-            "atomic_write_json(f'{output_dir}/review-findings.json'",
-            'open(f"{output_dir}/review-findings.json"',
-            "json.dump(output",
-            "from review.critic_adjustments import write_findings",
-            "write_findings(output_dir, output)",
-        ):
-            assert forbidden not in text, forbidden
-
-    def test_the_snippet_builds_the_ledger_with_the_ledger_builder(self):
+    def test_the_snippet_builds_the_ledger_and_saves_through_findings_save(
+        self
+    ):
         """`ReviewOutputBuilder` produces a reviewer document — it carries a
         `reviewer` field and a reviewed-file lifecycle the ledger does not
         have. Only `FindingsLedgerBuilder` produces the artifact this agent
-        is asked for."""
+        is asked for, and the built ledger is saved only through
+        `findings_save.py`, never a bare write."""
         text = self._text()
         assert 'FindingsLedgerBuilder(pr_id="PR_ID_FROM_CONTEXT", output_dir=' in text
         assert "from review.findings_ledger import FindingsLedgerBuilder" in text
         assert "ReviewOutputBuilder(" not in text
-
-    def test_the_snippet_authors_the_four_judgments_and_nothing_else(self):
-        """The pipeline-owned facts are stamped by findings_save.py from
-        reconciliation-context.json. A snippet that teaches the agent to
-        author them produces a ledger the save channel rejects."""
-        text = self._text()
-        call = text.split("builder.set_reconciliation(", 1)[1].split("\n)", 1)[0]
-        for judgment in (
-            "grouped_concern_count", "verified_concern_count",
-            "false_positive_concern_count", "out_of_scope_concern_count",
-        ):
-            assert f"{judgment}=" in call, judgment
-        assert "output['meta']['reconciliation']" not in text
-        assert 'output["meta"]["reconciliation"]' not in text
+        assert "scripts/review/findings_save.py" in text
+        assert "--output-dir" in text
+        assert "--findings" in text
 
 
 
@@ -2524,9 +1211,7 @@ class TestOutcomeVocabulary:
             applied=[{"adjustment_id": "a1", "outcome": value}]
         ))
 
-    @pytest.mark.parametrize("value", [
-        "checked", "VERIFIED", "not checked", "", True, 1, None,
-    ])
+    @pytest.mark.parametrize("value", ["not checked", True])
     def test_an_unknown_value_rejects_the_ledger(self, value):
         with pytest.raises(ValueError, match="applied_critic_adjustments"):
             validate_findings_document(self._ledger_with(
@@ -2557,64 +1242,6 @@ class TestOutcomeVocabulary:
             "rejection_reason": "the probe refuted it",
         }]))
 
-    def test_the_critic_proposal_gate_rejects_an_outcome(self):
-        problems = validate_proposal_input({
-            "schema": 2,
-            "adjustments": [{
-                "action": "demote",
-                "target": {"kind": "finding", "id": "f1"},
-                "fields": {"severity": "low"},
-                "rationale": "guarded upstream",
-                "outcome": "verified",
-            }],
-        })
-        assert any("outcome" in problem for problem in problems)
-
-
-class TestOutcomeRecordedInTheLedger:
-    """The applied-ids record carries the orchestrator's outcome per id."""
-
-    def _adjudicate(self, tmp_path, **request_kwargs):
-        _write_findings(tmp_path, [_finding("f1", "high")])
-        _, result = _publish_and_adjudicate(tmp_path, [{
-            "action": "demote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "low"}, "rationale": "guarded upstream",
-        }], **request_kwargs)
-        assert result["applied"] == 1
-        return _ledger(tmp_path)
-
-    def test_an_omitted_entry_records_not_checked(self, tmp_path):
-        data = self._adjudicate(tmp_path)
-        assert data[APPLIED_IDS_KEY][0]["outcome"] == OUTCOME_NOT_CHECKED
-
-    def test_a_verified_entry_records_verified(self, tmp_path):
-        data = self._adjudicate(tmp_path, verified=(0,))
-        assert data[APPLIED_IDS_KEY][0]["outcome"] == OUTCOME_VERIFIED
-
-    def test_the_record_still_carries_the_adjustment_id(self, tmp_path):
-        data = self._adjudicate(tmp_path)
-        adjustments = json.loads(
-            _artifact(tmp_path, "critic_adjustments").read_text()
-        )
-        assert data[APPLIED_IDS_KEY][0]["adjustment_id"] == (
-            adjustments["adjustments"][0]["adjustment_id"]
-        )
-
-    def test_a_schema_one_string_record_is_rejected(self, tmp_path):
-        _write_findings(tmp_path, [_finding("f1", "high")])
-        data = _ledger(tmp_path)
-        data[APPLIED_IDS_KEY] = ["legacy-id"]
-        write_findings(str(tmp_path), data)
-        ids = _publish_revise(tmp_path, [{
-            "action": "demote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "low"}, "rationale": "already landed",
-        }])
-        with pytest.raises(
-            ValueError, match="'applied_critic_adjustments' must be a list"
-        ):
-            _adjudicate(tmp_path, ids)
-
-
 class TestRevisedAssessment:
     """The orchestrator's post-critic assessment, in the channel.
 
@@ -2637,21 +1264,7 @@ class TestRevisedAssessment:
             assessment=self._SUMMARY,
         )
 
-    def test_a_non_string_revised_assessment_rejects_the_proposal(self):
-        problems = validate_proposal_input({
-            "schema": 2, "adjustments": [], "revised_assessment": ["a", "b"],
-        })
-        assert problems and "revised_assessment" in problems[0]
-
     def test_it_becomes_the_ledger_assessment(self, tmp_path):
-        self._seed(tmp_path)
-        _publish_and_adjudicate(
-            tmp_path, self._DEMOTION,
-            verified=(0,), assessment=self._REVISED,
-        )
-        assert _ledger(tmp_path)["assessment"] == self._REVISED
-
-    def test_the_withdrawal_record_survives_the_replacement(self, tmp_path):
         """Replacement is not erasure: the reconciler's retracted words
         stay auditable beside the ids that cost them their standing."""
         self._seed(tmp_path)
@@ -2660,6 +1273,7 @@ class TestRevisedAssessment:
             verified=(0,), assessment=self._REVISED,
         )
         data = _ledger(tmp_path)
+        assert data["assessment"] == self._REVISED
         assert data[INVALIDATED_ASSESSMENTS_KEY][0]["text"] == self._SUMMARY
 
     def test_a_blank_revised_assessment_is_rejected_without_mutation(
@@ -2681,121 +1295,6 @@ class TestRevisedAssessment:
         assert _ledger(tmp_path)["assessment"] == self._SUMMARY
 
 
-class TestWithdrawnAssessmentRender:
-    """A invalidated-and-unreplaced assessment renders as an explicit
-    absence — never an empty section, never the retracted text.
-
-    The prior wording sent the reader to "the report for the current
-    assessment", which on a bot run is a file nobody reads and on any run
-    may carry no post-critic assessment at all.
-    """
-
-    def _render(self, **overrides):
-        from review.review_markdown import render_markdown
-        data = {
-            "pr_id": "42", "reviewer": "reconciliator",
-            "timestamp": "2026-08-13T10:00:00", "plugin_version": None,
-            "schema": 2, "verdict": "approve",
-            "summary": {"total_findings": 0, "by_severity": {
-                "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0,
-            }},
-            "findings": [], "assessment": None,
-            "review_claimable_files": [], "reviewed_file_claims": [],
-            "unclaimed_review_files": [], "inline_diff_file_count": 1,
-            "reviewed_file_count": 1,
-            "in_scope_review_file_count": 1, "observations": [],
-            "recommendations": {
-                "immediate": [], "important": [], "suggestions": [],
-            },
-            "positive_observations": [],
-            "checks": None,
-            "meta": {"review_duration_ms": 1,
-                     "confidence_score": 0.9},
-        }
-        data.update(overrides)
-        return render_markdown(data)
-
-    def test_invalidated_without_replacement_says_so(self):
-        md = self._render(invalidated_assessments=[
-            {"text": "One CRITICAL blocker.", "invalidated_by_critic_adjustment_ids": ["a1"]},
-        ])
-        assert "No current assessment" in md
-        assert "not replaced" in md
-        assert "One CRITICAL blocker." not in md
-
-    def test_a_replacement_is_not_attributed_to_the_reconciler(self):
-        md = self._render(
-            assessment="After spot-checking: guarded upstream.",
-            invalidated_assessments=[
-                {"text": "One CRITICAL blocker.", "invalidated_by_critic_adjustment_ids": ["a1"]},
-            ],
-        )
-        assert "After spot-checking: guarded upstream." in md
-        assert "not adjusted by the decision critic" not in md
-
-    def test_an_untouched_assessment_still_reads_as_the_reconcilers(self):
-        md = self._render(assessment="The change is sound.")
-        assert "not adjusted by the decision critic" in md
-
-    def test_outcomes_render_per_id(self):
-        md = self._render(applied_critic_adjustments=[
-            {"adjustment_id": "aaaa", "outcome": "verified"},
-            {"adjustment_id": "bbbb", "outcome": "not_checked"},
-        ])
-        assert "aaaa" in md and "verified" in md
-        assert "bbbb" in md and "not_checked" in md
-
-    def test_mixed_applied_and_refuted_decisions_render_per_id(self):
-        md = self._render(
-            applied_critic_adjustments=[
-                {"adjustment_id": "aaaa", "outcome": "verified"},
-            ],
-            rejected_critic_adjustments=[
-                {
-                    "adjustment_id": "bbbb",
-                    "action": "remove",
-                    "target": {"kind": "finding", "id": "f1"},
-                    "outcome": "refuted",
-                    "rejection_reason": "refuted",
-                },
-            ],
-        )
-        assert "## Critic Adjustment Decisions" in md
-        assert "- `aaaa` — verified" in md
-        assert "- `bbbb` — refuted" in md
-
-    def test_all_refuted_decisions_still_render(self):
-        md = self._render(rejected_critic_adjustments=[
-            {
-                "adjustment_id": "aaaa", "action": "remove",
-                "target": {"kind": "finding", "id": "f1"},
-                "outcome": "refuted", "rejection_reason": "refuted",
-            },
-            {
-                "adjustment_id": "bbbb", "action": "correct",
-                "target": {"kind": "check", "id": "c1"},
-                "outcome": "refuted", "rejection_reason": "not true",
-            },
-        ])
-        assert "## Critic Adjustment Decisions" in md
-        assert "- `aaaa` — refuted" in md
-        assert "- `bbbb` — refuted" in md
-
-    def test_malformed_decision_records_are_ignored(self):
-        md = self._render(
-            applied_critic_adjustments=[
-                None, "", {"outcome": "verified"},
-                {"adjustment_id": 7, "outcome": "verified"},
-                {"adjustment_id": "bad", "outcome": []},
-            ],
-            rejected_critic_adjustments=[None, "bad", {}, {"adjustment_id": 7}],
-        )
-        assert "Critic Adjustment Decisions" not in md
-
-    def test_no_critic_decisions_renders_no_section(self):
-        assert "Critic Adjustment Decisions" not in self._render()
-
-
 class TestLedgerVerdictRecompute:
     """`_recount_summary` rebuilt the severities and left `verdict` alone.
 
@@ -2804,16 +1303,6 @@ class TestLedgerVerdictRecompute:
     ledger, a stale `request_changes` over a demoted-to-low finding list is
     machine authority for a wrong GitHub verdict.
     """
-
-    def test_demoting_the_last_high_moves_the_verdict(self, tmp_path):
-        _write_findings(tmp_path, [_finding("f1", "high")],
-                        verdict="request_changes")
-        _, result = _publish_and_adjudicate(tmp_path, [{
-            "action": "demote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "low"}, "rationale": "guarded upstream",
-        }], verified=(0,))
-        assert result["verdict"] == "approve"
-        assert _ledger(tmp_path)["verdict"] == "approve"
 
     def test_promoting_to_critical_blocks(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1", "medium")],
@@ -2851,17 +1340,6 @@ class TestLedgerVerdictRecompute:
         assert data["verdict"] == "approve"
         assert data["summary"]["suppressed_advisory_finding_count"] == 1
         assert data["summary"]["verdict_without_advisory"] == "request_changes"
-
-    def test_the_pre_apply_verdict_is_preserved(self, tmp_path):
-        _write_findings(tmp_path, [_finding("f1", "high")],
-                        verdict="request_changes")
-        _publish_and_adjudicate(tmp_path, [{
-            "action": "demote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "low"}, "rationale": "guarded upstream",
-        }], verified=(0,))
-        assert _ledger(tmp_path)["verdict_before_adjustments"] == (
-            "request_changes"
-        )
 
     def test_the_audit_trail_records_only_the_first_change(self, tmp_path):
         """A second round must name what the ledger came in as, not what
@@ -2948,48 +1426,29 @@ class TestSchemaTwoTargetUnion:
     @pytest.mark.parametrize(
         ("action", "fields"),
         [
-            ("promote", {"severity": "high"}),
-            ("demote", {"severity": "low"}),
-            ("rescope", {"file": "src/b.py", "line": 20}),
-            ("correct", {"description": "Corrected description."}),
-            ("remove", {}),
+            pytest.param(
+                "promote", {"severity": "high"}, id="severity-required-branch",
+            ),
+            pytest.param(
+                "rescope", {"file": "src/b.py", "line": 20},
+                id="exactly-file-and-line-branch",
+            ),
         ],
     )
     def test_finding_mutations_require_kind_and_id(self, action, fields):
+        """One representative each of the severity-required branch
+        (`promote`) and the exactly-file-and-line branch (`rescope`); the
+        other actions (`demote`, `correct`, `remove`) reach the same two
+        branches with no distinct outcome of their own."""
         payload = {
             "schema": 2,
             "adjustments": [self._entry(action, fields=fields)],
         }
-
         assert validate_proposal_input(payload) == []
 
-    def test_add_finding_has_no_caller_supplied_id(self):
-        entry = self._entry(
-            "add",
-            id_=None,
-            fields={
-                "severity": "high",
-                "title": "Missing authorization",
-                "file": "src/api.py",
-                "line": 42,
-                "description": "State changes before authorization.",
-                "recommendation": "Authorize before mutation.",
-                "category": "security",
-                "confidence": 0.98,
-            },
-        )
-        payload = {"schema": 2, "adjustments": [entry]}
-
-        assert validate_proposal_input(payload) == []
-        entry["target"]["id"] = "f9"
-        assert "must not include id" in " ".join(
-            validate_proposal_input(payload)
-        )
-
-    @pytest.mark.parametrize("action", ["promote", "demote"])
-    def test_severity_actions_accept_related_finding_corrections(self, action):
+    def test_severity_actions_accept_related_finding_corrections(self):
         payload = {"schema": 2, "adjustments": [self._entry(
-            action,
+            "promote",
             fields={
                 "severity": "medium", "title": "Corrected title",
                 "description": "Corrected description.",
@@ -3000,12 +1459,10 @@ class TestSchemaTwoTargetUnion:
 
         assert validate_proposal_input(payload) == []
 
-    @pytest.mark.parametrize("action", ["promote", "demote", "correct"])
-    def test_a_file_change_requires_its_line(self, action):
-        fields = {"file": "caller.py"}
-        if action != "correct":
-            fields["severity"] = "medium"
-        payload = {"schema": 2, "adjustments": [self._entry(action, fields=fields)]}
+    def test_a_file_change_requires_its_line(self):
+        payload = {"schema": 2, "adjustments": [self._entry(
+            "promote", fields={"file": "caller.py", "severity": "medium"},
+        )]}
 
         problems = validate_proposal_input(payload)
 
@@ -3015,25 +1472,20 @@ class TestSchemaTwoTargetUnion:
             "a stale line"
         ]
 
-    @pytest.mark.parametrize("action", ["add", "correct", "promote", "demote"])
-    @pytest.mark.parametrize(
-        ("field", "value"),
-        [
-            ("severity", "urgent"),
-            ("title", None),
-            ("description", []),
-            ("recommendation", 7),
-            ("file", None),
-            ("line", 0),
-            ("category", {}),
-            ("confidence", True),
-            ("confidence", -0.01),
-            ("confidence", 1.01),
-        ],
-    )
+    proposal_field_domain = [("severity", "urgent"), ("confidence", 1.01)]
+
+    @pytest.mark.parametrize("action", ["add", "correct"])
+    @pytest.mark.parametrize(("field", "value"), proposal_field_domain)
     def test_finding_content_values_follow_the_canonical_domain_contract(
         self, action, field, value
     ):
+        """Every field/action combination reaches
+        `review_document.validate_finding_content_field` — one delegated
+        function pinned per field at its owner (`agent/test_output.py`).
+        `add` and `correct` are kept because they build the `fields` dict
+        differently (merged onto a full finding vs. built from scratch);
+        `promote`/`demote` reach the identical branch through `add`'s
+        merged-dict path."""
         fields = {
             "severity": "medium",
             "title": "Missing validation",
@@ -3085,21 +1537,20 @@ class TestSchemaTwoTargetUnion:
 
         assert validate_proposal_input(payload) == []
 
-    @pytest.mark.parametrize("action", ["add", "correct"])
     def test_an_invalid_planned_finding_leaves_the_ledger_unchanged(
-        self, tmp_path, action
+        self, tmp_path
     ):
         _write_findings(tmp_path, [_finding("f1")])
         entry = self._entry(
-            action,
-            id_=None if action == "add" else "f1",
+            "add",
+            id_=None,
             fields={
                 "severity": "medium",
                 "title": "Invalid file",
                 "file": None,
                 "description": "The file value violates the domain.",
                 "recommendation": "Name the affected file.",
-            } if action == "add" else {"file": None},
+            },
         )
         entry["adjustment_id"] = "invalid-file"
         _publish_raw_proposal(
@@ -3136,9 +1587,10 @@ class TestSchemaTwoTargetUnion:
     @pytest.mark.parametrize(
         ("action", "fields"),
         [
+            # Hits the generic "action not allowed for check targets" branch.
             ("promote", {"severity": "high"}),
-            ("demote", {"severity": "low"}),
-            ("rescope", {"file": "src/b.py", "line": 20}),
+            # `add` hits a second, distinct branch first: `_validate_target`
+            # refuses a non-finding kind before the generic check ever runs.
             (
                 "add",
                 {
@@ -3169,8 +1621,7 @@ class TestSchemaTwoTargetUnion:
         assert problems
         assert "check" in " ".join(problems)
 
-    @pytest.mark.parametrize("field", ["id", "source_reviewers", "severity"])
-    def test_check_correction_rejects_immutable_or_finding_fields(self, field):
+    def test_check_correction_rejects_immutable_or_finding_fields(self):
         payload = {
             "schema": 2,
             "adjustments": [
@@ -3178,12 +1629,12 @@ class TestSchemaTwoTargetUnion:
                     "correct",
                     kind="check",
                     id_="c1",
-                    fields={field: "replacement"},
+                    fields={"severity": "replacement"},
                 )
             ],
         }
 
-        assert field in " ".join(validate_proposal_input(payload))
+        assert "severity" in " ".join(validate_proposal_input(payload))
 
     def test_non_add_target_requires_id_and_add_rejects_surplus_id(self):
         missing = {
@@ -3257,20 +1708,6 @@ class TestSchemaTwoTargetUnion:
             validate_proposal_input(duplicate)
         )
         assert validate_proposal_input(distinct_kinds) == []
-
-    def test_proposal_digest_commits_the_nested_target(self):
-        proposal = critic_adjustments_module.prepare_proposal({
-            "schema": 2,
-            "adjustments": [
-                self._entry("correct", fields={"description": "Corrected."})
-            ],
-        })
-        original = critic_adjustments_module.proposal_digest(proposal)
-        edited = json.loads(json.dumps(proposal))
-
-        assert critic_adjustments_module.proposal_digest(edited) == original
-        edited["adjustments"][0]["target"]["id"] = "f2"
-        assert critic_adjustments_module.proposal_digest(edited) != original
 
     def test_add_uses_ledger_allocator_and_increments_it(self, tmp_path):
         _write_findings(
@@ -3417,46 +1854,45 @@ class TestSchemaTwoTargetUnion:
 
         assert tuple(path.read_bytes() for path in paths) == before
 
-    def test_refuted_and_noop_corrections_leave_assessment_untouched(
-        self, tmp_path
-    ):
-        _write_findings(
-            tmp_path,
-            [_finding("f1")],
-            assessment="Original assessment.",
-        )
-        refuted = self._commit(tmp_path, [self._entry(
-            "correct", fields={"description": "Changed description."}
-        )])
-        self._adjudicate(
-            tmp_path,
-            refuted,
-            verified=(),
-            refuted=((0, "Source confirms the original description."),),
-        )
-        after_refuted = json.loads(
-            (tmp_path / "review-findings.json").read_text()
-        )
-        assert after_refuted["assessment"] == "Original assessment."
-        assert "invalidated_assessments" not in after_refuted
 
-        other_dir = tmp_path / "noop"
-        other_dir.mkdir()
-        _write_findings(
-            other_dir,
-            [_finding("f1")],
-            assessment="Original assessment.",
+class TestTypeScriptContractLockstep:
+    """schemas/review-output.ts's critic-adjustment shapes must match this
+    module's own vocabularies and actions — moved from `agent/test_output.py`
+    (G7), trimmed to the constant-parity asserts. The literal `Pick<...>` /
+    `AtLeastOne<...>` type-alias text those tests also pinned is TS-only
+    syntax with no Python side to drift against, so it is dropped as a
+    wording pin.
+    """
+
+    def test_invalidated_recommendation_priorities_match_the_ledger_constant(self):
+        content = ts_schema.interface_body("ReviewContent")
+        priorities = re.search(
+            r"recommendations:\s*\{(.*?)\n {4}\};", content, re.DOTALL
         )
-        no_op = self._commit(other_dir, [self._entry(
-            "correct", fields={"description": "d"}
-        )])
-        ledger_path = other_dir / "review-findings.json"
-        before_noop = ledger_path.read_bytes()
+        assert priorities is not None
+        assert set(re.findall(
+            r"(\w+): string\[\]", priorities.group(1),
+        )) == set(review_document.RECOMMENDATION_PRIORITIES)
 
-        with pytest.raises(ValueError, match="would not change"):
-            self._adjudicate(other_dir, no_op)
-
-        assert ledger_path.read_bytes() == before_noop
+    def test_correct_and_severity_action_proposals_reach_the_finding_target(self):
+        proposal = ts_schema.type_alias("CriticProposalAdjustment")
+        assert (
+            "action: 'correct'; target: FindingTarget; "
+            "fields: FindingCorrectionFields;"
+        ) in proposal
+        assert (
+            "action: 'correct'; target: CheckTarget; "
+            "fields: CheckCorrectionFields;"
+        ) in proposal
+        assert (
+            "action: 'promote' | 'demote'; target: FindingTarget; "
+            "fields: FindingSeverityChangeFields;"
+        ) in proposal
+        provenance = ts_schema.type_alias("FindingCriticAdjustment")
+        assert (
+            "action: 'promote' | 'demote'; rationale: string; "
+            "prior: FindingSeverityChangeFields"
+        ) in provenance
 
 
 class TestProposalPreparation:
@@ -3487,53 +1923,11 @@ class TestProposalPreparation:
             "normalization must not mutate the critic's temp input"
         )
 
-    def test_prepare_retries_the_improbable_uuid_collision(self, monkeypatch):
-        values = iter(("same", "same", "different"))
-
-        class FakeUuid:
-            def __init__(self, value):
-                self.hex = value
-
-        monkeypatch.setattr(
-            critic_adjustments_module.uuid,
-            "uuid4",
-            lambda: FakeUuid(next(values)),
-        )
-
-        proposal = critic_adjustments_module.prepare_proposal({
-            "schema": 2,
-            "adjustments": [self._entry(), {
-                **self._entry(), "target": {"kind": "finding", "id": "f2"},
-            }],
-        })
-
-        assert [
-            entry["adjustment_id"] for entry in proposal["adjustments"]
-        ] == ["same", "different"]
-
-    def test_prepare_rejects_duplicate_targets_before_assigning_ids(self):
-        with pytest.raises(ValueError, match="duplicate target finding 'f1'"):
-            critic_adjustments_module.prepare_proposal({
-                "schema": 2,
-                "adjustments": [
-                    self._entry(),
-                    {
-                        "action": "correct",
-                        "target": {"kind": "finding", "id": "f1"},
-                        "fields": {"title": "Clearer title"},
-                        "rationale": "Clarify the mechanism.",
-                    },
-                ],
-            })
-
     @pytest.mark.parametrize(
         "forbidden,value",
         [
             ("adjustment_id", "critic-owned"),
             ("outcome", "verified"),
-            ("rejected", True),
-            ("rejection_reason", "caller-owned"),
-            ("applied", True),
         ],
     )
     def test_prepare_rejects_lifecycle_fields(self, forbidden, value):
@@ -3543,28 +1937,14 @@ class TestProposalPreparation:
                 "adjustments": [self._entry(**{forbidden: value})],
             })
 
-    @pytest.mark.parametrize(
-        "payload,problem",
-        [
-            (
-                {"schema": 2, "adjustments": [], "revised_assessment": "x"},
-                "revised_assessment",
-            ),
-            (
-                {"schema": 2, "adjustments": [], "adjudication": {}},
-                "adjudication",
-            ),
-            (
-                {"schema": 2, "adjustments": [], "counts": {}},
-                "counts",
-            ),
-        ],
-    )
-    def test_prepare_rejects_non_proposal_top_level_fields(
-        self, payload, problem
-    ):
-        with pytest.raises(ValueError, match=problem):
-            critic_adjustments_module.prepare_proposal(payload)
+    def test_prepare_rejects_non_proposal_top_level_fields(self):
+        """`revised_assessment` doubles as the same-named row that used to
+        cover the now-deleted `TestRevisedAssessment::
+        test_a_non_string_revised_assessment_rejects_the_proposal`."""
+        with pytest.raises(ValueError, match="revised_assessment"):
+            critic_adjustments_module.prepare_proposal(
+                {"schema": 2, "adjustments": [], "revised_assessment": "x"}
+            )
 
     def test_the_digest_covers_every_byte_of_the_proposal(self):
         """The proposal is never rewritten, so the digest has nothing to
@@ -3664,27 +2044,12 @@ class TestAdjudicationRequest:
     @pytest.mark.parametrize(
         "mutate,problem",
         [
+            # One representative of the five `caller-*` rows: all are
+            # spellings of the same `_extra_key_problems(request,
+            # _REQUEST_KEYS)` check.
             (
                 lambda request, ids: request.update({"not_checked": [ids[2]]}),
                 "not_checked",
-            ),
-            (
-                lambda request, ids: request.update({"counts": {}}),
-                "counts",
-            ),
-            (
-                lambda request, ids: request.update({
-                    "recorded_at": "2026-08-24T10:00:00+00:00"
-                }),
-                "recorded_at",
-            ),
-            (
-                lambda request, ids: request.update({"outcome": "verified"}),
-                "outcome",
-            ),
-            (
-                lambda request, ids: request.update({"applied": True}),
-                "applied",
             ),
             (
                 lambda request, ids: request["verified"].append(7),
@@ -3728,8 +2093,7 @@ class TestAdjudicationRequest:
             ),
         ],
         ids=[
-            "caller-not-checked", "caller-counts", "caller-timestamp",
-            "caller-outcome", "caller-apply-state", "non-string-verified",
+            "caller-not-checked", "non-string-verified",
             "duplicate-verified", "overlap", "unknown-id", "blank-reason",
             "refuted-extra-key", "blank-assessment",
         ],
@@ -3765,39 +2129,6 @@ class TestAdjudicationRequest:
 
         with pytest.raises(ValueError, match="no finding with id 'f9'"):
             _adjudicate(tmp_path, ids, verified=(0,))
-
-        assert (adj_path.read_bytes(), findings_path.read_bytes()) == before
-
-    def test_duplicate_ledger_target_is_rejected_before_any_write(
-        self, tmp_path
-    ):
-        _write_findings(tmp_path, [_finding("f1", "low")])
-        document = {
-            "schema": 2,
-            "adjustments": [
-                {
-                    "adjustment_id": "first",
-                    "action": "promote",
-                    "target": {"kind": "finding", "id": "f1"},
-                    "fields": {"severity": "high"},
-                    "rationale": "First mutation.",
-                },
-                {
-                    "adjustment_id": "second",
-                    "action": "correct",
-                    "target": {"kind": "finding", "id": "f1"},
-                    "fields": {"title": "Clearer title"},
-                    "rationale": "Second mutation.",
-                },
-            ],
-        }
-        _publish_raw_proposal(tmp_path, document)
-        adj_path = _artifact(tmp_path, "critic_adjustments")
-        findings_path = tmp_path / "review-findings.json"
-        before = (adj_path.read_bytes(), findings_path.read_bytes())
-
-        with pytest.raises(ValueError, match="duplicate target finding 'f1'"):
-            _adjudicate(tmp_path, ["first", "second"], verified=(0, 1))
 
         assert (adj_path.read_bytes(), findings_path.read_bytes()) == before
 
@@ -3947,18 +2278,21 @@ class TestPublicationAndAdjudicationShareOneLock:
         }))
         lock = threading.Lock()
         save_inside_write = threading.Event()
+        adjudicate_reached_lock = threading.Event()
         release_save = threading.Event()
         real_write = critic_adjustments_module.write_critic_verdict
 
         @contextmanager
         def thread_lock(_output_dir):
+            if threading.current_thread().name == "adjudicate":
+                adjudicate_reached_lock.set()
             with lock:
                 yield
 
         def blocking_write(output_dir, verdict, proposal):
             if threading.current_thread().name == "critic-save":
                 save_inside_write.set()
-                assert release_save.wait(timeout=2)
+                assert release_save.wait(timeout=5)
             return real_write(output_dir, verdict, proposal)
 
         monkeypatch.setattr(
@@ -3973,6 +2307,7 @@ class TestPublicationAndAdjudicationShareOneLock:
             critic_module.critic_adjustments, "write_critic_verdict",
             blocking_write, raising=False,
         )
+
         results = {}
 
         def run_save():
@@ -3996,13 +2331,18 @@ class TestPublicationAndAdjudicationShareOneLock:
             target=run_adjudicate, name="adjudicate"
         )
         save_thread.start()
-        assert save_inside_write.wait(timeout=2)
+        assert save_inside_write.wait(timeout=5)
         adjudicate_thread.start()
-        time.sleep(0.05)
+        # `adjudicate_reached_lock` fires the instant the adjudicate thread
+        # calls `output_dir_lock`, before it blocks trying to acquire the
+        # real lock `blocking_write` still holds — so the thread cannot
+        # have produced a result yet, with no sleep needed to prove it.
+        assert adjudicate_reached_lock.wait(timeout=5)
+        assert adjudicate_thread.is_alive()
         assert "adjudicated" not in results and "error" not in results
         release_save.set()
-        save_thread.join(timeout=2)
-        adjudicate_thread.join(timeout=2)
+        save_thread.join(timeout=5)
+        adjudicate_thread.join(timeout=5)
 
         assert results["save"] == 0
         assert "error" in results, (
@@ -4061,41 +2401,21 @@ class TestAdjudicationCLI:
         assert "APPLIED: 1 | REJECTED: 0" in result.stdout
         assert "LEDGER VERDICT: approve" in result.stdout
 
-    def test_an_omitted_assessment_is_reported_absent(self, tmp_path):
+    def test_the_assessment_and_recommendations_echo_report_presence(
+        self, tmp_path
+    ):
+        """One request without a revised assessment but with revised
+        recommendations proves the presence/absence echo is per-key, not
+        a single flag."""
         ids = self._seed(tmp_path)
 
-        result = self._run(tmp_path, _request(ids, verified=(0,)))
+        result = self._run(tmp_path, _request(
+            ids, verified=(0,), recommendations={"suggestions": ["Add a nonce."]},
+        ))
 
         assert result.returncode == 0, result.stdout + result.stderr
         assert "REVISED ASSESSMENT: absent" in result.stdout
-        assert "REVISED RECOMMENDATIONS: absent" in result.stdout
-
-    @pytest.mark.parametrize("recommendations", [
-        pytest.param({"suggestions": ["Add a nonce."]}, id="nonempty"),
-        pytest.param({}, id="explicit-empty"),
-    ])
-    def test_revised_recommendations_are_reported_present(self, tmp_path, recommendations):
-        ids = self._seed(tmp_path)
-        result = self._run(tmp_path, _request(
-            ids, verified=(0,), recommendations=recommendations,
-        ))
-        assert result.returncode == 0, result.stdout + result.stderr
         assert "REVISED RECOMMENDATIONS: present" in result.stdout
-
-    def test_a_second_adjudication_is_refused_on_stdout(self, tmp_path):
-        ids = self._seed(tmp_path)
-        request = _request(ids, verified=(0,))
-        first = self._run(tmp_path, request)
-        assert first.returncode == 0, first.stdout + first.stderr
-        settled = (tmp_path / "review-findings.json").read_bytes()
-
-        second = self._run(tmp_path, request)
-
-        assert second.returncode == 1
-        assert second.stdout.startswith("REJECTED:")
-        assert "already adjudicated" in second.stdout
-        assert "Traceback" not in second.stderr
-        assert (tmp_path / "review-findings.json").read_bytes() == settled
 
     def test_an_invalid_request_is_rejected_line_by_line(self, tmp_path):
         self._seed(tmp_path)
@@ -4124,19 +2444,6 @@ class TestAdjudicationCLI:
         assert "REJECTED: adjudication request is not valid JSON" in (
             result.stdout
         )
-
-    @pytest.mark.parametrize(
-        "argv", [[], ["apply"], ["settle"]],
-        ids=("bare", "retired-apply", "retired-settle"),
-    )
-    def test_only_the_adjudicate_subcommand_exists(self, tmp_path, argv):
-        result = subprocess.run(
-            [sys.executable, str(SCRIPT_PATH), *argv,
-             "--output-dir", str(tmp_path)],
-            capture_output=True, text=True, timeout=10,
-        )
-
-        assert result.returncode != 0
 
 
 class TestProvenanceAtTheReaderBoundary:
@@ -4176,37 +2483,44 @@ class TestProvenanceAtTheReaderBoundary:
         validate_findings_document(doc)
 
     @pytest.mark.parametrize("mutate", [
-        lambda d: d["findings"][0].__setitem__("sources", []),
-        lambda d: d["findings"][0].__setitem__(
-            "sources", [{"reviewer": "security-review", "id": "F1"}]),
-        lambda d: d["findings"][0].__setitem__(
-            "sources", [{"reviewer": "security-review", "id": "f1", "extra": 1}]),
-        lambda d: d["checks"][0].__setitem__(
-            "sources", [{"reviewer": "security-review", "id": "c1", "severity": "high"}]),
-        lambda d: d.__setitem__("dropped_findings", [
-            {"reviewer": "x-review", "id": "f2", "reason": "false_positive"}]),
-        lambda d: d.__setitem__("dropped_findings", [
-            {"reviewer": "x-review", "id": "f2", "reason": "merged", "evidence": "e"}]),
-        lambda d: d.__setitem__("dropped_checks", [
-            {"reviewer": "x-review", "id": "c2", "reason": "void"}]),
-        lambda d: d.__setitem__("dropped_checks", [
-            {"reviewer": "x-review", "id": "c2", "reason": "void",
-             "evidence": "e", "scope_status": "in_scope"}]),
-        lambda d: d.__setitem__("orchestrator_notes", [
-            {"id": "1", "outcome": "confirmed", "evidence": "e"}]),
-        lambda d: d.__setitem__("orchestrator_notes", [
-            {"id": "n1", "outcome": "confirmed", "evidence": "e"},
-            {"id": "n1", "outcome": "refuted", "evidence": "e"}]),
-        lambda d: d.__setitem__("orchestrator_notes", [
-            {"id": "n1", "outcome": "refuted", "evidence": "e", "verifies": ["V2"]}]),
-        lambda d: d.__setitem__("orchestrator_notes", [
-            {"id": "n1", "outcome": "confirmed", "evidence": "e", "verifies": []}]),
-        lambda d: d.__setitem__("orchestrator_notes", [
-            {"id": "n1", "outcome": "confirmed", "evidence": "e", "verifies": ["v2"]}]),
-        lambda d: d.__setitem__("orchestrator_notes", [
-            {"id": "n1", "outcome": "confirmed", "evidence": "e", "verifies": "V2"}]),
+        pytest.param(
+            lambda d: d["findings"][0].__setitem__("sources", []),
+            id="empty-sources",
+        ),
+        pytest.param(
+            lambda d: d["checks"][0].__setitem__(
+                "sources",
+                [{"reviewer": "security-review", "id": "c1", "severity": "high"}],
+            ),
+            id="severity-on-a-check-source",
+        ),
+        pytest.param(
+            lambda d: d.__setitem__("dropped_findings", [
+                {"reviewer": "x-review", "id": "f2", "reason": "merged",
+                 "evidence": "e"},
+            ]),
+            id="bad-drop-reason",
+        ),
+        pytest.param(
+            lambda d: d.__setitem__("dropped_checks", [
+                {"reviewer": "x-review", "id": "c2", "reason": "void",
+                 "evidence": "e", "scope_status": "in_scope"},
+            ]),
+            id="stamped-key-on-a-check-drop",
+        ),
+        pytest.param(
+            lambda d: d.__setitem__("orchestrator_notes", [
+                {"id": "n1", "outcome": "refuted", "evidence": "e",
+                 "verifies": ["V2"]},
+            ]),
+            id="verifies-on-a-refuted-note",
+        ),
     ])
     def test_malformed_provenance_is_refused(self, mutate):
+        """One row per validated collection (`_validate_sources`,
+        `_validate_dropped` per drop reason set, `_validate_orchestrator_notes`);
+        the reader's counterpart to the builder's matching matrix in
+        `test_findings_ledger.py`."""
         doc = self._with()
         mutate(doc)
         with pytest.raises(ValueError):

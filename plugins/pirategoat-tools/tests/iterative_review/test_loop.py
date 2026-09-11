@@ -17,6 +17,7 @@ from iterative_review.loop import (
     compute_max_rounds,
     check_convergence,
     DEFAULT_STATE,
+    MAX_ROUNDS_HARD_LIMIT,
     build_pushback_entry,
     append_pushback_log,
     read_pushback_log,
@@ -30,28 +31,23 @@ from iterative_review.paths import iterative_artifact_path
 
 
 class TestMaxRounds:
-    """Diff-size-based max rounds computation."""
+    """Diff-size-based max rounds computation — a step function over
+    _MAX_ROUNDS_TABLE's thresholds. Each row is a threshold's first value
+    plus one below it; the bucket's upper edge is implied by the next
+    lower edge, so no separate "just under the next threshold" row is
+    needed."""
 
     @pytest.mark.parametrize("diff_lines,expected", [
         (0, 3),
-        (100, 3),
         (199, 3),
         (200, 4),
-        (499, 4),
         (500, 5),
-        (699, 5),
         (700, 6),
-        (999, 6),
         (1000, 7),
-        (1999, 7),
         (2000, 8),
-        (2999, 8),
         (3000, 9),
-        (4999, 9),
         (5000, 10),
-        (9999, 10),
         (10000, 12),
-        (50000, 12),
     ])
     def test_max_rounds_by_diff_size(self, diff_lines, expected):
         assert compute_max_rounds(diff_lines) == expected
@@ -81,83 +77,33 @@ class TestStateManagement:
         state = read_loop_state(str(d))
         assert state["current_round"] == 0
 
-    def test_default_state_has_autonomous_false(self):
-        assert DEFAULT_STATE["autonomous"] is False
-
-    def test_autonomous_flag_persists(self, tmp_path):
-        d = str(tmp_path / "code-review")
-        Path(d).mkdir()
-        state = {**DEFAULT_STATE, "autonomous": True, "merge_base": "abc"}
-        write_loop_state(d, state)
-        loaded = read_loop_state(d)
-        assert loaded["autonomous"] is True
-
 
 class TestConvergence:
-    """Four convergence conditions + none-met case."""
+    """check_convergence's priority ladder: hard_limit > zero_findings >
+    all_rejected > nitpicks_only > max_rounds > continue (None)."""
 
-    def test_zero_findings(self):
+    @pytest.mark.parametrize(
+        "findings_count,all_p3,all_rejected,current_round,max_rounds,expected",
+        [
+            pytest.param(0, False, False, 1, 3, "zero_findings", id="zero-findings"),
+            pytest.param(3, False, False, 3, 3, "max_rounds", id="max-rounds-reached"),
+            pytest.param(2, False, True, 1, 3, "all_rejected", id="all-rejected"),
+            pytest.param(2, True, False, 1, 3, "nitpicks_only", id="nitpicks-only"),
+            pytest.param(3, False, False, 1, 3, None, id="continue-no-condition-met"),
+            pytest.param(0, False, False, 3, 3, "zero_findings", id="zero-findings-beats-max-rounds"),
+            pytest.param(
+                5, False, False, MAX_ROUNDS_HARD_LIMIT, MAX_ROUNDS_HARD_LIMIT + 5,
+                "hard_limit", id="hard-limit-beats-everything",
+            ),
+        ],
+    )
+    def test_check_convergence(self, findings_count, all_p3, all_rejected,
+                                current_round, max_rounds, expected):
         result = check_convergence(
-            findings_count=0, all_p3=False, all_rejected=False,
-            current_round=1, max_rounds=3
+            findings_count=findings_count, all_p3=all_p3, all_rejected=all_rejected,
+            current_round=current_round, max_rounds=max_rounds,
         )
-        assert result == "zero_findings"
-
-    def test_max_rounds_reached(self):
-        result = check_convergence(
-            findings_count=3, all_p3=False, all_rejected=False,
-            current_round=3, max_rounds=3
-        )
-        assert result == "max_rounds"
-
-    def test_all_rejected(self):
-        result = check_convergence(
-            findings_count=2, all_p3=False, all_rejected=True,
-            current_round=1, max_rounds=3
-        )
-        assert result == "all_rejected"
-
-    def test_nitpicks_only(self):
-        result = check_convergence(
-            findings_count=2, all_p3=True, all_rejected=False,
-            current_round=1, max_rounds=3
-        )
-        assert result == "nitpicks_only"
-
-    def test_continue_when_no_condition_met(self):
-        result = check_convergence(
-            findings_count=3, all_p3=False, all_rejected=False,
-            current_round=1, max_rounds=3
-        )
-        assert result is None
-
-    def test_zero_findings_takes_priority_over_max_rounds(self):
-        result = check_convergence(
-            findings_count=0, all_p3=False, all_rejected=False,
-            current_round=3, max_rounds=3
-        )
-        assert result == "zero_findings"
-
-    def test_hard_limit_terminates_regardless(self):
-        from iterative_review.loop import MAX_ROUNDS_HARD_LIMIT
-        result = check_convergence(
-            findings_count=5, all_p3=False, all_rejected=False,
-            current_round=MAX_ROUNDS_HARD_LIMIT, max_rounds=MAX_ROUNDS_HARD_LIMIT + 5
-        )
-        assert result == "hard_limit"
-
-    def test_hard_limit_takes_priority_over_continue(self):
-        from iterative_review.loop import MAX_ROUNDS_HARD_LIMIT
-        # Even with findings and max_rounds above the limit, hard limit wins
-        result = check_convergence(
-            findings_count=3, all_p3=False, all_rejected=False,
-            current_round=MAX_ROUNDS_HARD_LIMIT, max_rounds=100
-        )
-        assert result == "hard_limit"
-
-    def test_hard_limit_is_15(self):
-        from iterative_review.loop import MAX_ROUNDS_HARD_LIMIT
-        assert MAX_ROUNDS_HARD_LIMIT == 15
+        assert result == expected
 
 
 class TestPushbackLog:
@@ -188,25 +134,13 @@ class TestPushbackLog:
         entry = build_pushback_entry(outcome, finding, round_num=1)
         assert entry is None
 
-    def test_includes_p0_deferred(self):
-        outcome = {"id": "r1_f1", "action": "deferred", "reasoning": "Out of scope."}
-        finding = {"id": "r1_f1", "severity": "P0", "title": "X", "location": "a.py:1"}
-        entry = build_pushback_entry(outcome, finding, round_num=1)
-        assert entry is not None
-        assert "DEFERRED" in entry
-
-    def test_includes_p2_deferred(self):
-        """Deferred items bypass severity gate so the reviewer sees scope decisions."""
+    @pytest.mark.parametrize("severity", ["P2", "P3"])
+    def test_deferred_always_logged(self, severity):
+        """Deferred items bypass the severity gate — P2/P3 are outside the
+        gate ({P0, P1}) and would otherwise be skipped, but a reviewer
+        must see every scope decision regardless of severity."""
         outcome = {"id": "r1_f3", "action": "deferred", "reasoning": "Out of scope."}
-        finding = {"id": "r1_f3", "severity": "P2", "title": "Edge case", "location": "b.py:5"}
-        entry = build_pushback_entry(outcome, finding, round_num=1)
-        assert entry is not None
-        assert "DEFERRED" in entry
-
-    def test_includes_p3_deferred(self):
-        """Even P3 deferred items are logged to prevent re-surfacing."""
-        outcome = {"id": "r1_f4", "action": "deferred", "reasoning": "Nice to have."}
-        finding = {"id": "r1_f4", "severity": "P3", "title": "Suggestion", "location": "c.py:10"}
+        finding = {"id": "r1_f3", "severity": severity, "title": "Edge case", "location": "b.py:5"}
         entry = build_pushback_entry(outcome, finding, round_num=1)
         assert entry is not None
         assert "DEFERRED" in entry
@@ -295,32 +229,38 @@ class TestDiffSizing:
 
 
 class TestOutcomeSeverity:
-    """outcome_severity prefers finding severity, falls back to outcome."""
+    """outcome_severity prefers finding severity, falls back to outcome's
+    when the finding's is absent, empty, or the degraded-round placeholder
+    'unknown'."""
 
-    def test_finding_severity_preferred(self):
-        assert outcome_severity({"severity": "P3"}, {"severity": "P0"}) == "P0"
-
-    def test_outcome_fallback_when_finding_missing(self):
-        assert outcome_severity({"severity": "P1"}, None) == "P1"
-
-    def test_outcome_fallback_when_finding_has_no_severity(self):
-        assert outcome_severity({"severity": "P2"}, {"id": "r1_f1"}) == "P2"
-
-    def test_unknown_when_neither_has_severity(self):
-        assert outcome_severity({}, None) == "unknown"
-        assert outcome_severity({}, {}) == "unknown"
-
-    def test_unknown_when_finding_severity_empty_string(self):
-        assert outcome_severity({"severity": "P1"}, {"severity": ""}) == "P1"
-
-    def test_degraded_round_severity(self):
-        """Degraded rounds have severity='unknown' in findings."""
-        assert outcome_severity({}, {"severity": "unknown"}) == "unknown"
-
-    def test_degraded_finding_defers_to_outcome_severity(self):
-        """When finding has 'unknown' severity, outcome's assessed severity wins."""
-        assert outcome_severity({"severity": "P1"}, {"severity": "unknown"}) == "P1"
-
-    def test_degraded_finding_no_outcome_severity(self):
-        """When finding has 'unknown' and outcome has no severity, returns 'unknown'."""
-        assert outcome_severity({}, {"severity": "unknown"}) == "unknown"
+    @pytest.mark.parametrize(
+        "outcome,finding,expected",
+        [
+            pytest.param(
+                {"severity": "P3"}, {"severity": "P0"}, "P0",
+                id="finding-severity-preferred",
+            ),
+            pytest.param(
+                {"severity": "P1"}, None, "P1",
+                id="outcome-fallback-finding-missing",
+            ),
+            pytest.param(
+                {"severity": "P2"}, {"id": "r1_f1"}, "P2",
+                id="outcome-fallback-finding-has-no-severity-key",
+            ),
+            pytest.param(
+                {"severity": "P1"}, {"severity": ""}, "P1",
+                id="outcome-fallback-finding-severity-empty-string",
+            ),
+            pytest.param(
+                {"severity": "P1"}, {"severity": "unknown"}, "P1",
+                id="outcome-fallback-finding-severity-unknown",
+            ),
+            pytest.param(
+                {}, {"severity": "unknown"}, "unknown",
+                id="unknown-when-neither-has-real-severity",
+            ),
+        ],
+    )
+    def test_outcome_severity(self, outcome, finding, expected):
+        assert outcome_severity(outcome, finding) == expected

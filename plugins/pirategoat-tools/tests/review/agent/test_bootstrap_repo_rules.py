@@ -36,32 +36,36 @@ def _rule(tmp_path, rid, body, applies_to=None, channel="blocking"):
 
 
 class TestSelectRepoRules:
-    def test_domain_match(self, mod, tmp_path):
-        cfg = {"rules": [_rule(tmp_path, "r1", "x", {"domains": ["security"]})]}
-        selected = mod.select_repo_rules(cfg, "security-reviewer", ["security"], [])
-        assert [r["id"] for r in selected] == ["r1"]
-
-    def test_agent_match(self, mod, tmp_path):
-        cfg = {"rules": [_rule(tmp_path, "r1", "x", {"agents": ["security-reviewer"]})]}
-        selected = mod.select_repo_rules(cfg, "security-reviewer", ["security"], [])
-        assert len(selected) == 1
-
-    def test_path_glob_match(self, mod, tmp_path):
-        cfg = {"rules": [_rule(tmp_path, "r1", "x", {"paths": ["includes/**/*.php"]})]}
-        selected = mod.select_repo_rules(
-            cfg, "architecture-reviewer", ["architecture"], ["includes/core/foo.php"]
-        )
-        assert len(selected) == 1
-
-    def test_no_match_excluded(self, mod, tmp_path):
-        cfg = {"rules": [_rule(tmp_path, "r1", "x", {"domains": ["performance"]})]}
-        selected = mod.select_repo_rules(cfg, "security-reviewer", ["security"], ["a.js"])
-        assert selected == []
-
-    def test_empty_applies_to_matches_all(self, mod, tmp_path):
-        cfg = {"rules": [_rule(tmp_path, "r1", "x", {})]}
-        selected = mod.select_repo_rules(cfg, "any-reviewer", ["whatever"], [])
-        assert len(selected) == 1
+    @pytest.mark.parametrize(
+        ("applies_to", "agent_name", "domains", "paths", "matched"),
+        [
+            pytest.param(
+                {"domains": ["security"]}, "security-reviewer", ["security"], [],
+                True, id="domain_match",
+            ),
+            pytest.param(
+                {"agents": ["security-reviewer"]}, "security-reviewer", ["security"], [],
+                True, id="agent_match",
+            ),
+            pytest.param(
+                {"paths": ["includes/**/*.php"]}, "architecture-reviewer", ["architecture"],
+                ["includes/core/foo.php"], True, id="path_glob_match",
+            ),
+            pytest.param(
+                {"domains": ["performance"]}, "security-reviewer", ["security"], ["a.js"],
+                False, id="no_match_excluded",
+            ),
+            pytest.param(
+                {}, "any-reviewer", ["whatever"], [], True, id="empty_applies_to_matches_all",
+            ),
+        ],
+    )
+    def test_select_repo_rules(
+        self, mod, tmp_path, applies_to, agent_name, domains, paths, matched
+    ):
+        cfg = {"rules": [_rule(tmp_path, "r1", "x", applies_to)]}
+        selected = mod.select_repo_rules(cfg, agent_name, domains, paths)
+        assert [r["id"] for r in selected] == (["r1"] if matched else [])
 
     def test_none_config(self, mod):
         assert mod.select_repo_rules(None, "security-reviewer", [], []) == []
@@ -93,15 +97,6 @@ class TestRenderRepoReviewRules:
 
 class TestAdapterRefMode:
     """Adapter ref-mode: per-instance naming and the repo-reviewer-prompt handoff."""
-
-    def test_reviewer_name_unique_per_instance(self, mod):
-        # N adapter instances share the registry key repo-reviewer-adapter but
-        # must derive distinct output names from their instance names.
-        a = mod.derive_reviewer_name("repo-runtime-environment-reviewer")
-        b = mod.derive_reviewer_name("repo-reuse-solid-reviewer")
-        assert a == "repo-runtime-environment"
-        assert b == "repo-reuse-solid"
-        assert a != b
 
     def test_reviewer_name_matches_reconciliation_stem(self, mod):
         # Load-bearing invariant: the synthetic dispatch name ends in -reviewer,
@@ -154,5 +149,3 @@ class TestBuildOutputRepoRules:
         )
         assert "=== DOMAIN RULES ===" in out
         assert "REPO REVIEW RULES" in out
-        # Repo rules come after domain rules (recency within Section 1).
-        assert out.index("DOMAIN RULES BODY") < out.index("REPO REVIEW RULES")

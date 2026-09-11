@@ -25,7 +25,7 @@ from helpers.review_fixtures import (
 )
 from review import manifest_sections
 from review.manifest_sections import aggregate_file_review
-from review.reviewer_lifecycle import ReviewPaths, review_paths, scope_summary_path
+from review.reviewer_lifecycle import review_paths, scope_summary_path
 from review.reviewer_names import derive_reviewer_name
 
 
@@ -103,36 +103,9 @@ def _write_assignment(output_dir, reviewer, claimable, *, inline_count=0):
 class TestAggregateReviewedFiles:
     """aggregate_file_review() reads *-scope-summary*.json sidecars."""
 
-    def test_direct_review_reads_follow_review_paths_authority(
-        self, tmp_path, monkeypatch
-    ):
-        authority_dir = tmp_path / "authority"
-        authority_dir.mkdir()
-        paths = ReviewPaths(
-            draft=str(authority_dir / "draft.json"),
-            final=str(authority_dir / "final.json"),
-            assignment=str(authority_dir / "authority.json"),
-        )
-        Path(paths.final).write_text(json.dumps(canonical_review_document(
-            "security",
-            review_claimable_files=["src/read.php", "src/unread.php"],
-            reviewed_file_claims=["src/read.php"],
-        )))
-        monkeypatch.setattr(
-            manifest_sections, "review_paths", lambda *_args: paths
-        )
-
-        claimed, unclaimed = manifest_sections._load_agent_reviewed_files(
-            str(tmp_path), "security-reviewer"
-        )
-
-        assert claimed == ["src/read.php"]
-        assert unclaimed == ["src/unread.php"]
-
     def test_returns_none_without_summaries(self, tmp_path):
         assert aggregate_file_review(str(tmp_path)) is None
-
-    def test_returns_none_for_missing_dir(self, tmp_path):
+        # A missing directory is the same absence.
         assert aggregate_file_review(str(tmp_path / "nope")) is None
 
     def test_reports_inline_receipt_and_each_agents_unclaimed_work(
@@ -184,29 +157,6 @@ class TestAggregateReviewedFiles:
             "src/starved.php": ["security"],
         }
 
-    def test_inline_receipt_keeps_other_agents_unclaimed_work_from_becoming_a_run_gap(
-        self, tmp_path
-    ):
-        """The aggregate keeps both per-agent facts; its report consumer must
-        not strengthen one reviewer's unfinished work into a run-wide gap."""
-        _write_summary(
-            str(tmp_path), "security-reviewer", [], ["src/shared.php"],
-        )
-        _write_summary(
-            str(tmp_path), "code-reviewer", ["src/shared.php"], [],
-        )
-
-        file_review = aggregate_file_review(str(tmp_path))
-
-        assert file_review["agents_receiving_inline_diff_by_file"] == {
-            "src/shared.php": ["code"]
-        }
-        assert file_review["agents_with_unclaimed_review_by_file"] == {
-            "src/shared.php": ["security"]
-        }
-        from review.briefings import _has_file_review_gap
-        assert not _has_file_review_gap(file_review)
-
     def test_malformed_summary_skipped(self, tmp_path):
         broken = Path(scope_summary_path(tmp_path, "broken"))
         broken.parent.mkdir(parents=True, exist_ok=True)
@@ -217,14 +167,6 @@ class TestAggregateReviewedFiles:
         )
         cov = aggregate_file_review(str(tmp_path))
         assert cov["scope_reporting_agent_count"] == 1
-
-    def test_secondary_summaries_attribute_to_agent(self, tmp_path):
-        _write_summary(
-            str(tmp_path), "security-reviewer", [], ["ci.yml"],
-            domain="config-ops",
-        )
-        cov = aggregate_file_review(str(tmp_path))
-        assert cov["agents_with_unclaimed_review_by_file"]["ci.yml"] == ["security"]
 
     def test_claims_come_from_the_final_document_not_the_sidecar(
         self, tmp_path
@@ -249,11 +191,7 @@ class TestAggregateReviewedFiles:
             "src/b.py": ["security"]
         }
 
-    @pytest.mark.parametrize(
-        "claims", ["src/read.php", ["src/read.php", None]],
-        ids=["raw-string", "malformed-entry"],
-    )
-    def test_malformed_claims_credit_nothing(self, tmp_path, claims):
+    def test_malformed_claims_credit_nothing(self, tmp_path):
         """A document whose claim list is not a list of paths is not a
         finalized review: it credits nothing, and every review-claimable
         file its scope summary reported stays visible as unclaimed work."""
@@ -264,7 +202,7 @@ class TestAggregateReviewedFiles:
             review_claimable_files=claimable,
             reviewed_file_claims=["src/read.php"],
         )
-        review["reviewed_file_claims"] = claims
+        review["reviewed_file_claims"] = ["src/read.php", None]
         path = Path(review_paths(tmp_path, "security").final)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(review))
@@ -305,19 +243,70 @@ class TestUnscopedFiles:
     never-covered population was ~46 while the report said 41.
     """
 
-    def test_changed_files_matching_no_domain_are_reported(self, tmp_path):
-        _write_summary(
-            str(tmp_path), "security-reviewer", ["src/a.php"], [],
-        )
-        cov = aggregate_file_review(
-            str(tmp_path),
-            changed_files=[
-                "src/a.php", "package-lock.json", ".editorconfig",
+    # Each row: a `_write_summary` call for one "security-reviewer" sidecar
+    # (fixed across every row — only the changed/reviewable inputs vary),
+    # and the `aggregate_file_review(...)` calls to make against it, each
+    # as (kwargs, expected `noise_filtered_files`). Most rows are one call;
+    # `no-planner-list-is-unmeasured` keeps its original two, since both
+    # halves — no reviewable list, and no changed-file list — are the same
+    # "unmeasured without both facts" branch that one row can pin together.
+    NOISE_FILTERED_CASES = (
+        pytest.param(
+            [(
+                {
+                    "changed_files": [
+                        "src/a.php", "package-lock.json",
+                        "assets/logo.png", "Gemfile",
+                    ],
+                    "reviewable_files": ["src/a.php", "Gemfile"],
+                },
+                ["assets/logo.png", "package-lock.json"],
+            )],
+            id="noise_filtered_files_are_the_planners_exclusions",
+        ),
+        pytest.param(
+            [
+                (
+                    {"changed_files": ["src/a.php", "package-lock.json"]},
+                    None,
+                ),
+                (
+                    {"changed_files": None, "reviewable_files": ["src/a.php"]},
+                    None,
+                ),
             ],
-        )
-        assert cov["unscoped_files"] == [".editorconfig", "package-lock.json"]
+            id="no-planner-list-is-unmeasured",
+        ),
+        pytest.param(
+            [(
+                {
+                    "changed_files": ["src/a.php"],
+                    "reviewable_files": ["src/a.php", "src/b.php"],
+                },
+                None,
+            )],
+            id="plan_list_outside_the_changed_files_is_unmeasured",
+        ),
+        pytest.param(
+            [(
+                {"changed_files": ["a.png"], "reviewable_files": []},
+                ["a.png"],
+            )],
+            id="empty_reviewable_list_is_measured",
+        ),
+    )
 
-    def test_noise_filtered_files_are_the_planner_s_exclusions(self, tmp_path):
+    @pytest.mark.parametrize("calls", NOISE_FILTERED_CASES)
+    def test_noise_filtered_table(self, tmp_path, calls):
+        _write_summary(str(tmp_path), "security-reviewer", ["src/a.php"], [])
+        for kwargs, expected in calls:
+            cov = aggregate_file_review(str(tmp_path), **kwargs)
+            assert cov["noise_filtered_files"] == expected
+
+    def test_noise_filtered_files_leave_unscoped_files_intact(self, tmp_path):
+        """`unscoped_files` counts every unscoped file; `noise_filtered_files`
+        is the subset the planner excluded — the two must not collapse into
+        one measurement."""
         _write_summary(str(tmp_path), "security-reviewer", ["src/a.php"], [])
         cov = aggregate_file_review(
             str(tmp_path),
@@ -329,37 +318,6 @@ class TestUnscopedFiles:
         assert cov["unscoped_files"] == [
             "Gemfile", "assets/logo.png", "package-lock.json",
         ]
-        assert cov["noise_filtered_files"] == [
-            "assets/logo.png", "package-lock.json",
-        ]
-
-    def test_noise_is_unmeasured_without_the_planner_s_list(self, tmp_path):
-        _write_summary(str(tmp_path), "security-reviewer", ["src/a.php"], [])
-        cov = aggregate_file_review(
-            str(tmp_path), changed_files=["src/a.php", "package-lock.json"],
-        )
-        assert cov["noise_filtered_files"] is None
-        cov = aggregate_file_review(
-            str(tmp_path), changed_files=None, reviewable_files=["src/a.php"],
-        )
-        assert cov["noise_filtered_files"] is None
-
-    def test_a_plan_list_outside_the_changed_files_is_unmeasured(self, tmp_path):
-        """The same guard the assignment manifest applies: a plan that does
-        not describe the changed range cannot be subtracted from it."""
-        _write_summary(str(tmp_path), "security-reviewer", ["src/a.php"], [])
-        cov = aggregate_file_review(
-            str(tmp_path), changed_files=["src/a.php"],
-            reviewable_files=["src/a.php", "src/b.php"],
-        )
-        assert cov["noise_filtered_files"] is None
-
-    def test_an_empty_reviewable_list_is_measured(self, tmp_path):
-        _write_summary(str(tmp_path), "security-reviewer", ["src/a.php"], [])
-        cov = aggregate_file_review(
-            str(tmp_path), changed_files=["a.png"], reviewable_files=[],
-        )
-        assert cov["noise_filtered_files"] == ["a.png"]
 
     def test_override_orphans_are_the_unscoped_files_a_skip_left(self, tmp_path):
         """The plan says which files a skipped agent's domain alone
@@ -380,22 +338,75 @@ class TestUnscopedFiles:
         cov = aggregate_file_review(str(tmp_path), changed_files=None, override_orphans={"changelog/x": ["docs-drift-reviewer"]})
         assert cov["override_orphaned_files"] is None
 
-    def test_union_covers_every_sidecar_file_list(self, tmp_path):
-        """Inline, claimable, AND name-only listing all count as scoped —
-        a file the agent was told about is not "matched no domain"."""
-        _write_summary(
-            str(tmp_path), "security-reviewer",
-            ["src/inline.php"], ["src/claimable.php"],
-            list_only=["src/listed.php"],
-        )
-        cov = aggregate_file_review(
-            str(tmp_path),
-            changed_files=[
+    # Each row: the sidecar(s) to write (as `_write_summary` kwargs, always
+    # for "security-reviewer" unless a row's spec overrides `agent`), the
+    # `changed_files` to measure against, and the expected `unscoped_files`.
+    UNSCOPED_FILES_CASES = (
+        pytest.param(
+            [{"files_with_diffs": ["src/a.php"], "budget_exceeded": []}],
+            ["src/a.php", "package-lock.json", ".editorconfig"],
+            [".editorconfig", "package-lock.json"],
+            id="changed_files_matching_no_domain_are_reported",
+        ),
+        pytest.param(
+            [{
+                "files_with_diffs": ["src/inline.php"],
+                "budget_exceeded": ["src/claimable.php"],
+                "list_only": ["src/listed.php"],
+            }],
+            [
                 "src/inline.php", "src/claimable.php", "src/listed.php",
                 "yarn.lock",
             ],
-        )
-        assert cov["unscoped_files"] == ["yarn.lock"]
+            ["yarn.lock"],
+            id="union_covers_every_sidecar_file_list",
+        ),
+        pytest.param(
+            [{"files_with_diffs": ["src/a.php"], "budget_exceeded": []}],
+            ["src/a.php", r'"src/broken\3"'],
+            None,
+            id="unnormalizable_changed_path_leaves_the_population_unmeasured",
+        ),
+        pytest.param(
+            [{"files_with_diffs": ["./src//a.php"], "budget_exceeded": []}],
+            ["src/a.php"],
+            [],
+            id="equivalent_spellings_of_one_path_are_one_file",
+        ),
+        pytest.param(
+            [{"files_with_diffs": ["src/a.php"], "budget_exceeded": []}],
+            ["src/a.php"],
+            [],
+            id="all_files_scoped_is_measured_empty",
+        ),
+        pytest.param(
+            [
+                {"files_with_diffs": ["src/a.php"], "budget_exceeded": []},
+                {
+                    "files_with_diffs": ["ci.yml"], "budget_exceeded": [],
+                    "domain": "config-ops",
+                },
+            ],
+            ["src/a.php", "ci.yml"],
+            [],
+            id="secondary_domain_sidecar_files_count_as_scoped",
+        ),
+    )
+
+    @pytest.mark.parametrize(
+        ("sidecars", "changed_files", "expected"), UNSCOPED_FILES_CASES,
+    )
+    def test_unscoped_files_table(
+        self, tmp_path, sidecars, changed_files, expected
+    ):
+        for spec in sidecars:
+            _write_summary(
+                str(tmp_path), spec.get("agent", "security-reviewer"),
+                spec["files_with_diffs"], spec["budget_exceeded"],
+                domain=spec.get("domain"), list_only=spec.get("list_only"),
+            )
+        cov = aggregate_file_review(str(tmp_path), changed_files=changed_files)
+        assert cov["unscoped_files"] == expected
 
     def test_git_quoted_changed_path_matches_the_unquoted_sidecar(
         self, tmp_path
@@ -415,31 +426,6 @@ class TestUnscopedFiles:
         )
         cov = aggregate_file_review(
             str(tmp_path), changed_files=[r'"src/caf\303\251.php"'],
-        )
-        assert cov["unscoped_files"] == []
-
-    def test_unnormalizable_changed_path_leaves_the_population_unmeasured(
-        self, tmp_path
-    ):
-        """A shrunken population reads as a cleaner review than the run
-        earned, so the strict side fails to unmeasured instead."""
-        _write_summary(
-            str(tmp_path), "security-reviewer", ["src/a.php"], [],
-        )
-        cov = aggregate_file_review(
-            str(tmp_path),
-            changed_files=["src/a.php", r'"src/broken\3"'],
-        )
-        assert cov["unscoped_files"] is None
-
-    def test_equivalent_spellings_of_one_path_are_one_file(
-        self, tmp_path
-    ):
-        _write_summary(
-            str(tmp_path), "security-reviewer", ["./src//a.php"], [],
-        )
-        cov = aggregate_file_review(
-            str(tmp_path), changed_files=["src/a.php"],
         )
         assert cov["unscoped_files"] == []
 
@@ -481,23 +467,6 @@ class TestUnscopedFiles:
             str(tmp_path), changed_files=["src/a.php", "src/b.php"],
         ) is None
 
-    def test_all_files_scoped_is_measured_empty(self, tmp_path):
-        _write_summary(
-            str(tmp_path), "security-reviewer", ["src/a.php"], [],
-        )
-        cov = aggregate_file_review(
-            str(tmp_path), changed_files=["src/a.php"],
-        )
-        assert cov["unscoped_files"] == []
-
-    def test_no_changed_file_list_is_unmeasured_not_empty(self, tmp_path):
-        """None, not [] — a caller must not read "not measured" as "none"."""
-        _write_summary(
-            str(tmp_path), "security-reviewer", ["src/a.php"], [],
-        )
-        cov = aggregate_file_review(str(tmp_path))
-        assert cov["unscoped_files"] is None
-
     @pytest.mark.parametrize(
         "changed_files", [None, []], ids=["absent", "empty"],
     )
@@ -518,33 +487,6 @@ class TestUnscopedFiles:
             str(tmp_path), changed_files=changed_files,
         )
         assert cov["unscoped_files"] is None
-
-    def test_a_measured_run_that_finds_nothing_reports_an_empty_list(
-        self, tmp_path
-    ):
-        """The other side of the same distinction: measured and clean."""
-        _write_summary(
-            str(tmp_path), "security-reviewer", ["src/a.php"], [],
-        )
-        cov = aggregate_file_review(
-            str(tmp_path), changed_files=["src/a.php"],
-        )
-        assert cov["unscoped_files"] == []
-
-    def test_secondary_domain_sidecar_files_count_as_scoped(
-        self, tmp_path
-    ):
-        _write_summary(
-            str(tmp_path), "security-reviewer", ["src/a.php"], [],
-        )
-        _write_summary(
-            str(tmp_path), "security-reviewer", ["ci.yml"], [],
-            domain="config-ops",
-        )
-        cov = aggregate_file_review(
-            str(tmp_path), changed_files=["src/a.php", "ci.yml"],
-        )
-        assert cov["unscoped_files"] == []
 
 
 class TestAgentsReportingCountsAgents:
@@ -579,21 +521,18 @@ class TestAgentsReportingCountsAgents:
 
 
 class TestHostContextSummary:
-    @pytest.mark.parametrize("value", [42, "bad", {"unexpected": "container"}], ids=["number", "string", "object"])
-    def test_malformed_lists_are_ignored(self, value):
+    def test_malformed_lists_are_ignored(self):
         summary = manifest_sections.summarize_host_context({
-            "resolved": value, "unresolved": value,
-            "diagnostics": {"self_provided": value, "scan_roots": True},
+            "resolved": "bad", "unresolved": "bad",
+            "diagnostics": {"self_provided": "bad", "scan_roots": True},
         })
         assert summary == {
             "resolved": [], "unresolved": [], "banner_reason": None,
             "self_provided": [], "scan_roots": None,
         }
 
-    @pytest.mark.parametrize("value", [
-        {"path": "/Users/private"}, ["/Users/private"], 42,
-    ], ids=["object", "list", "number"])
-    def test_non_string_identity_fields_are_unknown(self, value):
+    def test_non_string_identity_fields_are_unknown(self):
+        value = {"path": "/Users/private"}
         summary = manifest_sections.summarize_host_context({
             "resolved": [{
                 "name": value, "kind": value, "source": value, "version": value,

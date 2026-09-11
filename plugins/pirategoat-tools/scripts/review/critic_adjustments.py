@@ -15,6 +15,11 @@ record back for step 11.
 This module owns the ledger's read and validation surface —
 :func:`validate_findings_document`, :func:`read_findings_file` and
 :func:`write_findings`, the one write path for the findings ledger.
+
+This module does not import ``agent.output`` anywhere in the module,
+including inside functions: it owns the post-critic ledger schema, while
+``agent/output.py`` owns the builder, and ``findings_ledger`` already
+bridges the two in the other direction.
 """
 
 import argparse

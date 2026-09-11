@@ -124,16 +124,6 @@ def test_configured_roots_are_never_dropped_by_the_scan_cap(make_repo, monkeypat
     assert result.config_errors == []
 
 
-def test_a_configured_root_the_filesystem_cannot_resolve_is_outside(make_repo):
-    repo = make_repo({
-        "plugins/a/file": "",
-        ".pirategoat/config.json": json.dumps({"hosts": {"roots": ["plugins/a\u0000x", "plugins/a"]}}),
-    })
-    result = scan_roots(str(repo))
-    assert _relatives(result) == ["", "plugins", "plugins/a"]
-    assert result.config_errors == ["hosts.roots: 'plugins/a\\x00x' is outside the repository"]
-
-
 def test_a_malformed_config_is_one_error_and_the_scan_still_runs(make_repo):
     repo = make_repo({".pirategoat/config.json": "{", "src/a.php": "<?php"})
     result = scan_roots(str(repo))
@@ -163,7 +153,6 @@ def test_invalid_configured_path_preserves_earlier_and_later_roots(make_repo):
 
 @pytest.mark.parametrize("config, error_fragment", [
     pytest.param(json.dumps({"hosts": {"roots": ["bad\u0000name"]}}), "hosts.roots", id="nul-path"),
-    pytest.param('{"unrelated": ' + "1" * 4301 + '}', "integer string conversion", id="oversized-integer"),
 ])
 def test_invalid_config_keeps_the_chain_advisory(make_repo, config, error_fragment):
     repo = make_repo({

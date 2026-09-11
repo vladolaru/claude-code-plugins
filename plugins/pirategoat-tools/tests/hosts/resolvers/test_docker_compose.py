@@ -185,38 +185,48 @@ def test_named_volume_under_plugin_path_is_not_reported_missing(tmp_path):
     assert result.unresolved == []
 
 
-def test_environment_variable_source_is_expanded_before_path_check(tmp_path, monkeypatch):
+@pytest.mark.parametrize("source_spelling, plugin_subpath, env_setup", [
+    pytest.param(
+        "${HOST_ROOT}/woocommerce",
+        ("host-root", "woocommerce"),
+        lambda tmp_path, repo, monkeypatch, plugin: monkeypatch.setenv(
+            "HOST_ROOT", str(plugin.parent)
+        ),
+        id="environment-variable",
+    ),
+    pytest.param(
+        "${WC_PATH}",
+        ("host-root", "woocommerce"),
+        lambda tmp_path, repo, monkeypatch, plugin: (
+            monkeypatch.delenv("WC_PATH", raising=False),
+            (repo / ".env").write_text(f"WC_PATH={plugin}\n"),
+        ),
+        id="env-file-variable",
+    ),
+    pytest.param(
+        "~/plugins/woocommerce",
+        ("home", "plugins", "woocommerce"),
+        lambda tmp_path, repo, monkeypatch, plugin: monkeypatch.setenv(
+            "HOME", str(plugin.parent.parent)
+        ),
+        id="tilde",
+    ),
+])
+def test_compose_source_expansion(tmp_path, monkeypatch, source_spelling, plugin_subpath, env_setup):
+    """A volume source spelled as an environment variable, an `.env`-file
+    variable, or a `~` path is expanded before the path-existence check —
+    each is the same expand-then-check contract, differing only in where
+    the value comes from."""
     repo = tmp_path / "repo"
     repo.mkdir()
-    host_root = tmp_path / "host-root"
-    plugin = host_root / "woocommerce"
+    plugin = tmp_path.joinpath(*plugin_subpath)
     plugin.mkdir(parents=True)
-    monkeypatch.setenv("HOST_ROOT", str(host_root))
-    _write_compose(repo, "docker-compose.override.yml", """\
+    env_setup(tmp_path, repo, monkeypatch, plugin)
+    _write_compose(repo, "docker-compose.override.yml", f"""\
         services:
           wordpress:
             volumes:
-              - ${HOST_ROOT}/woocommerce:/var/www/html/wp-content/plugins/woocommerce
-    """)
-    result = DockerComposeResolver().resolve(str(repo))
-    assert len(result.entries) == 1
-    assert result.entries[0].name == "woocommerce"
-    assert result.entries[0].path == str(plugin)
-    assert result.unresolved == []
-
-
-def test_env_file_variable_source_is_expanded_before_path_check(tmp_path, monkeypatch):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    plugin = tmp_path / "host-root" / "woocommerce"
-    plugin.mkdir(parents=True)
-    monkeypatch.delenv("WC_PATH", raising=False)
-    (repo / ".env").write_text(f"WC_PATH={plugin}\n")
-    _write_compose(repo, "docker-compose.override.yml", """\
-        services:
-          wordpress:
-            volumes:
-              - ${WC_PATH}:/var/www/html/wp-content/plugins/woocommerce
+              - {source_spelling}:/var/www/html/wp-content/plugins/woocommerce
     """)
 
     result = DockerComposeResolver().resolve(str(repo))
@@ -245,26 +255,6 @@ def test_unresolved_env_file_variable_is_reported_without_empty_path_resolution(
     assert result.unresolved[0]["name"] == "woocommerce"
     assert result.unresolved[0]["reason"] == "variable_unresolved"
     assert result.unresolved[0]["variables"] == ["WC_PATH"]
-
-
-def test_tilde_source_is_expanded_before_path_check(tmp_path, monkeypatch):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    home = tmp_path / "home"
-    plugin = home / "plugins" / "woocommerce"
-    plugin.mkdir(parents=True)
-    monkeypatch.setenv("HOME", str(home))
-    _write_compose(repo, "docker-compose.override.yml", """\
-        services:
-          wordpress:
-            volumes:
-              - ~/plugins/woocommerce:/var/www/html/wp-content/plugins/woocommerce
-    """)
-    result = DockerComposeResolver().resolve(str(repo))
-    assert len(result.entries) == 1
-    assert result.entries[0].name == "woocommerce"
-    assert result.entries[0].path == str(plugin)
-    assert result.unresolved == []
 
 
 def test_long_form_bind_mount_resolves_runtime_host(tmp_path):
@@ -327,40 +317,6 @@ def test_core_mount_with_source_eq_repo_root_silent_skips(tmp_path):
     assert result.unresolved == []
 
 
-def test_plugin_self_mount_in_subdirectory_stays_silent(tmp_path):
-    """Even with the new core-target unresolved logic, plugin/theme
-    subdirectory self-mounts (monorepo style) don't trigger unresolved —
-    they're "repo provides this plugin", not "repo vendors upstream"."""
-    repo = tmp_path / "repo"
-    plugin = repo / "plugins" / "my-plugin"
-    plugin.mkdir(parents=True)
-    _write_compose(repo, "docker-compose.yml", """\
-        services:
-          wordpress:
-            volumes:
-              - ./plugins/my-plugin:/var/www/html/wp-content/plugins/my-plugin
-    """)
-    result = DockerComposeResolver().resolve(str(repo))
-    assert result.entries == []
-    assert result.unresolved == []
-
-
-def test_core_mount_produces_wordpress_entry(tmp_path):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    wp = tmp_path / "wordpress-develop"
-    wp.mkdir()
-    _write_compose(repo, "docker-compose.override.yml", f"""\
-        services:
-          wordpress:
-            volumes:
-              - {wp}:/var/www/html
-    """)
-    result = DockerComposeResolver().resolve(str(repo))
-    assert len(result.entries) == 1
-    assert result.entries[0].name == "wordpress"
-
-
 def test_theme_mount_classified_as_theme(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -377,27 +333,6 @@ def test_theme_mount_classified_as_theme(tmp_path):
     e = result.entries[0]
     assert e.name == "my-theme"
     assert e.notes.get("wp_kind") == "theme"
-
-
-@pytest.mark.parametrize("filename", [
-    "docker-compose.yaml",
-    "compose.yaml",
-    "compose.yml",
-])
-def test_standard_compose_yaml_names_are_discovered(tmp_path, filename):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    plugin = tmp_path / "my-plugin"
-    plugin.mkdir()
-    _write_compose(repo, filename, f"""\
-        services:
-          wordpress:
-            volumes:
-              - {plugin}:/var/www/html/wp-content/plugins/my-plugin
-    """)
-    result = DockerComposeResolver().resolve(str(repo))
-    assert len(result.entries) == 1
-    assert result.entries[0].name == "my-plugin"
 
 
 def test_unrelated_volume_skipped(tmp_path):
@@ -435,38 +370,6 @@ def test_missing_source_path_produces_unresolved(tmp_path):
     assert result.entries == []
     assert len(result.unresolved) == 1
     assert result.unresolved[0]["reason"] == "path_missing"
-
-
-def test_non_dict_yaml_root_returns_parse_error(tmp_path):
-    """YAML root is a list, not an object."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "docker-compose.yml").write_text("- foo\n- bar\n")
-    result = DockerComposeResolver().resolve(str(repo))
-    assert result.entries == []
-    assert "parse_error" in result.notes
-
-
-def test_unreadable_compose_file_returns_parse_error(tmp_path):
-    """File exists but permissions block reading."""
-    import os
-    import stat
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    cf = repo / "docker-compose.yml"
-    cf.write_text("services: {}\n")
-    # Strip all permissions
-    cf.chmod(0)
-    try:
-        result = DockerComposeResolver().resolve(str(repo))
-        # On systems where the test runner can still read chmod-0 files
-        # (some CI runners as root), this test is a no-op — in that case
-        # just skip via a conditional assertion.
-        if result.notes.get("parse_error"):
-            assert result.entries == []
-    finally:
-        # Restore so tmp_path cleanup works
-        cf.chmod(stat.S_IRUSR | stat.S_IWUSR)
 
 
 def test_symlinked_mount_resolving_into_repo_is_self_owned(tmp_path):

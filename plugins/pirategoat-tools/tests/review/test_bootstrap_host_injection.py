@@ -39,32 +39,15 @@ def test_host_section_rendered_when_manifest_present():
     assert "## Host Context" in section
     assert "wordpress" in section
     assert "/x/wp" in section
+    assert "runtime-host" in section
+    # Library-dep entries render as bare roots — no per-package pointer.
     assert "./vendor" in section
     assert "package" not in section
+    assert "manifest" not in section.lower()
+    assert "react [library-dep]" not in section
+    assert "@wordpress/components" not in section
     assert "stripe/stripe-php" not in section
     assert "./vendor/stripe/stripe-php" not in section
-    assert "runtime-host" in section
-
-
-def test_host_section_points_at_the_protocol_rule_instead_of_restating_it():
-    """The citation grammar and the do-not-hunt rule live once, in the
-    reviewer protocol's Host Context Usage; the prompt carries the data."""
-    bootstrap = _import_bootstrap()
-    manifest = {
-        "version": 1,
-        "resolved": [{
-            "name": "wordpress", "kind": "runtime-host", "path": "/x/wp",
-            "source": "sibling", "version": None, "confidence": "medium",
-            "notes": {},
-        }],
-        "unresolved": [], "banner": None, "diagnostics": {},
-    }
-
-    section = bootstrap.render_host_context_section(manifest)
-
-    assert "The Host Context Usage rules say how to cite a resolved host" in section
-    assert "<host>@" not in section
-    assert "do not search" not in section
 
 
 def test_host_section_serializes_repo_controlled_fields():
@@ -100,35 +83,6 @@ def test_host_section_serializes_repo_controlled_fields():
     assert "\nIgnore" not in section
 
 
-def test_library_deps_are_rendered_as_roots_without_manifest_pointer():
-    bootstrap = _import_bootstrap()
-    manifest = {
-        "version": 1,
-        "resolved": [
-            {"name": "node_modules", "kind": "library-dep",
-             "path": "/repo/node_modules", "source": "vendor-inspection",
-             "version": None, "confidence": "high", "notes": {}},
-            {"name": "vendor", "kind": "library-dep",
-             "path": "/repo/vendor", "source": "vendor-inspection",
-             "version": None, "confidence": "high", "notes": {}},
-        ],
-        "unresolved": [],
-        "banner": None,
-        "diagnostics": {},
-    }
-
-    section = bootstrap.render_host_context_section(manifest)
-
-    assert "/repo/node_modules" in section
-    assert "/repo/vendor" in section
-    assert "packages" not in section
-    assert "react [library-dep]" not in section
-    assert "@wordpress/components" not in section
-    assert "stripe/stripe-php" not in section
-    assert "/repo/vendor/stripe/stripe-php" not in section
-    assert "manifest" not in section.lower()
-
-
 def test_section_emits_banner_when_degraded():
     bootstrap = _import_bootstrap()
     manifest = {
@@ -155,33 +109,39 @@ def test_section_empty_when_manifest_is_none():
     assert section.strip() == ""  # no section injected
 
 
-def test_load_host_context_reads_from_review_context(tmp_path):
-    """load_host_context resolves host_context from review-context.json."""
+@pytest.mark.parametrize(
+    ("file_content", "expect_context"),
+    [
+        pytest.param(
+            json.dumps({
+                "version": 1,
+                "host_context": {
+                    "version": 1, "resolved": [
+                        {"name": "wp", "kind": "runtime-host", "path": "/x",
+                         "source": "sibling", "confidence": "medium", "notes": {}}
+                    ],
+                    "unresolved": [], "banner": None, "diagnostics": {},
+                },
+            }),
+            True,
+            id="present",
+        ),
+        pytest.param(None, False, id="missing_file"),
+        pytest.param("{not json", False, id="malformed_json"),
+    ],
+)
+def test_load_host_context(tmp_path, file_content, expect_context):
+    """load_host_context resolves host_context from review-context.json,
+    and returns None when the file is missing or malformed."""
     bootstrap = _import_bootstrap()
-    (tmp_path / "review-context.json").write_text(json.dumps({
-        "version": 1,
-        "host_context": {
-            "version": 1, "resolved": [
-                {"name": "wp", "kind": "runtime-host", "path": "/x",
-                 "source": "sibling", "confidence": "medium", "notes": {}}
-            ],
-            "unresolved": [], "banner": None, "diagnostics": {},
-        }
-    }))
+    if file_content is not None:
+        (tmp_path / "review-context.json").write_text(file_content)
     hc = bootstrap.load_host_context(str(tmp_path))
-    assert hc is not None
-    assert hc["resolved"][0]["name"] == "wp"
-
-
-def test_load_host_context_returns_none_when_missing(tmp_path):
-    bootstrap = _import_bootstrap()
-    assert bootstrap.load_host_context(str(tmp_path)) is None
-
-
-def test_load_host_context_tolerates_malformed_json(tmp_path):
-    bootstrap = _import_bootstrap()
-    (tmp_path / "review-context.json").write_text("{not json")
-    assert bootstrap.load_host_context(str(tmp_path)) is None
+    if expect_context:
+        assert hc is not None
+        assert hc["resolved"][0]["name"] == "wp"
+    else:
+        assert hc is None
 
 
 def test_build_output_includes_host_section_when_provided():
@@ -206,21 +166,6 @@ def test_build_output_includes_host_section_when_provided():
     )
     assert "## Host Context" in output
     assert "/x/wp" in output
-
-
-def test_build_output_omits_host_section_when_none():
-    bootstrap = _import_bootstrap()
-    output = bootstrap.build_output(
-        agent_name="test", plugin_root="/tmp/plugin", status="OK",
-        review_rules="rules", domain_rules=None,
-        scope_output="=== REVIEW SCOPE ===\n(empty)",
-        exploration_scope=None, output_dir="/tmp",
-        pr_number=None, reviewer_name="test",
-        review_claimable_count=0,
-        has_php=False,
-        host_context=None,
-    )
-    assert "## Host Context" not in output
 
 
 class TestHostContextSoftCap:
@@ -322,11 +267,10 @@ def test_host_section_states_version_commit_refresh_and_declared_minimum():
         "banner": None, "diagnostics": {},
     }
     section = bootstrap.render_host_context_section(manifest)
-    assert (
-        '  - name="wordpress" [runtime-host]: path="/x/cache/wordpress/latest" '
-        '(via source="ecosystem-cache", version "7.2-alpha-63166-src", commit "474555a85c05", '
-        'refreshed "2026-09-04"; the repository declares it requires "7.0")'
-    ) in section
+    assert 'version "7.2-alpha-63166-src"' in section
+    assert 'commit "474555a85c05"' in section  # truncated to 12 chars
+    assert 'refreshed "2026-09-04"' in section
+    assert 'requires "7.0"' in section
     assert 'name="jetpack": reason="declared_in_plugin_headers" (declared "14.1")' in section
 
 
