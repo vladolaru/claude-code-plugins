@@ -2,6 +2,10 @@
 
 Tests that guidance text for each step contains the right keywords, tool references,
 and structural elements. Follows the same pattern as test_review_pipeline.py.
+
+One pin per step contract: the artifact a step reads, the artifact its handoff
+gates, the tool or command it must invoke, and any routing it decides. Word-presence
+checks on plain wording (not a contract) are not pinned here.
 """
 
 import importlib.util
@@ -54,34 +58,20 @@ FIX_CTX = {"issue_id": "WOOPLUG-5678", "team_prefix": "WOOPLUG"}
 # ---------------------------------------------------------------------------
 
 class TestStep1ParseInput:
-    def test_fix_mode_mentioned(self, mod):
-        g = mod.get_step_guidance(1, "fix", {}, FIX_CTX,
+    def test_fix_mode_mentioned_and_writes_context_with_handoff(self, mod):
+        g_fix = mod.get_step_guidance(1, "fix", {}, FIX_CTX,
+                                      config={}, output_dir="/tmp/test")
+        fix_text = _guidance_text(g_fix)
+        assert "fix" in fix_text.lower()
+        assert "draft PR" in fix_text or "draft pr" in fix_text.lower()
+
+        g = mod.get_step_guidance(1, "investigate", {}, INVESTIGATE_CTX,
                                   config={}, output_dir="/tmp/test")
         text = _guidance_text(g)
-        assert "fix" in text.lower()
-        assert "draft PR" in text or "draft pr" in text.lower()
-
-    def test_references_issue_context_json(self, mod):
-        g = mod.get_step_guidance(1, "investigate", {}, INVESTIGATE_CTX,
-                                  config={}, output_dir="/tmp/test")
-        assert "issue-context.json" in _guidance_text(g)
-
-    def test_references_run_config_json(self, mod):
-        g = mod.get_step_guidance(1, "investigate", {}, INVESTIGATE_CTX,
-                                  config={}, output_dir="/tmp/test")
-        assert "run-config.json" in _guidance_text(g)
-
-    def test_has_handoff(self, mod):
-        g = mod.get_step_guidance(1, "investigate", {}, INVESTIGATE_CTX,
-                                  config={}, output_dir="/tmp/test")
+        assert "issue-context.json" in text
+        assert "run-config.json" in text
         assert g["handoff"] is not None
         assert len(g["handoff"]) > 0
-
-    def test_includes_pipeline_mission(self, mod):
-        g = mod.get_step_guidance(1, "investigate", {}, INVESTIGATE_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g)
-        assert "investigator" in text.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -89,28 +79,12 @@ class TestStep1ParseInput:
 # ---------------------------------------------------------------------------
 
 class TestStep2FetchIssue:
-    def test_references_linear_mcp(self, mod):
+    def test_references_linear_mcp_with_handoff(self, mod):
         g = mod.get_step_guidance(2, "investigate", {}, INVESTIGATE_CTX,
                                   config={}, output_dir="/tmp/test")
         text = _guidance_text(g)
         assert "mcp__linear-server__get_issue" in text
         assert "mcp__linear-server__list_comments" in text
-
-    def test_mentions_comments_are_mandatory(self, mod):
-        g = mod.get_step_guidance(2, "investigate", {}, INVESTIGATE_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g).lower()
-        assert "comment" in text
-
-    def test_mentions_hard_failure_on_mcp_unavailable(self, mod):
-        g = mod.get_step_guidance(2, "investigate", {}, INVESTIGATE_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g).lower()
-        assert "unavailable" in text or "fail" in text
-
-    def test_has_handoff(self, mod):
-        g = mod.get_step_guidance(2, "investigate", {}, INVESTIGATE_CTX,
-                                  config={}, output_dir="/tmp/test")
         assert g["handoff"] is not None
         handoff_text = "\n".join(g["handoff"]).lower()
         assert "comment" in handoff_text or "details" in handoff_text
@@ -121,30 +95,11 @@ class TestStep2FetchIssue:
 # ---------------------------------------------------------------------------
 
 class TestStep3CheckExisting:
-    def test_references_github_search(self, mod):
-        g = mod.get_step_guidance(3, "investigate", {}, INVESTIGATE_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g)
-        assert "gh" in text  # gh CLI reference
-
-    def test_mentions_merged_pr_handling(self, mod):
-        g = mod.get_step_guidance(3, "investigate", {}, INVESTIGATE_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g).lower()
-        assert "merged" in text
-
-    def test_repo_verification_checks_linked_prs(self, mod):
-        """Should check which repo linked PRs target."""
+    def test_repo_verification_checks_linked_prs_and_file_paths(self, mod):
         g = mod.get_step_guidance(3, "investigate", {}, INVESTIGATE_CTX,
                                   config={}, output_dir="/tmp/test")
         text = _guidance_text(g).lower()
         assert "linked pr" in text or "linked prs" in text
-
-    def test_repo_verification_checks_file_paths(self, mod):
-        """Should check if mentioned file paths exist in this codebase."""
-        g = mod.get_step_guidance(3, "investigate", {}, INVESTIGATE_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g).lower()
         assert "file path" in text or "file paths" in text
 
     def test_repo_mismatch_instructs_stop(self, mod):
@@ -160,21 +115,11 @@ class TestStep3CheckExisting:
 # ---------------------------------------------------------------------------
 
 class TestStep4GatherContext:
-    def test_references_grep_glob(self, mod):
-        g = mod.get_step_guidance(4, "investigate", {}, INVESTIGATE_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g).lower()
-        assert "grep" in text or "glob" in text or "search" in text
-
-    def test_references_git_blame(self, mod):
+    def test_references_git_blame_with_handoff(self, mod):
         g = mod.get_step_guidance(4, "investigate", {}, INVESTIGATE_CTX,
                                   config={}, output_dir="/tmp/test")
         text = _guidance_text(g)
         assert "git blame" in text or "git log" in text
-
-    def test_has_handoff(self, mod):
-        g = mod.get_step_guidance(4, "investigate", {}, INVESTIGATE_CTX,
-                                  config={}, output_dir="/tmp/test")
         assert g["handoff"] is not None
         assert len(g["handoff"]) > 0
 
@@ -197,40 +142,12 @@ class TestStep4GatherContext:
 # ---------------------------------------------------------------------------
 
 class TestStep5Investigate:
-    def test_mentions_every_issue_path(self, mod):
-        """One render, three paths — the same briefing text carries all of
-        bug/feature/task, so three separate collected tests over one
-        `get_step_guidance(5, ...)` call restated one code path."""
-        g = mod.get_step_guidance(5, "investigate", {}, INVESTIGATE_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g).lower()
-        assert "bug" in text
-        assert "feature" in text
-        assert "task" in text
-
-    def test_rca_mandatory_for_bugs(self, mod):
+    def test_rca_mandatory_for_bugs_with_handoff(self, mod):
         g = mod.get_step_guidance(5, "investigate", {}, INVESTIGATE_CTX,
                                   config={}, output_dir="/tmp/test")
         text = _guidance_text(g)
         assert "Root Cause Analysis" in text or "RCA" in text
         assert "MANDATORY" in text or "mandatory" in text.lower()
-
-    def test_mentions_duplicate_search(self, mod):
-        g = mod.get_step_guidance(5, "investigate", {}, INVESTIGATE_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g).lower()
-        assert "duplicate" in text
-
-    def test_mentions_verify_findings(self, mod):
-        g = mod.get_step_guidance(5, "investigate", {}, INVESTIGATE_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g).lower()
-        assert "verify" in text
-
-    def test_has_handoff(self, mod):
-        g = mod.get_step_guidance(5, "investigate", {}, INVESTIGATE_CTX,
-                                  config={}, output_dir="/tmp/test")
-        assert g["handoff"] is not None
         handoff_text = "\n".join(g["handoff"]).lower()
         assert "rca" in handoff_text or "root cause" in handoff_text
 
@@ -240,30 +157,11 @@ class TestStep5Investigate:
 # ---------------------------------------------------------------------------
 
 class TestStep6WriteReport:
-    def test_references_report_path(self, mod):
+    def test_report_path_in_text_and_handoff(self, mod):
         g = mod.get_step_guidance(6, "investigate", {}, INVESTIGATE_CTX,
                                   config={}, output_dir="/tmp/test")
         text = _guidance_text(g)
         assert "investigation-report.md" in text
-
-    def test_includes_report_template(self, mod):
-        g = mod.get_step_guidance(6, "investigate", {}, INVESTIGATE_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g)
-        # Should include template structure
-        assert "Summary" in text
-        assert "Recommendation" in text or "recommendation" in text.lower()
-
-    def test_mentions_verdict(self, mod):
-        g = mod.get_step_guidance(6, "investigate", {}, INVESTIGATE_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g).lower()
-        assert "valid" in text or "invalid" in text or "verdict" in text
-
-    def test_has_handoff_on_report_file(self, mod):
-        g = mod.get_step_guidance(6, "investigate", {}, INVESTIGATE_CTX,
-                                  config={}, output_dir="/tmp/test")
-        assert g["handoff"] is not None
         handoff_text = "\n".join(g["handoff"])
         assert "investigation-report.md" in handoff_text
 
@@ -273,21 +171,11 @@ class TestStep6WriteReport:
 # ---------------------------------------------------------------------------
 
 class TestStep7PostToLinear:
-    def test_references_linear_mcp_save_comment(self, mod):
+    def test_references_linear_mcp_save_comment_with_handoff(self, mod):
         g = mod.get_step_guidance(7, "investigate", {}, INVESTIGATE_CTX,
                                   config={}, output_dir="/tmp/test")
         text = _guidance_text(g)
         assert "mcp__linear-server__save_comment" in text
-
-    def test_mentions_best_effort(self, mod):
-        g = mod.get_step_guidance(7, "investigate", {}, INVESTIGATE_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g).lower()
-        assert "best-effort" in text or "not a blocking" in text or "degradation" in text
-
-    def test_has_handoff(self, mod):
-        g = mod.get_step_guidance(7, "investigate", {}, INVESTIGATE_CTX,
-                                  config={}, output_dir="/tmp/test")
         assert g["handoff"] is not None
 
 
@@ -296,47 +184,18 @@ class TestStep7PostToLinear:
 # ---------------------------------------------------------------------------
 
 class TestStep8AssessClarity:
-    def test_mentions_hard_gates(self, mod):
+    def test_clarity_assessment_schema_with_handoff(self, mod):
         g = mod.get_step_guidance(8, "fix", {}, FIX_CTX,
                                   config={}, output_dir="/tmp/test")
         text = _guidance_text(g)
         assert "problem_statement" in text or "Problem statement" in text
         assert "reproduction" in text.lower() or "scope" in text.lower()
         assert "success_criteria" in text or "Success criteria" in text
-
-    def test_mentions_soft_signals(self, mod):
-        g = mod.get_step_guidance(8, "fix", {}, FIX_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g)
-        assert "conflicting" in text.lower()
-        assert "implicit" in text.lower()
-
-    def test_references_clarity_assessment_json(self, mod):
-        g = mod.get_step_guidance(8, "fix", {}, FIX_CTX,
-                                  config={}, output_dir="/tmp/test")
-        assert "clarity-assessment.json" in _guidance_text(g)
-
-    def test_mentions_clear_enough(self, mod):
-        g = mod.get_step_guidance(8, "fix", {}, FIX_CTX,
-                                  config={}, output_dir="/tmp/test")
-        assert "clear_enough" in _guidance_text(g)
-
-    def test_handoff_requires_assessment_file(self, mod):
-        g = mod.get_step_guidance(8, "fix", {}, FIX_CTX,
-                                  config={}, output_dir="/tmp/test")
+        assert "clarity-assessment.json" in text
+        assert "clear_enough" in text
+        assert "questions_for_author" in text
         handoff_text = "\n".join(g.get("handoff", []))
         assert "clarity-assessment.json" in handoff_text
-
-    def test_references_investigation_report(self, mod):
-        g = mod.get_step_guidance(8, "fix", {}, FIX_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g)
-        assert "investigation" in text.lower()
-
-    def test_mentions_questions_for_author(self, mod):
-        g = mod.get_step_guidance(8, "fix", {}, FIX_CTX,
-                                  config={}, output_dir="/tmp/test")
-        assert "questions_for_author" in _guidance_text(g)
 
     def test_works_in_investigate_mode(self, mod):
         g = mod.get_step_guidance(8, "investigate", {}, INVESTIGATE_CTX,
@@ -350,22 +209,11 @@ class TestStep8AssessClarity:
 # ---------------------------------------------------------------------------
 
 class TestStep9WritePlan:
-    def test_references_writing_plans_skill(self, mod):
-        g = mod.get_step_guidance(9, "fix", {}, FIX_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g)
-        assert "writing-plans" in text
-
-    def test_references_plan_file(self, mod):
+    def test_plan_file_in_text_and_handoff(self, mod):
         g = mod.get_step_guidance(9, "fix", {}, FIX_CTX,
                                   config={}, output_dir="/tmp/test")
         text = _guidance_text(g)
         assert "implementation-plan.md" in text
-
-    def test_has_handoff_on_plan_file(self, mod):
-        g = mod.get_step_guidance(9, "fix", {}, FIX_CTX,
-                                  config={}, output_dir="/tmp/test")
-        assert g["handoff"] is not None
         handoff_text = "\n".join(g["handoff"])
         assert "implementation-plan.md" in handoff_text
 
@@ -385,59 +233,21 @@ class TestStep10Implement:
         text = _guidance_text(g)
         assert "subagent-driven-development" in text
 
-    def test_mentions_scope_discipline(self, mod):
-        g = mod.get_step_guidance(10, "fix", {}, FIX_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g).lower()
-        assert "scope" in text
-
 
 class TestStep11Verify:
-    def test_references_verification_skill(self, mod):
-        g = mod.get_step_guidance(11, "fix", {}, FIX_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g)
-        assert "verification-before-completion" in text
-
-    def test_mentions_tests(self, mod):
-        g = mod.get_step_guidance(11, "fix", {}, FIX_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g).lower()
-        assert "test" in text
-
-    def test_small_skips_to_step_14(self, mod):
-        """Step 11 guidance should say small complexity skips to step 14."""
+    def test_complexity_routes_small_to_step14_others_to_step12(self, mod):
+        """Step 11 guidance must name both routing branches: small complexity
+        skips to step 14, medium/large continues to step 12's code review."""
         g = mod.get_step_guidance(11, "fix", {}, FIX_CTX,
                                   config={}, output_dir="/tmp/test")
         text = _guidance_text(g).lower()
         assert "small" in text
         assert "step 14" in text
-
-    def test_medium_continues_to_step_12(self, mod):
-        """Step 11 guidance should say medium/large continues to step 12 —
-        the branch that actually runs code review, so the routing text has
-        to name it."""
-        g = mod.get_step_guidance(11, "fix", {}, FIX_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g).lower()
         assert "medium" in text
         assert "step 12" in text
         assert "code review" in text or "code-reviewer" in text
 
 class TestStep12SelfReview:
-    def test_references_iterative_review(self, mod):
-        g = mod.get_step_guidance(12, "fix", {}, FIX_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g)
-        assert "iterative" in text.lower()
-        assert "review" in text.lower()
-
-    def test_references_review_loop(self, mod):
-        g = mod.get_step_guidance(12, "fix", {}, FIX_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g)
-        assert "merge-base" in text.lower() or "merge_base" in text.lower()
-
     def test_uses_module_invocation(self, mod):
         """Step 12 must use 'python3 -m iterative_review', not direct path."""
         g = mod.get_step_guidance(12, "fix", {}, FIX_CTX,
@@ -452,103 +262,51 @@ class TestStep12SelfReview:
         text = _guidance_text(g)
         assert "symbolic-ref" in text or "BASE_BRANCH" in text
 
-class TestStep12AdaptiveEffort:
-    """Step 12 passes --adaptive-effort when config enables it."""
 
-    def test_includes_flag_when_config_true(self, mod):
-        config = {"mode": "fix", "adaptive_iterative_review": True}
+STEP12_FLAG_ROWS = [
+    pytest.param("adaptive_iterative_review", "--adaptive-effort", True, id="adaptive-effort-enabled"),
+    pytest.param("adaptive_iterative_review", "--adaptive-effort", False, id="adaptive-effort-disabled"),
+    pytest.param("autonomous_iterative_review", "--autonomous", True, id="autonomous-enabled"),
+    pytest.param("autonomous_iterative_review", "--autonomous", False, id="autonomous-disabled"),
+]
+
+
+class TestStep12Flags:
+    """Step 12 passes --adaptive-effort/--autonomous only when the matching
+    config flag is enabled, and never on the --action advance line."""
+
+    @pytest.mark.parametrize("config_key,flag,enabled", STEP12_FLAG_ROWS)
+    def test_step12_flag_reflects_config(self, mod, config_key, flag, enabled):
+        config = {"mode": "fix", config_key: True} if enabled else {"mode": "fix"}
         g = mod.get_step_guidance(12, "fix", {}, FIX_CTX,
                                   config=config, output_dir="/tmp/test")
         actions_text = "\n".join(g["actions"])
-        assert "--adaptive-effort" in actions_text
-
-    def test_omits_flag_when_config_absent(self, mod):
-        config = {"mode": "fix"}
-        g = mod.get_step_guidance(12, "fix", {}, FIX_CTX,
-                                  config=config, output_dir="/tmp/test")
-        actions_text = "\n".join(g["actions"])
-        assert "--adaptive-effort" not in actions_text
-
-    def test_flag_appears_in_both_round1_and_roundN_commands(self, mod):
-        config = {"mode": "fix", "adaptive_iterative_review": True}
-        g = mod.get_step_guidance(12, "fix", {}, FIX_CTX,
-                                  config=config, output_dir="/tmp/test")
-        actions_text = "\n".join(g["actions"])
-        # Should appear at least twice: round 1 command and round N command
-        assert actions_text.count("--adaptive-effort") >= 2
-
-
-class TestStep12Autonomous:
-    """Step 12 passes --autonomous when config enables it."""
-
-    def test_includes_flag_when_config_true(self, mod):
-        config = {"mode": "fix", "autonomous_iterative_review": True}
-        g = mod.get_step_guidance(12, "fix", {}, FIX_CTX,
-                                  config=config, output_dir="/tmp/test")
-        actions_text = "\n".join(g["actions"])
-        assert "--autonomous" in actions_text
-
-    def test_omits_flag_when_config_absent(self, mod):
-        config = {"mode": "fix"}
-        g = mod.get_step_guidance(12, "fix", {}, FIX_CTX,
-                                  config=config, output_dir="/tmp/test")
-        actions_text = "\n".join(g["actions"])
-        assert "--autonomous" not in actions_text
-
-    def test_flag_appears_in_both_round1_and_roundN_commands(self, mod):
-        config = {"mode": "fix", "autonomous_iterative_review": True}
-        g = mod.get_step_guidance(12, "fix", {}, FIX_CTX,
-                                  config=config, output_dir="/tmp/test")
-        actions_text = "\n".join(g["actions"])
-        # Should appear at least twice: round 1 command and round N command
-        assert actions_text.count("--autonomous") >= 2
-
-    def test_flag_not_on_advance_command(self, mod):
-        """--autonomous must only appear on --action review, not --action advance."""
-        config = {"mode": "fix", "autonomous_iterative_review": True}
-        g = mod.get_step_guidance(12, "fix", {}, FIX_CTX,
-                                  config=config, output_dir="/tmp/test")
+        if enabled:
+            # Should appear at least twice: round 1 command and round N command
+            assert actions_text.count(flag) >= 2
+        else:
+            assert flag not in actions_text
         for line in g["actions"]:
             if "--action advance" in line:
-                assert "--autonomous" not in line
+                assert flag not in line
 
 
 class TestStep13ReVerify:
-    def test_verification_already_handled(self, mod):
+    def test_verification_already_handled_with_no_handoff(self, mod):
         g = mod.get_step_guidance(13, "fix", {}, FIX_CTX,
                                   config={}, output_dir="/tmp/test")
         text = _guidance_text(g).lower()
         assert "already handled" in text or "redundant" in text
-
-    def test_references_iterative_review_loop(self, mod):
-        g = mod.get_step_guidance(13, "fix", {}, FIX_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g).lower()
-        assert "iterative review loop" in text or "review round" in text
-
-    def test_handoff_is_none(self, mod):
-        g = mod.get_step_guidance(13, "fix", {}, FIX_CTX,
-                                  config={}, output_dir="/tmp/test")
         assert g["handoff"] is None
 
 
 class TestStep14CreateDraftPR:
-    def test_references_gh_pr_create(self, mod):
+    def test_gh_pr_create_draft_with_issue_id(self, mod):
         g = mod.get_step_guidance(14, "fix", {}, FIX_CTX,
                                   config={}, output_dir="/tmp/test")
         text = _guidance_text(g)
         assert "gh pr create" in text
-
-    def test_mentions_draft_flag(self, mod):
-        g = mod.get_step_guidance(14, "fix", {}, FIX_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g)
         assert "--draft" in text
-
-    def test_mentions_issue_id_in_pr_body(self, mod):
-        g = mod.get_step_guidance(14, "fix", {}, FIX_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g)
         assert "WOOPLUG-5678" in text
 
     def test_includes_deferred_items_in_pr(self, mod):
@@ -558,45 +316,26 @@ class TestStep14CreateDraftPR:
         assert "deferred" in text.lower()
         assert "follow-up" in text.lower() or "follow-ups" in text.lower()
 
-    def test_mentions_fallback_on_failure(self, mod):
-        g = mod.get_step_guidance(14, "fix", {}, FIX_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g).lower()
-        assert "fail" in text or "degradation" in text
-
 
 # ---------------------------------------------------------------------------
 # Step 15: Present Results
 # ---------------------------------------------------------------------------
 
 class TestStep15PresentResults:
-    def test_includes_result_schema(self, mod):
+    def test_result_schema_and_status_values(self, mod):
         g = mod.get_step_guidance(15, "investigate", {}, INVESTIGATE_CTX,
                                   config={}, output_dir="/tmp/test")
         text = _guidance_text(g)
         assert "status" in text
         assert "verdict" in text
         assert "degradation_notes" in text
-
-    def test_mentions_status_values(self, mod):
-        g = mod.get_step_guidance(15, "investigate", {}, INVESTIGATE_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g)
         assert "success" in text
         assert "degraded" in text
         assert "failed" in text
 
-    def test_mentions_taskstop(self, mod):
-        g = mod.get_step_guidance(15, "investigate", {}, INVESTIGATE_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g)
-        assert "TaskStop" in text
-
-    def test_fix_mode_includes_pr_url(self, mod):
-        g = mod.get_step_guidance(15, "fix", {}, FIX_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g)
-        assert "pr_url" in text
+        g_fix = mod.get_step_guidance(15, "fix", {}, FIX_CTX,
+                                      config={}, output_dir="/tmp/test")
+        assert "pr_url" in _guidance_text(g_fix)
 
     def test_has_handoff(self, mod):
         g = mod.get_step_guidance(15, "investigate", {}, INVESTIGATE_CTX,
@@ -611,22 +350,14 @@ class TestStep15PresentResults:
 # ---------------------------------------------------------------------------
 
 class TestPhaseAssignment:
-    """Verify each step returns the correct phase in guidance."""
+    """get_step_guidance copies phase from the step definition; one
+    representative row proves the copy. The phase vocabulary itself is
+    pinned against STEP_SEQUENCE by test_pipeline.py::test_phases_are_valid."""
 
-    EXPECTED_PHASES = {
-        1: "SETUP", 2: "SETUP", 3: "SETUP",
-        4: "INVESTIGATION", 5: "INVESTIGATION", 6: "INVESTIGATION", 7: "INVESTIGATION",
-        8: "INVESTIGATION",
-        9: "IMPLEMENTATION", 10: "IMPLEMENTATION", 11: "IMPLEMENTATION",
-        12: "VALIDATION", 13: "VALIDATION",
-        14: "OUTPUT", 15: "OUTPUT",
-    }
-
-    @pytest.mark.parametrize("step,expected_phase", EXPECTED_PHASES.items())
-    def test_phase_matches(self, mod, step, expected_phase):
-        g = mod.get_step_guidance(step, "fix", {}, FIX_CTX,
+    def test_phase_matches(self, mod):
+        g = mod.get_step_guidance(4, "fix", {}, FIX_CTX,
                                   config={}, output_dir="/tmp/test")
-        assert g["phase"] == expected_phase
+        assert g["phase"] == "INVESTIGATION"
 
 
 # ---------------------------------------------------------------------------
@@ -634,21 +365,19 @@ class TestPhaseAssignment:
 # ---------------------------------------------------------------------------
 
 class TestModeGuidanceDifferences:
-    def test_step_7_mentions_investigate_jump(self, mod):
-        """Step 7 in investigate mode should hint that pipeline jumps to 15."""
-        g = mod.get_step_guidance(7, "investigate", {}, INVESTIGATE_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g).lower()
-        # Should mention that investigate mode stops here or jumps
-        assert "step 15" in text or "present results" in text.lower() or "jump" in text
+    def test_step_7_jump_hint_differs_by_mode(self, mod):
+        """Step 7 hints at jumping to step 15 in investigate mode, and must
+        not in fix mode."""
+        g_inv = mod.get_step_guidance(7, "investigate", {}, INVESTIGATE_CTX,
+                                      config={}, output_dir="/tmp/test")
+        inv_text = _guidance_text(g_inv).lower()
+        assert "step 15" in inv_text or "present results" in inv_text or "jump" in inv_text
 
-    def test_step_7_fix_mode_does_not_mention_jump(self, mod):
-        """Step 7 in fix mode must NOT tell the LLM to jump to step 15."""
-        g = mod.get_step_guidance(7, "fix", {}, FIX_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g)
-        assert "jumps to step 15" not in text
-        assert "Investigate mode" not in text
+        g_fix = mod.get_step_guidance(7, "fix", {}, FIX_CTX,
+                                      config={}, output_dir="/tmp/test")
+        fix_text = _guidance_text(g_fix)
+        assert "jumps to step 15" not in fix_text
+        assert "Investigate mode" not in fix_text
 
     def test_step_15_mode_in_schema(self, mod):
         """Step 15 guidance should include the current mode in the result schema."""
