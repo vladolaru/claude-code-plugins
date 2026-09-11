@@ -202,16 +202,13 @@ Deterministic pytest suite that validates structural properties of command files
 
 | Class | What it verifies |
 |---|---|
-| `TestFrontmatter` | All review commands have valid YAML frontmatter with a `description` field |
-| `TestAllCommandsStructural` | Every registered command file exists, has valid frontmatter with a real `description`, and is registered in `marketplace.json`; non-review commands are asserted absent from `ALL_REVIEW_COMMANDS` |
-| `TestScriptReferences` | Review commands reference `review/pipeline.py`, which exists on disk |
+| `TestAllCommandsStructural` | Every registered command file exists, has valid frontmatter with a real `description`, and is registered in `marketplace.json` — the superset that also covers review-command frontmatter |
+| `TestScriptReferences` | Review commands reference `review/pipeline.py` |
 | `TestReviewCommandsReferenceUnifiedScript` | Each review command passes the correct `--mode` to `review/pipeline.py` (`pr-review.md` → `pr`, `full-code-review.md` → `full`, `code-review.md` → computed incremental/full) |
 | `TestReviewRunIdentity` | Review commands link pipeline telemetry to the active Claude session |
-| `TestMarketplaceRegistration` | Review commands are registered in `marketplace.json` |
-| `TestCodeReviewIterative` | `code-review.md` has incremental mode, full/reset option, baseline reference |
-| `TestFullCodeReview` | `full-code-review.md` has full mode |
-| `TestUnifiedMission` | All review commands reference the unified pipeline mission |
+| `TestUnifiedMission` | Review commands share the "code review orchestrator" identity language |
 | `TestDependencyRefreshFlagDocumented` | Every review command documents the `--refresh-deps` opt-in |
+| `TestDurableReviewRunDirectories` | Interactive review commands allocate a distinct durable run directory through `run_paths.py` |
 
 ### ReviewOutputBuilder Unit Tests (`review/agent/test_output.py`)
 
