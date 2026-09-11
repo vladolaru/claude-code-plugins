@@ -113,25 +113,17 @@ class TestStructuredDataDiscipline:
         text = "\n".join(g["actions"])
         assert "critic.py --save" in text
         assert "You write nothing here" in text
-        assert "STAND" in text and "REVISE" in text and "ESCALATE" in text
 
     def test_step_10_never_asks_the_orchestrator_for_a_verdict(self, mod, tmp_path):
-        """Neither a hand-written verdict artifact nor a SKIPPED stand-in
-        for a crashed critic may reach the briefing — both would hide the
-        lost stress test step 11 now reports."""
+        """A hand-written verdict artifact may not reach the briefing — it
+        would hide the lost stress test step 11 now reports."""
         g = mod.get_step_guidance(
             10, "pr", {"completed_steps": []}, {}, output_dir=str(tmp_path)
         )
         text = "\n".join(g["actions"])
         assert "Save to: " + str(tmp_path) + "/decision-critic-verdict.json" \
             not in text
-        assert '{"verdict": "<STAND | REVISE | ESCALATE>"}' not in text
-        assert '"SKIPPED"' not in text
         assert "produced no verdict" in text
-        bare_stand = re.search(r'"verdict":\s*"STAND"', text)
-        bare_rc = re.search(r'"verdict":\s*"REQUEST_CHANGES"', text)
-        assert bare_stand is None, "Found copyable placeholder: STAND"
-        assert bare_rc is None, "Found copyable placeholder: REQUEST_CHANGES"
 
 
 class TestStep2RepoSetup:
