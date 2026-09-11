@@ -306,3 +306,27 @@ Reconciliation is two acts and one of them is invisible: a single extended-think
 **Evidence:** `.claude/docs/analysis/2026-09-11-claude-two-pr-review-runs-audit.md` § F1 and § Decision critic pass (per-turn anatomy for PR #66900 and PR #12089).
 **Deferred because:** it is an experiment, not a fix — whether visible incremental work actually shortens the think is unknown — and it changes the reconciliator's definition, its briefing, and the save channel's expectations about partial ledgers. Handoff 06's severity-floor and orchestrator-note changes also push the reconciliator toward reading rather than re-deciding, so measuring both at once would confound them.
 **Do when:** two field runs after the floor and note changes have landed show the reconciliator's single-turn time unchanged, or a run stalls inside that turn.
+
+### 37. A reviewer can abstain with `mark_not_applicable` after actually reviewing
+
+`performance-reviewer` on PR #66900 recorded one check and one positive observation, found no defect, and then called `builder.mark_not_applicable("No performance defects found…")`. That is an approve wearing the not-applicable label: the reviewer drops out of `reviewing_agents` in the outcome, and the run's coverage understates who looked. `ReviewOutputBuilder.mark_not_applicable()` (`scripts/review/agent/output.py:1013`) refuses the call once a finding exists; it accepts it when only checks or positive observations exist. The protocol wording ("no changes relevant to your domain") is right; the deterministic fix is the symmetric guard, refusing not-applicable once a check or positive observation has been recorded unless scope returned `NO_DOMAIN_FILES`, so no model compliance is needed.
+
+**Evidence:** `.claude/docs/analysis/2026-09-11-claude-two-pr-review-runs-audit.md` § F9 and § Decision critic pass ("F9 has a deterministic option").
+**Deferred because:** one occurrence in two runs, the outcome was still correct, and the guard changes a builder contract every reviewer relies on, so it wants its own small change with the `test_output.py` pins updated together.
+**Do when:** the next change to `mark_not_applicable()` or to the reviewer protocol's Quick Relevance Check, or the second run where a reviewer abstains after recording evidence.
+
+### 38. The read detector takes a process-substitution token as a file path
+
+`sed -n '1,40p;140,200p' <(git show <sha>:client/reports/fees/index.tsx)` in patterns-reviewer's transcript (PR #12089) put `(git` into `observed_reads.all`. `sed` routes through `_pattern_then_files()` and then `_literal_path_tokens()` (`scripts/analysis/review_transcript.py` ~1634–1640); `_file_operands()` is only the fallback, so the fix belongs in the literal-token walk: a token opening with `<(` or `>(` is a process substitution, not an operand, and everything up to its closing parenthesis belongs to the inner command. One more instance of the two-operand-walk shape recorded in entry 21.
+
+**Evidence:** `.claude/docs/analysis/2026-09-11-claude-two-pr-review-runs-audit.md` § F11 and the critic-pass correction naming the right function.
+**Deferred because:** one bogus path in one run, filtered out of in-scope comparisons because it matches no repository file; the detector's operand walks are already queued for a table-driven rewrite in entry 21.
+**Do when:** entry 21 is picked up, or a process-substitution read next shows up in a run's `observed_reads` where it changes an in-scope or out-of-scope count.
+
+### 39. Skipping `docs-drift-reviewer` orphans the changelog fragment every time
+
+Changelog fragments (`scope.py` `CHANGELOG_FRAGMENT_PATTERN`, ~728) belong to the docs domain only, and every WooCommerce and WooPayments PR ships one, so any skip of `docs-drift-reviewer` leaves that leaf reviewed by no one. `dispatch_adjust.py` already detects it (PR #12089 printed "leaves reviewed by no one: `changelog/fix-woopmnt-6265-…`"); the orchestrator proceeded, the report disclosed the gap, and the orchestrator read the fragment itself. The instrument works; the structure guarantees the gap. Two shapes of fix: the leaf-type one (give the fragment pattern a second home in the always-dispatched code domain, one prose file in code-reviewer's scope), and the class one (route every orphaned leaf to an always-dispatched domain, or make an orphan block the skip), which closes it for any leaf type, not only changelog fragments.
+
+**Evidence:** `.claude/docs/analysis/2026-09-11-claude-two-pr-review-runs-audit.md` § F12 and § Decision critic pass ("F12's class fix"); the 2026-09-08 audit's F1 for the detection that now fires.
+**Deferred because:** the current behaviour is disclosed and recovered, and the class fix is a dispatch-policy decision (whether an orphan may block a skip) that deserves its own design note rather than a slot in the field-audit fixes.
+**Do when:** the next change to `dispatch_adjust.py`'s orphan detection or to `scope.py`'s domain tables, or the first run where a disclosed orphan is not read by anyone.
