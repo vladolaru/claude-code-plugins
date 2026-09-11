@@ -32,7 +32,9 @@ except ImportError:
 REPORT_SCHEMA = 1
 REPORT_STATUSES = ("not_needed", "completed", "partial", "failed")
 EXIT_STATUSES = ("ok", "failed")
-REPORT_FILENAME = artifact_path("", "dependency_refresh").name
+# Run-relative, not the basename: the file lives under pipeline/, and the
+# step-3 briefing asks the orchestrator to match this exact SAVED line.
+REPORT_RUN_RELATIVE_PATH = str(artifact_path("", "dependency_refresh"))
 
 _MAX_DIRTY_FILES = 20
 _MAX_DIRTY_FILE_CHARS = 500
@@ -299,7 +301,7 @@ def run_save(args):
                 file=sys.stderr,
             )
         return 1
-    print(f"SAVED {REPORT_FILENAME}")
+    print(f"SAVED {REPORT_RUN_RELATIVE_PATH}")
     return 0
 
 

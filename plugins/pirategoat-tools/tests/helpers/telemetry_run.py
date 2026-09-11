@@ -266,6 +266,7 @@ def write_complete_run(repo, output_dir, log_dir, *, run_id):
             model_tier="sonnet",
             scope_files=len(scope),
             scope_lines=40 * len(scope),
+            scope_inline_lines=25 * len(scope),
             budget_target=15,
             scope_paths=scope,
         )

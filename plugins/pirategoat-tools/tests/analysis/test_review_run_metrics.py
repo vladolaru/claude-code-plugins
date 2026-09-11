@@ -489,7 +489,14 @@ def _agent_start(
     *,
     run_id: str = "run-1",
     timestamp: str = "2026-07-19T10:00:10+00:00",
+    inline_lines: int | None = None,
+    lines: int = 5,
 ) -> dict:
+    """One agent_start row. `inline_lines` defaults to absent, the shape of
+    every manifest written before bootstrap recorded the briefing size."""
+    scope: dict = {"files": 1, "lines": lines, "paths": ["src/a.py"]}
+    if inline_lines is not None:
+        scope["inline_lines"] = inline_lines
     return {
         "schema": contracts._SUPPORTED_MANIFEST_SCHEMA,
         "run_id": run_id,
@@ -499,7 +506,7 @@ def _agent_start(
         "domain": "code",
         "model_tier": "sonnet",
         "budget_target": 20,
-        "scope": {"files": 1, "lines": 5, "paths": ["src/a.py"]},
+        "scope": scope,
     }
 
 
@@ -772,7 +779,7 @@ class TestReviewVocabularyLifecycleMigration:
         row = render._table_row(measured)
 
         assert row[4] == "1/1/0"
-        assert row[5].startswith("3\u21921/")
+        assert row[6].startswith("3\u21921/")
 
 
 def _agent_review_draft_saved(
@@ -4477,6 +4484,9 @@ class TestLifecycleMeasurement:
             "extra_starts_by_agent": {},
             "retry_overhead": 0,
             "completion_gap": 0,
+            "inline_diff_lines": {
+                "total": None, "measured": 0, "dispatched": 0,
+            },
         }
 
     def test_running_lifecycle_rejects_missing_unmatched_agent(self, tmp_path):
@@ -4539,6 +4549,11 @@ class TestLifecycleMeasurement:
             "extra_starts_by_agent": {"code-reviewer": 0},
             "retry_overhead": 0,
             "completion_gap": 0,
+            # _agent_start() carries no inline_lines: unmeasured, and the
+            # sum stays None rather than collapsing to a measured zero.
+            "inline_diff_lines": {
+                "total": None, "measured": 0, "dispatched": 1,
+            },
         }
 
     def test_retry_events_are_not_name_deduplicated(self, tmp_path):
@@ -4867,6 +4882,105 @@ class TestLifecycleMeasurement:
 
         assert measured["lifecycle"] is None
         assert measured["metric_availability"]["lifecycle"] == "missing"
+
+
+class TestInlineDiffLines:
+    """How many diff lines the run's briefings carried, and the empty-briefing
+    alarm built on it.
+
+    The regression this measures shipped on 2026-09-10 and ran unseen for a
+    day: scope inlined nothing, every briefing listed files with no code, and
+    no metric could show it because the only recorded size was the diffstat
+    total. Both the run-level fact and the table cell must keep "nobody
+    measured this" apart from "every briefing was empty".
+    """
+
+    @staticmethod
+    def _manifest_with(starts: list[dict]) -> dict:
+        manifest = _manifest()
+        manifest["agents"] = {
+            "started": starts,
+            "completed": [],
+            "incomplete": sorted(start["agent"] for start in starts),
+        }
+        return manifest
+
+    @pytest.mark.parametrize(
+        ("starts", "expected", "warned", "cell"),
+        [
+            pytest.param(
+                [
+                    _agent_start("code-reviewer", inline_lines=120),
+                    _agent_start("security-reviewer", inline_lines=80),
+                ],
+                {"total": 200, "measured": 2, "dispatched": 2},
+                False,
+                "200",
+                id="every-briefing-measured",
+            ),
+            pytest.param(
+                [
+                    _agent_start("code-reviewer", inline_lines=0),
+                    _agent_start("security-reviewer", inline_lines=0),
+                ],
+                {"total": 0, "measured": 2, "dispatched": 2},
+                True,
+                "0",
+                id="every-briefing-empty-while-the-diffstat-was-not",
+            ),
+            pytest.param(
+                [
+                    _agent_start("code-reviewer", inline_lines=120),
+                    _agent_start("security-reviewer"),
+                ],
+                {"total": None, "measured": 1, "dispatched": 2},
+                False,
+                "—",
+                id="one-reviewer-predates-the-key",
+            ),
+            pytest.param(
+                [_agent_start("code-reviewer")],
+                {"total": None, "measured": 0, "dispatched": 1},
+                False,
+                "—",
+                id="run-predating-the-key",
+            ),
+        ],
+    )
+    def test_run_level_total_and_warning(self, starts, expected, warned, cell):
+        measured = measure_run(
+            self._manifest_with(starts),
+            Path("/nonexistent"),
+            include_transcripts=False,
+        )
+
+        assert measured["lifecycle"]["inline_diff_lines"] == expected
+        assert ("inline_diff_empty" in measured["warnings"]) is warned
+        assert render._table_row(measured)[5] == cell
+
+    def test_zero_diffstat_is_not_an_empty_briefing(self):
+        """A reviewer with nothing to diff legitimately carries no lines.
+        Only a zero briefing beside a non-zero diffstat is the regression."""
+        measured = measure_run(
+            self._manifest_with(
+                [_agent_start("code-reviewer", inline_lines=0, lines=0)]
+            ),
+            Path("/nonexistent"),
+            include_transcripts=False,
+        )
+
+        assert measured["lifecycle"]["inline_diff_lines"]["total"] == 0
+        assert "inline_diff_empty" not in measured["warnings"]
+
+    def test_column_position_is_pinned(self):
+        """Other tests index this table positionally; a column inserted
+        without updating them would silently re-point their assertions."""
+        header = render.format_table(
+            [measure_run(_manifest("run-1"), Path("/nonexistent"),
+                         include_transcripts=False)],
+            {},
+        ).splitlines()[0]
+        assert header.split("|")[6].strip() == "Diff lines"
 
 
 class TestTranscriptFamilyAvailability:
@@ -7207,6 +7321,12 @@ class TestAggregateCohort:
         assert cohort["artifact_writes"]["availability"]["missing"] == 1
 
     def test_tool_failures_and_nonexhaustive_reads_use_only_complete_totals(self):
+        poll = {
+            "category": "poll_outcome",
+            "recovered": False,
+            "recovery": "not_applicable",
+            "actor": "orchestrator",
+        }
         run = _measured_run(
             "complete",
             failures=[
@@ -7214,7 +7334,9 @@ class TestAggregateCohort:
                     "category": "write_requires_read",
                     "recovered": True,
                     "actor": "code-reviewer",
-                }
+                },
+                poll,
+                poll,
             ],
             reads={
                 "all": ["src/a.py", "src/context.py"],
@@ -7228,8 +7350,14 @@ class TestAggregateCohort:
 
         cohort = aggregate_cohort([run])
 
+        # Expected instrument exits stay visible by category, but a poll
+        # that reported "still running" is not a fault to count.
         assert cohort["tool_failures"]["total"] == 1
         assert cohort["tool_failures"]["recovered"] == 1
+        assert cohort["tool_failures"]["by_category"] == {
+            "poll_outcome": 2,
+            "write_requires_read": 1,
+        }
         assert cohort["observed_reads"]["out_of_scope_count"] == 1
         assert cohort["observed_reads"]["by_path"] == {"src/context.py": 1}
         assert cohort["observed_reads"]["non_scope_comparable_count"] == 1
@@ -7371,7 +7499,7 @@ class TestFormattingAndCli:
         )
 
         assert measured["metric_availability"]["usage"] == "disabled"
-        assert render._table_row(measured)[9] == "n/a"
+        assert render._table_row(measured)[10] == "n/a"
 
     def test_table_usage_complete_zero_is_observed_zero(
         self, monkeypatch, tmp_path
@@ -7381,7 +7509,7 @@ class TestFormattingAndCli:
         )
 
         assert measured["metric_availability"]["usage"] == "complete"
-        assert render._table_row(measured)[9] == "0/0"
+        assert render._table_row(measured)[10] == "0/0"
 
     def test_table_usage_partial_observation_is_explicit(
         self, monkeypatch, tmp_path
@@ -7393,7 +7521,7 @@ class TestFormattingAndCli:
         measured = _measure_fake_transcript(monkeypatch, tmp_path, transcript)
 
         assert measured["metric_availability"]["usage"] == "partial"
-        assert render._table_row(measured)[9] == "partial 6/4"
+        assert render._table_row(measured)[10] == "partial 6/4"
 
     def test_the_build_commit_survives_the_sanitizer(self):
         manifest = _manifest("build-identity")
@@ -8078,6 +8206,8 @@ class TestSynthesisAgentsCohort:
             "skipped_runs": 0,
             "total_ms": 1_300_000,
             "mean_ms": 650_000,
+            "dispatch_lag_measured_runs": 0,
+            "dispatch_lag_mean_ms": None,
         }
         assert block["by_agent"][
             contracts._SYNTHESIS_RECONCILIATOR
@@ -8116,7 +8246,119 @@ class TestSynthesisAgentsCohort:
             "skipped_runs": 0,
             "total_ms": None,
             "mean_ms": None,
+            "dispatch_lag_measured_runs": 0,
+            "dispatch_lag_mean_ms": None,
         }
+
+
+class TestSynthesisDispatchLag:
+    """The orchestrator gap each synthesis duration already contains.
+
+    `started_at` is a marker the step script writes before the orchestrator
+    registers its notes and issues the `Agent` call; `duration_ms` runs from
+    that marker to the completion artifact's mtime and has been carrying the
+    gap as agent runtime. The transcript's dispatch timestamp is the only
+    record of the call itself.
+    """
+
+    def _measure(self, monkeypatch, tmp_path, row, dispatched_at):
+        registry = tmp_path / "registry.json"
+        registry.write_text(json.dumps({"agents": {"code-reviewer": {}}}))
+        transcript = _complete_empty_transcript()
+        transcript["agent_usage"] = [
+            {
+                "agent": row["agent"],
+                "agent_id": "synthesis-id",
+                "model": "claude-opus-5",
+                "dispatched_at": dispatched_at,
+                "available": True,
+                "usage": _usage(0),
+                "usage_by_model": {},
+                "tool_calls": 3,
+            }
+        ] if dispatched_at is not None else []
+
+        monkeypatch.setattr(
+            measure,
+            "_load_transcript_module",
+            lambda: lambda *_args: copy.deepcopy(transcript),
+        )
+        manifest = _synthesis_manifest("run-1", row, session_id="session-1")
+        return measure_run(manifest, tmp_path, registry_path=registry)
+
+    @pytest.mark.parametrize(
+        ("started_at", "dispatched_at", "expected", "warned"),
+        [
+            pytest.param(
+                "2026-09-10T10:00:00+00:00",
+                "2026-09-10T10:01:30+00:00",
+                90_000,
+                False,
+                id="marker-then-dispatch",
+            ),
+            pytest.param(
+                "2026-09-10T10:00:00+00:00", None, None, False,
+                id="no-correlated-transcript-row",
+            ),
+            pytest.param(
+                "2026-09-10T10:01:30+00:00",
+                "2026-09-10T10:00:00+00:00",
+                None,
+                True,
+                id="dispatch-before-the-marker",
+            ),
+        ],
+    )
+    def test_lag_is_measured_beside_an_unchanged_duration(
+        self, monkeypatch, tmp_path, started_at, dispatched_at, expected, warned
+    ):
+        measured = self._measure(
+            monkeypatch,
+            tmp_path,
+            _synthesis_row(
+                contracts._SYNTHESIS_RECONCILIATOR, started_at=started_at
+            ),
+            dispatched_at,
+        )
+
+        [row] = measured["synthesis_agents"]["agents"]
+        assert row["dispatch_lag_ms"] == expected
+        # The duration keeps its meaning whether or not a transcript was
+        # available: one number, one definition.
+        assert row["duration_ms"] == 665_000
+        assert (
+            "synthesis_dispatch_before_marker" in measured["warnings"]
+        ) is warned
+        assert render._table_row(measured)[8] == "665.0s/—"
+
+    def test_cohort_mean_counts_only_the_measured_runs(
+        self, monkeypatch, tmp_path
+    ):
+        """A mean over one measured run of two must say so: the lag needs a
+        correlated transcript, which most runs in a cohort will not have."""
+        measured = self._measure(
+            monkeypatch,
+            tmp_path,
+            _synthesis_row(
+                contracts._SYNTHESIS_RECONCILIATOR,
+                started_at="2026-09-10T10:00:00+00:00",
+            ),
+            "2026-09-10T10:01:30+00:00",
+        )
+        unmeasured = measure_run(
+            _synthesis_manifest(
+                "run-2", _synthesis_row(contracts._SYNTHESIS_RECONCILIATOR)
+            ),
+            Path("/nonexistent"),
+            include_transcripts=False,
+        )
+
+        agent = aggregate_cohort([measured, unmeasured])["synthesis_agents"][
+            "by_agent"
+        ][contracts._SYNTHESIS_RECONCILIATOR]
+        assert agent["dispatched_runs"] == 2
+        assert agent["dispatch_lag_measured_runs"] == 1
+        assert agent["dispatch_lag_mean_ms"] == 90_000
 
 
 class TestSynthesisAgentsRendering:
@@ -8127,14 +8369,14 @@ class TestSynthesisAgentsRendering:
             [measure_run(_manifest("run-1"), Path("/nonexistent"),
                          include_transcripts=False)],
             {},
-        ).splitlines()[0].split("|")[8].strip() == "Recon/Critic"
+        ).splitlines()[0].split("|")[9].strip() == "Recon/Critic"
 
     def test_unmeasured_run_renders_as_absent(self):
         measured = measure_run(
             _manifest("run-1"), Path("/nonexistent"),
             include_transcripts=False,
         )
-        assert render._table_row(measured)[7] == "—"
+        assert render._table_row(measured)[8] == "—"
 
     def test_durations_render_as_seconds(self):
         measured = measure_run(
@@ -8145,7 +8387,7 @@ class TestSynthesisAgentsRendering:
             ),
             Path("/nonexistent"), include_transcripts=False,
         )
-        assert render._table_row(measured)[7] == "41.0s/665.0s"
+        assert render._table_row(measured)[8] == "41.0s/665.0s"
 
     def test_a_stall_renders_as_stalled_not_as_a_fast_phase(self):
         measured = measure_run(
@@ -8155,7 +8397,7 @@ class TestSynthesisAgentsRendering:
             )),
             Path("/nonexistent"), include_transcripts=False,
         )
-        assert render._table_row(measured)[7] == "—/stalled"
+        assert render._table_row(measured)[8] == "—/stalled"
 
 
 class TestSkippedCriticIsNotACritiqueDuration:
@@ -8190,6 +8432,8 @@ class TestSkippedCriticIsNotACritiqueDuration:
             "skipped_runs": 1,
             "total_ms": 600_000,
             "mean_ms": 600_000,
+            "dispatch_lag_measured_runs": 0,
+            "dispatch_lag_mean_ms": None,
         }
 
     def test_an_all_skipped_cohort_reports_no_duration_at_all(self):
@@ -9093,14 +9337,14 @@ class TestUsageShares:
         assert "Synth %" in table
         assert "80.0" in table
         assert "without-usage" in table
-        assert render._table_row(missing)[8] == "—"
+        assert render._table_row(missing)[9] == "—"
 
     def test_table_marks_a_partial_snapshot_share_as_partial(self):
         measured = self._measure(self._manifest_with_usage(
             availability={"subagents": "partial", "orchestrator": "complete"},
         ))
 
-        assert render._table_row(measured)[8] == "partial 80.0"
+        assert render._table_row(measured)[9] == "partial 80.0"
 
 
 class TestSkippedStepsSanitize:

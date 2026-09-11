@@ -26,7 +26,11 @@ try:
     from .agent.review_assignment import ReviewAssignmentError, derive_reviewed_files
     from .review_document import load_review_document
     from .reviewer_names import derive_reviewer_name
-    from .reviewer_lifecycle import is_scope_summary_name, review_paths
+    from .reviewer_lifecycle import (
+        SCOPE_SUMMARY_SCHEMA,
+        is_scope_summary_name,
+        review_paths,
+    )
     from .change_purpose import parse_change_purpose
     from .run_paths import REVIEWERS_SUBDIR, artifact_path
     from .dependency_refresh import (
@@ -59,7 +63,11 @@ except ImportError:
     from review.agent.review_assignment import ReviewAssignmentError, derive_reviewed_files
     from review.review_document import load_review_document
     from review.reviewer_names import derive_reviewer_name
-    from review.reviewer_lifecycle import is_scope_summary_name, review_paths
+    from review.reviewer_lifecycle import (
+        SCOPE_SUMMARY_SCHEMA,
+        is_scope_summary_name,
+        review_paths,
+    )
     from review.change_purpose import parse_change_purpose
     from review.run_paths import REVIEWERS_SUBDIR, artifact_path
     from review.dependency_refresh import (
@@ -779,7 +787,7 @@ def aggregate_file_review(
 ) -> Optional[Dict[str, Any]]:
     """Aggregate per-agent scope summaries into the run-level file review.
 
-    Reads schema-3 scope sidecars under each reviewer directory, carries inline-diff
+    Reads `SCOPE_SUMMARY_SCHEMA` scope sidecars under each reviewer directory, carries inline-diff
     receipt by file, and takes each reviewer's claimed and unclaimed files
     from its finalized review document. An agent that never finalized one
     keeps every review-claimable path its summary reported visible as
@@ -839,7 +847,15 @@ def aggregate_file_review(
                     data = json.load(f)
             except (OSError, json.JSONDecodeError):
                 continue
-            if not isinstance(data, dict) or data.get("schema") != 3:
+            # The one schema this run's own producer writes. A sidecar at
+            # any other is a foreign or stale shape whose lists this
+            # function cannot vouch for; skipping it leaves the section
+            # unmeasured, which is honest, where reading it would report a
+            # coverage number from fields nobody guaranteed.
+            if (
+                not isinstance(data, dict)
+                or data.get("schema") != SCOPE_SUMMARY_SCHEMA
+            ):
                 continue
             if any(
                 not isinstance(data.get(key), list)

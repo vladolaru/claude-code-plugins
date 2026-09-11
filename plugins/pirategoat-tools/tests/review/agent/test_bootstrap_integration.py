@@ -22,6 +22,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 from review.agent.output import ReviewOutputBuilder
 from review import run_paths
 from review.reviewer_lifecycle import (
+    briefing_path,
     review_paths,
     scope_summary_path,
     scoped_diff_path,
@@ -117,12 +118,32 @@ def run_bootstrap(*args: str, timeout: int = 60, fixture: str = "multi-file-real
     )
 
 
+def stub_field(stdout: str, field: str) -> str:
+    """The value of one `FIELD: value` line of bootstrap's stdout stub."""
+    for line in stdout.splitlines():
+        if line.startswith(f"{field}: "):
+            return line.split(": ", 1)[1]
+    raise AssertionError(f"{field} missing from stub:\n{stdout}")
+
+
+def briefing_text(result) -> str:
+    """The briefing file the stub names — what the reviewer actually reads.
+
+    Bootstrap's stdout is a pointer; every assertion about briefing CONTENT
+    goes through here, and only assertions about the stub itself stay on
+    stdout. Takes a CompletedProcess or a captured stdout string.
+    """
+    stdout = result if isinstance(result, str) else result.stdout
+    return Path(stub_field(stdout, "BRIEFING")).read_text()
+
+
 _IN_PROCESS_SCOPE = "STATUS: OK\n=== FILES ===\nsrc/a.py  (+1 -0)\n"
 _IN_PROCESS_FACTS = {
     "inline_diff_files": ["src/a.py"],
     "review_claimable_files": [],
     "list_only_files": [],
     "in_scope_stat_lines": 10,
+    "inline_diff_lines": 6,
 }
 
 
@@ -130,12 +151,14 @@ def _main_in_process(
     agent, tmp_path, monkeypatch, capsys,
     scope_output=_IN_PROCESS_SCOPE, facts=_IN_PROCESS_FACTS,
 ):
-    """Run bootstrap's real main() in-process and return its stdout.
+    """Run bootstrap's real main() in-process and return its briefing.
 
     Same harness as test_bootstrap.py::TestPartitionScopePaths: scope.py
     and its sidecar are stubbed (run_scope_discovery, load_scope_facts);
     everything else is real, including find_plugin_root() and the protocol
-    files main() reads from this checkout.
+    files main() reads from this checkout. Returns the briefing file
+    main() wrote, which is what a reviewer receives; stdout is only the
+    stub naming it.
     """
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
@@ -150,7 +173,7 @@ def _main_in_process(
         _mod.main()
     out = capsys.readouterr().out
     assert exc.value.code == 0, out
-    return out
+    return briefing_text(out)
 
 
 def _delivered_protocol_headings(protocol, skip_prefixes):
@@ -207,24 +230,24 @@ class TestCategoryRepresentatives:
             json.dumps({"mode": "pr", "plugin_version": "9.9.9"})
         )
         result = run_bootstrap("--agent", "performance-reviewer", "--output-dir", str(tmp_path))
-        stdout = result.stdout
+        briefing = briefing_text(result)
         assert result.returncode == 0
-        assert "PIRATEGOAT_PLUGIN_VERSION=9.9.9" in stdout
+        assert "PIRATEGOAT_PLUGIN_VERSION=9.9.9" in briefing
 
         # Section structure (hardcoded in build_output template)
-        assert "=== BOOTSTRAP: performance-reviewer ===" in stdout
-        assert "--- Section 1: REVIEW RULES" in stdout
-        assert "=== REVIEW RULES ===" in stdout
-        assert "--- Section 2: REVIEW CONTENT" in stdout
-        assert "--- Section 3: OUTPUT INSTRUCTIONS" in stdout
-        assert "=== OUTPUT INSTRUCTIONS ===" in stdout
+        assert "=== BOOTSTRAP: performance-reviewer ===" in briefing
+        assert "--- Section 1: REVIEW RULES" in briefing
+        assert "=== REVIEW RULES ===" in briefing
+        assert "--- Section 2: REVIEW CONTENT" in briefing
+        assert "--- Section 3: OUTPUT INSTRUCTIONS" in briefing
+        assert "=== OUTPUT INSTRUCTIONS ===" in briefing
 
         # Personalization
-        assert "REVIEWER_NAME: performance" in stdout
+        assert "REVIEWER_NAME: performance" in briefing
         reviewer_dir = tmp_path / "reviewers" / "performance"
-        assert f"{reviewer_dir}/review.json" in stdout
-        assert f"{reviewer_dir}/review.md" not in stdout
-        assert "PIRATEGOAT_REVIEWER_NAME=performance" in stdout
+        assert f"{reviewer_dir}/review.json" in briefing
+        assert f"{reviewer_dir}/review.md" not in briefing
+        assert "PIRATEGOAT_REVIEWER_NAME=performance" in briefing
 
         assert (reviewer_dir / "assignment.json").is_file()
         assert (reviewer_dir / "scope-summary.json").is_file()
@@ -232,18 +255,18 @@ class TestCategoryRepresentatives:
         assert not list(tmp_path.glob("performance-*"))
 
         # Budget present with hard ceiling
-        assert "=== REVIEW BUDGET ===" in stdout
-        assert "Target: ~" in stdout
-        assert "Hard ceiling:" in stdout
-        assert "STOP exploring" in stdout
+        assert "=== REVIEW BUDGET ===" in briefing
+        assert "Target: ~" in briefing
+        assert "Hard ceiling:" in briefing
+        assert "STOP exploring" in briefing
 
         # Conditional sections absent for standard agents
-        assert "=== DOMAIN RULES ===" not in stdout
-        assert "=== EXPLORATION SCOPE ===" not in stdout
-        assert "=== FILE HISTORY ===" not in stdout
+        assert "=== DOMAIN RULES ===" not in briefing
+        assert "=== EXPLORATION SCOPE ===" not in briefing
+        assert "=== FILE HISTORY ===" not in briefing
 
         # REVIEW SCOPE header not duplicated
-        assert stdout.count("=== REVIEW SCOPE ===") <= 1
+        assert briefing.count("=== REVIEW SCOPE ===") <= 1
 
         # The assignment persists the authoritative NOT DIFFED set so the
         # builder can reject claims that match no claimable file.
@@ -251,13 +274,13 @@ class TestCategoryRepresentatives:
             Path(review_paths(tmp_path, "performance").assignment).read_text()
         )
         assert sorted(data["review_claimable_files"]) == sorted(
-            not_diffed_files_in_text(stdout)
+            not_diffed_files_in_text(briefing)
         )
         # Closes the main()->build_output() seam: review_claimable_count must be
         # derived from this exact claimable set, not a neighboring fact
         # (e.g. total scope files) that also happens to be non-empty here.
         # A mis-wired count would pass every other assertion in this suite.
-        assert ("Not reviewed (budget):" in stdout) == bool(
+        assert ("Not reviewed (budget):" in briefing) == bool(
             data["review_claimable_files"]
         )
 
@@ -334,11 +357,12 @@ class TestCategoryRepresentatives:
         data = json.loads(summary.read_text())
         # The domain lives in the filename asserted above — the summary body
         # carries only the facts its readers consume.
-        assert data["schema"] == 3
+        assert data["schema"] == 4
         assert isinstance(data["in_scope_stat_lines"], int)
+        assert isinstance(data["inline_diff_lines"], int)
         # Identity chain: the assignment is named for the reviewer
         # the instance is taught to construct its builder with.
-        assert "PIRATEGOAT_REVIEWER_NAME=repo-renewals" in result.stdout
+        assert "PIRATEGOAT_REVIEWER_NAME=repo-renewals" in briefing_text(result)
         assignment = json.loads(
             Path(review_paths(tmp_path, "repo-renewals").assignment).read_text()
         )
@@ -447,9 +471,9 @@ class TestCategoryRepresentatives:
         # for context budget), and list-only CHANGED (no diff) paths the
         # reviewer is told to inspect when relevant.
         expected_scope = sorted(set(
-            scope_files_in_text(result.stdout)
-            + not_diffed_files_in_text(result.stdout)
-            + list_only_files_in_text(result.stdout)
+            scope_files_in_text(briefing_text(result))
+            + not_diffed_files_in_text(briefing_text(result))
+            + list_only_files_in_text(briefing_text(result))
         ))
         assert expected_scope
         assert agent_start["scope"]["paths"] == expected_scope
@@ -457,53 +481,53 @@ class TestCategoryRepresentatives:
     def test_test_agent(self, tmp_path):
         """Test-reviewer agent gets DOMAIN RULES (php-tests-reviewer)."""
         result = run_bootstrap("--agent", "php-tests-reviewer", "--output-dir", str(tmp_path))
-        stdout = result.stdout
+        briefing = briefing_text(result)
         assert result.returncode == 0
 
         # Test-agent-specific: DOMAIN RULES present
-        assert "=== DOMAIN RULES ===" in stdout
+        assert "=== DOMAIN RULES ===" in briefing
 
         # Standard structure still present
-        assert "=== REVIEW RULES ===" in stdout
-        assert "=== REVIEW BUDGET ===" in stdout
-        assert "REVIEWER_NAME: php-tests" in stdout
-        assert review_paths(tmp_path, "php-tests").final in stdout
-        assert "PIRATEGOAT_REVIEWER_NAME=php-tests" in stdout
+        assert "=== REVIEW RULES ===" in briefing
+        assert "=== REVIEW BUDGET ===" in briefing
+        assert "REVIEWER_NAME: php-tests" in briefing
+        assert review_paths(tmp_path, "php-tests").final in briefing
+        assert "PIRATEGOAT_REVIEWER_NAME=php-tests" in briefing
 
         # Other conditional sections absent
-        assert "=== EXPLORATION SCOPE ===" not in stdout
+        assert "=== EXPLORATION SCOPE ===" not in briefing
 
     def test_exploration_agent(self, tmp_path):
         """patterns-reviewer gets EXPLORATION SCOPE + no_semantic_filter (patterns-reviewer)."""
         result = run_bootstrap("--agent", "patterns-reviewer", "--output-dir", str(tmp_path))
-        stdout = result.stdout
+        briefing = briefing_text(result)
         assert result.returncode == 0
 
         # Exploration-specific: EXPLORATION SCOPE present
-        assert "=== EXPLORATION SCOPE ===" in stdout
+        assert "=== EXPLORATION SCOPE ===" in briefing
 
         # Personalization
-        assert "REVIEWER_NAME: patterns" in stdout
-        assert "PIRATEGOAT_REVIEWER_NAME=patterns" in stdout
+        assert "REVIEWER_NAME: patterns" in briefing
+        assert "PIRATEGOAT_REVIEWER_NAME=patterns" in briefing
 
         # Not a test agent — no DOMAIN RULES
-        assert "=== DOMAIN RULES ===" not in stdout
+        assert "=== DOMAIN RULES ===" not in briefing
 
     def test_null_domain_agent(self, tmp_path):
         """Null-domain agent skips scope discovery (tests-mutation-reviewer)."""
         result = run_bootstrap("--agent", "tests-mutation-reviewer", "--output-dir", str(tmp_path))
-        stdout = result.stdout
+        briefing = briefing_text(result)
         assert result.returncode == 0
 
         # Null-domain-specific: no scope discovery
-        assert "No scope discovery" in stdout
+        assert "No scope discovery" in briefing
 
         # tests-mutation-reviewer has protocols=["reviewer"], NOT "tests-reviewer"
-        assert "=== DOMAIN RULES ===" not in stdout
+        assert "=== DOMAIN RULES ===" not in briefing
 
         # Personalization still works
-        assert "REVIEWER_NAME: tests-mutation" in stdout
-        assert "PIRATEGOAT_REVIEWER_NAME=tests-mutation" in stdout
+        assert "REVIEWER_NAME: tests-mutation" in briefing
+        assert "PIRATEGOAT_REVIEWER_NAME=tests-mutation" in briefing
 
     def test_secondary_domains_agent(self, tmp_path):
         """Agent with secondary_domains gets SECONDARY SCOPE (security-reviewer).
@@ -516,15 +540,15 @@ class TestCategoryRepresentatives:
             "--agent", "security-reviewer", "--output-dir", str(tmp_path),
             fixture="php-with-ci-config.diff",
         )
-        stdout = result.stdout
+        briefing = briefing_text(result)
         assert result.returncode == 0
 
         # Secondary domains: config-ops scope appended
-        assert "=== SECONDARY SCOPE: config-ops ===" in stdout
+        assert "=== SECONDARY SCOPE: config-ops ===" in briefing
 
         # Standard structure still present
-        assert "=== REVIEW RULES ===" in stdout
-        assert "REVIEWER_NAME: security" in stdout
+        assert "=== REVIEW RULES ===" in briefing
+        assert "REVIEWER_NAME: security" in briefing
 
     def test_history_and_budget_override_agent(self, tmp_path):
         """history-insights-reviewer gets FILE HISTORY + budget override.
@@ -537,17 +561,17 @@ class TestCategoryRepresentatives:
         downstream reader would have to recompute.
         """
         result = run_bootstrap("--agent", "history-insights-reviewer", "--output-dir", str(tmp_path))
-        stdout = result.stdout
+        briefing = briefing_text(result)
         assert result.returncode == 0
 
         # History-specific: FILE HISTORY section present
-        assert "=== FILE HISTORY ===" in stdout
+        assert "=== FILE HISTORY ===" in briefing
 
         # Budget override: fixed value 45 (from registry), not scope-computed
-        assert "Target: ~45 tool calls" in stdout
+        assert "Target: ~45 tool calls" in briefing
 
         # Personalization
-        assert "REVIEWER_NAME: history-insights" in stdout
+        assert "REVIEWER_NAME: history-insights" in briefing
 
         data = json.loads(
             Path(review_paths(tmp_path, "history-insights").assignment).read_text()
@@ -557,8 +581,8 @@ class TestCategoryRepresentatives:
         assert data["channels"] == ["blocking"]
         assert "budget_capped" not in data
 
-        diffed = scope_files_in_text(stdout)
-        not_diffed = not_diffed_files_in_text(stdout)
+        diffed = scope_files_in_text(briefing)
+        not_diffed = not_diffed_files_in_text(briefing)
         assert data["in_scope_review_file_count"] == len(
             dict.fromkeys([*diffed, *not_diffed])
         )
@@ -568,18 +592,18 @@ class TestCategoryRepresentatives:
     def test_file_history_without_budget_override(self, tmp_path):
         """api-contract-reviewer gets FILE HISTORY but uses scope-computed budget."""
         result = run_bootstrap("--agent", "api-contract-reviewer", "--output-dir", str(tmp_path))
-        stdout = result.stdout
+        briefing = briefing_text(result)
         assert result.returncode == 0
 
         # file_history present
-        assert "=== FILE HISTORY ===" in stdout
+        assert "=== FILE HISTORY ===" in briefing
 
         # No budget override — uses scope-computed value (not 45)
-        assert "Target: ~45 tool calls" not in stdout
-        assert "Target: ~" in stdout
+        assert "Target: ~45 tool calls" not in briefing
+        assert "Target: ~" in briefing
 
         # Personalization
-        assert "REVIEWER_NAME: api-contract" in stdout
+        assert "REVIEWER_NAME: api-contract" in briefing
 
 
 class TestArchitecturalInvariants:
@@ -1204,6 +1228,92 @@ class TestReviewOutputBuilderAPIExample:
         assert "Do NOT read the output file back to verify" in output
 
 
+class TestBriefingFileDelivery:
+    """The briefing is a run-directory file the reviewer Reads once.
+
+    Briefings are 34-39 KB and Claude Code persists any tool result over
+    ~30,000 B, so an inline briefing reached the reviewer as a
+    random-named persisted file behind a 2 KB preview, cost a turn (three
+    Reads with offset/limit in two field dispatches), and was never kept
+    with the run. Delivery is unconditional: one shape, no threshold.
+    """
+
+    STUB_CAP = 2048
+
+    def test_stub_names_a_briefing_file_holding_the_whole_briefing(self, tmp_path):
+        result = run_bootstrap(
+            "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
+        )
+
+        assert result.returncode == 0, result.stderr
+        path = Path(stub_field(result.stdout, "BRIEFING"))
+        assert path.is_absolute()
+        assert path == Path(briefing_path(str(tmp_path), "performance"))
+        text = path.read_text()
+        assert int(stub_field(result.stdout, "BRIEFING_BYTES")) == len(
+            text.encode("utf-8")
+        )
+        for section in (
+            "=== BOOTSTRAP: performance-reviewer ===",
+            "=== REVIEW RULES ===",
+            "=== REVIEW SCOPE ===",
+            "=== OUTPUT INSTRUCTIONS ===",
+            "PIRATEGOAT_OUTPUT_DIR=",
+        ):
+            assert section in text, section
+
+    def test_stdout_is_a_stub_that_keeps_the_status(self, tmp_path):
+        result = run_bootstrap(
+            "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
+        )
+
+        assert len(result.stdout) < self.STUB_CAP, len(result.stdout)
+        assert "=== BOOTSTRAP: performance-reviewer ===" in result.stdout
+        assert "STATUS: OK" in result.stdout
+        # The briefing's own body must not be duplicated on stdout.
+        assert "=== REVIEW RULES ===" not in result.stdout
+
+    def test_a_truncated_read_has_a_way_to_reach_the_output_contract(
+        self, tmp_path
+    ):
+        """Only the scope section is capped (`SCOPE_INLINE_CAP`); the PR
+        body and the repository's own rules ride in whole, on purpose. A
+        briefing big enough for Read to answer partially would otherwise
+        strand the reviewer before OUTPUT INSTRUCTIONS — the last section,
+        and the only place the save and finalize contract is stated — with
+        the stub forbidding the offset read that would reach it."""
+        stub = run_bootstrap(
+            "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
+        ).stdout
+
+        assert "offset" in stub
+        assert stub.index("one Read call") < stub.index("Only if")
+
+    def test_no_domain_files_run_still_writes_the_briefing(self, tmp_path):
+        """The reviewer still needs the briefing to report not-applicable."""
+        result = run_bootstrap(
+            "--agent", "php-tests-reviewer", "--output-dir", str(tmp_path),
+            fixture="js-clean-source.diff",
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "STATUS: NO_DOMAIN_FILES" in result.stdout
+        assert "STATUS: NO_DOMAIN_FILES" in briefing_text(result)
+
+    def test_two_reviewers_get_distinct_briefing_files(self, tmp_path):
+        first = run_bootstrap(
+            "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
+        )
+        second = run_bootstrap(
+            "--agent", "security-reviewer", "--output-dir", str(tmp_path)
+        )
+
+        paths = {stub_field(r.stdout, "BRIEFING") for r in (first, second)}
+        assert len(paths) == 2
+        assert "performance-reviewer" in briefing_text(first)
+        assert "security-reviewer" in briefing_text(second)
+
+
 class TestBootstrapOutputSizeCap:
     """Bootstrap caps inline scope when output would exceed size threshold."""
 
@@ -1494,7 +1604,7 @@ class TestRepoRuleAndRefModeSelection:
             "--output-dir", str(tmp_path),
         )
         assert result.returncode == 0
-        assert "RENEWALS INSTANCE RULE MARKER" in result.stdout
+        assert "RENEWALS INSTANCE RULE MARKER" in briefing_text(result)
 
     def test_rule_targeting_a_declared_scope_domain_reaches_the_adapter(
         self, tmp_path
@@ -1515,7 +1625,7 @@ class TestRepoRuleAndRefModeSelection:
             "--output-dir", str(tmp_path),
         )
         assert result.returncode == 0
-        assert "DECLARED DOMAIN RULE MARKER" in result.stdout
+        assert "DECLARED DOMAIN RULE MARKER" in briefing_text(result)
 
     def test_advisory_rule_injects_the_channel_contract(self, tmp_path):
         """The channel exists only as rendered prose unless the reviewer is
@@ -1528,7 +1638,7 @@ class TestRepoRuleAndRefModeSelection:
             "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
         )
         assert result.returncode == 0
-        assert 'add_finding(..., channel="advisory")' in result.stdout
+        assert 'add_finding(..., channel="advisory")' in briefing_text(result)
 
         # The assignment is the sole carrier of the reviewer's channels.
         assignment = json.loads(
@@ -1544,8 +1654,8 @@ class TestRepoRuleAndRefModeSelection:
             "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
         )
         assert result.returncode == 0
-        assert "BLOCKING BODY" in result.stdout
-        assert "CHANNEL CONTRACT" not in result.stdout
+        assert "BLOCKING BODY" in briefing_text(result)
+        assert "CHANNEL CONTRACT" not in briefing_text(result)
 
         assignment = json.loads(
             Path(review_paths(tmp_path, "performance").assignment).read_text()
@@ -1578,8 +1688,8 @@ class TestRepoRuleAndRefModeSelection:
             repo, "--agent", "code-reviewer", "--output-dir", str(outdir)
         )
         assert result.returncode == 0
-        assert "claimable_target.php" in not_diffed_files_in_text(result.stdout)
-        assert "CLAIMABLE FILE RULE MARKER" in result.stdout
+        assert "claimable_target.php" in not_diffed_files_in_text(briefing_text(result))
+        assert "CLAIMABLE FILE RULE MARKER" in briefing_text(result)
 
     def test_ref_mode_path_declaration_scopes_the_matching_file(
         self, tmp_path
@@ -1612,7 +1722,7 @@ class TestRepoRuleAndRefModeSelection:
             "--output-dir", str(outdir),
         )
         assert result.returncode == 0
-        assert "docs/guide.md" in scope_files_in_text(result.stdout)
+        assert "docs/guide.md" in scope_files_in_text(briefing_text(result))
 
 
 class TestOutputFilenameConsistency:

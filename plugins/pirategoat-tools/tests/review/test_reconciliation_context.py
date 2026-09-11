@@ -318,6 +318,53 @@ class TestSeverityFloorNormalization:
         assert "Severity-floor" not in stripped
 
 
+class TestSeverityFloorConfidenceGate:
+    """A floor is a lock the reconciliator must obey, so only a reviewer
+    who stood behind the finding gets to set one.
+
+    The Woo self-audit files its mandatory promotions at confidence
+    0.5-0.6 by design. In run #66900 two of them arrived locked at medium,
+    the reconciliator kept both with no repository read of its own, and
+    the critic fetched the one real consumer and demoted them.
+    """
+
+    @pytest.mark.parametrize("confidence,floor,survives", [
+        pytest.param(0.5, "medium", False, id="self-audit-promotion"),
+        pytest.param(0.69, "high", False, id="just-below-threshold"),
+        pytest.param(0.7, "medium", True, id="at-threshold"),
+        pytest.param(0.9, "high", True, id="verified"),
+    ])
+    def test_only_a_confident_finding_keeps_its_floor(
+        self, mod, tmp_path, confidence, floor, survives
+    ):
+        _write_review_json(tmp_path, "woo", _make_review_json(
+            reviewer="woo",
+            findings=[_make_finding(
+                severity=floor, confidence=confidence, severity_floor=floor
+            )],
+        ))
+
+        finding = mod.load_agent_reviews(str(tmp_path))["woo-review"]["findings"][0]
+
+        assert ("severity_floor" in finding) is survives
+        # Stripping the lock never touches what the reviewer rated it.
+        assert finding["severity"] == floor
+
+    def test_the_reviewers_own_review_json_is_untouched(self, mod, tmp_path):
+        """Only the reconciliator's copy loses the floor. `review.json` is
+        the faithful record of what the reviewer said."""
+        path = _write_review_json(tmp_path, "woo", _make_review_json(
+            reviewer="woo",
+            findings=[_make_finding(confidence=0.5, severity_floor="medium")],
+        ))
+        before = path.read_bytes()
+
+        loaded = mod.load_agent_reviews(str(tmp_path))["woo-review"]
+
+        assert "severity_floor" not in loaded["findings"][0]
+        assert path.read_bytes() == before
+
+
 # ===========================================================================
 # TestExtractReferences
 # ===========================================================================

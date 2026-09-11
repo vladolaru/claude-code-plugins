@@ -104,6 +104,39 @@ def _result(
     return entry
 
 
+_POLL_COMMAND = 'python3 /plugin/scripts/review/agents_status.py --output-dir "/output"'
+# What the program prints on every 0/2/3 exit, and what argparse and the
+# Python launcher print instead when it never ran — all three exiting 2.
+_POLL_STATUS = "Dispatched: 2 | Finished: 1 | Running: 1\n\nALL_DONE: false"
+_POLL_USAGE_ERROR = (
+    "usage: agents_status.py [-h] --output-dir OUTPUT_DIR [--wait]\n"
+    "agents_status.py: error: unrecognized arguments: --timeout 60"
+)
+_POLL_MISSING_SCRIPT = (
+    "python3: can't open file '/plugin/scripts/review/agents_status.py': "
+    "[Errno 2] No such file or directory"
+)
+
+
+def _bash_exit(
+    tool_id: str, command: str, code: int, output: str = "output"
+) -> list[dict]:
+    """A non-zero Bash exit as the harness records it: `is_error`, the code
+    on the content's first line, and a plain-string `toolUseResult` with no
+    structured exit code. `output` is what the command printed, which is
+    what separates a program's contractual exit from a broken invocation
+    of the same program."""
+    return [
+        _assistant(_call(tool_id, "Bash", command=command)),
+        _result(
+            tool_id,
+            f"Exit code {code}\n{output}",
+            is_error=True,
+            structured=f"Error: Exit code {code}\n{output}",
+        ),
+    ]
+
+
 def _usage(input_tokens: int, output_tokens: int, create: int = 0, read: int = 0) -> dict:
     return {
         "input_tokens": input_tokens,
@@ -369,11 +402,36 @@ class TestCorrelateRunAgents:
                 "agent": "security-reviewer",
                 "agent_id": "abc123",
                 "model": "claude-opus-4-1",
+                # The instant the orchestrator issued the call — the only
+                # record of it, since the step markers are written earlier.
+                "dispatched_at": "2026-07-20T10:00:00+00:00",
                 "transcript": str(
                     tmp_path / "session-1" / "subagents" / "agent-abc123.jsonl"
                 ),
             }
         ]
+
+    def test_dispatch_without_a_timestamp_is_unmeasured(self, tmp_path):
+        """A dispatch entry the harness wrote without a timestamp carries no
+        instant. None says so; any substitute would invent a zero-length gap
+        between the step marker and the call."""
+        session = tmp_path / "session-1.jsonl"
+        output_dir = tmp_path / "pr-review-1"
+        entry = _assistant(_call("a1", "Agent", prompt=_agent_prompt(output_dir)))
+        session.write_text(
+            "\n".join(
+                json.dumps(item)
+                for item in (
+                    {**entry, "timestamp": None},
+                    _result("a1", structured={"agentId": "abc123"}),
+                )
+            ) + "\n"
+        )
+
+        [correlated] = correlate_run_agents(
+            session, output_dir, {"security-reviewer"}
+        )
+        assert correlated["dispatched_at"] is None
 
     @pytest.mark.parametrize(
         "prompt_template",
@@ -1442,6 +1500,125 @@ class TestAnalyzeSubagent:
         assert failure["category"] == "structured_failure"
         assert failure["operation_class"] == "builder_output_attempt"
         assert failure["recovered"] is True
+
+    @pytest.mark.parametrize(
+        "command,exit_code,output,category,recovery",
+        [
+            pytest.param(
+                _POLL_COMMAND, 2, _POLL_STATUS,
+                "poll_outcome", "not_applicable", id="poll-still-running",
+            ),
+            pytest.param(
+                f"{_POLL_COMMAND} --wait --max-seconds 60", 3, _POLL_STATUS,
+                "poll_outcome", "not_applicable", id="poll-wait-expired",
+            ),
+            pytest.param(
+                f"{_POLL_COMMAND} 2>&1", 2, _POLL_STATUS,
+                "poll_outcome", "not_applicable", id="poll-redirected",
+            ),
+            pytest.param(
+                _POLL_COMMAND, 1, "ERROR: No dispatch plan",
+                "structured_failure", "none", id="poll-error",
+            ),
+            pytest.param(
+                f"{_POLL_COMMAND} --timeout 60", 2, _POLL_USAGE_ERROR,
+                "structured_failure", "none", id="poll-rejected-by-argparse",
+            ),
+            pytest.param(
+                _POLL_COMMAND, 2, _POLL_MISSING_SCRIPT,
+                "structured_failure", "none", id="poll-script-not-found",
+            ),
+            pytest.param(
+                "grep -n ALL_DONE /plugin/scripts/review/agents_status.py", 2,
+                "output", "structured_failure", "none", id="script-as-operand",
+            ),
+            pytest.param(
+                "ls /output/missing.json", 1, "output",
+                "structured_failure", "none", id="other-command",
+            ),
+        ],
+    )
+    def test_poll_exit_is_listed_as_poll_outcome_by_program_and_code(
+        self, tmp_path, command, exit_code, output, category, recovery
+    ):
+        """`agents_status.py` exits 2 (still running) and 3 (`--wait`
+        expired) by contract; the harness flags both as errors. The
+        exemption needs all three of the program, the code, and the status
+        render — argparse answers an unknown flag with 2 and the Python
+        launcher answers a missing script path with 2, from a command line
+        naming this same program, and neither one polled anything."""
+        transcript = _write_jsonl(
+            tmp_path / "exit.jsonl",
+            _bash_exit("call", command, exit_code, output),
+        )
+
+        [failure] = analyze_subagent(transcript, tmp_path, [])["tool_failures"]
+
+        assert (failure["category"], failure["recovered"], failure["recovery"]) == (
+            category, False, recovery,
+        )
+
+    def test_poll_series_ending_in_all_done_is_not_a_recovery(self, tmp_path):
+        transcript = _write_jsonl(
+            tmp_path / "poll-series.jsonl",
+            [
+                *_bash_exit("poll-1", _POLL_COMMAND, 2, _POLL_STATUS),
+                *_bash_exit("poll-2", _POLL_COMMAND, 2, _POLL_STATUS),
+                _assistant(_call("poll-3", "Bash", command=_POLL_COMMAND)),
+                _result(
+                    "poll-3",
+                    "ALL_DONE: true",
+                    is_error=False,
+                    structured={"stdout": "ALL_DONE: true", "stderr": ""},
+                ),
+            ],
+        )
+
+        failures = analyze_subagent(transcript, tmp_path, [])["tool_failures"]
+
+        assert [
+            (f["category"], f["recovered"], f["recovery"]) for f in failures
+        ] == [("poll_outcome", False, "not_applicable")] * 2
+
+    def test_poll_outcome_does_not_recover_an_earlier_poll_error(self, tmp_path):
+        transcript = _write_jsonl(
+            tmp_path / "poll-after-error.jsonl",
+            [
+                *_bash_exit("error", _POLL_COMMAND, 1, "ERROR: No dispatch plan"),
+                *_bash_exit("poll", _POLL_COMMAND, 2, _POLL_STATUS),
+            ],
+        )
+
+        failures = analyze_subagent(transcript, tmp_path, [])["tool_failures"]
+
+        assert [(f["category"], f["recovered"]) for f in failures] == [
+            ("structured_failure", False),
+            ("poll_outcome", False),
+        ]
+
+    def test_search_miss_the_harness_interprets_is_not_a_failure(self, tmp_path):
+        """The harness records a grep/rg miss as a success carrying
+        `returnCodeInterpretation`, never as `is_error`, so a search that
+        found nothing needs no category of its own."""
+        transcript = _write_jsonl(
+            tmp_path / "grep-miss.jsonl",
+            [
+                _assistant(_call("grep", "Bash", command="grep -n absent src/a.py")),
+                _result(
+                    "grep",
+                    "",
+                    is_error=False,
+                    structured={
+                        "stdout": "",
+                        "stderr": "",
+                        "interrupted": False,
+                        "returnCodeInterpretation": "No matches found",
+                    },
+                ),
+            ],
+        )
+
+        assert analyze_subagent(transcript, tmp_path, [])["tool_failures"] == []
 
     def test_bash_failure_cannot_recover_through_write_success(self, tmp_path):
         command = _builder_envelope("print('attempt')")
@@ -3515,6 +3692,7 @@ class TestEnrichRunTranscript:
                 "agent": "security-reviewer",
                 "agent_id": "missing-agent",
                 "model": None,
+                "dispatched_at": "2026-07-20T10:00:00+00:00",
                 "available": False,
                 "usage": None,
                 "usage_by_model": None,

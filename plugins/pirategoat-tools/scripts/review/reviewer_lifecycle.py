@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Reviewer-specific draft, final, sidecar, and intake state."""
+"""Reviewer-specific draft, final, sidecar, and intake state.
+
+This module owns the fixed per-reviewer filenames under
+`reviewers/<reviewer>/`: `review.draft.json`, `review.json`,
+`assignment.json`, `review.md`, `scope-summary*.json`,
+`scoped-diff.patch`, `briefing.md` and `started`. They are per-reviewer,
+so they are named here rather than in `run_paths.ARTIFACTS`, which
+registers the run's shared artifacts.
+"""
 
 from dataclasses import dataclass
 import json
@@ -75,6 +83,20 @@ def scope_summary_path(
     return str(reviewer_dir(output_dir, reviewer) / name)
 
 
+# The shape every scope-summary sidecar is written and read at. The
+# producing authority is `agent/scope.py::write_scope_summary`, which
+# repeats the integer rather than importing it because that module is
+# deliberately stdlib-only; `TestScopeSummarySchemaParity` fails the
+# moment the two disagree.
+#
+# It lives here, beside the two other facts about this artifact, because
+# it has TWO readers that share no other code — `bootstrap.load_scope_facts`
+# (a reviewer's assignment facts) and `manifest_sections.aggregate_file_review`
+# (the run-level file review). Bumping 3 -> 4 moved only the first and left
+# step 9 silently omitting the review-coverage section for a whole release.
+SCOPE_SUMMARY_SCHEMA = 4
+
+
 def is_scope_summary_name(name: str) -> bool:
     """Return whether a basename is a canonical scope-summary sidecar."""
     return name == "scope-summary.json" or (
@@ -85,6 +107,11 @@ def is_scope_summary_name(name: str) -> bool:
 def scoped_diff_path(output_dir: str, reviewer: str) -> str:
     """Return one reviewer's complete scoped diff path."""
     return str(reviewer_dir(output_dir, reviewer) / "scoped-diff.patch")
+
+
+def briefing_path(output_dir: str, reviewer: str) -> str:
+    """Return one reviewer's complete briefing path."""
+    return str(reviewer_dir(output_dir, reviewer) / "briefing.md")
 
 
 def started_marker_path(output_dir: str, reviewer: str) -> str:

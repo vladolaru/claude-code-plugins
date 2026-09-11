@@ -64,7 +64,8 @@ except ImportError:
 # the block, not in the surrounding briefing prose.
 DISPATCH_PROMPT_LEAD = (
     "Run this exact command as your FIRST tool call, before reading any file, "
-    "and follow the scope and output contract it prints:"
+    "then read the briefing file it names and follow that scope and output "
+    "contract:"
 )
 
 
@@ -76,6 +77,16 @@ def _artifact_display(output_dir, key):
 def _artifact_name(key):
     """Return one registry-owned basename for state comparisons and prose."""
     return artifact_path("", key).name
+
+
+def _artifact_run_path(key):
+    """Return one registry-owned path relative to the run directory.
+
+    For literals a script echoes back, such as `SAVED <path>`, so the
+    orchestrator matches the file's real location, not a bare basename.
+    """
+    return str(artifact_path("", key))
+
 
 # ---------------------------------------------------------------------------
 # Pipeline Identity
@@ -735,8 +746,7 @@ def _dependency_refresh_briefing(state, config, output_dir):
         f"--output-dir {od} --report "
         '"$TMPDIR/dependency-refresh-report.json"`',
         "Proceed only when the command prints literal `SAVED "
-        f"{_artifact_name('dependency_refresh')}` and the canonical file exists in the "
-        "output directory.",
+        f"{_artifact_run_path('dependency_refresh')}`.",
     ]
     return situation, actions, handoff
 
@@ -1193,8 +1203,8 @@ def _step_6_dispatch_agents(mode, state, context, config, output_dir):
                     )
                     actions.append(
                         f"- {_codex_agent_instruction(agent_type)} Then run the exact "
-                        "bootstrap command below and follow the emitted scope and "
-                        "output contract."
+                        "bootstrap command below, read the briefing file it names, "
+                        "and follow that scope and output contract."
                     )
                 actions.append("```")
                 if not codex_host:
@@ -1210,8 +1220,8 @@ def _step_6_dispatch_agents(mode, state, context, config, output_dir):
                     )
                     actions.append(
                         f"- {_codex_agent_instruction(agent_type)} Then run the exact "
-                        "bootstrap command below and follow the emitted scope and "
-                        "output contract."
+                        "bootstrap command below, read the briefing file it names, "
+                        "and follow that scope and output contract."
                     )
                 actions.append("```")
                 if not codex_host:
@@ -1239,16 +1249,16 @@ def _step_6_dispatch_agents(mode, state, context, config, output_dir):
 # ---------------------------------------------------------------------------
 
 def _draft_finalization_guidance():
+    """The two draft facts that hold on both hosts.
+
+    When and how the orchestrator may finalize someone else's draft is a
+    per-host wake-up rule, so it lives in each host's waiting bullets
+    below, not here.
+    """
     return [
         "A saved review draft remains RUNNING; only final "
         "`reviewers/<reviewer>/review.json` that passes canonical validation is FINISHED; "
         "an invalid final filename is terminal process evidence only.",
-        "After a host subagent-completion notification, run agents_status. "
-        "If that returned agent's status block contains a `DRAFT` line, "
-        "run the exact command printed on its `FINALIZE_REVIEW_COMMAND` line, then "
-        "run agents_status again.",
-        "Polling or draft presence without a host completion notification "
-        "never authorizes parent-side finalization.",
         "A TIMED_OUT unfinalized draft remains timed out and is discarded "
         "when review intake closes.",
         "",
@@ -1295,50 +1305,58 @@ def _step_7_save_baseline(mode, state, context, config, output_dir):
             f"python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\" --wait --max-seconds 60",
             "```",
             "- Exit code 0 (ALL_DONE): proceed to step 8",
-            "- Exit code 3 (60s elapsed, still running): print one progress "
-            "line and re-run the same call",
+            "- Exit code 3 (60s elapsed, still running): re-run the same "
+            "call, no commentary",
             "- NOT_DISPATCHED agents: dispatch them first, then re-check",
+            "- A `DRAFT` line for an agent whose Codex task has returned: "
+            "run the exact command on its `FINALIZE_REVIEW_COMMAND` line, "
+            "then re-check",
             "",
-            "This terminates on its own: a RUNNING agent flips to TIMED_OUT "
-            f"at the configured agent timeout (default {DEFAULT_AGENT_TIMEOUT}s "
-            "/ 20 min), and a timed-out agent no longer blocks ALL_DONE, so "
-            "exit 0 arrives within about one more polling cycle even in the "
-            "worst case. If it doesn't, proceed to step 8 anyway — its own "
-            "escalation gate force-proceeds.",
-            "",
-            "Expect roughly 10 calls for a typical run.",
+            "A RUNNING agent flips to TIMED_OUT at the agent timeout "
+            f"(default {DEFAULT_AGENT_TIMEOUT}s) and stops blocking "
+            "ALL_DONE, so exit 0 always arrives.",
         ])
     else:
+        # The watchdog is the completion signal, not a backstop: --wait
+        # re-reads the reviewer directories every 1.5s and exits the instant
+        # nothing is left to wait for, so it cannot lag a host notification.
+        # That makes a poll after each FINISHED notification pure duplicate
+        # work — on the 2026-09-10 field runs those polls and the turns that
+        # narrated them were 17-23% of the orchestrator's input tokens.
+        # Notifications stay in the briefing only for the anomalies the disk
+        # cannot resolve on its own: a reviewer that saved a draft without
+        # finalizing it, errored, or timed out.
         actions.extend([
-            "Sequence matters here — do these two things IN ORDER, not in "
-            "parallel:",
-            "",
-            "1. Immediately after dispatching, launch ONE watchdog in the "
-            "BACKGROUND (a Bash call with `run_in_background: true`) — a "
-            "guaranteed wake-up past the 1200s agent timeout even if every "
-            "per-agent notification is missed. It holds no model turn open "
-            "while it waits:",
+            "1. Launch ONE watchdog in the BACKGROUND (a Bash call with "
+            "`run_in_background: true`). It exits the moment every reviewer "
+            "is done on disk, or at expiry:",
             "```",
             f"python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\" --wait --max-seconds 1500",
             "```",
-            "2. THEN END YOUR TURN. Notifications are primary from here — "
-            "each subagent's completion notification is your wake-up "
-            "signal; do not do anything else while waiting.",
+            "2. END YOUR TURN.",
             "",
-            "On wake-up, run agents_status once:",
-            "```",
-            f"python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\"",
-            "```",
-            "- Exit code 0 (ALL_DONE): proceed to step 8",
-            "- Exit code 2 (still running): end your turn again and wait for "
-            "the next wake-up",
-            "- NOT_DISPATCHED agents: dispatch them first, then re-check",
+            "On wake-up, act on what woke you:",
+            # NOT_DISPATCHED is read BEFORE the exit code, not under exit 2:
+            # `all_done` is `running == 0`, so an agent that never wrote a
+            # started marker does not block ALL_DONE, and step 8 closes
+            # intake on exit 0 — the reviewer could never submit.
+            "- The watchdog exited: run "
+            f"`python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\"` "
+            "once. Any NOT_DISPATCHED agents: dispatch them, launch a fresh "
+            "watchdog, end your turn — ALL_DONE does not wait for an agent "
+            "that never started. Otherwise exit 0: proceed to step 8; "
+            "exit 2: launch a fresh watchdog, end your turn.",
+            "- A subagent notification whose result begins `STATUS: "
+            "FINISHED`: no action. End your turn; the watchdog fires when "
+            "all are done.",
+            "- Any other subagent notification (no FINISHED line, an error, "
+            "a timeout): run agents_status once. A `DRAFT` line in that "
+            "agent's block: run the exact command on its "
+            "`FINALIZE_REVIEW_COMMAND` line, then end your turn.",
+            "- A task-id you have already acted on: no action.",
             "",
-            "Do not do any of these while waiting:",
-            "- No foreground `sleep` — the harness blocks it",
-            "- No keepalive loops — empty turns just to \"stay alive\"",
-            "- No polling without a new wake-up — re-checking status without "
-            "a fresh notification or watchdog expiry wastes turns",
+            "Never: foreground `sleep`, keepalive turns, or a status call "
+            "without a wake-up.",
         ])
 
     return {
@@ -1413,40 +1431,44 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
                     f"python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\" --wait --max-seconds 60",
                     "```",
                     "- Exit code 0 (ALL_DONE): re-run step 8",
-                    "- Exit code 3 (60s elapsed, still running): print one "
-                    "progress line and re-run the same call",
-                    "This terminates on its own within the "
-                    f"{agent_timeout}s agent timeout; if it doesn't, the "
-                    f"escalation above force-proceeds {escalation_threshold}s "
-                    "after waiting began.",
+                    "- Exit code 3 (60s elapsed, still running): re-run the "
+                    "same call, no commentary",
+                    "- A `DRAFT` line for an agent whose Codex task has "
+                    "returned: run the exact command on its "
+                    "`FINALIZE_REVIEW_COMMAND` line, then re-check",
+                    f"A RUNNING agent flips to TIMED_OUT at the {agent_timeout}s "
+                    "agent timeout, so exit 0 always arrives; the escalation "
+                    f"above force-proceeds {escalation_threshold}s after "
+                    "waiting began.",
                 ]
             else:
                 actions = _draft_finalization_guidance() + [
-                    "Sequence matters here — do these two things IN ORDER, "
-                    "not in parallel:",
-                    "",
-                    "1. If the step-7 watchdog may already have expired (or "
-                    "was never launched), launch a fresh one now with the "
-                    "remaining budget before the escalation above "
-                    "force-proceeds. Run it via a BACKGROUND Bash call "
-                    "(`run_in_background: true`) — it holds no model turn "
-                    "open, and in this state it may be the only remaining "
-                    "wake-up:",
+                    "1. Launch a fresh watchdog in the BACKGROUND (a Bash "
+                    "call with `run_in_background: true`) — the step-7 one "
+                    "may already have expired, and this may be the only "
+                    "remaining wake-up. It exits the moment every reviewer "
+                    "is done on disk, or at expiry:",
                     "```",
                     f"python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\" --wait --max-seconds {remaining_budget}",
                     "```",
-                    "2. THEN END YOUR TURN. Notifications are primary from "
-                    "here — wait for the next subagent completion "
-                    "notification (or the watchdog's exit); do not poll in "
-                    "a loop.",
+                    "2. END YOUR TURN.",
                     "",
-                    "On wake-up, run agents_status once:",
-                    "```",
-                    f"python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\"",
-                    "```",
-                    "- Exit code 0 (ALL_DONE): re-run step 8",
-                    "- Exit code 2 (still running): end your turn again and "
-                    "wait for the next wake-up",
+                    "On wake-up, act on what woke you:",
+                    "- The watchdog exited: run "
+                    f"`python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\"` "
+                    "once. Exit 0: re-run step 8. Exit 2: launch a fresh "
+                    "watchdog, end your turn.",
+                    "- A subagent notification whose result begins `STATUS: "
+                    "FINISHED`: no action. End your turn; the watchdog fires "
+                    "when all are done.",
+                    "- Any other subagent notification (no FINISHED line, an "
+                    "error, a timeout): run agents_status once. A `DRAFT` "
+                    "line in that agent's block: run the exact command on "
+                    "its `FINALIZE_REVIEW_COMMAND` line, then end your turn.",
+                    "- A task-id you have already acted on: no action.",
+                    "",
+                    "Never: foreground `sleep`, keepalive turns, or a status "
+                    "call without a wake-up.",
                 ]
 
             return {
@@ -1503,10 +1525,12 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
         situation.insert(1, "")
 
     stop_operation = _stop_operation(config)
+    # Said once, here: intake is closed, so every later step inherits it.
     actions = [
         (f"**1. {stop_operation}** stuck agents that exceeded their timeout."
          if escalation else
          f"**1. {stop_operation}** all remaining background review agents."),
+        "A reviewer completion notification arriving from now on needs no action.",
         "",
     ]
     if _host(config) == HOST_CODEX and dispatched:
@@ -1534,7 +1558,8 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
     actions.append(f"Output directory: {od}")
     actions.append(
         "Orchestrator notes: read orchestrator_notes in the context and "
-        "answer each with an outcome and evidence."
+        "answer each with an outcome and evidence; a confirmed note about "
+        "severity changes that severity in the same pass."
     )
     actions.append("```")
     actions.append(

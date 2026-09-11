@@ -71,6 +71,13 @@ except ImportError:
 
 DEFAULT_TIMEOUT = 1200  # 20 minutes
 DEFAULT_POLL_INTERVAL_SECONDS = 1.5  # grain at which --wait re-checks status
+# The line `format_output` always renders, and the only proof a caller has
+# that this program actually reported a status. Exit 2 is not that proof:
+# argparse answers an unknown flag with 2, and Python exits 2 for a script
+# path that does not exist, so a run that never reached `check_status`
+# looks exactly like "some agents are still running" from the outside.
+# `analysis/review_transcript.py` imports this to tell them apart.
+STATUS_ENVELOPE_PREFIX = "ALL_DONE: "
 
 
 def draft_evidence(output_dir: str, agent_name: str) -> dict:
@@ -305,7 +312,9 @@ def format_output(result: dict) -> str:
                 f"{a['finalize_review_command']}"
             )
     lines.append("")
-    lines.append(f"ALL_DONE: {'true' if result['all_done'] else 'false'}")
+    lines.append(
+        f"{STATUS_ENVELOPE_PREFIX}{'true' if result['all_done'] else 'false'}"
+    )
     if result["not_dispatched"] > 0:
         names = [a["name"] for a in result["agents"] if a["status"] == "NOT_DISPATCHED"]
         lines.append(f"NOTE: {len(names)} agent(s) never started (LLM may have failed to dispatch): {', '.join(names)}")

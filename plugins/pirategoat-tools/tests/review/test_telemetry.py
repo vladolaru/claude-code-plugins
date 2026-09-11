@@ -31,6 +31,7 @@ from review import run_paths
 from review import synthesis_lifecycle as lifecycle_contract
 from review.manifest_sections import aggregate_file_review
 from review.reviewer_lifecycle import (
+    SCOPE_SUMMARY_SCHEMA,
     ReviewPaths,
     review_paths,
     scope_summary_path,
@@ -1081,6 +1082,7 @@ class TestRunManifest:
             model_tier="sonnet",
             scope_files=2,
             scope_lines=40,
+            scope_inline_lines=31,
             budget_target=20,
         )
         telemetry.log_agent_complete(
@@ -1097,7 +1099,9 @@ class TestRunManifest:
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
 
         agents = _read_manifest(telemetry)["agents"]
-        assert agents["started"][0]["scope"] == {"files": 2, "lines": 40}
+        assert agents["started"][0]["scope"] == {
+            "files": 2, "lines": 40, "inline_lines": 31,
+        }
         assert agents["started"][0]["budget_target"] == 20
         assert agents["completed"][0]["severities"] == {"high": 1}
         serialized = json.dumps(agents)
@@ -1240,7 +1244,7 @@ class TestRunManifest:
         scope_summary.parent.mkdir(parents=True, exist_ok=True)
         scope_summary.write_text(
             json.dumps({
-                "schema": 3,
+                "schema": SCOPE_SUMMARY_SCHEMA,
                 "inline_diff_files": ["src/café.py"],
                 "review_claimable_files": [],
                 "list_only_files": [],
@@ -2758,6 +2762,7 @@ class TestLogAgentStart:
         telemetry.log_agent_start(
             agent_name="security-reviewer", domain="security",
             model_tier="sonnet", scope_files=3, scope_lines=150,
+            scope_inline_lines=120,
             budget_target=35,
         )
 
@@ -2768,7 +2773,9 @@ class TestLogAgentStart:
             "agent": "security-reviewer",
             "domain": "security",
             "model_tier": "sonnet",
-            "scope": {"files": 3, "lines": 150},
+            # Two different sizes: the diffstat total that sized the budget,
+            # and the hunk lines the briefing actually carried.
+            "scope": {"files": 3, "lines": 150, "inline_lines": 120},
             "budget_target": 35,
             "schema": mod.EVENT_SCHEMA,
             "run_id": "run-1",
@@ -2781,6 +2788,21 @@ class TestLogAgentStart:
         )
         event = _read_events(telemetry.log_path)[-1]
         assert "budget_target" not in event
+
+    def test_agent_start_omits_inline_lines_when_unmeasured(self, telemetry):
+        """An absent count must stay absent: a caller that could not measure
+        the briefing size has not measured a zero-line briefing."""
+        telemetry.start(run_id="run-1")
+        telemetry.log_agent_start(
+            agent_name="security-reviewer", scope_files=3, scope_lines=150,
+        )
+
+        event = _read_events(telemetry.log_path)[-1]
+        assert event["scope"] == {"files": 3, "lines": 150}
+
+        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
+        started = _read_manifest(telemetry)["agents"]["started"][0]
+        assert "inline_lines" not in started["scope"]
 
     def test_null_domain_is_canonicalized_to_empty_string(self, telemetry):
         telemetry.start(run_id="run-1")

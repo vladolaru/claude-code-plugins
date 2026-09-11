@@ -5,6 +5,23 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.119.5] - UNRELEASED
+
+### Changed
+
+- Bootstrap now writes each reviewer's briefing to `reviewers/<reviewer>/briefing.md` and prints a short pointer to it, so a reviewer reads one deterministic file instead of a harness-persisted tool result behind a truncated preview, and the briefing it was given is kept with the run.
+- While reviewers run, the orchestrator no longer polls status after every completion notification: the background watchdog signals completion, and a poll happens only on the watchdog's exit or on a reviewer that did not return `STATUS: FINISHED`.
+
+### Fixed
+
+- Reviewer briefings listed their files with an empty diff whenever the reviewer's shell sat in a subdirectory of the repository, which has been every review since Claude Code 2.1.267 made subagents inherit the orchestrator's working directory; scope now runs every git command from the repository toplevel.
+- The dependency-refresh save now prints the file's run-relative path (`SAVED pipeline/dependency-refresh.json`), and the step-3 briefing asks only for that line, so the orchestrator no longer looks for the file at the run root.
+- Run metrics no longer count reviewer-status polls as tool failures: a call to `agents_status.py` that reported a status and exited on one of its contractual codes (2 while agents run, 3 when a `--wait` window expires) is listed under a `poll_outcome` category and excluded from failure totals, which drops the two 2026-09-10 field runs from 31 recorded failures to 8 real ones.
+- A reviewer's severity floor now binds reconciliation only when the reviewer stood behind the finding (confidence 0.7 or above), so an unverified self-audit promotion is reconciled on its merits instead of locking the reconciliator at medium.
+- An orchestrator note the reconciliator confirms now changes the severity it bears on during reconciliation, instead of leaving a wrong verdict for the decision critic to correct a step later.
+- Run metrics now record how many diff lines each reviewer's briefing carried, and flag a run whose briefings carried none while the diffstat said otherwise.
+- Synthesis-agent durations now report the orchestrator gap before dispatch separately as `dispatch_lag_ms`, instead of leaving it inside `duration_ms` as agent runtime.
+
 ## [1.119.4] - 2026-09-11
 
 ### Removed

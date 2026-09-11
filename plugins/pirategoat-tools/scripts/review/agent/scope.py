@@ -14,6 +14,15 @@ The a11y scope alone looks past the extension: `filter_a11y_ui_evidence()`
 keeps a bare `.js` or `.ts` file only when the change shows UI evidence.
 Triage is untouched by it.
 
+Every Git call runs from the repository toplevel. `build_scope()` resolves
+it once and threads it through as `repo_root`, and `run_cmd()` takes `cwd`
+with no default, so no call can fall back to the process cwd by omission.
+Git reports `--name-only` paths from the root whatever the cwd, but
+resolves a `-- <path>` pathspec against the cwd: run from a subdirectory,
+the per-file diff matched nothing, exited 0, and every reviewer briefing
+carried an empty diff (reviewer shells inherit the orchestrator's cwd
+since Claude Code 2.1.267).
+
 Usage:
     python3 scope.py --domain code --output-dir <output-dir>
     python3 scope.py --domain code --summary --output-dir <output-dir>
@@ -422,6 +431,7 @@ def _parse_marker_path(line: str) -> Optional[str]:
 def classify_markup_evidence(
     range_spec: str,
     filepaths: List[str],
+    repo_root: Optional[str],
     line_predicate=_line_has_markup_token,
 ) -> set:
     """Return the subset of `filepaths` whose changed lines carry markup tokens.
@@ -447,7 +457,7 @@ def classify_markup_evidence(
     else:
         cmd = git_path_cmd("diff", range_spec, "--", *filepaths)
     try:
-        output = run_cmd(cmd, check=True)
+        output = run_cmd(cmd, check=True, cwd=repo_root)
     except RuntimeError:
         return set()
 
@@ -550,7 +560,7 @@ def _file_has_ui_evidence(
 
 
 def filter_a11y_ui_evidence(
-    range_spec: str, files: List[str]
+    range_spec: str, files: List[str], repo_root: Optional[str]
 ) -> Tuple[List[str], List[str]]:
     """Drop bare script modules that show no UI evidence from a11y scope.
 
@@ -560,10 +570,10 @@ def filter_a11y_ui_evidence(
     left silent — a UI module edited only in its data layer still belongs
     to a11y.
 
-    The on-disk read is the WORKING TREE, resolved against the repository
-    root — one `git rev-parse --show-toplevel`, hoisted out of the loop.
-    Reading blobs with `git show <ref>:<path>` was the alternative and is
-    worse on both counts that matter here: it is one subprocess per file
+    The on-disk read is the WORKING TREE, resolved against `repo_root`,
+    the toplevel `build_scope()` resolves once per run. Reading blobs with
+    `git show <ref>:<path>` was the alternative and is worse on both
+    counts that matter here: it is one subprocess per file
     instead of one per run, and it answers about a ref when the reviewer
     is going to read the working tree — for an uncommitted or `--cached`
     range there is no single right ref to name.
@@ -578,17 +588,12 @@ def filter_a11y_ui_evidence(
     if not candidates:
         return list(files), []
 
-    try:
-        repo_root = run_cmd(
-            git_path_cmd("rev-parse", "--show-toplevel"), check=True
-        )
-    except RuntimeError:
-        repo_root = ""
     if not repo_root:
         return list(files), []
 
     with_patch_evidence = classify_markup_evidence(
-        range_spec, candidates, line_predicate=_patch_line_has_ui_evidence
+        range_spec, candidates, repo_root,
+        line_predicate=_patch_line_has_ui_evidence,
     )
     dropped = {
         f for f in candidates
@@ -950,14 +955,20 @@ def git_path_cmd(*args: str) -> List[str]:
     return [*GIT_PATH_SAFE, *args]
 
 
-def run_cmd(cmd: List[str], check: bool = True, capture_stderr: bool = True) -> str:
-    """Run a command and return stdout. Raises on failure if check=True."""
+def run_cmd(cmd: List[str], check: bool = True, *, cwd: Optional[str]) -> str:
+    """Run a command from `cwd` and return stdout. Raises on failure if check=True.
+
+    `cwd` has no default, so every call names where Git runs: the
+    repository toplevel from `build_scope()`, or None (the process cwd)
+    only when there is no toplevel to run from.
+    """
     try:
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             timeout=30,
+            cwd=cwd,
         )
         if check and result.returncode != 0:
             stderr_msg = result.stderr.strip()
@@ -976,13 +987,14 @@ def run_cmd(cmd: List[str], check: bool = True, capture_stderr: bool = True) -> 
         raise RuntimeError(f"Command not found: {cmd[0]}")
 
 
-def detect_default_branch() -> str:
+def detect_default_branch(repo_root: Optional[str]) -> str:
     """Detect the default branch (main/master/trunk/develop)."""
     # Try symbolic ref first (most reliable)
     try:
         ref = run_cmd(
             ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
             check=False,
+            cwd=repo_root,
         )
         if ref:
             return ref.replace("refs/remotes/origin/", "")
@@ -992,7 +1004,11 @@ def detect_default_branch() -> str:
     # Fallback: check common branch names
     for branch in ["main", "master", "trunk", "develop"]:
         try:
-            run_cmd(["git", "rev-parse", f"refs/remotes/origin/{branch}"], check=True)
+            run_cmd(
+                ["git", "rev-parse", f"refs/remotes/origin/{branch}"],
+                check=True,
+                cwd=repo_root,
+            )
             return branch
         except RuntimeError:
             continue
@@ -1000,7 +1016,7 @@ def detect_default_branch() -> str:
     return "main"  # last resort
 
 
-def freshen_base_ref(branch: str) -> str:
+def freshen_base_ref(branch: str, repo_root: Optional[str]) -> str:
     """
     Ensure the base ref is as fresh as possible by using the remote tracking ref.
 
@@ -1024,19 +1040,24 @@ def freshen_base_ref(branch: str) -> str:
             capture_output=True,
             text=True,
             timeout=15,
+            cwd=repo_root,
         )
     except (subprocess.TimeoutExpired, OSError):
         pass  # Offline or slow network — use whatever we have.
 
     # Prefer the remote ref if it exists.
     try:
-        run_cmd(["git", "rev-parse", "--verify", remote_ref], check=True)
+        run_cmd(
+            ["git", "rev-parse", "--verify", remote_ref],
+            check=True,
+            cwd=repo_root,
+        )
         return remote_ref
     except RuntimeError:
         return branch
 
 
-def check_branch_freshness(base_ref: str) -> dict:
+def check_branch_freshness(base_ref: str, repo_root: Optional[str]) -> dict:
     """Check how far HEAD is behind the base ref.
 
     Returns:
@@ -1052,7 +1073,8 @@ def check_branch_freshness(base_ref: str) -> dict:
 
     try:
         behind_str = run_cmd(
-            ["git", "rev-list", "--count", f"HEAD..{base_ref}"], check=True,
+            ["git", "rev-list", "--count", f"HEAD..{base_ref}"],
+            check=True, cwd=repo_root,
         )
         behind = int(behind_str)
     except (RuntimeError, ValueError):
@@ -1060,7 +1082,8 @@ def check_branch_freshness(base_ref: str) -> dict:
 
     try:
         ahead_str = run_cmd(
-            ["git", "rev-list", "--count", f"{base_ref}..HEAD"], check=True,
+            ["git", "rev-list", "--count", f"{base_ref}..HEAD"],
+            check=True, cwd=repo_root,
         )
         ahead = int(ahead_str)
     except (RuntimeError, ValueError):
@@ -1068,7 +1091,8 @@ def check_branch_freshness(base_ref: str) -> dict:
 
     try:
         merge_base_sha = run_cmd(
-            ["git", "merge-base", base_ref, "HEAD"], check=True,
+            ["git", "merge-base", base_ref, "HEAD"],
+            check=True, cwd=repo_root,
         )
     except RuntimeError:
         pass
@@ -1093,7 +1117,7 @@ def rebase_range_to_merge_base(range_spec: str, merge_base: str) -> str:
     return f"{merge_base}..{range_end}"
 
 
-def detect_range() -> Tuple[str, str]:
+def detect_range(repo_root: Optional[str]) -> Tuple[str, str]:
     """
     Detect the appropriate diff range.
 
@@ -1103,14 +1127,15 @@ def detect_range() -> Tuple[str, str]:
 
     Raises RuntimeError if no changes found.
     """
-    default_branch = detect_default_branch()
-    base_ref = freshen_base_ref(default_branch)
+    default_branch = detect_default_branch(repo_root)
+    base_ref = freshen_base_ref(default_branch, repo_root)
 
     # Check if current branch has diverged from default
     try:
         commit_count = run_cmd(
             ["git", "rev-list", "--count", f"{base_ref}..HEAD"],
             check=True,
+            cwd=repo_root,
         )
         if int(commit_count) > 0:
             return f"{base_ref}..HEAD", base_ref
@@ -1118,19 +1143,23 @@ def detect_range() -> Tuple[str, str]:
         pass
 
     # Check for staged changes
-    staged = run_cmd(git_path_cmd("diff", "--cached", "--name-only"), check=True)
+    staged = run_cmd(
+        git_path_cmd("diff", "--cached", "--name-only"), check=True, cwd=repo_root
+    )
     if staged:
         return "--cached", "HEAD"
 
     # Check for unstaged changes
-    unstaged = run_cmd(git_path_cmd("diff", "--name-only"), check=True)
+    unstaged = run_cmd(
+        git_path_cmd("diff", "--name-only"), check=True, cwd=repo_root
+    )
     if unstaged:
         return "", "HEAD"  # empty range = unstaged working tree diff
 
     raise RuntimeError("NO_CHANGES: No changes to review — clean working tree.")
 
 
-def get_changed_files(range_spec: str) -> List[str]:
+def get_changed_files(range_spec: str, repo_root: Optional[str]) -> List[str]:
     """Get list of changed files for the given range."""
     if range_spec == "--cached":
         cmd = git_path_cmd("diff", "--cached", "--name-only")
@@ -1139,7 +1168,7 @@ def get_changed_files(range_spec: str) -> List[str]:
     else:
         cmd = git_path_cmd("diff", "--name-only", range_spec)
 
-    output = run_cmd(cmd, check=True)
+    output = run_cmd(cmd, check=True, cwd=repo_root)
     if not output:
         return []
     return output.splitlines()
@@ -1201,7 +1230,9 @@ def filter_domain(files: List[str], domain: str) -> Tuple[List[str], List[str]]:
     return matched, excluded
 
 
-def get_diff_for_file(range_spec: str, filepath: str) -> str:
+def get_diff_for_file(
+    range_spec: str, filepath: str, repo_root: Optional[str]
+) -> str:
     """Get the diff for a single file."""
     if range_spec == "--cached":
         cmd = git_path_cmd("diff", "--cached", "--", filepath)
@@ -1210,7 +1241,7 @@ def get_diff_for_file(range_spec: str, filepath: str) -> str:
     else:
         cmd = git_path_cmd("diff", range_spec, "--", filepath)
 
-    return run_cmd(cmd, check=True)
+    return run_cmd(cmd, check=True, cwd=repo_root)
 
 
 def count_diff_lines(diff_text: str) -> int:
@@ -1224,7 +1255,9 @@ def count_diff_lines(diff_text: str) -> int:
     return count
 
 
-def get_diffstat(range_spec: str, files: List[str]) -> Dict[str, Tuple[int, int]]:
+def get_diffstat(
+    range_spec: str, files: List[str], repo_root: Optional[str]
+) -> Dict[str, Tuple[int, int]]:
     """
     Get per-file diffstat (additions, deletions) using git diff --numstat.
 
@@ -1239,7 +1272,7 @@ def get_diffstat(range_spec: str, files: List[str]) -> Dict[str, Tuple[int, int]
     else:
         cmd = git_path_cmd("diff", "--numstat", range_spec)
 
-    output = run_cmd(cmd, check=True)
+    output = run_cmd(cmd, check=True, cwd=repo_root)
     if not output:
         return {f: (0, 0) for f in files}
 
@@ -1282,17 +1315,26 @@ def build_scope(args: argparse.Namespace) -> dict:
     Returns a structured dict with all scope information.
     Raises RuntimeError on any failure (defensive — no silent errors).
     """
-    # Step 0: Verify we're in a git repository
+    # Step 0: Resolve the repository toplevel every Git call below runs
+    # from (see the module docstring). None, for a bare repository or a
+    # cwd inside .git, keeps the process cwd; the probe after it still
+    # reports a cwd outside any repository.
     try:
-        run_cmd(["git", "rev-parse", "--git-dir"], check=True)
+        repo_root = run_cmd(
+            git_path_cmd("rev-parse", "--show-toplevel"), check=True, cwd=None
+        ) or None
     except RuntimeError:
-        raise RuntimeError("NOT_GIT_REPO: Not inside a git repository. Run from a git repo root.")
+        repo_root = None
+    try:
+        run_cmd(["git", "rev-parse", "--git-dir"], check=True, cwd=repo_root)
+    except RuntimeError:
+        raise RuntimeError("NOT_GIT_REPO: Not inside a git repository.")
 
     # Step 1: Determine range
     if args.range:
         raw_base = detect_base_ref(args.range)
         # Freshen the base ref to avoid stale local branch refs.
-        base_ref = freshen_base_ref(raw_base)
+        base_ref = freshen_base_ref(raw_base, repo_root)
         # Rebuild range with the (possibly upgraded) base ref.
         if ".." in args.range:
             _, range_end = args.range.split("..", 1)
@@ -1301,16 +1343,16 @@ def build_scope(args: argparse.Namespace) -> dict:
             range_spec = args.range
         # Validate the resolved base ref is valid
         try:
-            run_cmd(["git", "rev-parse", base_ref], check=True)
+            run_cmd(["git", "rev-parse", base_ref], check=True, cwd=repo_root)
         except RuntimeError:
             raise RuntimeError(
                 f"Invalid range '{range_spec}': base ref '{base_ref}' does not exist."
             )
     else:
-        range_spec, base_ref = detect_range()
+        range_spec, base_ref = detect_range(repo_root)
 
     # Step 1.5: Check branch freshness and rebase to merge-base
-    freshness = check_branch_freshness(base_ref)
+    freshness = check_branch_freshness(base_ref, repo_root)
     range_rebased = False
     if (freshness["merge_base"]
             and ".." in range_spec
@@ -1319,7 +1361,7 @@ def build_scope(args: argparse.Namespace) -> dict:
         range_rebased = True
 
     # Step 2: Get changed files
-    all_files = get_changed_files(range_spec)
+    all_files = get_changed_files(range_spec, repo_root)
     if not all_files:
         raise RuntimeError("NO_CHANGES: Range resolved but no files changed.")
 
@@ -1356,7 +1398,7 @@ def build_scope(args: argparse.Namespace) -> dict:
     # back: a reviewer dispatched FOR a path outranks a content sniff.
     if args.domain == "a11y" and domain_matched:
         domain_matched, no_ui_evidence = filter_a11y_ui_evidence(
-            range_spec, domain_matched
+            range_spec, domain_matched, repo_root
         )
         domain_excluded.extend(no_ui_evidence)
 
@@ -1407,7 +1449,7 @@ def build_scope(args: argparse.Namespace) -> dict:
         }
 
     # Step 5: Get diffstat for all matched files (cheap — single git command)
-    diffstat = get_diffstat(range_spec, domain_matched)
+    diffstat = get_diffstat(range_spec, domain_matched, repo_root)
 
     # Largest files first — ensures big changes get budget priority
     domain_matched_sorted = sorted(
@@ -1446,7 +1488,9 @@ def build_scope(args: argparse.Namespace) -> dict:
                 and not style_ext_re.search(f)  # style files: evidence by extension
                 and not is_template_file(f)  # pure templates: inherent UI
             ]
-            token_files = classify_markup_evidence(range_spec, scan_candidates)
+            token_files = classify_markup_evidence(
+                range_spec, scan_candidates, repo_root
+            )
 
             def _is_evidence(f):
                 return (
@@ -1504,7 +1548,7 @@ def build_scope(args: argparse.Namespace) -> dict:
                     budget_exceeded_files.append(filepath)
                     continue
 
-            diff_text = get_diff_for_file(range_spec, filepath)
+            diff_text = get_diff_for_file(range_spec, filepath, repo_root)
 
             # Apply semantic filtering to reduce noise (docblocks, comments,
             # formatting). Prose files are exempt — the filter's comment
@@ -1763,13 +1807,21 @@ def format_json_output(scope: dict) -> str:
 def write_scope_summary(scope: dict, path: str) -> None:
     """Persist the one machine-readable scope contract for this agent.
 
-    Five facts, each with exactly one consumer relationship:
+    Six facts, each with exactly one consumer relationship:
     ``inline_diff_files`` and ``review_claimable_files`` are the reviewer's
     assignment (bootstrap passes both straight through, and their lengths
     ARE the assignment's two counts); ``list_only_files`` is descriptive
     scope; ``routing_files`` is the every-mode population the run-level file
     review subtracts from the changed set; ``in_scope_stat_lines`` sizes the
-    tool-call budget.
+    tool-call budget; ``inline_diff_lines`` is how many diff lines the
+    briefing actually carried, which telemetry records so a run whose
+    briefings arrived empty is visible without reading them by hand.
+
+    The last two answer different questions and can disagree: the diffstat
+    total counts every changed line of every reviewed file, while the
+    inline count is the hunk lines this scope managed to fetch and inline.
+    A scope that fetched no diff at all reports a budget-sized
+    ``in_scope_stat_lines`` beside a zero ``inline_diff_lines``.
 
     ``review_claimable_files`` is published largest-diffstat-first because
     that is the order the assignment's claimable queue and the save echo's
@@ -1797,7 +1849,11 @@ def write_scope_summary(scope: dict, path: str) -> None:
     )
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     summary = {
-        "schema": 3,
+        # Repeated, not imported: this module is stdlib-only by contract
+        # (see the header). `reviewer_lifecycle.SCOPE_SUMMARY_SCHEMA` is
+        # where the readers take it from, and
+        # `TestScopeSummarySchemaParity` fails if the two drift.
+        "schema": 4,
         "inline_diff_files": inline_diff_files,
         "review_claimable_files": review_claimable_files,
         "list_only_files": list_only_files,
@@ -1810,6 +1866,10 @@ def write_scope_summary(scope: dict, path: str) -> None:
         "in_scope_stat_lines": sum(
             sum(diffstat.get(f, (0, 0))) for f in reviewed_files
         ),
+        # Carried, never recomputed: build_scope accumulates this as it
+        # inlines each hunk, and a second count here would be a second
+        # answer to the same question.
+        "inline_diff_lines": scope.get("total_diff_lines", 0),
     }
     parent = os.path.dirname(path)
     if parent:

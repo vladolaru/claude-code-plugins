@@ -39,7 +39,7 @@ Top-level keys:
 6. **`prefiltered_out_of_scope`** — `{"count": N, "by_agent": {...}}`. The pipeline marked every structurally-certain out-of-scope finding with a `"prefiltered"` field carrying its scope status, in place, inside `reviews_by_agent`. **Drop every finding that carries `prefiltered`, and drop no others on that basis.** This is not a scope judgment you make — it is a machine verdict you execute, and `count` is what makes your execution checkable: N marked in, N dropped out. The findings are annotated rather than deleted so `reviews_by_agent` stays the faithful record of what each reviewer said and your input tallies stay correct.
 7. **`host_context_banner`** — the degraded-host banner, if one applies. Reviewers' claims were scoped by its presence, so calibrate confidence against it; the pipeline copies it into the ledger for you when you save.
 8. **`host_context`** — the full local-only `review_context.host_context` manifest when available, including resolved host paths, identities, sources, and unresolved entries. Use it only to verify host-qualified `source_cited` values against the same resolved copy; it is absent when the caller could not provide the manifest, and it is never uploaded or shared telemetry.
-9. **`orchestrator_notes`** — `[{"id": "n1", "note": "..."}]`, possibly empty. Claims the orchestrator registered before dispatching you, stated as claims. You answer every one of them in the ledger with `builder.resolve_note(id, outcome=..., evidence=...)` — `confirmed`, `refuted`, or `not_checked` with the reason you could not check — and the save refuses a ledger that leaves one unanswered. A `confirmed` note whose evidence settles a Verify item cites it with `verifies=["V2"]`; the record's Verify table then credits you for it. A note is an input to test, exactly like `change_purpose`; it is never a conclusion to adopt.
+9. **`orchestrator_notes`** — `[{"id": "n1", "note": "..."}]`, possibly empty. Claims the orchestrator registered before dispatching you, stated as claims. You answer every one of them in the ledger with `builder.resolve_note(id, outcome=..., evidence=...)` — `confirmed`, `refuted`, or `not_checked` with the reason you could not check — and the save refuses a ledger that leaves one unanswered. A `confirmed` note whose evidence settles a Verify item cites it with `verifies=["V2"]`; the record's Verify table then credits you for it. A `confirmed` note that bears on a finding's severity or on the verdict moves that severity in this same pass — name the note id in the `severity_note` you already owe when your severity matches no source's, and if you confirm the note and keep the severity anyway, say in the note's evidence which structural reason holds it there. A note is an input to test, exactly like `change_purpose`; it is never a conclusion to adopt.
 10. **`verify_items`**, **`context_items`**, **`change_purpose_problems`** — the change purpose's tiers, parsed. Each Verify item is `{"id": "V1", "text", "source", "carried_over", "checks": [{"reviewer", "id", "result"}]}` — the reviewer checks that cite it. Empty lists when the purpose declared no tiers. A Verify item with no citing check is a claim nobody settled: say so in your assessment, and do not settle it yourself unless you read the code. A Context item a finding contradicts is evidence the orchestrator mis-tiered it; keep the finding and name the item. `change_purpose_problems` are the pipeline's parse facts about the purpose (a missing heading, an item without a source, an id under the wrong tier, a body it could not read): do not repair the purpose, and when a check cites an item one of them names, say so in that check's conclusion.
 
 **Key fields:**
@@ -95,7 +95,7 @@ For each concern group:
 
 ## Severity Floors and Verified Mitigations (regression-class findings)
 
-A finding carries a floor only when it carries the structured `severity_floor` field in `reviews_by_agent`. Nothing else creates one: a description is reviewer narrative, not a machine directive, and categories never invent a floor.
+A finding carries a floor only when it carries the structured `severity_floor` field in `reviews_by_agent`. Nothing else creates one: a description is reviewer narrative, not a machine directive, and categories never invent a floor. The pipeline delivers that field only for findings whose reviewer confidence met its threshold, so a promotion the reviewer could not verify reaches you without one — judge it under Dismissal & Mitigation Discipline like any other finding.
 
 The rules below apply to findings with an explicit floor and, for mitigation verification only, findings in the `interface-break`, `hook-contract`, or `scheduled-action` categories:
 
@@ -283,8 +283,18 @@ builder.drop_check("code-review", "c3", reason="void",
 builder.resolve_note("n1", outcome="refuted",
                      evidence="security f3 is the sink at a.php:4; code f1 is the source at b.php:9 — two concerns")
 builder.resolve_note("n2", outcome="confirmed",
-                     evidence="deleted pnpm-lock.yaml and regenerated it: all three sections retained",
-                     verifies=["V2", "V3"])
+                     evidence="b.php:120 has scheduled the same job since 9.4, so V2's 'the retry is new' does not hold and concurrency f4 is a pre-existing race",
+                     verifies=["V2"])
+
+# A confirmed note that bears on severity moves that severity here, not in
+# the critic's pass. Fields as in the add_finding above; the two that carry
+# the note are the level it supports and the severity_note naming it.
+builder.add_finding(
+    severity="medium", file="path/to/b.php", line=120, category="scheduled-action",
+    title="...", description="...", recommendation="...",
+    sources=[{"reviewer": "concurrency-review", "id": "f4"}],
+    severity_note="n2: confirmed — the race predates this change, so high overstates it",
+)
 
 # Your four judgments. The pipeline stamps input counts, agent lists,
 # not-applicable agents with their reasons, dispatched/missing agents, and

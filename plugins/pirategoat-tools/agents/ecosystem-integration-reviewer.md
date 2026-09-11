@@ -15,7 +15,7 @@ PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
 python3 $PLUGIN_ROOT/scripts/review/agent/bootstrap.py --agent ecosystem-integration-reviewer
 ```
 
-Read the output carefully. It contains your review rules, review scope, Host Context, and output instructions. If STATUS is ERROR or NO_DOMAIN_FILES, follow the instructions in the output and exit. Do not look for a `bootstrap.json` or read run artefacts by hand; the command above is the only entry point.
+The output names your briefing file; read it in full. It contains your review rules, review scope, Host Context, and output instructions. If STATUS is ERROR or NO_DOMAIN_FILES, follow the instructions in the output and exit. Do not look for a `bootstrap.json` or read run artefacts by hand; the command above is the only entry point, and the briefing file it names is the only artefact to read.
 
 ---
 

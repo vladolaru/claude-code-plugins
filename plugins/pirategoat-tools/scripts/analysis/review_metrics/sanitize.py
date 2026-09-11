@@ -396,7 +396,11 @@ def _sanitize_agent_event(value: object, *, completed: bool) -> dict[str, Any]:
         scope = value.get("scope")
         if isinstance(scope, dict):
             safe_scope: dict[str, Any] = {}
-            for name in ("files", "lines"):
+            # `inline_lines` is optional the way `budget_target` is: absent
+            # on every manifest written before it existed, and an absent
+            # key must stay absent so the run reads as unmeasured rather
+            # than as a briefing that carried no diff.
+            for name in ("files", "lines", "inline_lines"):
                 count = _nonnegative_int(scope.get(name))
                 if count is not None:
                     safe_scope[name] = count
@@ -515,6 +519,9 @@ def _strict_lifecycle_event(
     paths = _strict_repo_read_paths(scope.get("paths", []))
     if paths is None:
         return None
+    inline_lines = scope.get("inline_lines")
+    if "inline_lines" in scope and _nonnegative_exact_int(inline_lines) is None:
+        return None
     budget_target = value.get("budget_target")
     if "budget_target" in value and _nonnegative_exact_int(budget_target) is None:
         return None
@@ -532,6 +539,8 @@ def _strict_lifecycle_event(
             "paths": paths,
         },
     }
+    if "inline_lines" in scope:
+        result["scope"]["inline_lines"] = inline_lines
     if "budget_target" in value:
         result["budget_target"] = budget_target
     return result

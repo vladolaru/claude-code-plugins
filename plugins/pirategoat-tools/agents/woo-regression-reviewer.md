@@ -24,7 +24,7 @@ PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
 python3 $PLUGIN_ROOT/scripts/review/agent/bootstrap.py --agent woo-regression-reviewer
 ```
 
-Read the output carefully. It contains your review rules, review scope, and output instructions. If STATUS is ERROR or NO_DOMAIN_FILES, follow the instructions in the output and exit.
+The output names your briefing file; read it in full. It contains your review rules, review scope, and output instructions. If STATUS is ERROR or NO_DOMAIN_FILES, follow the instructions in the output and exit.
 
 ---
 
@@ -151,7 +151,7 @@ If an invariant does not apply, say so explicitly. Every `APPLIES` or `UNCERTAIN
 
 - Public-contract changes — required interface/abstract method added, public/extensible signature changed, `do_action`/`apply_filters` removed or renamed, serialized/queued format changed — rate at least Medium and pass `severity_floor="medium"`. Explain the out-of-tree consumer risk in the description.
 - Rate silent false-success High by default and pass `severity_floor="high"`. A downgrade is allowed only with a quoted, verified structural reason that proves no production or extension consumer can reach the path; in that case rate Medium and pass `severity_floor="medium"`. "Experimental package", "feature-flag gated", "unreleased UI", "Internal namespace", and "unlikely in practice" are blast-radius descriptors, not structural reasons.
-- Every mandatory self-audit promotion is Medium and passes `severity_floor="medium"`.
+- Every mandatory self-audit promotion is Medium, and passes `severity_floor="medium"` only when you verified the predicate that makes it dangerous — a recorded check, or confidence 0.7 or above. Otherwise file it at Medium with its stated confidence and no floor: the pipeline strips a floor the reviewer could not stand behind, and a promotion is a finding for the reconciliator to weigh, not a lock on it.
 
 ## Self-Audit (MANDATORY final step before saving output)
 

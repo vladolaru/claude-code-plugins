@@ -29,7 +29,7 @@ python3 $PLUGIN_ROOT/scripts/review/agent/bootstrap.py --agent repo-reviewer-ada
   --execution <given> --scope-domains "<given>" --range "<given>" --output-dir "<given>"
 ```
 
-Read the output carefully. Alongside the usual review rules, scope, and output
+The output names your briefing file; read it in full. Alongside the usual review rules, scope, and output
 instructions, it contains a **`=== REPO REVIEWER PROMPT ===`** section with the
 concrete values you need: the `REPO_AGENT_REF` file to run, the `EXECUTION` mode,
 the `CHANNEL` to tag findings with, and your `reviewer_name` / output file paths.

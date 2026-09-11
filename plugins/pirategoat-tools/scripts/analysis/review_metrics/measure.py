@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import statistics
 from collections import Counter
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
@@ -17,8 +18,8 @@ from .contracts import (
     _SYNTHESIS_RECONCILIATOR,
     _TRANSCRIPT_FAMILIES,
     _OBSERVED_READS_SCHEMA,
-    _load_exact_path_module,
     _parse_time,
+    _transcript_contract,
 )
 from .sanitize import (
     _exact_statistic,
@@ -42,22 +43,16 @@ _SYNTHESIS_AGENT_NAMES = frozenset({
 })
 
 
-@lru_cache(maxsize=None)
 def _load_transcript_module():
     # Always load the adjacent parser by exact path, like the telemetry and
     # dispatch-status contracts. An ambient `import review_transcript`
     # would pick up whatever another checkout or version already put on
     # sys.path/sys.modules in a long-lived process — an incompatible module
     # disables transcript metrics; a compatible stale one silently measures
-    # with different semantics. Cached so a cohort sweep pays the exact-path
-    # module execution once, not once per run.
-    path = Path(__file__).resolve().parents[1] / "review_transcript.py"
-    module = _load_exact_path_module(
-        "review_transcript",
-        path,
-        "review transcript parser unavailable",
-    )
-    return module.enrich_run_transcript
+    # with different semantics. `contracts._transcript_contract` caches the
+    # module, so a cohort sweep pays the exact-path execution once, not
+    # once per run, and cohort.py reads the same object.
+    return _transcript_contract().enrich_run_transcript
 
 
 @lru_cache(maxsize=None)
@@ -145,7 +140,7 @@ def _sanitize_agent_usage(value: object) -> list[dict[str, Any]] | None:
             "agent": agent,
             "available": item["available"],
         }
-        for name in ("agent_id", "model"):
+        for name in ("agent_id", "model", "dispatched_at"):
             scalar = item.get(name)
             if scalar is None:
                 safe[name] = None
@@ -564,6 +559,126 @@ def _wall_time(manifest: dict[str, Any]) -> int | None:
     )
 
 
+def _inline_diff_lines(started: list[Any]) -> dict[str, Any]:
+    """How many diff lines the run's reviewer briefings actually carried.
+
+    Per START EXECUTION, like every other count in the lifecycle family: a
+    retry gets its own bootstrap, its own scope discovery and its own
+    briefing, so its lines are a second delivery rather than a restatement
+    of the first.
+
+    `total` is None unless every dispatched reviewer carries the key —
+    partly measured briefings would sum to a number smaller than the run's
+    real one, and a reader cannot tell that undercount from a genuinely
+    small diff. `measured`/`dispatched` state the coverage so the None has
+    a reason. A run with no dispatched reviewer is unmeasured too: there is
+    no briefing whose size a 0 would be describing.
+    """
+    dispatched = 0
+    measured = 0
+    total = 0
+    for event in started:
+        if not isinstance(event, dict):
+            continue
+        dispatched += 1
+        scope = event.get("scope")
+        value = scope.get("inline_lines") if isinstance(scope, dict) else None
+        if isinstance(value, int) and not isinstance(value, bool):
+            measured += 1
+            total += value
+    return {
+        "total": total if dispatched > 0 and measured == dispatched else None,
+        "measured": measured,
+        "dispatched": dispatched,
+    }
+
+
+def _briefings_carried_no_diff(measured: dict[str, Any]) -> bool:
+    """True when every briefing arrived empty and the diffstat says it should
+    not have.
+
+    The regression this names ran unseen from 2026-09-10 until the scope fix:
+    `scope.py` inlined nothing because its git commands ran from the wrong
+    directory, while the diffstat total each briefing quoted stayed right, so
+    every reviewer read a file list and no code. Both halves are required —
+    a run whose reviewers genuinely had nothing to diff has a zero diffstat
+    too, and flagging it would be a false alarm on an honest empty review.
+    """
+    lifecycle = measured.get("lifecycle")
+    inline = lifecycle.get("inline_diff_lines") if isinstance(lifecycle, dict) else None
+    if not isinstance(inline, dict) or inline.get("total") != 0:
+        return False
+    agents = measured.get("agents")
+    started = agents.get("started") if isinstance(agents, dict) else None
+    if not isinstance(started, list):
+        return False
+    stat_lines = 0
+    for event in started:
+        scope = event.get("scope") if isinstance(event, dict) else None
+        lines = scope.get("lines") if isinstance(scope, dict) else None
+        if isinstance(lines, int) and not isinstance(lines, bool):
+            stat_lines += lines
+    return stat_lines > 0
+
+
+def _apply_synthesis_dispatch_lag(measured: dict[str, Any]) -> list[str]:
+    """Record the orchestrator gap each synthesis duration already contains.
+
+    `started_at` is a marker `orchestration.py` writes at the END of the
+    step's script work, before the orchestrator registers its notes,
+    narrates, and composes the dispatch. The `Agent` call lands some time
+    later, and `duration_ms` — marker to completion-artifact mtime — has
+    been carrying that gap as if it were agent runtime (97s and 79s for
+    the reconciliator on the two 2026-09-10 runs, 10-17% of its reported
+    duration). The script cannot see the call it is about to be used for;
+    the orchestrator's transcript can, and correlation already reads it.
+
+    `dispatch_lag_ms` is reported BESIDE `duration_ms`, which does not
+    change: a duration whose meaning depended on whether a transcript was
+    available would be worse than one that consistently includes the gap.
+    None whenever either instant is missing — an uncorrelated run, a
+    transcript-less host, a row with no marker — and None with a warning
+    when the call precedes the marker, which no ordering of the two
+    writers can produce and so means the correlation is not this run's.
+
+    First dispatch wins per agent: the marker precedes the first call, so
+    a retry's later call would measure a gap that includes the first
+    execution.
+    """
+    section = measured.get("synthesis_agents")
+    rows = section.get("agents") if isinstance(section, dict) else None
+    if not isinstance(rows, list):
+        return []
+    transcript = measured.get("transcript")
+    usage_rows = (
+        transcript.get("agent_usage") if isinstance(transcript, dict) else None
+    )
+    dispatched_at: dict[str, datetime] = {}
+    for entry in usage_rows if isinstance(usage_rows, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        agent = entry.get("agent")
+        instant = _parse_time(entry.get("dispatched_at"))
+        if isinstance(agent, str) and instant is not None:
+            dispatched_at.setdefault(agent, instant)
+
+    warnings: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row["dispatch_lag_ms"] = None
+        started = _parse_time(row.get("started_at"))
+        dispatch = dispatched_at.get(row.get("agent"))
+        if started is None or dispatch is None:
+            continue
+        lag_ms = int((dispatch - started).total_seconds() * 1000)
+        if lag_ms < 0:
+            warnings.append("synthesis_dispatch_before_marker")
+            continue
+        row["dispatch_lag_ms"] = lag_ms
+    return warnings
+
+
 def _lifecycle_summary(manifest: dict[str, Any]) -> dict[str, Any] | None:
     availability = manifest.get("availability")
     agents = manifest.get("agents")
@@ -606,6 +721,7 @@ def _lifecycle_summary(manifest: dict[str, Any]) -> dict[str, Any] | None:
         "extra_starts_by_agent": extra_starts_by_agent,
         "retry_overhead": sum(extra_starts_by_agent.values()),
         "completion_gap": len(started) - len(completed),
+        "inline_diff_lines": _inline_diff_lines(started),
     }
 
 
@@ -1108,6 +1224,8 @@ def measure_run(
         return measured
 
     warnings = list(measured.get("warnings", []))
+    if _briefings_carried_no_diff(measured):
+        warnings.append("inline_diff_empty")
     if not include_transcripts:
         transcript = _unavailable_transcript("disabled")
     else:
@@ -1126,8 +1244,11 @@ def measure_run(
     for warning in _sanitize_warnings(transcript.get("warnings")):
         if warning not in warnings:
             warnings.append(warning)
-    measured["warnings"] = _sanitize_warnings(warnings)
     measured["transcript"] = transcript
+    for warning in _apply_synthesis_dispatch_lag(measured):
+        if warning not in warnings:
+            warnings.append(warning)
+    measured["warnings"] = _sanitize_warnings(warnings)
     measured["budget_utilization"] = _budget_utilization(measured)
     measured["usage_shares"] = _usage_shares(measured)
     measured["metric_availability"] = {

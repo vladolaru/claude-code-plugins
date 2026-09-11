@@ -1327,6 +1327,59 @@ class TestStep6DispatchAgents:
 # ===================================================================
 
 
+def _assert_poll_is_evidence_gated(text, output_dir, exit_zero_action):
+    """The waiting briefing polls on evidence, not on every wake-up.
+
+    A status call plus the turn that narrated it, once per reviewer, was
+    17-23% of the orchestrator's input tokens on the 2026-09-10 field runs,
+    while the watchdog already exits the instant the disk says ALL_DONE.
+    So the bare (non-`--wait`) call appears exactly once, in the bullet the
+    watchdog's exit selects, and a `STATUS: FINISHED` notification selects
+    a no-action bullet.
+    """
+    lines = text.splitlines()
+
+    finished = [line for line in lines if "STATUS: FINISHED" in line]
+    assert len(finished) == 1, "the FINISHED wake-up needs exactly one bullet"
+    assert "no action" in finished[0].lower(), (
+        f"a FINISHED reviewer must cost nothing: {finished[0]}"
+    )
+
+    # The fenced watchdog command continues with ` --wait`; only the inline
+    # bare call closes its backtick right after the output directory.
+    bare_poll = f'agents_status.py --output-dir "{output_dir}"`'
+    assert text.count(bare_poll) == 1, (
+        "the bare status call must appear once, not as a blanket "
+        "'on wake-up, run agents_status' rule"
+    )
+    poll_line = next(line for line in lines if bare_poll in line)
+    assert poll_line.startswith("- The watchdog exited"), (
+        f"the poll must be gated on the watchdog's exit: {poll_line}"
+    )
+    assert exit_zero_action in poll_line
+
+
+def _waiting_text(mod, host, step, output_dir):
+    """One host's step-7 or step-8 waiting block, as the orchestrator reads it."""
+    ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main", "changed_files_csv": "a.py"}}
+    config = {"host": host} if host == "codex" else None
+    if step == 7:
+        state = {"completed_steps": [], "resolved_params": {"git_range": "abc..HEAD"}}
+        g = mod.get_step_guidance(7, "full", state, ctx, config=config, output_dir=output_dir)
+        text = "\n".join(g["actions"])
+        # Step 7 also confirms the baseline write; only the wait is at issue.
+        return text[text.index("**Wait for agents before step 8.**"):]
+    state = {
+        "resolved_params": {"git_range": "abc..HEAD"},
+        "completed_steps": [1, 3, 5, 6, 7],
+        "waiting_on_agents": {"running": ["security-reviewer"], "not_dispatched": []},
+        "agents": {"dispatched": ["security-reviewer"], "completed": [], "discarded_drafts": []},
+    }
+    g = mod.get_step_guidance(8, "pr", state, ctx, config=config, output_dir=output_dir)
+    assert "WAITING" in g["title"]
+    return "\n".join(g["actions"])
+
+
 class TestStep7SaveReviewBaseline:
     def test_confirms_baseline_saved(self, mod, tmp_path):
         """Step 7 confirms the file was written (script writes it internally). Runs for ALL modes."""
@@ -1355,6 +1408,12 @@ class TestStep7SaveReviewBaseline:
         # Watchdog: background wait as a guaranteed wake-up
         assert "--max-seconds 1500" in text
 
+        # The watchdog, not the notification stream, is what authorizes a
+        # status call: a FINISHED reviewer is a no-action wake-up, and the
+        # bare poll appears once, bound to the watchdog's exit.
+        assert "On wake-up, run agents_status once" not in text
+        _assert_poll_is_evidence_gated(text, tmp_path, "proceed to step 8")
+
         # Ordering (I1, backlog #25 follow-up): the watchdog must be
         # launched BEFORE the instruction to end the turn — a top-to-bottom
         # executor that ends its turn on reading step 1 would otherwise
@@ -1370,6 +1429,29 @@ class TestStep7SaveReviewBaseline:
         # Must not carry the Codex-host cadence
         assert "once a minute" not in text.lower()
 
+    def test_an_agent_that_never_started_is_handled_before_step_8(
+        self, mod, tmp_path
+    ):
+        """`check_status` computes `all_done` as `running == 0`, so a
+        reviewer with no started marker never blocks ALL_DONE, and step 8
+        closes review intake on the exit-0 transition — after which that
+        reviewer can no longer submit. So the watchdog-exit bullet has to
+        dispatch NOT_DISPATCHED agents before it takes exit 0, not under
+        exit 2, which those agents can never produce."""
+        state = {"completed_steps": [], "resolved_params": {"git_range": "abc..HEAD"}}
+        ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main"}}
+        g = mod.get_step_guidance(7, "full", state, ctx, output_dir=str(tmp_path))
+
+        poll_line = next(
+            line for line in "\n".join(g["actions"]).splitlines()
+            if line.startswith("- The watchdog exited")
+        )
+
+        assert "NOT_DISPATCHED" in poll_line
+        assert poll_line.index("NOT_DISPATCHED") < poll_line.index(
+            "proceed to step 8"
+        )
+
     def test_codex_host_wait_uses_per_minute_polling(self, mod, tmp_path):
         """Codex-host wait guidance: foreground --wait --max-seconds 60 cadence,
         not the Claude notification/end-turn mechanism."""
@@ -1381,6 +1463,8 @@ class TestStep7SaveReviewBaseline:
 
         assert "--max-seconds 60" in text
         assert "exit code 3" in text.lower()
+        # No call-count forecast and no per-poll narration to spend turns on
+        assert "Expect roughly" not in text
 
         # Must not carry the Claude-host end-turn/notification mechanism
         assert "END YOUR TURN" not in text
@@ -1458,7 +1542,8 @@ class TestStep8Reconcile:
         assert lines[2] == f"Output directory: {tmp_path}"
         assert lines[3] == (
             "Orchestrator notes: read orchestrator_notes in the context and "
-            "answer each with an outcome and evidence."
+            "answer each with an outcome and evidence; a confirmed note about "
+            "severity changes that severity in the same pass."
         )
         assert len(lines) == 4
         assert "retry logic" not in block
@@ -1638,6 +1723,32 @@ class TestStep8ReadinessGate:
         # Escalation warning should appear in situation
         assert "Escalation" in "\n".join(g["situation"])
 
+    def test_late_reviewer_notifications_are_dismissed_once(self, mod, tmp_path):
+        """Review intake closes at step 8, so a reviewer notification arriving
+        afterwards is noise. The dismissal belongs in the step that closes
+        intake and nowhere else: repeating it would spend tokens in every
+        later briefing restating a fact that is already settled."""
+        state = {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 3, 5, 6, 7],
+            "agents": {
+                "dispatched": ["code-reviewer"],
+                "completed": ["code-reviewer"],
+                "discarded_drafts": [],
+            },
+        }
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+        line = "A reviewer completion notification arriving from now on needs no action."
+
+        rendered = []
+        for step in (8, 9, 10, 11, 12):
+            g = mod.get_step_guidance(
+                step, "pr", copy.deepcopy(state), ctx, output_dir=str(tmp_path)
+            )
+            rendered.extend(g.get("situation") or [])
+            rendered.extend(g.get("actions") or [])
+        assert "\n".join(rendered).count(line) == 1
+
     def _make_waiting_state(self):
         return {
             "resolved_params": {"git_range": "abc..HEAD"},
@@ -1668,6 +1779,11 @@ class TestStep8ReadinessGate:
         end_turn_pos = text.index("END YOUR TURN")
         assert watchdog_pos < end_turn_pos
 
+        # Same evidence gate as step 7: the watchdog's exit, not each
+        # reviewer's completion notification, authorizes a status call.
+        assert "On wake-up, run agents_status once" not in text
+        _assert_poll_is_evidence_gated(text, tmp_path, "re-run step 8")
+
         # Must not carry the Codex-host cadence
         assert "once a minute" not in text.lower()
 
@@ -1684,9 +1800,55 @@ class TestStep8ReadinessGate:
 
         assert "--max-seconds 60" in text
         assert "exit code 3" in text.lower()
+        assert "Expect roughly" not in text
 
         # Must not carry the Claude-host end-turn/notification mechanism
         assert "END YOUR TURN" not in text
+
+
+class TestCodexDraftRecovery:
+    """A Codex reviewer that saves a draft and returns without finalizing
+    stays RUNNING until the agent timeout, and `close_review_intake()` then
+    discards the draft with every finding in it. Codex has no completion
+    notifications, so the recovery rides on the status output the
+    orchestrator already polls — and it has to be in BOTH waiting blocks,
+    since either can be the live gate when that reviewer returns."""
+
+    @pytest.mark.parametrize("step", [7, 8])
+    def test_a_returned_reviewers_draft_can_be_finalized(
+        self, mod, tmp_path, step
+    ):
+        text = _waiting_text(mod, "codex", step, str(tmp_path))
+
+        assert "FINALIZE_REVIEW_COMMAND" in text
+
+
+class TestWaitingGuidanceBudget:
+    """The waiting briefings are rendered on every wake-up, so their size is
+    part of their cost. Handoff 05 traded the per-notification poll for
+    watchdog-gated bullets; these ceilings are the pre-change byte counts,
+    measured with the plugin path and output directory normalized away so
+    the pin does not move with the checkout location."""
+
+    # Path-normalized bytes at e509fadc, before handoff 05.
+    CEILINGS = {
+        ("claude", 7): 1784,
+        ("claude", 8): 1472,
+        ("codex", 7): 1455,
+        ("codex", 8): 1115,
+    }
+
+    @pytest.mark.parametrize("host,step", sorted(CEILINGS))
+    def test_waiting_block_stays_within_its_budget(self, mod, tmp_path, host, step):
+        from review.pipeline_contract import SCRIPTS_DIR
+
+        text = _waiting_text(mod, host, step, str(tmp_path))
+        normalized = text.replace(str(SCRIPTS_DIR), "<S>").replace(str(tmp_path), "<O>")
+        size = len(normalized.encode())
+        assert size <= self.CEILINGS[(host, step)], (
+            f"{host} step {step} waiting guidance grew to {size} bytes, over "
+            f"its {self.CEILINGS[(host, step)]}-byte ceiling"
+        )
 
 
 class TestReviewCoverageSection:
@@ -3195,7 +3357,8 @@ class TestStep3DependencyRefresh:
         text = self._text(g)
         assert "decide whether dependency installation is needed" in text.lower()
         assert "dependency_refresh.py" in text
-        assert "SAVED dependency-refresh.json" in text
+        assert "prints literal `SAVED pipeline/dependency-refresh.json`" in text
+        assert "exists in the output directory" not in text
 
     def test_refresh_handoff_survives_unfetched_issues(self, mod, tmp_path):
         state = dict(self._CLEAN_STATE)

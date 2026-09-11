@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from review.reconciliation_context import FLOOR_MIN_CONFIDENCE
+
 TESTS_DIR = Path(__file__).resolve().parent.parent  # review/ -> tests/
 PLUGIN_ROOT = TESTS_DIR.parent
 REGISTRY = PLUGIN_ROOT / "scripts" / "review" / "agent_registry.json"
@@ -80,6 +82,19 @@ def test_woo_invariant_rows(row):
     assert row in _agent_definition("woo-regression-reviewer.md")
 
 
+def test_woo_floors_paragraph_states_the_confidence_the_pipeline_enforces():
+    """The reviewer tells a self-audit promotion which confidence earns a
+    floor; `reconciliation_context` is what strips the ones below it. Run
+    #66900 locked two 0.5-confidence promotions at medium, so the prose and
+    the constant must not be able to drift apart."""
+    text = _agent_definition("woo-regression-reviewer.md")
+    floors = text.split(
+        "**Structured floors (do not breach):**", 1
+    )[1].split("\n## ", 1)[0]
+
+    assert str(FLOOR_MIN_CONFIDENCE) in floors
+
+
 def test_wp_architecture_reviewer_audits_half_deprecations():
     """Deprecation Rule addition (regression guard for the
     woocommerce/woocommerce-subscriptions#5692 rework): a `@deprecated`
@@ -131,6 +146,22 @@ class TestDismissalDisciplineContract:
         assert "## Dismissal & Mitigation Discipline (ALL findings)" in (
             _agent_definition("review-reconciliator.md")
         )
+
+
+class TestConfirmedNoteMovesSeverity:
+    """Regression guard for the 2026-09-10 review of
+    woocommerce/woocommerce#12089: note n2 said the finding was a goal
+    misalignment on a pre-existing race, not a regression. The
+    reconciliator resolved n2 `confirmed` and left the finding at high,
+    which published request_changes; the critic then demoted it on n2's
+    own framing. Confirming a note and acting on it are one pass."""
+
+    def test_the_notes_item_says_a_confirmed_note_moves_the_severity(self):
+        item = _agent_definition("review-reconciliator.md").split(
+            "9. **`orchestrator_notes`**", 1
+        )[1].split("\n10. ", 1)[0]
+
+        assert "moves that severity in this same pass" in item
 
 
 class TestVerificationMethodContract:
