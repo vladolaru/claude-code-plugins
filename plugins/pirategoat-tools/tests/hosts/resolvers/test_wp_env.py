@@ -96,6 +96,23 @@ def test_core_remote_branch_ref_is_not_a_version(make_repo, ref):
     assert u["raw"] == f"WordPress/WordPress#{ref}"
 
 
+def test_plugin_remote_branch_ref_is_not_a_version(make_repo):
+    """The core and plugin paths diverge after `_parse_remote_ref`: core
+    (`_handle_core`) discards the parsed name and always appends `wordpress`
+    regardless of parse success, while the plugin path (`_handle_array_item`)
+    appends only `if name is not None` — so a plugin ref this resolver fails
+    to name at all would silently vanish from `unresolved`, with no core row
+    catching the regression. A slash in the ref (a private branch name) must
+    still parse the plugin name and land it as unresolved with no version."""
+    repo = make_repo({".wp-env.override.json": json.dumps({
+        "plugins": ["Automattic/jetpack-debug-helper#add/private-thing"]
+    })})
+    result = WpEnvResolver().resolve(str(repo))
+    assert [(u["name"], u["version"]) for u in result.unresolved] == [
+        ("jetpack-debug-helper", None),
+    ]
+
+
 def test_plugins_array_mix_of_local_and_remote(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
