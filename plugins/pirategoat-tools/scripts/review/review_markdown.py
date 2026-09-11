@@ -13,6 +13,13 @@ adjustments, so `critic_adjustments` and the document validators are
 module-level imports here. Nothing imports this module back and it never
 imports the builder — that is what keeps the pair acyclic.
 
+This module does not import `agent.output` anywhere in the module, including
+inside functions: rendering reads documents, it does not build them. It once
+imported one text coercer from `agent/output.py` and got the whole builder —
+plus its lifecycle, assignment, and atomic-write dependencies — as the
+price, so the coercer moved to `review_document.py` with the rest of the
+document's shape.
+
 Usage:
     python3 review_markdown.py render <run>/reviewers/<reviewer>/review.json
     python3 review_markdown.py materialize <output_dir> [--suffix ...]

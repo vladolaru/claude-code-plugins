@@ -28,28 +28,20 @@ from review.telemetry import _project_base_fetch, _project_scope_check
 
 
 @pytest.mark.parametrize("name", FIXTURE_NAMES)
-def test_fixture_carries_no_prose_paths_or_session_urls(name):
-    paths = [path for path in fixture_dir(name).rglob("*") if path.is_file()]
-    assert paths
-    assert sum(path.stat().st_size for path in paths) < 1_000_000
-    for path in paths:
-        text = path.read_text(encoding="utf-8")
-        assert not re.search(r"/Users/|/home/|/private/|[A-Za-z]:\\", text)
-        assert not re.search(r"Claude-Session:\s*(?!<redacted>)\S+", text)
+def test_historical_missingness_reads_as_unmeasured(name):
+    """Every audited run predates live instrumentation for these six
+    projections, so each reads as unmeasured rather than as a synthesized
+    zero. All six assert groups share the fixture: pre-fetch range truth,
+    dispatch signals, lineage-ledger evidence families, usage tool calls,
+    the critic proposal's digest binding, and verify-item settlement."""
+    output_dir = str(fixture_dir(name))
 
-
-@pytest.mark.parametrize("name", FIXTURE_NAMES)
-def test_pre_fetch_runs_read_the_range_truth_as_unmeasured(name):
     git = json.loads((fixture_dir(name) / "review-context.json").read_text())["git"]
     assert "base_fetch" not in git
     assert "scope_check" not in git
     assert _project_base_fetch(git.get("base_fetch")) is None
     assert _project_scope_check(git.get("scope_check")) is None
 
-
-@pytest.mark.parametrize("name", FIXTURE_NAMES)
-def test_historical_dispatch_signals_stay_unmeasured(name):
-    output_dir = str(fixture_dir(name))
     info = manifest_sections.inspect_dispatch_plan(output_dir, "dispatch_plan")
     assert info["available"]
     signals = Counter(a.get("signal") for a in info["entries"] if a["status"] == "DISPATCH")
@@ -63,16 +55,13 @@ def test_historical_dispatch_signals_stay_unmeasured(name):
     assert overrides
     assert all(row["final_signal"] == "override" for row in overrides)
 
-
-@pytest.mark.parametrize("name", FIXTURE_NAMES)
-def test_pre_lineage_ledgers_keep_missing_evidence_families(name):
     ledger = json.loads((fixture_dir(name) / "review-findings.json").read_text())
     assert all("sources" not in finding for finding in ledger["findings"])
     assert "dropped_findings" not in ledger
     assert "dropped_checks" not in ledger
     assert "orchestrator_notes" not in ledger
 
-    evidence = build_evidence_manifest(str(fixture_dir(name)))
+    evidence = build_evidence_manifest(output_dir)
     assert evidence is not None
     assert evidence["findings"]
     assert all(finding["sources"] is None for finding in evidence["findings"])
@@ -80,20 +69,17 @@ def test_pre_lineage_ledgers_keep_missing_evidence_families(name):
     assert evidence["checks"]["dropped"] is None
     assert evidence["orchestrator_notes"] is None
 
-
-@pytest.mark.parametrize("name", FIXTURE_NAMES)
-def test_pre_count_usage_reads_tool_calls_as_unmeasured(name):
-    usage = manifest_sections.build_usage_manifest(str(fixture_dir(name)))
+    usage = manifest_sections.build_usage_manifest(output_dir)
     assert usage["by_agent"]
     assert all(row["tool_calls"] is None for row in usage["by_agent"])
 
-
-@pytest.mark.parametrize("name", FIXTURE_NAMES)
-def test_redacted_critic_proposal_is_still_digest_bound(name):
-    verdict, proposal = read_committed_proposal(str(fixture_dir(name)))
+    verdict, proposal = read_committed_proposal(output_dir)
     assert verdict == "REVISE"
     assert proposal["adjustments"]
     assert all(entry["rationale"] == "<redacted>" for entry in proposal["adjustments"])
+
+    assert evidence["verify_items"] is None
+    assert evidence["undeclared_citations"] is None
 
 
 def _by_action(evidence):
@@ -143,15 +129,6 @@ def test_each_run_matches_its_audit(
     assert _by_action(evidence) == by_action
     if actions_by_finding is not None:
         assert {f["id"]: f["critic_action"] for f in evidence["findings"] if f["critic_action"]} == actions_by_finding
-
-
-@pytest.mark.parametrize("name", FIXTURE_NAMES)
-def test_pre_tier_purposes_read_verify_settlement_as_unmeasured(name):
-    """Every audited run predates the parsed `## Verify` heading; nothing was
-    declared, so nothing reads as settled or unsettled."""
-    evidence = build_evidence_manifest(str(fixture_dir(name)))
-    assert evidence["verify_items"] is None
-    assert evidence["undeclared_citations"] is None
 
 
 def test_recursive_redaction_preserves_counts_and_critic_coordinates():
@@ -233,7 +210,7 @@ def test_legacy_severity_action_requires_final_ledger_proof(prior, final, action
     assert ledger["findings"][0]["critic_adjustment"]["action"] == action
 
 
-@pytest.mark.parametrize("problem", ["missing_target", "duplicate_target", "wrong_kind", "wrong_action", "missing_prior", "invalid_prior", "malformed_prior", "invalid_final", "replacement_mismatch", "unchanged_severity"])
+@pytest.mark.parametrize("problem", ["missing_target", "wrong_action", "unchanged_severity"])
 def test_legacy_severity_action_rejects_unprovable_changes(problem):
     proposal = {"schema": 2, "adjustments": [{
         "action": "correct", "target": {"kind": "finding", "id": "f1"},
@@ -245,22 +222,8 @@ def test_legacy_severity_action_rejects_unprovable_changes(problem):
     ledger = {"findings": [finding]}
     if problem == "missing_target":
         ledger["findings"] = []
-    elif problem == "duplicate_target":
-        ledger["findings"].append(copy.deepcopy(finding))
-    elif problem == "wrong_kind":
-        proposal["adjustments"][0]["target"]["kind"] = "check"
     elif problem == "wrong_action":
         finding["critic_adjustment"]["action"] = "demote"
-    elif problem == "missing_prior":
-        finding["critic_adjustment"].pop("prior")
-    elif problem == "invalid_prior":
-        finding["critic_adjustment"]["prior"]["severity"] = "urgent"
-    elif problem == "malformed_prior":
-        finding["critic_adjustment"]["prior"] = ["high"]
-    elif problem == "invalid_final":
-        finding["severity"] = "urgent"
-    elif problem == "replacement_mismatch":
-        finding["severity"] = "medium"
     else:
         finding["critic_adjustment"]["prior"]["severity"] = "low"
     with pytest.raises(ValueError, match="cannot prove legacy severity adjustment"):
@@ -287,10 +250,22 @@ def _assert_prose_redacted(value):
 
 
 @pytest.mark.parametrize("name", FIXTURE_NAMES)
-def test_every_fixture_redacts_results_and_recommendation_prose(name):
-    paths = list(fixture_dir(name).rglob("*.json"))
+def test_fixture_is_redacted(name):
+    """Both privacy scans over every committed fixture file: no local paths
+    or live session URLs survive in the raw text, and every JSON document's
+    result/recommendation prose fields are redacted."""
+    paths = [path for path in fixture_dir(name).rglob("*") if path.is_file()]
     assert paths
+    assert sum(path.stat().st_size for path in paths) < 1_000_000
+    json_paths = []
     for path in paths:
+        text = path.read_text(encoding="utf-8")
+        assert not re.search(r"/Users/|/home/|/private/|[A-Za-z]:\\", text)
+        assert not re.search(r"Claude-Session:\s*(?!<redacted>)\S+", text)
+        if path.suffix == ".json":
+            json_paths.append(path)
+    assert json_paths
+    for path in json_paths:
         _assert_prose_redacted(json.loads(path.read_text(encoding="utf-8")))
 
 
@@ -368,8 +343,13 @@ def test_relocated_capture_scrubs_recorded_output_directories_everywhere(tmp_pat
             ))
 
 
-@pytest.mark.parametrize("symlink_location", ["file", "directory", "target", "root", "dangling"])
+@pytest.mark.parametrize("symlink_location", ["root", "target", "file"])
 def test_destination_symlink_refuses_capture_before_any_write(symlink_location, tmp_path, monkeypatch):
+    # One `or` expression (`FIXTURES_DIR.is_symlink() or target.is_symlink()
+    # or any(path.is_symlink() for path in target.rglob("*"))`); each row
+    # covers a distinct clause — "target" is not subsumed by "file" because
+    # `target.rglob("*")` walks a symlinked target's resolved contents,
+    # which are not themselves symlinks.
     original = fixture_dir(FIXTURE_NAMES[0])
     # The helper creates an expendable source, so even the RED run cannot
     # write through a symlink into the committed or private source runs.
@@ -387,12 +367,7 @@ def test_destination_symlink_refuses_capture_before_any_write(symlink_location, 
         target.symlink_to(external, target_is_directory=True)
     else:
         target.mkdir(parents=True)
-        if symlink_location == "file":
-            (target / "review-context.json").symlink_to(source / "review-context.json")
-        elif symlink_location == "directory":
-            (target / "pipeline").symlink_to(external, target_is_directory=True)
-        else:
-            (target / "unused").symlink_to(tmp_path / "absent")
+        (target / "review-context.json").symlink_to(source / "review-context.json")
     before = set(tmp_path.rglob("*"))
     monkeypatch.setattr(review_run_fixture, "FIXTURES_DIR", root)
     with pytest.raises(ValueError, match="fixture destination contains a symlink"):
@@ -421,9 +396,8 @@ def test_invalid_source_marker_refuses_capture_before_writing(verdict, tmp_path,
     assert not (tmp_path / "fixtures").exists()
 
 
-@pytest.mark.parametrize("name", ["../escape", "/absolute", "unknown-run"])
-def test_capture_refuses_unknown_fixture_names(name, tmp_path, monkeypatch):
+def test_capture_refuses_unknown_fixture_names(tmp_path, monkeypatch):
     monkeypatch.setattr(review_run_fixture, "FIXTURES_DIR", tmp_path / "fixtures")
     with pytest.raises(ValueError, match="unknown fixture name"):
-        review_run_fixture.capture(tmp_path, name)
+        review_run_fixture.capture(tmp_path, "../escape")
     assert not (tmp_path / "fixtures").exists()

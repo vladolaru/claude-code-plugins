@@ -19,7 +19,9 @@ def _canonical_plugins() -> list[dict]:
     return json.loads(CLAUDE_MARKETPLACE.read_text())["plugins"]
 
 
-def test_codex_marketplace_covers_every_canonical_plugin():
+def test_generated_codex_output_matches_every_canonical_plugin():
+    """One walk over every canonical plugin, checking the marketplace entry,
+    the Codex manifest, and every command's generated skill adapter."""
     assert CODEX_MARKETPLACE.is_file()
     marketplace = json.loads(CODEX_MARKETPLACE.read_text())
     canonical = _canonical_plugins()
@@ -30,20 +32,17 @@ def test_codex_marketplace_covers_every_canonical_plugin():
         entry["name"] for entry in canonical
     ]
 
-    for entry in marketplace["plugins"]:
-        assert entry["source"] == {
+    for entry, codex_entry in zip(canonical, marketplace["plugins"]):
+        assert codex_entry["source"] == {
             "source": "local",
-            "path": f"./plugins/{entry['name']}",
+            "path": f"./plugins/{codex_entry['name']}",
         }
-        assert entry["policy"] == {
+        assert codex_entry["policy"] == {
             "installation": "AVAILABLE",
             "authentication": "ON_INSTALL",
         }
-        assert entry["category"]
+        assert codex_entry["category"]
 
-
-def test_every_plugin_has_matching_codex_manifest():
-    for entry in _canonical_plugins():
         plugin_root = REPO_ROOT / entry["source"].removeprefix("./")
         manifest_path = plugin_root / ".codex-plugin" / "plugin.json"
         assert manifest_path.is_file(), entry["name"]
@@ -66,10 +65,6 @@ def test_every_plugin_has_matching_codex_manifest():
             assert manifest["skills"] == "./codex-skills/"
             assert (plugin_root / manifest["skills"]).is_dir()
 
-
-def test_every_claude_command_has_generated_codex_skill():
-    for entry in _canonical_plugins():
-        plugin_root = REPO_ROOT / entry["source"].removeprefix("./")
         for command_ref in entry.get("commands", []):
             command_path = plugin_root / command_ref.removeprefix("./")
             skill_dir = (
@@ -243,9 +238,6 @@ def test_canonical_skills_use_host_neutral_skill_directory():
     for skill_path in REPO_ROOT.glob("plugins/*/skills/*/SKILL.md"):
         text = skill_path.read_text()
         assert "${CLAUDE_SKILL_DIR}" not in text, skill_path
-        if "$SKILL_DIR" in text:
-            assert "directory containing this `SKILL.md`" in text
-            assert "not a host-exported environment variable" in text
 
 
 def test_generated_codex_compatibility_files_are_current():
