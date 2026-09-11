@@ -2102,11 +2102,19 @@ class TestStep10DecisionCritic:
         self, mod, tmp_path
     ):
         """The field failure: a report said "all four spot-checked" about a
-        FIVE-entry batch, and the unverified entry propagated as fact."""
+        FIVE-entry batch, and the unverified entry propagated as fact.
+
+        The instruction must demand one line per adjustment id with its own
+        outcome, and must forbid the aggregate phrasing outright.
+        """
         g = mod.get_step_guidance(10, "pr", {"completed_steps": []}, {})
         revise = self._revise_section(g)
 
         assert "PER ENTRY, never in aggregate" in revise
+        assert '"verified"' in revise
+        assert '"refuted"' in revise
+        assert "omitted" in revise and "not_checked" in revise
+        assert "Never report the batch in aggregate anywhere" in revise
 
     def test_codex_critic_uses_canonical_agent_definition(self, mod, tmp_path):
         state = {"completed_steps": []}
