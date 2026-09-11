@@ -40,6 +40,9 @@ _scope_spec = importlib.util.spec_from_file_location("review_scope", str(REVIEW_
 review_scope = importlib.util.module_from_spec(_scope_spec)
 _scope_spec.loader.exec_module(review_scope)
 
+from review.manifest_sections import aggregate_file_review
+from review.reviewer_lifecycle import SCOPE_SUMMARY_SCHEMA, scope_summary_path
+
 
 # =============================================================================
 # CLI argument contract
@@ -1177,6 +1180,42 @@ class TestScopeSummaryJson:
         assert data["routing_files"] == []
         assert data["in_scope_stat_lines"] == 0
         assert data["inline_diff_lines"] == 0
+
+    def test_producer_and_readers_agree_on_the_schema(self, tmp_path):
+        """The integer is written here and checked in two readers that share
+        no other code. Bumping 3 -> 4 moved only one of them and left step 9
+        silently omitting the whole review-coverage section."""
+        path = tmp_path / "security-reviewer-scope-summary.json"
+        review_scope.write_scope_summary({"status": "OK"}, str(path))
+
+        assert json.loads(path.read_text())["schema"] == SCOPE_SUMMARY_SCHEMA
+
+    def test_a_generated_summary_reaches_the_run_level_file_review(
+        self, tmp_path
+    ):
+        """Producer to consumer with no fixture in between: the unit tests on
+        either side both passed while the two disagreed about the schema."""
+        review_scope.write_scope_summary(
+            {
+                "status": "OK",
+                "diffs": {"src/a.php": "+x"},
+                "diffstat": {"src/a.php": (10, 5)},
+                "budget_exceeded_files": [],
+                "list_only_files": [],
+                "in_scope_files": ["src/a.php"],
+                "total_diff_lines": 15,
+            },
+            scope_summary_path(str(tmp_path), "security"),
+        )
+
+        review = aggregate_file_review(
+            str(tmp_path), changed_files=["src/a.php", "src/b.php"]
+        )
+
+        assert review is not None
+        assert review["scope_reporting_agent_count"] == 1
+        # The section's whole point: src/b.php reached no reviewer's scope.
+        assert review["unscoped_files"] == ["src/b.php"]
 
     def test_write_scope_summary_fails_closed(self, tmp_path):
         """The summary is the only source of a reviewer's assignment facts.

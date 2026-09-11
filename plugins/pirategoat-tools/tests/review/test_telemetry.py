@@ -31,6 +31,7 @@ from review import run_paths
 from review import synthesis_lifecycle as lifecycle_contract
 from review.manifest_sections import aggregate_file_review
 from review.reviewer_lifecycle import (
+    SCOPE_SUMMARY_SCHEMA,
     ReviewPaths,
     review_paths,
     scope_summary_path,
@@ -1243,7 +1244,7 @@ class TestRunManifest:
         scope_summary.parent.mkdir(parents=True, exist_ok=True)
         scope_summary.write_text(
             json.dumps({
-                "schema": 3,
+                "schema": SCOPE_SUMMARY_SCHEMA,
                 "inline_diff_files": ["src/café.py"],
                 "review_claimable_files": [],
                 "list_only_files": [],

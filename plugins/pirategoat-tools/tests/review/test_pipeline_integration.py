@@ -193,7 +193,7 @@ class TestReviewerDraftFinalizationLifecycle:
         )
         Path(reviewer_lifecycle.scope_summary_path(output_dir, "code")).write_text(
             json.dumps({
-                "schema": 3,
+                "schema": reviewer_lifecycle.SCOPE_SUMMARY_SCHEMA,
                 "inline_diff_files": ["second.txt"],
                 "review_claimable_files": [
                     "claimable/read.py",
@@ -2432,7 +2432,7 @@ class TestStep9CoverageMeasurement:
     @staticmethod
     def _summary(tmp_path, agent, *, inline=(), claimable=()):
         _write_scope_summary(tmp_path, agent.removesuffix("-reviewer"), {
-            "schema": 3,
+            "schema": reviewer_lifecycle.SCOPE_SUMMARY_SCHEMA,
             "inline_diff_files": list(inline),
             "review_claimable_files": list(claimable),
             "list_only_files": [],

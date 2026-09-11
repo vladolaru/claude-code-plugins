@@ -48,6 +48,7 @@ from review.manifest_sections import host_identity_phrase, project_host_entry
 from review.run_paths import artifact_path
 from review.triage_sources import strip_html_comments
 from review.reviewer_lifecycle import (
+    SCOPE_SUMMARY_SCHEMA,
     briefing_path,
     review_paths,
     scope_summary_path,
@@ -408,8 +409,13 @@ def load_scope_facts(summary_paths: List[str]) -> Dict[str, Any]:
                 data = json.load(f)
         except (OSError, json.JSONDecodeError) as exc:
             raise ValueError(f"unreadable scope summary {path}: {exc}") from exc
-        if not isinstance(data, dict) or data.get("schema") != 4:
-            raise ValueError(f"scope summary {path} is not schema 4")
+        if (
+            not isinstance(data, dict)
+            or data.get("schema") != SCOPE_SUMMARY_SCHEMA
+        ):
+            raise ValueError(
+                f"scope summary {path} is not schema {SCOPE_SUMMARY_SCHEMA}"
+            )
         counts = {}
         for key in _SCOPE_FACT_COUNTS:
             count = data.get(key)

@@ -25,7 +25,11 @@ from helpers.review_fixtures import (
 )
 from review import manifest_sections
 from review.manifest_sections import aggregate_file_review
-from review.reviewer_lifecycle import review_paths, scope_summary_path
+from review.reviewer_lifecycle import (
+    SCOPE_SUMMARY_SCHEMA,
+    review_paths,
+    scope_summary_path,
+)
 from review.reviewer_names import derive_reviewer_name
 
 
@@ -45,7 +49,11 @@ def _write_summary(
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         json.dump({
-            "schema": 3,
+            # From the producer's own constant, never a literal: the whole
+            # coverage family reads sidecars this helper writes, and a
+            # hand-spelled integer left it testing a shape scope.py had
+            # already stopped writing.
+            "schema": SCOPE_SUMMARY_SCHEMA,
             "inline_diff_files": files_with_diffs,
             "review_claimable_files": budget_exceeded,
             "list_only_files": list(list_only or []),

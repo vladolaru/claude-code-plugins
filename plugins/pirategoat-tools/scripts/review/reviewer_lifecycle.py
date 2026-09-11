@@ -83,6 +83,20 @@ def scope_summary_path(
     return str(reviewer_dir(output_dir, reviewer) / name)
 
 
+# The shape every scope-summary sidecar is written and read at. The
+# producing authority is `agent/scope.py::write_scope_summary`, which
+# repeats the integer rather than importing it because that module is
+# deliberately stdlib-only; `TestScopeSummarySchemaParity` fails the
+# moment the two disagree.
+#
+# It lives here, beside the two other facts about this artifact, because
+# it has TWO readers that share no other code — `bootstrap.load_scope_facts`
+# (a reviewer's assignment facts) and `manifest_sections.aggregate_file_review`
+# (the run-level file review). Bumping 3 -> 4 moved only the first and left
+# step 9 silently omitting the review-coverage section for a whole release.
+SCOPE_SUMMARY_SCHEMA = 4
+
+
 def is_scope_summary_name(name: str) -> bool:
     """Return whether a basename is a canonical scope-summary sidecar."""
     return name == "scope-summary.json" or (

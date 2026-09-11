@@ -1849,6 +1849,10 @@ def write_scope_summary(scope: dict, path: str) -> None:
     )
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     summary = {
+        # Repeated, not imported: this module is stdlib-only by contract
+        # (see the header). `reviewer_lifecycle.SCOPE_SUMMARY_SCHEMA` is
+        # where the readers take it from, and
+        # `TestScopeSummarySchemaParity` fails if the two drift.
         "schema": 4,
         "inline_diff_files": inline_diff_files,
         "review_claimable_files": review_claimable_files,
