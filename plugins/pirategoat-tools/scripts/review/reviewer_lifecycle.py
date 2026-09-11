@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Reviewer-specific draft, final, sidecar, and intake state."""
+"""Reviewer-specific draft, final, sidecar, and intake state.
+
+This module owns the fixed per-reviewer filenames under
+`reviewers/<reviewer>/`: `review.draft.json`, `review.json`,
+`assignment.json`, `review.md`, `scope-summary*.json`,
+`scoped-diff.patch`, `briefing.md` and `started`. They are per-reviewer,
+so they are named here rather than in `run_paths.ARTIFACTS`, which
+registers the run's shared artifacts.
+"""
 
 from dataclasses import dataclass
 import json
@@ -85,6 +93,11 @@ def is_scope_summary_name(name: str) -> bool:
 def scoped_diff_path(output_dir: str, reviewer: str) -> str:
     """Return one reviewer's complete scoped diff path."""
     return str(reviewer_dir(output_dir, reviewer) / "scoped-diff.patch")
+
+
+def briefing_path(output_dir: str, reviewer: str) -> str:
+    """Return one reviewer's complete briefing path."""
+    return str(reviewer_dir(output_dir, reviewer) / "briefing.md")
 
 
 def started_marker_path(output_dir: str, reviewer: str) -> str:

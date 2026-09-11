@@ -133,6 +133,7 @@ Interactive reviews keep durable state under `~/.pirategoat-tools/reviews/`; an 
         │   └── .worktree-baseline.json
         ├── reviewers/<reviewer>/                              # short reviewer identity
         │   ├── assignment.json
+        │   ├── briefing.md                                    # what bootstrap delivered; stdout is a stub naming it
         │   ├── review.draft.json
         │   ├── review.json
         │   ├── review.md

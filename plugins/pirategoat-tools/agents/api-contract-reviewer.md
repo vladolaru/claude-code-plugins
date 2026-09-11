@@ -24,7 +24,7 @@ PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
 python3 $PLUGIN_ROOT/scripts/review/agent/bootstrap.py --agent api-contract-reviewer
 ```
 
-Read the output carefully. It contains your review rules, review scope, and output instructions. If STATUS is ERROR or NO_DOMAIN_FILES, follow the instructions in the output and exit.
+The output names your briefing file; read it in full. It contains your review rules, review scope, and output instructions. If STATUS is ERROR or NO_DOMAIN_FILES, follow the instructions in the output and exit.
 
 ---
 

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.119.5] - UNRELEASED
 
+### Changed
+
+- Bootstrap now writes each reviewer's briefing to `reviewers/<reviewer>/briefing.md` and prints a short pointer to it, so a reviewer reads one deterministic file instead of a harness-persisted tool result behind a truncated preview, and the briefing it was given is kept with the run.
+
 ### Fixed
 
 - Reviewer briefings listed their files with an empty diff whenever the reviewer's shell sat in a subdirectory of the repository, which has been every review since Claude Code 2.1.267 made subagents inherit the orchestrator's working directory; scope now runs every git command from the repository toplevel.

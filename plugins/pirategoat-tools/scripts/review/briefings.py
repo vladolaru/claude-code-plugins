@@ -64,7 +64,8 @@ except ImportError:
 # the block, not in the surrounding briefing prose.
 DISPATCH_PROMPT_LEAD = (
     "Run this exact command as your FIRST tool call, before reading any file, "
-    "and follow the scope and output contract it prints:"
+    "then read the briefing file it names and follow that scope and output "
+    "contract:"
 )
 
 
@@ -1202,8 +1203,8 @@ def _step_6_dispatch_agents(mode, state, context, config, output_dir):
                     )
                     actions.append(
                         f"- {_codex_agent_instruction(agent_type)} Then run the exact "
-                        "bootstrap command below and follow the emitted scope and "
-                        "output contract."
+                        "bootstrap command below, read the briefing file it names, "
+                        "and follow that scope and output contract."
                     )
                 actions.append("```")
                 if not codex_host:
@@ -1219,8 +1220,8 @@ def _step_6_dispatch_agents(mode, state, context, config, output_dir):
                     )
                     actions.append(
                         f"- {_codex_agent_instruction(agent_type)} Then run the exact "
-                        "bootstrap command below and follow the emitted scope and "
-                        "output contract."
+                        "bootstrap command below, read the briefing file it names, "
+                        "and follow that scope and output contract."
                     )
                 actions.append("```")
                 if not codex_host:

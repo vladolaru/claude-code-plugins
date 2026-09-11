@@ -24,7 +24,7 @@ PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
 python3 $PLUGIN_ROOT/scripts/review/agent/bootstrap.py --agent php-tests-reviewer
 ```
 
-Read the output carefully. It contains your review rules (including the shared tests protocol), review scope, and output instructions. If STATUS is NO_DOMAIN_FILES, report "No PHP test files to review" → APPROVE → exit. If ERROR, follow the instructions and exit.
+The output names your briefing file; read it in full. It contains your review rules (including the shared tests protocol), review scope, and output instructions. If STATUS is NO_DOMAIN_FILES, report "No PHP test files to review" → APPROVE → exit. If ERROR, follow the instructions and exit.
 
 ---
 

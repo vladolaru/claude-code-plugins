@@ -650,8 +650,8 @@ def build_dispatch_prompt(agent_name: str, bootstrap_cmd: str) -> str:
     contract.
     """
     return (
-        f"Run this exact bootstrap command and follow the emitted scope and "
-        f"output contract:\n```\n{bootstrap_cmd}\n```"
+        f"Run this exact bootstrap command, read the briefing file it names, "
+        f"and follow that scope and output contract:\n```\n{bootstrap_cmd}\n```"
     )
 
 

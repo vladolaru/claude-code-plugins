@@ -42,12 +42,13 @@ if _SCRIPTS_DIR not in sys.path:
 
 from review.reviewer_names import derive_reviewer_name
 from review.agent.review_assignment import ASSIGNMENT_SCHEMA, derive_reviewed_files
-from review.atomic_io import atomic_write_json
+from review.atomic_io import atomic_write_json, atomic_write_text
 from review.change_purpose import parse_change_purpose
 from review.manifest_sections import host_identity_phrase, project_host_entry
 from review.run_paths import artifact_path
 from review.triage_sources import strip_html_comments
 from review.reviewer_lifecycle import (
+    briefing_path,
     review_paths,
     scope_summary_path,
     scoped_diff_path,
@@ -118,6 +119,18 @@ _REVIEW_DOMAINS = set(_scope_mod.DOMAIN_CATALOG.keys())
 # Beyond this, the full scope is written to a file and only a summary is inlined.
 # Prevents Claude Code's output persistence cascade for large PRs.
 SCOPE_INLINE_CAP = 15 * 1024  # 15KB
+
+# Header for every file bootstrap tells a reviewer to Read whole: the Read
+# tool numbers the lines it displays, and a finding anchored to those
+# numbers points at the wrong source line. Shared by the briefing and the
+# scoped-diff writers so one wording covers both.
+READ_LINE_NUMBER_WARNING = (
+    "# WARNING: When you read this file, the Read tool adds display line numbers\n"
+    "# (e.g., 227→...). These are line numbers WITHIN THIS FILE, NOT source\n"
+    "# file line numbers. For add_finding(line=...), use the source file line numbers\n"
+    "# from the @@ hunk headers (e.g., @@ -0,0 +1,116 @@ means source starts at line 1).\n"
+    "#\n"
+)
 
 # Soft cap on host_context section size to keep prompt growth bounded.
 # Most reviewers only need the top entries; the cap ensures wp-env setups
@@ -1087,13 +1100,7 @@ def build_output(
         scope_file = scoped_diff_path(output_dir, reviewer_name)
         os.makedirs(os.path.dirname(scope_file), exist_ok=True)
         with open(scope_file, 'w') as f:
-            f.write(
-                "# WARNING: When you read this file, the Read tool adds display line numbers\n"
-                "# (e.g., 227→...). These are line numbers WITHIN THIS PATCH FILE, NOT source\n"
-                "# file line numbers. For add_finding(line=...), use the source file line numbers\n"
-                "# from the @@ hunk headers (e.g., @@ -0,0 +1,116 @@ means source starts at line 1).\n"
-                "#\n"
-            )
+            f.write(READ_LINE_NUMBER_WARNING)
             f.write(scope_output)
         # Show first ~200 lines inline, capped at SCOPE_INLINE_CAP characters
         scope_lines = scope_output.splitlines()
@@ -1251,6 +1258,55 @@ def build_output(
     lines.append("   $PLUGIN_ROOT/skills/*/references/*.md)")
 
     return "\n".join(lines)
+
+
+BRIEFING_STUB_GUIDANCE = (
+    "Read the BRIEFING file in full with one Read call (no offset/limit). "
+    "It is your complete briefing: review rules, review scope, and output "
+    "instructions. Follow it; do not read run artifacts by hand."
+)
+
+
+def deliver_briefing(
+    output: str,
+    *,
+    output_dir: str,
+    reviewer_name: str,
+    agent_name: str,
+    plugin_root: str,
+    status: str,
+) -> str:
+    """Write one reviewer's briefing to the run directory, return the stub.
+
+    Unconditional, with no size threshold and no inline branch: two
+    delivery shapes would be two conventions for one thing, and the
+    harness's persistence threshold (~30,000 B, against briefings of
+    34-39 KB) is not ours to depend on. Printing the briefing handed the
+    reviewer a random-named persisted tool result behind a truncated
+    preview, cost it a turn to read back, and left no copy with the run.
+
+    Every fact in the stub arrives as a parameter, like `build_output`'s:
+    re-deriving `STATUS` by parsing our own rendered text would make a
+    reformat of the header silently change what a reviewer is told.
+
+    The caller writes this BEFORE the started marker, so a reviewer that
+    observes the marker can rely on the briefing being there.
+    """
+    path = os.path.abspath(briefing_path(output_dir, reviewer_name))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    text = READ_LINE_NUMBER_WARNING + output
+    atomic_write_text(path, text)
+    return "\n".join([
+        f"=== BOOTSTRAP: {agent_name} ===",
+        f"PLUGIN_ROOT: {plugin_root}",
+        # STATUS stays on stdout: every agent definition tells the reviewer
+        # to exit on ERROR or NO_DOMAIN_FILES, and the compliance grader
+        # reads it from here.
+        f"STATUS: {status}",
+        f"BRIEFING: {path}",
+        f"BRIEFING_BYTES: {len(text.encode('utf-8'))}",
+        BRIEFING_STUB_GUIDANCE,
+    ])
 
 
 def build_error_output(agent_name: str, error_msg: str, plugin_root: str = "UNKNOWN") -> str:
@@ -1903,6 +1959,17 @@ def main():
         plugin_version=load_plugin_version(output_dir),
     )
 
+    # The briefing file precedes the marker: a reviewer that sees RUNNING
+    # can rely on its briefing existing.
+    stub = deliver_briefing(
+        output,
+        output_dir=output_dir,
+        reviewer_name=reviewer_name,
+        agent_name=effective_agent_name,
+        plugin_root=plugin_root,
+        status=overall_status,
+    )
+
     # The started marker is the last thing bootstrap writes: agents_status.py
     # reads it as RUNNING, and a reviewer whose briefing failed above never
     # started — leaving the marker would hold step 8 open until the timeout.
@@ -1915,7 +1982,7 @@ def main():
     with open(started_path, "w") as f:
         from datetime import datetime, timezone
         f.write(datetime.now(timezone.utc).isoformat())
-    print(output)
+    print(stub)
 
     # Exit code: 0 for success (including NO_DOMAIN_FILES), 1 for errors
     if overall_status == "ERROR":
