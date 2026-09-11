@@ -185,9 +185,10 @@ def test_named_volume_under_plugin_path_is_not_reported_missing(tmp_path):
     assert result.unresolved == []
 
 
-@pytest.mark.parametrize("source_spelling, env_setup", [
+@pytest.mark.parametrize("source_spelling, plugin_subpath, env_setup", [
     pytest.param(
         "${HOST_ROOT}/woocommerce",
+        ("host-root", "woocommerce"),
         lambda tmp_path, repo, monkeypatch, plugin: monkeypatch.setenv(
             "HOST_ROOT", str(plugin.parent)
         ),
@@ -195,6 +196,7 @@ def test_named_volume_under_plugin_path_is_not_reported_missing(tmp_path):
     ),
     pytest.param(
         "${WC_PATH}",
+        ("host-root", "woocommerce"),
         lambda tmp_path, repo, monkeypatch, plugin: (
             monkeypatch.delenv("WC_PATH", raising=False),
             (repo / ".env").write_text(f"WC_PATH={plugin}\n"),
@@ -203,23 +205,21 @@ def test_named_volume_under_plugin_path_is_not_reported_missing(tmp_path):
     ),
     pytest.param(
         "~/plugins/woocommerce",
+        ("home", "plugins", "woocommerce"),
         lambda tmp_path, repo, monkeypatch, plugin: monkeypatch.setenv(
             "HOME", str(plugin.parent.parent)
         ),
         id="tilde",
     ),
 ])
-def test_compose_source_expansion(tmp_path, monkeypatch, source_spelling, env_setup):
+def test_compose_source_expansion(tmp_path, monkeypatch, source_spelling, plugin_subpath, env_setup):
     """A volume source spelled as an environment variable, an `.env`-file
     variable, or a `~` path is expanded before the path-existence check —
     each is the same expand-then-check contract, differing only in where
     the value comes from."""
     repo = tmp_path / "repo"
     repo.mkdir()
-    if source_spelling == "~/plugins/woocommerce":
-        plugin = tmp_path / "home" / "plugins" / "woocommerce"
-    else:
-        plugin = tmp_path / "host-root" / "woocommerce"
+    plugin = tmp_path.joinpath(*plugin_subpath)
     plugin.mkdir(parents=True)
     env_setup(tmp_path, repo, monkeypatch, plugin)
     _write_compose(repo, "docker-compose.override.yml", f"""\

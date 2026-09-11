@@ -65,7 +65,7 @@ def test_missing_subcommand_errors(tmp_path, monkeypatch):
     with pytest.raises(SystemExit) as exc:
         ecosystem_cache.main()
 
-    assert exc.value.code != 0
+    assert exc.value.code == 2  # argparse's mutually-exclusive-group error
 
 
 def test_ecosystem_cache_cli_unknown_host_returns_structured_error(tmp_path, monkeypatch, capsys):

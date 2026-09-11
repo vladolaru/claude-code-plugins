@@ -4,8 +4,6 @@ import re
 from pathlib import Path
 from typing import get_args
 
-import pytest
-
 from hosts.types import (
     BannerReason,
     HostEntry,

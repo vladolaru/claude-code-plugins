@@ -1,13 +1,9 @@
 """Tests for the resolver chain."""
 
 import json
-from pathlib import Path
-
-import pytest
 
 from hosts.chain import ResolverChain
 from hosts.resolvers.base import ResolverResult
-from hosts.types import HostContextManifest
 
 
 def test_empty_repo_with_ambient_hosts_and_populated_cache_yields_nothing(tmp_path, monkeypatch):

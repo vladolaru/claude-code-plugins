@@ -96,6 +96,6 @@ def test_cli_writes_host_context_into_review_context(tmp_path, monkeypatch):
 def test_cli_missing_args_errors(capsys):
     with pytest.raises(SystemExit) as exc:
         host_context.main([])
-    assert exc.value.code != 0
+    assert exc.value.code == 2  # argparse's required-argument error
     stderr = capsys.readouterr().err
     assert "--repo" in stderr or "required" in stderr.lower()

@@ -1,9 +1,5 @@
 """Tests for ecosystem-cache resolver."""
 
-from pathlib import Path
-
-import pytest
-
 from hosts.resolvers.ecosystem_cache import EcosystemCacheResolver
 
 

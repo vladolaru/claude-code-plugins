@@ -1,7 +1,5 @@
 """Tests for the vendor/node_modules library-dep resolver."""
 
-import json
-
 from hosts.resolvers.vendor import VendorResolver
 
 
