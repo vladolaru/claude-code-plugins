@@ -876,8 +876,9 @@ class TestStep5QuickMode:
 
 class TestAdditionalInstructions:
     """Steps 5 and 8 each render additional_instructions from their own
-    code (briefings.py:1061, 1561), so each needs its own pin — but the
-    shape of the check is one table, not four near-identical tests."""
+    code (briefings.py's _step_5_dispatch_plan and _step_8_reconcile), so
+    each needs its own pin — but the shape of the check is one table, not
+    four near-identical tests."""
 
     _STATES = {
         5: {
@@ -1564,8 +1565,9 @@ class TestStep8ReadinessGate:
         assert "agents_status.py" in actions_text
 
     def test_not_blocked_when_no_running_agents(self, mod, tmp_path):
-        """Step 8 should proceed normally when waiting_on_agents is absent,
-        empty, or holds only NOT_DISPATCHED agents (only RUNNING blocks)."""
+        """Step 8 should proceed normally when waiting_on_agents has an
+        empty running list and a non-empty not_dispatched list (only
+        RUNNING blocks)."""
         state = {
             "resolved_params": {"git_range": "abc..HEAD"},
             "waiting_on_agents": {"running": [], "not_dispatched": ["dead-code-reviewer"]},

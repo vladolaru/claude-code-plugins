@@ -2823,9 +2823,11 @@ class TestLoadRuns:
     def test_invalid_numeric_fields_degrade_availability_without_crashing(
         self, tmp_path
     ):
-        """An integer past `_nonnegative_int`'s bound degrades the dispatch
-        family at load level; the float conjuncts are swept at measure
-        level by `TestMeasureRun::test_invalid_manifest_numerics_are_
+        """A `planner_candidate_count` past int64 pins the dispatch family
+        to degraded availability without crashing; the count recomputation
+        against `agents` would reject the same row independently, so this
+        does not pin `_nonnegative_int`'s bound in isolation — that lives in
+        `TestMeasureRun::test_invalid_manifest_numerics_are_
         omitted_and_never_drive_wall_time`."""
         manifest = _manifest("nonfinite")
         manifest["dispatch"]["planner_candidate_count"] = 10**1_000
@@ -6357,7 +6359,12 @@ class TestTranscriptFamilyAvailability:
     @pytest.mark.parametrize(
         # A non-finite float (inf stands for nan), a fraction, and an
         # integer past the bound.
-        "invalid", [float("inf"), 0.9, 10**1_000]
+        "invalid",
+        [
+            pytest.param(float("inf"), id="nonfinite"),
+            pytest.param(0.9, id="fraction"),
+            pytest.param(10**1_000, id="past-bound"),
+        ],
     )
     def test_invalid_transcript_numerics_are_unavailable_and_strict_json_safe(
         self, monkeypatch, tmp_path, invalid

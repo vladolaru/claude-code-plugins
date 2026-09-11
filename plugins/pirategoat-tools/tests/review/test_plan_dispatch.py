@@ -12,7 +12,12 @@ from unittest.mock import patch
 
 import pytest
 
-from review.dispatch_status import SIGNAL_ALWAYS, SIGNAL_NO_DOMAIN_FILES, SIGNAL_UNTRIAGED
+from review.dispatch_status import (
+    SIGNAL_ALWAYS,
+    SIGNAL_NO_DOMAIN_FILES,
+    SIGNAL_REPO_REVIEWER,
+    SIGNAL_UNTRIAGED,
+)
 
 # ---------------------------------------------------------------------------
 # Path setup
@@ -82,12 +87,6 @@ SAMPLE_PHP_FILES = [
     "src/Controller.php",
     "src/Service.php",
     "tests/ControllerTest.php",
-]
-
-SAMPLE_JS_FILES = [
-    "src/components/Modal.tsx",
-    "src/hooks/useData.ts",
-    "src/styles/modal.scss",
 ]
 
 SAMPLE_MIXED_FILES = [
@@ -3335,7 +3334,6 @@ class TestDispatchSignals:
         assert (reason, signal) == ("default", SIGNAL_DEFAULT)
 
     def test_repo_reviewers_carry_their_own_signals(self):
-        from review.dispatch_status import SIGNAL_NO_DOMAIN_FILES, SIGNAL_REPO_REVIEWER
         dispatch = []
         expand_repo_reviewers(
             _review_ctx([

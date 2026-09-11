@@ -489,7 +489,6 @@ class TestUnscopedFiles:
         assert cov["unscoped_files"] is None
 
 
-
 class TestAgentsReportingCountsAgents:
     """`scope_reporting_agent_count` counts distinct agents, not summary files.
 

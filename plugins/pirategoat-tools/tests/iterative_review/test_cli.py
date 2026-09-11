@@ -523,6 +523,7 @@ class TestPreflightBackend:
         assert backend is not None
         assert callable(backend.check_auth)
 
+
 class TestTryFallback:
     """_try_fallback selects the other backend after a runtime failure."""
 

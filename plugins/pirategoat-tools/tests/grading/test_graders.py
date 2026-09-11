@@ -233,6 +233,7 @@ class TestGradeReviewJson:
             "below floor" in failure for failure in result.failures
         ), result.failures
 
+
 class TestGradeReviewMarkdown:
     """Tests for grade_review_markdown."""
 

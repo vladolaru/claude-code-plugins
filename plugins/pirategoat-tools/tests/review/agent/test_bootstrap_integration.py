@@ -640,7 +640,9 @@ class TestArchitecturalInvariants:
         fails here by name, and a new section is covered the day it is
         added. Adding a heading to the skip list is a deliberate policy
         change this guard does not police; TestEmpiricalProbeContract pins
-        the section that must never be skipped.
+        the section that must never be skipped. Blind spot: a new `###`
+        heading placed under a skipped `##` section is dropped by the
+        extractor and so is not checked by this guard.
         """
         protocol = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
         expected = _delivered_protocol_headings(

@@ -601,6 +601,7 @@ class TestTotals:
                 bucket[field] for bucket in snapshot["usage_by_model"].values()
             ) == total
 
+
 class TestCliContract:
     """The seam the pipeline depends on."""
 
