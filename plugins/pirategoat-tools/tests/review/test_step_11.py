@@ -225,6 +225,7 @@ class TestCriticAbsenceHonesty:
         result = self._finalize(tmp_path)
         assert result["status"] == "success"
         assert result["degradation_notes"] == []
+        assert result["critic_verdict"] == "unavailable"
 
     def test_a_dispatched_critic_that_answered_is_silent(self, tmp_path):
         """The other two rows (REVISE, ESCALATE) reach the same silence
