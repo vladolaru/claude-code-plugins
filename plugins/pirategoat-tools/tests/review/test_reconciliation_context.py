@@ -442,17 +442,20 @@ class TestReadSourceSnippets:
         # Should be a single contiguous block from 7 to 15 = 9 lines
         assert len(lines_in_snippet) == 9
 
-    @pytest.mark.parametrize("lines,context_lines,expected_count", [
-        pytest.param([3, 8], 2, 10, id="adjacent_windows_merge"),
-        pytest.param([6, 3], 5, 11, id="unsorted_and_contained_windows_merge"),
+    @pytest.mark.parametrize("lines,context_lines,expected_count,absent_lines", [
+        pytest.param([3, 8], 2, 10, [], id="adjacent_windows_merge"),
+        pytest.param([6, 3], 5, 11, [], id="unsorted_and_contained_windows_merge"),
+        pytest.param([3, 27], 1, 6, [15], id="non_overlapping_windows_stay_separate"),
     ])
-    def test_adjacent_and_contained_windows_merge(
-        self, mod, tmp_path, lines, context_lines, expected_count
+    def test_windows_merge_or_stay_separate(
+        self, mod, tmp_path, lines, context_lines, expected_count, absent_lines
     ):
         """`_merge_windows` merges adjacent windows (end+1 == next start)
         and windows one contains inside another, sorting unsorted input
-        first — exercised here through the public API rather than the
-        private helper directly."""
+        first, and leaves well-separated windows apart — dropping the
+        lines between them rather than reading the whole span. Exercised
+        here through the public API rather than the private helper
+        directly."""
         source_file = tmp_path / "app.py"
         source_file.write_text(
             "\n".join(f"line {i}" for i in range(1, 31)) + "\n"
@@ -464,6 +467,10 @@ class TestReadSourceSnippets:
         snippet = snippets[str(source_file)]
         lines_in_snippet = snippet.strip().split("\n")
         assert len(lines_in_snippet) == expected_count
+        for line in lines:
+            assert f"{line} | line {line}" in snippet
+        for line in absent_lines:
+            assert f"{line} | line {line}" not in snippet
 
     def test_handles_missing_files(self, mod, tmp_path):
         """Missing files are skipped gracefully."""
