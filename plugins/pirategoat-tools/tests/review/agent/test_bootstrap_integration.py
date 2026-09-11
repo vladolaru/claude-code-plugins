@@ -1271,6 +1271,22 @@ class TestBriefingFileDelivery:
         # The briefing's own body must not be duplicated on stdout.
         assert "=== REVIEW RULES ===" not in result.stdout
 
+    def test_a_truncated_read_has_a_way_to_reach_the_output_contract(
+        self, tmp_path
+    ):
+        """Only the scope section is capped (`SCOPE_INLINE_CAP`); the PR
+        body and the repository's own rules ride in whole, on purpose. A
+        briefing big enough for Read to answer partially would otherwise
+        strand the reviewer before OUTPUT INSTRUCTIONS — the last section,
+        and the only place the save and finalize contract is stated — with
+        the stub forbidding the offset read that would reach it."""
+        stub = run_bootstrap(
+            "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
+        ).stdout
+
+        assert "offset" in stub
+        assert stub.index("one Read call") < stub.index("Only if")
+
     def test_no_domain_files_run_still_writes_the_briefing(self, tmp_path):
         """The reviewer still needs the briefing to report not-applicable."""
         result = run_bootstrap(

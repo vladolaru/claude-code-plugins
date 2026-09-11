@@ -1260,10 +1260,20 @@ def build_output(
     return "\n".join(lines)
 
 
+# One Read is the expected shape and the default the stub states first.
+# The continuation clause is conditional on the harness's own answer, not
+# on the reviewer's judgement, so it cannot bring back the three
+# speculative offset Reads inline delivery used to cost: the briefing is
+# uncapped except for its scope section (`SCOPE_INLINE_CAP`), and a PR
+# body long enough to push it past Read's limit would otherwise leave the
+# OUTPUT INSTRUCTIONS — the save and finalize contract — unread.
 BRIEFING_STUB_GUIDANCE = (
-    "Read the BRIEFING file in full with one Read call (no offset/limit). "
+    "Read the BRIEFING file in full: one Read call, no offset/limit. "
     "It is your complete briefing: review rules, review scope, and output "
-    "instructions. Follow it; do not read run artifacts by hand."
+    "instructions. Only if that Read comes back partial, continue with "
+    "offset reads to the end of the file — the output instructions are the "
+    "last section, and you cannot save a review without them. "
+    "Follow it; do not read run artifacts by hand."
 )
 
 
