@@ -116,7 +116,8 @@ tests/
 │   ├── triage_run_fixture.py         # Captures one audited run's planner inputs from a clone; replays them through build_dispatch_plan without git
 │   ├── review_run_fixture.py          # Captures sanitized complete audited runs for generated replay fixtures
 │   ├── review_fixtures.py            # Canonical finalized-review/ledger fixtures for consumer-boundary tests
-│   └── critic_seeds.py               # Ledger/proposal seed helpers shared by test_critic_adjustments.py and test_step_11.py
+│   ├── critic_seeds.py               # Ledger/proposal seed helpers shared by test_critic_adjustments.py and test_step_11.py
+│   └── ts_schema.py                  # Shared reader for schemas/review-output.ts, for TS-contract-lockstep tests
 └── fixtures/
     ├── no-code-changes.diff          # Docs-only diff for NO_DOMAIN_FILES tests
     ├── php-source.diff               # PHP source: SQL injection, tight coupling

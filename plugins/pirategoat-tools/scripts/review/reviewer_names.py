@@ -8,11 +8,14 @@ instead of restating the rule.
 
 Leaf module: stdlib only, never imports from anywhere else in `review/`,
 so any script can import the naming rule without re-entering a module that
-is still initializing. `tests/review/test_reviewer_names.py` pins the
-inverse; the forward rule is pinned by
-`tests/review/agent/test_bootstrap_repo_rules.py` (trailing-suffix stripping
-for adapter instance names) and `tests/review/agent/test_bootstrap_integration.py`
-(a unique, non-empty name for every registered agent).
+is still initializing. `tests/review/test_reviewer_names.py` pins both the
+inverse and, directly, the trailing-only-suffix-stripping rule on a
+mid-string "-reviewer" name (`TestDeriveReviewerName`); the same case is
+also pinned at the reconciliation-context layer by
+`tests/review/test_reconciliation_context.py::TestReviewStem::
+test_mid_string_reviewer_id_output_is_loaded`, and
+`tests/review/agent/test_bootstrap_integration.py` pins a unique,
+non-empty name for every registered agent.
 """
 
 
