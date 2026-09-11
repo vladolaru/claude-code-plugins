@@ -278,14 +278,11 @@ Direct unit tests on `scripts/review/reconciliation_context.py` — finalized-re
 | `TestLoadAgentReviews` | Only immutable finalized reviewer JSON enters synthesis; drafts, the reconciled ledger, and pipeline artifacts are excluded |
 | `TestSeverityFloorNormalization` | The floor is the structured field only — description prose never promotes a finding, and the prose marker is stripped before the critic reads it |
 | `TestExtractReferences` | Source references are extracted only from canonical finding fields |
-| `TestReadSourceSnippets` | Repository reads stay bounded, normalized, and honest for missing or binary source |
-| `TestMergeWindows` | Overlapping source windows merge deterministically without losing referenced lines |
+| `TestReadSourceSnippets` | Repository reads stay bounded, normalized, and honest for missing or binary source; overlapping and boundary-clamped windows merge deterministically without losing referenced lines |
 | `TestCheckScope` | File and line scope annotations preserve the finding while describing its diff relationship |
 | `TestFilterInScopeReferences` | In-scope references are selected without mutating the reviewer record |
-| `TestCheckScopeHunkLevel` | Hunk proximity remains a review aid, not an automatic out-of-scope verdict |
+| `TestCheckScopeHunkLevel` | Hunk proximity remains a review aid, not an automatic out-of-scope verdict, through the public `diff_hunks=` parameter |
 | `TestParseDiffHunks` | Unified-diff hunk ranges and quoted paths parse into deterministic source coordinates |
-| `TestLineNearHunk` | The bounded line-proximity predicate handles absent and malformed line evidence |
-| `TestFindFileHunks` | File lookup distinguishes matching, missing, and metadata-only diff entries |
 | `TestFullScript` | The CLI writes exact schema-4 reconciliation context from finalized schema-2 reviews and canonical assignments, with the change purpose's `verify_items` carrying the reviewer checks that cite each |
 | `TestMissingAgentDetection` | Dispatched-minus-reporting is a measurement, with unknown dispatch (`null`) distinct from a measured-empty dispatch (`[]`), through the CLI and back |
 | `TestPrefilterAnnotation` | Structurally-certain out-of-scope findings are annotated in place with a checkable count, never deleted, and `not_in_hunk` is never annotated |
