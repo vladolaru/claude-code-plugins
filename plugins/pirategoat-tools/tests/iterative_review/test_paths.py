@@ -1,8 +1,6 @@
 """Canonical layout coverage for iterative review run artifacts."""
 
 import json
-import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -82,64 +80,32 @@ def test_analysis_paths_reject_unsafe_prefixes(tmp_path, prefix):
         )
 
 
-def test_paths_cli_resolves_pipeline_synthesis_and_round_artifacts(tmp_path):
-    script = SCRIPTS_DIR / "iterative_review" / "paths.py"
+def test_paths_cli_resolves_pipeline_synthesis_and_round_artifacts(tmp_path, capsys):
+    context_code = paths.main([
+        "artifact", "--output-dir", str(tmp_path), "--key", "context",
+    ])
+    context_out = capsys.readouterr().out
 
-    context = subprocess.run(
-        [
-            sys.executable,
-            str(script),
-            "artifact",
-            "--output-dir",
-            str(tmp_path),
-            "--key",
-            "context",
-        ],
-        capture_output=True,
-        text=True,
-        env={**os.environ, "PYTHONPATH": ""},
-    )
-    outcomes = subprocess.run(
-        [
-            sys.executable,
-            str(script),
-            "round",
-            "--output-dir",
-            str(tmp_path),
-            "--round",
-            "3",
-            "--key",
-            "outcomes",
-        ],
-        capture_output=True,
-        text=True,
-        env={**os.environ, "PYTHONPATH": ""},
-    )
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(script),
-            "artifact",
-            "--output-dir",
-            str(tmp_path),
-            "--key",
-            "result",
-        ],
-        capture_output=True,
-        text=True,
-        env={**os.environ, "PYTHONPATH": ""},
-    )
+    outcomes_code = paths.main([
+        "round", "--output-dir", str(tmp_path), "--round", "3", "--key", "outcomes",
+    ])
+    outcomes_out = capsys.readouterr().out
 
-    assert context.returncode == 0, context.stderr
-    assert outcomes.returncode == 0, outcomes.stderr
-    assert result.returncode == 0, result.stderr
-    assert Path(context.stdout.strip()) == paths.iterative_artifact_path(
+    result_code = paths.main([
+        "artifact", "--output-dir", str(tmp_path), "--key", "result",
+    ])
+    result_out = capsys.readouterr().out
+
+    assert context_code == 0
+    assert outcomes_code == 0
+    assert result_code == 0
+    assert Path(context_out.strip()) == paths.iterative_artifact_path(
         tmp_path, "context"
     )
-    assert Path(outcomes.stdout.strip()) == paths.round_artifact_path(
+    assert Path(outcomes_out.strip()) == paths.round_artifact_path(
         tmp_path, 3, "outcomes"
     )
-    assert Path(result.stdout.strip()) == paths.iterative_artifact_path(
+    assert Path(result_out.strip()) == paths.iterative_artifact_path(
         tmp_path, "result"
     )
 
