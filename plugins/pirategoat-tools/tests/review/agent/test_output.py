@@ -511,6 +511,50 @@ class TestAddFinding:
         assert len(b.observations) == 0
         assert finding_id == "f1"
 
+    def test_behavior_evidence_and_source_cited_are_stored(self):
+        b = ReviewOutputBuilder(pr_id="0", reviewer="ecosystem-integration-reviewer")
+        b.add_finding(
+            severity="medium",
+            category="behavior-assumption",
+            title="State assumption mismatch",
+            description="Callback reads saved status before save fires.",
+            file="src/hooks.php",
+            line=42,
+            recommendation="Switch to woocommerce_after_order_object_save.",
+            behavior_evidence="cited",
+            source_cited="woocommerce/.../class-wc-order.php:200",
+        )
+        finding = b.to_dict()["findings"][0]
+        assert finding["behavior_evidence"] == "cited"
+        assert finding["source_cited"] == "woocommerce/.../class-wc-order.php:200"
+
+    def test_behavior_evidence_and_source_cited_are_optional(self):
+        b = ReviewOutputBuilder(pr_id="0", reviewer="security-reviewer")
+        b.add_finding(
+            severity="low", category="xss", title="X", description="y",
+            file="f.php", line=1, recommendation="z",
+        )
+        finding = b.to_dict()["findings"][0]
+        assert "behavior_evidence" not in finding
+        assert "source_cited" not in finding
+
+    def test_behavior_evidence_rejects_any_value_outside_cited_or_inferred(self):
+        """'MAYBE' and 'speculative' are rejected by the same vocabulary
+        check — one ValueError branch, not two."""
+        b = ReviewOutputBuilder(pr_id="0", reviewer="ecosystem-integration-reviewer")
+        with pytest.raises(ValueError, match="behavior_evidence"):
+            b.add_finding(
+                severity="low", category="other", title="T", description="d",
+                file="f.php", line=1, recommendation="r",
+                behavior_evidence="MAYBE",
+            )
+        with pytest.raises(ValueError, match="behavior_evidence"):
+            b.add_finding(
+                severity="low", category="behavior-assumption", title="T", description="d",
+                file="f.php", line=1, recommendation="r",
+                behavior_evidence="speculative",
+            )
+
 
 class TestFindingNormalizationIsShared:
     """add_finding and update_finding normalize through one implementation.
