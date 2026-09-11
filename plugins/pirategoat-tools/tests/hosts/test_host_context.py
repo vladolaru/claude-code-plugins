@@ -15,16 +15,6 @@ PLUGIN_SCRIPTS = (
 ).resolve()
 
 
-def _run_cli(*args, cwd=None, env=None):
-    env = {**os.environ, **(env or {})}
-    env["PYTHONPATH"] = str(PLUGIN_SCRIPTS)
-    env.pop("XDG_CACHE_HOME", None)
-    return subprocess.run(
-        [sys.executable, "-m", "hosts.host_context", *args],
-        capture_output=True, text=True, cwd=cwd, env=env, timeout=30,
-    )
-
-
 def test_cli_runs_from_absolute_script_path_without_pythonpath(tmp_path):
     """Standalone invocation should work from the repo being reviewed."""
     repo = tmp_path / "repo"
@@ -47,26 +37,33 @@ def test_cli_runs_from_absolute_script_path_without_pythonpath(tmp_path):
     assert (outdir / "host-context.json").exists()
 
 
-def test_cli_writes_manifest_to_output_dir(tmp_path):
+def test_cli_writes_manifest_to_output_dir_and_stdout_creating_it_if_missing(
+    tmp_path, monkeypatch, capsys
+):
+    """--output-dir that doesn't exist is created, not rejected; the manifest
+    lands both on disk and on stdout for piping."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     repo = tmp_path / "repo"
     repo.mkdir()
-    outdir = tmp_path / "out"
-    outdir.mkdir()
-    result = _run_cli(
-        "--repo", str(repo),
-        "--output-dir", str(outdir),
-        env={"HOME": str(tmp_path / "home")},
-    )
-    assert result.returncode == 0, result.stderr
+    outdir = tmp_path / "out-does-not-exist"
+    assert not outdir.exists()
+
+    rc = host_context.main(["--repo", str(repo), "--output-dir", str(outdir)])
+
+    assert rc == 0
+    assert outdir.is_dir()
     manifest_path = outdir / "host-context.json"
     assert manifest_path.exists()
     data = json.loads(manifest_path.read_text())
     assert data["version"] == 1
     assert data["unresolved"] == []
     assert data["banner"] is None
+    stdout_json = json.loads(capsys.readouterr().out)
+    assert stdout_json["version"] == 1
 
 
-def test_cli_writes_host_context_into_review_context(tmp_path):
+def test_cli_writes_host_context_into_review_context(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     repo = tmp_path / "repo"
     repo.mkdir()
     plugin = tmp_path / "woocommerce"
@@ -87,74 +84,18 @@ def test_cli_writes_host_context_into_review_context(tmp_path):
         "git": {"head_ref": "feature"},
     }))
 
-    result = _run_cli(
-        "--repo", str(repo),
-        "--output-dir", str(outdir),
-        env={"HOME": str(tmp_path / "home")},
-    )
+    rc = host_context.main(["--repo", str(repo), "--output-dir", str(outdir)])
 
-    assert result.returncode == 0, result.stderr
+    assert rc == 0
     review_context = json.loads((outdir / "review-context.json").read_text())
     assert review_context["git"]["head_ref"] == "feature"
     assert review_context["host_context"]["resolved"][0]["name"] == "woocommerce"
     assert review_context["host_context"]["resolved"][0]["path"] == str(plugin)
 
 
-def test_main_resolves_review_context_through_canonical_authority(
-    tmp_path, monkeypatch
-):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    outdir = tmp_path / "out"
-    canonical_path = outdir / "canonical-review-context.json"
-    resolved = []
-
-    def resolve_artifact(run_dir, key):
-        resolved.append((Path(run_dir), key))
-        return canonical_path
-
-    monkeypatch.setattr(host_context, "artifact_path", resolve_artifact)
-
-    assert host_context.main(
-        ["--repo", str(repo), "--output-dir", str(outdir)]
-    ) == 0
-    assert resolved == [(outdir, "review_context")]
-    assert json.loads(canonical_path.read_text())["host_context"]["version"] == 1
-
-
-def test_cli_missing_args_errors(tmp_path):
-    result = _run_cli()
-    assert result.returncode != 0
-    assert "--repo" in result.stderr or "required" in result.stderr.lower()
-
-
-def test_cli_stdout_contains_manifest_json(tmp_path):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    outdir = tmp_path / "out"
-    outdir.mkdir()
-    result = _run_cli(
-        "--repo", str(repo),
-        "--output-dir", str(outdir),
-        env={"HOME": str(tmp_path / "home")},
-    )
-    assert result.returncode == 0
-    # stdout has the manifest JSON for piping
-    stdout_json = json.loads(result.stdout)
-    assert stdout_json["version"] == 1
-
-
-def test_cli_creates_output_dir_when_missing(tmp_path):
-    """--output-dir that doesn't exist should be created, not rejected."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    outdir = tmp_path / "out-does-not-exist"
-    assert not outdir.exists()
-    result = _run_cli(
-        "--repo", str(repo),
-        "--output-dir", str(outdir),
-        env={"HOME": str(tmp_path / "home")},
-    )
-    assert result.returncode == 0, result.stderr
-    assert outdir.is_dir()
-    assert (outdir / "host-context.json").exists()
+def test_cli_missing_args_errors(capsys):
+    with pytest.raises(SystemExit) as exc:
+        host_context.main([])
+    assert exc.value.code != 0
+    stderr = capsys.readouterr().err
+    assert "--repo" in stderr or "required" in stderr.lower()

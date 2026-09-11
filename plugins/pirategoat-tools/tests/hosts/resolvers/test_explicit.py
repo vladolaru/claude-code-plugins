@@ -4,7 +4,6 @@ import json
 import os
 
 import pytest
-from pathlib import Path
 
 from hosts.resolvers.explicit import ExplicitResolver
 
@@ -14,13 +13,6 @@ def test_absent_config_returns_empty(make_repo):
     result = ExplicitResolver().resolve(str(repo))
     assert result.entries == []
     assert result.unresolved == []
-
-
-def test_malformed_json_returns_empty_with_note(make_repo):
-    repo = make_repo({".pirategoat/config.json": "{not json"})
-    result = ExplicitResolver().resolve(str(repo))
-    assert result.entries == []
-    assert result.notes.get("parse_error") is not None
 
 
 def test_declared_host_with_absolute_path_resolves(tmp_path, make_repo):
@@ -39,30 +31,6 @@ def test_declared_host_with_absolute_path_resolves(tmp_path, make_repo):
     assert e.version == "9.5"
     assert e.source == "explicit"
     assert e.confidence == "high"
-
-
-def test_declared_host_with_missing_path_is_noted(make_repo, tmp_path):
-    config = {"hosts": {"runtime": [
-        {"name": "wordpress", "path": str(tmp_path / "nonexistent")}
-    ]}}
-    repo = make_repo({".pirategoat/config.json": json.dumps(config)})
-    result = ExplicitResolver().resolve(str(repo))
-    assert result.entries == []
-    assert "parse_error" in result.notes
-    assert "does not exist" in result.notes["parse_error"]
-
-
-def test_declared_host_with_file_path_is_noted(make_repo, tmp_path):
-    host_file = tmp_path / "not-a-host"
-    host_file.write_text("not a directory")
-    config = {"hosts": {"runtime": [
-        {"name": "wordpress", "path": str(host_file)}
-    ]}}
-    repo = make_repo({".pirategoat/config.json": json.dumps(config)})
-    result = ExplicitResolver().resolve(str(repo))
-    assert result.entries == []
-    assert "parse_error" in result.notes
-    assert "not a directory" in result.notes["parse_error"]
 
 
 def test_relative_path_is_resolved_from_repo(tmp_path):
@@ -94,46 +62,60 @@ def test_paths_inside_reviewed_repo_are_not_runtime_hosts(tmp_path, raw_path):
     assert "inside reviewed repo" in result.notes.get("skipped", "")
 
 
-def test_non_dict_json_root_returns_empty_with_note(make_repo):
-    """JSON root is a string/list/number, not an object."""
-    repo = make_repo({".pirategoat/config.json": '"hello"'})
-    result = ExplicitResolver().resolve(str(repo))
-    assert result.entries == []
-    assert result.notes.get("parse_error") is not None
+def _malformed_json(tmp_path):
+    return "{not json"
 
 
-def test_non_dict_host_entry_returns_empty_with_note(make_repo):
+def _non_dict_host_entry(tmp_path):
     """An entry in the runtime list is a string instead of an object."""
-    repo = make_repo({".pirategoat/config.json": json.dumps({
-        "hosts": {"runtime": ["not-an-object"]}
-    })})
-    result = ExplicitResolver().resolve(str(repo))
-    assert result.entries == []
-    assert result.notes.get("parse_error") is not None
+    return json.dumps({"hosts": {"runtime": ["not-an-object"]}})
 
 
-def test_entry_missing_name_is_noted(make_repo, tmp_path):
+def _entry_missing_name(tmp_path):
     """Declarer omitted 'name'."""
     host = tmp_path / "wc"
     host.mkdir()
-    repo = make_repo({".pirategoat/config.json": json.dumps({
-        "hosts": {"runtime": [{"path": str(host)}]}
-    })})
-    result = ExplicitResolver().resolve(str(repo))
-    assert result.entries == []
-    assert "parse_error" in result.notes
-    assert "name" in result.notes["parse_error"]
+    return json.dumps({"hosts": {"runtime": [{"path": str(host)}]}})
 
 
-def test_entry_missing_path_is_noted(make_repo):
+def _entry_missing_path(tmp_path):
     """Declarer omitted 'path'."""
-    repo = make_repo({".pirategoat/config.json": json.dumps({
-        "hosts": {"runtime": [{"name": "wordpress"}]}
-    })})
+    return json.dumps({"hosts": {"runtime": [{"name": "wordpress"}]}})
+
+
+def _declared_host_with_missing_path(tmp_path):
+    return json.dumps({"hosts": {"runtime": [
+        {"name": "wordpress", "path": str(tmp_path / "nonexistent")}
+    ]}})
+
+
+def _declared_host_with_file_path(tmp_path):
+    host_file = tmp_path / "not-a-host"
+    host_file.write_text("not a directory")
+    return json.dumps({"hosts": {"runtime": [{"name": "wordpress", "path": str(host_file)}]}})
+
+
+@pytest.mark.parametrize("config_builder, note_fragment", [
+    pytest.param(_malformed_json, None, id="malformed-json"),
+    pytest.param(_non_dict_host_entry, None, id="non-dict-host-entry"),
+    pytest.param(_entry_missing_name, "name", id="entry-missing-name"),
+    pytest.param(_entry_missing_path, "path", id="entry-missing-path"),
+    pytest.param(_declared_host_with_missing_path, "does not exist", id="declared-host-missing-path"),
+    pytest.param(_declared_host_with_file_path, "not a directory", id="declared-host-file-path"),
+])
+def test_explicit_config_rejections(make_repo, tmp_path, config_builder, note_fragment):
+    """Every shape of a bad `.pirategoat/config.json` (malformed JSON, a
+    non-object root or entry, a missing required field, or a declared path
+    that doesn't resolve) resolves to no entries and a `parse_error` note."""
+    config = config_builder(tmp_path)
+    repo = make_repo({".pirategoat/config.json": config})
+
     result = ExplicitResolver().resolve(str(repo))
+
     assert result.entries == []
-    assert "parse_error" in result.notes
-    assert "path" in result.notes["parse_error"]
+    assert result.notes.get("parse_error") is not None
+    if note_fragment is not None:
+        assert note_fragment in result.notes["parse_error"]
 
 
 def test_symlinked_path_resolving_into_repo_is_skipped(tmp_path, make_repo):

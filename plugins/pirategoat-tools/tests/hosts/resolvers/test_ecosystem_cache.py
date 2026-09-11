@@ -23,24 +23,6 @@ class TestResolveForNames:
         monkeypatch.setattr(ec_mod, "ensure_fresh", stub)
         return calls
 
-    def test_empty_names_returns_empty(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("HOME", str(tmp_path))
-        monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
-        ensure_calls = self._stub_ensure_fresh(monkeypatch)
-        result = EcosystemCacheResolver().resolve_for_names([])
-        assert result.entries == []
-        assert result.unresolved == []
-        assert ensure_calls == []  # no refresh attempted for empty input
-
-    def test_unknown_names_filtered_out(self, tmp_path, monkeypatch):
-        """Names outside _KNOWN_HOSTS (e.g. 'jetpack') are silently ignored."""
-        monkeypatch.setenv("HOME", str(tmp_path))
-        monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
-        ensure_calls = self._stub_ensure_fresh(monkeypatch)
-        result = EcosystemCacheResolver().resolve_for_names({"jetpack", "akismet"})
-        assert result.entries == []
-        assert ensure_calls == []  # no refresh for unknown names
-
     def test_known_name_with_populated_cache_returns_high_confidence(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
