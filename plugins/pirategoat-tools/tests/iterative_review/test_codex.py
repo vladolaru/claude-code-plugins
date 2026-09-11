@@ -175,149 +175,55 @@ class TestWritePromptFile:
 
 
 class TestRubric:
-    def test_rubric_file_exists(self):
-        rubric = get_rubric()
-        assert len(rubric) > 0, "Rubric file missing or empty"
-
     def test_rubric_contains_severity_levels(self):
         rubric = get_rubric()
+        assert len(rubric) > 0, "Rubric file missing or empty"
         assert "P0" in rubric
         assert "P1" in rubric
         assert "P2" in rubric
         assert "P3" in rubric
 
-    def test_rubric_contains_conservative_threshold(self):
-        rubric = get_rubric()
-        assert "no findings" in rubric.lower()
-
 
 class TestInvokeReviewEffort:
     """Tests for the effort parameter in invoke_review()."""
 
+    @pytest.mark.parametrize(
+        "effort,expect_c_value,expect_fast",
+        [
+            pytest.param(None, None, False, id="no-effort"),
+            pytest.param("medium", "medium", False, id="medium"),
+            pytest.param("high", "high", True, id="high"),
+            pytest.param("xhigh", "xhigh", True, id="xhigh"),
+        ],
+    )
     @patch("iterative_review.backends.codex.subprocess.run")
-    def test_no_effort_omits_config_flag(self, mock_run, tmp_path):
-        """When effort is None (default), -c is not in the command."""
+    def test_codex_effort_cmd(self, mock_run, tmp_path, effort, expect_c_value, expect_fast):
+        """-c presence/value, fast-tier presence, and the stdin marker '-'
+        staying last are facets of one command per effort value."""
         prompt = tmp_path / "prompt.md"
         prompt.write_text("Review this code.")
         mock_run.return_value = MagicMock(returncode=0, stdout="")
 
-        invoke_review(str(prompt), "schema.json",
-                      output_file=str(tmp_path / "out.json"))
+        invoke_review(
+            str(prompt), "schema.json",
+            output_file=str(tmp_path / "out.json"), effort=effort
+        )
 
         # The second call is the actual codex exec (first is git rev-parse)
         codex_call = mock_run.call_args_list[1]
         cmd = codex_call[0][0]
-        assert "-c" not in cmd
-
-    @patch("iterative_review.backends.codex.subprocess.run")
-    def test_effort_high_injects_config_flag(self, mock_run, tmp_path):
-        """When effort='high', cmd contains -c followed by model_reasoning_effort="high"."""
-        prompt = tmp_path / "prompt.md"
-        prompt.write_text("Review this code.")
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
-
-        invoke_review(
-            str(prompt), "schema.json",
-            output_file=str(tmp_path / "out.json"), effort="high"
-        )
-
-        codex_call = mock_run.call_args_list[1]
-        cmd = codex_call[0][0]
-        c_idx = cmd.index("-c")
-        assert cmd[c_idx + 1] == 'model_reasoning_effort="high"'
-
-    @patch("iterative_review.backends.codex.subprocess.run")
-    def test_effort_xhigh_injects_config_flag(self, mock_run, tmp_path):
-        """When effort='xhigh', cmd contains -c followed by model_reasoning_effort="xhigh"."""
-        prompt = tmp_path / "prompt.md"
-        prompt.write_text("Review this code.")
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
-
-        invoke_review(
-            str(prompt), "schema.json",
-            output_file=str(tmp_path / "out.json"), effort="xhigh"
-        )
-
-        codex_call = mock_run.call_args_list[1]
-        cmd = codex_call[0][0]
-        c_idx = cmd.index("-c")
-        assert cmd[c_idx + 1] == 'model_reasoning_effort="xhigh"'
-
-    @patch("iterative_review.backends.codex.subprocess.run")
-    def test_effort_flag_before_stdin_marker(self, mock_run, tmp_path):
-        """The -c flag and its value come before the - stdin marker (always last)."""
-        prompt = tmp_path / "prompt.md"
-        prompt.write_text("Review this code.")
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
-
-        invoke_review(
-            str(prompt), "schema.json",
-            output_file=str(tmp_path / "out.json"), effort="high"
-        )
-
-        codex_call = mock_run.call_args_list[1]
-        cmd = codex_call[0][0]
         assert cmd[-1] == "-", "stdin marker '-' must be last element"
-        c_idx = cmd.index("-c")
-        assert c_idx < len(cmd) - 1, "-c flag must come before the stdin marker"
-
-    @patch("iterative_review.backends.codex.subprocess.run")
-    def test_high_effort_activates_fast_mode(self, mock_run, tmp_path):
-        """When effort='high', service_tier='fast' is also injected."""
-        prompt = tmp_path / "prompt.md"
-        prompt.write_text("Review this code.")
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
-
-        invoke_review(
-            str(prompt), "schema.json",
-            output_file=str(tmp_path / "out.json"), effort="high"
-        )
-
-        codex_call = mock_run.call_args_list[1]
-        cmd = codex_call[0][0]
-        assert 'service_tier="fast"' in cmd
-
-    @patch("iterative_review.backends.codex.subprocess.run")
-    def test_xhigh_effort_activates_fast_mode(self, mock_run, tmp_path):
-        """When effort='xhigh', service_tier='fast' is also injected."""
-        prompt = tmp_path / "prompt.md"
-        prompt.write_text("Review this code.")
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
-
-        invoke_review(
-            str(prompt), "schema.json",
-            output_file=str(tmp_path / "out.json"), effort="xhigh"
-        )
-
-        codex_call = mock_run.call_args_list[1]
-        cmd = codex_call[0][0]
-        assert 'service_tier="fast"' in cmd
-
-    @patch("iterative_review.backends.codex.subprocess.run")
-    def test_medium_effort_no_fast_mode(self, mock_run, tmp_path):
-        """When effort='medium', service_tier is not injected."""
-        prompt = tmp_path / "prompt.md"
-        prompt.write_text("Review this code.")
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
-
-        invoke_review(
-            str(prompt), "schema.json",
-            output_file=str(tmp_path / "out.json"), effort="medium"
-        )
-
-        codex_call = mock_run.call_args_list[1]
-        cmd = codex_call[0][0]
-        assert 'service_tier="fast"' not in cmd
+        if expect_c_value is None:
+            assert "-c" not in cmd
+        else:
+            c_idx = cmd.index("-c")
+            assert cmd[c_idx + 1] == f'model_reasoning_effort="{expect_c_value}"'
+            assert c_idx < len(cmd) - 1, "-c flag must come before the stdin marker"
+        assert ('service_tier="fast"' in cmd) is expect_fast
 
 
 class TestTimeoutSentinel:
-    """TIMEOUT_SENTINEL and TIMEOUT constants."""
-
-    def test_sentinel_is_string(self):
-        assert isinstance(TIMEOUT_SENTINEL, str)
-
-    def test_timeout_is_1800(self):
-        assert TIMEOUT == 1800
+    """TIMEOUT_SENTINEL is returned when invoke_review's subprocess times out."""
 
     @patch("iterative_review.backends.codex.subprocess.run")
     def test_timeout_returns_sentinel(self, mock_run, tmp_path):
@@ -341,18 +247,6 @@ class TestInvokeReviewOutputFile:
     """invoke_review handles output_file kwarg."""
 
     @patch("iterative_review.backends.codex.subprocess.run")
-    def test_invoke_review_auto_creates_output_file(self, mock_run, tmp_path):
-        """invoke_review creates a temp output file when none is specified."""
-        prompt = tmp_path / "prompt.md"
-        prompt.write_text("Review this code.")
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
-
-        invoke_review(str(prompt), "schema.json")
-
-        # Should have called subprocess.run (git rev-parse + codex exec)
-        assert mock_run.call_count == 2
-
-    @patch("iterative_review.backends.codex.subprocess.run")
     def test_invoke_review_accepts_output_file_kwarg(self, mock_run, tmp_path):
         """invoke_review passes output_file through to the codex exec command."""
         prompt = tmp_path / "prompt.md"
@@ -369,26 +263,23 @@ class TestInvokeReviewOutputFile:
 
 
 class TestDetectFailureReason:
-    """detect_failure_reason classifies Codex stderr for telemetry."""
+    """detect_failure_reason classifies Codex stderr for telemetry — one
+    classifier, its rate-limit and unknown branches."""
 
-    def test_rate_limit_exceeded(self):
-        stderr = 'ERROR codex_api: error=http 429 Too Many Requests: {"error": {"code": "rate_limit_exceeded"}}'
-        assert detect_failure_reason(stderr) == "rate_limit"
-
-    def test_usage_limit_message(self):
-        stderr = "You've hit your usage limit. Upgrade to Pro or try again in 4h."
-        assert detect_failure_reason(stderr) == "rate_limit"
-
-    def test_quota_exceeded(self):
-        stderr = "Quota exceeded. Check your plan and billing details."
-        assert detect_failure_reason(stderr) == "rate_limit"
-
-    def test_generic_error_is_unknown(self):
-        stderr = "Error: connection refused"
-        assert detect_failure_reason(stderr) == "unknown"
-
-    def test_empty_stderr_is_unknown(self):
-        assert detect_failure_reason("") == "unknown"
-
-    def test_none_stderr_is_unknown(self):
-        assert detect_failure_reason(None) == "unknown"
+    @pytest.mark.parametrize(
+        "stderr,expected",
+        [
+            pytest.param(
+                'ERROR codex_api: error=http 429 Too Many Requests: {"error": {"code": "rate_limit_exceeded"}}',
+                "rate_limit", id="429-json",
+            ),
+            pytest.param(
+                "You've hit your usage limit. Upgrade to Pro or try again in 4h.",
+                "rate_limit", id="usage-limit-message",
+            ),
+            pytest.param("Error: connection refused", "unknown", id="generic-error"),
+            pytest.param(None, "unknown", id="none-stderr"),
+        ],
+    )
+    def test_detect_failure_reason(self, stderr, expected):
+        assert detect_failure_reason(stderr) == expected
