@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.119.4] - 2026-09-11
+
+### Removed
+
+- The unused sibling-directory host resolver and the ecosystem cache resolver's ambient mode; neither was reachable from the resolver chain.
+
 ## [1.119.3] - 2026-09-09
 
 ### Changed

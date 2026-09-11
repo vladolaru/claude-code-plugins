@@ -1,8 +1,8 @@
 """Resolver chain — merges repository host signals and emits a manifest.
 
 Composes the repo-signaled advisory resolvers in priority order — explicit,
-wp-env, docker-compose, plugin-headers, vendor (the sibling resolver is not
-in it) — and dedups entries by `kind:name`, the first winning.
+wp-env, docker-compose, plugin-headers, vendor — and dedups entries by
+`kind:name`, the first winning.
 
 Every resolved local runtime host is stamped with the identity
 `hosts/identity.py` reads from its path. Only facts the resolver left

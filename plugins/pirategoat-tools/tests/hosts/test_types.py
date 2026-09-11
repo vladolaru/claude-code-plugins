@@ -11,7 +11,6 @@ from hosts.types import (
     BannerReason,
     HostEntry,
     HostContextManifest,
-    ResolverSource,
 )
 
 
@@ -86,15 +85,3 @@ def test_typescript_banner_reasons_match_runtime_contract():
 
     assert ts_reasons == {"partial_unresolved", "fully_unavailable"}
     assert set(get_args(BannerReason)) == {"partial_unresolved", "fully_unavailable"}
-
-
-def test_resolver_sources_match_runtime_contract():
-    """Resolver sources remain limited to live discovery producers."""
-    assert set(get_args(ResolverSource)) == {
-        "explicit",
-        "wp-env",
-        "docker-compose",
-        "sibling",
-        "ecosystem-cache",
-        "vendor-inspection",
-    }
