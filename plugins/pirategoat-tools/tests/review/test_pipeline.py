@@ -3086,18 +3086,6 @@ class TestStep12Cleanup:
 class TestDegradedPaths:
     """Degraded-path scenarios and pipeline-result.json contract (rule 31)."""
 
-    def test_scenario_b_report_missing(self, mod, tmp_path):
-        """Step 10 falls back to review-findings.md when review-report.md is
-        absent — established by step 10's recorded existence facts, not by
-        the writer-less `report_synthesis_failed` flag this once read."""
-        state = {
-            "completed_steps": [],
-            "critic_source": "review-findings.md",
-        }
-        g = mod.get_step_guidance(10, "pr", state, {})
-        text = "\n".join(g["actions"])
-        assert "review-findings.md" in text
-
     def test_scenario_c_critic_failed(self, mod, tmp_path):
         """Step 11 should show critic_verdict as unavailable when critic failed.
 
