@@ -1551,8 +1551,11 @@ class TestReviewedFileClaims:
         _write_assignment(tmp_path, "sec", claimable)
         return ReviewOutputBuilder.open(tmp_path, "1", "sec")
 
-    @pytest.mark.parametrize("bad", ["", "   ", None, 42, [42], ("src/a.py", None)])
+    @pytest.mark.parametrize("bad", ["", 42], ids=["blank", "wrong-type"])
     def test_rejects_non_path_values(self, bad):
+        """The full grammar is pinned once in test_review_assignment.py,
+        the shared normalizer's owner; this keeps one row per branch this
+        API adds on top (blank, wrong type)."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         with pytest.raises(ValueError):
             b.claim_files_reviewed(bad)
@@ -1574,15 +1577,12 @@ class TestReviewedFileClaims:
             b.claim_files_reviewed(42)
 
     @pytest.mark.parametrize(
-        "bad",
-        [
-            "/abs/a.py", "../outside.py", "..", "C:/win.py", "c:win.py",
-            # These normalize to "." — a form no scope summary can contain.
-            ".", "./", "foo/..",
-        ],
+        "bad", ["/abs/a.py", "../outside.py"], ids=["absolute", "parent-traversal"]
     )
     def test_rejects_non_repo_relative_forms(self, bad):
-        """A claim must address a repository-relative claimable path."""
+        """A claim must address a repository-relative claimable path. The
+        full grammar (including the drive-letter and dot-normalized forms)
+        is pinned once in test_review_assignment.py."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         with pytest.raises(ValueError):
             b.claim_files_reviewed(bad)
