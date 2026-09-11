@@ -7,9 +7,11 @@ annotations and metadata into one artifact, so the agent makes no reads of
 its own. It writes no Markdown: `compute_missing_agents()` and
 `annotate_prefiltered_findings()` travel in the JSON, and the reconciliator
 obeys both rather than recomputing either. Severity floors come from the
-structured field alone; no description prose is parsed. The complete local
-host map is read from the run's own context snapshot, so host-qualified
-citations are verifiable without pushing paths through argv or telemetry.
+structured field alone, no description prose is parsed, and a floor reaches
+the reconciliator only when the reviewer's own confidence met
+`FLOOR_MIN_CONFIDENCE`. The complete local host map is read from the run's
+own context snapshot, so host-qualified citations are verifiable without
+pushing paths through argv or telemetry.
 
 It owns `validate_orchestrator_notes()` and `RECONCILIATION_CONTEXT_SCHEMA`,
 which the notes CLI and the save gate import. A rebuild carries the already
@@ -76,6 +78,18 @@ _SEVERITY_FLOOR_MARKER_RE = re.compile(
 )
 
 
+# A floor is a directive: the reconciliator must keep every retained
+# concern at or above it. So the pipeline honours one only when the
+# reviewer's own stated confidence in the finding reaches this value.
+# Below it the finding keeps its severity and loses the lock — an
+# unverified promotion is still a concern to reconcile, it is just not a
+# concern to bind. Run #66900 carried two 0.5-confidence Woo self-audit
+# promotions, filed at that confidence by design; the reconciliator kept
+# both at medium with no repository read of its own, and the critic read
+# the one real consumer and demoted them.
+FLOOR_MIN_CONFIDENCE = 0.7
+
+
 def resolve_structured_severity_floor(finding: Dict[str, Any]) -> Optional[str]:
     """Return a valid explicit floor without consulting description prose."""
     structured = finding.get("severity_floor")
@@ -85,6 +99,14 @@ def resolve_structured_severity_floor(finding: Dict[str, Any]) -> Optional[str]:
     ):
         return structured.lower()
     return None
+
+
+def _floor_is_honoured(finding: Dict[str, Any]) -> bool:
+    """Whether the reviewer stood behind this finding enough to bind it."""
+    confidence = finding.get("confidence")
+    if type(confidence) not in (int, float):
+        return False
+    return confidence >= FLOOR_MIN_CONFIDENCE
 
 
 def strip_severity_floor_markers(text: Any) -> str:
@@ -261,7 +283,7 @@ def load_agent_reviews(
                     if not isinstance(finding, dict):
                         continue
                     floor = resolve_structured_severity_floor(finding)
-                    if floor is None:
+                    if floor is None or not _floor_is_honoured(finding):
                         finding.pop("severity_floor", None)
                     else:
                         finding["severity_floor"] = floor

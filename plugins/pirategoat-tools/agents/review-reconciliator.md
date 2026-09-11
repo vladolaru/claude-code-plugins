@@ -95,7 +95,7 @@ For each concern group:
 
 ## Severity Floors and Verified Mitigations (regression-class findings)
 
-A finding carries a floor only when it carries the structured `severity_floor` field in `reviews_by_agent`. Nothing else creates one: a description is reviewer narrative, not a machine directive, and categories never invent a floor.
+A finding carries a floor only when it carries the structured `severity_floor` field in `reviews_by_agent`. Nothing else creates one: a description is reviewer narrative, not a machine directive, and categories never invent a floor. The pipeline delivers that field only for findings whose reviewer confidence met its threshold, so a promotion the reviewer could not verify reaches you without one — judge it under Dismissal & Mitigation Discipline like any other finding.
 
 The rules below apply to findings with an explicit floor and, for mitigation verification only, findings in the `interface-break`, `hook-contract`, or `scheduled-action` categories:
 

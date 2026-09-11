@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from review.reconciliation_context import FLOOR_MIN_CONFIDENCE
+
 TESTS_DIR = Path(__file__).resolve().parent.parent  # review/ -> tests/
 PLUGIN_ROOT = TESTS_DIR.parent
 REGISTRY = PLUGIN_ROOT / "scripts" / "review" / "agent_registry.json"
@@ -78,6 +80,19 @@ WOO_INVARIANT_ROWS = [
 @pytest.mark.parametrize("row", WOO_INVARIANT_ROWS)
 def test_woo_invariant_rows(row):
     assert row in _agent_definition("woo-regression-reviewer.md")
+
+
+def test_woo_floors_paragraph_states_the_confidence_the_pipeline_enforces():
+    """The reviewer tells a self-audit promotion which confidence earns a
+    floor; `reconciliation_context` is what strips the ones below it. Run
+    #66900 locked two 0.5-confidence promotions at medium, so the prose and
+    the constant must not be able to drift apart."""
+    text = _agent_definition("woo-regression-reviewer.md")
+    floors = text.split(
+        "**Structured floors (do not breach):**", 1
+    )[1].split("\n## ", 1)[0]
+
+    assert str(FLOOR_MIN_CONFIDENCE) in floors
 
 
 def test_wp_architecture_reviewer_audits_half_deprecations():
