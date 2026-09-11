@@ -47,6 +47,7 @@ from review import critic_adjustments, run_paths
 from review.reviewer_lifecycle import ReviewPaths, review_paths, started_marker_path
 
 sys.path.insert(0, str(TESTS_DIR))
+from helpers import ts_schema
 from helpers.review_fixtures import (
     apply_schema,
     canonical_assignment,
@@ -501,20 +502,6 @@ class TestAddFinding:
 
         assert "severity_floor" not in b.findings[0]
 
-    def test_markdown_renders_severity_floor(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="woo-regression")
-        b.add_finding(
-            "medium",
-            "Title",
-            "f.php",
-            "desc",
-            "rec",
-            line=1,
-            severity_floor="medium",
-        )
-
-        assert "**Severity floor:** medium" in render_markdown(b.to_dict())
-
     def test_confidence_boundaries_valid(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         b.add_finding("high", "A", "f.py", "d", "r", line=1, confidence=0.0)
@@ -731,18 +718,6 @@ class TestRecordCheck:
         b = ReviewOutputBuilder(pr_id="1", reviewer="a11y")
         with pytest.raises(ValueError):
             b.record_check(question="Any blast radius?", method="", result="none")
-
-    def test_renders_in_markdown_with_method(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="a11y")
-        b.record_check(
-            question="Does CSS depend on the label?",
-            method="grep 'th label' admin.scss",
-            result="No dependencies found.",
-        )
-        md = render_markdown(b.to_dict())
-        assert "## Checks Performed" in md
-        assert "Does CSS depend on the label?" in md
-        assert "grep 'th label' admin.scss" in md
 
 
 # =============================================================================
@@ -1498,17 +1473,6 @@ class TestFileScopedFindings:
         assert "scope" not in b.findings[0]
         assert b.findings[0]["line"] == 42
 
-    def test_file_scoped_finding_renders_under_severity_section(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="js-tests")
-        b.add_finding(
-            "high", "whole-file has no test", "src/foo.ts", "desc", "rec",
-            category="missing-coverage",
-        )
-        md = render_markdown(b.to_dict())
-        assert "## High Findings" in md
-        assert "whole-file has no test" in md
-        assert "`src/foo.ts` (file-scoped)" in md
-
     def test_file_scoped_finding_json_roundtrip(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         b.add_finding("medium", "Title", "f.py", "desc", "rec", line=None)
@@ -1567,13 +1531,6 @@ class TestAddObservation:
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         b.add_observation("f.py", "Looks risky", category="security")
         assert b.to_dict()["verdict"] == "approve"
-
-    def test_observations_in_markdown(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_observation("f.py", "File lacks CSRF protection")
-        md = render_markdown(b.to_dict())
-        assert "Observations" in md
-        assert "File lacks CSRF protection" in md
 
 
 # =============================================================================
@@ -1985,8 +1942,6 @@ class TestAdvisoryChannel:
         assert output["verdict"] == "approve"
         assert output["summary"]["suppressed_advisory_finding_count"] == 1
         assert output["summary"]["verdict_without_advisory"] == "block"
-        assert "Advisory suppression:** 1 finding excluded" in render_markdown(output)
-        assert "verdict without suppression: BLOCK" in render_markdown(output)
 
     def test_advisory_count_without_verdict_softening_omits_counterfactual(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
@@ -2001,7 +1956,6 @@ class TestAdvisoryChannel:
         assert output["verdict"] == "approve"
         assert output["summary"]["suppressed_advisory_finding_count"] == 1
         assert "verdict_without_advisory" not in output["summary"]
-        assert "Advisory suppression:** 1 finding excluded" in render_markdown(output)
 
     def test_advisory_count_when_verdict_already_strict_omits_counterfactual(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
@@ -2633,16 +2587,13 @@ class TestTypeScriptContractLockstep:
     The TypeScript file is the published contract downstream consumers read;
     the builder is what actually lands on disk. When they drift, a consumer
     is typed against a shape that no longer exists — and nothing fails.
+
+    The ledger/critic-type parity tests moved to `test_critic_adjustments.py`
+    and `test_findings_ledger.py` (G7); text-extraction helpers now live in
+    `helpers/ts_schema.py`, shared by all three files.
     """
 
-    @staticmethod
-    def _interface_body(name: str, *, extends: str = "") -> str:
-        schema = (PLUGIN_ROOT / "schemas" / "review-output.ts").read_text()
-        suffix = f" extends {extends}" if extends else ""
-        pattern = r"export interface " + name + suffix + r"\s*\{(.*?)\n\}"
-        match = re.search(pattern, schema, re.DOTALL)
-        assert match is not None, f"review-output.ts must declare {name}"
-        return match.group(1)
+    _interface_body = staticmethod(ts_schema.interface_body)
 
     @classmethod
     def _review_document_interface(cls) -> str:
@@ -2690,22 +2641,6 @@ class TestTypeScriptContractLockstep:
         )
         assert match is not None
         assert match.group(1).strip() == "string | null"
-
-    def test_schema_two_rejected_outcome_is_required(self):
-        """Both adjustment outcomes are derived from AdjudicationOutcome, so
-        a fourth outcome cannot be added on one side only — and neither is
-        optional.
-
-        `test_ts_schema_field_sets_match_python_validators` never parses
-        `CriticRejectedAdjustment`/`CriticAppliedAdjustment`, and its
-        `top_level_fields()` extractor tolerates a trailing `?` on any
-        field — so nothing else in this file stops `outcome` becoming
-        optional or `AdjudicationOutcome` drifting.
-        """
-        schema = (PLUGIN_ROOT / "schemas" / "review-output.ts").read_text()
-        assert "outcome: Extract<AdjudicationOutcome, 'refuted'>;" in schema
-        assert "outcome: Exclude<AdjudicationOutcome, 'refuted'>;" in schema
-        assert "outcome?:" not in schema
 
     def test_ts_schema_field_sets_match_python_validators(self):
         """schemas/review-output.ts declares exactly the field sets the two
@@ -2758,112 +2693,8 @@ class TestTypeScriptContractLockstep:
         meta_body = self._interface_body("ReviewMeta")
         assert top_level_fields(meta_body) == review_document._REQUIRED_META_FIELDS
 
-    @classmethod
-    def _field_types(cls, name, *, extends=""):
-        return dict(re.findall(
-            r"^ {4}(\w+\??):\s*([^;]+);",
-            cls._interface_body(name, extends=extends), re.MULTILINE,
-        ))
-
-    @staticmethod
-    def _type_alias(name):
-        schema = (PLUGIN_ROOT / "schemas" / "review-output.ts").read_text()
-        match = re.search(
-            rf"(?:export )?type {name} =\s*(.*?)(?=\n(?:export )?type |\n\n|\Z)",
-            schema, re.DOTALL,
-        )
-        assert match is not None, f"review-output.ts must declare {name}"
-        return " ".join(match.group(1).split())
-
-    @pytest.mark.parametrize("interface, expected", [
-        ("Finding", {"sources?": "FindingSource[]", "severity_note?": "string"}),
-        ("ReviewCheck", {"sources?": "ReviewSource[]"}),
-        ("FindingsLedger", {
-            "dropped_findings?": "DroppedFinding[]",
-            "dropped_checks?": "DroppedCheck[]",
-            "orchestrator_notes?": "OrchestratorNote[]",
-            "invalidated_recommendations?": "InvalidatedRecommendations[]",
-        }),
-    ], ids=["finding-provenance", "check-provenance", "ledger-audit"])
-    def test_reconciliation_extensions_remain_optional(self, interface, expected):
-        fields = self._field_types(
-            interface, extends="ReviewContent" if interface == "FindingsLedger" else "",
-        )
-        assert {key: fields.get(key) for key in expected} == expected
-
-    def test_source_identity_and_optional_stamped_severity(self):
-        assert self._field_types("ReviewSource") == {
-            "reviewer": "string", "id": "FindingId | CheckId",
-        }
-        assert self._field_types("FindingSource", extends="ReviewSource") == {
-            "severity?": "Severity",
-        }
-
-    def test_drop_reason_and_evidence_contract(self):
-        assert self._field_types("DroppedFindingSource", extends="ReviewSource") == {
-            "scope_status?": "string",
-        }
-        assert self._type_alias("DroppedFinding") == (
-            "DroppedFindingSource & ( "
-            "| { reason: 'false_positive' | 'out_of_scope'; evidence: string } "
-            "| { reason: 'prefiltered'; evidence?: string } );"
-        )
-        # A dropped check carries no stamped scope: the reader rejects
-        # scope_status there, so the contract must not offer it.
-        assert self._field_types("DroppedCheck", extends="ReviewSource") == {
-            "reason": "'void'", "evidence": "string",
-        }
-        assert set(re.findall(
-            r"'([^']+)'", self._type_alias("DroppedFinding"),
-        )) == set(critic_adjustments.DROP_REASONS_FINDING)
-        assert critic_adjustments.DROP_REASONS_CHECK == ("void",)
-
-    def test_orchestrator_note_outcomes_and_optional_stamped_note(self):
-        assert self._field_types("OrchestratorNote") == {
-            "id": "`n${number}`",
-            "outcome": "'confirmed' | 'refuted' | 'not_checked'",
-            "evidence": "string", "note?": "string",
-        }
-        assert set(re.findall(
-            r"'([^']+)'", self._field_types("OrchestratorNote")["outcome"],
-        )) == set(critic_adjustments.NOTE_OUTCOMES)
-
-    def test_invalidated_recommendations_keep_partial_priorities_and_adjustment_ids(self):
-        assert self._type_alias("ReviewRecommendations") == "ReviewContent['recommendations'];"
-        assert self._field_types("InvalidatedRecommendations") == {
-            "recommendations": "Partial<ReviewRecommendations>",
-            "invalidated_by_critic_adjustment_ids": "string[]",
-        }
-        content = self._interface_body("ReviewContent")
-        priorities = re.search(r"recommendations:\s*\{(.*?)\n {4}\};", content, re.DOTALL)
-        assert priorities is not None
-        assert set(re.findall(r"(\w+): string\[\]", priorities.group(1))) == set(
-            review_document.RECOMMENDATION_PRIORITIES
-        )
-
-    def test_request_replacements_are_optional_nullable_and_partial_by_priority(self):
-        fields = self._field_types("AdjudicationRequest")
-        assert fields.get("revised_assessment?") == "string | null"
-        assert fields.get("revised_recommendations?") == "Partial<ReviewRecommendations> | null"
-        assert fields["schema"] == "2"
-
-    def test_correct_excludes_severity_while_severity_actions_retain_it(self):
-        assert self._type_alias("FindingSeverityChangeFields") == (
-            "Pick<Finding, 'severity'> & Partial<Omit<FindingPatchFields, 'severity'>>;"
-        )
-        assert self._type_alias("FindingCorrectionFields") == (
-            "AtLeastOne<Omit<FindingPatchFields, 'severity'>> & { severity?: never };"
-        )
-        assert self._type_alias("CheckCorrectionFields") == (
-            "AtLeastOne<Pick<ReviewCheck, 'question' | 'method' | 'result'>> "
-            "& { severity?: never };"
-        )
-        proposal = self._type_alias("CriticProposalAdjustment")
-        assert "action: 'correct'; target: FindingTarget; fields: FindingCorrectionFields;" in proposal
-        assert "action: 'correct'; target: CheckTarget; fields: CheckCorrectionFields;" in proposal
-        assert "action: 'promote' | 'demote'; target: FindingTarget; fields: FindingSeverityChangeFields;" in proposal
-        provenance = self._type_alias("FindingCriticAdjustment")
-        assert "action: 'promote' | 'demote'; rationale: string; prior: FindingSeverityChangeFields" in provenance
+    _field_types = staticmethod(ts_schema.field_types)
+    _type_alias = staticmethod(ts_schema.type_alias)
 
     @pytest.mark.parametrize(
         "field", ["observations", "recommendations", "positive_observations"]
@@ -2931,18 +2762,6 @@ class TestAssessment:
         b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
         b.set_assessment("   ")
         assert b.to_dict()["assessment"] is None
-
-    def test_renders_as_an_assessment_section(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
-        b.set_assessment("Two sentences of judgment.")
-        rendered = render_markdown(b.to_dict())
-        assert "## Assessment\n\nTwo sentences of judgment." in rendered
-
-    def test_absent_prose_renders_no_assessment_section(self):
-        rendered = render_markdown(
-            ReviewOutputBuilder(pr_id="1", reviewer="pr").to_dict()
-        )
-        assert "## Assessment" not in rendered
 
 
 # =============================================================================

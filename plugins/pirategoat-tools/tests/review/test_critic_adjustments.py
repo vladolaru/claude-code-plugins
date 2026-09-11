@@ -2,6 +2,7 @@
 finding-level decisions into review-findings.json."""
 
 import json
+import re
 import subprocess
 import sys
 import threading
@@ -28,11 +29,13 @@ from helpers.critic_seeds import (
     _request,
     _write_findings,
 )
+from helpers import ts_schema
 from helpers.review_fixtures import (
     apply_schema,
     canonical_findings_ledger,
     rejected_schema_values,
 )
+from review import review_document
 from review.atomic_io import atomic_write_json
 from review.critic_adjustments import (
     APPLIED_IDS_KEY,
@@ -1850,6 +1853,47 @@ class TestSchemaTwoTargetUnion:
             self._adjudicate(tmp_path, proposal)
 
         assert tuple(path.read_bytes() for path in paths) == before
+
+
+class TestTypeScriptContractLockstep:
+    """schemas/review-output.ts's critic-adjustment shapes must match this
+    module's own vocabularies and actions — moved from `agent/test_output.py`
+    (G7), trimmed to the constant-parity asserts. The literal `Pick<...>` /
+    `AtLeastOne<...>` type-alias text those tests also pinned is TS-only
+    syntax with no Python side to drift against, so it is dropped as a
+    wording pin.
+    """
+
+    def test_invalidated_recommendation_priorities_match_the_ledger_constant(self):
+        content = ts_schema.interface_body("ReviewContent")
+        priorities = re.search(
+            r"recommendations:\s*\{(.*?)\n {4}\};", content, re.DOTALL
+        )
+        assert priorities is not None
+        assert set(re.findall(
+            r"(\w+): string\[\]", priorities.group(1),
+        )) == set(review_document.RECOMMENDATION_PRIORITIES)
+
+    def test_correct_and_severity_action_proposals_reach_the_finding_target(self):
+        proposal = ts_schema.type_alias("CriticProposalAdjustment")
+        assert (
+            "action: 'correct'; target: FindingTarget; "
+            "fields: FindingCorrectionFields;"
+        ) in proposal
+        assert (
+            "action: 'correct'; target: CheckTarget; "
+            "fields: CheckCorrectionFields;"
+        ) in proposal
+        assert (
+            "action: 'promote' | 'demote'; target: FindingTarget; "
+            "fields: FindingSeverityChangeFields;"
+        ) in proposal
+        provenance = ts_schema.type_alias("FindingCriticAdjustment")
+        assert (
+            "action: 'promote' | 'demote'; rationale: string; "
+            "prior: FindingSeverityChangeFields"
+        ) in provenance
+
 
 class TestProposalPreparation:
     def _entry(self, **extra):

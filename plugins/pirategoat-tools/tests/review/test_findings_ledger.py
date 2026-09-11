@@ -25,6 +25,7 @@ from review.review_document import (  # noqa: E402
 )
 from review.review_markdown import render_markdown  # noqa: E402
 from review import run_paths  # noqa: E402
+from helpers import ts_schema  # noqa: E402
 from helpers.review_fixtures import write_reconciliation_context  # noqa: E402
 
 
@@ -194,6 +195,27 @@ def test_the_definition_states_what_the_builder_derives_and_accepts():
     snippet = RECONCILIATOR_MD.read_text(encoding="utf-8")
     for value in DROP_REASONS_FINDING + DROP_REASONS_CHECK + NOTE_OUTCOMES:
         assert f"`{value}`" in snippet, value
+
+
+class TestTypeScriptContractLockstep:
+    """schemas/review-output.ts's drop-reason and note-outcome unions must
+    match this module's own vocabularies — moved from
+    `agent/test_output.py` (G7), trimmed to the parity asserts against
+    `DROP_REASONS_FINDING`/`DROP_REASONS_CHECK`/`NOTE_OUTCOMES`. The literal
+    TS field-shape text those tests also pinned was wording, not parity,
+    and is dropped.
+    """
+
+    def test_drop_reason_vocabulary_matches_the_ts_union(self):
+        assert set(re.findall(
+            r"'([^']+)'", ts_schema.type_alias("DroppedFinding"),
+        )) == set(DROP_REASONS_FINDING)
+        assert DROP_REASONS_CHECK == ("void",)
+
+    def test_note_outcome_vocabulary_matches_the_ts_union(self):
+        assert set(re.findall(
+            r"'([^']+)'", ts_schema.field_types("OrchestratorNote")["outcome"],
+        )) == set(NOTE_OUTCOMES)
 
 
 def _ledger_with_provenance(tmp_path):

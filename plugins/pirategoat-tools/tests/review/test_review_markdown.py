@@ -151,6 +151,86 @@ class TestRenderMarkdown:
 
         assert "**Not reviewed (budget):**" not in render_markdown(data)
 
+    # -- Moved from agent/test_output.py (G7): the builder file is not the
+    # renderer's test file. --
+
+    def test_markdown_renders_severity_floor(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="woo-regression")
+        b.add_finding(
+            "medium", "Title", "f.php", "desc", "rec", line=1,
+            severity_floor="medium",
+        )
+
+        assert "**Severity floor:** medium" in render_markdown(b.to_dict())
+
+    def test_renders_checks_performed_with_method(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="a11y")
+        b.record_check(
+            question="Does CSS depend on the label?",
+            method="grep 'th label' admin.scss",
+            result="No dependencies found.",
+        )
+        md = render_markdown(b.to_dict())
+        assert "## Checks Performed" in md
+        assert "Does CSS depend on the label?" in md
+        assert "grep 'th label' admin.scss" in md
+
+    def test_observations_in_markdown(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_observation("f.py", "File lacks CSRF protection")
+        md = render_markdown(b.to_dict())
+        assert "Observations" in md
+        assert "File lacks CSRF protection" in md
+
+    def test_file_scoped_finding_renders_under_severity_section(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="js-tests")
+        b.add_finding(
+            "high", "whole-file has no test", "src/foo.ts", "desc", "rec",
+            category="missing-coverage",
+        )
+        md = render_markdown(b.to_dict())
+        assert "## High Findings" in md
+        assert "whole-file has no test" in md
+        assert "`src/foo.ts` (file-scoped)" in md
+
+    def test_renders_as_an_assessment_section(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
+        b.set_assessment("Two sentences of judgment.")
+        rendered = render_markdown(b.to_dict())
+        assert "## Assessment\n\nTwo sentences of judgment." in rendered
+
+    def test_absent_prose_renders_no_assessment_section(self):
+        rendered = render_markdown(
+            ReviewOutputBuilder(pr_id="1", reviewer="pr").to_dict()
+        )
+        assert "## Assessment" not in rendered
+
+    def test_critical_advisory_suppression_states_the_stricter_counterfactual(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
+        b.add_finding(
+            severity="critical", title="x", file="a.php",
+            description="d", recommendation="r", line=5,
+            channel="advisory",
+        )
+
+        rendered = render_markdown(b.to_dict())
+
+        assert "Advisory suppression:** 1 finding excluded" in rendered
+        assert "verdict without suppression: BLOCK" in rendered
+
+    def test_advisory_suppression_without_a_counterfactual_still_states_the_count(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
+        b.add_finding(
+            severity="low", title="x", file="a.php",
+            description="d", recommendation="r", line=5,
+            channel="advisory",
+        )
+
+        assert (
+            "Advisory suppression:** 1 finding excluded"
+            in render_markdown(b.to_dict())
+        )
+
 
 class TestMaterializeMarkdown:
     def test_writes_md_beside_every_review_json(self):
