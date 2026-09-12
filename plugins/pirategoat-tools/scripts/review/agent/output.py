@@ -25,7 +25,9 @@ Usage:
     finalize_review(output_dir, "security", saved["review_digest"])
 """
 
+import contextlib
 import hashlib
+import io
 import json
 import os
 import sys
@@ -1111,8 +1113,9 @@ class ReviewOutputBuilder:
         """Milliseconds from this actor's dispatch to now, or None.
 
         Derived from the dispatch marker the pipeline wrote — the one clock
-        that spans the actual review. A negative interval (marker stamped
-        after this serialization, which no ordering produces) is discarded
+        that spans the actual review. Bootstrap records an empty-scope
+        review before it writes that marker, so such a review reads None:
+        there was no review to time. A negative interval is discarded
         rather than published: a wrong number is worse than a missing one.
         """
         started = _actor_start_time(self._output_dir, self._marker_name())
@@ -1366,6 +1369,35 @@ def finalize_review(output_dir: str, reviewer: str, review_digest: str):
                     file=sys.stderr,
                 )
     return {"final": paths.final, "review_digest": review_digest}
+
+
+def record_no_domain_files_review(
+    output_dir: str, pr_id: str, reviewer: str, skip_reason: str
+) -> str:
+    """Record and finalize the not_applicable review of a reviewer whose
+    scope matched no files, returning the final review path.
+
+    Called by bootstrap on NO_DOMAIN_FILES. The content is fully determined
+    by scope, so no model turn is spent producing it, and the reviewer
+    cannot leave a started marker with no review behind (run b9c0: two
+    reviewers, 20 minutes each as RUNNING). Goes through the same open /
+    mark / save / finalize path a reviewer uses, so validation, the
+    assignment binding and agent_complete telemetry are the ones every
+    other review gets; the builder's receipts and notes are swallowed
+    because they advise a reviewer and bootstrap's stub is the only thing
+    its caller reads. Idempotent: an
+    existing final review is returned untouched, so a bootstrap retry
+    cannot fail on its own success.
+    """
+    paths = review_paths(output_dir, reviewer)
+    if os.path.exists(paths.final):
+        return paths.final
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        builder = ReviewOutputBuilder.open(output_dir, pr_id, reviewer)
+        builder.mark_not_applicable(skip_reason)
+        receipt = builder.save_draft()
+        finalize_review(output_dir, reviewer, receipt["review_digest"])
+    return paths.final
 
 
 if __name__ == '__main__':

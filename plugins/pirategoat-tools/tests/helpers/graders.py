@@ -378,26 +378,6 @@ def grade_signal_format(text: str) -> GradeResult:
     return _grade(checks)
 
 
-def grade_no_domain_files(text: str) -> GradeResult:
-    """Grade agent output for NO_DOMAIN_FILES scenario.
-
-    Checks: APPROVE verdict, zero findings.
-    """
-    text_upper = text.upper()
-    # A severity mention only counts as a finding when it is followed by
-    # something other than a zero count or the literal "N" placeholder from
-    # the bootstrap's return-signal template ("COUNTS: critical: N, ...").
-    finding_mention = re.search(r"(CRITICAL|HIGH|MEDIUM):\s*(?!0\b|N\b)\S", text_upper)
-    checks = [
-        ("APPROVE" in text_upper, "Missing APPROVE verdict"),
-        (
-            finding_mention is None,
-            "Expected zero findings but found severity mentions"
-        ),
-    ]
-    return _grade(checks)
-
-
 def grade_error_exit(text: str) -> GradeResult:
     """Grade agent output for ERROR scenario.
 
@@ -707,13 +687,10 @@ def grade_detection(review: dict, key: dict, repo_root=None) -> GradeResult:
         ]
 
     if key.get("expect_not_applicable"):
-        # Both abstention spellings are doctrine-compliant: the shared
-        # reviewer protocol mandates mark_not_applicable on NO_DOMAIN_FILES,
-        # while the tests-reviewer agent definitions instruct APPROVE on the
-        # same status. Until that conflict is reconciled in the definitions,
-        # punishing either reading would grade an internal doc inconsistency,
-        # not reviewer quality. The zero-findings requirement carries the
-        # actual behavioral content.
+        # Both abstention spellings are doctrine-compliant: bootstrap records
+        # not_applicable itself when scope matches no file, and a reviewer
+        # that reads an in-domain diff and finds nothing approves. The
+        # zero-findings requirement carries the actual behavioral content.
         result = _grade([
             (verdict in _ABSTENTION_VERDICTS,
              f"expected abstention ({'/'.join(sorted(_ABSTENTION_VERDICTS))}), got '{verdict}'"),

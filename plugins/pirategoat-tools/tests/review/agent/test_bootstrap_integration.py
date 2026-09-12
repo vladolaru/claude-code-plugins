@@ -20,6 +20,7 @@ BOOTSTRAP_SCRIPT = SCRIPTS_DIR / "review" / "agent" / "bootstrap.py"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from review.agent.output import ReviewOutputBuilder
+from helpers.review_fixtures import write_artifact
 from review import run_paths
 from review.reviewer_lifecycle import (
     briefing_path,
@@ -1289,8 +1290,13 @@ class TestBriefingFileDelivery:
         assert "offset" in stub
         assert stub.index("one Read call") < stub.index("Only if")
 
-    def test_no_domain_files_run_still_writes_the_briefing(self, tmp_path):
-        """The reviewer still needs the briefing to report not-applicable."""
+    def test_no_domain_files_run_records_the_review_and_still_writes_the_briefing(self, tmp_path):
+        """An empty scope has nothing for a model to judge, so bootstrap
+        records the not_applicable review itself and the stub tells the
+        reviewer to return FINISHED. b9c0: two forced reviewers read the
+        stub, exited without a review, and sat as RUNNING for 20 minutes.
+        The briefing is still written, as the run's record of what the
+        reviewer was told."""
         result = run_bootstrap(
             "--agent", "php-tests-reviewer", "--output-dir", str(tmp_path),
             fixture="js-clean-source.diff",
@@ -1298,7 +1304,57 @@ class TestBriefingFileDelivery:
 
         assert result.returncode == 0, result.stderr
         assert "STATUS: NO_DOMAIN_FILES" in result.stdout
+        final = review_paths(str(tmp_path), "php-tests").final
+        assert stub_field(result.stdout, "REVIEW") == final
+        review = json.loads(Path(final).read_text())
+        assert review["verdict"] == "not_applicable"
+        assert "php-tests" in review["skip_reason"]
+        assert "Return STATUS: FINISHED" in result.stdout
+        assert "Do not read the briefing" in result.stdout
+        assert "mark_not_applicable" not in result.stdout
         assert "STATUS: NO_DOMAIN_FILES" in briefing_text(result)
+        # agents_status reads the reviewer as finished, not running.
+        from review.agents_status import check_status
+        write_artifact(tmp_path, "dispatch_plan", {"agents": [
+            {"name": "php-tests-reviewer", "status": "DISPATCH", "reason": "r", "signal": "always"},
+        ]})
+        status = {a["name"]: a["status"] for a in check_status(str(tmp_path))["agents"]}
+        assert status["php-tests-reviewer"] == "FINISHED"
+
+    def test_a_secondary_only_scope_is_reviewed_not_recorded(self, tmp_path):
+        """resolve_overall_status flips a primary-empty, secondary-present
+        scope to OK so the secondary files get reviewed; the recorder must
+        key on that flipped status, never on the primary domain alone."""
+        result = run_bootstrap(
+            "--agent", "security-reviewer", "--output-dir", str(tmp_path),
+            fixture="ci-config-changes.diff",
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "STATUS: OK" in result.stdout
+        assert "REVIEW:" not in result.stdout
+        assert not Path(review_paths(str(tmp_path), "security").final).exists()
+
+    def test_a_ref_mode_adapter_with_an_empty_scope_is_recorded(self, tmp_path):
+        """Ref mode honours its own scope status, so an adapter whose declared
+        domains match nothing gets the same recorded review, under the
+        instance-derived reviewer name."""
+        ref = tmp_path / "renewals.md"
+        ref.write_text("Review renewals logic end to end.")
+        result = run_bootstrap(
+            "--agent", "repo-reviewer-adapter",
+            "--repo-agent-ref", str(ref),
+            "--instance-name", "repo-renewals-reviewer",
+            "--scope-domains", "php",
+            "--output-dir", str(tmp_path),
+            fixture="js-clean-source.diff",
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "STATUS: NO_DOMAIN_FILES" in result.stdout
+        final = review_paths(str(tmp_path), "repo-renewals").final
+        assert stub_field(result.stdout, "REVIEW") == final
+        assert json.loads(Path(final).read_text())["verdict"] == "not_applicable"
 
     def test_two_reviewers_get_distinct_briefing_files(self, tmp_path):
         first = run_bootstrap(
@@ -1947,6 +2003,36 @@ class TestEveryReviewerMandatesBootstrap:
         text = path.read_text()
         assert "## MANDATORY SETUP — Run Bootstrap Before Reviewing" in text, agent
         assert f"bootstrap.py --agent {agent}" in text, agent
+
+    # The one NO_DOMAIN_FILES model, as every definition states it. Run b9c0:
+    # the protocol, six tests-reviewer definitions and twenty others described
+    # the status three ways, and two reviewers exited without a review.
+    RECORDED_ABSTENTION_CLAUSE = (
+        "your not_applicable review is already recorded at the REVIEW path printed"
+    )
+
+    @pytest.mark.parametrize("agent", ALL_AGENTS)
+    def test_definition_states_the_recorded_abstention(self, agent):
+        """Every definition that runs bootstrap and can receive NO_DOMAIN_FILES
+        says the same thing about it. A null-domain agent never sees the
+        status, except the repo adapter, whose ref-mode scope can be empty."""
+        if agent in BOOTSTRAP_EXEMPT_AGENTS:
+            pytest.skip("not dispatched through bootstrap")
+        if AGENT_CONFIG[agent].get("domain") is None and agent != "repo-reviewer-adapter":
+            pytest.skip("no domain: never receives NO_DOMAIN_FILES")
+        text = (PLUGIN_ROOT / "agents" / f"{agent}.md").read_text()
+        assert self.RECORDED_ABSTENTION_CLAUSE in text, agent
+        assert "APPROVE → exit" not in text, agent
+
+    @pytest.mark.parametrize("protocol", [
+        "agents/shared/reviewer-protocol.md",
+        "agents/shared/tests-reviewer-protocol.md",
+    ])
+    def test_shared_protocols_state_the_recorded_abstention(self, protocol):
+        text = (PLUGIN_ROOT / protocol).read_text()
+        line = next(l for l in text.splitlines() if "NO_DOMAIN_FILES" in l and "already recorded" in l)
+        assert "STATUS: FINISHED" in line
+        assert "mark_not_applicable" not in line
 
 
 class TestBuilderSnippetSignatures:

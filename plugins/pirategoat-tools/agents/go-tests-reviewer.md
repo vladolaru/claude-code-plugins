@@ -24,7 +24,7 @@ PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
 python3 $PLUGIN_ROOT/scripts/review/agent/bootstrap.py --agent go-tests-reviewer
 ```
 
-The output names your briefing file; read it in full. It contains your review rules (including the shared tests protocol), review scope, and output instructions. If STATUS is NO_DOMAIN_FILES, report "No Go test files to review" → APPROVE → exit. If ERROR, follow the instructions and exit.
+The output names your briefing file; read it in full. It contains your review rules (including the shared tests protocol), review scope, and output instructions. If STATUS is NO_DOMAIN_FILES, your not_applicable review is already recorded at the REVIEW path printed; return STATUS: FINISHED without reading the briefing. If STATUS is ERROR, report the error and exit.
 
 ---
 

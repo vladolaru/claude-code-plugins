@@ -12,7 +12,7 @@ Usage:
     python3 bootstrap.py --agent patterns-reviewer --output-dir <output-dir>
 
 Exit codes:
-    0  Success (scope may be OK or NO_DOMAIN_FILES)
+    0  Success (scope OK, or NO_DOMAIN_FILES with the not_applicable review recorded)
     1  Error (plugin root not found, unknown agent, scope discovery failed)
 """
 
@@ -41,6 +41,7 @@ if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
 from review.reviewer_names import derive_reviewer_name
+from review.agent.output import record_no_domain_files_review
 from review.agent.review_assignment import ASSIGNMENT_SCHEMA, derive_reviewed_files
 from review.atomic_io import atomic_write_json, atomic_write_text
 from review.change_purpose import parse_change_purpose
@@ -1293,6 +1294,17 @@ BRIEFING_STUB_GUIDANCE = (
     "Follow it; do not read run artifacts by hand."
 )
 
+# What a reviewer with an empty scope is told instead. Bootstrap has already
+# recorded and finalized its not_applicable review (agents_status reads it
+# as FINISHED), so the reviewer's whole job is to say so; reading the
+# briefing or opening the builder would be a turn spent on nothing.
+NO_DOMAIN_FILES_GUIDANCE = (
+    "Nothing to review: no changed file is in your domain, and your "
+    "not_applicable review is already recorded at the REVIEW path above. "
+    "Do not read the briefing or open the builder. Return STATUS: FINISHED, "
+    "VERDICT: not_applicable, and the REVIEW path as your only output file."
+)
+
 
 def deliver_briefing(
     output: str,
@@ -1302,8 +1314,13 @@ def deliver_briefing(
     agent_name: str,
     plugin_root: str,
     status: str,
+    recorded_review: Optional[str] = None,
 ) -> str:
     """Write one reviewer's briefing to the run directory, return the stub.
+
+    `recorded_review` is the final review bootstrap wrote for an empty
+    scope; the stub then names it and replaces the read-the-briefing
+    guidance with the return-FINISHED one.
 
     Unconditional, with no size threshold and no inline branch: two
     delivery shapes would be two conventions for one thing, and the
@@ -1323,17 +1340,21 @@ def deliver_briefing(
     os.makedirs(os.path.dirname(path), exist_ok=True)
     text = READ_LINE_NUMBER_WARNING + output
     atomic_write_text(path, text)
-    return "\n".join([
+    lines = [
         f"=== BOOTSTRAP: {agent_name} ===",
         f"PLUGIN_ROOT: {plugin_root}",
-        # STATUS stays on stdout: every agent definition tells the reviewer
-        # to exit on ERROR or NO_DOMAIN_FILES, and the compliance grader
-        # reads it from here.
+        # STATUS stays on stdout: the reviewer's next action (read the
+        # briefing, return FINISHED, or report the error) is decided from
+        # it, and the compliance grader reads it from here.
         f"STATUS: {status}",
         f"BRIEFING: {path}",
         f"BRIEFING_BYTES: {len(text.encode('utf-8'))}",
-        BRIEFING_STUB_GUIDANCE,
-    ])
+    ]
+    if recorded_review is not None:
+        lines += [f"REVIEW: {recorded_review}", NO_DOMAIN_FILES_GUIDANCE]
+    else:
+        lines.append(BRIEFING_STUB_GUIDANCE)
+    return "\n".join(lines)
 
 
 def build_error_output(agent_name: str, error_msg: str, plugin_root: str = "UNKNOWN") -> str:
@@ -1954,7 +1975,7 @@ def main():
     )
     # In ref-mode the adapter has a null registry domain, so resolve_overall_status
     # forces OK. Honor the real ref-mode scope status instead, so an adapter with
-    # no matching files sees NO_DOMAIN_FILES and exits cleanly.
+    # no matching files gets NO_DOMAIN_FILES and its not_applicable review recorded.
     if ref_mode:
         overall_status = scope_status
         secondary_only = False
@@ -1989,6 +2010,31 @@ def main():
         plugin_version=load_plugin_version(output_dir),
     )
 
+    # An empty scope has nothing for a model to judge. Record the review
+    # here, through the reviewer's own builder path, so the reviewer's job
+    # is one line and a started marker can never outlive its review. The
+    # pr_id is the one the output instructions hand a reviewer.
+    recorded_review = None
+    if overall_status == "NO_DOMAIN_FILES":
+        try:
+            recorded_review = record_no_domain_files_review(
+                output_dir,
+                str(pr_number) if pr_number else "0",
+                reviewer_name,
+                f"No {config['domain'] or 'in-domain'} files among the changed "
+                "files: scope discovery matched nothing for this reviewer",
+            )
+        except (OSError, ValueError) as exc:
+            # A closed intake or an unreadable draft: the reviewer reads
+            # STATUS: ERROR like every other bootstrap failure, and no
+            # started marker is left behind to read as RUNNING.
+            print(build_error_output(
+                effective_agent_name,
+                f"Could not record the empty-scope review: {exc}",
+                plugin_root,
+            ))
+            sys.exit(1)
+
     # The briefing file precedes the marker: a reviewer that sees RUNNING
     # can rely on its briefing existing.
     stub = deliver_briefing(
@@ -1998,6 +2044,7 @@ def main():
         agent_name=effective_agent_name,
         plugin_root=plugin_root,
         status=overall_status,
+        recorded_review=recorded_review,
     )
 
     # The started marker is the last thing bootstrap writes: agents_status.py
@@ -2014,7 +2061,8 @@ def main():
         f.write(datetime.now(timezone.utc).isoformat())
     print(stub)
 
-    # Exit code: 0 for success (including NO_DOMAIN_FILES), 1 for errors
+    # Exit code: 0 for success (NO_DOMAIN_FILES included; its review is
+    # recorded above), 1 for errors
     if overall_status == "ERROR":
         sys.exit(1)
     sys.exit(0)

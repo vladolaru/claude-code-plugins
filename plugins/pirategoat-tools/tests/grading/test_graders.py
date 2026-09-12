@@ -25,7 +25,6 @@ from helpers.graders import (
     grade_review_json,
     grade_review_markdown,
     grade_signal_format,
-    grade_no_domain_files,
     grade_error_exit,
     grade_output_pair,
     grade_review_baseline,
@@ -272,36 +271,6 @@ class TestGradeSignalFormat:
 
     def test_missing_status(self):
         result = grade_signal_format("OUTPUT_FILES:\nVERDICT: APPROVE\n")
-        assert not result.passed
-
-
-class TestGradeNoDomainFiles:
-    """Tests for grade_no_domain_files."""
-
-    def test_approve_with_no_findings(self):
-        text = "VERDICT: APPROVE\nNo security files to review."
-        result = grade_no_domain_files(text)
-        assert result.passed
-
-    def test_non_approve_fails(self):
-        text = "VERDICT: REQUEST_CHANGES\nCRITICAL: found finding"
-        result = grade_no_domain_files(text)
-        assert not result.passed
-
-    def test_bootstrap_signal_template_is_not_a_finding(self):
-        # Bootstrap output embeds the return-signal template; its "N"
-        # placeholders and explicit zero counts are not severity findings.
-        text = (
-            "STATUS: NO_DOMAIN_FILES\nACTION: APPROVE and exit\n"
-            "COUNTS: critical: N, high: N, medium: N\n"
-            "critical: 0, high: 0, medium: 0"
-        )
-        result = grade_no_domain_files(text)
-        assert result.passed, f"Failures: {result.failures}"
-
-    def test_nonzero_count_fails(self):
-        text = "VERDICT: APPROVE\nCOUNTS: critical: 0, high: 2, medium: 0"
-        result = grade_no_domain_files(text)
         assert not result.passed
 
 

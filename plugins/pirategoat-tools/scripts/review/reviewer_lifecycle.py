@@ -127,11 +127,30 @@ def require_review_intake_open(output_dir: str) -> None:
 
 
 def require_not_finalized(paths: ReviewPaths) -> None:
-    """Reject a mutable draft save once final JSON exists."""
-    if os.path.exists(paths.final):
+    """Reject a mutable draft save once final JSON exists.
+
+    A finalized abstention names the return a reviewer owes, so one that
+    opened the builder anyway is told what to do instead of being left with
+    a bare refusal. The cause is not stated: bootstrap records an
+    abstention for an empty scope and a reviewer records one after its
+    Quick Relevance Check, and the file does not say which.
+    """
+    if not os.path.exists(paths.final):
+        return
+    try:
+        with open(paths.final, encoding="utf-8") as handle:
+            verdict = json.load(handle).get("verdict")
+    except (OSError, ValueError, AttributeError):
+        verdict = None
+    if verdict == "not_applicable":
         raise ValueError(
-            f"reviewer {os.path.basename(paths.final)!r} is already finalized"
+            f"reviewer {os.path.basename(paths.final)!r} is already finalized "
+            "as not_applicable. Return STATUS: FINISHED with that path; an "
+            "abstention records no further work"
         )
+    raise ValueError(
+        f"reviewer {os.path.basename(paths.final)!r} is already finalized"
+    )
 
 
 def _load_closed_intake(path: str):

@@ -504,11 +504,18 @@ def extract_subagent_metrics(filepath: str) -> dict:
                     last_timestamp = ts_str
 
                 # Verdict (reviewer agents)
+                # The return-signal vocabulary: the four pipeline verdicts,
+                # the Linear pipeline's ALIGN, and the abstention a reviewer
+                # (or bootstrap, for an empty scope) returns in lower case.
                 verdict_match = re.search(
-                    r"VERDICT:\s*(APPROVE|COMMENT|REQUEST_CHANGES|ALIGN)", line
+                    r"VERDICT:\s*(APPROVE|COMMENT|REQUEST_CHANGES|BLOCK|ALIGN|NOT_APPLICABLE)",
+                    line, re.IGNORECASE,
                 )
                 if verdict_match:
-                    metrics["verdict"] = verdict_match.group(1)
+                    verdict = verdict_match.group(1).upper()
+                    metrics["verdict"] = (
+                        "not_applicable" if verdict == "NOT_APPLICABLE" else verdict
+                    )
 
                 # Severity counts (from COUNTS line in reviewer output)
                 counts_match = re.search(

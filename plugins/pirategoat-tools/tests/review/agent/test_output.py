@@ -2684,3 +2684,64 @@ def test_builder_timestamp_is_aware_utc():
     stamp = datetime.fromisoformat(ReviewOutputBuilder("42", "security").timestamp)
     assert stamp.tzinfo is not None and stamp.utcoffset() == timedelta(0)
 
+
+# =============================================================================
+# record_no_domain_files_review — bootstrap records the empty-scope review
+# =============================================================================
+
+
+class TestRecordNoDomainFilesReview:
+    """Bootstrap records the review a reviewer with an empty scope would
+    otherwise have to write itself: three tool calls to produce a file
+    whose content is fully determined, which two b9c0 reviewers skipped,
+    leaving a started marker that read RUNNING for 20 minutes."""
+
+    def test_records_a_finalized_not_applicable_review(self, tmp_path, capsys):
+        from review.agent.output import record_no_domain_files_review
+        from review.reviewer_lifecycle import review_paths
+        _write_required_assignment(tmp_path, "code-clarity")
+        path = record_no_domain_files_review(
+            str(tmp_path), "68615", "code-clarity",
+            "No clarity files among the changed files",
+        )
+        assert path == review_paths(str(tmp_path), "code-clarity").final
+        review = json.loads(Path(path).read_text())
+        assert review["verdict"] == "not_applicable"
+        assert review["skip_reason"] == "No clarity files among the changed files"
+        assert review["findings"] == []
+        assert not Path(review_paths(str(tmp_path), "code-clarity").draft).exists()
+        # The builder's receipts are for a reviewer; bootstrap's stub is
+        # the only thing on stdout.
+        assert capsys.readouterr().out == ""
+
+    def test_is_idempotent(self, tmp_path):
+        from review.agent.output import record_no_domain_files_review
+        _write_required_assignment(tmp_path, "code-clarity")
+        first = record_no_domain_files_review(str(tmp_path), "68615", "code-clarity", "No clarity files")
+        before = Path(first).read_bytes()
+        second = record_no_domain_files_review(str(tmp_path), "68615", "code-clarity", "a different reason")
+        assert second == first and Path(first).read_bytes() == before
+
+    def test_a_saved_draft_without_a_final_is_finalized(self, tmp_path, capsys):
+        """The crash window between save and finalize: a retry rehydrates
+        the abstained draft and finalizes it rather than failing on it."""
+        from review.agent.output import record_no_domain_files_review
+        from review.reviewer_lifecycle import review_paths
+        _write_required_assignment(tmp_path, "code-clarity")
+        b = ReviewOutputBuilder.open(tmp_path, "68615", "code-clarity")
+        b.mark_not_applicable("No clarity files")
+        b.save_draft()
+        capsys.readouterr()
+        path = record_no_domain_files_review(str(tmp_path), "68615", "code-clarity", "No clarity files")
+        assert Path(path).exists()
+        assert not Path(review_paths(str(tmp_path), "code-clarity").draft).exists()
+
+    def test_a_reviewer_that_opens_the_builder_anyway_is_told_what_to_return(self, tmp_path):
+        """A definition that sends an empty-scope reviewer into the builder
+        gets a refusal that names the recorded abstention and the return."""
+        from review.agent.output import record_no_domain_files_review
+        _write_required_assignment(tmp_path, "code-clarity")
+        record_no_domain_files_review(str(tmp_path), "68615", "code-clarity", "No clarity files")
+        with pytest.raises(ValueError, match="already finalized as not_applicable.*STATUS: FINISHED"):
+            ReviewOutputBuilder.open(tmp_path, "68615", "code-clarity")
+

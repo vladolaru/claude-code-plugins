@@ -470,7 +470,6 @@ class GradeResult:
 | `grade_review_json(path)` | Path to `reviewers/<reviewer>/review.json` | File exists, valid JSON, required fields (`pr_id`, `reviewer`, `schema`, `verdict`, `summary`, `findings`, `checks`, `assessment`, the reviewed-file fields, `meta`), valid severities, exact schema 2, finding/check schemas, reviewed-file coherence, summary structure |
 | `grade_review_markdown(path)` | Path to `reviewers/<reviewer>/review.md` | File exists, `# ... Review` header, `## Executive Summary`, `**Verdict:**` — rendered from the JSON when absent |
 | `grade_signal_format(text)` | Return signal text | `STATUS: FINISHED`, `OUTPUT_FILES:`, `COUNTS:`, `VERDICT:`, `SUMMARY:` |
-| `grade_no_domain_files(text)` | Agent output for no-code scenario | APPROVE verdict, zero findings |
 | `grade_error_exit(text)` | Agent output for error scenario | Error indication, no STATUS: FINISHED |
 | `grade_output_pair(output_dir, reviewer_name)` | Output directory + reviewer name | Both `.json` and `.md` exist, delegates to json + markdown graders, reviewer name matches |
 | `grade_review_baseline(path)` | Path to `.branch-review-baseline.json` | File exists, valid JSON, required fields (`last_reviewed_sha`, `last_reviewed_at`, `review_type`, `review_count`, `base_ref`, `git_range_used`), SHA format (7-40 hex), positive review_count, range contains `..` |
@@ -617,12 +616,10 @@ counts are not comparable with single-trial check counts — the comparative
 metric remains per-entry `passed`.
 
 **Abstention keys.** `expect_not_applicable` accepts BOTH `not_applicable`
-and `approve` verdicts (each with zero findings): the shared reviewer
-protocol mandates `mark_not_applicable` on `NO_DOMAIN_FILES` while the
-tests-reviewer agent definitions instruct APPROVE on the same status — a
-live doctrine conflict in the plugin's own definitions. Until that is
-reconciled, punishing either compliant reading would grade a documentation
-inconsistency, not reviewer quality. `expect_not_applicable` is also
+and `approve` verdicts (each with zero findings): bootstrap records the
+`not_applicable` review itself when scope matches no file, while a reviewer
+that reads an in-domain diff and finds nothing approves, so a fixture may
+legitimately produce either. `expect_not_applicable` is also
 mutually exclusive with every other answer-key field: `grade_detection`
 short-circuits on it before `match_findings` runs, so the other fields
 would be silently inert beside it, and the answer-key guard

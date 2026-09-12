@@ -1981,7 +1981,7 @@ def main():
 
         # Exit code based on status
         if scope["status"] == "NO_DOMAIN_FILES":
-            sys.exit(0)  # Not an error — agent should APPROVE and exit
+            sys.exit(0)  # Not an error — bootstrap records the not_applicable review
         sys.exit(0)
 
     except RuntimeError as e:
