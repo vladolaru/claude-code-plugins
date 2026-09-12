@@ -322,3 +322,12 @@ Changelog fragments (`scope.py` `CHANGELOG_FRAGMENT_PATTERN`, ~728) belong to th
 **Evidence:** `.claude/docs/analysis/2026-09-11-claude-two-pr-review-runs-audit.md` § F12 and § Decision critic pass ("F12's class fix"); the 2026-09-08 audit's F1 for the detection that now fires.
 **Deferred because:** the current behaviour is disclosed and recovered, and the class fix is a dispatch-policy decision (whether an orphan may block a skip) that deserves its own design note rather than a slot in the field-audit fixes.
 **Do when:** the next change to `dispatch_adjust.py`'s orphan detection or to `scope.py`'s domain tables, or the first run where a disclosed orphan is not read by anyone.
+
+### 40. A repo reviewer declaring only unknown domains is scoped to `code` but planned as `no_domain_files`
+
+`plan_dispatch.py` filters a repo reviewer's declared `applies_to.domains` through `DOMAIN_CATALOG` and falls back to `["code"]` for its `scope_domains`, while `reviewer_applies_to_diff` tests the raw declared list and `review_config._normalize_applies_to` does not validate domain names. A `.pirategoat/config.json` declaring only a misspelled domain therefore produces a row with `signal: no_domain_files` whose bootstrap scope is the non-empty `code` domain. Since 1.119.6 `dispatch_adjust.py` refuses to force-dispatch that row with "has no files in its domain", which is false for it. The fix is upstream: applicability should use the same catalog-filtered list `scope_domains` uses, or an unknown domain should fail config normalization loudly instead of silently becoming a `code`-scoped reviewer.
+
+**Evidence:** code review of the 1.119.6 `dispatch_adjust` refusals (`plan_dispatch.py` ~1929 and ~1948 against `review_config.py` ~348 and ~548).
+**Deferred because:** it needs a misconfigured repo config, and the right fix is a config-validation decision that belongs with `docs/repo-reviewers.md`.
+**Do when:** the next change to `review_config._normalize_applies_to` or to how `plan_dispatch` builds repo-reviewer rows.
+

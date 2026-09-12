@@ -115,18 +115,18 @@ class TestAdjustDispatchPlan:
         result = dispatch_adjust.adjust_dispatch_plan(
             str(tmp_path),
             skips=[("a11y-reviewer", "no markup, ARIA or focus call in the diff")],
-            dispatches=[("php-tests-reviewer", "the fixtures are PHP")],
+            dispatches=[("woo-regression-reviewer", "the PHP is in a template")],
         )
         agents = _read(path)
         assert agents["a11y-reviewer"]["status"] == SKIPPED_OVERRIDE
         assert agents["a11y-reviewer"]["override_reason"] == "no markup, ARIA or focus call in the diff"
         assert agents["a11y-reviewer"]["reason"].startswith("conditional")  # the planner's reason stays
-        assert agents["php-tests-reviewer"]["status"] == DISPATCH_OVERRIDE
+        assert agents["woo-regression-reviewer"]["status"] == DISPATCH_OVERRIDE
         assert result["written"] is True
         assert result["dispatching"] == 2 and result["skipped"] == 2
         assert [(row["name"], row["from"], row["to"], row["changed"]) for row in result["adjustments"]] == [
             ("a11y-reviewer", DISPATCH, SKIPPED_OVERRIDE, True),
-            ("php-tests-reviewer", SKIPPED, DISPATCH_OVERRIDE, True),
+            ("woo-regression-reviewer", SKIPPED_TRIAGE, DISPATCH_OVERRIDE, True),
         ]
         # The planner's baseline is never touched.
         initial = _read(artifact_path(str(tmp_path), "dispatch_plan_initial"))
@@ -257,3 +257,70 @@ class TestCli:
             "WOULD ADJUST: 1 | DISPATCHING: 1 | SKIPPED: 3",
         ]
         assert _read(path)["a11y-reviewer"]["status"] == DISPATCH
+
+
+class TestRefusedOverrides:
+    """Run b9c0: two agents skipped for `no files in … domain` were force-
+    dispatched, bootstrap scoped them to the same empty domain, both exited
+    without a review, and the orchestrator re-skipped them while they were
+    RUNNING so the wait would end. Neither override can do what it says."""
+
+    def test_dispatch_of_a_no_domain_files_skip_is_refused(self, tmp_path):
+        _plan(tmp_path)
+        with pytest.raises(dispatch_adjust.DispatchAdjustmentError) as err:
+            dispatch_adjust.adjust_dispatch_plan(
+                tmp_path, dispatches=[("php-tests-reviewer", "verify the docs against the code")]
+            )
+        message = "; ".join(err.value.problems)
+        assert "php-tests-reviewer has no files in its domain" in message
+        assert "reconciliation_notes.py" in message
+        plan = json.loads(artifact_path(tmp_path, "dispatch_plan").read_text())
+        assert {a["name"]: a["status"] for a in plan["agents"]}["php-tests-reviewer"] == SKIPPED
+
+    def test_dispatch_of_a_triage_skip_still_works(self, tmp_path):
+        _plan(tmp_path)
+        result = dispatch_adjust.adjust_dispatch_plan(
+            tmp_path, dispatches=[("woo-regression-reviewer", "the PHP is in a template")]
+        )
+        assert result["adjustments"][0]["to"] == DISPATCH_OVERRIDE
+
+    @pytest.mark.parametrize("evidence", ["started", "final"])
+    @pytest.mark.parametrize("name, reviewer", [
+        ("a11y-reviewer", "a11y"),
+        # An adapter instance: bootstrap keys the marker on the instance
+        # name, and derive_reviewer_name strips only the trailing suffix.
+        ("repo-reuse-reviewer", "repo-reuse"),
+    ], ids=["registry", "repo-instance"])
+    def test_skip_of_a_started_agent_is_refused(self, tmp_path, evidence, name, reviewer):
+        from review.reviewer_lifecycle import review_paths, started_marker_path
+        rows = [
+            {"name": name, "status": DISPATCH, "reason": "r", "signal": "always"},
+        ]
+        _plan(tmp_path, agents=rows)
+        if evidence == "started":
+            path = Path(started_marker_path(str(tmp_path), reviewer))
+        else:
+            path = Path(review_paths(str(tmp_path), reviewer).final)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("2026-09-11T21:13:49+00:00" if evidence == "started" else "{}")
+        with pytest.raises(dispatch_adjust.DispatchAdjustmentError) as err:
+            dispatch_adjust.adjust_dispatch_plan(
+                tmp_path, skips=[(name, "its bootstrap refused")]
+            )
+        assert f"{name} has already started" in "; ".join(err.value.problems)
+        plan = json.loads(artifact_path(tmp_path, "dispatch_plan").read_text())
+        assert {a["name"]: a["status"] for a in plan["agents"]}[name] == DISPATCH
+
+    def test_a_refused_request_is_refused_under_dry_run_too(self, tmp_path):
+        """A preview that said WOULD for a request the real run refuses would
+        mislead, so the refusal precedes the dry-run branch."""
+        path = _plan(tmp_path)
+        before = path.read_bytes()
+        result = subprocess.run(
+            [sys.executable, str(CLI), "--output-dir", str(tmp_path), "--dry-run",
+             "--dispatch", "php-tests-reviewer", "verify the docs"],
+            capture_output=True, text=True, cwd=tmp_path,
+        )
+        assert result.returncode == 1
+        assert "REJECTED:" in result.stdout and "WOULD" not in result.stdout
+        assert path.read_bytes() == before

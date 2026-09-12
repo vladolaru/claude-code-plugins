@@ -8,7 +8,13 @@ skipped one to DISPATCH_OVERRIDE; both repeatable. Every name is validated
 against the plan first, and the read and the single atomic write happen
 under the run-directory lock. An unknown name, an empty reason or a
 malformed plan exits 1 and writes nothing; an agent already in the requested
-family is a reported `UNCHANGED` no-op, so a re-run is idempotent.
+family is a reported `UNCHANGED` no-op, so a re-run is idempotent. Two
+requests are refused because they cannot do what they say: a `--dispatch`
+of a `no_domain_files` skip (bootstrap scopes the agent to the same empty
+domain, and no review comes of it) and a `--skip` of an agent whose started
+marker or final review exists (a skipped row is no longer waited for, so
+the skip only hides a live reviewer); each refusal names the route that
+works.
 
 `dispatch_status.OVERRIDE_REASON_KEY`, `PLANNER_STATUS_KEY` and
 `ORPHANED_FILES_KEY` are the one spelling of the fields written here. Each
@@ -18,7 +24,7 @@ the planner's own triage uses.
 Usage:
     dispatch_adjust.py --output-dir DIR --skip a11y-reviewer "no markup in the diff"
                        --skip security-reviewer "no input, escaping or auth surface"
-                       [--dispatch php-tests-reviewer "..."] [--dry-run]
+                       [--dispatch woo-regression-reviewer "..."] [--dry-run]
 """
 
 import argparse
@@ -30,9 +36,11 @@ try:
     from . import atomic_io
     from .dispatch_status import (
         DISPATCH_OVERRIDE, DISPATCHED_STATUSES, ORPHANED_FILES_KEY, ORPHANED_FILES_LEAD,
-        OVERRIDE_REASON_KEY, PLANNER_STATUS_KEY, SKIPPED_OVERRIDE, SKIPPED_STATUSES,
-        load_dispatch_plan,
+        OVERRIDE_REASON_KEY, PLANNER_STATUS_KEY, SIGNAL_NO_DOMAIN_FILES, SKIPPED_OVERRIDE,
+        SKIPPED_STATUSES, load_dispatch_plan,
     )
+    from .reviewer_lifecycle import review_paths, started_marker_path
+    from .reviewer_names import derive_reviewer_name
     from .plan_dispatch import scope_files
     from .review_document import normalize_bounded_text
     from .run_paths import artifact_path
@@ -43,9 +51,11 @@ except ImportError:
     from review import atomic_io
     from review.dispatch_status import (
         DISPATCH_OVERRIDE, DISPATCHED_STATUSES, ORPHANED_FILES_KEY, ORPHANED_FILES_LEAD,
-        OVERRIDE_REASON_KEY, PLANNER_STATUS_KEY, SKIPPED_OVERRIDE, SKIPPED_STATUSES,
-        load_dispatch_plan,
+        OVERRIDE_REASON_KEY, PLANNER_STATUS_KEY, SIGNAL_NO_DOMAIN_FILES, SKIPPED_OVERRIDE,
+        SKIPPED_STATUSES, load_dispatch_plan,
     )
+    from review.reviewer_lifecycle import review_paths, started_marker_path
+    from review.reviewer_names import derive_reviewer_name
     from review.plan_dispatch import scope_files
     from review.review_document import normalize_bounded_text
     from review.run_paths import artifact_path
@@ -142,6 +152,42 @@ def _record_override_orphans(plan):
             agent.pop(ORPHANED_FILES_KEY, None)
 
 
+def _refusal(output_dir, agent, action):
+    """Why this request cannot do what it says, or None.
+
+    A `no_domain_files` skip is a scope fact, not a triage judgment:
+    bootstrap scopes the agent to the same domain the planner measured,
+    and finds nothing, so the dispatch buys a subagent spawn and no
+    review (five cohort attempts, zero findings). A started agent cannot be un-dispatched: agents_status
+    stops waiting for a skipped row, so the skip only hides a reviewer
+    that is still running or has already finished.
+    """
+    name = agent["name"]
+    if action == ACTION_DISPATCH and agent.get("signal") == SIGNAL_NO_DOMAIN_FILES:
+        return (
+            f"{name} has no files in its domain (signal {SIGNAL_NO_DOMAIN_FILES}): "
+            "a forced dispatch finds an empty scope and produces no review. A claim "
+            "you want checked against the code is a step-8 note "
+            "(reconciliation_notes.py --note); a file no dispatched domain covers "
+            "is a repo reviewer with applies_to.paths"
+        )
+    if action == ACTION_SKIP:
+        reviewer = derive_reviewer_name(name)
+        if os.path.exists(review_paths(str(output_dir), reviewer).final):
+            return (
+                f"{name} has already started and finished; its review stands. "
+                "To contest it, register a step-8 note (reconciliation_notes.py "
+                "--note) for the reconciliator to weigh"
+            )
+        if os.path.exists(started_marker_path(str(output_dir), reviewer)):
+            return (
+                f"{name} has already started: a skipped row is no longer waited "
+                "for, so the skip would hide a running reviewer. Wait for it "
+                "(agents_status.py) or let it time out"
+            )
+    return None
+
+
 def adjust_dispatch_plan(output_dir, skips=None, dispatches=None, dry_run=False):
     """Apply the adjustments to the run's dispatch plan.
 
@@ -169,6 +215,10 @@ def adjust_dispatch_plan(output_dir, skips=None, dispatches=None, dry_run=False)
                 problems.append(f"unknown agent '{name}'; the plan names: {known}")
                 continue
             family, target = _TRANSITIONS[action]
+            refusal = _refusal(output_dir, agent, action)
+            if refusal:
+                problems.append(refusal)
+                continue
             current = agent["status"]
             if current == target:
                 rows.append({"name": name, "from": current, "to": target, "reason": reason,

@@ -1041,6 +1041,11 @@ def _step_5_dispatch_plan(mode, state, context, config, output_dir):
         "- Only force-dispatch a skipped agent when you're confident it will find "
         "something the plan missed."
     )
+    actions.append(
+        '- An agent skipped for "no files in … domain" cannot be force-dispatched: '
+        "its scope is empty and no review comes of it. A claim you want "
+        "checked against the code is a step-8 note (reconciliation_notes.py)."
+    )
     actions.append("")
     actions.append(
         "Record every adjustment in ONE call — it validates each name and "

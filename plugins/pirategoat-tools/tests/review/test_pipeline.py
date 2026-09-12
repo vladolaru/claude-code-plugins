@@ -706,6 +706,9 @@ class TestStep5DispatchPlan:
         ) in lowered
         assert "DISPATCH_OVERRIDE" in text
         assert "SKIPPED_OVERRIDE" in text
+        # b9c0: the boundary the orchestrator otherwise learns by reading source.
+        assert "no files in" in lowered and "cannot be force-dispatched" in lowered
+        assert "reconciliation_notes.py" in text
 
     def test_adjustments_go_through_the_entry_point_not_a_hand_edit(self, mod, tmp_path):
         """Run 4's orchestrator wrote its own throwaway script to flip four
