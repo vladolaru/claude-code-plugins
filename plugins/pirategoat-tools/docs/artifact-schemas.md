@@ -18,7 +18,7 @@ A consequence of the default: an in-window key rename reads as unavailable on an
 
 ## The second carve-out: additive optional keys
 
-A released schema does not bump for a purely additive optional key whose absence reads as a defined default, because no reader can misread an old artifact and a bump would only make history unreadable. Telemetry schema 3 is the precedent: `run.repo` and `run.target` read as unavailable when absent, and the one consumer that requires them (`telemetry_share.py`) refuses an identity-less manifest on its own. A key a reader would silently treat as present, or a field whose meaning changed, is not additive and bumps.
+A released schema does not bump for a purely additive optional key whose absence reads as a defined default, or for a widened value space that no earlier artifact can carry, because no reader can misread an old artifact and a bump would only make history unreadable. Telemetry schema 3 is the precedent: `run.repo` and `run.target` read as unavailable when absent, and the one consumer that requires them (`telemetry_share.py`) refuses an identity-less manifest on its own. A key a reader would silently treat as present, or a field whose meaning changed, is not additive and bumps.
 
 ## Which artifacts carry a schema
 
@@ -27,7 +27,7 @@ The field earns its place where an artifact outlives the run that wrote it, or c
 | Artifact | Schema | Producing authority |
 |---|---:|---|
 | `reviewers/<agent>/review.draft.json`, `reviewers/<agent>/review.json` | 2 | `REVIEW_OUTPUT_SCHEMA`, `scripts/review/agent/output.py` (the optional `verifies` check field is additive; an absent key reads as "cites nothing") |
-| `review-findings.json` (the findings ledger) | 3 | `LEDGER_SCHEMA`, `scripts/review/findings_ledger.py` |
+| `review-findings.json` (the findings ledger) | 3 | `LEDGER_SCHEMA`, `scripts/review/findings_ledger.py`. Since 1.119.6 a finding's `sources` may cite a confirmed orchestrator note as `{"reviewer": "orchestrator", "id": "nN"}`; additive under the second carve-out, because a ledger written before it never carries one, this version's readers project either form, and the three recorded field runs under `tests/fixtures/review-runs/` stay readable |
 | `review-intake.json` | 2 | `close_review_intake()`, `scripts/review/reviewer_lifecycle.py` |
 | Telemetry JSONL events and `<log>.manifest.json` | 3 | `EVENT_SCHEMA`, `scripts/review/telemetry.py` |
 | `synthesis-agents.json` | 1 | `LIFECYCLE_SCHEMA`, `scripts/review/synthesis_lifecycle.py` |

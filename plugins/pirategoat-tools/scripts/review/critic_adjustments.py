@@ -856,9 +856,12 @@ def _validate_sources(value, label, *, with_severity):
     """`sources` on a ledger finding or check, in the builder's grammar.
 
     A finding's entries may carry the source `severity` findings_save.py
-    stamps from the context; a check's never do.
+    stamps from the context and may cite a confirmed orchestrator note; a
+    check's do neither.
     """
-    normalized_sources(value, label, allow_severity=with_severity)
+    normalized_sources(
+        value, label, allow_severity=with_severity, allow_note=with_severity
+    )
 
 
 def _validate_dropped(

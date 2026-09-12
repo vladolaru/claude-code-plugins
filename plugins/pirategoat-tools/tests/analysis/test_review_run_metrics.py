@@ -8607,6 +8607,24 @@ class TestEvidenceMetrics:
             "security-reviewer": {"kept": 1, "dropped": {"false_positive": 1}, "critic_removed": 1},
         }
 
+    def test_a_note_sourced_finding_keeps_its_lineage_through_the_sanitizer(self):
+        """A lineage row naming the orchestrator with a note id survives
+        sanitization and counts as a survival row of its own."""
+        manifest = _manifest("added")
+        manifest["evidence"] = _evidence_payload()
+        manifest["availability"]["evidence"] = True
+        manifest["evidence"]["findings"].append(
+            {"id": "f9", "severity": "medium",
+             "sources": [{"agent": "orchestrator", "id": "n1", "severity": None}],
+             "critic_action": None}
+        )
+        measured = measure_run(manifest, Path("/nonexistent"), include_transcripts=False)
+        assert measured["evidence"]["findings"][1]["sources"] == [
+            {"agent": "orchestrator", "id": "n1", "severity": None}
+        ]
+        result = aggregate_cohort([measured])["evidence"]
+        assert result["survival_by_agent"]["orchestrator"]["kept"] == 1
+
     def test_a_manifest_without_critic_removals_has_unknown_lineage(self):
         """A manifest projected before critic removals were carried cannot
         say what happened to their sources; the run's lineage is

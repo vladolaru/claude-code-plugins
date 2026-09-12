@@ -1229,3 +1229,128 @@ class TestAccountingGate:
         code, out = _save(tmp_path, _valid_findings(context=reviews), capsys)
         assert code == 0, out
         assert "ACCOUNTED: findings 3/3 (1 merged, 2 dropped) | checks 2/2 (1 merged, 1 dropped) | notes 0/0" in out
+
+
+class TestNoteSourcedFindings:
+    """b9c0: the reconciliator confirmed note n1 (a defect in lines the PR
+    adds), had no reviewer finding to attach it to, recorded it only as a
+    note, and published approve with zero findings; the critic added the
+    finding a stage later with no sources. The note is the source."""
+
+    @staticmethod
+    def _note_finding(**extra):
+        finding = {
+            "id": "f1", "category": "documentation", "severity": "high",
+            "title": "Mock omits getAdminLink", "file": "README.md", "line": 85,
+            "description": "d", "recommendation": "r", "confidence": 0.9,
+            "sources": [{"reviewer": "orchestrator", "id": "n1"}],
+            "severity_note": "n1: confirmed — the recipe trades one error for another",
+        }
+        finding.update(extra)
+        return finding
+
+    def _doc(self, reviews, notes, findings=None, **overrides):
+        doc = _valid_findings(
+            context=reviews, findings=findings or [self._note_finding()], **overrides
+        )
+        doc["orchestrator_notes"] = notes
+        return doc
+
+    def test_a_confirmed_note_may_source_a_finding(self, tmp_path, capsys):
+        reviews = _reviews(**{"security-review": (1, ["grep"])})
+        _write_context(tmp_path, reviews, notes=[{"id": "n1", "note": "the mock omits getAdminLink"}])
+        doc = self._doc(reviews, [{"id": "n1", "outcome": "confirmed", "evidence": "url.js:6"}])
+        code, out = _save(tmp_path, doc, capsys)
+        assert code == 0, out
+        saved = json.loads((tmp_path / "review-findings.json").read_text())
+        assert saved["findings"][0]["sources"] == [{"reviewer": "orchestrator", "id": "n1"}]
+        # The uncited reviewer finding is still accounted for, and the receipt
+        # counts the note beside the notes, not against the reviewer population.
+        assert [(d["reviewer"], d["id"]) for d in saved["dropped_findings"]] == [("security-review", "f1")]
+        assert (
+            "ACCOUNTED: findings 1/1 (0 merged, 1 dropped) | checks 1/1 (1 merged, 0 dropped) "
+            "| notes 1/1 (1 sourced a finding)"
+        ) in out
+
+    def test_a_hand_written_note_severity_is_stripped(self, tmp_path, capsys):
+        reviews = _reviews(**{"security-review": (1, ["grep"])})
+        _write_context(tmp_path, reviews, notes=[{"id": "n1", "note": "x"}])
+        doc = self._doc(reviews, [{"id": "n1", "outcome": "confirmed", "evidence": "e"}])
+        doc["findings"][0]["sources"][0]["severity"] = "critical"
+        code, out = _save(tmp_path, doc, capsys)
+        assert code == 0, out
+        saved = json.loads((tmp_path / "review-findings.json").read_text())
+        assert saved["findings"][0]["sources"] == [{"reviewer": "orchestrator", "id": "n1"}]
+
+    def test_a_note_beside_a_reviewer_source_leaves_the_severity_rule_alone(self, tmp_path, capsys):
+        """The note carries no severity; the reviewer's high still matches."""
+        reviews = _reviews(**{"security-review": (1, ["grep"])})
+        _write_context(tmp_path, reviews, notes=[{"id": "n1", "note": "x"}])
+        finding = self._note_finding(sources=[
+            {"reviewer": "security-review", "id": "f1"},
+            {"reviewer": "orchestrator", "id": "n1"},
+        ])
+        del finding["severity_note"]
+        doc = self._doc(reviews, [{"id": "n1", "outcome": "confirmed", "evidence": "e"}], findings=[finding])
+        code, out = _save(tmp_path, doc, capsys)
+        assert code == 0, out
+        saved = json.loads((tmp_path / "review-findings.json").read_text())
+        assert saved["findings"][0]["sources"] == [
+            {"reviewer": "security-review", "id": "f1", "severity": "high"},
+            {"reviewer": "orchestrator", "id": "n1"},
+        ]
+        assert "ACCOUNTED: findings 1/1 (1 merged, 0 dropped)" in out
+
+    def test_an_unresolved_reviewer_source_does_not_blame_the_notes(self, tmp_path, capsys):
+        """A finding whose only source is unknown is reported for that; the
+        severity rule does not add a note-shaped problem it did not find."""
+        reviews = _reviews(**{"security-review": (1, ["grep"])})
+        _write_context(tmp_path, reviews)
+        doc = _valid_findings(context=reviews)
+        doc["findings"][0]["sources"] = [{"reviewer": "security-review", "id": "f9"}]
+        code, out = _save(tmp_path, doc, capsys)
+        assert code == 1
+        assert "unknown source security-review:f9" in out
+        assert "orchestrator notes only" not in out
+
+    def test_an_unconfirmed_note_cannot_source_a_finding(self, tmp_path, capsys):
+        reviews = _reviews(**{"security-review": (1, ["grep"])})
+        _write_context(tmp_path, reviews, notes=[{"id": "n1", "note": "x"}])
+        doc = self._doc(reviews, [{"id": "n1", "outcome": "refuted", "evidence": "e"}])
+        code, out = _save(tmp_path, doc, capsys)
+        assert code == 1
+        assert "orchestrator:n1" in out and "confirmed" in out
+
+    def test_a_note_only_finding_requires_a_severity_note(self, tmp_path, capsys):
+        reviews = _reviews(**{"security-review": (1, ["grep"])})
+        _write_context(tmp_path, reviews, notes=[{"id": "n1", "note": "x"}])
+        doc = self._doc(reviews, [{"id": "n1", "outcome": "confirmed", "evidence": "e"}])
+        del doc["findings"][0]["severity_note"]
+        code, out = _save(tmp_path, doc, capsys)
+        assert code == 1
+        assert "severity_note is required" in out
+
+    def test_a_note_sources_at_most_one_finding(self, tmp_path, capsys):
+        reviews = _reviews(**{"security-review": (1, ["grep"])})
+        _write_context(tmp_path, reviews, notes=[{"id": "n1", "note": "x"}])
+        doc = self._doc(
+            reviews, [{"id": "n1", "outcome": "confirmed", "evidence": "e"}],
+            findings=[self._note_finding(), self._note_finding(id="f2", title="again")],
+            summary={
+                "total_findings": 2,
+                "by_severity": {"critical": 0, "high": 2, "medium": 0, "low": 0, "info": 0},
+                "suppressed_advisory_finding_count": 0,
+            },
+        )
+        code, out = _save(tmp_path, doc, capsys)
+        assert code == 1
+        assert "orchestrator:n1 is merged into both findings[0] and findings[1]" in out
+
+    def test_an_unknown_note_id_is_refused(self, tmp_path, capsys):
+        reviews = _reviews(**{"security-review": (1, ["grep"])})
+        _write_context(tmp_path, reviews, notes=[{"id": "n1", "note": "x"}])
+        doc = self._doc(reviews, [{"id": "n1", "outcome": "confirmed", "evidence": "e"}])
+        doc["findings"][0]["sources"] = [{"reviewer": "orchestrator", "id": "n9"}]
+        code, out = _save(tmp_path, doc, capsys)
+        assert code == 1
+        assert "unknown source orchestrator:n9" in out

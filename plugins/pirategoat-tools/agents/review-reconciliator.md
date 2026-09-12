@@ -296,6 +296,20 @@ builder.add_finding(
     severity_note="n2: confirmed — the race predates this change, so high overstates it",
 )
 
+# A confirmed note that is itself a defect in the diff — nothing a reviewer
+# filed, but real and anchored in a changed line — becomes a finding whose
+# source is the note. Resolve it confirmed first; the pipeline stamps the
+# note's text, and you supply the severity and say in severity_note why,
+# since a note carries none.
+builder.resolve_note("n3", outcome="confirmed",
+                     evidence="url.js:6 imports getAdminLink; the recipe's mock at README.md:85 omits it")
+builder.add_finding(
+    severity="medium", file="path/to/README.md", line=85, category="documentation",
+    title="...", description="...", recommendation="...",
+    sources=[{"reviewer": "orchestrator", "id": "n3"}],
+    severity_note="n3: confirmed — the recipe trades one error for a less obvious one",
+)
+
 # Your four judgments. The pipeline stamps input counts, agent lists,
 # not-applicable agents with their reasons, dispatched/missing agents, and
 # the host-context banner from synthesis/reconciliation-context.json when you save.

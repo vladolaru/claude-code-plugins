@@ -384,6 +384,7 @@ A set of module-level functions cover what is specific to this channel rather th
 - `test_save_copies_degraded_host_banner`, `test_save_leaves_an_undegraded_host_banner_off_the_ledger` — the banner reaches the ledger only from the context, and only when it is actually degraded
 - `test_save_rejects_advisory_finding_without_advisory_source`, `test_save_accepts_an_advisory_finding_a_source_review_carried` — an advisory-channel finding must trace back to a source review that itself carried the advisory channel
 - `test_save_rejects_a_run_with_no_reconciliation_context` — a missing `reconciliation-context.json` refuses the save outright, since there is nothing to stamp the ledger's pipeline-owned facts from
+- `TestNoteSourcedFindings` — a finding may cite a confirmed orchestrator note as its source; unknown, unconfirmed and double-merged notes are refused, a note-only finding needs a `severity_note`, and the ACCOUNTED receipt reports the note beside the notes tally
 
 ### Orchestration Hygiene Tests (`review/test_orchestration_hygiene.py`)
 

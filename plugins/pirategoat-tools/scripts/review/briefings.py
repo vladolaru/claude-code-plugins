@@ -1564,7 +1564,9 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
     actions.append(
         "Orchestrator notes: read orchestrator_notes in the context and "
         "answer each with an outcome and evidence; a confirmed note about "
-        "severity changes that severity in the same pass."
+        "severity changes that severity in the same pass, and a confirmed "
+        "note that is itself a defect in the diff becomes a finding sourced "
+        "to the note."
     )
     actions.append("```")
     actions.append(

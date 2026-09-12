@@ -299,6 +299,26 @@ def test_provenance_ledger_passes_the_reader_boundary(tmp_path):
         id="duplicate_source-normalized_sources",
     ),
     pytest.param(
+        lambda b: b.add_finding(severity="low", title="t", file="f", line=1,
+                                description="d", recommendation="r",
+                                sources=[{"reviewer": "orchestrator", "id": "f1"}]),
+        id="note_stem_with_a_finding_id-normalized_sources",
+    ),
+    pytest.param(
+        lambda b: b.add_finding(severity="low", title="t", file="f", line=1,
+                                description="d", recommendation="r",
+                                sources=[{"reviewer": "x-review", "id": "n1"}]),
+        id="reviewer_stem_with_a_note_id-normalized_sources",
+    ),
+    pytest.param(
+        lambda b: b.record_check("q", "m", "r", sources=[{"reviewer": "orchestrator", "id": "n1"}]),
+        id="note_source_on_a_check-record_check",
+    ),
+    pytest.param(
+        lambda b: b.drop_finding("orchestrator", "n1", reason="false_positive", evidence="e"),
+        id="note_as_a_dropped_finding-drop_finding",
+    ),
+    pytest.param(
         lambda b: b.drop_finding("x-review", "f1", reason="bogus", evidence="e"),
         id="bad_drop_reason-drop_finding",
     ),
@@ -319,6 +339,18 @@ def test_malformed_provenance_is_refused_at_the_builder(tmp_path, call):
     builder = FindingsLedgerBuilder(pr_id="42", output_dir=str(tmp_path))
     with pytest.raises(ValueError):
         call(builder)
+
+
+def test_a_confirmed_note_is_a_valid_finding_source(tmp_path):
+    """b9c0: the note is the source when no reviewer filed the concern; the
+    id grammar admits nN only under the orchestrator stem (the two refusals
+    above), and the save gate then requires the note to be confirmed."""
+    builder = FindingsLedgerBuilder(pr_id="42", output_dir=str(tmp_path))
+    builder.add_finding(severity="medium", title="t", file="f", line=1,
+                        description="d", recommendation="r",
+                        sources=[{"reviewer": "orchestrator", "id": "n1"}],
+                        severity_note="n1: confirmed — medium on its own evidence")
+    assert builder.findings[0]["sources"] == [{"reviewer": "orchestrator", "id": "n1"}]
 
 
 class TestNoteSettlesVerifyItems:

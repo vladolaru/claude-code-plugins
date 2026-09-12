@@ -45,6 +45,7 @@ export type ConfidenceScore = number; // 0.0 - 1.0
  */
 export type FindingId = `f${number}`;
 export type CheckId = `c${number}`;
+export type NoteId = `n${number}`;
 
 /** Source identity in reconciliation evidence; reviewer is a review stem. */
 export interface ReviewSource {
@@ -52,9 +53,15 @@ export interface ReviewSource {
     id: FindingId | CheckId;
 }
 
-export interface FindingSource extends ReviewSource {
-    severity?: Severity; // Stamped from the source review by findings_save.py.
-}
+/**
+ * A finding's source: a reviewer finding, or — only for a finding — a
+ * confirmed orchestrator note, cited as reviewer "orchestrator" with the
+ * note's id. findings_save.py admits the note form only when the same
+ * ledger resolves that note as confirmed. Checks and drops never cite a note.
+ */
+export type FindingSource =
+    | (ReviewSource & { severity?: Severity }) // Stamped from the source review by findings_save.py.
+    | { reviewer: 'orchestrator'; id: NoteId };
 
 export interface DroppedFindingSource extends ReviewSource {
     scope_status?: string; // Stamped scope evidence, when available.

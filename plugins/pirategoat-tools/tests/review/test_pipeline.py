@@ -1546,7 +1546,9 @@ class TestStep8Reconcile:
         assert lines[3] == (
             "Orchestrator notes: read orchestrator_notes in the context and "
             "answer each with an outcome and evidence; a confirmed note about "
-            "severity changes that severity in the same pass."
+            "severity changes that severity in the same pass, and a confirmed "
+            "note that is itself a defect in the diff becomes a finding sourced "
+            "to the note."
         )
         assert len(lines) == 4
         assert "retry logic" not in block
@@ -1564,6 +1566,7 @@ class TestStep8Reconcile:
         # code stayed "unverified" because notes were described for
         # concerns only.
         assert "Verify item" in text and "verifies=" in text
+        assert "sourced to the note" in text
 
     def test_change_purpose_is_rendered_exactly_once_in_step_8(self, mod, tmp_path):
         """It is in the context already (`change_purpose`); the situation

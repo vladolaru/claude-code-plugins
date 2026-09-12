@@ -1769,7 +1769,14 @@ def _sanitize_evidence(value: object) -> dict[str, Any] | None:
             if not isinstance(row, dict):
                 continue
             agent = identity(row.get("agent"), _PRODUCER_AGENT_NAME_RE)
-            source_id = identity(row.get("id"), _FINDINGS_LEDGER_CONTRACT.SOURCE_ID_RE)
+            # A note-sourced finding's lineage row names the orchestrator
+            # and carries the note's nN id.
+            id_pattern = (
+                _FINDINGS_LEDGER_CONTRACT.NOTE_ID_RE
+                if agent == _FINDINGS_LEDGER_CONTRACT.NOTE_SOURCE_REVIEWER
+                else _FINDINGS_LEDGER_CONTRACT.SOURCE_ID_RE
+            )
+            source_id = identity(row.get("id"), id_pattern)
             if agent is None or source_id is None:
                 continue
             entry = {"agent": agent, "id": source_id}

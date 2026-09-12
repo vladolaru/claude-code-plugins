@@ -12,7 +12,8 @@ ReviewOutputBuilder; do not grow a hierarchy under it.
 appends each merged source check's `method` verbatim and unions its
 `verifies`, so the save gate's verbatim-method rule holds by construction;
 `resolve_note(verifies=[...])` settles Verify items through
-`review_document.normalize_verifies`. The pipeline-owned reconciliation facts
+`review_document.normalize_verifies`, and a confirmed note may be the source
+of a finding, cited as `{"reviewer": NOTE_SOURCE_REVIEWER, "id": "nN"}`. The pipeline-owned reconciliation facts
 are never authored here — `findings_save.py` stamps them at save time.
 """
 import json
@@ -92,6 +93,13 @@ LEDGER_AGENT_NAME = "review-reconciliator"
 # check is merged into exactly one ledger entry or dropped with a reason,
 # never silently gone.
 SOURCE_ENTRY_FIELDS = frozenset({"reviewer", "id"})
+# The reviewer stem a ledger finding cites when its source is an
+# orchestrator note the reconciliator confirmed rather than a reviewer
+# finding. findings_save.py admits the key only for a note the same ledger
+# resolves as confirmed, so provenance still names the actor whose evidence
+# produced the finding; the critic's `add` stays the route for a concern
+# nothing before it raised.
+NOTE_SOURCE_REVIEWER = "orchestrator"
 DROP_REASONS_FINDING = ("false_positive", "out_of_scope", "prefiltered")
 DROP_REASONS_CHECK = ("void",)
 NOTE_OUTCOMES = ("confirmed", "refuted", "not_checked")
@@ -99,8 +107,17 @@ NOTE_ID_RE = re.compile(r"n[1-9][0-9]*")
 SOURCE_ID_RE = re.compile(r"[fc][1-9][0-9]*")
 
 
-def _source_entry(entry, label, allow_severity=False):
+def _source_entry(entry, label, allow_severity=False, allow_note=False):
     allowed = SOURCE_ENTRY_FIELDS | ({"severity"} if allow_severity else set())
+    # A reviewer source carries a canonical fN/cN id. Only a finding may
+    # cite the orchestrator's notes (nN ids, under the reserved stem): a
+    # check has reviewer sources and a drop names a reviewer finding.
+    is_note = (
+        allow_note
+        and isinstance(entry, dict)
+        and entry.get("reviewer") == NOTE_SOURCE_REVIEWER
+    )
+    id_grammar = NOTE_ID_RE if is_note else SOURCE_ID_RE
     if (
         not isinstance(entry, dict)
         or not SOURCE_ENTRY_FIELDS <= set(entry)
@@ -108,12 +125,16 @@ def _source_entry(entry, label, allow_severity=False):
         or not isinstance(entry["reviewer"], str)
         or not entry["reviewer"].strip()
         or not isinstance(entry["id"], str)
-        or SOURCE_ID_RE.fullmatch(entry["id"]) is None
+        or id_grammar.fullmatch(entry["id"]) is None
         or ("severity" in entry and entry["severity"] not in VALID_SEVERITIES)
     ):
+        note_clause = (
+            ", or the orchestrator stem and a confirmed note's nN id"
+            if allow_note else ""
+        )
         raise ValueError(
             f"{label} sources entries must be {{reviewer, id}} with a "
-            "review stem and a canonical fN/cN id"
+            f"review stem and a canonical fN/cN id{note_clause}"
             + (" (and a valid severity, if any)" if allow_severity else "")
         )
     normalized = {"reviewer": entry["reviewer"].strip(), "id": entry["id"]}
@@ -122,16 +143,17 @@ def _source_entry(entry, label, allow_severity=False):
     return normalized
 
 
-def normalized_sources(value, label, *, allow_severity=False):
+def normalized_sources(value, label, *, allow_severity=False, allow_note=False):
     """A non-empty, duplicate-free list of {reviewer, id} entries.
 
     `allow_severity` admits the source `severity` findings_save.py stamps
     on a finding's sources from the reconciliation context; a check's
-    sources never carry one.
+    sources never carry one. `allow_note` admits a confirmed orchestrator
+    note as a source; only a finding's sources may carry one.
     """
     if not isinstance(value, list) or not value:
         raise ValueError(f"{label} requires a non-empty sources list")
-    entries = [_source_entry(entry, label, allow_severity) for entry in value]
+    entries = [_source_entry(entry, label, allow_severity, allow_note) for entry in value]
     keys = [(e["reviewer"], e["id"]) for e in entries]
     if len(keys) != len(set(keys)):
         raise ValueError(f"{label} sources must not repeat a source")
@@ -226,7 +248,7 @@ class FindingsLedgerBuilder(ReviewOutputBuilder):
 
     def add_finding(self, *args, sources=None, severity_note=None, **kwargs):
         """A reconciled finding names every source finding it merged."""
-        normalized = normalized_sources(sources, "add_finding")
+        normalized = normalized_sources(sources, "add_finding", allow_note=True)
         normalized_note = (
             None if severity_note is None
             else normalize_bounded_text(severity_note, "severity_note")

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from review.agent.review_assignment import ASSIGNMENT_SCHEMA
+from review.findings_ledger import LEDGER_SCHEMA
 from review.reconciliation_context import RECONCILIATION_CONTEXT_SCHEMA
 from review.reviewer_lifecycle import review_paths
 from review.run_paths import artifact_path
@@ -116,7 +117,7 @@ def canonical_findings_ledger(severities=(), *, checks=(), reconciliation=None):
         "reviewed_file_count", "in_scope_review_file_count",
     ):
         document.pop(field)
-    document["schema"] = 3
+    document["schema"] = LEDGER_SCHEMA
     document["checks"] = list(checks)
     document["meta"]["next_check_number"] = len(checks) + 1
     count = len(document["findings"])

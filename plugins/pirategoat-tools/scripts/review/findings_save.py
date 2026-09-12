@@ -27,6 +27,7 @@ import unicodedata
 try:
     from . import critic_adjustments
     from .findings_ledger import (
+        NOTE_SOURCE_REVIEWER,
         DROP_REASONS_CHECK,
         DROP_REASONS_FINDING,
         RECONCILIATION_PIPELINE_FIELDS,
@@ -45,6 +46,7 @@ except ImportError:
         sys.path.insert(0, _scripts_parent)
     from review import critic_adjustments
     from review.findings_ledger import (
+        NOTE_SOURCE_REVIEWER,
         DROP_REASONS_CHECK,
         DROP_REASONS_FINDING,
         RECONCILIATION_PIPELINE_FIELDS,
@@ -211,6 +213,25 @@ def _source_population(context):
     return findings, checks
 
 
+def _note_ids(context):
+    """Every registered note id, the population a note source is checked against."""
+    return {
+        note["id"] for note in (context.get("orchestrator_notes") or [])
+        if isinstance(note, dict) and isinstance(note.get("id"), str)
+    }
+
+
+def _confirmed_notes(payload):
+    """The note ids this ledger resolves as confirmed."""
+    entries = payload.get("orchestrator_notes")
+    return {
+        entry["id"]
+        for entry in (entries if isinstance(entries, list) else [])
+        if isinstance(entry, dict) and entry.get("outcome") == "confirmed"
+        and isinstance(entry.get("id"), str)
+    }
+
+
 def _fmt(key):
     return f"{key[0]}:{key[1]}"
 
@@ -226,6 +247,8 @@ def _accounting_problems(payload, context):
     """
     problems = []
     source_findings, source_checks = _source_population(context)
+    known_notes = _note_ids(context)
+    confirmed_notes = _confirmed_notes(payload)
 
     merged_findings = {}
     findings = payload.get("findings")
@@ -237,10 +260,30 @@ def _accounting_problems(payload, context):
             problems.append(f"findings[{idx}] names no sources")
             continue
         severities = set()
+        note_sourced = False
         for entry in sources:
             key = _source_key(entry)
             if key is None:
                 problems.append(f"findings[{idx}] has a malformed sources entry")
+                continue
+            if key[0] == NOTE_SOURCE_REVIEWER:
+                # A note is a source only once the same ledger has confirmed
+                # it; the finding then carries no source severity to inherit.
+                if key[1] not in known_notes:
+                    problems.append(f"findings[{idx}] cites unknown source {_fmt(key)}")
+                elif key[1] not in confirmed_notes:
+                    problems.append(
+                        f"findings[{idx}] cites {_fmt(key)}, which this ledger does not "
+                        "resolve as confirmed; only a confirmed note sources a finding"
+                    )
+                elif key in merged_findings:
+                    problems.append(
+                        f"{_fmt(key)} is merged into both {merged_findings[key]} "
+                        f"and findings[{idx}]"
+                    )
+                else:
+                    merged_findings[key] = f"findings[{idx}]"
+                    note_sourced = True
                 continue
             if key not in source_findings:
                 problems.append(f"findings[{idx}] cites unknown source {_fmt(key)}")
@@ -258,16 +301,20 @@ def _accounting_problems(payload, context):
                     f"merged into findings[{idx}]; it must be dropped as prefiltered"
                 )
             severities.add(source_findings[key].get("severity"))
+        # A severity no source carries needs the reconciliator's reason. A
+        # finding sourced to notes alone has no source severity at all, so
+        # it always needs one; a finding whose sources all failed above has
+        # its problem stated already.
         if (
             finding.get("severity") in VALID_SEVERITIES
-            and severities
+            and (severities or note_sourced)
             and finding.get("severity") not in severities
             and not str(finding.get("severity_note") or "").strip()
         ):
+            sourced = ", ".join(sorted(s for s in severities if s)) or "orchestrator notes only"
             problems.append(
                 f"findings[{idx}] is {finding.get('severity')} but its sources "
-                f"are {', '.join(sorted(s for s in severities if s))}; "
-                "severity_note is required"
+                f"are {sourced}; severity_note is required"
             )
 
     dropped_findings = {}
@@ -467,6 +514,9 @@ def stamp_pipeline_facts(document, context):
             continue
         for entry in finding.get("sources") or []:
             key = _source_key(entry)
+            if key[0] == NOTE_SOURCE_REVIEWER:
+                entry.pop("severity", None)
+                continue
             severity = source_findings[key].get("severity")
             if severity is not None:
                 entry["severity"] = severity
@@ -580,8 +630,20 @@ def validate_findings(payload, context):
     stamp_pipeline_facts(payload, context)
     recon = payload["meta"]["reconciliation"]
     grouped = recon.get("grouped_concern_count")
-    if isinstance(grouped, int) and grouped > recon["input_finding_count"]:
-        problems.append("grouped_concern_count exceeds the input finding count")
+    # Every concern comes from a reviewer finding or a confirmed note the
+    # ledger turned into a finding, so the population a grouping can reach
+    # is the reviewer input plus the notes that became findings.
+    note_sourced = {
+        entry["id"]
+        for finding in payload.get("findings") or []
+        for entry in (finding.get("sources") or [])
+        if isinstance(entry, dict) and entry.get("reviewer") == NOTE_SOURCE_REVIEWER
+    }
+    if isinstance(grouped, int) and grouped > recon["input_finding_count"] + len(note_sourced):
+        problems.append(
+            "grouped_concern_count exceeds the input finding count "
+            "(reviewer findings plus note-sourced findings)"
+        )
     try:
         critic_adjustments.validate_findings_document(payload)
     except ValueError as err:
@@ -617,18 +679,28 @@ def _echo(findings, context):
     print(f"CHECKS: {len(checks)} | ASSESSMENT: {assessment_state}")
     dropped_findings = findings.get("dropped_findings") or []
     dropped_checks = findings.get("dropped_checks") or []
-    merged_findings = sum(len(f.get("sources") or []) for f in recorded_findings)
+    # Reviewer sources count against the reviewer population; a note that
+    # sourced a finding is reported beside the notes it belongs to.
+    source_entries = [
+        entry for f in recorded_findings for entry in (f.get("sources") or [])
+        if isinstance(entry, dict)
+    ]
+    note_sourced = sum(1 for e in source_entries if e.get("reviewer") == NOTE_SOURCE_REVIEWER)
+    merged_findings = len(source_entries) - note_sourced
     merged_checks = sum(len(c.get("sources") or []) for c in checks)
     notes = findings.get("orchestrator_notes") or []
     source_findings, source_checks = _source_population(context)
     source_notes = context.get("orchestrator_notes") or []
+    notes_tally = f"notes {len(notes)}/{len(source_notes)}"
+    if note_sourced:
+        notes_tally += f" ({note_sourced} sourced a finding)"
     print(
         f"ACCOUNTED: findings {merged_findings + len(dropped_findings)}/"
         f"{len(source_findings)} ({merged_findings} merged, "
         f"{len(dropped_findings)} dropped) | checks "
         f"{merged_checks + len(dropped_checks)}/{len(source_checks)} "
         f"({merged_checks} merged, {len(dropped_checks)} dropped) | "
-        f"notes {len(notes)}/{len(source_notes)}"
+        + notes_tally
     )
 
 

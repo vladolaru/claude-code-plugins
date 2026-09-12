@@ -1182,6 +1182,19 @@ class TestReconciliatorWritePathPin:
         assert "--output-dir" in text
         assert "--findings" in text
 
+    def test_every_note_the_snippet_cites_as_a_source_is_resolved_confirmed(self):
+        """The save refuses a note source the same ledger does not confirm,
+        so the taught snippet must confirm every note it sources — read top
+        to bottom, the way the agent follows it."""
+        import re
+        text = self._text()
+        confirmed = set(re.findall(
+            r'resolve_note\("(n\d+)",\s*outcome="confirmed"', text
+        ))
+        sourced = set(re.findall(r'\{"reviewer": "orchestrator", "id": "(n\d+)"\}', text))
+        assert sourced, "the snippet teaches the note-sourced finding"
+        assert sourced <= confirmed, sourced - confirmed
+
 
 
 # =============================================================================
