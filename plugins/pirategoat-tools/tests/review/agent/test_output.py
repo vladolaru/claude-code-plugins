@@ -1221,6 +1221,20 @@ class TestSaveDraft:
             _save_draft(b, d)
             err = capsys.readouterr().err
             assert "NOTE: verdict approve with nothing recorded" in err
+            assert "record_check()" in err
+
+    def test_an_abstention_is_not_told_to_record_a_check(self, capsys):
+        """An abstention records nothing by contract, and the builder now
+        refuses a record_check() after it, so the note keeps only the
+        re-run-your-script half of its advice."""
+        with tempfile.TemporaryDirectory() as d:
+            b = ReviewOutputBuilder(pr_id="1", reviewer="security")
+            b.mark_not_applicable("No security-relevant changes")
+            _write_required_assignment(d, "security")
+            _save_draft(b, d)
+            err = capsys.readouterr().err
+            assert "NOTE: verdict not_applicable with nothing recorded" in err
+            assert "record_check()" not in err
 
     @pytest.mark.parametrize("record", [
         lambda b: b.record_check("q", "m", "r"),
@@ -1719,6 +1733,53 @@ class TestNotApplicable:
         with pytest.raises(ValueError, match="finding.*already recorded"):
             b.mark_not_applicable("Agent mistakenly started before checking relevance")
 
+    @pytest.mark.parametrize("record, expected", [
+        (lambda b: b.record_check(
+            "Does the hook still fire?", "grep for the hook name", "yes, at a.php:4"
+        ), r"1 check\(s\) already recorded"),
+        (lambda b: b.add_positive_observation("Clean escaping throughout"),
+         r"1 positive observation\(s\) already recorded"),
+        (lambda b: b.add_observation("a.php", "Two call sites share one helper"),
+         r"1 observation\(s\) already recorded"),
+        (lambda b: b.add_recommendation("important", "Cache the lookup"),
+         r"1 recommendation\(s\) already recorded"),
+    ], ids=["check", "positive_observation", "observation", "recommendation"])
+    def test_raises_if_work_already_recorded(self, record, expected):
+        """An abstention after a check or observation is an approve wearing
+        the not-applicable label; it drops the reviewer from the run's
+        reviewing_agents (20 cases across 14 field runs)."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="perf")
+        record(b)
+        with pytest.raises(ValueError, match=expected):
+            b.mark_not_applicable("No performance defects found")
+
+    @pytest.mark.parametrize("record", [
+        lambda b: b.add_finding("high", "XSS", "f.php", "desc", "rec", line=1),
+        lambda b: b.record_check("q", "m", "r"),
+        lambda b: b.add_observation("a.php", "note"),
+        lambda b: b.add_positive_observation("fine"),
+        lambda b: b.add_recommendation("suggestions", "later"),
+    ], ids=["finding", "check", "observation", "positive_observation", "recommendation"])
+    def test_raises_if_work_is_recorded_after_abstaining(self, record):
+        """The other order is the same contradiction, and it is the one a
+        rehydrated draft can reach without calling mark_not_applicable."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="perf")
+        b.mark_not_applicable("No performance-relevant changes")
+        with pytest.raises(ValueError, match="marked not_applicable"):
+            record(b)
+
+    def test_a_reopened_abstention_still_refuses_work(self, tmp_path):
+        """open() rehydrates the abstention from the persisted draft, so a
+        continuation script cannot record work without calling
+        mark_not_applicable and slip past the other guard."""
+        _write_required_assignment(tmp_path, "perf")
+        b = ReviewOutputBuilder.open(tmp_path, "1", "perf")
+        b.mark_not_applicable("No performance-relevant changes")
+        b.save_draft()
+        reopened = ReviewOutputBuilder.open(tmp_path, "1", "perf")
+        with pytest.raises(ValueError, match="marked not_applicable"):
+            reopened.record_check("q", "m", "r")
+
 
 # =============================================================================
 # Advisory channel — repo-contributed reviewers
@@ -1847,13 +1908,10 @@ class TestAdvisoryChannel:
         assert "verdict_without_advisory" not in output["summary"]
 
     def test_not_applicable_does_not_claim_advisory_suppression(self):
+        """The abstention's summary is the ordinary empty one; nothing is
+        suppressed and no advisory-free verdict is claimed."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
         b.mark_not_applicable("No relevant changes")
-        b.add_finding(
-            severity="critical", title="advisory", file="a.php",
-            description="d", recommendation="r", line=5,
-            channel="advisory",
-        )
 
         output = b.to_dict()
 

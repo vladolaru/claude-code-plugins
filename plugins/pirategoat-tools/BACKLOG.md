@@ -307,14 +307,6 @@ Reconciliation is two acts and one of them is invisible: a single extended-think
 **Deferred because:** it is an experiment, not a fix — whether visible incremental work actually shortens the think is unknown — and it changes the reconciliator's definition, its briefing, and the save channel's expectations about partial ledgers. Handoff 06's severity-floor and orchestrator-note changes also push the reconciliator toward reading rather than re-deciding, so measuring both at once would confound them.
 **Do when:** two field runs after the floor and note changes have landed show the reconciliator's single-turn time unchanged, or a run stalls inside that turn.
 
-### 37. A reviewer can abstain with `mark_not_applicable` after actually reviewing
-
-`performance-reviewer` on PR #66900 recorded one check and one positive observation, found no defect, and then called `builder.mark_not_applicable("No performance defects found…")`. That is an approve wearing the not-applicable label: the reviewer drops out of `reviewing_agents` in the outcome, and the run's coverage understates who looked. `ReviewOutputBuilder.mark_not_applicable()` (`scripts/review/agent/output.py:1013`) refuses the call once a finding exists; it accepts it when only checks or positive observations exist. The protocol wording ("no changes relevant to your domain") is right; the deterministic fix is the symmetric guard, refusing not-applicable once a check or positive observation has been recorded unless scope returned `NO_DOMAIN_FILES`, so no model compliance is needed.
-
-**Evidence:** `.claude/docs/analysis/2026-09-11-claude-two-pr-review-runs-audit.md` § F9 and § Decision critic pass ("F9 has a deterministic option").
-**Deferred because:** one occurrence in two runs, the outcome was still correct, and the guard changes a builder contract every reviewer relies on, so it wants its own small change with the `test_output.py` pins updated together.
-**Do when:** the next change to `mark_not_applicable()` or to the reviewer protocol's Quick Relevance Check, or the second run where a reviewer abstains after recording evidence.
-
 ### 38. The read detector takes a process-substitution token as a file path
 
 `sed -n '1,40p;140,200p' <(git show <sha>:client/reports/fees/index.tsx)` in patterns-reviewer's transcript (PR #12089) put `(git` into `observed_reads.all`. `sed` routes through `_pattern_then_files()` and then `_literal_path_tokens()` (`scripts/analysis/review_transcript.py` ~1634–1640); `_file_operands()` is only the fallback, so the fix belongs in the literal-token walk: a token opening with `<(` or `>(` is a process substitution, not an operand, and everything up to its closing parenthesis belongs to the inner command. One more instance of the two-operand-walk shape recorded in entry 21.

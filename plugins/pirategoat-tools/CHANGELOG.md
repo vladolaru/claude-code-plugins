@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.119.6] - UNRELEASED
+
+### Fixed
+
+- A review can no longer mix an abstention with recorded work in either order: `mark_not_applicable` is refused after a finding, check, observation or recommendation, and recording any of those is refused after an abstention, so a reviewer that looked and found nothing approves and stays in the run's reviewing agents.
+
 ## [1.119.5] - 2026-09-12
 
 ### Changed

@@ -602,6 +602,7 @@ class ReviewOutputBuilder:
         ``verifies`` names the change purpose's Verify items this check settles
         (``["V2"]``); absent when it cites none.
         """
+        self._refuse_after_abstention("record a check")
         if source_reviewers is None:
             source_reviewers = [self.reviewer]
         values = [
@@ -706,6 +707,7 @@ class ReviewOutputBuilder:
         should NOT count toward the verdict.
         When severity_floor is provided, lower severities are promoted to it.
         """
+        self._refuse_after_abstention("add a finding")
         if not 0.0 <= confidence <= 1.0:
             raise ValueError(f"Confidence must be 0.0-1.0, got {confidence}")
         if behavior_evidence is not None and behavior_evidence not in (
@@ -770,6 +772,7 @@ class ReviewOutputBuilder:
         specific line reference. They don't affect the verdict and are
         displayed separately from findings.
         """
+        self._refuse_after_abstention("add an observation")
         self.observations.append({
             "file": file,
             "note": note,
@@ -791,11 +794,13 @@ class ReviewOutputBuilder:
 
     def add_recommendation(self, priority: str, text: str):
         """Add recommendation (priority: immediate, important, suggestions)."""
+        self._refuse_after_abstention("add a recommendation")
         if priority in self.recommendations:
             self.recommendations[priority].append(coerce_text(text))
 
     def add_positive_observation(self, observation: str):
         """Add positive observation."""
+        self._refuse_after_abstention("add a positive observation")
         self.positive_observations.append(coerce_text(observation))
 
     @staticmethod
@@ -997,25 +1002,61 @@ class ReviewOutputBuilder:
             raise ValueError(f"Confidence must be 0.0-1.0, got {score}")
         self.overall_confidence = score
 
-    def mark_not_applicable(self, reason: str):
-        """Mark this review as not applicable — changes not relevant to this domain.
+    def _recorded_work(self) -> Dict[str, int]:
+        """What this review has recorded, by kind, non-zero kinds only.
 
-        Use this when the Quick Relevance Check determines the diff has no
-        changes relevant to this agent's specialty, or when NO_DOMAIN_FILES
-        is returned by scope discovery. Produces a 'not_applicable' verdict
-        so the reconciliator knows the agent abstained rather than endorsed.
+        Findings, checks, observations, positive observations and
+        recommendations are work: each says the reviewer judged the code.
+        `reviewed_file_claims` are not: reading a claimable file's diff is
+        how a reviewer decides relevance, and "I read it, it is not mine"
+        is a legitimate abstention. `assessment` is the reconciliator's,
+        which never abstains.
+        """
+        counts = {
+            "finding": len(self.findings),
+            "check": len(self.checks),
+            "observation": len(self.observations),
+            "positive observation": len(self.positive_observations),
+            "recommendation": sum(len(v) for v in self.recommendations.values()),
+        }
+        return {label: count for label, count in counts.items() if count}
+
+    def _refuse_after_abstention(self, action: str) -> None:
+        """Recording work after `mark_not_applicable` is the same
+        contradiction as abstaining after work, so both orders are refused
+        and a persisted abstention rehydrated by `open()` stays one."""
+        if self._not_applicable:
+            raise ValueError(
+                f"Cannot {action} — this review is marked not_applicable. "
+                "An abstention records no work: abstain only when the diff "
+                "holds nothing for your domain, before recording anything."
+            )
+
+    def mark_not_applicable(self, reason: str):
+        """Mark this review as not applicable — the changes are not relevant to this domain.
+
+        For the Quick Relevance Check, and for the protocol's NO_DOMAIN_FILES
+        step, both of which run on a fresh builder. Produces a
+        'not_applicable' verdict so the reconciliator knows the agent
+        abstained rather than endorsed. Refused once any work is recorded:
+        an abstention after a check or observation is an approve wearing
+        the wrong label, which drops the reviewer from the run's
+        reviewing_agents and understates coverage (20 cases across 14
+        field runs).
         """
         if not reason or not reason.strip():
             raise ValueError(
                 "mark_not_applicable requires a non-empty reason explaining "
                 "why the changes are not relevant to this domain."
             )
-        if self.findings:
+        recorded = self._recorded_work()
+        if recorded:
+            summary = ", ".join(f"{count} {label}(s)" for label, count in recorded.items())
             raise ValueError(
-                "Cannot mark review as not_applicable — "
-                f"{len(self.findings)} finding(s) already recorded. "
-                "An agent that found findings reviewed the code; "
-                "it should not also claim the changes are irrelevant."
+                f"Cannot mark review as not_applicable — {summary} already "
+                "recorded. An agent that recorded work reviewed the code; "
+                "finish with the verdict its findings derive (approve when "
+                "there are none), not with an abstention."
             )
         self._not_applicable = True
         self._skip_reason = reason.strip()
@@ -1033,17 +1074,10 @@ class ReviewOutputBuilder:
         verdict = (
             'not_applicable' if self._not_applicable else derived['verdict']
         )
+        # An abstention has an empty finding list by construction (the
+        # builder refuses work in either order around it), so its summary
+        # is the ordinary empty one.
         summary = derived['summary']
-        if self._not_applicable:
-            # `mark_not_applicable` only refuses to abstain once a finding
-            # is ALREADY recorded; nothing stops a subsequent add_finding
-            # call, so the summary cannot assume an empty finding list here.
-            # An abstaining review makes no advisory-suppression claim
-            # regardless of what was added afterward — the verdict does not
-            # depend on it either way.
-            summary = dict(summary)
-            summary['suppressed_advisory_finding_count'] = 0
-            summary.pop('verdict_without_advisory', None)
 
         result = {
             'pr_id': self.pr_id,
@@ -1175,12 +1209,20 @@ class ReviewOutputBuilder:
             # An approve that records nothing reads downstream as a clean
             # approve. The one seen in the field followed a builder script
             # that raised after its content was added.
+            advice = (
+                "If an earlier builder script raised, re-run the whole script "
+                "with its content, not only the save"
+            )
+            if review["verdict"] != "not_applicable":
+                # An abstention records nothing by contract; only a verdict
+                # that claims a review should say what it checked.
+                advice += (
+                    "; if the review truly found nothing to record, say what "
+                    "you checked with record_check()"
+                )
             print(
                 f"NOTE: verdict {review['verdict']} with nothing recorded — no "
-                "finding, check, observation or positive observation. If an "
-                "earlier builder script raised, re-run the whole script with "
-                "its content, not only the save; if the review truly found "
-                "nothing to record, say what you checked with record_check().",
+                f"finding, check, observation or positive observation. {advice}.",
                 file=sys.stderr,
             )
         unclaimed = list(review["unclaimed_review_files"])
