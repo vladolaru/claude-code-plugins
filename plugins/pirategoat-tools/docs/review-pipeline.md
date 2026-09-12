@@ -36,7 +36,8 @@ Command (thin wrapper: pr-review.md, full-code-review.md, code-review.md)
       ├─ decision-reviewer agent → critic.py --save commits findings + proposal +
       │   a digest-bound STAND/REVISE/ESCALATE marker
       │
-      ├─ Step 10 REVISE: the orchestrator probes each proposal entry and submits
+      ├─ Step 10 REVISE (or STAND with wording corrections): the orchestrator
+      │   probes each proposal entry and submits
       │   verified/refuted ids to critic_adjustments.py adjudicate, which applies
       │   the proposal to the ledger in one locked write
       │
@@ -57,7 +58,7 @@ Before reconciliation, step 8 checks dispatched agents through `review/agents_st
 
 Step 11 is re-entrant by design. The first pass records `publication_pending: true`, fingerprints the exact record and ledger bytes plus the terminal presentation facts, blocks progress, leaves step 11 out of `completed_steps`, and writes no `pipeline-result.json`; a missing `review-report.md` is the expected handoff state, not a degradation. The blocking briefing has the orchestrator author `review-report.md` once from the settled record and re-run step 11. The second pass repeats settlement idempotently, publishes atomically only when settlement still matches the prepared fingerprint and the report is not byte-identical to one already rejected as stale, writes `pipeline-result.json` with that exact `report_path`, closes the handoff, and only then completes the step (bot mode ends; interactive mode routes to step 12). A changed source, an unchanged stale report, or a pre-existing unbound report regenerates the handoff instead of exposing a terminal marker.
 
-The first pass also reads `critic_adjustments.adjudication_state()`: a REVISE proposal never adjudicated is recorded as a degradation, never applied on the orchestrator's behalf. Step-11-owned degradation records carry stable producer codes across the handoff in first-seen order and project back to the public string-list contract; fingerprints use those ordered identities rather than prose. The one mutating measurement, the probe-residue sweep, accumulates removed paths in `worktree-hygiene.json`; a private hash of the sorted unique path set makes any newly swept path invalidate the prepared report without exposing path provenance.
+The first pass also reads `critic_adjustments.adjudication_state()`: a REVISE (or corrections-carrying STAND) proposal never adjudicated is recorded as a degradation, never applied on the orchestrator's behalf. Step-11-owned degradation records carry stable producer codes across the handoff in first-seen order and project back to the public string-list contract; fingerprints use those ordered identities rather than prose. The one mutating measurement, the probe-residue sweep, accumulates removed paths in `worktree-hygiene.json`; a private hash of the sorted unique path set makes any newly swept path invalidate the prepared report without exposing path provenance.
 
 ## Briefing design
 

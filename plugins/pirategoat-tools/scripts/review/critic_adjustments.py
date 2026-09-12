@@ -180,8 +180,9 @@ ADJUDICATION_SCHEMA = 2
 
 # The canonical critic verdict vocabulary, owned here because this module is
 # what commits it: `write_critic_verdict()` is the one writer of the marker,
-# and `REVISE_VERDICT` is the one verdict `adjudicate()` accepts. critic.py
-# and the offline metrics consumer read these rather than respelling them.
+# and `verdict_admits_proposal()` is the one rule for what each verdict may
+# carry. critic.py and the offline metrics consumer read these rather than
+# respelling them.
 CRITIC_VERDICTS = ("STAND", "REVISE", "ESCALATE")
 # Deliberately NOT a member of CRITIC_VERDICTS: it is not a critique outcome,
 # it is the record that no critique happened — pipeline step 10 commits it
@@ -189,9 +190,84 @@ CRITIC_VERDICTS = ("STAND", "REVISE", "ESCALATE")
 # must exclude it; consumers that measure whether a critic ran must not.
 CRITIC_VERDICT_SKIPPED = "SKIPPED"
 VALID_CRITIC_VERDICTS = CRITIC_VERDICTS + (CRITIC_VERDICT_SKIPPED,)
-# The one verdict that sanctions applying adjustments. Everything else —
-# STAND, ESCALATE, SKIPPED, an unrecognized string, a missing file — refuses.
+# The verdict that says something the ladder reads moved. A proposal is
+# adjudicated under REVISE or under a STAND that carries wording corrections;
+# ESCALATE, SKIPPED, an unrecognized string and a missing file carry nothing.
 REVISE_VERDICT = "REVISE"
+# What each verdict may commit. A wording correction changes no severity,
+# scope or membership, so a batch of them rides STAND and is adjudicated like
+# any proposal; REVISE is reserved for a batch that moves something the
+# verdict ladder reads. Before this rule the critic could not return STAND
+# with a reword, and 13 of 13 field runs came back REVISE.
+WORDING_ONLY_ACTIONS = frozenset({"correct"})
+# A `correct` may patch these, and then it is a scope move, not a reword.
+_SCOPE_FIELDS = frozenset({"file", "line"})
+
+
+def entry_moves_ledger(entry):
+    """Whether one adjustment changes something the verdict ladder or the
+    assessment rests on: any action but `correct`, a `correct` that touches
+    a finding's file or line, or any correction of a check, since the
+    record's verifications are evidence the assessment cites."""
+    if not isinstance(entry, dict):
+        return False
+    if entry.get("action") not in WORDING_ONLY_ACTIONS:
+        return True
+    if (entry.get("target") or {}).get("kind") == TARGET_CHECK:
+        return True
+    fields = entry.get("fields")
+    return isinstance(fields, dict) and bool(_SCOPE_FIELDS & set(fields))
+
+
+def _moving_labels(entries):
+    labels = set()
+    for entry in entries:
+        if not entry_moves_ledger(entry):
+            continue
+        action = entry.get("action")
+        if action not in WORDING_ONLY_ACTIONS:
+            labels.add(str(action))
+        elif (entry.get("target") or {}).get("kind") == TARGET_CHECK:
+            labels.add("correct(check)")
+        else:
+            labels.add("correct(file/line)")
+    return sorted(labels)
+
+
+def verdict_admits_proposal(verdict, proposal, *, strict=True):
+    """The one problem with `proposal` under `verdict`, or None.
+
+    Only STAND and REVISE carry a proposal at all. STAND carries wording
+    corrections only; `strict` is the rule the critic is held to at its
+    save channel: REVISE must move something, and a wording-only batch
+    rides STAND. The commit and read sites pass `strict=False` and keep
+    only the safety invariant (nothing under any other verdict, wording
+    only under STAND), so a proposal committed before the rule — recorded
+    run 6e6a is a REVISE of corrections alone — stays readable and
+    adjudicable.
+    """
+    entries = proposal.get("adjustments") if isinstance(proposal, dict) else None
+    entries = [entry for entry in (entries or []) if isinstance(entry, dict)]
+    moving = _moving_labels(entries)
+    if verdict not in ("STAND", REVISE_VERDICT) and entries:
+        return (
+            f"{verdict} carries no proposal; only STAND and REVISE commit "
+            "adjustments, and nothing is adjudicated under any other verdict"
+        )
+    if verdict == "STAND" and moving:
+        return (
+            "STAND may carry only wording corrections (a finding `correct` "
+            f"without file or line); {', '.join(moving)} changes what the "
+            "verdict ladder or the assessment rests on and is a REVISE"
+        )
+    if strict and verdict == REVISE_VERDICT and not entries:
+        return "REVISE requires a non-empty adjustments batch"
+    if strict and verdict == REVISE_VERDICT and not moving:
+        return (
+            "a batch of wording corrections alone rides STAND; REVISE needs a "
+            "severity, scope or membership change"
+        )
+    return None
 
 _PROPOSAL_TOP_LEVEL_KEYS = frozenset({"schema", "adjustments"})
 _PROPOSAL_ENTRY_KEYS = frozenset({"action", "target", "fields", "rationale"})
@@ -602,8 +678,9 @@ def write_critic_verdict(output_dir, verdict, proposal):
     problems = validate_adjustments_document(proposal)
     if problems:
         raise AdjustmentValidationError(problems)
-    if verdict != REVISE_VERDICT and proposal["adjustments"]:
-        raise ValueError(f"{verdict} may not commit a non-empty proposal")
+    problem = verdict_admits_proposal(verdict, proposal, strict=False)
+    if problem:
+        raise ValueError(problem)
     digest = proposal_digest(proposal)
     adjustments_path = artifact_path(output_dir, "critic_adjustments")
     verdict_path = artifact_path(output_dir, "critic_verdict")
@@ -652,10 +729,9 @@ def read_committed_proposal(output_dir):
             "proposal digest mismatch: the proposal changed after its "
             "verdict was committed"
         )
-    if marker["verdict"] != REVISE_VERDICT and proposal["adjustments"]:
-        raise ValueError(
-            f"{marker['verdict']} may not commit a non-empty proposal"
-        )
+    problem = verdict_admits_proposal(marker["verdict"], proposal, strict=False)
+    if problem:
+        raise ValueError(problem)
     return marker["verdict"], proposal
 
 
@@ -1587,6 +1663,9 @@ def _apply_proposal(
     rejected_records = list(ledger.get(REJECTED_ADJUSTMENTS_KEY) or [])
     batch_ids = []
     refuted_count = 0
+    # The assessment and recommendations rest on severities, scope and the
+    # finding set; a batch that moves none of them cannot contradict them.
+    moved = False
     for index, entry in enumerate(proposal["adjustments"]):
         label = f"adjustment[{index}]"
         outcome, reason = decisions.get(
@@ -1602,6 +1681,7 @@ def _apply_proposal(
             })
             refuted_count += 1
             continue
+        moved = moved or entry_moves_ledger(entry)
         action = entry["action"]
         kind = entry["target"]["kind"]
         provenance = {"action": action, "rationale": entry["rationale"]}
@@ -1656,10 +1736,12 @@ def _apply_proposal(
             ledger.setdefault(VERDICT_BEFORE_ADJUSTMENTS_KEY, ledger["verdict"])
             ledger["verdict"] = derived["verdict"]
         ledger[APPLIED_IDS_KEY] = applied_records
-        _invalidate_assessment(ledger, batch_ids)
+        if moved:
+            _invalidate_assessment(ledger, batch_ids)
         if revised_assessment:
             ledger[ASSESSMENT_KEY] = revised_assessment
-        _invalidate_recommendations(ledger, batch_ids)
+        if moved:
+            _invalidate_recommendations(ledger, batch_ids)
         if revised_recommendations is not None:
             ledger["recommendations"] = revised_recommendations
     if refuted_count:
@@ -1688,10 +1770,8 @@ def adjudicate(output_dir, request):
     """
     with atomic_io.output_dir_lock(output_dir):
         verdict, proposal = read_committed_proposal(output_dir)
-        if verdict != REVISE_VERDICT:
-            raise ValueError(
-                f"cannot adjudicate a critic proposal under a {verdict} verdict"
-            )
+        if not proposal["adjustments"]:
+            raise ValueError(f"nothing to adjudicate under a {verdict} verdict")
         known_ids = {
             entry["adjustment_id"] for entry in proposal["adjustments"]
         }

@@ -2098,8 +2098,9 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
             "critic was dispatched but produced no verdict"
         )
 
-    # Report whether the critic's REVISE proposal was ever adjudicated. Step
-    # 10's REVISE briefing has the orchestrator probe each entry and submit
+    # Report whether the critic's proposal was ever adjudicated. Step 10's
+    # briefing, for a REVISE or a STAND that carries wording corrections,
+    # has the orchestrator probe each entry and submit
     # its verified/refuted claims through `adjudicate`, which is the one and
     # only writer that carries them into the ledger. Any orchestrator — bot
     # or interactive — can stop short of that (a crash, an early return, a
@@ -2110,7 +2111,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # decisions nobody chose.
     if (
         read.status != critic_adjustments.FINDINGS_READ_ABSENT
-        and critic_verdict == "REVISE"
+        and critic_verdict in ("STAND", "REVISE")
     ):
         try:
             proposal_state = critic_adjustments.adjudication_state(output_dir)
@@ -2125,8 +2126,8 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
                 _record_step_11_degradation(
                     degradation_records,
                     "critic_adjudication_missing",
-                    "critic REVISE proposal was never adjudicated; the ledger "
-                    "is published without its adjustments",
+                    f"critic {critic_verdict} proposal was never adjudicated; "
+                    "the ledger is published without its adjustments",
                 )
 
     # Re-render the derived artifacts from the FINAL ledger — immediately

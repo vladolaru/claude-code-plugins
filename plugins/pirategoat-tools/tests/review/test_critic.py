@@ -301,13 +301,11 @@ class TestCriticSave:
         assert "adjustments" in out.lower()
         assert [p.name for p in tmp_path.iterdir()] == [findings.name]
 
-    def test_critic_save_rejects_non_revise_with_adjustments(
+    def test_critic_save_rejects_stand_with_a_severity_change(
         self, tmp_path, capsys
     ):
-        """STAND alongside a non-empty batch is the contradiction the
-        apply gate could only quarantine downstream; now rejected at
-        source."""
-        verdict = "STAND"
+        """A batch that moves a severity is a REVISE whatever the critic
+        called it; rejected at source, nothing written."""
         findings = self._write_findings(tmp_path)
         adjustments = self._write_adjustments(tmp_path, [{
             "action": "promote", "target": {"kind": "finding", "id": "f1"},
@@ -315,16 +313,54 @@ class TestCriticSave:
         }])
 
         result = critic_module.run_save(
-            self._args(tmp_path, verdict, findings, adjustments)
+            self._args(tmp_path, "STAND", findings, adjustments)
         )
         out = capsys.readouterr().out
 
         assert result != 0
         assert "REJECTED" in out
-        assert "contradiction" in out.lower()
+        assert "STAND may carry only wording corrections" in out
         assert sorted(p.name for p in tmp_path.iterdir()) == [
             "a.json", "f.md",
         ], "a rejected save must write nothing"
+
+    def test_critic_save_accepts_stand_with_wording_corrections(
+        self, tmp_path, capsys
+    ):
+        """A reword changes nothing the verdict ladder reads, so it rides
+        STAND and is committed as a proposal the orchestrator adjudicates."""
+        findings = self._write_findings(tmp_path)
+        adjustments = self._write_adjustments(tmp_path, [{
+            "action": "correct", "target": {"kind": "finding", "id": "f1"},
+            "fields": {"description": "clearer"}, "rationale": "r",
+        }])
+
+        result = critic_module.run_save(
+            self._args(tmp_path, "STAND", findings, adjustments)
+        )
+        out = capsys.readouterr().out
+
+        assert result == 0, out
+        proposal = json.loads(_artifact(tmp_path, "critic_adjustments").read_text())
+        assert [e["action"] for e in proposal["adjustments"]] == ["correct"]
+        assert json.loads(_artifact(tmp_path, "critic_verdict").read_text())["verdict"] == "STAND"
+
+    def test_critic_save_rejects_revise_with_only_wording_corrections(
+        self, tmp_path, capsys
+    ):
+        findings = self._write_findings(tmp_path)
+        adjustments = self._write_adjustments(tmp_path, [{
+            "action": "correct", "target": {"kind": "finding", "id": "f1"},
+            "fields": {"title": "clearer"}, "rationale": "r",
+        }])
+
+        result = critic_module.run_save(
+            self._args(tmp_path, "REVISE", findings, adjustments)
+        )
+        out = capsys.readouterr().out
+
+        assert result != 0
+        assert "rides STAND" in out
 
     def test_critic_save_without_adjustments_replaces_stale_snapshot(
         self, tmp_path, capsys

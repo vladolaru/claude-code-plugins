@@ -325,13 +325,41 @@ class TestAdjudicateWritesTheLedgerOnce:
         ])
         assert adjudication_state(str(tmp_path)) == "pending"
 
-    def test_non_revise_verdict_cannot_be_adjudicated(self, tmp_path):
+    def test_an_empty_proposal_cannot_be_adjudicated(self, tmp_path):
         write_findings(str(tmp_path), canonical_findings_ledger(("high",)))
         _publish_verdict(tmp_path, "STAND")
 
         assert adjudication_state(str(tmp_path)) == "empty"
-        with pytest.raises(ValueError, match="STAND"):
+        with pytest.raises(ValueError, match="nothing to adjudicate under a STAND"):
             _adjudicate(tmp_path, [])
+
+    def test_a_stand_with_corrections_is_adjudicated(self, tmp_path):
+        """13 of 13 field runs came back REVISE because a reword could ride
+        nothing else; a correct-only batch now rides STAND and is applied
+        the same way."""
+        from review.critic_adjustments import prepare_proposal, write_critic_verdict
+        write_findings(str(tmp_path), canonical_findings_ledger(("high",)))
+        proposal = prepare_proposal({"schema": 2, "adjustments": [
+            {"action": "correct", "target": {"kind": "finding", "id": "f1"},
+             "fields": {"description": "The reworded description."}, "rationale": "r"},
+        ]})
+        write_critic_verdict(str(tmp_path), "STAND", proposal)
+        ids = [entry["adjustment_id"] for entry in proposal["adjustments"]]
+
+        before = _ledger(tmp_path)
+        assert adjudication_state(str(tmp_path)) == "pending"
+        _adjudicate(tmp_path, ids, verified=(0,))
+        assert adjudication_state(str(tmp_path)) == "adjudicated"
+        after = _ledger(tmp_path)
+        assert after["findings"][0]["description"] == "The reworded description."
+        assert read_critic_verdict(str(tmp_path)) == "STAND"
+        # Nothing the ladder or the assessment rests on moved.
+        from review.critic_adjustments import VERDICT_BEFORE_ADJUSTMENTS_KEY
+        assert after["verdict"] == before["verdict"]
+        assert VERDICT_BEFORE_ADJUSTMENTS_KEY not in after
+        assert after["assessment"] == before["assessment"]
+        assert after["recommendations"] == before["recommendations"]
+        assert "invalidated_assessments" not in after
 
     def test_a_tampered_proposal_is_refused(self, tmp_path):
         """The marker commits a digest; an edited proposal is unusable."""
@@ -2575,3 +2603,71 @@ class TestCriticCannotTouchVerifies:
                     "fields": {"verifies": ["V2"]}, "rationale": "No.",
                 }],
             })
+
+
+class TestVerdictAdmitsProposal:
+    """One rule for what each verdict may commit, used by the save, the
+    commit, the read and the adjudication: only STAND and REVISE carry a
+    proposal, STAND carries wording corrections only, REVISE needs a
+    change the verdict ladder reads. A `correct` that touches file or
+    line is a scope move, not a reword."""
+
+    @staticmethod
+    def _proposal(entries):
+        """Rows are an action, an (action, fields) pair, or an
+        (action, fields, target kind) triple; the kind defaults to a finding."""
+        from review.critic_adjustments import ADJUSTMENTS_SCHEMA
+        rows = []
+        for entry in entries:
+            if isinstance(entry, tuple):
+                action, fields, *rest = entry
+                kind = rest[0] if rest else "finding"
+            else:
+                action, fields, kind = entry, {}, "finding"
+            rows.append({"action": action, "fields": fields, "target": {"kind": kind}})
+        return {"schema": ADJUSTMENTS_SCHEMA, "adjustments": rows}
+
+    @pytest.mark.parametrize("verdict, entries, problem", [
+        ("STAND", [], None),
+        ("STAND", ["correct"], None),
+        ("STAND", [("correct", {"description": "d"}), ("correct", {"title": "t"})], None),
+        ("STAND", ["correct", "demote"], "STAND may carry only wording corrections"),
+        ("STAND", ["add"], "STAND may carry only wording corrections"),
+        ("STAND", [("correct", {"file": "a.py", "line": 3})], "correct(file/line) changes what the verdict ladder"),
+        ("STAND", [("correct", {"result": "3 hits"}, "check")], "correct(check) changes what the verdict ladder"),
+        ("REVISE", [("correct", {"result": "3 hits"}, "check")], None),
+        ("REVISE", ["demote"], None),
+        ("REVISE", ["correct", "remove"], None),
+        ("REVISE", [("correct", {"file": "a.py", "line": 3})], None),
+        ("REVISE", [], "REVISE requires a non-empty adjustments batch"),
+        ("REVISE", ["correct"], "rides STAND"),
+        ("ESCALATE", [], None),
+        ("ESCALATE", ["correct"], "ESCALATE carries no proposal"),
+        ("SKIPPED", ["correct"], "SKIPPED carries no proposal"),
+    ])
+    def test_the_rule(self, verdict, entries, problem):
+        from review.critic_adjustments import verdict_admits_proposal
+        result = verdict_admits_proposal(verdict, self._proposal(entries))
+        if problem is None:
+            assert result is None
+        else:
+            assert problem in result
+
+    @pytest.mark.parametrize("verdict, entries, problem", [
+        # The two REVISE clauses relax: recorded run 6e6a is a REVISE of
+        # corrections alone, and the low-level helpers publish an empty one.
+        ("REVISE", ["correct"], None),
+        ("REVISE", [], None),
+        # The safety invariant does not.
+        ("STAND", ["demote"], "STAND may carry only wording corrections"),
+        ("STAND", [("correct", {"file": "a.py", "line": 3})], "changes what the verdict ladder"),
+        ("ESCALATE", ["correct"], "ESCALATE carries no proposal"),
+        ("SKIPPED", ["correct"], "SKIPPED carries no proposal"),
+    ])
+    def test_the_commit_and_read_sites_keep_only_the_safety_invariant(self, verdict, entries, problem):
+        from review.critic_adjustments import verdict_admits_proposal
+        result = verdict_admits_proposal(verdict, self._proposal(entries), strict=False)
+        if problem is None:
+            assert result is None
+        else:
+            assert problem in result

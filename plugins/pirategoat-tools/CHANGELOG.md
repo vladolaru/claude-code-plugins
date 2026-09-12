@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The decision critic's STAND now carries wording corrections and REVISE is reserved for a batch that moves a severity, a scope, a check or the finding set, so the verdict word says whether anything changed; a STAND with corrections is adjudicated the same way a REVISE is.
+- The reconciliator's assessment and recommendations are now withdrawn only when an applied critic adjustment moves a severity, a scope, a check or the finding set, so a verified reword leaves them standing.
 - The reconciliator can now file a finding whose only source is an orchestrator note it confirmed, so a defect the orchestrator found in the diff reaches the ledger at reconciliation instead of arriving a stage later as a critic addition with no source.
 - The step-8 briefing now tells the orchestrator to register a Verify item it settled by reading the code as a note, so the reconciliator's confirmation credits the item in the review record instead of leaving it unverified for the decision critic to redo.
 

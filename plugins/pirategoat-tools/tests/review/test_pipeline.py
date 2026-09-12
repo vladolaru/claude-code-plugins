@@ -2395,6 +2395,9 @@ class TestStep10DecisionCritic:
         assert any(phrase in lower for phrase in [
             "no changes", "no action", "proceed to writing",
         ]), "STAND must convey no report edits needed"
+        # A STAND may carry wording corrections; they are adjudicated like
+        # a REVISE batch, and the briefing says so.
+        assert "wording corrections" in lower
 
     def test_escalate_instructs_override_to_comment(self, mod, tmp_path):
         """ESCALATE verdict instructions must say to override verdict to COMMENT."""

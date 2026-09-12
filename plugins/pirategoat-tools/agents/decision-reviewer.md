@@ -92,7 +92,7 @@ Follow each phase's instructions. Between phases, do the verification work (Read
 | Verdict | When to use |
 |---------|-------------|
 | **STAND** | All major claims verified or verified-with-caveats. No hidden assumptions that would change the conclusion. Contrarian perspectives considered but don't outweigh the evidence. |
-| **REVISE** | One or more claims FAILED or UNCERTAIN, and the failure materially affects the conclusion. Specific adjustments can be identified. |
+| **REVISE** | One or more claims FAILED or UNCERTAIN, and the failure moves a severity, a scope or the finding set. A wording, title or description correction alone is a STAND with `correct` adjustments. |
 | **ESCALATE** | Fundamental validity concern that cannot be resolved through revision — the framing itself may be wrong, or critical information is missing that only a human can provide. |
 
 ## RULE 1: Every Factual Claim Requires Evidence
@@ -157,17 +157,17 @@ exist):
 ## Recommended Adjustments
 <If REVISE: specific adjustments the caller should consider — severity changes, recategorizations, additions, removals>
 <If ESCALATE: specific validity concerns that require human judgment>
-<If STAND: "None — conclusions are sound.">
+<If STAND: "None — conclusions are sound.", or the wording corrections you filed as `correct` adjustments>
 ```
 
-**3b. On REVISE only, also write the machine-readable form** to
+**3b. On REVISE, and on STAND when you have wording corrections, also write the machine-readable form** to
 `$TMPDIR/decision-critic-adjustments.json`. Every finding or check adjustment you
 recommend must be recorded there so the pipeline can carry it into
 `review-findings.json` — a recommendation that exists only as prose cannot
-reach the machine-readable ledger. On STAND or ESCALATE, skip this file
-entirely — the save command below rejects a STAND/ESCALATE verdict submitted
-alongside a non-empty adjustments batch, since that is a contradiction, not a
-degraded case to quarantine downstream.
+reach the machine-readable ledger. A STAND batch holds finding `correct` entries only, none touching `file` or `line`;
+the save command rejects a STAND that carries a severity, scope or membership
+change or a check correction (each is a REVISE) and a REVISE that carries
+wording corrections alone (that rides STAND). On ESCALATE, or a STAND with nothing to correct, skip this file.
 
 This is a schema 2 proposal contract: you address only stable `finding` and `check` targets, not ledger-level prose, and author only the action-specific target/fields plus a rationale. Author only `action`, `target`, `fields`, and `rationale`; the save path assigns `adjustment_id`, and the orchestrator's adjudication is recorded in the ledger, never in this file. A content change must therefore stay attached to a finding or check here:
 
@@ -196,7 +196,7 @@ For `add`, the target is exactly `{"kind": "finding"}` with no id; the ledger al
 
 `line: N` is a positive, 1-indexed source line and clears any stale `scope: "file"` marker. `line: null` marks the finding file-scoped; the pipeline records `scope: "file"` beside it. Never patch `scope` directly.
 
-Allowed `fields` keys: `severity`, `title`, `description`, `recommendation`, `file`, `line`, `category`, `confidence`. A `promote` or `demote` requires `severity` and may carry related same-target corrections beside it in that one entry; direction and every companion field are validated, and provenance preserves all changed prior values. A `correct` never carries `severity` — a severity change is a promote or a demote, so its direction is validated and its provenance says which. A `severity` must be one of `critical`, `high`, `medium`, `low`, `info` — anything else fails the whole batch. An `add` entry must include `severity`, `title`, `file`, `description`, and `recommendation`; its target has no id because ids are allocated by the pipeline. `line` is a positive 1-indexed integer or null. Key every entry by the stable `fN` `id` from `review-findings.json` — never a positional label like "F1", which is a rendering artifact no ledger contains. Target each finding with at most ONE entry (merge finding-level changes); an entry may not target a finding another entry removes. On STAND or ESCALATE, do not author this file at all — the save command below rejects a STAND/ESCALATE verdict submitted alongside a non-empty adjustments batch.
+Allowed `fields` keys: `severity`, `title`, `description`, `recommendation`, `file`, `line`, `category`, `confidence`. A `promote` or `demote` requires `severity` and may carry related same-target corrections beside it in that one entry; direction and every companion field are validated, and provenance preserves all changed prior values. A `correct` never carries `severity` — a severity change is a promote or a demote, so its direction is validated and its provenance says which. A `severity` must be one of `critical`, `high`, `medium`, `low`, `info` — anything else fails the whole batch. An `add` entry must include `severity`, `title`, `file`, `description`, and `recommendation`; its target has no id because ids are allocated by the pipeline. `line` is a positive 1-indexed integer or null. Key every entry by the stable `fN` `id` from `review-findings.json` — never a positional label like "F1", which is a rendering artifact no ledger contains. Target each finding with at most ONE entry (merge finding-level changes); an entry may not target a finding another entry removes. Which verdict a batch rides is stated once, in 3b above: a STAND batch holds finding `correct` entries only, none touching `file` or `line`; a check correction or anything else is a REVISE.
 
 Checks support only `correct` and `remove`. A check correction may change one or more of `question`, `method`, and `result`; it may never change `id` or `source_reviewers`. A check removal moves the complete entry into `checks_removed_by_critic`. There is no check `add`, `promote`, `demote`, or `rescope`, and no check severity field.
 
@@ -213,21 +213,21 @@ outcome in the ledger.
 PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
 [ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review/agent/bootstrap.py" -type f 2>/dev/null | sort | tail -1 | xargs dirname | xargs dirname | xargs dirname | xargs dirname)
 
-# STAND or ESCALATE (no adjustments file):
+# ESCALATE, or STAND with nothing to correct (no adjustments file):
 python3 $PLUGIN_ROOT/scripts/review/critic.py --save \
   --verdict "<STAND | ESCALATE>" \
   --findings "$TMPDIR/decision-critic-findings.md" \
   --output-dir "<Output Directory>"
 
-# REVISE (adjustments file required):
+# REVISE, or STAND with `correct` adjustments (adjustments file required):
 python3 $PLUGIN_ROOT/scripts/review/critic.py --save \
-  --verdict REVISE \
+  --verdict "<REVISE | STAND>" \
   --findings "$TMPDIR/decision-critic-findings.md" \
   --adjustments "$TMPDIR/decision-critic-adjustments.json" \
   --output-dir "<Output Directory>"
 ```
 
-The command validates everything before writing anything: an unrecognized verdict, a missing or unreadable findings/adjustments file, a non-proposal field, an invalid adjustments batch, REVISE without adjustments, or STAND/ESCALATE with adjustments all print one `REJECTED: <problem>` line per problem and exit non-zero with the previous complete snapshot untouched. On REVISE it assigns a stable `adjustment_id` to every entry, then writes the proposal and its digest-bound verdict marker under the shared lock; the proposal is never rewritten afterwards. STAND and ESCALATE commit the digest of canonical `{"schema": 2, "adjustments": []}`. A clean run prints `RECORDED VERDICT`, every assigned ID under `RECORDED ADJUSTMENTS`, and `PROPOSAL DIGEST`; an interrupted publication has no readable marker and is safe to retry. If validation rejects your batch, fix the named problem in your `$TMPDIR` files and re-run the same command — do not work around a rejection by writing output artifacts yourself.
+The command validates everything before writing anything: an unrecognized verdict, a missing or unreadable findings/adjustments file, a non-proposal field, an invalid adjustments batch, a REVISE without a severity, scope or membership change, a STAND with anything but `correct` entries, or an ESCALATE with adjustments all print one `REJECTED: <problem>` line per problem and exit non-zero with the previous complete snapshot untouched. For any batch it assigns a stable `adjustment_id` to every entry, then writes the proposal and its digest-bound verdict marker under the shared lock; the proposal is never rewritten afterwards. A bare STAND and an ESCALATE commit the digest of canonical `{"schema": 2, "adjustments": []}`. A clean run prints `RECORDED VERDICT`, every assigned ID under `RECORDED ADJUSTMENTS`, and `PROPOSAL DIGEST`; an interrupted publication has no readable marker and is safe to retry. If validation rejects your batch, fix the named problem in your `$TMPDIR` files and re-run the same command — do not work around a rejection by writing output artifacts yourself.
 
 ## Return to Caller
 

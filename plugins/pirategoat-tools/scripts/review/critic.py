@@ -218,19 +218,25 @@ def get_step_guidance(
                 "- Challenges from Step 3 are minor or the review already addresses them",
                 "- The verdict is proportionate to the actual issues found",
                 "",
-                "REVISE when ANY of these apply:",
-                "- One or more FAILED factual claims that materially affect a finding",
-                "- Severity is materially wrong on a finding that changes the verdict tier",
-                "- The review omits important context that would change how a human interprets it",
-                "- Specific adjustments can be identified (not just \"could be better\")",
+                "REVISE when ANY of these apply — each names a change the verdict ladder reads:",
+                "- One or more FAILED factual claims that materially affect a finding (a removal or demotion follows)",
+                "- Severity is materially wrong on a finding (a promotion or demotion follows)",
+                "- A verified defect in the diff is missing (an addition follows), or a finding sits on the wrong lines (a rescope follows)",
+                "",
+                "A finding's wording, title, recommendation or description correction changes none "
+                "of those: file it as a `correct` adjustment under STAND. A STAND with corrections is "
+                "adjudicated exactly like a REVISE; the verdict word reports whether anything moved. "
+                "A correction that moves a finding's file or line, or corrects a check, is a REVISE: "
+                "the assessment rests on scope and on the record's verifications.",
                 "",
                 "ESCALATE when ANY of these apply:",
                 "- Multiple FAILED claims suggesting systematic quality issues",
                 "- The review may be actively misleading about what the code does",
                 "- Fundamental framing problem that revision cannot fix",
                 "",
-                "BORDERLINE: When between STAND and REVISE, favor REVISE (cheaper to refine "
-                "than to ship an unfair review).",
+                "BORDERLINE: a proposal is REVISE if and only if it moves a severity, a scope, a "
+                "check or the finding set. Do not upgrade a clean review to REVISE to carry a "
+                "reword, and do not soften a needed demotion to keep STAND.",
                 "",
                 "A refuted factual claim rarely lives in one place. When a demotion or "
                 "removal rests on one, grep the ledger's `checks[].result` and "
@@ -243,8 +249,9 @@ def get_step_guidance(
                 "using the format specified in the agent definition; never "
                 f"write `{artifact_path(output_dir, 'critic_findings')}` directly.",
                 "Invoke `critic.py --save` for the final STAND, REVISE, or "
-                "ESCALATE verdict. Pass the temp adjustments file only for "
-                "REVISE, as specified in the agent definition.",
+                "ESCALATE verdict. Pass the temp adjustments file for REVISE, "
+                "and for a STAND that carries `correct` entries; never for "
+                "ESCALATE.",
                 "",
                 state_requirement,
             ],
@@ -355,7 +362,7 @@ def run_save(args):
     Every problem is collected before anything is decided, the same
     all-or-nothing style `critic_adjustments.prepare_proposal()` and
     `adjudicate()` use: a bad verdict, a missing findings file, an
-    invalid adjustments batch, and a REVISE/STAND contradiction are all
+    invalid adjustments batch, and a verdict that does not admit its batch are all
     independent facts, and reporting only the first would make a caller
     fix one problem at a time instead of seeing the whole rejection at
     once. Proposal normalization assigns the stable adjustment IDs before
@@ -395,20 +402,17 @@ def run_save(args):
                 problems.extend(error.problems)
     adjustments_doc = adjustments if isinstance(adjustments, dict) else {}
     entries = adjustments_doc.get("adjustments") or []
-    if verdict == "REVISE" and not entries:
-        problems.append("REVISE requires a non-empty adjustments batch")
-    if verdict in ("STAND", "ESCALATE") and entries:
-        problems.append(
-            f"{verdict} with adjustments is a contradiction — adjustments "
-            f"are a REVISE-only channel"
-        )
+    if verdict in critic_adjustments.CRITIC_VERDICTS:
+        problem = critic_adjustments.verdict_admits_proposal(verdict, adjustments_doc)
+        if problem:
+            problems.append(problem)
 
     if problems:
         for p in problems:
             print(f"REJECTED: {p}")
         return 1
 
-    if verdict != "REVISE":
+    if not entries:
         adjustment_snapshot = critic_adjustments.empty_proposal()
     od = args.output_dir
     with atomic_io.output_dir_lock(od):
@@ -469,7 +473,7 @@ def main():
         "--adjustments",
         type=str,
         default=None,
-        help="Save mode: path to the adjustments JSON (REVISE only)",
+        help="Save mode: path to the adjustments JSON (REVISE, or STAND with `correct` entries)",
     )
     parser.add_argument(
         "--step-number",

@@ -2129,14 +2129,14 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         "write a canonical `decision-critic-*` artifact directly."
     )
     actions.append(
-        "On REVISE, also author every finding or check adjustment in "
+        "On REVISE, and on a STAND that carries wording corrections, also "
+        "author every finding or check adjustment in "
         f"`$TMPDIR/{_artifact_name('critic_adjustments')}` and pass it to the "
-        "same `critic.py --save` command, "
-        "per your agent instructions. "
-        "On STAND or ESCALATE, invoke that command without an adjustments "
-        "file. A recommendation that exists only as prose cannot reach "
-        "the machine-readable ledger, while a raw write bypasses its "
-        "source-bound commit."
+        "same `critic.py --save` command, per your agent instructions; a "
+        "bare STAND or an ESCALATE invokes the command without an "
+        "adjustments file. A recommendation that exists only as prose "
+        "cannot reach the machine-readable ledger, while a raw write "
+        "bypasses its source-bound commit."
     )
     actions.append("```")
     actions.append("")
@@ -2155,7 +2155,7 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         "**You write nothing here.** That file is the critic's own "
         "artifact and it already exists; a second, hand-written copy would "
         "be an unvalidated writer of a file three things depend on — the "
-        "REVISE gate inside the adjustments applier, step 11's derived "
+        "admission gate inside the adjustments applier, step 11's derived "
         "verdict, and the critic's measured duration, which is keyed on "
         "this file's mtime. A mistranscription would overwrite a "
         "channel-validated verdict with a typo."
@@ -2171,8 +2171,11 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append("Act on the critic's verdict:")
     actions.append("")
     actions.append(
-        "**STAND** — No changes needed. The review stands as reconciled; "
-        "proceed to the next step."
+        "**STAND** — No changes to severities or verdict; the review stands "
+        "as reconciled. If the critic filed wording corrections (`correct` "
+        "entries), adjudicate them exactly as under REVISE below; the "
+        "assessment and recommendations stand, since nothing they rest on "
+        "moved. Then proceed to the next step."
     )
     actions.append("")
     actions.append(
@@ -2289,8 +2292,8 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         f"saved one, and written nothing verdict-shaped yourself. If the "
         f"critic produced no verdict, that file is absent and stays "
         f"absent — step 11 reports it.",
-        f"On REVISE: `{_artifact_display(od, 'review_findings_json')}` carries the applied "
-        f"adjustments. Nothing else needs syncing — step 11 re-assembles "
+        f"On REVISE, or a STAND with corrections: `{_artifact_display(od, 'review_findings_json')}` "
+        f"carries the applied adjustments. Nothing else needs syncing — step 11 re-assembles "
         f"the record from that ledger before the report is written.",
     ]
 
