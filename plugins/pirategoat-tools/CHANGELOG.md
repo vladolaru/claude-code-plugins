@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.119.6] - UNRELEASED
 
+### Changed
+
+- The step-8 briefing now tells the orchestrator to register a Verify item it settled by reading the code as a note, so the reconciliator's confirmation credits the item in the review record instead of leaving it unverified for the decision critic to redo.
+
 ### Fixed
 
 - A reviewer whose scope matches no changed file no longer has to write its own abstention: bootstrap records and finalizes the `not_applicable` review, prints its path, and the reviewer returns `STATUS: FINISHED`, so an empty-scope dispatch can no longer sit as running until the timeout.

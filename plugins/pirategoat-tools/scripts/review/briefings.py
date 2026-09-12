@@ -1573,7 +1573,12 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
         "findings you believe describe one concern, or any fact you want "
         "weighed goes into the context as a note, BEFORE dispatch, stated as "
         "a claim, so the reconciliator must confirm or refute it with "
-        "evidence rather than adopt it:"
+        "evidence rather than adopt it. A Verify item you settled yourself by "
+        "reading the code is a note too, opening with its id (\"V3: wc-csv is "
+        "registered only on admin_enqueue_scripts, WCAdminAssets.php:50\"); "
+        "the reconciliator's confirmation then cites `verifies=[\"V3\"]` and "
+        "the record credits the item instead of leaving it unverified for the "
+        "decision critic to redo:"
     )
     actions.append("```bash")
     actions.append(

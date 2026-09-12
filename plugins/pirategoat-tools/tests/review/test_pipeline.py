@@ -1560,6 +1560,10 @@ class TestStep8Reconcile:
         assert f'--output-dir "{tmp_path}" --note' in text
         assert "stated as a claim" in text
         assert "BEFORE dispatch" in text
+        # b9c0: four Verify items the orchestrator settled by reading the
+        # code stayed "unverified" because notes were described for
+        # concerns only.
+        assert "Verify item" in text and "verifies=" in text
 
     def test_change_purpose_is_rendered_exactly_once_in_step_8(self, mod, tmp_path):
         """It is in the context already (`change_purpose`); the situation
