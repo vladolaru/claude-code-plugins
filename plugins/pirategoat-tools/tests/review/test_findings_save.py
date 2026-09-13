@@ -1354,3 +1354,18 @@ class TestNoteSourcedFindings:
         code, out = _save(tmp_path, doc, capsys)
         assert code == 1
         assert "unknown source orchestrator:n9" in out
+
+    def test_a_null_finding_is_rejected_not_crashed_on(self, tmp_path, capsys):
+        """The accounting and stamping passes skip a malformed entry so the
+        canonical validator can name it; the note-sourced bound must skip
+        it too instead of raising before that validator runs."""
+        reviews = _reviews(**{"security-review": (1, ["grep"])})
+        _write_context(tmp_path, reviews)
+        # Passed as an override so the fixture recomputes the drops: the
+        # ledger is accounted-for and the null entry reaches the bound.
+        doc = _valid_findings(context=reviews, findings=[None])
+        code, out = _save(tmp_path, doc, capsys)
+        assert code == 1
+        assert "review finding 0 must be an object" in out
+        assert not (tmp_path / "review-findings.json").exists()
+

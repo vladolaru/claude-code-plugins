@@ -633,9 +633,11 @@ def validate_findings(payload, context):
     # Every concern comes from a reviewer finding or a confirmed note the
     # ledger turned into a finding, so the population a grouping can reach
     # is the reviewer input plus the notes that became findings.
+    findings = payload.get("findings")
     note_sourced = {
         entry["id"]
-        for finding in payload.get("findings") or []
+        for finding in (findings if isinstance(findings, list) else [])
+        if isinstance(finding, dict)
         for entry in (finding.get("sources") or [])
         if isinstance(entry, dict) and entry.get("reviewer") == NOTE_SOURCE_REVIEWER
     }
