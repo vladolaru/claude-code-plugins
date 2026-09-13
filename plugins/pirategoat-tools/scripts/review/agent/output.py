@@ -1026,13 +1026,33 @@ class ReviewOutputBuilder:
     def _refuse_after_abstention(self, action: str) -> None:
         """Recording work after `mark_not_applicable` is the same
         contradiction as abstaining after work, so both orders are refused
-        and a persisted abstention rehydrated by `open()` stays one."""
+        and a persisted abstention rehydrated by `open()` stays one until
+        `withdraw_abstention` lifts it."""
         if self._not_applicable:
             raise ValueError(
                 f"Cannot {action} — this review is marked not_applicable. "
                 "An abstention records no work: abstain only when the diff "
-                "holds nothing for your domain, before recording anything."
+                "holds nothing for your domain, before recording anything. "
+                "If a closer read found work after all, call "
+                "withdraw_abstention() first, then record it."
             )
+
+    def withdraw_abstention(self) -> None:
+        """Lift an abstention so the review can record work.
+
+        The explicit way back for a reviewer that marked the diff not
+        applicable, saved, and then found something on a closer read: the
+        guards refuse work in either order around an abstention, and a
+        persisted one would otherwise dead-end the review, since the draft
+        is never edited by hand.
+        """
+        if not self._not_applicable:
+            raise ValueError(
+                "Cannot withdraw an abstention — this review is not marked "
+                "not_applicable."
+            )
+        self._not_applicable = False
+        self._skip_reason = None
 
     def mark_not_applicable(self, reason: str):
         """Mark this review as not applicable — the changes are not relevant to this domain.

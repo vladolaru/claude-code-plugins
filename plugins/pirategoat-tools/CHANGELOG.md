@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A reviewer whose scope matches no changed file no longer has to write its own abstention: bootstrap records and finalizes the `not_applicable` review, prints its path, and the reviewer returns `STATUS: FINISHED`, so an empty-scope dispatch can no longer sit as running until the timeout.
 - `dispatch_adjust.py` refuses to force-dispatch an agent the planner skipped for having no files in its domain, and refuses to skip an agent that has already started; each refusal names the route that works (a step-8 note, or waiting for the reviewer).
-- A review can no longer mix an abstention with recorded work in either order: `mark_not_applicable` is refused after a finding, check, observation or recommendation, and recording any of those is refused after an abstention, so a reviewer that looked and found nothing approves and stays in the run's reviewing agents.
+- A review can no longer mix an abstention with recorded work in either order: `mark_not_applicable` is refused after a finding, check, observation or recommendation, and recording any of those is refused after an abstention, so a reviewer that looked and found nothing approves and stays in the run's reviewing agents; `withdraw_abstention()` is the explicit way back for a reviewer that abstained and then found work on a closer read.
 
 ## [1.119.5] - 2026-09-12
 

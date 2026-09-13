@@ -1780,6 +1780,37 @@ class TestNotApplicable:
         with pytest.raises(ValueError, match="marked not_applicable"):
             reopened.record_check("q", "m", "r")
 
+    def test_the_refusal_names_the_way_back(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="perf")
+        b.mark_not_applicable("No performance-relevant changes")
+        with pytest.raises(ValueError, match="withdraw_abstention"):
+            b.record_check("q", "m", "r")
+
+    def test_a_withdrawn_abstention_reopens_the_review_for_work(self, tmp_path):
+        """A reviewer that abstained, saved, and then read closer has a
+        route back: the withdrawal is explicit, and it survives the draft
+        round-trip so the finding it then records reaches reconciliation."""
+        _write_required_assignment(tmp_path, "perf")
+        b = ReviewOutputBuilder.open(tmp_path, "1", "perf")
+        b.mark_not_applicable("No performance-relevant changes")
+        b.save_draft()
+        reopened = ReviewOutputBuilder.open(tmp_path, "1", "perf")
+        reopened.withdraw_abstention()
+        reopened.add_finding(
+            "high", "N+1 query", "src/orders.php",
+            "Loads each order in a loop.", "Batch the lookup.", line=12,
+        )
+        reopened.save_draft()
+        saved = ReviewOutputBuilder.open(tmp_path, "1", "perf").to_dict()
+        assert saved["verdict"] == "request_changes"
+        assert "skip_reason" not in saved
+        assert len(saved["findings"]) == 1
+
+    def test_withdrawing_without_an_abstention_is_refused(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="perf")
+        with pytest.raises(ValueError, match="not marked not_applicable"):
+            b.withdraw_abstention()
+
 
 # =============================================================================
 # Advisory channel — repo-contributed reviewers

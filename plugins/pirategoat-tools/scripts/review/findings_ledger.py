@@ -206,6 +206,7 @@ class FindingsLedgerBuilder(ReviewOutputBuilder):
     claim_files_reviewed = _no_lifecycle
     retract_reviewed_file_claims = _no_lifecycle
     mark_not_applicable = _no_lifecycle
+    withdraw_abstention = _no_lifecycle
 
     def _marker_name(self) -> str:
         """The ledger has no assignment, so it names its own marker."""

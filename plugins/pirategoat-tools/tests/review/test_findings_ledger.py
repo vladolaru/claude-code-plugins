@@ -88,7 +88,7 @@ def test_ledger_requires_reconciliation_before_serializing(tmp_path):
 def test_ledger_has_no_reviewer_lifecycle(tmp_path):
     """Matched on the message: an inherited signature can raise TypeError
     of its own, which would pass this test without any override at all.
-    One representative stands for the four lifecycle names bound to the
+    One representative stands for the five lifecycle names bound to the
     same `_no_lifecycle` function object; `open` is the other binding
     below, a classmethod that calls `_no_lifecycle()` directly."""
     builder = FindingsLedgerBuilder(pr_id="42", output_dir=str(tmp_path))
