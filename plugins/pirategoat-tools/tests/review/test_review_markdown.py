@@ -523,7 +523,7 @@ class TestAssessmentProvenance:
 
     The reconciler writes it; the decision critic then mutates the findings
     it summarizes. The critic's vocabulary reaches every finding but no
-    ledger-level prose, so a withdrawn or demoted finding described in the
+    ledger-level prose, so a removed or demoted finding described in the
     Assessment survives every correction channel — the rendered file
     contradicting the list printed beneath it.
     """
@@ -552,7 +552,7 @@ class TestAssessmentProvenance:
         # An explicit absence, not a pointer at a file nobody may open: an
         # invalidated-and-unreplaced assessment says it has no current one.
         assert "no current assessment" in rendered.lower()
-        # The retracted text is never presented as current.
+        # The invalidated text is never presented as current.
         assert "Old claim." not in rendered
 
     ASSESSMENT_ABSENT_CASES = (
@@ -620,7 +620,7 @@ class TestAssessmentProvenance:
         assert "- `refuted-one` — refuted" in rendered
         assert "- `refuted-two` — refuted" in rendered
 
-    def test_a_replacement_is_not_attributed_to_the_reconciler(self):
+    def test_a_revised_assessment_is_not_attributed_to_the_reconciler(self):
         """Moved from `test_critic_adjustments.py` (fix 554723eb)."""
         data = _reconciliator_findings("low", "Minor problem",
             assessment="After spot-checking: guarded upstream.",
@@ -631,6 +631,7 @@ class TestAssessmentProvenance:
         )
         rendered = render_markdown(data)
         assert "After spot-checking: guarded upstream." in rendered
+        assert "*Revised assessment, installed after the critic adjustments applied.*" in rendered
         assert "not adjusted by the decision critic" not in rendered
 
     def test_malformed_decision_records_are_ignored(self):

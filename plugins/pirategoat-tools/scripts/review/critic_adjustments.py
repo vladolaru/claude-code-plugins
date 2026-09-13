@@ -130,21 +130,21 @@ OUTCOME_REFUTED = "refuted"
 OUTCOME_NOT_CHECKED = "not_checked"
 OUTCOMES = (OUTCOME_VERIFIED, OUTCOME_REFUTED, OUTCOME_NOT_CHECKED)
 
-# The orchestrator's post-critic assessment, submitted with the adjudication
-# request. An applying batch that moves a severity, a scope, a check or the
-# finding set invalidates the reconciler's assessment (see
-# INVALIDATED_ASSESSMENTS_KEY below), and without a replacement a REVISE run
+# The orchestrator's revised assessment, submitted with the adjudication
+# request. An applied batch that moves the ledger (`entry_moves_ledger`)
+# invalidates the reconciler's assessment (see
+# INVALIDATED_ASSESSMENTS_KEY below), and without a revised one a REVISE run
 # published a ledger whose Assessment section was a pointer to prose only a
 # human could read. This is that assessment's machine-readable seat: on
 # apply it BECOMES the ledger's assessment, with the invalidation record
 # left intact beside it. A wording-only batch leaves the assessment standing,
 # so the key is optional there; when supplied anyway (a verified correction
-# the assessment restates), it withdraws the prior the same way.
+# the assessment restates), it invalidates the prior the same way.
 REVISED_ASSESSMENT_KEY = "revised_assessment"
 
 # Recommendations are ledger-level prose the critic cannot address directly;
-# a moving batch withdraws them, and a supplied replacement withdraws them
-# under any batch.
+# a batch that moves the ledger invalidates them, and supplied revised
+# recommendations invalidate them under any applied batch.
 REVISED_RECOMMENDATIONS_KEY = "revised_recommendations"
 INVALIDATED_RECOMMENDATIONS_KEY = "invalidated_recommendations"
 
@@ -202,9 +202,9 @@ REVISE_VERDICT = "REVISE"
 # scope or membership, so a batch of them rides STAND and is adjudicated like
 # any proposal; REVISE is reserved for a batch that moves something the
 # verdict ladder reads. Before this rule the critic could not return STAND
-# with a reword, and 13 of 13 field runs came back REVISE.
+# with a wording correction, and 13 of 13 field runs came back REVISE.
 WORDING_ONLY_ACTIONS = frozenset({"correct"})
-# A `correct` may patch these, and then it is a scope move, not a reword.
+# A `correct` may patch these, and then it is a scope move, not a wording correction.
 _SCOPE_FIELDS = frozenset({"file", "line"})
 
 
@@ -318,7 +318,7 @@ FindingsRead = collections.namedtuple(
 #
 # The pipeline cannot re-derive that prose (it is LLM output, not a
 # projection of the findings), so a batch that moves the ledger, or a
-# replacement the orchestrator supplies, invalidates it rather than leaving
+# revised assessment the orchestrator supplies, invalidates it rather than leaving
 # it to contradict the ledger it summarizes. Invalidated, not
 # deleted: the text moves here beside the ids of the decisions that
 # invalidated it, the same way a removed finding moves into
@@ -1838,15 +1838,15 @@ def adjudicate(output_dir, request):
         }
 
 
-REPLACEMENT_NOT_INSTALLED = "not installed (every adjustment refuted)"
+REVISED_NOT_INSTALLED = "not installed (every adjustment refuted)"
 
 
-def _replacement_echo(supplied, applied):
-    """`present`, `absent`, or the not-installed note for a replacement
+def _revised_echo(supplied, applied):
+    """`present`, `absent`, or the not-installed note for revised text
     that rode a batch the orchestrator refuted whole."""
     if not supplied:
         return "absent"
-    return "present" if applied else REPLACEMENT_NOT_INSTALLED
+    return "present" if applied else REVISED_NOT_INSTALLED
 
 
 def adjudication_state(output_dir):
@@ -1899,16 +1899,16 @@ def main():
         f"REFUTED: {counts[OUTCOME_REFUTED]} | "
         f"NOT_CHECKED: {counts[OUTCOME_NOT_CHECKED]}"
     )
-    # Echo what the ledger now holds, not what the request carried: a
-    # replacement rides the applied batch, so a wholly refuted one installs
+    # Echo what the ledger now holds, not what the request carried: revised
+    # text rides the applied batch, so a wholly refuted one installs
     # nothing and the reconciler's prose stands.
     print(
         "REVISED ASSESSMENT: "
-        + _replacement_echo(bool(request.get(REVISED_ASSESSMENT_KEY)), result["applied"])
+        + _revised_echo(bool(request.get(REVISED_ASSESSMENT_KEY)), result["applied"])
     )
     print(
         "REVISED RECOMMENDATIONS: "
-        + _replacement_echo(
+        + _revised_echo(
             request.get(REVISED_RECOMMENDATIONS_KEY) is not None, result["applied"]
         )
     )

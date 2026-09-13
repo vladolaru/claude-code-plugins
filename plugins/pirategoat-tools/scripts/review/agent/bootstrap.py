@@ -41,7 +41,7 @@ if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
 from review.reviewer_names import derive_reviewer_name
-from review.agent.output import RecordedAbstention, record_no_domain_files_review
+from review.agent.output import NotApplicableReview, record_no_domain_files_review
 from review.agent.review_assignment import ASSIGNMENT_SCHEMA, derive_reviewed_files
 from review.atomic_io import atomic_write_json, atomic_write_text
 from review.change_purpose import parse_change_purpose
@@ -1331,7 +1331,7 @@ def deliver_briefing(
     agent_name: str,
     plugin_root: str,
     status: str,
-    recorded_review: Optional[RecordedAbstention] = None,
+    recorded_review: Optional[NotApplicableReview] = None,
 ) -> str:
     """Write one reviewer's briefing to the run directory, return the stub.
 

@@ -636,15 +636,15 @@ def validate_findings(payload, context):
     # is the reviewer input plus the findings only a note sourced; a note
     # merged beside a reviewer source is that reviewer's concern, not one more.
     findings = payload.get("findings")
-    note_only = 0
+    note_only_findings = 0
     for finding in (findings if isinstance(findings, list) else []):
         sources = finding.get("sources") if isinstance(finding, dict) else None
         if isinstance(sources, list) and sources and all(
             isinstance(entry, dict) and entry.get("reviewer") == NOTE_SOURCE_REVIEWER
             for entry in sources
         ):
-            note_only += 1
-    if isinstance(grouped, int) and grouped > recon["input_finding_count"] + note_only:
+            note_only_findings += 1
+    if isinstance(grouped, int) and grouped > recon["input_finding_count"] + note_only_findings:
         problems.append(
             "grouped_concern_count exceeds the input finding count "
             "(reviewer findings plus findings only a note sourced)"

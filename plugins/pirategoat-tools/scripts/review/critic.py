@@ -236,7 +236,7 @@ def get_step_guidance(
                 "",
                 "BORDERLINE: a proposal is REVISE if and only if it moves a severity, a scope, a "
                 "check or the finding set. Do not upgrade a clean review to REVISE to carry a "
-                "reword, and do not soften a needed demotion to keep STAND.",
+                "wording correction, and do not soften a needed demotion to keep STAND.",
                 "",
                 "A refuted factual claim rarely lives in one place. When a demotion or "
                 "removal rests on one, grep the ledger's `checks[].result` and "

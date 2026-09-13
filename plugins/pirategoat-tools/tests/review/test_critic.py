@@ -327,7 +327,7 @@ class TestCriticSave:
     def test_critic_save_accepts_stand_with_wording_corrections(
         self, tmp_path, capsys
     ):
-        """A reword changes nothing the verdict ladder reads, so it rides
+        """A wording correction changes nothing the verdict ladder reads, so it rides
         STAND and is committed as a proposal the orchestrator adjudicates."""
         findings = self._write_findings(tmp_path)
         adjustments = self._write_adjustments(tmp_path, [{

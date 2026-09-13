@@ -210,8 +210,8 @@ builder.drop_finding("code-review", "f4", reason="prefiltered")
 # Keep finding-level claims OUT of it wherever you can state the same thing
 # about the change as a whole. The decision critic can adjust any finding
 # but cannot adjust this prose, so an assessment that names a severity or a
-# specific finding is invalidated wholesale when a critic adjustment moves a severity, a scope, a check or the finding set,
-# or when the orchestrator supplies a replacement — the pipeline invalidates it rather than let it contradict the ledger.
+# specific finding is invalidated wholesale when a critic adjustment moves the ledger (`critic_adjustments.entry_moves_ledger`),
+# or when the orchestrator supplies a revised assessment — the pipeline invalidates it rather than let it contradict the ledger.
 builder.set_assessment(
     "OVERALL_ASSESSMENT_2_TO_3_SENTENCES"
 )

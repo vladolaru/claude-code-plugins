@@ -604,7 +604,7 @@ class ReviewOutputBuilder:
         ``verifies`` names the change purpose's Verify items this check settles
         (``["V2"]``); absent when it cites none.
         """
-        self._refuse_after_abstention("record a check")
+        self._refuse_after_not_applicable("record a check")
         if source_reviewers is None:
             source_reviewers = [self.reviewer]
         values = [
@@ -709,7 +709,7 @@ class ReviewOutputBuilder:
         should NOT count toward the verdict.
         When severity_floor is provided, lower severities are promoted to it.
         """
-        self._refuse_after_abstention("add a finding")
+        self._refuse_after_not_applicable("add a finding")
         if not 0.0 <= confidence <= 1.0:
             raise ValueError(f"Confidence must be 0.0-1.0, got {confidence}")
         if behavior_evidence is not None and behavior_evidence not in (
@@ -774,7 +774,7 @@ class ReviewOutputBuilder:
         specific line reference. They don't affect the verdict and are
         displayed separately from findings.
         """
-        self._refuse_after_abstention("add an observation")
+        self._refuse_after_not_applicable("add an observation")
         self.observations.append({
             "file": file,
             "note": note,
@@ -796,13 +796,13 @@ class ReviewOutputBuilder:
 
     def add_recommendation(self, priority: str, text: str):
         """Add recommendation (priority: immediate, important, suggestions)."""
-        self._refuse_after_abstention("add a recommendation")
+        self._refuse_after_not_applicable("add a recommendation")
         if priority in self.recommendations:
             self.recommendations[priority].append(coerce_text(text))
 
     def add_positive_observation(self, observation: str):
         """Add positive observation."""
-        self._refuse_after_abstention("add a positive observation")
+        self._refuse_after_not_applicable("add a positive observation")
         self.positive_observations.append(coerce_text(observation))
 
     @staticmethod
@@ -1023,32 +1023,32 @@ class ReviewOutputBuilder:
         }
         return {label: count for label, count in counts.items() if count}
 
-    def _refuse_after_abstention(self, action: str) -> None:
+    def _refuse_after_not_applicable(self, action: str) -> None:
         """Recording work after `mark_not_applicable` is the same
         contradiction as abstaining after work, so both orders are refused
-        and a persisted abstention rehydrated by `open()` stays one until
-        `withdraw_abstention` lifts it."""
+        and a persisted mark rehydrated by `open()` stays one until
+        `withdraw_not_applicable` lifts it."""
         if self._not_applicable:
             raise ValueError(
                 f"Cannot {action} — this review is marked not_applicable. "
                 "An abstention records no work: abstain only when the diff "
                 "holds nothing for your domain, before recording anything. "
                 "If a closer read found work after all, call "
-                "withdraw_abstention() first, then record it."
+                "withdraw_not_applicable() first, then record it."
             )
 
-    def withdraw_abstention(self) -> None:
-        """Lift an abstention so the review can record work.
+    def withdraw_not_applicable(self) -> None:
+        """Lift the not_applicable mark so the review can record work.
 
         The explicit way back for a reviewer that marked the diff not
         applicable, saved, and then found something on a closer read: the
-        guards refuse work in either order around an abstention, and a
+        guards refuse work in either order around the mark, and a
         persisted one would otherwise dead-end the review, since the draft
         is never edited by hand.
         """
         if not self._not_applicable:
             raise ValueError(
-                "Cannot withdraw an abstention — this review is not marked "
+                "Cannot withdraw not_applicable — this review is not marked "
                 "not_applicable."
             )
         self._not_applicable = False
@@ -1391,7 +1391,7 @@ def finalize_review(output_dir: str, reviewer: str, review_digest: str):
     return {"final": paths.final, "review_digest": review_digest}
 
 
-class RecordedAbstention(NamedTuple):
+class NotApplicableReview(NamedTuple):
     """The final review bootstrap recorded for an empty scope and the
     reason it states, which is what the reviewer's return signal carries."""
     path: str
@@ -1400,7 +1400,7 @@ class RecordedAbstention(NamedTuple):
 
 def record_no_domain_files_review(
     output_dir: str, pr_id: str, reviewer: str, skip_reason: str
-) -> RecordedAbstention:
+) -> NotApplicableReview:
     """Record and finalize the not_applicable review of a reviewer whose
     scope matched no files, returning the final review path and the reason
     that review records.
@@ -1428,7 +1428,7 @@ def record_no_domain_files_review(
         if not isinstance(review, dict):
             raise ValueError(f"malformed final review: {paths.final}")
         recorded = review.get("skip_reason")
-        return RecordedAbstention(
+        return NotApplicableReview(
             paths.final, recorded if isinstance(recorded, str) else skip_reason
         )
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -1436,7 +1436,7 @@ def record_no_domain_files_review(
         builder.mark_not_applicable(skip_reason)
         receipt = builder.save_draft()
         finalize_review(output_dir, reviewer, receipt["review_digest"])
-    return RecordedAbstention(paths.final, skip_reason)
+    return NotApplicableReview(paths.final, skip_reason)
 
 
 if __name__ == '__main__':

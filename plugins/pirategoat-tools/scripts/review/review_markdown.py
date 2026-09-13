@@ -245,12 +245,12 @@ def render_review_body(data: Dict) -> str:
     #
     # It is also the one part of this document the decision critic cannot
     # correct: its adjustment vocabulary addresses findings, and this is
-    # ledger-level prose. So a batch that moves the ledger, or a replacement
-    # the orchestrator supplies, INVALIDATES it
+    # ledger-level prose. So a batch that moves the ledger, or a revised
+    # assessment the orchestrator supplies, INVALIDATES it
     # (critic_adjustments.py) rather than leaving a stale claim rendered
     # above the list that contradicts it, and this renders the invalidation
-    # instead of silently dropping the section — an absent Assessment and a
-    # retracted one are different facts. Prose that survived a critic round
+    # instead of silently dropping the section — an absent Assessment and
+    # an invalidated one are different facts. Prose that survived a critic round
     # untouched still renders as prose: that is the STAND case, and the
     # marker below says exactly whose words they are.
     invalidated = data.get('invalidated_assessments')
@@ -261,9 +261,9 @@ def render_review_body(data: Dict) -> str:
         # the reconciler's. After invalidation the standing text is the
         # orchestrator's `revised_assessment`, carried in through the
         # adjustments channel — attributing it to the reconciler would
-        # credit prose that was retracted a step earlier.
+        # credit prose that was invalidated a step earlier.
         md.append(
-            "*Post-critic assessment, written after the critic "
+            "*Revised assessment, installed after the critic "
             "adjustments applied.*\n\n"
             if invalidated else
             "*Reconciler-authored assessment, not adjusted by the decision "
@@ -272,13 +272,13 @@ def render_review_body(data: Dict) -> str:
     elif invalidated:
         # Keyed on the invalidation record itself, not on
         # applied_critic_adjustments: a ledger that never carried a summary
-        # records no withdrawal, and rendering a retraction notice for it
+        # records no invalidation, and rendering an invalidation notice for it
         # would claim an act that never happened.
         #
         # An explicit absence, not a pointer: the previous wording sent the
         # reader to "the report for the current assessment", which on a bot
-        # run is a file nobody opens and on any run may carry no post-critic
-        # assessment at all. The retracted text is deliberately NOT shown
+        # run is a file nobody opens and on any run may carry no revised
+        # assessment at all. The invalidated text is deliberately NOT shown
         # here — it is the one thing this section must not present as
         # current.
         md.append("## Assessment\n\n")

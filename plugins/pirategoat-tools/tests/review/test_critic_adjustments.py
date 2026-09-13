@@ -335,7 +335,7 @@ class TestAdjudicateWritesTheLedgerOnce:
             _adjudicate(tmp_path, [])
 
     def test_a_stand_with_corrections_is_adjudicated(self, tmp_path):
-        """13 of 13 field runs came back REVISE because a reword could ride
+        """13 of 13 field runs came back REVISE because a wording correction could ride
         nothing else; a correct-only batch now rides STAND and is applied
         the same way."""
         from review.critic_adjustments import prepare_proposal, write_critic_verdict
@@ -971,7 +971,7 @@ class TestReadCriticVerdict:
 
 
 class TestRecommendationsInvalidation:
-    """A moving batch must withdraw advice that its revisions may contradict."""
+    """A batch that moves the ledger must invalidate advice its revisions may contradict."""
 
     _RECS = {
         "immediate": ["Escape the payment notice before merge."],
@@ -988,7 +988,7 @@ class TestRecommendationsInvalidation:
             "fields": {"severity": "low"}, "rationale": "guarded upstream",
         }])
 
-    def test_an_applying_batch_withdraws_the_recommendations(self, tmp_path):
+    def test_a_moving_batch_invalidates_the_recommendations(self, tmp_path):
         ids = self._seed(tmp_path)
         result = _adjudicate(tmp_path, ids, verified=(0,))
         assert result["applied"] == 1
@@ -1002,14 +1002,14 @@ class TestRecommendationsInvalidation:
         }]
         validate_findings_document(data)
 
-    @pytest.mark.parametrize("replacement,expected", [
+    @pytest.mark.parametrize("revised,expected", [
         pytest.param({"suggestions": ["  Add a nonce when convenient.  "]},
                      ["Add a nonce when convenient."], id="normalized-subset"),
-        pytest.param({}, [], id="empty-replacement"),
+        pytest.param({}, [], id="empty-revision"),
     ])
-    def test_revised_recommendations_are_installed(self, tmp_path, replacement, expected):
+    def test_revised_recommendations_are_installed(self, tmp_path, revised, expected):
         ids = self._seed(tmp_path)
-        _adjudicate(tmp_path, ids, verified=(0,), recommendations=replacement)
+        _adjudicate(tmp_path, ids, verified=(0,), recommendations=revised)
         data = _ledger(tmp_path)
         assert data["recommendations"] == {
             "immediate": [], "important": [], "suggestions": expected,
@@ -1065,7 +1065,7 @@ class TestRecommendationsInvalidation:
         assert any("revised_recommendations" in p for p in excinfo.value.problems)
         assert (tmp_path / "review-findings.json").read_bytes() == before
 
-    def test_reader_rejects_malformed_withdrawn_priority(self, tmp_path):
+    def test_reader_rejects_malformed_invalidated_priority(self, tmp_path):
         bad = "not a list"
         ids = self._seed(tmp_path)
         _adjudicate(tmp_path, ids, verified=(0,))
@@ -1087,7 +1087,7 @@ class TestAssessmentInvalidation:
     demoted critical still described as "one CRITICAL blocker" survives the
     whole correction pipeline and renders directly above the list that
     contradicts it. The pipeline cannot re-derive the prose (it is LLM
-    output), so a moving batch withdraws it — auditably.
+    output), so a batch that moves the ledger invalidates it — auditably.
     """
 
     _SUMMARY = "One CRITICAL blocker: the payment path is unescaped."
@@ -1098,7 +1098,7 @@ class TestAssessmentInvalidation:
             assessment=self._SUMMARY,
         )
 
-    def test_an_applying_batch_withdraws_the_summary(self, tmp_path):
+    def test_a_moving_batch_invalidates_the_summary(self, tmp_path):
         self._seed(tmp_path)
         _, result = _publish_and_adjudicate(tmp_path, [{
             "action": "demote", "target": {"kind": "finding", "id": "f1"},
@@ -1114,11 +1114,11 @@ class TestAssessmentInvalidation:
         # touched finding names the action that touched it.
         assert invalidated[0]["invalidated_by_critic_adjustment_ids"] == _applied_ids(data)
 
-    def test_a_second_withdrawal_names_only_its_own_batch(self, tmp_path):
+    def test_a_second_invalidation_names_only_its_own_batch(self, tmp_path):
         """invalidated_by_critic_adjustment_ids is causal attribution, not history: a second
-        reconciliation round's withdrawal must name the batch that caused
+        reconciliation round's invalidation must name the batch that caused
         it, never the cumulative applied-ids list. Also covers a second
-        round appending rather than overwriting the first withdrawal's
+        round appending rather than overwriting the first invalidation's
         text. Fix 47cd4c16."""
         self._seed(tmp_path)
         _publish_and_adjudicate(tmp_path, [{
@@ -1147,7 +1147,7 @@ class TestAssessmentInvalidation:
         assert invalidated[1]["invalidated_by_critic_adjustment_ids"] == second_batch
         assert invalidated[0]["invalidated_by_critic_adjustment_ids"] == first_batch
 
-    def test_no_summary_to_withdraw_records_no_withdrawal(self, tmp_path):
+    def test_no_summary_to_invalidate_records_no_invalidation(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1", "critical")])
         _publish_and_adjudicate(tmp_path, [{
             "action": "demote", "target": {"kind": "finding", "id": "f1"},
@@ -1303,12 +1303,12 @@ class TestOutcomeVocabulary:
         }]))
 
 class TestRevisedAssessment:
-    """The orchestrator's post-critic assessment, in the channel.
+    """The orchestrator's revised assessment, in the channel.
 
-    A moving batch withdraws the reconciler's `assessment` and nothing
-    used to replace it, so a REVISE run published a ledger whose
+    A batch that moves the ledger invalidates the reconciler's `assessment`
+    and nothing used to replace it, so a REVISE run published a ledger whose
     Assessment section pointed at a report the machine could not read.
-    A replacement supplied on a wording-only batch withdraws the prior the
+    Revised text supplied on a wording-only batch invalidates the prior the
     same way, so the record never credits the orchestrator's words to the
     reconciler.
     """
@@ -1328,7 +1328,7 @@ class TestRevisedAssessment:
         )
 
     def test_it_becomes_the_ledger_assessment(self, tmp_path):
-        """Replacement is not erasure: the reconciler's retracted words
+        """Revision is not erasure: the reconciler's invalidated words
         stay auditable beside the ids that cost them their standing."""
         self._seed(tmp_path)
         _publish_and_adjudicate(
@@ -1343,7 +1343,7 @@ class TestRevisedAssessment:
         "immediate": ["Wrap the call in a transaction."],
         "important": [], "suggestions": [],
     }
-    _REWORD = [{
+    _WORDING_ONLY = [{
         "action": "correct", "target": {"kind": "finding", "id": "f1"},
         "fields": {"recommendation": "Use a row lock instead."},
         "rationale": "a transaction does not serialize the read",
@@ -1356,18 +1356,18 @@ class TestRevisedAssessment:
             recommendations=copy.deepcopy(self._RECOMMENDATIONS),
         )
 
-    def test_a_replacement_on_a_wording_only_batch_withdraws_the_prior_on_the_record(
+    def test_revised_text_on_a_wording_only_batch_invalidates_the_prior_on_the_record(
         self, tmp_path
     ):
-        """A verified reword leaves the reconciler's prose standing unless
-        the orchestrator replaces it — a corrected recommendation the
-        ledger's recommendations restate is the case. The replacement then
-        installs the way it does after a move: the prior withdrawn beside
+        """A verified wording correction leaves the reconciler's prose standing
+        unless the orchestrator revises it — a corrected recommendation the
+        ledger's recommendations restate is the case. The revised text then
+        installs the way it does after a move: the prior invalidated beside
         the ids, never overwritten as if the reconciler had written it."""
         self._seed_with_recommendations(tmp_path)
         revised = {"immediate": ["Use a row lock."], "important": [], "suggestions": []}
         ids, _ = _publish_and_adjudicate(
-            tmp_path, self._REWORD, verified=(0,), verdict="STAND",
+            tmp_path, self._WORDING_ONLY, verified=(0,), verdict="STAND",
             assessment=self._REVISED, recommendations=revised,
         )
         data = _ledger(tmp_path)
@@ -1382,12 +1382,12 @@ class TestRevisedAssessment:
             "invalidated_by_critic_adjustment_ids": ids,
         }]
 
-    def test_a_wording_only_batch_without_a_replacement_leaves_the_prose_standing(
+    def test_a_wording_only_batch_without_revised_text_leaves_the_prose_standing(
         self, tmp_path
     ):
         self._seed_with_recommendations(tmp_path)
         _publish_and_adjudicate(
-            tmp_path, self._REWORD, verified=(0,), verdict="STAND",
+            tmp_path, self._WORDING_ONLY, verified=(0,), verdict="STAND",
         )
         data = _ledger(tmp_path)
         assert data["assessment"] == self._SUMMARY
@@ -2536,7 +2536,7 @@ class TestAdjudicationCLI:
         assert "REVISED ASSESSMENT: absent" in result.stdout
         assert "REVISED RECOMMENDATIONS: present" in result.stdout
 
-    def test_a_replacement_on_a_wholly_refuted_batch_echoes_not_installed(
+    def test_revised_text_on_a_wholly_refuted_batch_echoes_not_installed(
         self, tmp_path
     ):
         """The echo reports the ledger, not the request: nothing applied,
@@ -2707,7 +2707,7 @@ class TestVerdictAdmitsProposal:
     commit, the read and the adjudication: only STAND and REVISE carry a
     proposal, STAND carries wording corrections only, REVISE needs a
     change the verdict ladder reads. A `correct` that touches file or
-    line is a scope move, not a reword."""
+    line is a scope move, not a wording correction."""
 
     @staticmethod
     def _proposal(entries):

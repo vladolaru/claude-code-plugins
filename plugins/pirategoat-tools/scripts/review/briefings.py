@@ -2208,7 +2208,7 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append("    }")
     actions.append("  ],")
     actions.append(
-        '  "revised_assessment": "<optional post-critic assessment>",'
+        '  "revised_assessment": "<optional revised assessment>",'
     )
     actions.append('  "revised_recommendations": {"immediate": [], "important": [], "suggestions": []}')
     actions.append("}")
@@ -2221,12 +2221,12 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         "derived as `not_checked`. The orchestrator never edits the committed "
         "proposal. `revised_assessment` and `revised_recommendations` are "
         "optional. A batch that moves a severity, a scope, a check or the "
-        "finding set withdraws the reconciler's assessment and "
-        "recommendations, and these are where the replacements go. A "
-        "wording-only batch leaves both standing: supply a replacement only "
+        "finding set invalidates the reconciler's assessment and "
+        "recommendations, and these are where the revised text goes. A "
+        "wording-only batch leaves both standing: supply revised text only "
         "when a verified correction contradicts them (a corrected "
-        "recommendation the ledger's recommendations restate). Either "
-        "replacement rides the applied batch and withdraws the reconciler's "
+        "recommendation the ledger's recommendations restate). Revised "
+        "text rides the applied batch and invalidates the reconciler's "
         "text on the record; a batch you refute whole installs neither."
     )
     actions.append(
@@ -2257,9 +2257,9 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     )
     actions.append(
         "Never hand-edit the findings ledger either: that one write "
-        "carries provenance, withdraws the reconciler's prior assessment and recommendations "
-        "when an accepted operation moves the ledger or when you supply a replacement, installs "
-        "the replacement, recounts findings, and derives the "
+        "carries provenance, invalidates the reconciler's prior assessment and recommendations "
+        "when an accepted operation moves the ledger, and each of them when you supply its revised "
+        "text, installs what you supplied, recounts findings, and derives the "
         "final ledger verdict. Refuted operations do not invalidate or "
         "replace the assessment or recommendations."
     )
