@@ -343,7 +343,7 @@ The command validates everything before writing anything, and it holds you to th
 
 1. `verified_concern_count` must equal the number of findings you recorded.
 2. Your classification counts must partition `grouped_concern_count` — verified plus false-positive plus out-of-scope, exactly — and agree with your drops: `false_positive_concern_count` cannot exceed the findings you dropped as false positives and cannot be 0 when you dropped any; the same for out-of-scope against `out_of_scope` plus `prefiltered` drops.
-3. `grouped_concern_count` must not exceed `input_finding_count`: you cannot group more concerns than the run read findings.
+3. `grouped_concern_count` must not exceed `input_finding_count` plus the confirmed notes you sourced findings from: a concern comes from a reviewer finding or from a note that became one, nowhere else.
 4. Every source finding and every source check in `reviews_by_agent` is accounted for exactly once: merged into one of your findings or checks through `sources`, or dropped through `drop_finding` / `drop_check`. The rejection names the source (`security-review:f2 is neither merged into a finding nor dropped`).
 5. A merged check carries every source's `method` text verbatim inside its own `method`, and every Verify item id any source cited in its own `verifies`. `record_check(..., sources=[...])` does this for you from the reconciliation context — it appends any source method your `method` does not already contain as a `[<stem>:<id>] …` line and unions their `verifies` — so write your own method text and never paste theirs by hand.
 6. A finding whose severity matches none of its sources' carries a `severity_note`.
