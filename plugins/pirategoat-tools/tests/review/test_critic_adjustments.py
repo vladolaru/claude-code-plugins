@@ -1,6 +1,7 @@
 """Tests for critic_adjustments — the sole writer that carries decision-critic
 finding-level decisions into review-findings.json."""
 
+import copy
 import json
 import re
 import subprocess
@@ -970,7 +971,7 @@ class TestReadCriticVerdict:
 
 
 class TestRecommendationsInvalidation:
-    """An applying batch must withdraw advice that its revisions may contradict."""
+    """A moving batch must withdraw advice that its revisions may contradict."""
 
     _RECS = {
         "immediate": ["Escape the payment notice before merge."],
@@ -1068,7 +1069,7 @@ class TestAssessmentInvalidation:
     demoted critical still described as "one CRITICAL blocker" survives the
     whole correction pipeline and renders directly above the list that
     contradicts it. The pipeline cannot re-derive the prose (it is LLM
-    output), so an applying batch withdraws it — auditably.
+    output), so a moving batch withdraws it — auditably.
     """
 
     _SUMMARY = "One CRITICAL blocker: the payment path is unescaped."
@@ -1286,9 +1287,12 @@ class TestOutcomeVocabulary:
 class TestRevisedAssessment:
     """The orchestrator's post-critic assessment, in the channel.
 
-    An applying batch withdraws the reconciler's `assessment` and
-    nothing used to replace it, so a REVISE run published a ledger whose
+    A moving batch withdraws the reconciler's `assessment` and nothing
+    used to replace it, so a REVISE run published a ledger whose
     Assessment section pointed at a report the machine could not read.
+    A replacement supplied on a wording-only batch withdraws the prior the
+    same way, so the record never credits the orchestrator's words to the
+    reconciler.
     """
 
     _SUMMARY = "One CRITICAL blocker: the payment path is unescaped."
@@ -1316,6 +1320,62 @@ class TestRevisedAssessment:
         data = _ledger(tmp_path)
         assert data["assessment"] == self._REVISED
         assert data[INVALIDATED_ASSESSMENTS_KEY][0]["text"] == self._SUMMARY
+
+    _RECOMMENDATIONS = {
+        "immediate": ["Wrap the call in a transaction."],
+        "important": [], "suggestions": [],
+    }
+    _REWORD = [{
+        "action": "correct", "target": {"kind": "finding", "id": "f1"},
+        "fields": {"recommendation": "Use a row lock instead."},
+        "rationale": "a transaction does not serialize the read",
+    }]
+
+    def _seed_with_recommendations(self, tmp_path):
+        _write_findings(
+            tmp_path, [_finding("f1", "critical")],
+            assessment=self._SUMMARY,
+            recommendations=copy.deepcopy(self._RECOMMENDATIONS),
+        )
+
+    def test_a_replacement_on_a_wording_only_batch_withdraws_the_prior_on_the_record(
+        self, tmp_path
+    ):
+        """A verified reword leaves the reconciler's prose standing unless
+        the orchestrator replaces it — a corrected recommendation the
+        ledger's recommendations restate is the case. The replacement then
+        installs the way it does after a move: the prior withdrawn beside
+        the ids, never overwritten as if the reconciler had written it."""
+        self._seed_with_recommendations(tmp_path)
+        revised = {"immediate": ["Use a row lock."], "important": [], "suggestions": []}
+        ids, _ = _publish_and_adjudicate(
+            tmp_path, self._REWORD, verified=(0,), verdict="STAND",
+            assessment=self._REVISED, recommendations=revised,
+        )
+        data = _ledger(tmp_path)
+        assert data["assessment"] == self._REVISED
+        assert data[INVALIDATED_ASSESSMENTS_KEY] == [{
+            "text": self._SUMMARY,
+            "invalidated_by_critic_adjustment_ids": ids,
+        }]
+        assert data["recommendations"] == revised
+        assert data["invalidated_recommendations"] == [{
+            "recommendations": self._RECOMMENDATIONS,
+            "invalidated_by_critic_adjustment_ids": ids,
+        }]
+
+    def test_a_wording_only_batch_without_a_replacement_leaves_the_prose_standing(
+        self, tmp_path
+    ):
+        self._seed_with_recommendations(tmp_path)
+        _publish_and_adjudicate(
+            tmp_path, self._REWORD, verified=(0,), verdict="STAND",
+        )
+        data = _ledger(tmp_path)
+        assert data["assessment"] == self._SUMMARY
+        assert data["recommendations"] == self._RECOMMENDATIONS
+        assert INVALIDATED_ASSESSMENTS_KEY not in data
+        assert "invalidated_recommendations" not in data
 
     def test_a_blank_revised_assessment_is_rejected_without_mutation(
         self, tmp_path
@@ -2457,6 +2517,25 @@ class TestAdjudicationCLI:
         assert result.returncode == 0, result.stdout + result.stderr
         assert "REVISED ASSESSMENT: absent" in result.stdout
         assert "REVISED RECOMMENDATIONS: present" in result.stdout
+
+    def test_a_replacement_on_a_wholly_refuted_batch_echoes_not_installed(
+        self, tmp_path
+    ):
+        """The echo reports the ledger, not the request: nothing applied,
+        so the reconciler's prose stands and the orchestrator is told so."""
+        ids = self._seed(tmp_path)
+
+        result = self._run(tmp_path, _request(
+            ids, refuted=((0, "not reproducible"),),
+            assessment="Never installed.",
+            recommendations={"suggestions": ["Never installed."]},
+        ))
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "REVISED ASSESSMENT: not installed (every adjustment refuted)" in result.stdout
+        assert "REVISED RECOMMENDATIONS: not installed (every adjustment refuted)" in result.stdout
+        assert "APPLIED: 0 | REJECTED: 1" in result.stdout
+        assert "invalidated_assessments" not in _ledger(tmp_path)
 
     def test_an_invalid_request_is_rejected_line_by_line(self, tmp_path):
         self._seed(tmp_path)

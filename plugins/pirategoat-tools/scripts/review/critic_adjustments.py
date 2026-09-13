@@ -131,16 +131,20 @@ OUTCOME_NOT_CHECKED = "not_checked"
 OUTCOMES = (OUTCOME_VERIFIED, OUTCOME_REFUTED, OUTCOME_NOT_CHECKED)
 
 # The orchestrator's post-critic assessment, submitted with the adjudication
-# request. An applying batch invalidates the reconciler's
-# assessment (see INVALIDATED_ASSESSMENTS_KEY below), and without a replacement
-# REVISE run published a ledger whose Assessment section was a pointer to
-# prose only a human could read. This is that assessment's machine-readable
-# seat: on apply it BECOMES the ledger's assessment, with the invalidation
-# record left intact beside it.
+# request. An applying batch that moves a severity, a scope, a check or the
+# finding set invalidates the reconciler's assessment (see
+# INVALIDATED_ASSESSMENTS_KEY below), and without a replacement a REVISE run
+# published a ledger whose Assessment section was a pointer to prose only a
+# human could read. This is that assessment's machine-readable seat: on
+# apply it BECOMES the ledger's assessment, with the invalidation record
+# left intact beside it. A wording-only batch leaves the assessment standing,
+# so the key is optional there; when supplied anyway (a verified correction
+# the assessment restates), it withdraws the prior the same way.
 REVISED_ASSESSMENT_KEY = "revised_assessment"
 
 # Recommendations are ledger-level prose the critic cannot address directly;
-# an applying batch withdraws them and the request may supply replacements.
+# a moving batch withdraws them, and a supplied replacement withdraws them
+# under any batch.
 REVISED_RECOMMENDATIONS_KEY = "revised_recommendations"
 INVALIDATED_RECOMMENDATIONS_KEY = "invalidated_recommendations"
 
@@ -313,8 +317,9 @@ FindingsRead = collections.namedtuple(
 # above a list where the critical has just been demoted to low.
 #
 # The pipeline cannot re-derive that prose (it is LLM output, not a
-# projection of the findings), so an applying batch invalidates it rather
-# than leaving it to contradict the ledger it summarizes. Invalidated, not
+# projection of the findings), so a batch that moves the ledger, or a
+# replacement the orchestrator supplies, invalidates it rather than leaving
+# it to contradict the ledger it summarizes. Invalidated, not
 # deleted: the text moves here beside the ids of the decisions that
 # invalidated it, the same way a removed finding moves into
 # `findings_removed_by_critic` carrying the action that removed it. A list,
@@ -1586,7 +1591,8 @@ def _invalidate_assessment(review, recorded_ids):
 
 
 def _invalidate_recommendations(review, recorded_ids):
-    """Withdraw recommendations only when an applying batch may contradict them."""
+    """Withdraw recommendations a moving batch may contradict, or that a
+    supplied replacement is about to displace."""
     prior = review.get("recommendations")
     review["recommendations"] = {
         priority: [] for priority in RECOMMENDATION_PRIORITIES
@@ -1670,7 +1676,8 @@ def _apply_proposal(
     batch_ids = []
     refuted_count = 0
     # The assessment and recommendations rest on severities, scope and the
-    # finding set; a batch that moves none of them cannot contradict them.
+    # finding set; a batch that moves none of them leaves them standing
+    # unless the orchestrator replaces them (see REVISED_ASSESSMENT_KEY).
     moved = False
     for index, entry in enumerate(proposal["adjustments"]):
         label = f"adjustment[{index}]"
@@ -1742,11 +1749,14 @@ def _apply_proposal(
             ledger.setdefault(VERDICT_BEFORE_ADJUSTMENTS_KEY, ledger["verdict"])
             ledger["verdict"] = derived["verdict"]
         ledger[APPLIED_IDS_KEY] = applied_records
-        if moved:
+        # A replacement withdraws the prior on the record even when nothing
+        # moved: installing it over the reconciler's text would leave that
+        # text unrecoverable and the replacement rendered as the reconciler's.
+        if moved or revised_assessment:
             _invalidate_assessment(ledger, batch_ids)
         if revised_assessment:
             ledger[ASSESSMENT_KEY] = revised_assessment
-        if moved:
+        if moved or revised_recommendations is not None:
             _invalidate_recommendations(ledger, batch_ids)
         if revised_recommendations is not None:
             ledger["recommendations"] = revised_recommendations
@@ -1815,6 +1825,17 @@ def adjudicate(output_dir, request):
         }
 
 
+REPLACEMENT_NOT_INSTALLED = "not installed (every adjustment refuted)"
+
+
+def _replacement_echo(supplied, applied):
+    """`present`, `absent`, or the not-installed note for a replacement
+    that rode a batch the orchestrator refuted whole."""
+    if not supplied:
+        return "absent"
+    return "present" if applied else REPLACEMENT_NOT_INSTALLED
+
+
 def adjudication_state(output_dir):
     """'empty' (no entries), 'pending' (not in the ledger), or 'adjudicated'."""
     _verdict, proposal = read_committed_proposal(output_dir)
@@ -1865,13 +1886,18 @@ def main():
         f"REFUTED: {counts[OUTCOME_REFUTED]} | "
         f"NOT_CHECKED: {counts[OUTCOME_NOT_CHECKED]}"
     )
+    # Echo what the ledger now holds, not what the request carried: a
+    # replacement rides the applied batch, so a wholly refuted one installs
+    # nothing and the reconciler's prose stands.
     print(
         "REVISED ASSESSMENT: "
-        f"{'present' if request.get(REVISED_ASSESSMENT_KEY) else 'absent'}"
+        + _replacement_echo(bool(request.get(REVISED_ASSESSMENT_KEY)), result["applied"])
     )
     print(
         "REVISED RECOMMENDATIONS: "
-        f"{'present' if request.get(REVISED_RECOMMENDATIONS_KEY) is not None else 'absent'}"
+        + _replacement_echo(
+            request.get(REVISED_RECOMMENDATIONS_KEY) is not None, result["applied"]
+        )
     )
     print(f"APPLIED: {result['applied']} | REJECTED: {result['rejected']}")
     print(f"LEDGER VERDICT: {result['verdict']}")

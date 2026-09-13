@@ -229,7 +229,8 @@ def render_review_body(data: Dict) -> str:
     #
     # It is also the one part of this document the decision critic cannot
     # correct: its adjustment vocabulary addresses findings, and this is
-    # ledger-level prose. So an applying batch INVALIDATES it
+    # ledger-level prose. So a batch that moves the ledger, or a replacement
+    # the orchestrator supplies, INVALIDATES it
     # (critic_adjustments.py) rather than leaving a stale claim rendered
     # above the list that contradicts it, and this renders the invalidation
     # instead of silently dropping the section — an absent Assessment and a

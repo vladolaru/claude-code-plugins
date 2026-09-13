@@ -92,7 +92,7 @@ Follow each phase's instructions. Between phases, do the verification work (Read
 | Verdict | When to use |
 |---------|-------------|
 | **STAND** | All major claims verified or verified-with-caveats. No hidden assumptions that would change the conclusion. Contrarian perspectives considered but don't outweigh the evidence. |
-| **REVISE** | One or more claims FAILED or UNCERTAIN, and the failure moves a severity, a scope or the finding set. A wording, title or description correction alone is a STAND with `correct` adjustments. |
+| **REVISE** | One or more claims FAILED or UNCERTAIN, and the failure moves a severity, a scope, a check or the finding set. A wording, title or description correction alone is a STAND with `correct` adjustments. |
 | **ESCALATE** | Fundamental validity concern that cannot be resolved through revision — the framing itself may be wrong, or critical information is missing that only a human can provide. |
 
 ## RULE 1: Every Factual Claim Requires Evidence
@@ -160,14 +160,7 @@ exist):
 <If STAND: "None — conclusions are sound.", or the wording corrections you filed as `correct` adjustments>
 ```
 
-**3b. On REVISE, and on STAND when you have wording corrections, also write the machine-readable form** to
-`$TMPDIR/decision-critic-adjustments.json`. Every finding or check adjustment you
-recommend must be recorded there so the pipeline can carry it into
-`review-findings.json` — a recommendation that exists only as prose cannot
-reach the machine-readable ledger. A STAND batch holds finding `correct` entries only, none touching `file` or `line`;
-the save command rejects a STAND that carries a severity, scope or membership
-change or a check correction (each is a REVISE) and a REVISE that carries
-wording corrections alone (that rides STAND). On ESCALATE, or a STAND with nothing to correct, skip this file.
+**3b. On REVISE, and on STAND when you have wording corrections, also write the machine-readable form** to `$TMPDIR/decision-critic-adjustments.json`. Every finding or check adjustment you recommend must be recorded there so the pipeline can carry it into `review-findings.json` — a recommendation that exists only as prose cannot reach the machine-readable ledger. A STAND batch holds finding `correct` entries only, none touching `file` or `line`; the save command rejects a STAND that carries a severity, scope or membership change or a check correction (each is a REVISE) and a REVISE that carries wording corrections alone (that rides STAND). On ESCALATE, or a STAND with nothing to correct, skip this file.
 
 This is a schema 2 proposal contract: you address only stable `finding` and `check` targets, not ledger-level prose, and author only the action-specific target/fields plus a rationale. Author only `action`, `target`, `fields`, and `rationale`; the save path assigns `adjustment_id`, and the orchestrator's adjudication is recorded in the ledger, never in this file. A content change must therefore stay attached to a finding or check here:
 

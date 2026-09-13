@@ -2219,10 +2219,15 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         "individually disproved IDs in `\"refuted\"`, each refutation with "
         "its non-empty reason. Every committed ID omitted from both lists is "
         "derived as `not_checked`. The orchestrator never edits the committed "
-        "proposal. `revised_assessment` is optional: omit it when no "
-        "replacement assessment should be installed. `revised_recommendations` "
-        "is likewise optional: an applying batch withdraws the reconciler's "
-        "recommendations along with its assessment, and this is where replacements go."
+        "proposal. `revised_assessment` and `revised_recommendations` are "
+        "optional. A batch that moves a severity, a scope, a check or the "
+        "finding set withdraws the reconciler's assessment and "
+        "recommendations, and these are where the replacements go. A "
+        "wording-only batch leaves both standing: supply a replacement only "
+        "when a verified correction contradicts them (a corrected "
+        "recommendation the ledger's recommendations restate). Either "
+        "replacement rides the applied batch and withdraws the reconciler's "
+        "text on the record; a batch you refute whole installs neither."
     )
     actions.append(
         "3) Save the request as `$TMPDIR/critic-adjudication.json`, then run "
@@ -2237,7 +2242,8 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append(
         "A successful handoff reports `RECORDED ADJUDICATION`, the derived "
         "`VERIFIED | REFUTED | NOT_CHECKED` counts, `REVISED ASSESSMENT: "
-        "present|absent`, `REVISED RECOMMENDATIONS: present|absent`, "
+        "present|absent|not installed`, `REVISED RECOMMENDATIONS: "
+        "present|absent|not installed`, "
         "`APPLIED | REJECTED`, and the `LEDGER VERDICT`. On "
         "any `REJECTED:` line, correct only the temp request and resubmit it; "
         "never edit the output artifact or bypass `adjudicate`."
@@ -2251,9 +2257,9 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     )
     actions.append(
         "Never hand-edit the findings ledger either: that one write "
-        "carries provenance, invalidates the reconciler's prior assessment and recommendations "
-        "only when an accepted operation really changes the ledger, installs "
-        "a supplied revised assessment and recommendations, recounts findings, and derives the "
+        "carries provenance, withdraws the reconciler's prior assessment and recommendations "
+        "when an accepted operation moves the ledger or when you supply a replacement, installs "
+        "the replacement, recounts findings, and derives the "
         "final ledger verdict. Refuted operations do not invalidate or "
         "replace the assessment or recommendations."
     )
