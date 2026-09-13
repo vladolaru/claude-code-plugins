@@ -1301,6 +1301,23 @@ class TestNoteSourcedFindings:
         ]
         assert "ACCOUNTED: findings 1/1 (1 merged, 0 dropped)" in out
 
+    def test_a_note_merged_beside_a_reviewer_source_widens_no_bound(self, tmp_path, capsys):
+        """The population a grouping can reach is the reviewer input plus
+        the findings only a note sourced: a note merged into a finding a
+        reviewer already raised is the same concern, not one more."""
+        reviews = _reviews(**{"security-review": (1, ["grep"])})
+        _write_context(tmp_path, reviews, notes=[{"id": "n1", "note": "x"}])
+        finding = self._note_finding(sources=[
+            {"reviewer": "security-review", "id": "f1"},
+            {"reviewer": "orchestrator", "id": "n1"},
+        ])
+        del finding["severity_note"]
+        doc = self._doc(reviews, [{"id": "n1", "outcome": "confirmed", "evidence": "e"}], findings=[finding])
+        doc["meta"]["reconciliation"]["grouped_concern_count"] = 2
+        code, out = _save(tmp_path, doc, capsys)
+        assert code == 1
+        assert "grouped_concern_count exceeds" in out
+
     def test_an_unresolved_reviewer_source_does_not_blame_the_notes(self, tmp_path, capsys):
         """A finding whose only source is unknown is reported for that; the
         severity rule does not add a note-shaped problem it did not find."""

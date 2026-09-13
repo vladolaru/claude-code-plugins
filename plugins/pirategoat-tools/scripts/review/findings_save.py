@@ -632,19 +632,21 @@ def validate_findings(payload, context):
     grouped = recon.get("grouped_concern_count")
     # Every concern comes from a reviewer finding or a confirmed note the
     # ledger turned into a finding, so the population a grouping can reach
-    # is the reviewer input plus the notes that became findings.
+    # is the reviewer input plus the findings only a note sourced; a note
+    # merged beside a reviewer source is that reviewer's concern, not one more.
     findings = payload.get("findings")
-    note_sourced = {
-        entry["id"]
-        for finding in (findings if isinstance(findings, list) else [])
-        if isinstance(finding, dict)
-        for entry in (finding.get("sources") or [])
-        if isinstance(entry, dict) and entry.get("reviewer") == NOTE_SOURCE_REVIEWER
-    }
-    if isinstance(grouped, int) and grouped > recon["input_finding_count"] + len(note_sourced):
+    note_only = 0
+    for finding in (findings if isinstance(findings, list) else []):
+        sources = finding.get("sources") if isinstance(finding, dict) else None
+        if isinstance(sources, list) and sources and all(
+            isinstance(entry, dict) and entry.get("reviewer") == NOTE_SOURCE_REVIEWER
+            for entry in sources
+        ):
+            note_only += 1
+    if isinstance(grouped, int) and grouped > recon["input_finding_count"] + note_only:
         problems.append(
             "grouped_concern_count exceeds the input finding count "
-            "(reviewer findings plus note-sourced findings)"
+            "(reviewer findings plus findings only a note sourced)"
         )
     try:
         critic_adjustments.validate_findings_document(payload)
