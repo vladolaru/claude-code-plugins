@@ -371,6 +371,30 @@ class TestCriticSave:
         assert "REJECTED" in out and fragment.lower() in out.lower()
         assert sorted(p.name for p in tmp_path.iterdir()) == ["a.json", "f.md"]
 
+    @pytest.mark.parametrize("verdict", ["REVISE", "STAND"])
+    @pytest.mark.parametrize("contents, got", [
+        ("null", "got null"), ("[]", "got list"), ("5", "got int"),
+    ], ids=["null", "list", "scalar"])
+    def test_critic_save_rejects_a_non_object_adjustments_file(
+        self, tmp_path, capsys, verdict, contents, got
+    ):
+        """A readable file holding JSON null parsed to None with no read
+        problem; before the reader owned the object check a REVISE
+        published an empty proposal from it and adjudication_state read
+        'empty', hiding the loss. Every non-object is one mechanism now."""
+        findings = self._write_findings(tmp_path)
+        adjustments = tmp_path / "a.json"
+        adjustments.write_text(contents)
+
+        result = critic_module.run_save(
+            self._args(tmp_path, verdict, findings, adjustments)
+        )
+        out = capsys.readouterr().out
+
+        assert result != 0
+        assert "REJECTED" in out and got in out and "--adjustments" in out
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["a.json", "f.md"]
+
     def test_critic_save_rejects_revise_with_only_wording_corrections(
         self, tmp_path, capsys
     ):
