@@ -213,7 +213,8 @@ def entry_moves_ledger(entry):
         return False
     if entry.get("action") not in WORDING_ONLY_ACTIONS:
         return True
-    if (entry.get("target") or {}).get("kind") == TARGET_CHECK:
+    target = entry.get("target")
+    if isinstance(target, dict) and target.get("kind") == TARGET_CHECK:
         return True
     fields = entry.get("fields")
     return isinstance(fields, dict) and bool(_SCOPE_FIELDS & set(fields))
@@ -225,9 +226,10 @@ def _moving_labels(entries):
         if not entry_moves_ledger(entry):
             continue
         action = entry.get("action")
+        target = entry.get("target")
         if action not in WORDING_ONLY_ACTIONS:
             labels.add(str(action))
-        elif (entry.get("target") or {}).get("kind") == TARGET_CHECK:
+        elif isinstance(target, dict) and target.get("kind") == TARGET_CHECK:
             labels.add("correct(check)")
         else:
             labels.add("correct(file/line)")
@@ -246,8 +248,12 @@ def verdict_admits_proposal(verdict, proposal, *, strict=True):
     run 6e6a is a REVISE of corrections alone — stays readable and
     adjudicable.
     """
+    # Tolerant of a malformed document: the shape validator reports those
+    # problems itself, and this rule must not turn them into a traceback.
     entries = proposal.get("adjustments") if isinstance(proposal, dict) else None
-    entries = [entry for entry in (entries or []) if isinstance(entry, dict)]
+    if not isinstance(entries, list):
+        entries = []
+    entries = [entry for entry in entries if isinstance(entry, dict)]
     moving = _moving_labels(entries)
     if verdict not in ("STAND", REVISE_VERDICT) and entries:
         return (

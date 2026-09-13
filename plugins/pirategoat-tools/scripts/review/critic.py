@@ -400,12 +400,18 @@ def run_save(args):
                 )
             except critic_adjustments.AdjustmentValidationError as error:
                 problems.extend(error.problems)
-    adjustments_doc = adjustments if isinstance(adjustments, dict) else {}
-    entries = adjustments_doc.get("adjustments") or []
-    if verdict in critic_adjustments.CRITIC_VERDICTS:
-        problem = critic_adjustments.verdict_admits_proposal(verdict, adjustments_doc)
+    # Admission runs against the validated proposal, never the raw file: a
+    # batch that failed preparation already has its REJECTED lines, and a
+    # save with no adjustments file is judged as an empty proposal.
+    if args.adjustments:
+        admitted = adjustment_snapshot
+    else:
+        admitted = critic_adjustments.empty_proposal()
+    if admitted is not None and verdict in critic_adjustments.CRITIC_VERDICTS:
+        problem = critic_adjustments.verdict_admits_proposal(verdict, admitted)
         if problem:
             problems.append(problem)
+    entries = (admitted or {}).get("adjustments") or []
 
     if problems:
         for p in problems:

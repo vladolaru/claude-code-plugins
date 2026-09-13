@@ -2653,6 +2653,20 @@ class TestVerdictAdmitsProposal:
         else:
             assert problem in result
 
+    @pytest.mark.parametrize("proposal", [
+        {"schema": 2, "adjustments": 5},
+        {"schema": 2, "adjustments": [{"action": "correct", "target": "f1", "fields": {"title": "t"}}]},
+        {"schema": 2, "adjustments": ["not-an-entry"]},
+    ], ids=["adjustments-not-a-list", "target-not-an-object", "entry-not-an-object"])
+    def test_a_malformed_document_is_judged_not_crashed_on(self, proposal):
+        """The shape validator reports these; admission must not turn them
+        into a traceback that swallows its REJECTED lines."""
+        from review.critic_adjustments import verdict_admits_proposal
+        assert verdict_admits_proposal("STAND", proposal) is None
+        # REVISE gets a string back, never a traceback: "requires a non-empty
+        # batch" when nothing survives, "rides STAND" when a correct does.
+        assert isinstance(verdict_admits_proposal("REVISE", proposal), str)
+
     @pytest.mark.parametrize("verdict, entries, problem", [
         # The two REVISE clauses relax: recorded run 6e6a is a REVISE of
         # corrections alone, and the low-level helpers publish an empty one.

@@ -345,6 +345,32 @@ class TestCriticSave:
         assert [e["action"] for e in proposal["adjustments"]] == ["correct"]
         assert json.loads(_artifact(tmp_path, "critic_verdict").read_text())["verdict"] == "STAND"
 
+    @pytest.mark.parametrize("payload, fragment", [
+        ({"schema": 2, "adjustments": 5}, "'adjustments' must be a list"),
+        ({"schema": 2, "adjustments": [{
+            "action": "correct", "target": "f1",
+            "fields": {"title": "t"}, "rationale": "r",
+        }]}, "target"),
+    ], ids=["adjustments-not-a-list", "target-not-an-object"])
+    def test_critic_save_rejects_a_malformed_proposal_without_crashing(
+        self, tmp_path, capsys, payload, fragment
+    ):
+        """Admission judges the validated proposal, never the raw file, so
+        a shape the validator rejects reaches the critic as REJECTED lines
+        rather than as a traceback that swallows them."""
+        findings = self._write_findings(tmp_path)
+        adjustments = tmp_path / "a.json"
+        adjustments.write_text(json.dumps(payload))
+
+        result = critic_module.run_save(
+            self._args(tmp_path, "STAND", findings, adjustments)
+        )
+        out = capsys.readouterr().out
+
+        assert result != 0
+        assert "REJECTED" in out and fragment.lower() in out.lower()
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["a.json", "f.md"]
+
     def test_critic_save_rejects_revise_with_only_wording_corrections(
         self, tmp_path, capsys
     ):
