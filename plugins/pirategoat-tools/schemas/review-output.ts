@@ -137,7 +137,7 @@ export interface InvalidatedAssessment {
 export type ReviewRecommendations = ReviewContent['recommendations'];
 
 export interface InvalidatedRecommendations {
-    recommendations: Partial<ReviewRecommendations>; // At least one non-empty priority at runtime.
+    recommendations: Partial<ReviewRecommendations>; // May be all-empty: revised recommendations record the prior they displaced even when it held nothing.
     invalidated_by_critic_adjustment_ids: string[]; // Non-empty; each ID must name an applied adjustment.
 }
 
@@ -430,10 +430,13 @@ export interface FindingsLedger extends ReviewContent {
     // than duplicating if a proposal's ids are already recorded here.
     rejected_critic_adjustments?: CriticRejectedAdjustment[];
 
-    // Assessments invalidated by an applying batch, oldest first.
+    // Assessments invalidated by a batch that moves the ledger or by a
+    // revised assessment, oldest first.
     invalidated_assessments?: InvalidatedAssessment[];
 
-    // Recommendations withdrawn by an applying batch, citing the applied IDs.
+    // Recommendations invalidated by a batch that moves the ledger or
+    // displaced by revised recommendations (then recorded even when empty),
+    // citing the applied IDs.
     invalidated_recommendations?: InvalidatedRecommendations[];
 }
 

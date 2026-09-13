@@ -1094,7 +1094,9 @@ def _validate_invalidated_recommendations(value, applied_ids):
                 )
                 for entries in record["recommendations"].values()
             )
-            or not any(record["recommendations"].values())
+            # An all-empty prior is a legitimate record: revised
+            # recommendations displaced nothing, and the record is what
+            # attributes the standing advice (see _invalidate_recommendations).
         ):
             raise ValueError(f"{label}[{index}] is malformed")
         ids = record["invalidated_by_critic_adjustment_ids"]
@@ -1590,14 +1592,23 @@ def _invalidate_assessment(review, recorded_ids):
     review[INVALIDATED_ASSESSMENTS_KEY] = invalidated
 
 
-def _invalidate_recommendations(review, recorded_ids):
-    """Withdraw recommendations a moving batch may contradict, or that a
-    supplied replacement is about to displace."""
+def _invalidate_recommendations(review, recorded_ids, *, displaced):
+    """Invalidate recommendations a batch that moves the ledger may
+    contradict, or that supplied revised recommendations displace.
+
+    An empty prior is recorded only when revised recommendations displace
+    it (`displaced`): the record is what tells the renderer the standing
+    recommendations are the orchestrator's, and unlike the assessment,
+    which the ledger always carries, the reconciler's recommendations are
+    often empty. A moving batch that clears nothing has nothing to record.
+    """
     prior = review.get("recommendations")
     review["recommendations"] = {
         priority: [] for priority in RECOMMENDATION_PRIORITIES
     }
-    if not isinstance(prior, dict) or not any(prior.values()):
+    if not isinstance(prior, dict):
+        prior = {}
+    if not any(prior.values()) and not displaced:
         return
     invalidated = review.get(INVALIDATED_RECOMMENDATIONS_KEY)
     if not isinstance(invalidated, list):
@@ -1749,15 +1760,17 @@ def _apply_proposal(
             ledger.setdefault(VERDICT_BEFORE_ADJUSTMENTS_KEY, ledger["verdict"])
             ledger["verdict"] = derived["verdict"]
         ledger[APPLIED_IDS_KEY] = applied_records
-        # A replacement withdraws the prior on the record even when nothing
+        # Revised text invalidates the prior on the record even when nothing
         # moved: installing it over the reconciler's text would leave that
-        # text unrecoverable and the replacement rendered as the reconciler's.
+        # text unrecoverable and the revised text rendered as the reconciler's.
         if moved or revised_assessment:
             _invalidate_assessment(ledger, batch_ids)
         if revised_assessment:
             ledger[ASSESSMENT_KEY] = revised_assessment
         if moved or revised_recommendations is not None:
-            _invalidate_recommendations(ledger, batch_ids)
+            _invalidate_recommendations(
+                ledger, batch_ids, displaced=revised_recommendations is not None
+            )
         if revised_recommendations is not None:
             ledger["recommendations"] = revised_recommendations
     if refuted_count:

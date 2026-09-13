@@ -118,6 +118,22 @@ def _rejected_critic_decision(record):
     return adjustment_id, 'refuted'
 
 
+def _any_prior_advice(invalidated_recommendations) -> bool:
+    """Whether any invalidation record displaced actual advice.
+
+    Revised recommendations over an empty prior record the displacement
+    (that record is what attributes the standing advice), so a record
+    alone does not mean the reconciler's advice was lost.
+    """
+    if not isinstance(invalidated_recommendations, list):
+        return False
+    for entry in invalidated_recommendations:
+        prior = entry.get("recommendations") if isinstance(entry, dict) else None
+        if isinstance(prior, dict) and any(prior.values()):
+            return True
+    return False
+
+
 def render_review_body(data: Dict) -> str:
     """Everything a rendered review says beneath its title.
 
@@ -376,12 +392,17 @@ def render_review_body(data: Dict) -> str:
         if groups:
             md.append("## Recommendations\n\n")
             md.extend(groups)
-            if data.get('applied_critic_adjustments'):
+            # Keyed on the invalidation record, like the assessment marker:
+            # an applied batch that moved nothing and carried no revised
+            # recommendations leaves the reconciler's standing, and the
+            # record is written even over an empty prior when revised text
+            # displaces it, so it is the one fact that says whose these are.
+            if invalidated_recommendations:
                 md.append(
-                    "*Post-critic recommendations, installed after the critic "
+                    "*Revised recommendations, installed after the critic "
                     "adjustments applied.*\n\n"
                 )
-        elif invalidated_recommendations:
+        elif _any_prior_advice(invalidated_recommendations):
             md.append("## Recommendations\n\n")
             md.append(
                 "No current recommendations: the reconciler's were invalidated "

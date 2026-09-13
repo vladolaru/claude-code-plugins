@@ -27,7 +27,7 @@ The field earns its place where an artifact outlives the run that wrote it, or c
 | Artifact | Schema | Producing authority |
 |---|---:|---|
 | `reviewers/<agent>/review.draft.json`, `reviewers/<agent>/review.json` | 2 | `REVIEW_OUTPUT_SCHEMA`, `scripts/review/agent/output.py` (the optional `verifies` check field is additive; an absent key reads as "cites nothing") |
-| `review-findings.json` (the findings ledger) | 3 | `LEDGER_SCHEMA`, `scripts/review/findings_ledger.py`. Since 1.119.6 a finding's `sources` may cite a confirmed orchestrator note as `{"reviewer": "orchestrator", "id": "nN"}`; additive under the second carve-out, because a ledger written before it never carries one, this version's readers project either form, and the three recorded field runs under `tests/fixtures/review-runs/` stay readable |
+| `review-findings.json` (the findings ledger) | 3 | `LEDGER_SCHEMA`, `scripts/review/findings_ledger.py`. Since 1.119.6 a finding's `sources` may cite a confirmed orchestrator note as `{"reviewer": "orchestrator", "id": "nN"}`; additive under the second carve-out, because a ledger written before it never carries one, this version's readers project either form, and the three recorded field runs under `tests/fixtures/review-runs/` stay readable. Since 1.119.6 an `invalidated_recommendations` record may hold an all-empty prior (revised recommendations displaced nothing); the same carve-out, for the same reason |
 | `review-intake.json` | 2 | `close_review_intake()`, `scripts/review/reviewer_lifecycle.py` |
 | Telemetry JSONL events and `<log>.manifest.json` | 3 | `EVENT_SCHEMA`, `scripts/review/telemetry.py` |
 | `synthesis-agents.json` | 1 | `LIFECYCLE_SCHEMA`, `scripts/review/synthesis_lifecycle.py` |

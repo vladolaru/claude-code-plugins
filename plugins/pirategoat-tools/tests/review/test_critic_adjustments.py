@@ -1026,6 +1026,24 @@ class TestRecommendationsInvalidation:
         assert data["recommendations"] == self._RECS
         assert "invalidated_recommendations" not in data
 
+    def test_revised_recommendations_over_an_empty_prior_record_the_displacement(
+        self, tmp_path
+    ):
+        """The record is what says the standing recommendations are the
+        orchestrator's; without it, revised advice over an empty prior
+        would render as the reconciler's."""
+        _write_findings(tmp_path, [_finding("f1", "critical")])
+        ids, _ = _publish_and_adjudicate(tmp_path, [{
+            "action": "demote", "target": {"kind": "finding", "id": "f1"},
+            "fields": {"severity": "low"}, "rationale": "guarded upstream",
+        }], verified=(0,), recommendations={"suggestions": ["Add a nonce."]})
+        data = _ledger(tmp_path)
+        assert data["recommendations"]["suggestions"] == ["Add a nonce."]
+        assert data["invalidated_recommendations"] == [{
+            "recommendations": {p: [] for p in ("immediate", "important", "suggestions")},
+            "invalidated_by_critic_adjustment_ids": ids,
+        }]
+
     def test_empty_recommendations_record_no_invalidation(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1", "critical")])
         _publish_and_adjudicate(tmp_path, [{

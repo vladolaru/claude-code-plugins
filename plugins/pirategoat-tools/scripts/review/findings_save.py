@@ -79,6 +79,7 @@ CRITIC_OWNED_LEDGER_FIELDS = (
     critic_adjustments.REJECTED_ADJUSTMENTS_KEY,
     critic_adjustments.VERDICT_BEFORE_ADJUSTMENTS_KEY,
     critic_adjustments.INVALIDATED_ASSESSMENTS_KEY,
+    critic_adjustments.INVALIDATED_RECOMMENDATIONS_KEY,
     "findings_removed_by_critic",
     "checks_removed_by_critic",
 )
