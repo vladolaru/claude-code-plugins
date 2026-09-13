@@ -1312,6 +1312,17 @@ class TestBriefingFileDelivery:
         assert "Return STATUS: FINISHED" in result.stdout
         assert "Do not read the briefing" in result.stdout
         assert "mark_not_applicable" not in result.stdout
+        # The stub hands over the complete return signal, in the shape the
+        # briefing it tells the reviewer not to read would have taught.
+        for line in (
+            "  STATUS: FINISHED",
+            "  OUTPUT_FILES:",
+            f"    - {final}",
+            "  COUNTS: critical: 0, high: 0, medium: 0",
+            "  VERDICT: not_applicable",
+            f"  SUMMARY: {review['skip_reason']}",
+        ):
+            assert line in result.stdout.splitlines(), line
         assert "STATUS: NO_DOMAIN_FILES" in briefing_text(result)
         # agents_status reads the reviewer as finished, not running.
         from review.agents_status import check_status

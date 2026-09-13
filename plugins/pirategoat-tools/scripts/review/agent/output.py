@@ -34,7 +34,7 @@ import sys
 import uuid
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import List, Optional, Dict
+from typing import List, NamedTuple, Optional, Dict
 
 try:
     from .review_assignment import (
@@ -1391,11 +1391,19 @@ def finalize_review(output_dir: str, reviewer: str, review_digest: str):
     return {"final": paths.final, "review_digest": review_digest}
 
 
+class RecordedAbstention(NamedTuple):
+    """The final review bootstrap recorded for an empty scope and the
+    reason it states, which is what the reviewer's return signal carries."""
+    path: str
+    skip_reason: str
+
+
 def record_no_domain_files_review(
     output_dir: str, pr_id: str, reviewer: str, skip_reason: str
-) -> str:
+) -> RecordedAbstention:
     """Record and finalize the not_applicable review of a reviewer whose
-    scope matched no files, returning the final review path.
+    scope matched no files, returning the final review path and the reason
+    that review records.
 
     Called by bootstrap on NO_DOMAIN_FILES. The content is fully determined
     by scope, so no model turn is spent producing it, and the reviewer
@@ -1406,18 +1414,29 @@ def record_no_domain_files_review(
     other review gets; the builder's receipts and notes are swallowed
     because they advise a reviewer and bootstrap's stub is the only thing
     its caller reads. Idempotent: an
-    existing final review is returned untouched, so a bootstrap retry
-    cannot fail on its own success.
+    existing final review is returned untouched, with the reason it
+    already states, so a bootstrap retry cannot fail on its own success
+    and the signal never names a reason the review does not carry.
     """
     paths = review_paths(output_dir, reviewer)
     if os.path.exists(paths.final):
-        return paths.final
+        # A final that parses but is not an object is corrupt, and a
+        # ValueError is what bootstrap turns into STATUS: ERROR; an
+        # AttributeError from `.get` would escape as a traceback.
+        with open(paths.final, "r", encoding="utf-8") as handle:
+            review = json.load(handle)
+        if not isinstance(review, dict):
+            raise ValueError(f"malformed final review: {paths.final}")
+        recorded = review.get("skip_reason")
+        return RecordedAbstention(
+            paths.final, recorded if isinstance(recorded, str) else skip_reason
+        )
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         builder = ReviewOutputBuilder.open(output_dir, pr_id, reviewer)
         builder.mark_not_applicable(skip_reason)
         receipt = builder.save_draft()
         finalize_review(output_dir, reviewer, receipt["review_digest"])
-    return paths.final
+    return RecordedAbstention(paths.final, skip_reason)
 
 
 if __name__ == '__main__':

@@ -507,9 +507,14 @@ def extract_subagent_metrics(filepath: str) -> dict:
                 # The return-signal vocabulary: the four pipeline verdicts,
                 # the Linear pipeline's ALIGN, and the abstention a reviewer
                 # (or bootstrap, for an empty scope) returns in lower case.
+                # The label is case-insensitive (the reconciliator returns
+                # `Verdict:`), the token is not and ends at a word boundary,
+                # so a transcript line that discusses a verdict in prose is
+                # not one.
                 verdict_match = re.search(
-                    r"VERDICT:\s*(APPROVE|COMMENT|REQUEST_CHANGES|BLOCK|ALIGN|NOT_APPLICABLE)",
-                    line, re.IGNORECASE,
+                    r"(?i:VERDICT):\s*(APPROVE|COMMENT|REQUEST_CHANGES|BLOCK|ALIGN"
+                    r"|not_applicable|NOT_APPLICABLE)\b",
+                    line,
                 )
                 if verdict_match:
                     verdict = verdict_match.group(1).upper()

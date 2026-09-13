@@ -2731,11 +2731,12 @@ class TestRecordNoDomainFilesReview:
         from review.agent.output import record_no_domain_files_review
         from review.reviewer_lifecycle import review_paths
         _write_required_assignment(tmp_path, "code-clarity")
-        path = record_no_domain_files_review(
+        path, reason = record_no_domain_files_review(
             str(tmp_path), "68615", "code-clarity",
             "No clarity files among the changed files",
         )
         assert path == review_paths(str(tmp_path), "code-clarity").final
+        assert reason == "No clarity files among the changed files"
         review = json.loads(Path(path).read_text())
         assert review["verdict"] == "not_applicable"
         assert review["skip_reason"] == "No clarity files among the changed files"
@@ -2749,9 +2750,25 @@ class TestRecordNoDomainFilesReview:
         from review.agent.output import record_no_domain_files_review
         _write_required_assignment(tmp_path, "code-clarity")
         first = record_no_domain_files_review(str(tmp_path), "68615", "code-clarity", "No clarity files")
-        before = Path(first).read_bytes()
+        before = Path(first.path).read_bytes()
         second = record_no_domain_files_review(str(tmp_path), "68615", "code-clarity", "a different reason")
-        assert second == first and Path(first).read_bytes() == before
+        # The reason returned is the one the review states, so the signal
+        # built from it never names a sentence the review does not carry.
+        assert second == first and Path(first.path).read_bytes() == before
+
+    @pytest.mark.parametrize("corrupt", ["[]", '"text"', "{oops"])
+    def test_a_corrupt_existing_final_fails_closed(self, tmp_path, corrupt):
+        """Bootstrap catches ValueError and prints STATUS: ERROR; a final
+        that parses to a non-object must reach it the same way, not as an
+        AttributeError traceback."""
+        from review.agent.output import record_no_domain_files_review
+        from review.reviewer_lifecycle import review_paths
+        _write_required_assignment(tmp_path, "code-clarity")
+        final = Path(review_paths(str(tmp_path), "code-clarity").final)
+        final.parent.mkdir(parents=True, exist_ok=True)
+        final.write_text(corrupt)
+        with pytest.raises(ValueError):
+            record_no_domain_files_review(str(tmp_path), "68615", "code-clarity", "No clarity files")
 
     def test_a_saved_draft_without_a_final_is_finalized(self, tmp_path, capsys):
         """The crash window between save and finalize: a retry rehydrates
@@ -2763,7 +2780,7 @@ class TestRecordNoDomainFilesReview:
         b.mark_not_applicable("No clarity files")
         b.save_draft()
         capsys.readouterr()
-        path = record_no_domain_files_review(str(tmp_path), "68615", "code-clarity", "No clarity files")
+        path, _reason = record_no_domain_files_review(str(tmp_path), "68615", "code-clarity", "No clarity files")
         assert Path(path).exists()
         assert not Path(review_paths(str(tmp_path), "code-clarity").draft).exists()
 

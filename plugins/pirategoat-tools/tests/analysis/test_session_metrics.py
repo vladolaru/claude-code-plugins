@@ -272,6 +272,8 @@ class TestVerdictVocabulary:
         ("STATUS: FINISHED\nVERDICT: NOT_APPLICABLE", "not_applicable"),
         ("STATUS: FINISHED\nVERDICT: BLOCK\nCOUNTS: critical: 1", "BLOCK"),
         ("STATUS: FINISHED\nVERDICT: APPROVE", "APPROVE"),
+        # The reconciliator's return (agents/review-reconciliator.md).
+        ("RECONCILIATION COMPLETE\nVerdict: REQUEST_CHANGES", "REQUEST_CHANGES"),
     ])
     def test_verdict_is_read_from_the_return_signal(self, tmp_path, line, expected):
         path = _write_jsonl(
@@ -282,4 +284,22 @@ class TestVerdictVocabulary:
             str(tmp_path),
         )
         assert _mod.extract_subagent_metrics(path)["verdict"] == expected
+
+    @pytest.mark.parametrize("line", [
+        "the expected verdict: approve when the tests are present",
+        "VERDICT: APPROVED",
+        "VERDICT: comment",
+    ])
+    def test_prose_and_near_misses_are_not_a_verdict(self, tmp_path, line):
+        """The signal is the upper-case token (or the lower-case abstention)
+        at a word boundary; a transcript line that discusses a verdict, or
+        misspells one, reports none rather than the nearest match."""
+        path = _write_jsonl(
+            [
+                _make_user_message("python3 bootstrap.py --agent security-reviewer"),
+                _make_assistant_message(line),
+            ],
+            str(tmp_path),
+        )
+        assert _mod.extract_subagent_metrics(path)["verdict"] is None
 

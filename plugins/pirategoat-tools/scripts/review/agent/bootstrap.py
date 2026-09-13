@@ -41,7 +41,7 @@ if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
 from review.reviewer_names import derive_reviewer_name
-from review.agent.output import record_no_domain_files_review
+from review.agent.output import RecordedAbstention, record_no_domain_files_review
 from review.agent.review_assignment import ASSIGNMENT_SCHEMA, derive_reviewed_files
 from review.atomic_io import atomic_write_json, atomic_write_text
 from review.change_purpose import parse_change_purpose
@@ -1301,9 +1301,26 @@ BRIEFING_STUB_GUIDANCE = (
 NO_DOMAIN_FILES_GUIDANCE = (
     "Nothing to review: no changed file is in your domain, and your "
     "not_applicable review is already recorded at the REVIEW path above. "
-    "Do not read the briefing or open the builder. Return STATUS: FINISHED, "
-    "VERDICT: not_applicable, and the REVIEW path as your only output file."
+    "Do not read the briefing or open the builder. Return STATUS: FINISHED "
+    "with exactly this signal:"
 )
+
+
+def no_domain_files_signal(path: str, skip_reason: str) -> List[str]:
+    """The complete return signal for an empty-scope reviewer.
+
+    The briefing teaches the five-line signal, and the stub tells this
+    reviewer not to read the briefing, so the stub carries the signal
+    itself: one shape for every return, whoever recorded the review.
+    """
+    return [
+        "  STATUS: FINISHED",
+        "  OUTPUT_FILES:",
+        f"    - {path}",
+        "  COUNTS: critical: 0, high: 0, medium: 0",
+        "  VERDICT: not_applicable",
+        f"  SUMMARY: {skip_reason}",
+    ]
 
 
 def deliver_briefing(
@@ -1314,13 +1331,14 @@ def deliver_briefing(
     agent_name: str,
     plugin_root: str,
     status: str,
-    recorded_review: Optional[str] = None,
+    recorded_review: Optional[RecordedAbstention] = None,
 ) -> str:
     """Write one reviewer's briefing to the run directory, return the stub.
 
     `recorded_review` is the final review bootstrap wrote for an empty
-    scope; the stub then names it and replaces the read-the-briefing
-    guidance with the return-FINISHED one.
+    scope, with the reason it states; the stub then names the review and
+    replaces the read-the-briefing guidance with the complete return
+    signal.
 
     Unconditional, with no size threshold and no inline branch: two
     delivery shapes would be two conventions for one thing, and the
@@ -1351,7 +1369,8 @@ def deliver_briefing(
         f"BRIEFING_BYTES: {len(text.encode('utf-8'))}",
     ]
     if recorded_review is not None:
-        lines += [f"REVIEW: {recorded_review}", NO_DOMAIN_FILES_GUIDANCE]
+        lines += [f"REVIEW: {recorded_review.path}", NO_DOMAIN_FILES_GUIDANCE]
+        lines += no_domain_files_signal(*recorded_review)
     else:
         lines.append(BRIEFING_STUB_GUIDANCE)
     return "\n".join(lines)
