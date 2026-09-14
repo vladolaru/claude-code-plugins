@@ -1231,7 +1231,7 @@ def build_output(
     lines.append(
         "OUTPUT_DIR accepts only your named artifacts (the files this "
         "briefing tells you to write). Scratch work — diff slices, notes, "
-        "intermediate files — goes in OUTPUT_DIR/tmp/ (create it first)."
+        "intermediate files — goes in OUTPUT_DIR/tmp/, which the run already has."
     )
     lines.append("")
     pr_id_str = pr_number if pr_number else "0"

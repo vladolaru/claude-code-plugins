@@ -29,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Registering several orchestrator notes in one call now records every one of them: a repeated `--note` flag used to keep only the last claim while printing a success line for it, so the other claims never reached the reconciliator.
 - The step-10 briefing now names one recovery for a decision critic that an API error killed before it saved (resume it with one message, or dispatch it once more, and note the retry in the report), where it covered only a critic that produced no verdict.
 - The critic's dispatch prompt now also carries the plugin scripts directory, so the critic saves through the same code the run was built with instead of the machine-wide pointer file.
-- The dependency-refresh request, the reconciliator's staged ledger, the critic's draft findings and adjustments, and the adjudication request are now staged under the run's own `tmp/` directory instead of fixed names in `$TMPDIR`, which every session on a machine shares; two concurrent reviews could read each other's staged file as their own input.
+- The dependency-refresh request, the reconciliator's staged ledger, the critic's draft findings and adjustments, and the adjudication request are now staged under the run's own `tmp/` directory instead of fixed names in `$TMPDIR`, which every session on a machine shares; two concurrent reviews could read each other's staged file as their own input. Every pipeline step call creates that directory, so reviewers are no longer told to create it themselves.
 
 ## [1.119.5] - 2026-09-12
 
