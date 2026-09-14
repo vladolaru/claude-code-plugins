@@ -14,8 +14,8 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from review import dispatch_adjust  # noqa: E402
 from review.dispatch_status import (  # noqa: E402
-    DISPATCH, DISPATCH_OVERRIDE, OVERRIDE_REASON_KEY, PLANNER_STATUS_KEY, SKIPPED,
-    SKIPPED_OVERRIDE, SKIPPED_TRIAGE,
+    DISPATCH, DISPATCH_OVERRIDE, EXECUTION_ISOLATED, OVERRIDE_REASON_KEY, PLANNER_STATUS_KEY,
+    SIGNAL_NO_DOMAIN_FILES, SIGNAL_REPO_REVIEWER, SKIPPED, SKIPPED_OVERRIDE, SKIPPED_TRIAGE,
 )
 from review.run_paths import artifact_path  # noqa: E402
 from helpers.review_fixtures import write_artifact  # noqa: E402
@@ -284,6 +284,28 @@ class TestRefusedOverrides:
             tmp_path, dispatches=[("woo-regression-reviewer", "the PHP is in a template")]
         )
         assert result["adjustments"][0]["to"] == DISPATCH_OVERRIDE
+
+    @pytest.mark.parametrize("signal", [SIGNAL_REPO_REVIEWER, SIGNAL_NO_DOMAIN_FILES])
+    def test_dispatch_of_an_isolated_repo_reviewer_is_refused(self, tmp_path, signal):
+        """The planner skips a repo reviewer declared for isolated execution,
+        and bootstrap refuses to run its prompt inline, so a forced dispatch
+        could only spend a subagent on that refusal. Isolation is the reason
+        named even when the reviewer also matched no files: it is why the
+        reviewer cannot run at all."""
+        _plan(tmp_path, agents=[{
+            "name": "repo-renewals-reviewer", "status": SKIPPED, "reason": "r",
+            "signal": signal, "execution": EXECUTION_ISOLATED,
+        }])
+        before = artifact_path(tmp_path, "dispatch_plan").read_text()
+        with pytest.raises(dispatch_adjust.DispatchAdjustmentError) as err:
+            dispatch_adjust.adjust_dispatch_plan(
+                tmp_path, dispatches=[("repo-renewals-reviewer", "the renewals logic changed")]
+            )
+        message = "; ".join(err.value.problems)
+        assert "repo-renewals-reviewer is declared for isolated execution" in message
+        assert "no files in its domain" not in message
+        assert "reconciliation_notes.py" in message
+        assert artifact_path(tmp_path, "dispatch_plan").read_text() == before
 
     @pytest.mark.parametrize("evidence", ["started", "final"])
     @pytest.mark.parametrize("name, reviewer", [

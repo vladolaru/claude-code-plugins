@@ -45,6 +45,7 @@ from review.agent.output import NotApplicableReview, record_no_domain_files_revi
 from review.agent.review_assignment import ASSIGNMENT_SCHEMA, derive_reviewed_files
 from review.atomic_io import atomic_write_json, atomic_write_text
 from review.change_purpose import parse_change_purpose
+from review.dispatch_status import EXECUTION_INLINE, EXECUTION_ISOLATED, EXECUTIONS
 from review.manifest_sections import host_identity_phrase, project_host_entry
 from review.run_paths import artifact_path
 from review.triage_sources import strip_html_comments
@@ -1502,10 +1503,10 @@ def resolve_reviewer_identity(args):
                 "Adapter ref-mode requires --instance-name.",
             ),
         )
-    if ref_mode and args.execution == "isolated":
-        # Defense in depth behind plan_dispatch's refusal: an explicit
-        # isolation request must never silently widen into inline
-        # execution of the repo prompt — not even via a dispatch override.
+    if ref_mode and args.execution == EXECUTION_ISOLATED:
+        # Defense in depth behind the planner's skip and dispatch_adjust's
+        # refusal of an override: an explicit isolation request must never
+        # silently widen into inline execution of the repo prompt.
         return (
             agent_name,
             args.instance_name,
@@ -1597,8 +1598,8 @@ def main():
     )
     parser.add_argument(
         "--execution",
-        default="inline",
-        choices=["inline", "isolated"],
+        default=EXECUTION_INLINE,
+        choices=sorted(EXECUTIONS),
         help="How the adapter runs the repo reviewer (adapter ref-mode).",
     )
     parser.add_argument(

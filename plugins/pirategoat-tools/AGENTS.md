@@ -35,7 +35,7 @@ This file holds the rules and the map. A fact about one module lives in that mod
 | `scripts/review/triage_sources.py` | The prose the keyword triage reads, reduced to the author's words. Stdlib-only leaf. |
 | `scripts/review/change_purpose.py` | Parser of the step-3 change purpose (Verify and Context items) and of who may cite a Verify item. Stdlib-only leaf. |
 | `scripts/review/dispatch_adjust.py` | The orchestrator's one channel for step-5 dispatch overrides (`--skip`, `--dispatch`). |
-| `scripts/review/dispatch_status.py` | Dispatch-status and signal vocabulary; `load_dispatch_plan()` is the one plan reader. |
+| `scripts/review/dispatch_status.py` | Dispatch-plan row vocabulary (statuses, signals, field keys, execution modes); `load_dispatch_plan()` is the one plan reader. |
 | `scripts/review/agent/bootstrap.py` | Builds each reviewer's structured prompt: protocol extraction, scope, output instructions. |
 | `scripts/review/agent/scope.py` | Domain-filtered diff scoping; language recognition lives in its `_*_LANGS` groups only. |
 | `scripts/review/agent/output.py` | `ReviewOutputBuilder`: draft, finalize, and the `finalize-review` CLI. |

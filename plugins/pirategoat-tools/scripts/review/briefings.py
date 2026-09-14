@@ -23,6 +23,7 @@ try:
         ORPHANED_FILES_KEY,
         ORPHANED_FILES_LEAD,
         DISPATCHED_STATUSES,
+        EXECUTION_INLINE,
         SKIPPED_QUICK_MODE,
         SKIPPED_STATUSES,
     )
@@ -53,6 +54,7 @@ except ImportError:
         ORPHANED_FILES_KEY,
         ORPHANED_FILES_LEAD,
         DISPATCHED_STATUSES,
+        EXECUTION_INLINE,
         SKIPPED_QUICK_MODE,
         SKIPPED_STATUSES,
     )
@@ -1050,9 +1052,11 @@ def _step_5_dispatch_plan(mode, state, context, config, output_dir):
         "something the plan missed."
     )
     actions.append(
-        '- An agent skipped for "no files in … domain" cannot be force-dispatched: '
-        "its scope is empty and no review comes of it. A claim you want "
-        "checked against the code is a step-8 note (reconciliation_notes.py)."
+        '- An agent skipped for "no files in … domain", or a repo reviewer skipped '
+        "for isolated execution, cannot be force-dispatched: no review comes of "
+        "it (its scope is empty, or bootstrap refuses to run its prompt inline). "
+        "A claim you want checked against the code is a step-8 note "
+        "(reconciliation_notes.py)."
     )
     actions.append("")
     actions.append(
@@ -1181,7 +1185,7 @@ def _step_6_dispatch_agents(mode, state, context, config, output_dir):
                     "--instance-name", name,
                     "--repo-agent-ref", agent.get("ref") or "",
                     "--adapter-label", agent.get("label") or name,
-                    "--execution", agent.get("execution") or "inline",
+                    "--execution", agent.get("execution") or EXECUTION_INLINE,
                     "--channel", agent.get("channel") or "blocking",
                     "--scope-domains", scope_domains,
                     # The tier actually dispatched for this instance (the

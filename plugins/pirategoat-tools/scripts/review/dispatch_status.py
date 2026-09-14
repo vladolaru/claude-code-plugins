@@ -1,4 +1,5 @@
-"""Canonical dispatch-status and signal vocabulary, producers and consumers.
+"""Canonical dispatch-plan row vocabulary: statuses, signals, field keys and
+execution modes, for producers and consumers.
 
 ``load_dispatch_plan(path)`` is the one reader of a dispatch plan: it
 requires JSON, requires an object, and validates the plan's agents, so
@@ -46,6 +47,15 @@ PLANNER_STATUS_KEY = "planner_status"
 # briefing; the lead is the one spelling both renderers use.
 ORPHANED_FILES_KEY = "orphaned_files"
 ORPHANED_FILES_LEAD = "leaves reviewed by no one: "
+
+# How a repo reviewer runs, as its declaration states and its plan row
+# carries under `execution`. Only inline execution exists: every step that
+# could run an isolated reviewer refuses it (the planner skips it,
+# dispatch_adjust refuses an override, bootstrap exits with an error)
+# rather than widen the request into inline execution.
+EXECUTION_INLINE = "inline"
+EXECUTION_ISOLATED = "isolated"
+EXECUTIONS = frozenset({EXECUTION_INLINE, EXECUTION_ISOLATED})
 
 DISPATCHED_STATUSES = frozenset({DISPATCH, DISPATCH_OVERRIDE})
 SKIPPED_STATUSES = frozenset({
@@ -150,6 +160,9 @@ __all__ = [
     "DISPATCHED_STATUSES",
     "SKIPPED_STATUSES",
     "SUPPORTED_DISPATCH_STATUSES",
+    "EXECUTION_INLINE",
+    "EXECUTION_ISOLATED",
+    "EXECUTIONS",
     "SIGNAL_NO_DOMAIN_FILES",
     "SIGNAL_ALWAYS",
     "SIGNAL_TEST_ONLY",

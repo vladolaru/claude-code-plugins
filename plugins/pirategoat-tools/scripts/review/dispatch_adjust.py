@@ -10,13 +10,14 @@ under the run-directory lock. An unknown name, an empty reason or a
 malformed plan exits 1 and writes nothing. A request that moves no status is
 never refused: an agent already in the requested family is a reported
 `UNCHANGED` no-op, and a new reason on an override already in place is a
-reported `UPDATED` reason, so a re-run is idempotent. Two transitions are
-refused because they cannot do what they say: a `--dispatch` of a
-`no_domain_files` skip (bootstrap scopes the agent to the same empty domain,
-and no review comes of it) and a `--skip` of a dispatched agent whose
-started marker or final review exists (a skipped row is no longer waited
-for, so the skip only hides a live reviewer); each refusal names the route
-that works.
+reported `UPDATED` reason, so a re-run is idempotent. Three transitions are
+refused because they cannot do what they say: a `--dispatch` of a repo
+reviewer declared for isolated execution (bootstrap refuses to run its
+prompt inline), a `--dispatch` of a `no_domain_files` skip (bootstrap scopes
+the agent to the same empty domain, and no review comes of it) and a
+`--skip` of a dispatched agent whose started marker or final review exists
+(a skipped row is no longer waited for, so the skip only hides a live
+reviewer); each refusal names the route that works.
 
 `dispatch_status.OVERRIDE_REASON_KEY`, `PLANNER_STATUS_KEY` and
 `ORPHANED_FILES_KEY` are the one spelling of the fields written here. Each
@@ -37,7 +38,8 @@ import sys
 try:
     from . import atomic_io
     from .dispatch_status import (
-        DISPATCH_OVERRIDE, DISPATCHED_STATUSES, ORPHANED_FILES_KEY, ORPHANED_FILES_LEAD,
+        DISPATCH_OVERRIDE, DISPATCHED_STATUSES, EXECUTION_ISOLATED, ORPHANED_FILES_KEY,
+        ORPHANED_FILES_LEAD,
         OVERRIDE_REASON_KEY, PLANNER_STATUS_KEY, SIGNAL_NO_DOMAIN_FILES, SKIPPED_OVERRIDE,
         SKIPPED_STATUSES, load_dispatch_plan,
     )
@@ -52,7 +54,8 @@ except ImportError:
         sys.path.insert(0, _scripts_parent)
     from review import atomic_io
     from review.dispatch_status import (
-        DISPATCH_OVERRIDE, DISPATCHED_STATUSES, ORPHANED_FILES_KEY, ORPHANED_FILES_LEAD,
+        DISPATCH_OVERRIDE, DISPATCHED_STATUSES, EXECUTION_ISOLATED, ORPHANED_FILES_KEY,
+        ORPHANED_FILES_LEAD,
         OVERRIDE_REASON_KEY, PLANNER_STATUS_KEY, SIGNAL_NO_DOMAIN_FILES, SKIPPED_OVERRIDE,
         SKIPPED_STATUSES, load_dispatch_plan,
     )
@@ -166,11 +169,21 @@ def _refusal(output_dir, agent, action):
     A `no_domain_files` skip is a scope fact, not a triage judgment:
     bootstrap scopes the agent to the same domain the planner measured,
     and finds nothing, so the dispatch buys a subagent spawn and no
-    review (five cohort attempts, zero findings). A started agent cannot be un-dispatched: agents_status
+    review (five cohort attempts, zero findings). A repo reviewer declared
+    for isolated execution is refused by bootstrap before it reviews
+    anything, because isolation does not exist and inline execution would
+    widen the request. A started agent cannot be un-dispatched: agents_status
     stops waiting for a skipped row, so the skip only hides a reviewer
     that is still running or has already finished.
     """
     name = agent["name"]
+    if action == ACTION_DISPATCH and agent.get("execution") == EXECUTION_ISOLATED:
+        return (
+            f"{name} is declared for isolated execution, which is not implemented: "
+            "bootstrap refuses to run its prompt inline, so a forced dispatch "
+            "produces no review. A claim you want checked against the code is a "
+            "step-8 note (reconciliation_notes.py --note)"
+        )
     if action == ACTION_DISPATCH and agent.get("signal") == SIGNAL_NO_DOMAIN_FILES:
         return (
             f"{name} has no files in its domain (signal {SIGNAL_NO_DOMAIN_FILES}): "
