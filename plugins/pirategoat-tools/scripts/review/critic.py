@@ -19,13 +19,13 @@ from typing import Optional
 
 try:
     from . import atomic_io, critic_adjustments
-    from .run_paths import artifact_path
+    from .run_paths import artifact_path, scratch_dir
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
     from review import atomic_io, critic_adjustments
-    from review.run_paths import artifact_path
+    from review.run_paths import artifact_path, scratch_dir
 
 atomic_write_text = atomic_io.atomic_write_text
 
@@ -244,8 +244,8 @@ def get_step_guidance(
                 "same proposal; a check that restates a refuted claim leaves the record "
                 "contradicting itself, and nothing after you can touch a check.",
                 "",
-                "Author findings in `$TMPDIR/"
-                f"{artifact_path('', 'critic_findings').name}` "
+                "Author findings in `"
+                f"{scratch_dir(output_dir) / artifact_path('', 'critic_findings').name}` "
                 "using the format specified in the agent definition; never "
                 f"write `{artifact_path(output_dir, 'critic_findings')}` directly.",
                 "Invoke `critic.py --save` for the final STAND, REVISE, or "

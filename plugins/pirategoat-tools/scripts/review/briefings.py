@@ -32,7 +32,7 @@ try:
         LEDGER_MOVES, STAND_BATCH_RULE, quick_mode_skips_critic,
     )
     from .review_document import RECOMMENDATION_PRIORITIES
-    from .run_paths import artifact_path
+    from .run_paths import artifact_path, scratch_dir
     from .telemetry_share import CONSENT_DISCLOSURE, REMOTE_REPO
 except ImportError:
     _scripts_parent = str(Path(__file__).resolve().parent.parent)
@@ -63,7 +63,7 @@ except ImportError:
         LEDGER_MOVES, STAND_BATCH_RULE, quick_mode_skips_critic,
     )
     from review.review_document import RECOMMENDATION_PRIORITIES
-    from review.run_paths import artifact_path
+    from review.run_paths import artifact_path, scratch_dir
     from review.telemetry_share import CONSENT_DISCLOSURE, REMOTE_REPO
 
 
@@ -96,6 +96,17 @@ def _artifact_run_path(key):
     orchestrator matches the file's real location, not a bare basename.
     """
     return str(artifact_path("", key))
+
+
+def _scratch_display(output_dir, name):
+    """Render one staging path under the run's own scratch directory.
+
+    Staged inputs to a validating save (a request, a draft) used to be
+    named under `$TMPDIR`, which every session on a machine shares and
+    which pirategoat-bot never scopes per run; the run directory already
+    owns `tmp/` (`run_paths.scratch_dir`, created at allocation).
+    """
+    return str(scratch_dir(output_dir or "<OUTPUT_DIR>") / name)
 
 
 # ---------------------------------------------------------------------------
@@ -735,13 +746,13 @@ def _dependency_refresh_briefing(state, config, output_dir):
         f"`python3 {SCRIPTS_DIR / 'context.py'} --output-dir {od} "
         "--refresh-host-context`",
         "4. Prepare the exact schema-1 request at "
-        "`$TMPDIR/dependency-refresh-report.json`. When inspection finds no "
+        f"`{_scratch_display(od, 'dependency-refresh-report.json')}`. When inspection finds no "
         "refresh work, report `not_needed` with an empty command list.",
         "",
     ]
 
     handoff = [
-        "Prepare one of these request shapes under `$TMPDIR`:",
+        f"Prepare one of these request shapes at `{_scratch_display(od, 'dependency-refresh-report.json')}`:",
         "```json",
         '{"schema": 1, "status": "not_needed", "commands": []}',
         "```",
@@ -754,7 +765,7 @@ def _dependency_refresh_briefing(state, config, output_dir):
         "Publish it only through the validating save channel:",
         f"`python3 {SCRIPTS_DIR / 'dependency_refresh.py'} save "
         f"--output-dir {od} --report "
-        '"$TMPDIR/dependency-refresh-report.json"`',
+        f'"{_scratch_display(od, "dependency-refresh-report.json")}"`',
         "Proceed only when the command prints literal `SAVED "
         f"{_artifact_run_path('dependency_refresh')}`.",
     ]
@@ -2144,13 +2155,13 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append(f"Context: <one-line summary of PR scope, verdict, and finding count>")
     actions.append(
         "Return STAND, REVISE, or ESCALATE. Author findings first at "
-        f"`$TMPDIR/{_artifact_name('critic_findings')}`, then publish the findings "
+        f"`{_scratch_display(od, _artifact_name('critic_findings'))}`, then publish the findings "
         "and verdict through `critic.py --save` for every verdict. Never "
         "write a canonical `decision-critic-*` artifact directly."
     )
     actions.append(
         "On REVISE, also author every finding or check adjustment in "
-        f"`$TMPDIR/{_artifact_name('critic_adjustments')}`; on a STAND that "
+        f"`{_scratch_display(od, _artifact_name('critic_adjustments'))}`; on a STAND that "
         f"carries wording corrections, that file holds {STAND_BATCH_RULE}. "
         "Pass it to the same `critic.py --save` command, per your agent "
         "instructions; a bare STAND or an ESCALATE invokes the command "
@@ -2221,8 +2232,7 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     )
     actions.append(
         "2) Probe the claims with `git grep`/`Read`, then author ONLY "
-        "this schema-2 adjudication request under `$TMPDIR` (create the "
-        "directory first if needed):"
+        f"this schema-2 adjudication request at `{_scratch_display(od, 'critic-adjudication.json')}`:"
     )
     actions.append("```json")
     actions.append("{")
@@ -2263,13 +2273,13 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         "text on the record; a batch you refute whole installs neither."
     )
     actions.append(
-        "3) Save the request as `$TMPDIR/critic-adjudication.json`, then run "
+        "3) Save the request there, then run "
         "the validating adjudication channel exactly once:"
     )
     actions.append("```bash")
     actions.append(
         f'python3 {SCRIPTS_DIR}/critic_adjustments.py adjudicate '
-        f'--output-dir "{od}" < "$TMPDIR/critic-adjudication.json"'
+        f'--output-dir "{od}" < "{_scratch_display(od, "critic-adjudication.json")}"'
     )
     actions.append("```")
     actions.append(

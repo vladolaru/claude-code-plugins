@@ -2320,6 +2320,16 @@ class TestStep10DecisionCritic:
         assert "omitted" in revise and "not_checked" in revise
         assert "Never report the batch in aggregate anywhere" in revise
 
+    def test_critic_and_adjudication_files_are_staged_in_the_run_scratch_dir(self, mod, tmp_path):
+        """B's orchestrator found A's critic-adjudication.json at the
+        $TMPDIR path it was about to use (2026-09-14); pirategoat-bot runs
+        five reviews under one $TMPDIR."""
+        g = mod.get_step_guidance(10, "pr", {"completed_steps": [], "ledger_status": "ok"}, {}, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert f"{tmp_path}/tmp/decision-critic-findings.md" in text
+        assert f"{tmp_path}/tmp/decision-critic-adjustments.json" in text
+        assert f"{tmp_path}/tmp/critic-adjudication.json" in text
+
     def test_prompt_names_the_scripts_directory(self, mod, tmp_path):
         """The critic saves through critic.py; without this line its only
         source for the plugin root was the machine-wide pointer file, so a
@@ -2462,7 +2472,7 @@ class TestStep10DecisionCritic:
 
         g = mod.get_step_guidance(10, "pr", {"completed_steps": []}, {}, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
-        block = text.split("adjudication request under", 1)[1]
+        block = text.split("adjudication request at", 1)[1]
         request = json.loads(block.split("```json\n", 1)[1].split("\n```", 1)[0])
         recommendations = {"immediate": ["Fix f1 before merge."], "important": [], "suggestions": []}
         _write_findings(
@@ -3502,6 +3512,15 @@ class TestStep3DependencyRefresh:
         text = self._text(g)
         assert "Dependency refresh" not in text
         assert "dependency-refresh.json" not in text
+
+    def test_refresh_request_is_staged_in_the_run_scratch_dir(self, mod, tmp_path):
+        """Two interactive sessions on one machine share $TMPDIR, and the
+        report carries no run identity, so a fixed name there could be read
+        as this run's report. The run already owns tmp/."""
+        config = {"mode": "full", "interactive": True, "refresh_dependencies": True}
+        g = mod.get_step_guidance(3, "full", dict(self._CLEAN_STATE), {}, config=config, output_dir=str(tmp_path))
+        text = self._text(g)
+        assert f"{tmp_path}/tmp/dependency-refresh-report.json" in text
 
 
 class TestStep11Projection:

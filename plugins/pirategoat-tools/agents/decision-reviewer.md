@@ -119,11 +119,10 @@ uncommitted work.
 one of
 those artifacts is produced by one validating, atomic save command, and a
 hand-written file bypasses the validation that command performs. Author your
-content in `$TMPDIR` first, then hand it to the script.
+content under `<Output Directory>/tmp/` first, then hand it to the script.
 
 **3a. Write your findings Markdown to a temp file** —
-`$TMPDIR/decision-critic-findings.md` (create `$TMPDIR` first if it does not
-exist):
+`<Output Directory>/tmp/decision-critic-findings.md` (the run creates `tmp/`; it is yours to write in):
 
 ```markdown
 # Decision Critic Findings
@@ -160,7 +159,7 @@ exist):
 <If STAND: "None — conclusions are sound.", or the wording corrections you filed as `correct` adjustments>
 ```
 
-**3b. On REVISE, and on STAND when you have wording corrections, also write the machine-readable form** to `$TMPDIR/decision-critic-adjustments.json`. Every finding or check adjustment you recommend must be recorded there so the pipeline can carry it into `review-findings.json` — a recommendation that exists only as prose cannot reach the machine-readable ledger. A STAND batch holds finding `correct` entries only, none touching `file` or `line`; the save command rejects a STAND whose batch moves a severity, a scope, a check or the finding set (that is a REVISE) and a REVISE that carries wording corrections alone (that rides STAND). On ESCALATE, or a STAND with nothing to correct, skip this file.
+**3b. On REVISE, and on STAND when you have wording corrections, also write the machine-readable form** to `<Output Directory>/tmp/decision-critic-adjustments.json`. Every finding or check adjustment you recommend must be recorded there so the pipeline can carry it into `review-findings.json` — a recommendation that exists only as prose cannot reach the machine-readable ledger. A STAND batch holds finding `correct` entries only, none touching `file` or `line`; the save command rejects a STAND whose batch moves a severity, a scope, a check or the finding set (that is a REVISE) and a REVISE that carries wording corrections alone (that rides STAND). On ESCALATE, or a STAND with nothing to correct, skip this file.
 
 This is a schema 2 proposal contract: you address only stable `finding` and `check` targets, not ledger-level prose, and author only the action-specific target/fields plus a rationale. Author only `action`, `target`, `fields`, and `rationale`; the save path assigns `adjustment_id`, and the orchestrator's adjudication is recorded in the ledger, never in this file. A content change must therefore stay attached to a finding or check here:
 
@@ -209,18 +208,18 @@ SCRIPTS_DIR="<Plugin scripts directory from the dispatch prompt>"
 # ESCALATE, or STAND with nothing to correct (no adjustments file):
 python3 $SCRIPTS_DIR/review/critic.py --save \
   --verdict "<STAND | ESCALATE>" \
-  --findings "$TMPDIR/decision-critic-findings.md" \
+  --findings "<Output Directory>/tmp/decision-critic-findings.md" \
   --output-dir "<Output Directory>"
 
 # REVISE, or STAND with `correct` adjustments (adjustments file required):
 python3 $SCRIPTS_DIR/review/critic.py --save \
   --verdict "<REVISE | STAND>" \
-  --findings "$TMPDIR/decision-critic-findings.md" \
-  --adjustments "$TMPDIR/decision-critic-adjustments.json" \
+  --findings "<Output Directory>/tmp/decision-critic-findings.md" \
+  --adjustments "<Output Directory>/tmp/decision-critic-adjustments.json" \
   --output-dir "<Output Directory>"
 ```
 
-The command validates everything before writing anything: an unrecognized verdict, a missing or unreadable findings/adjustments file, a non-proposal field, an invalid adjustments batch, or a batch its verdict does not admit (see 3b) all print one `REJECTED: <problem>` line per problem and exit non-zero with the previous complete snapshot untouched. For any batch it assigns a stable `adjustment_id` to every entry, then writes the proposal and its digest-bound verdict marker under the shared lock; the proposal is never rewritten afterwards. A bare STAND and an ESCALATE commit the digest of canonical `{"schema": 2, "adjustments": []}`. A clean run prints `RECORDED VERDICT`, every assigned ID under `RECORDED ADJUSTMENTS`, and `PROPOSAL DIGEST`; an interrupted publication has no readable marker and is safe to retry. If validation rejects your batch, fix the named problem in your `$TMPDIR` files and re-run the same command — do not work around a rejection by writing output artifacts yourself.
+The command validates everything before writing anything: an unrecognized verdict, a missing or unreadable findings/adjustments file, a non-proposal field, an invalid adjustments batch, or a batch its verdict does not admit (see 3b) all print one `REJECTED: <problem>` line per problem and exit non-zero with the previous complete snapshot untouched. For any batch it assigns a stable `adjustment_id` to every entry, then writes the proposal and its digest-bound verdict marker under the shared lock; the proposal is never rewritten afterwards. A bare STAND and an ESCALATE commit the digest of canonical `{"schema": 2, "adjustments": []}`. A clean run prints `RECORDED VERDICT`, every assigned ID under `RECORDED ADJUSTMENTS`, and `PROPOSAL DIGEST`; an interrupted publication has no readable marker and is safe to retry. If validation rejects your batch, fix the named problem in your `tmp/` files and re-run the same command — do not work around a rejection by writing output artifacts yourself.
 
 ## Return to Caller
 

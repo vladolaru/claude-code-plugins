@@ -103,7 +103,7 @@ class TestOutputPathInSynthesis:
         output = critic_module.format_output(4, 4, guidance)
         assert "/tmp/test-critic-output" in output
         assert "decision-critic-findings.md" in output
-        assert "$TMPDIR/decision-critic-findings.md" in output
+        assert "/tmp/test-critic-output/tmp/decision-critic-findings.md" in output
         assert "critic.py --save" in output
         assert "STAND, REVISE, or ESCALATE" in output
         assert (

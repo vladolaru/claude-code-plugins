@@ -1285,7 +1285,7 @@ class TestReconciliatorWritePathPin:
     thing that can hold it to the sanctioned write path is a test.
 
     Since findings_save.py shipped, the reconciliator no longer calls
-    `write_findings()` directly — it stages the ledger in `$TMPDIR` and
+    `write_findings()` directly — it stages the ledger in the run's `tmp/` and
     saves it through `findings_save.py`, the validating channel that
     calls `write_findings()` internally (mirroring critic.py's `--save`
     mode for the decision critic). If `agents/review-reconciliator.md`

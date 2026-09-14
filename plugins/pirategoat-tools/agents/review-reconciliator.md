@@ -325,21 +325,20 @@ builder.set_reconciliation(
 output = builder.to_dict()
 ```
 
-**3b. Write the ledger to `$TMPDIR`, then save through the script** (create `$TMPDIR` first if it does not exist):
+**3b. Write the ledger to the run's `tmp/`, then save through `scripts/review/findings_save.py`** (the run creates `tmp/`; never write `review-findings.json` at the output directory's root yourself):
 
 ```python
-staged_path = os.path.join(os.environ["TMPDIR"], "review-findings.json")
+staged_path = os.path.join(output_dir, "tmp", "review-findings.json")
 with open(staged_path, "w") as f:
     f.write(json.dumps(output))
 ```
 
 ```bash
-PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
-[ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review/agent/bootstrap.py" -type f 2>/dev/null | sort | tail -1 | xargs dirname | xargs dirname | xargs dirname | xargs dirname)
+SCRIPTS_DIR="<Plugin scripts directory>"   # from the dispatch prompt, the same directory you imported the builder from
 
-python3 $PLUGIN_ROOT/scripts/review/findings_save.py \
+python3 "$SCRIPTS_DIR/review/findings_save.py" \
   --output-dir "<Output Directory>" \
-  --findings "$TMPDIR/review-findings.json"
+  --findings "<Output Directory>/tmp/review-findings.json"
 ```
 
 The command validates everything before writing anything, and it holds you to the things only you can get wrong:
@@ -369,7 +368,7 @@ both go through it; the other is `adjudicate()` carrying the
 decision critic's adjustments.
 
 **3c. On REJECTED, fix and re-save.** Correct the named problem in your
-in-memory `output` dict (or the staged `$TMPDIR/review-findings.json`),
+in-memory `output` dict (or the staged `tmp/review-findings.json`),
 re-serialize, and re-run the same `findings_save.py` command — do not work
 around a rejection by writing `review-findings.json` yourself.
 
