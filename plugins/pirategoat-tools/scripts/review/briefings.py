@@ -2119,6 +2119,10 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         actions.append(f"Review document to stress-test: {critic_target}")
         actions.append(f"No structured findings available (reconciliation failed) — critique the document directly without --context.")
     actions.append(f"Output directory: {od}")
+    # The directory, never a file, like the step-8 prompt: the critic saves
+    # through critic.py and must run the same code the run was built with,
+    # not whatever /tmp/.pirategoat-tools-root last pointed at.
+    actions.append(f"Plugin scripts directory: {SCRIPTS_DIR.parent}")
     git = context.get("git", {})
     head_ref = git.get("head_ref")
     head_sha = git.get("head_sha")
@@ -2182,6 +2186,17 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         "produced no verdict is a run that lost its stress test, step 11 "
         "reports it as a degradation, and a stand-in would hide exactly "
         "that."
+    )
+    actions.append(
+        "If the critic terminated with an API error (a safeguard refusal "
+        "or an invalid_request) after it started and before its verdict "
+        "file exists: send it one message, `Continue from where you "
+        "stopped and save your verdict through critic.py --save`, and "
+        "wait again; do not read its draft files, since restating them "
+        "makes you a co-author of the proposal you adjudicate next. If it "
+        "cannot be resumed, dispatch it once more with the same prompt, "
+        "once. Either way, note the retry in your step-11 report's run "
+        "notes with the error text, since telemetry cannot see it yet."
     )
     actions.append("")
     actions.append("Act on the critic's verdict:")

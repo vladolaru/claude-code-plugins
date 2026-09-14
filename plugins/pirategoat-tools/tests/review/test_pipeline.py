@@ -2320,6 +2320,27 @@ class TestStep10DecisionCritic:
         assert "omitted" in revise and "not_checked" in revise
         assert "Never report the batch in aggregate anywhere" in revise
 
+    def test_prompt_names_the_scripts_directory(self, mod, tmp_path):
+        """The critic saves through critic.py; without this line its only
+        source for the plugin root was the machine-wide pointer file, so a
+        dev session and a release session could build with one version and
+        save with another."""
+        g = mod.get_step_guidance(10, "pr", {"completed_steps": [], "ledger_status": "ok"}, {}, output_dir=str(tmp_path))
+        lines = [l for l in self._prompt_block(g).strip().splitlines() if l.strip()]
+        output_index = next(i for i, l in enumerate(lines) if l.startswith("Output directory: "))
+        assert lines[output_index + 1].startswith("Plugin scripts directory: ")
+        assert lines[output_index + 1].endswith("/scripts")
+
+    def test_briefing_names_one_recovery_for_a_critic_killed_by_an_api_error(self, mod, tmp_path):
+        """Three critics were refused by an API safeguard on 2026-09-14; the
+        two orchestrators whose critic died improvised different recoveries,
+        one of them by reading the critic's uncommitted drafts."""
+        g = mod.get_step_guidance(10, "pr", {"completed_steps": [], "ledger_status": "ok"}, {}, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "terminated with an API error" in text
+        assert "do not read its draft files" in text
+        assert "dispatch it once more with the same prompt" in text
+
     def test_codex_critic_uses_canonical_agent_definition(self, mod, tmp_path):
         state = {"completed_steps": []}
         config = {"host": "codex"}

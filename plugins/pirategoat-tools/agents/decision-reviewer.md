@@ -55,32 +55,32 @@ If the input is empty, unreadable, or contains no claims to evaluate, write a fi
 
 ## Step 2: Run the Review Critic Workflow
 
-Run the 4-phase review criticism pipeline. Each phase builds on the prior — pass your accumulated analysis in `--thoughts`.
+Run the 4-phase review criticism pipeline. Each phase builds on the prior — pass your accumulated analysis in `--thoughts`. The dispatch prompt gives you the plugin scripts directory; use it for every `critic.py` call, and fall back to the pointer file only when the prompt has none.
 
 **Normal path** (record path + findings path both provided):
 
 ```bash
-PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
-[ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review/agent/bootstrap.py" -type f 2>/dev/null | sort | tail -1 | xargs dirname | xargs dirname | xargs dirname | xargs dirname)
+SCRIPTS_DIR="<Plugin scripts directory from the dispatch prompt>"
+[ -d "$SCRIPTS_DIR/review" ] || SCRIPTS_DIR="$(cat /tmp/.pirategoat-tools-root 2>/dev/null)/scripts"
 
 # Phase 1: Decompose — extract claims, severity assertions, scope claims
-python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 1 --total-steps 4 --report "<record-path>" --context "<findings-path>" --output-dir "<output-dir>" --thoughts "Starting analysis"
+python3 $SCRIPTS_DIR/review/critic.py --step-number 1 --total-steps 4 --report "<record-path>" --context "<findings-path>" --output-dir "<output-dir>" --thoughts "Starting analysis"
 
 # Phase 2: Verify — read actual source code, check each claim
-python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 2 --total-steps 4 --report "<record-path>" --context "<findings-path>" --output-dir "<output-dir>" --thoughts "<your accumulated analysis from phase 1>"
+python3 $SCRIPTS_DIR/review/critic.py --step-number 2 --total-steps 4 --report "<record-path>" --context "<findings-path>" --output-dir "<output-dir>" --thoughts "<your accumulated analysis from phase 1>"
 
 # Phase 3: Challenge — adversarial analysis, false positives, severity inflation
-python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 3 --total-steps 4 --report "<record-path>" --output-dir "<output-dir>" --thoughts "<your accumulated analysis from phases 1-2>"
+python3 $SCRIPTS_DIR/review/critic.py --step-number 3 --total-steps 4 --report "<record-path>" --output-dir "<output-dir>" --thoughts "<your accumulated analysis from phases 1-2>"
 
 # Phase 4: Synthesize — verdict + write findings
-python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 4 --total-steps 4 --report "<record-path>" --output-dir "<output-dir>" --thoughts "<your accumulated analysis from phases 1-3>"
+python3 $SCRIPTS_DIR/review/critic.py --step-number 4 --total-steps 4 --report "<record-path>" --output-dir "<output-dir>" --thoughts "<your accumulated analysis from phases 1-3>"
 ```
 
 **Degraded path** (plain document, no ledger — omit `--context`):
 
 ```bash
 # Phase 1: Decompose — no --context, assign your own claim IDs
-python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 1 --total-steps 4 --report "<document-path>" --output-dir "<output-dir>" --thoughts "Starting analysis"
+python3 $SCRIPTS_DIR/review/critic.py --step-number 1 --total-steps 4 --report "<document-path>" --output-dir "<output-dir>" --thoughts "Starting analysis"
 
 # Phases 2-4: same as above but without --context
 ```
@@ -203,17 +203,17 @@ adjudicates your proposal separately, and `adjudicate` records each entry's
 outcome in the ledger.
 
 ```bash
-PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
-[ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review/agent/bootstrap.py" -type f 2>/dev/null | sort | tail -1 | xargs dirname | xargs dirname | xargs dirname | xargs dirname)
+SCRIPTS_DIR="<Plugin scripts directory from the dispatch prompt>"
+[ -d "$SCRIPTS_DIR/review" ] || SCRIPTS_DIR="$(cat /tmp/.pirategoat-tools-root 2>/dev/null)/scripts"
 
 # ESCALATE, or STAND with nothing to correct (no adjustments file):
-python3 $PLUGIN_ROOT/scripts/review/critic.py --save \
+python3 $SCRIPTS_DIR/review/critic.py --save \
   --verdict "<STAND | ESCALATE>" \
   --findings "$TMPDIR/decision-critic-findings.md" \
   --output-dir "<Output Directory>"
 
 # REVISE, or STAND with `correct` adjustments (adjustments file required):
-python3 $PLUGIN_ROOT/scripts/review/critic.py --save \
+python3 $SCRIPTS_DIR/review/critic.py --save \
   --verdict "<REVISE | STAND>" \
   --findings "$TMPDIR/decision-critic-findings.md" \
   --adjustments "$TMPDIR/decision-critic-adjustments.json" \
