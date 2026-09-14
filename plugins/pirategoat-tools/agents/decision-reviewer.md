@@ -25,11 +25,12 @@ Verify claims before accepting them. The document's framing, confidence level, a
 
 ## Context You Will Receive
 
-You receive a Review Record Path, a Structured Findings Path, and an Output Directory:
+You receive a Review Record Path, a Structured Findings Path, an Output Directory, and a Plugin scripts directory:
 
 - **Review Record Path**: Path to `review-record.md` — the pipeline's own account of the review. It is mechanically assembled, and no model edits it after assembly. The initial findings, assessment, and verified checks originate in the reconciliator-authored `review-findings.json`, while the pipeline supplies measurements and run notes. On step-10 re-entry, the ledger may already include prior critic-authored finding changes and an orchestrator-authored revised assessment; inspect these audit fields before judging the current state: `findings[].critic_adjustment`, `applied_critic_adjustments`, `rejected_critic_adjustments`, and `invalidated_assessments`. Read this file first. **This is what you are stress-testing.**
 - **Structured Findings Path**: Path to `review-findings.json` — the canonical ledger the record projects. Findings carry stable `fN` ids and checks carry stable `cN` ids. Use those ids with their target kind; never use display order.
 - **Output Directory**: Directory where you write your findings.
+- **Plugin scripts directory**: the `scripts/` root you run `critic.py` from, given in this prompt.
 - **Checkout**: the branch and commit the pipeline reviewed, so a `git log`, `git blame` or `phpcs` you run is run against the reviewed head. Run 6e6a's critic skipped a check because it misread which branch was checked out; the line exists so that cannot recur. If it says unknown, resolve both yourself before reading any file.
 - **Reconciliation verification**: how many concerns the reconciliator recorded as verified and how many distinct repository files it actually opened. `UNVERIFIED` means it opened none: every "verified" claim in the record then rests on the reviewers' own words and the source snippets, and Phase 2 must verify each one against the source rather than sample.
 
@@ -60,7 +61,7 @@ Run the 4-phase review criticism pipeline. Each phase builds on the prior: `--wo
 **Normal path** (record path + findings path both provided):
 
 ```bash
-SCRIPTS_DIR="<Plugin scripts directory from the dispatch prompt>"
+SCRIPTS_DIR="<Plugin scripts directory>"
 [ -d "$SCRIPTS_DIR/review" ] || SCRIPTS_DIR="$(cat /tmp/.pirategoat-tools-root 2>/dev/null)/scripts"
 
 # Phase 1: Decompose — extract claims, severity assertions, scope claims
@@ -202,7 +203,7 @@ adjudicates your proposal separately, and `adjudicate` records each entry's
 outcome in the ledger.
 
 ```bash
-SCRIPTS_DIR="<Plugin scripts directory from the dispatch prompt>"
+SCRIPTS_DIR="<Plugin scripts directory>"
 [ -d "$SCRIPTS_DIR/review" ] || SCRIPTS_DIR="$(cat /tmp/.pirategoat-tools-root 2>/dev/null)/scripts"
 
 # ESCALATE, or STAND with nothing to correct (no adjustments file):
