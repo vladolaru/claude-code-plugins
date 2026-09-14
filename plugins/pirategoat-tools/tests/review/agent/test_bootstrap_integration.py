@@ -380,7 +380,7 @@ class TestCategoryRepresentatives:
     def test_ref_mode_scope_failure_is_an_error_not_a_clean_exit(
         self, tmp_path
     ):
-        """When every declared ref-mode domain fails scope discovery (bad
+        """When any declared ref-mode domain fails scope discovery (bad
         range, git error, timeout), the adapter must report the
         infrastructure failure — a NO_DOMAIN_FILES exit would let the repo
         reviewer emit a clean not-applicable result for a run that never

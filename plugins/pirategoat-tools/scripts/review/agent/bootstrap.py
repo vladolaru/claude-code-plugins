@@ -311,6 +311,50 @@ def extract_status(scope_output: str) -> Optional[str]:
     return match.group(1).strip() if match else None
 
 
+def scope_run_failed(rc: int, scope_output: str) -> bool:
+    """Whether one scope discovery run failed.
+
+    scope.py prints a STATUS on every structured exit, and a range with no
+    changes is one of them (exit 2 with STATUS: ERROR); an exit that printed
+    no STATUS is a failure it could not describe. The one rule for every
+    run bootstrap makes (the primary scope, a secondary domain, the
+    exploration scope, each of a repo reviewer's domains), so no run's
+    failure is dropped because another run succeeded.
+    """
+    status = extract_status(scope_output)
+    return status == "ERROR" or (status is None and rc != 0)
+
+
+def scope_failure_diagnosis(scope_output: str) -> List[str]:
+    """The ERROR and ACTION lines one failed scope run reported.
+
+    scope.py names the problem on every structured exit. A run that ended
+    before it could (bootstrap's own timeout on the subprocess, an
+    interpreter crash) printed no ERROR line, so the last line it did print
+    becomes one, and the reviewer reports what actually happened.
+    """
+    lines = scope_output.splitlines()
+    diagnosis = [line for line in lines if line.startswith(("ERROR:", "ACTION:"))]
+    if not any(line.startswith("ERROR:") for line in diagnosis):
+        last = next((line.strip() for line in reversed(lines) if line.strip()), None)
+        diagnosis.insert(0, (
+            f"ERROR: Scope discovery failed: {last}" if last
+            else "ERROR: Scope discovery failed and reported no diagnosis."
+        ))
+    return diagnosis
+
+
+def label_scope_failure(label: str, scope_output: str) -> str:
+    """One failed scope run's diagnosis, each ERROR line naming the scope it
+    came from. Every run but a primary scope is labelled, a repo reviewer's
+    single declared domain included."""
+    return "\n".join(
+        f"ERROR: [{label}] {line.removeprefix('ERROR:').strip()}"
+        if line.startswith("ERROR:") else line
+        for line in scope_failure_diagnosis(scope_output)
+    )
+
+
 def get_file_history(files: List[str], max_commits: int = 15) -> str:
     """Get recent commit history for each changed file.
 
@@ -1394,23 +1438,22 @@ def build_scope_failure_output(
     """Re-report a failed scope discovery under the bootstrap header.
 
     scope.py already named the real problem — NO_CHANGES, NO_RELEVANT_FILES,
-    an unusable range, not a git repository — and the ACTION that fits it,
-    and both lines are carried through verbatim. Every one of them ends the
+    an unusable range, not a git repository — and the ACTION that fits it.
+    Both reach the reviewer as `scope_failure_diagnosis` extracts them: a
+    run other than the primary scope arrives already labelled by
+    `label_scope_failure`, and a run that printed no ERROR line gets one
+    built from its last output line. Every one of those problems ends the
     review with a report to the caller: a reviewer that approved a range with
     no changes would publish a clean review of nothing. The symptom bootstrap
     meets downstream is a scope summary that was never written, which names
     the wrong problem instead of the one scope.py found.
     """
-    diagnosis = list(dict.fromkeys(
-        line for line in scope_output.splitlines()
-        if line.startswith(("ERROR:", "ACTION:"))
-    )) or ["ERROR: Scope discovery failed and reported no diagnosis."]
     return (
         f"=== BOOTSTRAP: {agent_name} ===\n"
         f"PLUGIN_ROOT: {plugin_root}\n"
         f"STATUS: ERROR\n"
         f"\n"
-        + "\n".join(diagnosis)
+        + "\n".join(scope_failure_diagnosis(scope_output))
         + "\n"
     )
 
@@ -1659,7 +1702,6 @@ def main():
                     ref_include_flags += ["--include-path", pattern]
         scope_status = "NO_DOMAIN_FILES"
         captured_meta = False
-        error_outputs = []
         for dom in ref_domains:
             if dom not in _REVIEW_DOMAINS:
                 continue
@@ -1684,33 +1726,24 @@ def main():
             if not captured_meta:
                 pr_number = extract_pr_number(dom_output)
                 captured_meta = True
-            dom_status = extract_status(dom_output)
-            if dom_status == "OK":
+            if scope_run_failed(dom_rc, dom_output):
+                # One failed domain fails the repo reviewer, even when
+                # another domain succeeded: a review of the domains that
+                # happened to run would claim coverage of the one that did
+                # not, and reading the failure as NO_DOMAIN_FILES would turn
+                # it into a clean abstention. The range is shared, so the
+                # first failure is the diagnosis.
+                scope_status = "ERROR"
+                scope_output = label_scope_failure(dom, dom_output)
+                break
+            if extract_status(dom_output) == "OK":
                 if scope_output:
                     scope_output += f"\n\n=== SECONDARY SCOPE: {dom} ===\n{dom_output}"
                 else:
                     scope_output = dom_output
                 scope_status = "OK"
-            elif dom_status == "ERROR" or (dom_status is None and dom_rc != 0):
-                # A domain that failed is reported, never read as a domain
-                # with no files, and that includes a range with no changes
-                # (exit 2 with STATUS: ERROR, the same contract as the
-                # primary path).
-                error_outputs.append(f"[{dom}] {dom_output}")
         if not scope_output:
-            if error_outputs:
-                # Every declared domain that ran failed (bad range, git
-                # error, timeout). Reporting NO_DOMAIN_FILES here would
-                # convert an infrastructure failure into a clean
-                # not-applicable exit — the repo reviewer must fail loudly
-                # instead.
-                scope_status = "ERROR"
-                scope_output = (
-                    "Scope discovery failed for the declared domains:\n"
-                    + "\n".join(error_outputs)
-                )
-            else:
-                scope_output = "(No files matched the repo reviewer's declared domains)"
+            scope_output = "(No files matched the repo reviewer's declared domains)"
         if not pr_number:
             pr_number = load_pr_number_from_context(output_dir)
     elif config["domain"] is not None:
@@ -1733,14 +1766,10 @@ def main():
         )
         scope_summary_paths.append(primary_summary_out)
 
-        # scope.py prints a STATUS on every structured exit, a range with no
-        # changes included (exit 2 with STATUS: ERROR); an exit without one
-        # is a failure it could not describe.
-        parsed_status = extract_status(scope_output)
-        if parsed_status:
-            scope_status = parsed_status
-        elif rc != 0:
+        if scope_run_failed(rc, scope_output):
             scope_status = "ERROR"
+        else:
+            scope_status = extract_status(scope_output) or scope_status
 
         pr_number = extract_pr_number(scope_output)
 
@@ -1748,16 +1777,24 @@ def main():
         if not pr_number:
             pr_number = load_pr_number_from_context(output_dir)
 
-        # Run extra scope for patterns-reviewer (exploration scope)
-        if "extra_scope" in config:
-            extra_flags = config["extra_scope"]
-            _, exploration_scope = run_scope_discovery(
-                plugin_root, config["domain"], extra_flags, args.range,
+        # The further scope runs (the exploration scope, secondary domains)
+        # follow the same rule: a failed run ends bootstrap with its labelled
+        # diagnosis, never a review of the scopes that happened to succeed.
+        # After the primary run failed there is nothing to add; the range is
+        # shared, so the first failure is the diagnosis.
+        if scope_status != "ERROR" and "extra_scope" in config:
+            extra_rc, exploration_scope = run_scope_discovery(
+                plugin_root, config["domain"], config["extra_scope"], args.range,
                 output_dir=args.output_dir,
             )
+            if scope_run_failed(extra_rc, exploration_scope):
+                scope_status = "ERROR"
+                scope_output = label_scope_failure("exploration", exploration_scope)
 
         # Run secondary domain scope discovery (e.g., config-ops for security/architecture)
         for sec_domain in config.get("secondary_domains", []):
+            if scope_status == "ERROR":
+                break
             sec_flags = list(config.get("scope_flags", []))
             if config.get("no_semantic_filter", False):
                 sec_flags.append("--no-semantic-filter")
@@ -1772,8 +1809,11 @@ def main():
                 summary_json_out=sec_summary_out,
             )
             scope_summary_paths.append(sec_summary_out)
-            sec_status = extract_status(sec_output)
-            if sec_status and sec_status == "OK":
+            if scope_run_failed(sec_rc, sec_output):
+                scope_status = "ERROR"
+                scope_output = label_scope_failure(sec_domain, sec_output)
+                break
+            if extract_status(sec_output) == "OK":
                 scope_output += f"\n\n=== SECONDARY SCOPE: {sec_domain} ===\n"
                 scope_output += sec_output
                 secondary_with_content.append(sec_domain)
