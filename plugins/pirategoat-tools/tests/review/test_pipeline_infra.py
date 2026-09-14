@@ -566,6 +566,19 @@ class TestCLIIntegration:
                        "--output-dir", str(tmp_path / "out"), "--pr-number", "42", cwd=tmp_path / "repo")
         assert r.returncode == 0
 
+    def test_step_creates_tmp_for_a_bare_caller_supplied_output_dir(self, tmp_path):
+        """pirategoat-bot passes `--output-dir` to a directory it made itself
+        with a bare `mkdir` — it never calls `run_paths.allocate_run_dir`,
+        which is the only code that creates `tmp/` for interactive runs.
+        Every `main()` call must create `tmp/` under whatever directory it
+        was handed, so the reconciliator, the critic, and the dependency
+        refresh have somewhere sanctioned to stage into on every caller's
+        path, not just the allocator's."""
+        r = run_pipeline("--step", "1", "--mode", "pr",
+                       "--output-dir", str(tmp_path / "out"), "--pr-number", "42", cwd=tmp_path / "repo")
+        assert r.returncode == 0
+        assert (tmp_path / "out" / "tmp").is_dir()
+
     def test_invalid_step_exits_1(self, tmp_path):
         r = run_pipeline("--step", "99", "--mode", "pr",
                        "--output-dir", str(tmp_path / "out"), cwd=tmp_path / "repo")

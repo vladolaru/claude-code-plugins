@@ -104,7 +104,10 @@ def _scratch_display(output_dir, name):
     Staged inputs to a validating save (a request, a draft) used to be
     named under `$TMPDIR`, which every session on a machine shares and
     which pirategoat-bot never scopes per run; the run directory already
-    owns `tmp/` (`run_paths.scratch_dir`, created at allocation).
+    owns `tmp/` (`run_paths.scratch_dir`, created at allocation for
+    interactive runs and by every `pipeline.py` step call otherwise, so a
+    caller-supplied directory that never went through the allocator still
+    has it).
     """
     return str(scratch_dir(output_dir or "<OUTPUT_DIR>") / name)
 

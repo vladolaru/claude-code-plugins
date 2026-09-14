@@ -105,7 +105,7 @@ try:
     )
     from .user_settings import load_user_settings, refresh_dependencies_default
     from .atomic_io import atomic_write_json
-    from .run_paths import artifact_path
+    from .run_paths import artifact_path, scratch_dir
 except ImportError:
     _scripts_parent = str(Path(__file__).resolve().parent.parent)
     if _scripts_parent not in sys.path:
@@ -185,7 +185,7 @@ except ImportError:
         refresh_dependencies_default,
     )
     from review.atomic_io import atomic_write_json
-    from review.run_paths import artifact_path
+    from review.run_paths import artifact_path, scratch_dir
 
 # ---------------------------------------------------------------------------
 # Condition Evaluation
@@ -683,8 +683,13 @@ def main():
     output_dir = args.output_dir
     step = args.step
 
-    # Ensure output dir exists
+    # Ensure output dir exists, along with the run's sanctioned scratch
+    # directory: `run_paths.allocate_run_dir` creates `tmp/` for the
+    # interactive commands that allocate through it, but a caller-supplied
+    # directory (pirategoat-bot's own `mkdir`) never goes through the
+    # allocator, so every step call creates it here too.
     os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(scratch_dir(output_dir), exist_ok=True)
     context = read_review_context(output_dir)
 
     # --- Step 1: Special handling (seed config) ---
