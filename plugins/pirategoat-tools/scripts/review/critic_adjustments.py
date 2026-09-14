@@ -31,7 +31,7 @@ import os
 import re
 import sys
 import uuid
-from typing import Mapping
+from typing import Callable, Mapping, NamedTuple
 
 try:
     from . import atomic_io
@@ -154,7 +154,10 @@ def prose_is_empty(value):
     recommendations with no entry under any priority.
 
     The one emptiness rule for the reconciler's prose and the orchestrator's
-    revised text, so revised text is judged by the same rule for both keys.
+    revised text: the request validator refuses empty revised text by it,
+    `_invalidate_prose` decides by it whether a prior is recorded as text or
+    as the field's empty value, and the renderer decides by it whether an
+    invalidation lost anything, so the three cannot disagree.
     """
     if isinstance(value, str):
         return not value.strip()
@@ -342,11 +345,59 @@ FindingsRead = collections.namedtuple(
 # it to contradict the ledger it summarizes. Invalidated, not
 # deleted: the text moves here beside the ids of the decisions that
 # invalidated it, the same way a removed finding moves into
-# `findings_removed_by_critic` carrying the action that removed it. A list,
+# `findings_removed_by_critic` carrying the action that removed it. Revised
+# text over a null assessment records `text: null` the same way, since that
+# record is what attributes the standing text (`LEDGER_PROSE`). A list,
 # because a second reconciliation-plus-critic round is a second invalidation and
 # must not erase the first.
 INVALIDATED_ASSESSMENTS_KEY = "invalidated_assessments"
 ASSESSMENT_KEY = "assessment"
+RECOMMENDATIONS_KEY = "recommendations"
+
+
+class LedgerProse(NamedTuple):
+    """How one piece of ledger prose is invalidated."""
+
+    invalidated_key: str  # the ledger key its invalidation records go under
+    record_field: str  # the record field that keeps the prior
+    empty: Callable[[], object]  # the field's empty value, fresh on each call
+    valid_prior: Callable[[object], bool]  # the shapes a recorded prior may take
+
+
+def _valid_assessment_prior(prior):
+    return prior is None or (isinstance(prior, str) and not prose_is_empty(prior))
+
+
+def _valid_recommendations_prior(prior):
+    return (
+        isinstance(prior, dict)
+        and set(prior) <= set(RECOMMENDATION_PRIORITIES)
+        and all(
+            isinstance(entries, list)
+            and all(isinstance(entry, str) and entry.strip() for entry in entries)
+            for entries in prior.values()
+        )
+    )
+
+
+# The two pieces of ledger prose the adjustment vocabulary cannot address,
+# in one table so both follow one invalidation rule (`_invalidate_prose`),
+# one record validator and one renderer check. A recorded prior is the
+# displaced text, or the field's empty value when revised text displaced
+# nothing, since that record is what attributes the standing text to the
+# orchestrator. The two writers this replaced had drifted: only the
+# recommendations recorded an empty prior, so a revised assessment over a
+# reconciler that wrote none rendered as reconciler-authored.
+LEDGER_PROSE = {
+    ASSESSMENT_KEY: LedgerProse(
+        INVALIDATED_ASSESSMENTS_KEY, "text", lambda: None, _valid_assessment_prior,
+    ),
+    RECOMMENDATIONS_KEY: LedgerProse(
+        INVALIDATED_RECOMMENDATIONS_KEY, "recommendations",
+        lambda: {priority: [] for priority in RECOMMENDATION_PRIORITIES},
+        _valid_recommendations_prior,
+    ),
+}
 
 
 class AdjustmentValidationError(ValueError):
@@ -1075,48 +1126,19 @@ def _validate_ledger_check(check, index, *, removed=False):
     )
 
 
-def _validate_invalidated_assessments(value, applied_ids):
-    label = f"{FINDINGS_FILENAME}: {INVALIDATED_ASSESSMENTS_KEY}"
+def _validate_invalidation_records(key, value, applied_ids):
+    """Validate one ledger prose field's invalidation records (`LEDGER_PROSE`)."""
+    prose = LEDGER_PROSE[key]
+    label = f"{FINDINGS_FILENAME}: {prose.invalidated_key}"
     if not isinstance(value, list) or not value:
         raise ValueError(f"{label} must be a non-empty list")
     for index, record in enumerate(value):
         if (
             not isinstance(record, dict)
             or set(record) != {
-                "text", "invalidated_by_critic_adjustment_ids",
+                prose.record_field, "invalidated_by_critic_adjustment_ids",
             }
-            or not isinstance(record.get("text"), str)
-            or not record["text"].strip()
-        ):
-            raise ValueError(f"{label}[{index}] is malformed")
-        ids = record["invalidated_by_critic_adjustment_ids"]
-        _validate_unique_strings(ids, f"{label}[{index}] adjustment ids")
-        if not ids or not set(ids) <= applied_ids:
-            raise ValueError(f"{label}[{index}] cites unknown adjustments")
-
-
-def _validate_invalidated_recommendations(value, applied_ids):
-    label = f"{FINDINGS_FILENAME}: {INVALIDATED_RECOMMENDATIONS_KEY}"
-    if not isinstance(value, list) or not value:
-        raise ValueError(f"{label} must be a non-empty list")
-    for index, record in enumerate(value):
-        if (
-            not isinstance(record, dict)
-            or set(record) != {
-                "recommendations", "invalidated_by_critic_adjustment_ids",
-            }
-            or not isinstance(record["recommendations"], dict)
-            or not set(record["recommendations"]) <= set(RECOMMENDATION_PRIORITIES)
-            or any(
-                not isinstance(entries, list) or any(
-                    not isinstance(entry, str) or not entry.strip()
-                    for entry in entries
-                )
-                for entries in record["recommendations"].values()
-            )
-            # An all-empty prior is a legitimate record: revised
-            # recommendations displaced nothing, and the record is what
-            # attributes the standing advice (see _invalidate_recommendations).
+            or not prose.valid_prior(record[prose.record_field])
         ):
             raise ValueError(f"{label}[{index}] is malformed")
         ids = record["invalidated_by_critic_adjustment_ids"]
@@ -1269,14 +1291,11 @@ def validate_findings_document(document):
         raise ValueError(
             f"{FINDINGS_FILENAME}: verdict_before_adjustments is invalid"
         )
-    if INVALIDATED_ASSESSMENTS_KEY in extensions:
-        _validate_invalidated_assessments(
-            extensions[INVALIDATED_ASSESSMENTS_KEY], set(applied_by_id)
-        )
-    if INVALIDATED_RECOMMENDATIONS_KEY in extensions:
-        _validate_invalidated_recommendations(
-            extensions[INVALIDATED_RECOMMENDATIONS_KEY], set(applied_by_id)
-        )
+    for key, prose in LEDGER_PROSE.items():
+        if prose.invalidated_key in extensions:
+            _validate_invalidation_records(
+                key, extensions[prose.invalidated_key], set(applied_by_id)
+            )
     return document
 
 
@@ -1596,59 +1615,39 @@ def _validate_adjudication_request(request, known_ids):
     return problems, decisions, normalized_assessment, normalized_recommendations
 
 
-def _invalidate_assessment(review, recorded_ids):
-    """Invalidate prose the applied batch may have just contradicted.
+def _invalidate_prose(ledger, key, recorded_ids, *, displaced):
+    """Invalidate one piece of ledger prose (`LEDGER_PROSE`), keeping it
+    auditable beside the ids of the decisions that invalidated it.
 
-    Called only when a batch actually applied, so an adjudication that
-    refuted everything leaves the assessment exactly as the reconciler wrote
-    it — nothing changed, nothing to invalidate.
+    Called only when a batch actually applied, for a batch that moves the
+    ledger or for revised text, so an adjudication that refuted everything
+    leaves the reconciler's prose exactly as written.
 
-    A ledger with no assessment records no invalidation: there is no text to
-    keep auditable, and fabricating an empty entry would claim an invalidation
-    that never happened.
+    An empty prior (`prose_is_empty`) is recorded, as the field's empty
+    value, only when revised text displaces it (`displaced`): that record is
+    what tells the renderer the standing text is the orchestrator's, for an
+    assessment the reconciler left null as much as for recommendations it
+    left empty. A moving batch that clears an empty prior records nothing:
+    there is no text to keep, and an entry would claim an invalidation that
+    never happened.
     """
-    prior = review.get(ASSESSMENT_KEY)
-    review[ASSESSMENT_KEY] = None
-    if not isinstance(prior, str) or not prior.strip():
+    prose = LEDGER_PROSE[key]
+    prior = ledger.get(key)
+    ledger[key] = prose.empty()
+    if prose_is_empty(prior) and not displaced:
         return
-    invalidated = review.get(INVALIDATED_ASSESSMENTS_KEY)
-    if not isinstance(invalidated, list):
-        invalidated = []
-    invalidated.append({
-        "text": prior,
-        # The exact decisions that cost the assessment its standing, so the
+    records = ledger.get(prose.invalidated_key)
+    if not isinstance(records, list):
+        records = []
+    records.append({
+        prose.record_field: (
+            prose.empty() if prose_is_empty(prior) else copy.deepcopy(prior)
+        ),
+        # The exact decisions that cost the prose its standing, so the
         # invalidation can be read back against the batch that caused it.
         "invalidated_by_critic_adjustment_ids": list(recorded_ids),
     })
-    review[INVALIDATED_ASSESSMENTS_KEY] = invalidated
-
-
-def _invalidate_recommendations(review, recorded_ids, *, displaced):
-    """Invalidate recommendations a batch that moves the ledger may
-    contradict, or that supplied revised recommendations displace.
-
-    An empty prior is recorded only when revised recommendations displace
-    it (`displaced`): the record is what tells the renderer the standing
-    recommendations are the orchestrator's, and unlike the assessment,
-    which the ledger always carries, the reconciler's recommendations are
-    often empty. A moving batch that clears nothing has nothing to record.
-    """
-    prior = review.get("recommendations")
-    review["recommendations"] = {
-        priority: [] for priority in RECOMMENDATION_PRIORITIES
-    }
-    if not isinstance(prior, dict):
-        prior = {}
-    if not any(prior.values()) and not displaced:
-        return
-    invalidated = review.get(INVALIDATED_RECOMMENDATIONS_KEY)
-    if not isinstance(invalidated, list):
-        invalidated = []
-    invalidated.append({
-        "recommendations": copy.deepcopy(prior),
-        "invalidated_by_critic_adjustment_ids": list(recorded_ids),
-    })
-    review[INVALIDATED_RECOMMENDATIONS_KEY] = invalidated
+    ledger[prose.invalidated_key] = records
 
 
 def _changed_fields(target, fields):
@@ -1791,19 +1790,20 @@ def _apply_proposal(
             ledger.setdefault(VERDICT_BEFORE_ADJUSTMENTS_KEY, ledger["verdict"])
             ledger["verdict"] = derived["verdict"]
         ledger[APPLIED_IDS_KEY] = applied_records
-        # Revised text invalidates the prior on the record even when nothing
-        # moved: installing it over the reconciler's text would leave that
-        # text unrecoverable and the revised text rendered as the reconciler's.
-        if moved or revised_assessment:
-            _invalidate_assessment(ledger, batch_ids)
-        if revised_assessment:
-            ledger[ASSESSMENT_KEY] = revised_assessment
-        if moved or revised_recommendations is not None:
-            _invalidate_recommendations(
-                ledger, batch_ids, displaced=revised_recommendations is not None
-            )
-        if revised_recommendations is not None:
-            ledger["recommendations"] = revised_recommendations
+        for key, revised in (
+            (ASSESSMENT_KEY, revised_assessment),
+            (RECOMMENDATIONS_KEY, revised_recommendations),
+        ):
+            # Revised text invalidates the prior on the record even when
+            # nothing moved: installing it over the reconciler's prose would
+            # leave that prose unrecoverable and the revised text rendered
+            # as the reconciler's.
+            if moved or revised is not None:
+                _invalidate_prose(
+                    ledger, key, batch_ids, displaced=revised is not None
+                )
+            if revised is not None:
+                ledger[key] = revised
     if refuted_count:
         ledger[REJECTED_ADJUSTMENTS_KEY] = rejected_records
     return len(batch_ids), refuted_count

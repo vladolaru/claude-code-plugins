@@ -13,13 +13,9 @@
  * below to match, and note the bump in the changelog. A schema number that
  * lags the shape is worse than none: it states a compatibility guarantee
  * the producer is not honoring.
- * One carve-out, spelled out beside REVIEW_OUTPUT_SCHEMA/LEDGER_SCHEMA and
- * in AGENTS.md: a shape change made inside the SAME unreleased version that
- * introduced the current number updates this file without moving the
- * number, because the number only guarantees anything once released.
- * Other artifact families carry their own `schema` constants; see the
- * Artifact Schemas section of the plugin's AGENTS.md for the full list and
- * for which artifacts deliberately carry no schema at all.
+ * The carve-outs that let a shape change keep its number, and the list of
+ * artifact families with their own `schema` constants (and those that
+ * deliberately carry none), are in docs/artifact-schemas.md.
  *
  * Implements: Proposal #3 (Structured Output) from Tier 1 agentic patterns
  */
@@ -130,14 +126,14 @@ export interface ReviewCheck {
 }
 
 export interface InvalidatedAssessment {
-    text: string;
+    text: string | null; // Null: a revised assessment displaced nothing; the record still attributes it (critic_adjustments.LEDGER_PROSE).
     invalidated_by_critic_adjustment_ids: string[];
 }
 
 export type ReviewRecommendations = ReviewContent['recommendations'];
 
 export interface InvalidatedRecommendations {
-    recommendations: Partial<ReviewRecommendations>; // May be all-empty: revised recommendations record the prior they displaced even when it held nothing.
+    recommendations: Partial<ReviewRecommendations>; // May be all-empty: revised recommendations displaced nothing; the record still attributes them.
     invalidated_by_critic_adjustment_ids: string[]; // Non-empty; each ID must name an applied adjustment.
 }
 
@@ -432,8 +428,9 @@ export interface FindingsLedger extends ReviewContent {
     // than duplicating if a proposal's ids are already recorded here.
     rejected_critic_adjustments?: CriticRejectedAdjustment[];
 
-    // Assessments invalidated by a batch that moves the ledger or by a
-    // revised assessment, oldest first.
+    // Assessments invalidated by a batch that moves the ledger or displaced
+    // by a revised assessment (then recorded even when there was none, as
+    // null), oldest first.
     invalidated_assessments?: InvalidatedAssessment[];
 
     // Recommendations invalidated by a batch that moves the ledger or

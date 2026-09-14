@@ -47,12 +47,9 @@ except ImportError:
 # `version: "1.0.0"` string that survived six format changes unbumped —
 # an unmaintained compatibility claim is worse than none.
 #
-# One carve-out, matching the rule in the plugin's AGENTS.md: a shape change
-# made within the same UNRELEASED version that introduced the current number
-# updates the TypeScript contract in the same commit but does NOT bump. The
-# number states a compatibility guarantee only once released, so bumping
-# here would publish a shape no artifact ever had. This migration deliberately
-# establishes schema 2 as the one review-artifact contract shipped by 1.114.0.
+# The carve-outs that let a shape change keep its number are in
+# docs/artifact-schemas.md. This migration deliberately establishes schema 2
+# as the one review-artifact contract shipped by 1.114.0.
 REVIEW_OUTPUT_SCHEMA = 2
 
 VALID_CHANNELS = ('blocking', 'advisory')

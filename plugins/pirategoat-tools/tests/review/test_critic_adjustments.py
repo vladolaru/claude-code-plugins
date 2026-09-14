@@ -1192,6 +1192,59 @@ class TestAssessmentInvalidation:
         assert data["assessment"] is None
         assert INVALIDATED_ASSESSMENTS_KEY not in data
 
+    @pytest.mark.parametrize("verdict, entry", [
+        pytest.param("STAND", {
+            "action": "correct", "target": {"kind": "finding", "id": "f1"},
+            "fields": {"title": "Sharper title"}, "rationale": "wording",
+        }, id="wording-only-stand"),
+        pytest.param("REVISE", {
+            "action": "demote", "target": {"kind": "finding", "id": "f1"},
+            "fields": {"severity": "low"}, "rationale": "guarded upstream",
+        }, id="moving-revise"),
+    ])
+    def test_a_revised_assessment_over_none_records_the_displacement(
+        self, tmp_path, verdict, entry
+    ):
+        """The PR #21 review's reproduction: with no reconciler assessment,
+        revised text left no record and rendered as reconciler-authored. The
+        record over a null prior is what attributes it, the rule the
+        recommendations already followed."""
+        from review.review_markdown import render_review_body
+        _write_findings(tmp_path, [_finding("f1", "medium")], assessment=None)
+        ids, _ = _publish_and_adjudicate(
+            tmp_path, [entry], verified=(0,), verdict=verdict,
+            assessment="Orchestrator's revised text.",
+        )
+        data = _ledger(tmp_path)
+        assert data["assessment"] == "Orchestrator's revised text."
+        assert data[INVALIDATED_ASSESSMENTS_KEY] == [{
+            "text": None, "invalidated_by_critic_adjustment_ids": ids,
+        }]
+        validate_findings_document(data)
+        body = render_review_body(data)
+        assert "*Revised assessment, installed after the critic adjustments applied.*" in body
+        assert "Reconciler-authored" not in body
+
+    @pytest.mark.parametrize("text, valid", [
+        pytest.param(None, True, id="null"),
+        pytest.param("Old claim.", True, id="text"),
+        pytest.param("   ", False, id="blank"),
+        pytest.param(5, False, id="not-a-string"),
+    ])
+    def test_reader_admits_a_null_or_non_blank_invalidated_text(self, tmp_path, text, valid):
+        self._seed(tmp_path)
+        _publish_and_adjudicate(tmp_path, [{
+            "action": "demote", "target": {"kind": "finding", "id": "f1"},
+            "fields": {"severity": "low"}, "rationale": "r",
+        }], verified=(0,))
+        data = _ledger(tmp_path)
+        data[INVALIDATED_ASSESSMENTS_KEY][0]["text"] = text
+        if valid:
+            validate_findings_document(data)
+        else:
+            with pytest.raises(ValueError, match="invalidated_assessments.*malformed"):
+                validate_findings_document(data)
+
 
 class TestCheckPassthrough:
     """The ledger's `checks` must survive every writer after the

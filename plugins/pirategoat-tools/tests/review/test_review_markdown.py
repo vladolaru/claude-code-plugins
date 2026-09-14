@@ -634,6 +634,51 @@ class TestAssessmentProvenance:
         assert "*Revised assessment, installed after the critic adjustments applied.*" in rendered
         assert "not adjusted by the decision critic" not in rendered
 
+    def test_a_null_record_beside_a_record_that_kept_text_renders_the_notice(self):
+        """Round one installs revised text over no assessment (a null
+        record); round two moves the ledger without revised text (a record
+        keeping round one's text). The assessment was lost, and the notice
+        says so: one record that kept text is enough."""
+        rendered = render_markdown(_reconciliator_findings("low", "Minor problem",
+            assessment=None,
+            applied_critic_adjustments=[
+                {"adjustment_id": "a1", "outcome": "verified"},
+                {"adjustment_id": "a2", "outcome": "verified"},
+            ],
+            invalidated_assessments=[
+                {"text": None, "invalidated_by_critic_adjustment_ids": ["a1"]},
+                {"text": "Orchestrator's revised text.",
+                 "invalidated_by_critic_adjustment_ids": ["a2"]},
+            ],
+        ))
+        assert "no current assessment" in rendered.lower()
+        assert "Orchestrator's revised text." not in rendered
+
+    def test_a_revised_assessment_over_none_is_not_attributed_to_the_reconciler(self):
+        """A revised assessment over a null prior records the displacement
+        as `text: null`; that record alone attributes the standing text."""
+        rendered = render_markdown(_reconciliator_findings("low", "Minor problem",
+            assessment="Orchestrator's revised text.",
+            applied_critic_adjustments=[{"adjustment_id": "a1", "outcome": "verified"}],
+            invalidated_assessments=[
+                {"text": None, "invalidated_by_critic_adjustment_ids": ["a1"]},
+            ],
+        ))
+        assert "*Revised assessment, installed after the critic adjustments applied.*" in rendered
+        assert "not adjusted by the decision critic" not in rendered
+
+    def test_an_invalidation_record_over_no_assessment_renders_no_section(self):
+        """Nothing stood and nothing stands: a notice that the assessment
+        was invalidated would describe an act that never happened."""
+        rendered = render_markdown(_reconciliator_findings("low", "Minor problem",
+            assessment=None,
+            applied_critic_adjustments=[{"adjustment_id": "a1", "outcome": "verified"}],
+            invalidated_assessments=[
+                {"text": None, "invalidated_by_critic_adjustment_ids": ["a1"]},
+            ],
+        ))
+        assert "## Assessment" not in rendered
+
     def test_malformed_decision_records_are_ignored(self):
         """Moved from `test_critic_adjustments.py` (fix 554723eb)."""
         data = _reconciliator_findings("low", "Minor problem",
