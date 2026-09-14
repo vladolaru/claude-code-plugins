@@ -1394,12 +1394,12 @@ def build_scope_failure_output(
     """Re-report a failed scope discovery under the bootstrap header.
 
     scope.py already named the real problem — NO_CHANGES, NO_RELEVANT_FILES,
-    an unusable range, not a git repository — and the ACTION that fits it: a
-    benign nothing-to-review no-op says APPROVE and exit, an infrastructure
-    failure says report to the caller. Both lines are carried through
-    verbatim. The symptom bootstrap meets downstream is a scope summary that
-    was never written, which names the wrong problem and would read a clean
-    no-op as broken infrastructure.
+    an unusable range, not a git repository — and the ACTION that fits it,
+    and both lines are carried through verbatim. Every one of them ends the
+    review with a report to the caller: a reviewer that approved a range with
+    no changes would publish a clean review of nothing. The symptom bootstrap
+    meets downstream is a scope summary that was never written, which names
+    the wrong problem instead of the one scope.py found.
     """
     diagnosis = list(dict.fromkeys(
         line for line in scope_output.splitlines()
@@ -1684,15 +1684,18 @@ def main():
             if not captured_meta:
                 pr_number = extract_pr_number(dom_output)
                 captured_meta = True
-            if extract_status(dom_output) == "OK":
+            dom_status = extract_status(dom_output)
+            if dom_status == "OK":
                 if scope_output:
                     scope_output += f"\n\n=== SECONDARY SCOPE: {dom} ===\n{dom_output}"
                 else:
                     scope_output = dom_output
                 scope_status = "OK"
-            elif dom_rc not in (0, 2):
-                # rc=2 means no changes, which is still structured output
-                # (same contract as the primary-domain path).
+            elif dom_status == "ERROR" or (dom_status is None and dom_rc != 0):
+                # A domain that failed is reported, never read as a domain
+                # with no files, and that includes a range with no changes
+                # (exit 2 with STATUS: ERROR, the same contract as the
+                # primary path).
                 error_outputs.append(f"[{dom}] {dom_output}")
         if not scope_output:
             if error_outputs:
@@ -1730,14 +1733,14 @@ def main():
         )
         scope_summary_paths.append(primary_summary_out)
 
-        if rc != 0 and rc != 2:
-            # rc=2 means no changes, which is still structured output
-            scope_status = "ERROR"
-
-        # Parse status and PR number from scope output.
+        # scope.py prints a STATUS on every structured exit, a range with no
+        # changes included (exit 2 with STATUS: ERROR); an exit without one
+        # is a failure it could not describe.
         parsed_status = extract_status(scope_output)
         if parsed_status:
             scope_status = parsed_status
+        elif rc != 0:
+            scope_status = "ERROR"
 
         pr_number = extract_pr_number(scope_output)
 

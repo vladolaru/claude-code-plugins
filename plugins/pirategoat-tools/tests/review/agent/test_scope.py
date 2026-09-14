@@ -599,6 +599,41 @@ class TestGitRunsFromTheRepositoryToplevel:
         assert "+export const label = 'Pay now';" in scope["diffs"][self.CHANGED]
 
 
+class TestAnEmptyRangeIsReportedNotApproved:
+    """A range with no changes exits 2 with STATUS: ERROR, and its ACTION
+    tells the reviewer to report it. It used to say "APPROVE and exit", which
+    contradicted every agent definition's ERROR branch and would publish a
+    clean review of nothing."""
+
+    def test_scope_cli_reports_no_changes(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+
+        def _git(*args):
+            subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+        _git("init", "-b", "main")
+        _git("config", "user.email", "t@t.com")
+        _git("config", "user.name", "T")
+        _git("config", "commit.gpgsign", "false")
+        (repo / "README.md").write_text("# Project\n")
+        _git("add", ".")
+        _git("commit", "-m", "initial")
+
+        result = subprocess.run(
+            [sys.executable, review_scope.__file__, "--domain", "code",
+             "--range", "HEAD..HEAD", "--no-merge-base",
+             "--output-dir", str(tmp_path / "out")],
+            cwd=repo, capture_output=True, text=True, timeout=60,
+        )
+
+        assert result.returncode == 2, result.stdout + result.stderr
+        assert "STATUS: ERROR" in result.stdout
+        assert "NO_CHANGES" in result.stdout
+        assert "ACTION: Report this to the caller: the range holds no changes" in result.stdout
+        assert "APPROVE" not in result.stdout
+
+
 # =============================================================================
 # Semantic filtering tests — apply_semantic_filter() integration
 # =============================================================================

@@ -406,6 +406,37 @@ class TestCategoryRepresentatives:
         from review.reviewer_lifecycle import started_marker_path
         assert not Path(started_marker_path(str(tmp_path), "repo-renewals")).exists()
 
+    @pytest.mark.parametrize("adapter", [False, True], ids=["primary", "adapter"])
+    def test_an_empty_range_is_reported_never_approved_or_abstained(self, tmp_path, adapter):
+        """A range with no changes reaches the reviewer as scope.py's own
+        NO_CHANGES diagnosis and its report ACTION, on the primary path and
+        the repo adapter's alike: no briefing, no started marker, no
+        recorded review. The adapter used to skip exit code 2, fall through
+        to NO_DOMAIN_FILES and report a missing scope summary instead."""
+        from review.reviewer_lifecycle import started_marker_path
+        if adapter:
+            ref = tmp_path / "renewals.md"
+            ref.write_text("Review renewals logic end to end.")
+            args = ["--agent", "repo-reviewer-adapter", "--repo-agent-ref", str(ref),
+                    "--instance-name", "repo-renewals-reviewer", "--scope-domains", "code"]
+            reviewer = "repo-renewals"
+        else:
+            args = ["--agent", "security-reviewer"]
+            reviewer = "security"
+        out = tmp_path / "out"
+
+        result = run_bootstrap(*args, "--output-dir", str(out), "--range", "HEAD..HEAD")
+
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert "STATUS: ERROR" in result.stdout
+        assert "NO_CHANGES" in result.stdout
+        assert "ACTION: Report this to the caller: the range holds no changes" in result.stdout
+        assert "APPROVE" not in result.stdout
+        assert "scope summary" not in result.stdout
+        assert "BRIEFING:" not in result.stdout
+        assert not Path(started_marker_path(str(out), reviewer)).exists()
+        assert not Path(review_paths(str(out), reviewer).final).exists()
+
     def test_ref_mode_agent_start_records_the_dispatched_model_tier(
         self, tmp_path
     ):

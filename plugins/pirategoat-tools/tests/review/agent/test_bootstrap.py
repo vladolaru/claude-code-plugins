@@ -431,12 +431,11 @@ class TestPartitionScopePaths:
     def test_scope_failure_reports_what_scope_said_not_the_missing_sidecar(
         self, tmp_path, monkeypatch, capsys
     ):
-        """A clean tree is a no-op, not broken infrastructure.
+        """A clean tree is reported as what it is, not as broken infrastructure.
 
-        scope.py already answered the question — nothing changed, approve and
-        exit — and never got as far as writing a summary. Reporting the
-        missing file instead would hide that answer behind a symptom and
-        turn every benign no-op into an error the reviewer must escalate.
+        scope.py already answered the question (nothing changed: report it,
+        never approve) and never got as far as writing a summary. Reporting
+        the missing file instead would hide that answer behind a symptom.
         """
         monkeypatch.setattr(_mod, "find_plugin_root", lambda: str(PLUGIN_ROOT))
         monkeypatch.setattr(_mod, "read_file", lambda _path: "# rules")
@@ -449,7 +448,8 @@ class TestPartitionScopePaths:
                 "STATUS: ERROR\n"
                 "ERROR: NO_CHANGES: No changes to review — clean working "
                 "tree.\n"
-                "ACTION: APPROVE and exit — nothing to review.\n",
+                "ACTION: Report this to the caller: the range holds no "
+                "changes, so there is nothing to review. Do NOT approve.\n",
             ),
         )
         monkeypatch.setattr(
@@ -466,7 +466,7 @@ class TestPartitionScopePaths:
         output = capsys.readouterr().out
         assert "=== BOOTSTRAP: security-reviewer ===" in output
         assert "ERROR: NO_CHANGES: No changes to review" in output
-        assert "ACTION: APPROVE and exit — nothing to review." in output
+        assert "ACTION: Report this to the caller: the range holds no changes" in output
         # The downstream symptom must not displace the real diagnosis.
         assert "scope summary" not in output
         assert not list(tmp_path.glob("*-assignment.json"))
