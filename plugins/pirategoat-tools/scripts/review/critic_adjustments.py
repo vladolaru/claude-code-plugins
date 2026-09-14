@@ -208,59 +208,68 @@ ADJUDICATION_SCHEMA = 2
 # The canonical critic verdict vocabulary, owned here because this module is
 # what commits it: `write_critic_verdict()` is the one writer of the marker,
 # and `verdict_admits_proposal()` is the one rule for what each verdict may
-# carry. critic.py and the offline metrics consumer read these rather than
-# respelling them.
-CRITIC_VERDICTS = ("STAND", "REVISE", "ESCALATE")
+# carry. critic.py, pipeline step 11 and the offline metrics consumer read
+# these rather than respelling them.
+STAND_VERDICT = "STAND"
+REVISE_VERDICT = "REVISE"
+ESCALATE_VERDICT = "ESCALATE"
+CRITIC_VERDICTS = (STAND_VERDICT, REVISE_VERDICT, ESCALATE_VERDICT)
 # Deliberately NOT a member of CRITIC_VERDICTS: it is not a critique outcome,
 # it is the record that no critique happened — pipeline step 10 commits it
 # when quick mode skips the critic. Consumers that measure critique quality
 # must exclude it; consumers that measure whether a critic ran must not.
 CRITIC_VERDICT_SKIPPED = "SKIPPED"
 VALID_CRITIC_VERDICTS = CRITIC_VERDICTS + (CRITIC_VERDICT_SKIPPED,)
-# The verdict that says something the ladder reads moved. A proposal is
-# adjudicated under REVISE or under a STAND that carries wording corrections;
-# ESCALATE, SKIPPED, an unrecognized string and a missing file carry nothing.
-REVISE_VERDICT = "REVISE"
-# What each verdict may commit. A wording correction changes no severity,
-# scope or membership, so a batch of them rides STAND and is adjudicated like
+# The verdicts a proposal may ride: REVISE, which says something the ladder
+# reads moved, and a STAND that carries wording corrections. ESCALATE,
+# SKIPPED, an unrecognized string and a missing file carry nothing.
+PROPOSAL_VERDICTS = (STAND_VERDICT, REVISE_VERDICT)
+# What each verdict may commit. A wording correction moves none of
+# LEDGER_MOVES, so a batch of them rides STAND and is adjudicated like
 # any proposal; REVISE is reserved for a batch that moves something the
 # verdict ladder reads. Before this rule the critic could not return STAND
 # with a wording correction, and 13 of 13 field runs came back REVISE.
 WORDING_ONLY_ACTIONS = frozenset({"correct"})
 # A `correct` may patch these, and then it is a scope move, not a wording correction.
 _SCOPE_FIELDS = frozenset({"file", "line"})
+# The two halves of the verdict rule, in the words every reader of it sees:
+# the save channel's rejections, the critic's synthesis guidance, the
+# step-10 briefing and decision-reviewer.md, which tests pin to these
+# strings. What a REVISE batch moves (`_ledger_move_label` classifies an
+# entry), and what a STAND batch may hold. The briefing once drifted to
+# "every finding or check adjustment", and the move list was spelled both
+# "membership change" and "the finding set".
+LEDGER_MOVES = "a severity, a scope, a check or the finding set"
+STAND_BATCH_RULE = "finding `correct` entries only, none touching `file` or `line`"
+
+
+def _ledger_move_label(entry):
+    """What one adjustment moves in the ledger, as a rejection message names
+    it, or None for a wording correction.
+
+    A move is anything the verdict ladder or the assessment rests on: any
+    action but `correct`, a `correct` that touches a finding's file or line,
+    or any correction of a check, since the record's verifications are
+    evidence the assessment cites.
+    """
+    if not isinstance(entry, dict):
+        return None
+    action = entry.get("action")
+    if action not in WORDING_ONLY_ACTIONS:
+        return str(action)
+    target = entry.get("target")
+    if isinstance(target, dict) and target.get("kind") == TARGET_CHECK:
+        return "correct(check)"
+    fields = entry.get("fields")
+    if isinstance(fields, dict) and _SCOPE_FIELDS & set(fields):
+        return "correct(file/line)"
+    return None
 
 
 def entry_moves_ledger(entry):
-    """Whether one adjustment changes something the verdict ladder or the
-    assessment rests on: any action but `correct`, a `correct` that touches
-    a finding's file or line, or any correction of a check, since the
-    record's verifications are evidence the assessment cites."""
-    if not isinstance(entry, dict):
-        return False
-    if entry.get("action") not in WORDING_ONLY_ACTIONS:
-        return True
-    target = entry.get("target")
-    if isinstance(target, dict) and target.get("kind") == TARGET_CHECK:
-        return True
-    fields = entry.get("fields")
-    return isinstance(fields, dict) and bool(_SCOPE_FIELDS & set(fields))
-
-
-def _moving_labels(entries):
-    labels = set()
-    for entry in entries:
-        if not entry_moves_ledger(entry):
-            continue
-        action = entry.get("action")
-        target = entry.get("target")
-        if action not in WORDING_ONLY_ACTIONS:
-            labels.add(str(action))
-        elif isinstance(target, dict) and target.get("kind") == TARGET_CHECK:
-            labels.add("correct(check)")
-        else:
-            labels.add("correct(file/line)")
-    return sorted(labels)
+    """Whether one adjustment moves something the verdict ladder or the
+    assessment rests on (`_ledger_move_label` holds the rule)."""
+    return _ledger_move_label(entry) is not None
 
 
 def verdict_admits_proposal(verdict, proposal, *, strict=True):
@@ -281,24 +290,26 @@ def verdict_admits_proposal(verdict, proposal, *, strict=True):
     if not isinstance(entries, list):
         entries = []
     entries = [entry for entry in entries if isinstance(entry, dict)]
-    moving = _moving_labels(entries)
-    if verdict not in ("STAND", REVISE_VERDICT) and entries:
+    moving = sorted({
+        label for label in map(_ledger_move_label, entries) if label is not None
+    })
+    if verdict not in PROPOSAL_VERDICTS and entries:
         return (
-            f"{verdict} carries no proposal; only STAND and REVISE commit "
-            "adjustments, and nothing is adjudicated under any other verdict"
+            f"{verdict} carries no proposal; only {' and '.join(PROPOSAL_VERDICTS)} "
+            "commit adjustments, and nothing is adjudicated under any other verdict"
         )
-    if verdict == "STAND" and moving:
+    if verdict == STAND_VERDICT and moving:
         return (
-            "STAND may carry only wording corrections (a finding `correct` "
-            f"without file or line); {', '.join(moving)} changes what the "
-            "verdict ladder or the assessment rests on and is a REVISE"
+            f"a {STAND_VERDICT} batch holds {STAND_BATCH_RULE}; "
+            f"{', '.join(moving)} changes what the verdict ladder or the "
+            f"assessment rests on and is a {REVISE_VERDICT}"
         )
     if strict and verdict == REVISE_VERDICT and not entries:
-        return "REVISE requires a non-empty adjustments batch"
+        return f"{REVISE_VERDICT} requires a non-empty adjustments batch"
     if strict and verdict == REVISE_VERDICT and not moving:
         return (
-            "a batch of wording corrections alone rides STAND; REVISE needs a "
-            "severity, scope or membership change"
+            f"a batch of wording corrections alone rides {STAND_VERDICT}; "
+            f"a {REVISE_VERDICT} batch moves {LEDGER_MOVES}"
         )
     return None
 
@@ -705,7 +716,8 @@ def validate_adjustments_document(payload):
 
 
 def empty_proposal():
-    """The proposal every non-REVISE verdict commits."""
+    """The proposal a verdict with no adjustments commits: ESCALATE, SKIPPED,
+    or a STAND with nothing to correct."""
     return {"schema": ADJUSTMENTS_SCHEMA, "adjustments": []}
 
 

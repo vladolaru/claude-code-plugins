@@ -319,7 +319,7 @@ class TestCriticSave:
 
         assert result != 0
         assert "REJECTED" in out
-        assert "STAND may carry only wording corrections" in out
+        assert "a STAND batch holds finding `correct` entries only" in out
         assert sorted(p.name for p in tmp_path.iterdir()) == [
             "a.json", "f.md",
         ], "a rejected save must write nothing"

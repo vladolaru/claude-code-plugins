@@ -27,9 +27,9 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from review.critic_adjustments import (  # noqa: E402
-    REVISE_VERDICT, _validate_verdict_marker, proposal_digest,
+    _validate_verdict_marker, proposal_digest,
     validate_adjustments_document, validate_findings_document,
-    write_critic_verdict,
+    verdict_admits_proposal, write_critic_verdict,
 )
 from review.dispatch_status import DISPATCHED_STATUSES, validate_dispatch_plan_agents  # noqa: E402
 from review.review_document import (  # noqa: E402
@@ -222,8 +222,10 @@ def capture(run_dir: Path, name: str) -> Path:
     }
     proposal = _read_object(artifact_path(run_dir, "critic_adjustments"))
     marker = _read_object(artifact_path(run_dir, "critic_verdict"))
-    if _validate_verdict_marker(marker) or (
-        marker.get("verdict") != REVISE_VERDICT and proposal.get("adjustments")
+    # The rule write_critic_verdict commits by, so a recorded STAND that
+    # carries wording corrections is a fixture source like any other run.
+    if _validate_verdict_marker(marker) or verdict_admits_proposal(
+        marker.get("verdict"), proposal, strict=False
     ):
         raise ValueError("source critic marker failed validation")
     if marker.get("proposal_digest") != proposal_digest(proposal):

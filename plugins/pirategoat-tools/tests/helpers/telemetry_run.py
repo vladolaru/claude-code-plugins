@@ -82,7 +82,9 @@ def _usage(output):
     }
 
 
-def write_evidence_artifacts(output_dir, ledger, *, verdict="REVISE", verdict_before="block"):
+def write_evidence_artifacts(
+    output_dir, ledger, *, verdict=critic_adjustments.REVISE_VERDICT, verdict_before="block",
+):
     """Exercise the evidence vocabulary through canonical on-disk artifacts."""
     fields_by_action = {
         "promote": {"severity": "high"}, "demote": {"severity": "low"},
@@ -97,7 +99,8 @@ def write_evidence_artifacts(output_dir, ledger, *, verdict="REVISE", verdict_be
             "action": action, "target": {"kind": "finding", **({} if action == "add" else {"id": f"f{index}"})},
             "fields": fields_by_action[action],
             "rationale": "private rationale",
-        } for index, action in enumerate(critic_adjustments.ACTIONS, 1)] if verdict == "REVISE" else [],
+        } for index, action in enumerate(critic_adjustments.ACTIONS, 1)]
+        if verdict == critic_adjustments.REVISE_VERDICT else [],
     })
     ledger["dropped_findings"] = [{
         "reviewer": "performance-review", "id": f"f{index}", "reason": reason, "evidence": "private evidence",

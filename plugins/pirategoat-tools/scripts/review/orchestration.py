@@ -2111,7 +2111,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # decisions nobody chose.
     if (
         read.status != critic_adjustments.FINDINGS_READ_ABSENT
-        and critic_verdict in ("STAND", "REVISE")
+        and critic_verdict in critic_adjustments.PROPOSAL_VERDICTS
     ):
         try:
             proposal_state = critic_adjustments.adjudication_state(output_dir)
@@ -2262,7 +2262,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
         else None
     )
 
-    if critic_verdict == "ESCALATE":
+    if critic_verdict == critic_adjustments.ESCALATE_VERDICT:
         # The critic's one unilateral power, exercised by the pipeline
         # rather than asked of the orchestrator: ESCALATE means the review's
         # conclusions did not survive the stress test, so nothing it

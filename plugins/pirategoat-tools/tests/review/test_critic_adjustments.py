@@ -2807,8 +2807,8 @@ class TestVerdictAdmitsProposal:
         ("STAND", [], None),
         ("STAND", ["correct"], None),
         ("STAND", [("correct", {"description": "d"}), ("correct", {"title": "t"})], None),
-        ("STAND", ["correct", "demote"], "STAND may carry only wording corrections"),
-        ("STAND", ["add"], "STAND may carry only wording corrections"),
+        ("STAND", ["correct", "demote"], "a STAND batch holds finding `correct` entries only"),
+        ("STAND", ["add"], "a STAND batch holds finding `correct` entries only"),
         ("STAND", [("correct", {"file": "a.py", "line": 3})], "correct(file/line) changes what the verdict ladder"),
         ("STAND", [("correct", {"result": "3 hits"}, "check")], "correct(check) changes what the verdict ladder"),
         ("REVISE", [("correct", {"result": "3 hits"}, "check")], None),
@@ -2843,13 +2843,37 @@ class TestVerdictAdmitsProposal:
         # batch" when nothing survives, "rides STAND" when a correct does.
         assert isinstance(verdict_admits_proposal("REVISE", proposal), str)
 
+    def test_every_reader_of_the_verdict_rule_states_it_in_the_same_words(self, tmp_path):
+        """The step-10 briefing once told the critic a STAND with corrections
+        authors "every finding or check adjustment", which the save channel
+        refuses, and the move list was spelled both "membership change" and
+        "the finding set". The rejections, the critic's synthesis guidance
+        and the agent definition carry LEDGER_MOVES and STAND_BATCH_RULE (the
+        briefing is pinned in test_pipeline.py), so each half has one
+        spelling."""
+        from review import critic as critic_module
+        from review.critic_adjustments import (
+            LEDGER_MOVES, STAND_BATCH_RULE, verdict_admits_proposal,
+        )
+        assert STAND_BATCH_RULE in verdict_admits_proposal("STAND", self._proposal(["demote"]))
+        assert LEDGER_MOVES in verdict_admits_proposal("REVISE", self._proposal(["correct"]))
+        guidance = " ".join(critic_module.get_step_guidance(
+            4, 4, "/tmp/review-record.md", str(tmp_path), "/tmp/review-findings.json",
+        )["actions"])
+        assert STAND_BATCH_RULE in guidance and LEDGER_MOVES in guidance
+        definition = (
+            Path(__file__).resolve().parents[2] / "agents" / "decision-reviewer.md"
+        ).read_text()
+        assert definition.count(STAND_BATCH_RULE) == 1
+        assert LEDGER_MOVES in definition and "membership" not in definition
+
     @pytest.mark.parametrize("verdict, entries, problem", [
         # The two REVISE clauses relax: recorded run 6e6a is a REVISE of
         # corrections alone, and the low-level helpers publish an empty one.
         ("REVISE", ["correct"], None),
         ("REVISE", [], None),
         # The safety invariant does not.
-        ("STAND", ["demote"], "STAND may carry only wording corrections"),
+        ("STAND", ["demote"], "a STAND batch holds finding `correct` entries only"),
         ("STAND", [("correct", {"file": "a.py", "line": 3})], "changes what the verdict ladder"),
         ("ESCALATE", ["correct"], "ESCALATE carries no proposal"),
         ("SKIPPED", ["correct"], "SKIPPED carries no proposal"),

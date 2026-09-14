@@ -27,6 +27,7 @@ try:
         SKIPPED_STATUSES,
     )
     from .manifest_sections import describe_reconciliation_verification, host_identity_phrase, project_host_entry
+    from .critic_adjustments import LEDGER_MOVES, STAND_BATCH_RULE
     from .review_document import RECOMMENDATION_PRIORITIES
     from .run_paths import artifact_path
     from .telemetry_share import CONSENT_DISCLOSURE, REMOTE_REPO
@@ -54,6 +55,7 @@ except ImportError:
         SKIPPED_STATUSES,
     )
     from review.manifest_sections import describe_reconciliation_verification, host_identity_phrase, project_host_entry
+    from review.critic_adjustments import LEDGER_MOVES, STAND_BATCH_RULE
     from review.review_document import RECOMMENDATION_PRIORITIES
     from review.run_paths import artifact_path
     from review.telemetry_share import CONSENT_DISCLOSURE, REMOTE_REPO
@@ -2131,13 +2133,13 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         "write a canonical `decision-critic-*` artifact directly."
     )
     actions.append(
-        "On REVISE, and on a STAND that carries wording corrections, also "
-        "author every finding or check adjustment in "
-        f"`$TMPDIR/{_artifact_name('critic_adjustments')}` and pass it to the "
-        "same `critic.py --save` command, per your agent instructions; a "
-        "bare STAND or an ESCALATE invokes the command without an "
-        "adjustments file. A recommendation that exists only as prose "
-        "cannot reach the machine-readable ledger, while a raw write "
+        "On REVISE, also author every finding or check adjustment in "
+        f"`$TMPDIR/{_artifact_name('critic_adjustments')}`; on a STAND that "
+        f"carries wording corrections, that file holds {STAND_BATCH_RULE}. "
+        "Pass it to the same `critic.py --save` command, per your agent "
+        "instructions; a bare STAND or an ESCALATE invokes the command "
+        "without an adjustments file. A recommendation that exists only as "
+        "prose cannot reach the machine-readable ledger, while a raw write "
         "bypasses its source-bound commit."
     )
     actions.append("```")
@@ -2224,8 +2226,8 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         "string, and revised recommendations are an object with keys among "
         + ", ".join(f"`{priority}`" for priority in RECOMMENDATION_PRIORITIES)
         + ", each a list of non-empty strings; an empty value is refused. "
-        "A batch that moves a severity, a scope, a check or the "
-        "finding set invalidates the reconciler's assessment and "
+        f"A batch that moves {LEDGER_MOVES} "
+        "invalidates the reconciler's assessment and "
         "recommendations, and these are where the revised text goes. A "
         "wording-only batch leaves both standing: supply revised text only "
         "when a verified correction contradicts them (a corrected "

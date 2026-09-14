@@ -104,7 +104,8 @@ def _publish_revise(output_dir, adjustments, *, verdict="REVISE"):
 
 
 def _publish_verdict(output_dir, verdict):
-    """Publish a non-REVISE verdict with its mandatory empty proposal."""
+    """Publish a verdict with no adjustments (ESCALATE, SKIPPED, or a STAND
+    with nothing to correct) and its empty proposal."""
     write_critic_verdict(
         str(output_dir), verdict, critic_adjustments_module.empty_proposal()
     )

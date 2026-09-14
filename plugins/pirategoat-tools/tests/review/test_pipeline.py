@@ -2399,6 +2399,18 @@ class TestStep10DecisionCritic:
         # a REVISE batch, and the briefing says so.
         assert "wording corrections" in lower
 
+    def test_the_dispatch_prompt_states_the_stand_batch_rule(self, mod, tmp_path):
+        """A STAND batch holds wording corrections only. The prompt once said
+        a STAND with corrections authors every finding or check adjustment,
+        which `critic.py --save` refuses at a cost of a resubmit round."""
+        from review.critic_adjustments import LEDGER_MOVES, STAND_BATCH_RULE
+        g = mod.get_step_guidance(10, "pr", {"completed_steps": []}, {}, output_dir=str(tmp_path))
+        assert LEDGER_MOVES in "\n".join(g["actions"])
+        prompt = "\n".join(g["actions"]).split("Use this dispatch prompt:", 1)[1]
+        prompt = prompt.split("Act on the critic's verdict:", 1)[0]
+        stand_clause = prompt.split("on a STAND that carries wording corrections", 1)[1]
+        assert STAND_BATCH_RULE in stand_clause.split(".", 1)[0]
+
     def test_the_adjudication_template_copied_as_shown_revises_nothing(self, mod, tmp_path):
         """An orchestrator that fills in the ids and copies the rest of the
         step-10 request as shown must leave the reconciler's prose standing

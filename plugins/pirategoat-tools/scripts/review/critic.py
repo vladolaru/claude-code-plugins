@@ -224,7 +224,8 @@ def get_step_guidance(
                 "- A verified defect in the diff is missing (an addition follows), or a finding sits on the wrong lines (a rescope follows)",
                 "",
                 "A finding's wording, title, recommendation or description correction changes none "
-                "of those: file it as a `correct` adjustment under STAND. A STAND with corrections is "
+                "of those, so it rides STAND, and a STAND batch holds "
+                f"{critic_adjustments.STAND_BATCH_RULE}. A STAND with corrections is "
                 "adjudicated exactly like a REVISE; the verdict word reports whether anything moved. "
                 "A correction that moves a finding's file or line, or corrects a check, is a REVISE: "
                 "the assessment rests on scope and on the record's verifications.",
@@ -234,8 +235,8 @@ def get_step_guidance(
                 "- The review may be actively misleading about what the code does",
                 "- Fundamental framing problem that revision cannot fix",
                 "",
-                "BORDERLINE: a proposal is REVISE if and only if it moves a severity, a scope, a "
-                "check or the finding set. Do not upgrade a clean review to REVISE to carry a "
+                "BORDERLINE: a proposal is REVISE if and only if it moves "
+                f"{critic_adjustments.LEDGER_MOVES}. Do not upgrade a clean review to REVISE to carry a "
                 "wording correction, and do not soften a needed demotion to keep STAND.",
                 "",
                 "A refuted factual claim rarely lives in one place. When a demotion or "
