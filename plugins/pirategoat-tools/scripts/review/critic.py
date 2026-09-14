@@ -13,7 +13,6 @@ Grounded in:
 """
 
 import argparse
-import json
 import os
 import sys
 from typing import Optional
@@ -309,8 +308,7 @@ def _read_required(path, problems, label):
     Records a problem (and returns None) instead of raising when the path
     is absent, missing, or unreadable — `run_save()` collects every
     problem before deciding whether to write anything, so a bad
-    `--findings`/`--adjustments` path is just one more REJECTED line, not
-    a crash.
+    `--findings` path is just one more REJECTED line, not a crash.
     """
     if not path:
         problems.append(f"--{label} is required")
@@ -321,37 +319,9 @@ def _read_required(path, problems, label):
     try:
         with open(path, "r", encoding="utf-8") as f:
             return f.read()
-    except OSError as err:
+    except (OSError, UnicodeDecodeError) as err:
         problems.append(f"--{label} could not be read ({path}): {err}")
         return None
-
-
-def _read_json_object(path, problems, label):
-    """Read a required save-mode input file as a JSON object, or None
-    with the problem recorded.
-
-    Layered on `_read_required()`: a missing/unreadable file reports
-    through that shared check, a present-but-unparseable file gets its
-    own problem instead of an uncaught `JSONDecodeError`, and a parsed
-    value that is not an object (`null`, a list, a scalar) is refused
-    here, so a caller can rely on `None` meaning "a problem was recorded"
-    rather than judging `null` as an empty proposal.
-    """
-    text = _read_required(path, problems, label)
-    if text is None:
-        return None
-    try:
-        value = json.loads(text)
-    except json.JSONDecodeError as err:
-        problems.append(f"--{label} is not valid JSON ({path}): {err}")
-        return None
-    if not isinstance(value, dict):
-        problems.append(
-            f"--{label} must hold a JSON object with an 'adjustments' list "
-            f"({path}), got {'null' if value is None else type(value).__name__}"
-        )
-        return None
-    return value
 
 
 def _invalidate_verdict_commit_marker(output_dir):
@@ -404,7 +374,11 @@ def run_save(args):
     adjustments = None
     adjustment_snapshot = None
     if args.adjustments:
-        adjustments = _read_json_object(args.adjustments, problems, "adjustments")
+        # The shared reader refuses null, a list or a scalar, which is what
+        # stops a `null` file from being judged as an empty proposal.
+        adjustments = atomic_io.collect_json_object(
+            args.adjustments, "--adjustments", problems
+        )
         if adjustments is not None:
             try:
                 adjustment_snapshot = critic_adjustments.prepare_proposal(

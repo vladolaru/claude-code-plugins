@@ -55,7 +55,7 @@ except ImportError:
     )
 
 try:
-    from ..atomic_io import output_dir_lock
+    from ..atomic_io import output_dir_lock, read_json_object
     from ..reviewer_lifecycle import (
         finalize_review_command,
         require_not_finalized,
@@ -79,7 +79,7 @@ try:
         validate_review_document,
     )
 except ImportError:
-    from review.atomic_io import output_dir_lock
+    from review.atomic_io import output_dir_lock, read_json_object
     from review.reviewer_lifecycle import (
         finalize_review_command,
         require_not_finalized,
@@ -853,10 +853,9 @@ class ReviewOutputBuilder:
         if self._paths is None:
             return None
         try:
-            with open(self._paths.assignment, "r", encoding="utf-8") as handle:
-                data = json.load(handle)
+            data = _read_assignment(self._paths.assignment)
             return derive_reviewed_files(data, [], reviewer=self.reviewer)
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ReviewAssignmentError):
+        except ValueError:  # ReviewAssignmentError included
             return None
 
     def _marker_name(self) -> Optional[str]:
@@ -957,18 +956,7 @@ class ReviewOutputBuilder:
         manually via to_dict knowingly opts out; publication is the
         enforcing seam.
         """
-        assignment_path = self._paths.assignment
-        try:
-            with open(assignment_path, "r", encoding="utf-8") as handle:
-                assignment = json.load(handle)
-        except FileNotFoundError as exc:
-            raise ValueError(
-                f"missing authoritative review assignment: {assignment_path}"
-            ) from exc
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError(
-                f"malformed authoritative review assignment: {assignment_path}"
-            ) from exc
+        assignment = _read_assignment(self._paths.assignment)
         return derive_reviewed_files(
             assignment, self.reviewed_file_claims, reviewer=self.reviewer
         )
@@ -1274,17 +1262,6 @@ class ReviewOutputBuilder:
         }
 
 
-def _read_json_object(path, label):
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            value = json.load(handle)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError(f"malformed {label}: {path}") from exc
-    if not isinstance(value, dict):
-        raise ValueError(f"malformed {label}: expected an object")
-    return value
-
-
 def reviewed_files_fields(reviewed_files) -> Dict:
     """The six reviewer-envelope reviewed-file fields, from one derivation.
 
@@ -1301,6 +1278,20 @@ def reviewed_files_fields(reviewed_files) -> Dict:
     }
 
 
+def _read_assignment(path):
+    """The authoritative review assignment at `path`.
+
+    The one reader for every step that needs it (add-time feedback, the
+    draft save, the finalizer), so a missing or malformed assignment reads
+    the same everywhere: a ValueError naming the file, which the builder's
+    callers and the finalize-review CLI report as REJECTED.
+    """
+    try:
+        return read_json_object(path, f"authoritative review assignment {path}")
+    except FileNotFoundError as exc:
+        raise ValueError(f"missing authoritative review assignment: {path}") from exc
+
+
 def _validate_review(output_dir, reviewer, paths, review_bytes):
     """Validate one exact review snapshot and return telemetry facts."""
     try:
@@ -1309,9 +1300,7 @@ def _validate_review(output_dir, reviewer, paths, review_bytes):
         raise ValueError("malformed review JSON") from exc
     validate_review_document(review, reviewer)
 
-    assignment = _read_json_object(
-        paths.assignment, "review assignment"
-    )
+    assignment = _read_assignment(paths.assignment)
     try:
         reviewed_files = derive_reviewed_files(
             assignment, review["reviewed_file_claims"], reviewer=reviewer

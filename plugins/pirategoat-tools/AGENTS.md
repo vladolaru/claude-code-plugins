@@ -49,7 +49,7 @@ This file holds the rules and the map. A fact about one module lives in that mod
 | `scripts/review/verdict_rules.py` | `verdict_for_counts()`, the one severity-to-verdict ladder, and `publish_verdict()`, the one ledger-to-published mapping. |
 | `scripts/review/critic.py` | The decision critic's validating `--save` channel. |
 | `scripts/review/critic_adjustments.py` | Critic lifecycle after authorship: proposal writer, `adjudicate()`, ledger read/write. |
-| `scripts/review/atomic_io.py` | Atomic JSON writes and the output-directory lock. |
+| `scripts/review/atomic_io.py` | Atomic JSON writes, the JSON object read, and the output-directory lock. |
 | `scripts/review/evidence_manifest.py` | The path- and prose-free evidence projection telemetry shares. |
 | `scripts/review/manifest_sections.py` | Pure builders for every manifest section, `aggregate_file_review()`, and the host-context projection. |
 | `scripts/review/synthesis_lifecycle.py` | Dispatch and completion measurement for the reconciliator and the critic. |

@@ -1262,7 +1262,9 @@ def _orchestrate_step_5(mode, config, state, context, output_dir):
                 ]
                 # Surface coverage warnings (e.g. unrecognized source language).
                 state["dispatch_plan_warnings"] = plan.get("warnings", [])
-            except (json.JSONDecodeError, OSError):
+            # A malformed or unreadable plan raises on purpose; only a plan
+            # removed since the existence check reads as no plan.
+            except FileNotFoundError:
                 state["dispatch_plan_summary"] = {}
                 state["dispatch_plan_agents"] = []
                 state["dispatch_plan_warnings"] = []
@@ -1316,7 +1318,9 @@ def _orchestrate_step_6(mode, config, state, context, output_dir):
                     and "conditional" in a.get("reason", "").lower()
                 ),
             }
-        except (json.JSONDecodeError, OSError):
+        # As in step 5: a malformed or unreadable plan raises; only a plan
+        # removed since the existence check reads as no plan.
+        except FileNotFoundError:
             state["dispatched_agents"] = []
     else:
         state["dispatched_agents"] = []

@@ -2105,6 +2105,18 @@ class TestBudgetTargetEcho:
         with pytest.raises(ValueError, match="missing authoritative review assignment"):
             self._save_with_unreviewed(tmp_path, monkeypatch, capsys)
 
+    def test_a_missing_assignment_at_finalize_reads_the_same(self, tmp_path, capsys):
+        """The draft save and the finalizer read the assignment through one
+        reader, so an assignment gone between the two is named the same way
+        instead of surfacing as a bare OS error."""
+        from review.agent.output import finalize_review
+        _write_required_assignment(tmp_path, "code-clarity")
+        receipt = ReviewOutputBuilder.open(tmp_path, "68615", "code-clarity").save_draft()
+        capsys.readouterr()
+        Path(review_paths(str(tmp_path), "code-clarity").assignment).unlink()
+        with pytest.raises(ValueError, match="missing authoritative review assignment"):
+            finalize_review(str(tmp_path), "code-clarity", receipt["review_digest"])
+
     @pytest.mark.parametrize("publish", ["draft", "final"])
     def test_a_sidecar_at_another_schema_refuses_publication(
         self, tmp_path, monkeypatch, capsys, publish

@@ -1503,6 +1503,41 @@ class TestStep5Orchestration:
 
         assert not (_artifact(tmp_path, "dispatch_plan_initial")).exists()
 
+    def test_an_unreadable_plan_stops_step_6_like_a_malformed_one(
+        self, mod, tmp_path
+    ):
+        """Step 6 used to catch any OSError on the plan read and carry on
+        with no agents dispatched; the shared JSON reader names an
+        unreadable plan the way it names a malformed one, and both stop
+        the step."""
+        plan = _artifact(tmp_path, "dispatch_plan")
+        plan.write_text(json.dumps({"agents": []}))
+        plan.chmod(0o000)
+        try:
+            with pytest.raises(ValueError, match=r"dispatch-plan\.json is not readable JSON"):
+                mod._orchestrate_step(
+                    6, "full", {}, {}, {"git": {"git_range": "base..head"}}, str(tmp_path),
+                )
+        finally:
+            plan.chmod(0o644)
+
+    def test_a_plan_gone_before_step_6_reads_it_is_no_plan(
+        self, mod, orchestration_mod, tmp_path, monkeypatch
+    ):
+        """The one fault step 6 still absorbs: a plan removed between the
+        existence check and the read reads as no dispatched agents."""
+        _artifact(tmp_path, "dispatch_plan").write_text(json.dumps({"agents": []}))
+
+        def vanished(_path):
+            raise FileNotFoundError("dispatch-plan.json")
+
+        monkeypatch.setattr(orchestration_mod, "load_dispatch_plan", vanished)
+        state = {}
+        mod._orchestrate_step(
+            6, "full", {}, state, {"git": {"git_range": "base..head"}}, str(tmp_path),
+        )
+        assert state["dispatched_agents"] == []
+
 
 class TestStep6Orchestration:
     """Step 6 main() reads dispatch-plan.json and populates dispatched_agents."""

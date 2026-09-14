@@ -9,9 +9,17 @@ missing or invalid signal as ``None``, so no consumer ever derives signal
 identity from the prose ``reason`` beside it.
 """
 
-import json
 import os
 import re
+import sys
+
+try:
+    from .atomic_io import read_json_object
+except ImportError:
+    _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _scripts_parent not in sys.path:
+        sys.path.insert(0, _scripts_parent)
+    from review.atomic_io import read_json_object
 
 # Producer agent-name grammar: lowercase ASCII kebab-case. Agent names become
 # machine identifiers downstream (telemetry manifests, output filenames, shell
@@ -124,14 +132,7 @@ def load_dispatch_plan(path) -> dict:
     edit.
     """
     path = os.fspath(path)
-    name = os.path.basename(path)
-    with open(path, "r", encoding="utf-8") as handle:
-        try:
-            plan = json.load(handle)
-        except json.JSONDecodeError as err:
-            raise ValueError(f"{name} is not valid JSON: {err}") from None
-    if not isinstance(plan, dict):
-        raise ValueError(f"{name} must be a JSON object, got {type(plan).__name__}")
+    plan = read_json_object(path, os.path.basename(path))
     validate_dispatch_plan_agents(plan.get("agents"))
     return plan
 

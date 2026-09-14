@@ -19,13 +19,12 @@ partial ledger. The write goes through
 """
 
 import argparse
-import json
 import os
 import sys
 import unicodedata
 
 try:
-    from . import critic_adjustments
+    from . import atomic_io, critic_adjustments
     from .findings_ledger import (
         NOTE_SOURCE_REVIEWER,
         DROP_REASONS_CHECK,
@@ -44,7 +43,7 @@ except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
-    from review import critic_adjustments
+    from review import atomic_io, critic_adjustments
     from review.findings_ledger import (
         NOTE_SOURCE_REVIEWER,
         DROP_REASONS_CHECK,
@@ -109,31 +108,18 @@ def _bounded_skip_reason(text):
 
 
 def _read_findings_json(path, problems):
-    """Read the ``--findings`` input file as JSON.
+    """Read the ``--findings`` input file as a JSON object.
 
-    Records a problem (and returns None) instead of raising for every
-    failure mode — absent, unreadable, or unparseable — so a bad path is
-    just one more REJECTED line, matching critic.py's ``_read_required``/
-    ``_read_json`` pair for the same reason: this function collects
-    problems, it never crashes the caller.
+    Records a problem (and returns None) for every failure mode (absent,
+    unreadable, unparseable, or not an object) through
+    `atomic_io.collect_json_object`, the form the critic's save channel
+    reads its JSON input through too, so a bad file is one more REJECTED
+    line and never crashes the caller.
     """
     if not path:
         problems.append("--findings is required")
         return None
-    if not os.path.isfile(path):
-        problems.append(f"--findings file not found: {path}")
-        return None
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            text = f.read()
-    except OSError as err:
-        problems.append(f"--findings could not be read ({path}): {err}")
-        return None
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as err:
-        problems.append(f"--findings is not valid JSON ({path}): {err}")
-        return None
+    return atomic_io.collect_json_object(path, "--findings", problems)
 
 
 def _read_context(output_dir, problems):

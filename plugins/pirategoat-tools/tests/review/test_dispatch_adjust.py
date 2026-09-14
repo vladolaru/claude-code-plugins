@@ -194,7 +194,7 @@ class TestAdjustDispatchPlan:
     def test_a_malformed_plan_names_the_file(self, tmp_path):
         path = _plan(tmp_path)
         path.write_text("{not json")
-        with pytest.raises(ValueError, match=r"dispatch-plan\.json is not valid JSON"):
+        with pytest.raises(ValueError, match=r"dispatch-plan\.json is not readable JSON"):
             dispatch_adjust.adjust_dispatch_plan(str(tmp_path), skips=[("x", "r")])
 
     def test_dry_run_validates_and_writes_nothing(self, tmp_path):

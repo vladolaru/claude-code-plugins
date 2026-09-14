@@ -16,7 +16,6 @@ appends each merged source check's `method` verbatim and unions its
 of a finding, cited as `{"reviewer": NOTE_SOURCE_REVIEWER, "id": "nN"}`. The pipeline-owned reconciliation facts
 are never authored here — `findings_save.py` stamps them at save time.
 """
-import json
 import os
 import re
 import sys
@@ -24,9 +23,10 @@ from typing import Dict
 
 try:
     from .agent.output import ReviewOutputBuilder, SYNTHESIS_MARKER_PREFIX
+    from .atomic_io import read_json_object
     from .run_paths import artifact_path
     from .review_document import (
-        MAX_LEDGER_TEXT_LENGTH, coerce_text, normalize_bounded_text, normalize_verifies,
+        coerce_text, normalize_bounded_text, normalize_verifies,
         validate_check_shape,
     )
     from .verdict_rules import VALID_SEVERITIES
@@ -35,9 +35,10 @@ except ImportError:
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
     from review.agent.output import ReviewOutputBuilder, SYNTHESIS_MARKER_PREFIX
+    from review.atomic_io import read_json_object
     from review.run_paths import artifact_path
     from review.review_document import (
-        MAX_LEDGER_TEXT_LENGTH, coerce_text, normalize_bounded_text, normalize_verifies,
+        coerce_text, normalize_bounded_text, normalize_verifies,
         validate_check_shape,
     )
     from review.verdict_rules import VALID_SEVERITIES
@@ -173,13 +174,9 @@ def read_reconciliation_context(output_dir) -> dict:
     """
     path = artifact_path(output_dir, "reconciliation_context")
     try:
-        with open(path, "r", encoding="utf-8") as handle:
-            context = json.load(handle)
-    except (OSError, json.JSONDecodeError) as err:
-        raise ValueError(f"{path.name} is unreadable: {err}") from err
-    if not isinstance(context, dict):
-        raise ValueError(f"{path.name} is not a JSON object")
-    return context
+        return read_json_object(path, path.name)
+    except FileNotFoundError as err:
+        raise ValueError(f"{path.name} is missing: {err}") from err
 
 
 class FindingsLedgerBuilder(ReviewOutputBuilder):

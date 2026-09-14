@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Single implementation of the pipeline's atomic-JSON-write convention.
+"""The pipeline's JSON file conventions, each implemented once: the atomic
+write, the object read, and the output-directory lock.
 
 Write to a temp file in the SAME directory as the target, then
 ``os.replace`` it over the target: a half-written JSON file must never be
@@ -108,6 +109,51 @@ def atomic_write_json(path, payload):
     _atomic_write(
         path, lambda f: json.dump(payload, f, indent=2, ensure_ascii=False)
     )
+
+
+def read_json_object(path, label):
+    """Read a JSON file that must hold an object.
+
+    A missing file raises FileNotFoundError untouched, because callers
+    answer absence differently: a critic snapshot not yet written is a state,
+    a save input that does not exist is a refusal. Anything else wrong with
+    the file (an unreadable path, bytes that are not JSON, JSON that is not
+    an object) raises ValueError naming `label` and what was found, so every
+    caller reports the same fault in the same words and never as a
+    traceback.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            value = json.load(handle)
+    except FileNotFoundError:
+        raise
+    # RecursionError is what the parser raises for pathologically nested
+    # arrays or objects; it is a malformed file like any other.
+    except (OSError, ValueError, RecursionError) as error:
+        raise ValueError(f"{label} is not readable JSON: {error}") from error
+    if not isinstance(value, dict):
+        found = "null" if value is None else type(value).__name__
+        raise ValueError(f"{label} must be a JSON object, got {found}")
+    return value
+
+
+def collect_json_object(path, label, problems):
+    """`read_json_object` for a save channel that reports every problem
+    before deciding anything: the object, or None with the problem
+    appended.
+
+    `label` is the command-line flag the file came in on; the problem names
+    it and the path, and a missing file reads as not found rather than as
+    unreadable JSON. The critic's and the reconciliator's save channels
+    both read their JSON input through here.
+    """
+    try:
+        return read_json_object(path, f"{label} ({path})")
+    except FileNotFoundError:
+        problems.append(f"{label} file not found: {path}")
+    except ValueError as error:
+        problems.append(str(error))
+    return None
 
 
 def atomic_write_text(path, text):

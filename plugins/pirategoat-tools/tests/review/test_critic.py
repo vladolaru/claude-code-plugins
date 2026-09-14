@@ -395,6 +395,39 @@ class TestCriticSave:
         assert "REJECTED" in out and got in out and "--adjustments" in out
         assert sorted(p.name for p in tmp_path.iterdir()) == ["a.json", "f.md"]
 
+    @pytest.mark.parametrize("make", [
+        pytest.param(lambda path: path.mkdir(), id="directory"),
+        pytest.param(lambda path: path.write_bytes(b"\xff\xfe"), id="not-utf8"),
+        pytest.param(lambda path: path.write_text("[" * 200000), id="too-deeply-nested"),
+    ])
+    def test_critic_save_reports_an_unreadable_adjustments_file(self, tmp_path, capsys, make):
+        """Every fault the shared JSON reader names reaches the critic as one
+        REJECTED line naming the flag and the path. A non-UTF-8 file used to
+        escape as a traceback, and a directory read as "file not found"."""
+        findings = self._write_findings(tmp_path)
+        adjustments = tmp_path / "a.json"
+        make(adjustments)
+
+        result = critic_module.run_save(
+            self._args(tmp_path, "REVISE", findings, adjustments)
+        )
+        out = capsys.readouterr().out
+
+        assert result != 0
+        assert f"REJECTED: --adjustments ({adjustments}) is not readable JSON" in out
+
+    def test_critic_save_reports_a_non_utf8_findings_file(self, tmp_path, capsys):
+        """The findings document is prose, read as text: invalid UTF-8 is a
+        REJECTED line, not a traceback."""
+        findings = tmp_path / "f.md"
+        findings.write_bytes(b"\xff\xfe")
+
+        result = critic_module.run_save(self._args(tmp_path, "STAND", findings))
+        out = capsys.readouterr().out
+
+        assert result != 0
+        assert f"REJECTED: --findings could not be read ({findings})" in out
+
     def test_critic_save_rejects_revise_with_only_wording_corrections(
         self, tmp_path, capsys
     ):

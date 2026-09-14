@@ -721,19 +721,6 @@ def empty_proposal():
     return {"schema": ADJUSTMENTS_SCHEMA, "adjustments": []}
 
 
-def _read_json_object(path, label):
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            value = json.load(handle)
-    except FileNotFoundError:
-        raise
-    except (OSError, json.JSONDecodeError) as error:
-        raise ValueError(f"{label} is not readable JSON: {error}") from error
-    if not isinstance(value, dict):
-        raise ValueError(f"{label} must be a JSON object")
-    return value
-
-
 def _validate_verdict_marker(marker):
     if not isinstance(marker, dict):
         return [f"{CRITIC_VERDICT_FILENAME} must be a JSON object"]
@@ -799,7 +786,7 @@ def read_verdict_marker(output_dir):
     None` — so the marker has one reader, which `read_committed_proposal`
     calls before it goes on to bind the proposal.
     """
-    marker = _read_json_object(
+    marker = atomic_io.read_json_object(
         artifact_path(output_dir, "critic_verdict"),
         CRITIC_VERDICT_FILENAME,
     )
@@ -812,7 +799,7 @@ def read_verdict_marker(output_dir):
 def read_committed_proposal(output_dir):
     """Return (verdict, proposal) only when the marker binds the proposal."""
     marker = read_verdict_marker(output_dir)
-    proposal = _read_json_object(
+    proposal = atomic_io.read_json_object(
         artifact_path(output_dir, "critic_adjustments"), ADJUSTMENTS_FILENAME
     )
     problems = validate_adjustments_document(proposal)
