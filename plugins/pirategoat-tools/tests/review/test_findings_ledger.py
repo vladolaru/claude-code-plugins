@@ -179,6 +179,16 @@ def test_the_taught_snippet_calls_only_methods_the_builder_has():
         )
 
 
+def test_the_taught_snippet_says_to_omit_method_without_an_own_probe():
+    """Run C (2026-09-14) made zero repository reads and its checks
+    still read "Read class-wc-data-store-wp.php:343-370 …", a paraphrase
+    of a reviewer's method: the template asked for THE_EXACT_PROBE for
+    every check, and the builder already carries the sources' methods."""
+    text = RECONCILIATOR_MD.read_text(encoding="utf-8")
+    assert "method=None" in text
+    assert "ran no probe of your own" in text
+
+
 def test_the_definition_states_what_the_builder_derives_and_accepts():
     """In all six field runs the reconciliator read `agent/output.py`,
     `findings_ledger.py` and `verdict_rules.py` for 10 s to 4 min 20 s

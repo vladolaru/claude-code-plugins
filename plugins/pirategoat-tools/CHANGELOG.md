@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The rendered findings and record label the orchestrator's post-critic text *Revised assessment* and *Revised recommendations*, the words of the `revised_assessment` and `revised_recommendations` request keys, instead of *Post-critic*; each label now appears exactly when that revised text was installed, where the recommendations label used to follow any applied batch and a revised assessment over a null reconciliator assessment was labelled *Reconciler-authored*.
 - The reconciliator can now file a finding whose only source is an orchestrator note it confirmed, so a defect the orchestrator found in the diff reaches the ledger at reconciliation instead of arriving a stage later as a critic addition with no source.
 - The step-8 briefing now tells the orchestrator to register a Verify item it settled by reading the code as a note, so the reconciliator's confirmation credits the item in the review record instead of leaving it unverified for the decision critic to redo.
+- The reconciliator records a check's `method` only for a probe it ran itself and otherwise leaves it to the carried reviewer methods, so the record no longer shows reads the reconciliator never made.
 
 ### Fixed
 

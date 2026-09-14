@@ -21,7 +21,7 @@ You are a Review Reconciliator who owns the full post-agent pipeline: semantic d
 
 - **Reconciliation Context File**: Path to `synthesis/reconciliation-context.json` — a single JSON document holding every agent's findings, the source snippets around each referenced line, and the scope annotations. Read this file first.
 - **Output Directory**: Where to write `review-findings.json` — the one artifact you produce. The pipeline renders `review-findings.md` from it mechanically, and assembles `review-record.md` from it; never write Markdown yourself.
-- **Output Builder Path**: Resolved path to `review/agent/output.py`, given in this prompt. Its grandparent directory is the `scripts/` root you import `FindingsLedgerBuilder` from.
+- **Plugin scripts directory**: the `scripts/` root you import `FindingsLedgerBuilder` from and run `findings_save.py` from, given in this prompt.
 
 ### `synthesis/reconciliation-context.json` Structure
 
@@ -259,11 +259,14 @@ builder.add_observation(
 # this verified work is absent rather than reconstructed from memory.
 builder.record_check(
     question="THE_MATERIAL_QUESTION_THE_REVIEWERS_CHECKED",
-    # YOUR OWN probe text only. The builder reads every merged source from
-    # the reconciliation context and appends its method verbatim as a
-    # `[<stem>:<id>] …` line, which is what the save gate requires.
-    method="THE_EXACT_PROBE_THAT_ESTABLISHED_IT",
-    result="WHAT_THE_PROBE_SHOWED",
+    # Your own probe text ONLY, and only when you ran one (a Read, a grep, a
+    # command). When you ran no probe of your own, pass method=None: the
+    # builder reads every merged source from the reconciliation context and
+    # appends its method verbatim as a `[<stem>:<id>] …` line, which is what
+    # the save gate requires. Never restate a reviewer's probe in your own
+    # words; a method that claims a read nobody made is a false record.
+    method=None,
+    result="WHAT_THE_EVIDENCE_SHOWED",
     source_reviewers=["security-reviewer", "concurrency-reviewer"],
     verifies=["V2"],  # only ids YOU add; the sources' verifies are unioned in for you
     sources=[{"reviewer": "security-review", "id": "c1"},
