@@ -796,7 +796,7 @@ class TestEvidenceTrailSections:
         assert "- Wrap the call in a transaction." in text
         assert "Revised" not in text
 
-    def test_empty_revised_recommendations_over_an_empty_prior_render_no_section(self):
+    def test_an_invalidation_record_over_no_advice_renders_no_section(self):
         """Nothing stood and nothing stands: a notice that the reconciler's
         advice was invalidated would describe an act that never happened."""
         settled = canonical_findings_ledger(("high",))

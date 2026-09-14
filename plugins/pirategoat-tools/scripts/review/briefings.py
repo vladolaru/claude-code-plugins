@@ -27,6 +27,7 @@ try:
         SKIPPED_STATUSES,
     )
     from .manifest_sections import describe_reconciliation_verification, host_identity_phrase, project_host_entry
+    from .review_document import RECOMMENDATION_PRIORITIES
     from .run_paths import artifact_path
     from .telemetry_share import CONSENT_DISCLOSURE, REMOTE_REPO
 except ImportError:
@@ -53,6 +54,7 @@ except ImportError:
         SKIPPED_STATUSES,
     )
     from review.manifest_sections import describe_reconciliation_verification, host_identity_phrase, project_host_entry
+    from review.review_document import RECOMMENDATION_PRIORITIES
     from review.run_paths import artifact_path
     from review.telemetry_share import CONSENT_DISCLOSURE, REMOTE_REPO
 
@@ -2207,10 +2209,8 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     )
     actions.append("    }")
     actions.append("  ],")
-    actions.append(
-        '  "revised_assessment": "<optional revised assessment>",'
-    )
-    actions.append('  "revised_recommendations": {"immediate": [], "important": [], "suggestions": []}')
+    actions.append('  "revised_assessment": null,')
+    actions.append('  "revised_recommendations": null')
     actions.append("}")
     actions.append("```")
     actions.append(
@@ -2219,8 +2219,12 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         "individually disproved IDs in `\"refuted\"`, each refutation with "
         "its non-empty reason. Every committed ID omitted from both lists is "
         "derived as `not_checked`. The orchestrator never edits the committed "
-        "proposal. `revised_assessment` and `revised_recommendations` are "
-        "optional. A batch that moves a severity, a scope, a check or the "
+        "proposal. `revised_assessment` and `revised_recommendations` stay "
+        "null unless you revise that text: a revised assessment is a "
+        "string, and revised recommendations are an object with keys among "
+        + ", ".join(f"`{priority}`" for priority in RECOMMENDATION_PRIORITIES)
+        + ", each a list of non-empty strings; an empty value is refused. "
+        "A batch that moves a severity, a scope, a check or the "
         "finding set invalidates the reconciler's assessment and "
         "recommendations, and these are where the revised text goes. A "
         "wording-only batch leaves both standing: supply revised text only "

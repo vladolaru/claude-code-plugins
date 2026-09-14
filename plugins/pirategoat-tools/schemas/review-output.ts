@@ -236,6 +236,8 @@ export interface AdjudicationRequest {
     schema: 2;
     verified: string[];
     refuted: Array<{ adjustment_id: string; rejection_reason: string }>;
+    // Revised text is null or content (critic_adjustments.prose_is_empty): a
+    // blank assessment or recommendations with no entry are refused.
     revised_assessment?: string | null;
     revised_recommendations?: Partial<ReviewRecommendations> | null;
 }

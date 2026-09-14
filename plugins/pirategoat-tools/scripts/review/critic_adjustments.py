@@ -130,23 +130,43 @@ OUTCOME_REFUTED = "refuted"
 OUTCOME_NOT_CHECKED = "not_checked"
 OUTCOMES = (OUTCOME_VERIFIED, OUTCOME_REFUTED, OUTCOME_NOT_CHECKED)
 
-# The orchestrator's revised assessment, submitted with the adjudication
-# request. An applied batch that moves the ledger (`entry_moves_ledger`)
-# invalidates the reconciler's assessment (see
-# INVALIDATED_ASSESSMENTS_KEY below), and without a revised one a REVISE run
-# published a ledger whose Assessment section was a pointer to prose only a
-# human could read. This is that assessment's machine-readable seat: on
-# apply it BECOMES the ledger's assessment, with the invalidation record
-# left intact beside it. A wording-only batch leaves the assessment standing,
-# so the key is optional there; when supplied anyway (a verified correction
-# the assessment restates), it invalidates the prior the same way.
+# The orchestrator's revised ledger prose, submitted with the adjudication
+# request. The adjustment vocabulary cannot address the reconciler's
+# assessment or recommendations, so an applied batch that moves the ledger
+# (`entry_moves_ledger`) invalidates them (see INVALIDATED_ASSESSMENTS_KEY
+# below), and without revised text a REVISE run published an Assessment
+# section that pointed at prose only a human could read. These keys are that
+# prose's machine-readable seat: on apply the revised text BECOMES the
+# ledger's, with the invalidation record left intact beside it. A
+# wording-only batch leaves the prose standing, so the keys are optional
+# there; revised text supplied anyway (a verified correction the prose
+# restates) invalidates the prior the same way. Revised text is null or
+# content (`prose_is_empty`): an empty value would be a second spelling of
+# "not revised", and under a batch that moved nothing it would replace the
+# reconciler's prose with nothing.
 REVISED_ASSESSMENT_KEY = "revised_assessment"
-
-# Recommendations are ledger-level prose the critic cannot address directly;
-# a batch that moves the ledger invalidates them, and supplied revised
-# recommendations invalidate them under any applied batch.
 REVISED_RECOMMENDATIONS_KEY = "revised_recommendations"
 INVALIDATED_RECOMMENDATIONS_KEY = "invalidated_recommendations"
+
+
+def prose_is_empty(value):
+    """Whether ledger prose says nothing: a null or blank assessment, or
+    recommendations with no entry under any priority.
+
+    The one emptiness rule for the reconciler's prose and the orchestrator's
+    revised text, so revised text is judged by the same rule for both keys.
+    """
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, dict):
+        return not any(value.values())
+    return True
+
+
+_EMPTY_REVISED_TEXT = (
+    "adjudication request: {key!r} names no {noun}; send null, or omit the "
+    "key, when you are not revising it"
+)
 
 ADJUSTMENTS_FILENAME = artifact_path("", "critic_adjustments").name
 FINDINGS_FILENAME = artifact_path("", "review_findings_json").name
@@ -1469,14 +1489,19 @@ def _validate_adjudication_request(request, known_ids):
             f"adjudication request: 'schema' must be {ADJUDICATION_SCHEMA}"
         )
     revised = request.get(REVISED_ASSESSMENT_KEY)
-    if revised is not None and (
-        not isinstance(revised, str) or not revised.strip()
-    ):
-        problems.append(
-            "adjudication request: 'revised_assessment' must be null or a "
-            "non-empty string"
-        )
-    normalized_assessment = revised.strip() if isinstance(revised, str) else None
+    normalized_assessment = None
+    if revised is not None:
+        if not isinstance(revised, str):
+            problems.append(
+                "adjudication request: 'revised_assessment' must be null or a "
+                "string"
+            )
+        elif prose_is_empty(revised):
+            problems.append(_EMPTY_REVISED_TEXT.format(
+                key=REVISED_ASSESSMENT_KEY, noun="assessment",
+            ))
+        else:
+            normalized_assessment = revised.strip()
 
     revised_recs = request.get(REVISED_RECOMMENDATIONS_KEY)
     normalized_recommendations = None
@@ -1493,6 +1518,7 @@ def _validate_adjudication_request(request, known_ids):
             normalized_recommendations = {
                 priority: [] for priority in RECOMMENDATION_PRIORITIES
             }
+            malformed = False
             for priority, entries in revised_recs.items():
                 if not isinstance(entries, list) or any(
                     not isinstance(entry, str) or not entry.strip()
@@ -1502,10 +1528,15 @@ def _validate_adjudication_request(request, known_ids):
                         f"adjudication request: 'revised_recommendations'.{priority} "
                         "must be a list of non-empty strings"
                     )
+                    malformed = True
                     continue
                 normalized_recommendations[priority] = [
                     entry.strip() for entry in entries
                 ]
+            if not malformed and prose_is_empty(normalized_recommendations):
+                problems.append(_EMPTY_REVISED_TEXT.format(
+                    key=REVISED_RECOMMENDATIONS_KEY, noun="recommendation",
+                ))
 
     verified = request.get("verified")
     decisions = {}
@@ -1902,16 +1933,13 @@ def main():
     # Echo what the ledger now holds, not what the request carried: revised
     # text rides the applied batch, so a wholly refuted one installs
     # nothing and the reconciler's prose stands.
-    print(
-        "REVISED ASSESSMENT: "
-        + _revised_echo(bool(request.get(REVISED_ASSESSMENT_KEY)), result["applied"])
-    )
-    print(
-        "REVISED RECOMMENDATIONS: "
-        + _revised_echo(
-            request.get(REVISED_RECOMMENDATIONS_KEY) is not None, result["applied"]
-        )
-    )
+    for label, key in (
+        ("REVISED ASSESSMENT", REVISED_ASSESSMENT_KEY),
+        ("REVISED RECOMMENDATIONS", REVISED_RECOMMENDATIONS_KEY),
+    ):
+        print(f"{label}: " + _revised_echo(
+            request.get(key) is not None, result["applied"]
+        ))
     print(f"APPLIED: {result['applied']} | REJECTED: {result['rejected']}")
     print(f"LEDGER VERDICT: {result['verdict']}")
 

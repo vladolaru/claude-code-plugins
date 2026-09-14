@@ -1002,17 +1002,16 @@ class TestRecommendationsInvalidation:
         }]
         validate_findings_document(data)
 
-    @pytest.mark.parametrize("revised,expected", [
-        pytest.param({"suggestions": ["  Add a nonce when convenient.  "]},
-                     ["Add a nonce when convenient."], id="normalized-subset"),
-        pytest.param({}, [], id="empty-revision"),
-    ])
-    def test_revised_recommendations_are_installed(self, tmp_path, revised, expected):
+    def test_revised_recommendations_are_installed_normalized(self, tmp_path):
         ids = self._seed(tmp_path)
-        _adjudicate(tmp_path, ids, verified=(0,), recommendations=revised)
+        _adjudicate(
+            tmp_path, ids, verified=(0,),
+            recommendations={"suggestions": ["  Add a nonce when convenient.  "]},
+        )
         data = _ledger(tmp_path)
         assert data["recommendations"] == {
-            "immediate": [], "important": [], "suggestions": expected,
+            "immediate": [], "important": [],
+            "suggestions": ["Add a nonce when convenient."],
         }
         assert len(data["invalidated_recommendations"]) == 1
 
@@ -1056,6 +1055,9 @@ class TestRecommendationsInvalidation:
         pytest.param("not a dict", id="not-object"),
         pytest.param({"immediate": "x"}, id="not-list"),
         pytest.param({"immediate": [1]}, id="not-string"),
+        pytest.param({}, id="no-priority"),
+        pytest.param({"immediate": [], "important": [], "suggestions": []},
+                     id="every-priority-empty"),
     ])
     def test_malformed_revised_recommendations_are_refused(self, tmp_path, bad):
         ids = self._seed(tmp_path)
@@ -1063,6 +1065,39 @@ class TestRecommendationsInvalidation:
         with pytest.raises(critic_adjustments_module.AdjustmentValidationError) as excinfo:
             _adjudicate(tmp_path, ids, verified=(0,), recommendations=bad)
         assert any("revised_recommendations" in p for p in excinfo.value.problems)
+        assert (tmp_path / "review-findings.json").read_bytes() == before
+
+    @pytest.mark.parametrize("key, empty, noun", [
+        pytest.param("revised_recommendations",
+                     {"immediate": [], "important": [], "suggestions": []},
+                     "recommendation", id="recommendations"),
+        pytest.param("revised_assessment", "   ", "assessment", id="assessment"),
+    ])
+    def test_empty_revised_text_under_a_wording_only_stand_is_refused(
+        self, tmp_path, key, empty, noun
+    ):
+        """The PR #21 review's reproduction: the step-10 template once showed
+        every priority empty as the value to copy, and that object displaced
+        the reconciler's advice under a batch that moved nothing. Revised
+        text is null or content for both keys, and the refusal says how to
+        send none."""
+        _write_findings(
+            tmp_path, [_finding("f1", "medium")],
+            assessment="Reconciler view.", recommendations=self._RECS,
+        )
+        ids = _publish_revise(tmp_path, [{
+            "action": "correct", "target": {"kind": "finding", "id": "f1"},
+            "fields": {"title": "Sharper title"}, "rationale": "wording",
+        }], verdict="STAND")
+        before = (tmp_path / "review-findings.json").read_bytes()
+        request = _request(ids, verified=(0,))
+        request[key] = empty
+        with pytest.raises(critic_adjustments_module.AdjustmentValidationError) as excinfo:
+            critic_adjustments_module.adjudicate(str(tmp_path), request)
+        assert excinfo.value.problems == [
+            f"adjudication request: '{key}' names no {noun}; send null, or "
+            "omit the key, when you are not revising it"
+        ]
         assert (tmp_path / "review-findings.json").read_bytes() == before
 
     def test_reader_rejects_malformed_invalidated_priority(self, tmp_path):
@@ -1394,15 +1429,6 @@ class TestRevisedAssessment:
         assert data["recommendations"] == self._RECOMMENDATIONS
         assert INVALIDATED_ASSESSMENTS_KEY not in data
         assert "invalidated_recommendations" not in data
-
-    def test_a_blank_revised_assessment_is_rejected_without_mutation(
-        self, tmp_path
-    ):
-        self._seed(tmp_path)
-        ids = _publish_revise(tmp_path, self._DEMOTION)
-        with pytest.raises(ValueError, match="revised_assessment"):
-            _adjudicate(tmp_path, ids, verified=(0,), assessment="   ")
-        assert _ledger(tmp_path)["assessment"] == self._SUMMARY
 
     def test_a_wholly_refuted_batch_never_replaces_the_summary(self, tmp_path):
         self._seed(tmp_path)

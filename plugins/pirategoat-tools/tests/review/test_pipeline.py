@@ -2399,6 +2399,37 @@ class TestStep10DecisionCritic:
         # a REVISE batch, and the briefing says so.
         assert "wording corrections" in lower
 
+    def test_the_adjudication_template_copied_as_shown_revises_nothing(self, mod, tmp_path):
+        """An orchestrator that fills in the ids and copies the rest of the
+        step-10 request as shown must leave the reconciler's prose standing
+        under a wording-only STAND. The PR #21 review found the template's
+        empty recommendations object replacing that advice with nothing."""
+        from helpers.critic_seeds import _finding, _ledger, _publish_revise, _write_findings
+        from review import critic_adjustments
+
+        g = mod.get_step_guidance(10, "pr", {"completed_steps": []}, {}, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        block = text.split("adjudication request under", 1)[1]
+        request = json.loads(block.split("```json\n", 1)[1].split("\n```", 1)[0])
+        recommendations = {"immediate": ["Fix f1 before merge."], "important": [], "suggestions": []}
+        _write_findings(
+            tmp_path, [_finding("f1", "medium")],
+            assessment="Reconciler view.", recommendations=recommendations,
+        )
+        request["verified"] = _publish_revise(tmp_path, [{
+            "action": "correct", "target": {"kind": "finding", "id": "f1"},
+            "fields": {"title": "Sharper title"}, "rationale": "wording",
+        }], verdict="STAND")
+        request["refuted"] = []
+
+        critic_adjustments.adjudicate(str(tmp_path), request)
+
+        ledger = _ledger(tmp_path)
+        assert ledger["assessment"] == "Reconciler view."
+        assert ledger["recommendations"] == recommendations
+        assert "invalidated_assessments" not in ledger
+        assert "invalidated_recommendations" not in ledger
+
     def test_escalate_instructs_override_to_comment(self, mod, tmp_path):
         """ESCALATE verdict instructions must say to override verdict to COMMENT."""
         state = {"completed_steps": []}
