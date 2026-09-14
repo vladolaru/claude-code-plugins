@@ -512,12 +512,6 @@ def grade_review_baseline(path: str) -> GradeResult:
 
 DEFAULT_LINE_TOLERANCE = 2
 
-# Verdicts accepted as correct abstention on a NO_DOMAIN_FILES scenario: the
-# not_applicable review bootstrap records, and approve, which the
-# tests-reviewer agent definitions mandated before bootstrap recorded the
-# abstention itself (1.119.6).
-_ABSTENTION_VERDICTS = frozenset({NOT_APPLICABLE_VERDICT, "approve"})
-
 
 def _norm_path(path) -> str:
     """Normalize a reviewer-reported path for comparison against a spec path.
@@ -687,13 +681,14 @@ def grade_detection(review: dict, key: dict, repo_root=None) -> GradeResult:
         ]
 
     if key.get("expect_not_applicable"):
-        # Both abstention spellings are doctrine-compliant: bootstrap records
-        # not_applicable itself when scope matches no file, and a reviewer
-        # that reads an in-domain diff and finds nothing approves. The
-        # zero-findings requirement carries the actual behavioral content.
+        # Abstention has one spelling: the not_applicable review bootstrap
+        # records when the reviewer's scope matches no file. A reviewer that
+        # reads an in-domain diff and finds nothing approves, and a key for
+        # that case says verdict_in ["approve"] (as php_clean_review does),
+        # never expect_not_applicable.
         result = _grade([
-            (verdict in _ABSTENTION_VERDICTS,
-             f"expected abstention ({'/'.join(sorted(_ABSTENTION_VERDICTS))}), got '{verdict}'"),
+            (verdict == NOT_APPLICABLE_VERDICT,
+             f"expected {NOT_APPLICABLE_VERDICT}, got '{verdict}'"),
             (len(findings) == 0,
              f"expected zero findings on abstention, got {len(findings)}"),
         ])

@@ -500,7 +500,7 @@ probes.
 | `max_severity` | False-positive precision cap: no finding may rank above this severity — the gate the clean-code probes rely on. |
 | `max_unexpected` | Precision cap on how many findings are entirely unpredicted (`match["unexpected"]`) — contrast `max_severity`'s cap on how severe findings are. |
 | `verdict_in` | The reviewer's verdict must be one of the listed values — derive from the agent's auto-verdict rules, not intuition (see below). |
-| `expect_not_applicable` | Abstention keys: accepts `not_applicable` or `approve`, each with zero findings. Mutually exclusive with every other field in this table — see "Abstention keys" below. |
+| `expect_not_applicable` | Abstention keys: accepts only `not_applicable`, with zero findings. Mutually exclusive with every other field in this table — see "Abstention keys" below. |
 
 **`max_unexpected` is implemented but unused.** `grade_detection()` in
 `helpers/graders.py` gates on it when present, `grading/test_graders.py`
@@ -616,11 +616,11 @@ trial is simply a failed trial. The aggregate is a single check, so its check
 counts are not comparable with single-trial check counts — the comparative
 metric remains per-entry `passed`.
 
-**Abstention keys.** `expect_not_applicable` accepts BOTH `not_applicable`
-and `approve` verdicts (each with zero findings): bootstrap records the
-`not_applicable` review itself when scope matches no file, while a reviewer
-that reads an in-domain diff and finds nothing approves, so a fixture may
-legitimately produce either. `expect_not_applicable` is also
+**Abstention keys.** `expect_not_applicable` accepts only a `not_applicable`
+verdict with zero findings: the review bootstrap records when the reviewer's
+scope matches no file. A reviewer that reads an in-domain diff and finds
+nothing approves, and a key for that case uses `verdict_in: ["approve"]` (as
+`php_clean_review` does). `expect_not_applicable` is also
 mutually exclusive with every other answer-key field: `grade_detection`
 short-circuits on it before `match_findings` runs, so the other fields
 would be silently inert beside it, and the answer-key guard

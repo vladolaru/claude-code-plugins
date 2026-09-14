@@ -118,7 +118,7 @@ def setup_temp_git_repo(diff_file: str = None) -> str:
 # helpers.graders.grade_detection — see its docstring for key fields and the
 # matcher's claimed-set rule (one finding satisfies at most one spec).
 SCENARIOS = {
-    "no_domain_files_approve": {
+    "no_domain_files": {
         "description": "Docs-only changes: every non-docs reviewer must short-circuit",
         # docs-drift-reviewer legitimately owns docs-only diffs (its domain
         # HAS files here), so the short-circuit assertion cannot apply to it.

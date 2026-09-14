@@ -524,6 +524,11 @@ class TestGradeDetection:
         r = grade_detection(self._review("comment", [self._finding()]), key)
         assert not r.passed
 
+        # One spelling: an approve is a review that looked and found
+        # nothing, keyed with verdict_in instead, so it fails this key.
+        r = grade_detection(self._review("approve", []), key)
+        assert not r.passed
+
         r = grade_detection(self._review("not_applicable", [self._finding()]), key)
         assert not r.passed
         assert r.detail["finding_count"] == 1
@@ -806,19 +811,6 @@ class TestReviewRoundHardening:
         result = grade_detection(review, key)
         assert not result.passed
         assert result.detail["gates"]["max_severity"] is False
-
-    def test_abstention_accepts_both_doctrine_readings(self):
-        from helpers.graders import grade_detection
-        key = {"expect_not_applicable": True}
-        for verdict in ("not_applicable", "approve"):
-            review = {"verdict": verdict, "findings": []}
-            assert grade_detection(review, key).passed, verdict
-        assert not grade_detection({"verdict": "comment", "findings": []}, key).passed
-        assert not grade_detection(
-            {"verdict": "approve", "findings": [{"severity": "low", "file": "f",
-                                              "title": "t", "description": "", "category": ""}]},
-            key,
-        ).passed
 
     def test_patterns_cannot_bridge_field_boundaries(self):
         from helpers.graders import _finding_matches
