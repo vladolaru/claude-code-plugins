@@ -6,10 +6,11 @@ A 4-phase pipeline tailored for code review criticism: Decompose, Verify, Challe
 Synthesize. Fork of the generic decision-critic.py with prompts focused on severity
 calibration, false positive detection, and code-grounded verification.
 
-Grounded in:
-- Chain-of-Verification (Dhuliawala et al., 2023)
-- Self-Consistency (Wang et al., 2023)
-- Multi-Expert Prompting (Wang et al., 2024)
+Between phases the critic carries a claim table in `--worklog`: every claim id
+with its status marker and evidence pointer. The script never reads it; the
+model does, as its own tool-call input on the next phase, which is what makes
+the write-down durable. The argument is required on every phase and refused
+when empty from phase 2 on.
 """
 
 import argparse
@@ -44,11 +45,17 @@ def get_step_guidance(
 
     next_step = step + 1 if step < total_steps else None
 
-    # Common state accumulation requirement for steps 2+
-    state_requirement = (
-        "STATE ACCUMULATION REQUIREMENT: Your --thoughts from this step must include "
-        "ALL IDs, classifications, and status markers from previous steps. This "
-        "accumulated state is essential for workflow continuity."
+    # Carry-forward reminder for phases 2+: the next phase's --worklog is the
+    # claim table this phase produced. Ids, status markers and evidence
+    # pointers only; the pipeline keys everything by the ledger's fN/cN ids.
+    carry_forward = (
+        "WORKLOG CARRY-FORWARD: the `--worklog` you pass to the next phase "
+        "lists every claim id from the previous phase and this one (fN, cN, "
+        "SN, JN) with its status marker (VERIFIED / FAILED / UNCERTAIN / "
+        "PENDING), its evidence pointer (file:line, or the command run), and "
+        "the verdict direction so far. Ids, markers and pointers only, no "
+        "narrative; a claim missing from the worklog is a claim the next "
+        "phase cannot act on."
     )
 
     # STEP 1 — DECOMPOSITION
@@ -101,10 +108,6 @@ def get_step_guidance(
             "step_title": "Decompose",
             "actions": actions,
             "next": f"Step {next_step}: Verify each verifiable item against primary source code.",
-            "academic_note": (
-                "Multi-Expert Prompting (Wang et al., 2024): \"Integrating multiple experts' "
-                "perspectives catches blind spots in reasoning.\""
-            ),
         }
 
     # STEP 2 — VERIFICATION
@@ -145,18 +148,13 @@ def get_step_guidance(
             "",
             "Mark each: VERIFIED / FAILED / UNCERTAIN.",
             "",
-            state_requirement,
+            carry_forward,
         ])
         return {
             "phase": "VERIFICATION",
             "step_title": "Verify",
             "actions": actions_2,
             "next": f"Step {next_step}: Challenge the review with adversarial analysis.",
-            "academic_note": (
-                "Chain-of-Verification (Dhuliawala et al., 2023): \"Factored verification "
-                "prevents confirmation bias. Plan verification questions, then answer them "
-                "independently.\""
-            ),
         }
 
     # STEP 3 — CHALLENGE
@@ -190,13 +188,9 @@ def get_step_guidance(
                 "STEEL-MANNING: Present the PR author's BEST defense, not a strawman. Make the "
                 "argument as strong as you can.",
                 "",
-                state_requirement,
+                carry_forward,
             ],
             "next": f"Step {next_step}: Synthesize findings into verdict.",
-            "academic_note": (
-                "Self-Consistency (Wang et al., 2023): \"Correct reasoning processes tend to "
-                "have greater agreement in their final answer than incorrect processes.\""
-            ),
         }
 
     # STEP 4 — SYNTHESIS
@@ -253,10 +247,9 @@ def get_step_guidance(
                 "and for a STAND that carries `correct` entries; never for "
                 "ESCALATE.",
                 "",
-                state_requirement,
+                carry_forward,
             ],
             "next": None,
-            "academic_note": None,
         }
 
     # Fallback (should not be reached with proper validation)
@@ -265,7 +258,6 @@ def get_step_guidance(
         "step_title": "Unknown Step",
         "actions": ["Invalid step number."],
         "next": None,
-        "academic_note": None,
     }
 
 
@@ -284,11 +276,6 @@ def format_output(step: int, total_steps: int, guidance: dict) -> str:
     for action in guidance["actions"]:
         lines.append(action)
     lines.append("")
-
-    # Academic note if present
-    if guidance.get("academic_note"):
-        lines.append(f"[{guidance['academic_note']}]")
-        lines.append("")
 
     # Next step or completion
     if guidance["next"]:
@@ -500,10 +487,13 @@ def main():
         help="Directory for output files",
     )
     parser.add_argument(
-        "--thoughts",
+        "--worklog",
         type=str,
         default=None,
-        help="Accumulated analysis state from previous steps",
+        help=(
+            "Claim table carried from the previous phase: every claim id with "
+            "its status marker and evidence pointer. Any short text on phase 1."
+        ),
     )
 
     args = parser.parse_args()
@@ -515,11 +505,16 @@ def main():
         args.step_number is None
         or args.total_steps is None
         or args.report is None
-        or args.thoughts is None
+        or args.worklog is None
     ):
         parser.error(
-            "--step-number, --total-steps, --report, and --thoughts are "
+            "--step-number, --total-steps, --report, and --worklog are "
             "required unless --save is given"
+        )
+    if args.step_number >= 2 and not args.worklog.strip():
+        parser.error(
+            "--worklog is empty: from phase 2 on it lists every claim id from "
+            "the previous phase with its status marker and evidence pointer"
         )
 
     # Validate total steps matches the constant

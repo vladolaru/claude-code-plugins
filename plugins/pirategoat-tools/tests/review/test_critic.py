@@ -41,7 +41,7 @@ class TestStepCount:
             "--total-steps", "7",
             "--report", "/tmp/nonexistent-report.md",
             "--output-dir", "/tmp/test-critic",
-            "--thoughts", "initial",
+            "--worklog", "initial",
         )
         assert result.returncode != 0
         assert "must be 4" in result.stderr
@@ -53,11 +53,68 @@ class TestStepCount:
             "--total-steps", "4",
             "--report", "/tmp/nonexistent-report.md",
             "--output-dir", "/tmp/test-critic",
-            "--thoughts", "initial",
+            "--worklog", "initial",
         ])
         with pytest.raises(SystemExit) as exc:
             critic_module.main()
         assert exc.value.code == 1
+
+
+class TestWorklogContract:
+    """The between-phase write-down is a claim table: every claim id with
+    its status marker and evidence pointer. The script requires it on every
+    phase, refuses an empty one from phase 2 on, and reminds the model at
+    phases 2-4 what the next call must carry."""
+
+    def test_worklog_is_required(self):
+        result = run_critic(
+            "--step-number", "1", "--total-steps", "4",
+            "--report", "/tmp/nonexistent-report.md",
+            "--output-dir", "/tmp/test-critic",
+        )
+        assert result.returncode == 2
+        assert "--worklog" in result.stderr
+
+    def test_an_empty_worklog_is_refused_after_phase_1(self, tmp_path):
+        report = tmp_path / "review-record.md"
+        report.write_text("# record\n", encoding="utf-8")
+        result = run_critic(
+            "--step-number", "2", "--total-steps", "4",
+            "--report", str(report), "--output-dir", str(tmp_path),
+            "--worklog", "   ",
+        )
+        assert result.returncode == 2
+        assert "every claim id from the previous phase" in result.stderr
+
+    def test_phase_1_accepts_a_minimal_worklog(self, tmp_path):
+        report = tmp_path / "review-record.md"
+        report.write_text("# record\n", encoding="utf-8")
+        result = run_critic(
+            "--step-number", "1", "--total-steps", "4",
+            "--report", str(report), "--output-dir", str(tmp_path),
+            "--worklog", "start",
+        )
+        assert result.returncode == 0, result.stderr
+        assert "Step 1/4" in result.stdout
+
+    @pytest.mark.parametrize("step", [2, 3, 4])
+    def test_later_phases_carry_the_claim_table_forward(self, step):
+        guidance = critic_module.get_step_guidance(
+            step, 4, "/tmp/test-report.md", "/tmp/test-critic", None,
+        )
+        output = critic_module.format_output(step, 4, guidance)
+        assert "WORKLOG CARRY-FORWARD" in output
+        assert "--worklog" in output
+        assert "every claim id" in output
+
+    def test_the_definition_invokes_every_phase_with_a_worklog(self):
+        """The definition is what the critic follows; each of its five
+        phase commands (four normal, one degraded) passes the flag the
+        script requires."""
+        text = (PLUGIN_ROOT / "agents" / "decision-reviewer.md").read_text(encoding="utf-8")
+        phase_lines = [l for l in text.splitlines() if "critic.py --step-number" in l]
+        assert len(phase_lines) == 5
+        assert all("--worklog" in l for l in phase_lines)
 
 
 class TestSynthesisAuthorsSiblingCheckCorrections:

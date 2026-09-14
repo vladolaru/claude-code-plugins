@@ -31,11 +31,17 @@ def get_step_guidance(step: int, total_steps: int, decision: Optional[str], cont
     next_step = step + 1 if step < total_steps else None
     phase = get_phase_name(step)
 
-    # Common state requirement for steps 2+
-    state_requirement = (
-        "CONTEXT REQUIREMENT: Your --thoughts from this step must include ALL IDs, "
-        "classifications, and status markers from previous steps. This accumulated "
-        "state is essential for workflow continuity."
+    # Carry-forward reminder for steps 2+: the next step's --worklog is the
+    # claim table this step produced. Ids, status markers and evidence
+    # pointers only; the pipeline keys everything by the ledger's F1/C1/A1 ids.
+    carry_forward = (
+        "WORKLOG CARRY-FORWARD: the `--worklog` you pass to the next phase "
+        "lists every claim id from the previous phase and this one (F1, C1, "
+        "A1, …) with its status marker (VERIFIED / FAILED / UNCERTAIN / "
+        "PENDING), its evidence pointer (file:line, or the command run), and "
+        "the verdict direction so far. Ids, markers and pointers only, no "
+        "narrative; a claim missing from the worklog is a claim the next "
+        "phase cannot act on."
     )
 
     # DECOMPOSITION PHASE
@@ -76,7 +82,6 @@ def get_step_guidance(step: int, total_steps: int, decision: Optional[str], cont
                 "These IDs will be referenced in ALL subsequent steps. Be thorough but focused.",
             ],
             "next": f"Step {next_step}: Classify each item's verifiability.",
-            "academic_note": None,
         }
 
     if step == 2:
@@ -114,10 +119,9 @@ def get_step_guidance(step: int, total_steps: int, decision: Optional[str], cont
                 "",
                 "COUNT: State how many [V] items require verification in the next phase.",
                 "",
-                state_requirement,
+                carry_forward,
             ],
             "next": f"Step {next_step}: Generate verification questions for [V] items.",
-            "academic_note": None,
         }
 
     # VERIFICATION PHASE
@@ -153,13 +157,9 @@ def get_step_guidance(step: int, total_steps: int, decision: Optional[str], cont
                 "    Q1: Can a retry succeed after another request has already written?",
                 "    Q2: What ordering guarantees exist between concurrent requests?",
                 "",
-                state_requirement,
+                carry_forward,
             ],
             "next": f"Step {next_step}: Answer questions with factored verification.",
-            "academic_note": (
-                "Chain-of-Verification (Dhuliawala et al., 2023): \"Plan verification questions "
-                "to check its work, and then systematically answer those questions.\""
-            ),
         }
 
     if step == 4:
@@ -208,13 +208,9 @@ def get_step_guidance(step: int, total_steps: int, decision: Optional[str], cont
                 "    Status: VERIFIED | FAILED | UNCERTAIN",
                 "    Rationale: <one sentence explaining the status>",
                 "",
-                state_requirement,
+                carry_forward,
             ],
             "next": f"Step {next_step}: Begin challenge phase with adversarial analysis.",
-            "academic_note": (
-                "Chain-of-Verification: \"Factored variants which separate out verification steps, "
-                "in terms of which context is attended to, give further performance gains.\""
-            ),
         }
 
     # CHALLENGE PHASE
@@ -257,13 +253,9 @@ def get_step_guidance(step: int, total_steps: int, decision: Optional[str], cont
                 "- <Risk 2>",
                 "- <Risk 3>",
                 "",
-                state_requirement,
+                carry_forward,
             ],
             "next": f"Step {next_step}: Explore alternative problem framing.",
-            "academic_note": (
-                "Multi-Expert Prompting (Wang et al., 2024): \"Integrating multiple experts' "
-                "perspectives catches blind spots in reasoning.\""
-            ),
         }
 
     if step == 6:
@@ -301,10 +293,9 @@ def get_step_guidance(step: int, total_steps: int, decision: Optional[str], cont
                 "IMPLICATION FOR DECISION:",
                 "<Does this reframing strengthen, weaken, or redirect the proposed decision?>",
                 "",
-                state_requirement,
+                carry_forward,
             ],
             "next": f"Step {next_step}: Synthesize findings into verdict.",
-            "academic_note": None,
         }
 
     # SYNTHESIS PHASE
@@ -357,10 +348,6 @@ def get_step_guidance(step: int, total_steps: int, decision: Optional[str], cont
                 "   If REVISE, specify which items need rework. If STAND, note accepted risks.>",
             ],
             "next": None,
-            "academic_note": (
-                "Self-Consistency (Wang et al., 2023): \"Correct reasoning processes tend to "
-                "have greater agreement in their final answer than incorrect processes.\""
-            ),
         }
 
     return {
@@ -368,7 +355,6 @@ def get_step_guidance(step: int, total_steps: int, decision: Optional[str], cont
         "step_title": "Unknown Step",
         "actions": ["Invalid step number."],
         "next": None,
-        "academic_note": None,
     }
 
 
@@ -384,11 +370,6 @@ def format_output(step: int, total_steps: int, guidance: dict) -> str:
     for action in guidance["actions"]:
         lines.append(action)
     lines.append("")
-
-    # Academic note if present
-    if guidance.get("academic_note"):
-        lines.append(f"[{guidance['academic_note']}]")
-        lines.append("")
 
     # Next step or completion
     if guidance["next"]:
@@ -426,10 +407,10 @@ def main():
         help="Relevant constraints and background (required for step 1)",
     )
     parser.add_argument(
-        "--thoughts",
+        "--worklog",
         type=str,
         required=True,
-        help="Your analysis, findings, and progress from previous steps",
+        help="Claim table carried from the previous step: every id with its status marker and evidence pointer",
     )
 
     args = parser.parse_args()

@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The reconciliator can now file a finding whose only source is an orchestrator note it confirmed, so a defect the orchestrator found in the diff reaches the ledger at reconciliation instead of arriving a stage later as a critic addition with no source.
 - The step-8 briefing now tells the orchestrator to register a Verify item it settled by reading the code as a note, so the reconciliator's confirmation credits the item in the review record instead of leaving it unverified for the decision critic to redo.
 - The reconciliator records a check's `method` only for a probe it ran itself and otherwise leaves it to the carried reviewer methods, so the record no longer shows reads the reconciliator never made.
+- The decision critic's phase commands carry their between-phase claim table in `--worklog` (every claim id with its status marker and evidence pointer; refused when empty from phase 2 on) instead of `--thoughts` with an "accumulated analysis" instruction, and the phase prompts and the critic's definition no longer speak of reasoning or cite the academic notes. The mechanics are unchanged; the words now describe the payload.
 
 ### Fixed
 
