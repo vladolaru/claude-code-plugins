@@ -55,10 +55,10 @@ python3 "$SKILL_DIR/scripts/decision-critic.py" \
   --worklog "<claim table from all previous steps: ids, status markers, evidence pointers>"
 ```
 
-| Argument        | Required | Description                                                 |
-| --------------- | -------- | ----------------------------------------------------------- |
-| `--step-number` | Yes      | Current step (1-7)                                          |
-| `--total-steps` | Yes      | Always 7                                                    |
-| `--decision`    | Step 1   | The decision statement being criticized                     |
-| `--context`     | Step 1   | Constraints, background, system context                     |
+| Argument        | Required | Description                                                                            |
+| --------------- | -------- | -------------------------------------------------------------------------------------- |
+| `--step-number` | Yes      | Current step (1-7)                                                                     |
+| `--total-steps` | Yes      | Always 7                                                                               |
+| `--decision`    | Step 1   | The decision statement being criticized                                                |
+| `--context`     | Step 1   | Constraints, background, system context                                                |
 | `--worklog`     | Yes      | The claim table from prior steps: every id with its status marker and evidence pointer |

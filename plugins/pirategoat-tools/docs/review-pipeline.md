@@ -97,7 +97,7 @@ The pipeline never installs dependencies itself, because package managers execut
 Responsibilities:
 
 - **Pipeline config plus a tracked-Git precheck decide whether refresh may be offered.** Step 3 observes tracked state with `git status --porcelain --untracked-files=no --ignore-submodules=untracked`; a dirty or unknown observation fails closed and offers no commands or save handoff. This gate is separate from the whole-run hygiene baseline and never takes custody of the requester's tracked changes.
-- **The orchestrator decides whether and what to run.** After a clean precheck it inspects the repository and the change, chooses lockfile-preserving commands without a manager or flag allowlist, refreshes host context after any installation (`context.py --refresh-host-context`), and writes a schema-1 request under `$TMPDIR`; `not_needed` with an empty command list is the required outcome when inspection finds no work.
+- **The orchestrator decides whether and what to run.** After a clean precheck it inspects the repository and the change, chooses lockfile-preserving commands without a manager or flag allowlist, refreshes host context after any installation (`context.py --refresh-host-context`), and writes a schema-1 request under the run's `tmp/`; `not_needed` with an empty command list is the required outcome when inspection finds no work.
 - **`dependency_refresh.py save` validates and publishes.** It accepts exactly the request schema, records bounded final tracked-state evidence, and publishes the canonical `dependency-refresh.json` atomically. `completed`, `partial`, `failed`, and a dirty or unknown final state are all valid evidence; only invalid request input blocks publication. Reported command strings are evidence, never execution attestation.
 
 At step 5 the pipeline reads the report through `load_dependency_refresh_report()`; a missing or malformed report after a clean precheck, or a dirty or unknown final state, becomes explicit degraded evidence before dispatch. The manifest preserves `requested`, `reported`, optional unsafe-precheck evidence, and the validated report fields.
@@ -147,7 +147,7 @@ Interactive reviews keep durable state under `~/.pirategoat-tools/reviews/`; an 
         │   ├── decision-critic-findings.md
         │   ├── decision-critic-verdict.json
         │   └── <agent>.synthesis-started
-        └── tmp/                                               # sanctioned reviewer probe scratch
+        └── tmp/                                               # sanctioned scratch: reviewer probes, plus the reconciliator's staged ledger, the critic's drafts, and the adjudication and dependency-refresh requests
 ```
 
 The target directory groups runs for one PR or branch and owns only cross-run state. A run directory is immutable in identity and never reused: its UTC run id sorts lexically, `latest` resolves the newest valid name without a symlink, and the allocator prunes older runs after keeping ten. The seven boundary files stay at the root because interactive commands and pirategoat-bot exchange them there. `run_paths.py` resolves shared artifacts and `reviewer_lifecycle.py` per-reviewer artifacts; callers never reconstruct these paths or spell filenames themselves.

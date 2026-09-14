@@ -85,7 +85,7 @@ Structured data lives in files. The LLM's conversation context handles qualitati
 | Qualitative reasoning ("this change fixes a payment flow bug") | LLM | Conversation context (free — already there) |
 | LLM synthesis needed downstream ("purpose summary") | LLM → file | Explicit handoff artifact (e.g., `change-purpose.md`) |
 
-**Why not `--thoughts`:**
+**Why not `--thoughts`:** (the live critic scripts now call this argument `--worklog`; see the vocabulary note under "`--thoughts` as explicit state bus" in `step-by-step-prompt-injection.md`)
 - LLMs are good at reasoning, bad at bookkeeping. Asking them to faithfully maintain `STASH_REF=abc123` across 12 steps is asking them to do what scripts do better.
 - Each `--thoughts` string appears in conversation context. Over N steps, that's N copies of growing state blobs — token waste.
 - The LLM's conversation history already contains everything it learned. Serializing it to a string and back is redundant.
