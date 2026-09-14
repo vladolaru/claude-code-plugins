@@ -26,9 +26,9 @@ from review import (
 )
 from review.agent.review_assignment import derive_reviewed_files
 from review.manifest_sections import aggregate_file_review
-from review.critic_adjustments import write_findings
+from review.critic_adjustments import QUICK_MODE_SKIP_VERDICTS, write_findings
 from review.telemetry import ReviewTelemetry
-from review.verdict_rules import verdict_for_counts
+from review.verdict_rules import LEDGER_VERDICTS, summary_for, verdict_for_counts
 
 sys.path.insert(0, str(TESTS_DIR))
 from helpers.pipeline_process import (
@@ -2720,63 +2720,60 @@ class TestStep10Orchestration:
     step, so the branch cannot silently stop executing again.
     """
 
+    # One finding at the lowest severity that earns each verdict; approve
+    # is the canonical ledger with none.
+    _SEVERITY_FOR_VERDICT = {
+        "comment": "medium", "request_changes": "high", "block": "critical",
+    }
+
     def _findings(self, tmp_path, verdict):
         findings = _review_json("reconciliator")
-        if verdict == "block":
+        severity = self._SEVERITY_FOR_VERDICT.get(verdict)
+        if severity:
             findings["findings"] = [{
                 "id": "f1",
                 "category": "correctness",
-                "severity": "critical",
-                "title": "Blocking defect",
-                "description": "The defect blocks a safe release.",
-                "file": "src/blocking.py",
+                "severity": severity,
+                "title": "A defect",
+                "description": "The defect this verdict rests on.",
+                "file": "src/defect.py",
                 "line": 1,
                 "recommendation": "Correct the defect.",
                 "confidence": 0.9,
             }]
-            findings["verdict"] = "block"
-            findings["summary"] = {
-                "total_findings": 1,
-                "by_severity": {
-                    "critical": 1,
-                    "high": 0,
-                    "medium": 0,
-                    "low": 0,
-                    "info": 0,
-                },
-                "suppressed_advisory_finding_count": 0,
-            }
+            derived = summary_for(findings["findings"])
+            assert derived["verdict"] == verdict
+            findings["verdict"] = derived["verdict"]
+            findings["summary"] = derived["summary"]
             findings["meta"]["next_finding_number"] = 2
         (tmp_path / "review-findings.json").write_text(
             json.dumps(findings)
         )
 
-    @pytest.mark.parametrize(
-        "quick, verdict, expect_skip",
-        [
-            pytest.param(False, "block", False, id="not_quick_blocking"),
-            pytest.param(True, "approve", True, id="quick_approve_skips"),
-            pytest.param(True, "block", False, id="quick_block_keeps_critic"),
-        ],
-    )
-    def test_step_10_quick_skip_decision(
-        self, mod, tmp_path, quick, verdict, expect_skip
+    @pytest.mark.parametrize("quick", [True, False], ids=["quick", "not_quick"])
+    @pytest.mark.parametrize("verdict", LEDGER_VERDICTS)
+    def test_step_10_orchestration_and_briefing_agree_on_the_skip(
+        self, mod, tmp_path, quick, verdict
     ):
+        """Orchestration records the quick-mode skip and the briefing drops
+        the critic's handoff through one predicate, so for every ledger
+        verdict they agree: a skip is a recorded decision and no handoff."""
         self._findings(tmp_path, verdict)
         state = {"resolved_params": {}}
+        config = {"quick": quick}
 
-        mod._orchestrate_step(
-            10, "full", {"quick": quick}, state, {}, str(tmp_path)
+        mod._orchestrate_step(10, "full", config, state, {}, str(tmp_path))
+        guidance = mod.get_step_guidance(
+            10, "full", state, {}, config=config, output_dir=str(tmp_path),
         )
 
         assert state.get("reconciliation_verdict") == verdict
         decision = state.get("step_decisions", {}).get("10")
-        if expect_skip:
-            assert decision is not None, "quick-mode critic skip was not recorded"
+        assert (decision is not None) is (quick and verdict in QUICK_MODE_SKIP_VERDICTS)
+        assert (guidance["handoff"] is None) is (decision is not None)
+        if decision is not None:
             assert decision["critic_skipped"] is True
             assert verdict in decision["reason"]
-        else:
-            assert decision is None
 
     def test_step_10_clears_a_stale_skip_decision_on_rerun(self, mod, tmp_path):
         """A rerun after the verdict escalates must drop the earlier skip.

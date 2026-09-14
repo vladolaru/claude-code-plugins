@@ -27,7 +27,9 @@ try:
         SKIPPED_STATUSES,
     )
     from .manifest_sections import describe_reconciliation_verification, host_identity_phrase, project_host_entry
-    from .critic_adjustments import LEDGER_MOVES, STAND_BATCH_RULE
+    from .critic_adjustments import (
+        LEDGER_MOVES, STAND_BATCH_RULE, quick_mode_skips_critic,
+    )
     from .review_document import RECOMMENDATION_PRIORITIES
     from .run_paths import artifact_path
     from .telemetry_share import CONSENT_DISCLOSURE, REMOTE_REPO
@@ -55,7 +57,9 @@ except ImportError:
         SKIPPED_STATUSES,
     )
     from review.manifest_sections import describe_reconciliation_verification, host_identity_phrase, project_host_entry
-    from review.critic_adjustments import LEDGER_MOVES, STAND_BATCH_RULE
+    from review.critic_adjustments import (
+        LEDGER_MOVES, STAND_BATCH_RULE, quick_mode_skips_critic,
+    )
     from review.review_document import RECOMMENDATION_PRIORITIES
     from review.run_paths import artifact_path
     from review.telemetry_share import CONSENT_DISCLOSURE, REMOTE_REPO
@@ -1980,9 +1984,8 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     findings_json_name = _artifact_name("review_findings_json")
 
     # Quick-mode critic skip: low-risk verdicts don't need stress-testing
-    is_quick = config.get("quick", False)
     recon_verdict = state.get("reconciliation_verdict", "")
-    skip_critic = is_quick and recon_verdict.lower() in ("approve", "comment")
+    skip_critic = quick_mode_skips_critic(config, recon_verdict)
 
     if skip_critic:
         situation = [

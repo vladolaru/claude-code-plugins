@@ -1722,14 +1722,11 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
     ) if read.status == critic_adjustments.FINDINGS_READ_OK else None
 
     # Record critic skip decision for telemetry.
-    # Clear any stale decision first (step 10 may be rerun after
-    # the findings ledger changes from approve/comment to a higher verdict).
+    # Clear any stale decision first (step 10 may be rerun after the
+    # findings ledger's verdict leaves critic_adjustments.QUICK_MODE_SKIP_VERDICTS).
     state.setdefault("step_decisions", {}).pop("10", None)
-    is_quick = config.get("quick", False)
     recon_verdict = state.get("reconciliation_verdict", "")
-    should_skip = (
-        is_quick and recon_verdict.lower() in ("approve", "comment")
-    )
+    should_skip = critic_adjustments.quick_mode_skips_critic(config, recon_verdict)
     if should_skip:
         reason = f"quick mode + reconciliation verdict: {recon_verdict}"
         state["step_decisions"]["10"] = {

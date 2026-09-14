@@ -63,6 +63,7 @@ try:
     from .verdict_rules import (
         LEDGER_VERDICTS,
         SEVERITY_RANK,
+        VERDICT_RANK,
         summary_for,
     )
     from .run_paths import artifact_path
@@ -99,6 +100,7 @@ except ImportError:
     from review.verdict_rules import (
         LEDGER_VERDICTS,
         SEVERITY_RANK,
+        VERDICT_RANK,
         summary_for,
     )
     from review.run_paths import artifact_path
@@ -208,8 +210,8 @@ ADJUDICATION_SCHEMA = 2
 # The canonical critic verdict vocabulary, owned here because this module is
 # what commits it: `write_critic_verdict()` is the one writer of the marker,
 # and `verdict_admits_proposal()` is the one rule for what each verdict may
-# carry. critic.py, pipeline step 11 and the offline metrics consumer read
-# these rather than respelling them.
+# carry. critic.py, pipeline steps 10 and 11 and the offline metrics consumer
+# read these rather than respelling them.
 STAND_VERDICT = "STAND"
 REVISE_VERDICT = "REVISE"
 ESCALATE_VERDICT = "ESCALATE"
@@ -220,6 +222,22 @@ CRITIC_VERDICTS = (STAND_VERDICT, REVISE_VERDICT, ESCALATE_VERDICT)
 # must exclude it; consumers that measure whether a critic ran must not.
 CRITIC_VERDICT_SKIPPED = "SKIPPED"
 VALID_CRITIC_VERDICTS = CRITIC_VERDICTS + (CRITIC_VERDICT_SKIPPED,)
+# The ledger verdicts quick mode leaves unstressed, derived from the ladder:
+# every verdict ranked below request_changes. `quick_mode_skips_critic` is
+# the one test, read by step 10's orchestration (which commits
+# CRITIC_VERDICT_SKIPPED) and by its briefing (which tells the orchestrator).
+QUICK_MODE_SKIP_VERDICTS = tuple(
+    verdict for verdict in LEDGER_VERDICTS
+    if VERDICT_RANK[verdict] < VERDICT_RANK["request_changes"]
+)
+
+
+def quick_mode_skips_critic(config, ledger_verdict):
+    """Whether step 10 skips the decision critic: quick mode is on and the
+    reconciled ledger verdict (a validated LEDGER_VERDICTS value, or "" when
+    no ledger was read) is one of QUICK_MODE_SKIP_VERDICTS."""
+    return bool(config.get("quick")) and ledger_verdict in QUICK_MODE_SKIP_VERDICTS
+
 # The verdicts a proposal may ride: REVISE, which says something the ladder
 # reads moved, and a STAND that carries wording corrections. ESCALATE,
 # SKIPPED, an unrecognized string and a missing file carry nothing.

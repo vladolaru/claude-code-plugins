@@ -3340,7 +3340,9 @@ class TestStep10QuickMode:
 
     QUICK_MODE_CRITIC = (
         pytest.param("approve", True, False, id="approve_quick_skips"),
-        pytest.param("COMMENT", True, False, id="comment_quick_skips_case_insensitive"),
+        # Lower case: step 10 records the validated ledger verdict (or ""),
+        # the only values this state key ever holds.
+        pytest.param("comment", True, False, id="comment_quick_skips"),
         pytest.param("request_changes", True, True, id="request_changes_quick_runs"),
         pytest.param("block", True, True, id="block_quick_runs"),
         pytest.param("approve", False, True, id="approve_normal_always_runs"),

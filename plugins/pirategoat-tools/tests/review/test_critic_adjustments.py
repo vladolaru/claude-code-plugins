@@ -2781,6 +2781,30 @@ class TestCriticCannotTouchVerifies:
             })
 
 
+class TestQuickModeSkipsCritic:
+    """Step 10's orchestration records the quick-mode skip and its briefing
+    announces it. Both used to spell ("approve", "comment") by hand; both
+    now read this one test, derived from the verdict ladder."""
+
+    def test_the_skip_verdicts_are_the_ledger_verdicts_below_request_changes(self):
+        from review.critic_adjustments import QUICK_MODE_SKIP_VERDICTS
+        assert QUICK_MODE_SKIP_VERDICTS == ("approve", "comment")
+
+    @pytest.mark.parametrize("quick, verdict, skips", [
+        (True, "approve", True),
+        (True, "comment", True),
+        (True, "request_changes", False),
+        (True, "block", False),
+        (True, "", False),
+        (False, "approve", False),
+    ])
+    def test_the_skip_needs_quick_mode_and_a_verdict_below_request_changes(
+        self, quick, verdict, skips
+    ):
+        from review.critic_adjustments import quick_mode_skips_critic
+        assert quick_mode_skips_critic({"quick": quick}, verdict) is skips
+
+
 class TestVerdictAdmitsProposal:
     """One rule for what each verdict may commit, used by the save, the
     commit, the read and the adjudication: only STAND and REVISE carry a
