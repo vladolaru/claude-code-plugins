@@ -24,7 +24,7 @@ PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
 python3 $PLUGIN_ROOT/scripts/review/agent/bootstrap.py --agent history-insights-reviewer
 ```
 
-The output names your briefing file; read it in full. It contains your review rules, scope (with diffs and file list), and output instructions. Parse the diffs, file list, BASE_REF, and OUTPUT_DIR from the scope section. Use the diffs for scenario extraction (Phase 1). Use BASE_REF for history mining commands. Only then proceed. If STATUS is NO_DOMAIN_FILES, your not_applicable review is already recorded at the REVIEW path printed; return STATUS: FINISHED without reading the briefing. If STATUS is ERROR, report the error and exit.
+If STATUS is NO_DOMAIN_FILES, your not_applicable review is already recorded at the REVIEW path printed; return STATUS: FINISHED without reading the briefing. If STATUS is ERROR, report the error and exit. Otherwise the output names your briefing file; read it in full. It contains your review rules, scope (with diffs and file list), and output instructions. Parse the diffs, file list, BASE_REF, and OUTPUT_DIR from the scope section. Use the diffs for scenario extraction (Phase 1). Use BASE_REF for history mining commands. Only then proceed.
 
 ---
 

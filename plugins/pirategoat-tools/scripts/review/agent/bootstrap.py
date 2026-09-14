@@ -1362,8 +1362,8 @@ def deliver_briefing(
         f"=== BOOTSTRAP: {agent_name} ===",
         f"PLUGIN_ROOT: {plugin_root}",
         # STATUS stays on stdout: the reviewer's next action (read the
-        # briefing, return FINISHED, or report the error) is decided from
-        # it, and the compliance grader reads it from here.
+        # briefing, or return FINISHED) is decided from it, and the
+        # compliance grader reads it from here. An ERROR never gets this far.
         f"STATUS: {status}",
         f"BRIEFING: {path}",
         f"BRIEFING_BYTES: {len(text.encode('utf-8'))}",
@@ -1793,6 +1793,17 @@ def main():
 
     os.makedirs(output_dir, exist_ok=True)
 
+    # A failed scope ends here, whether or not it left a summary behind: the
+    # diagnosis and the ACTION that fits it, no briefing and no started
+    # marker. Every STATUS: ERROR a reviewer sees therefore comes with no
+    # briefing to read, which is what each agent definition branches on
+    # before its read-the-briefing instruction.
+    if scope_status == "ERROR":
+        print(build_scope_failure_output(
+            effective_agent_name, scope_output, plugin_root
+        ))
+        sys.exit(1)
+
     # Scope facts come from the machine-readable sidecars and only from them
     # — the same producer dict the rendered text was printed from. A run that
     # could not produce one has no facts, and a reviewer briefed with facts
@@ -1800,22 +1811,13 @@ def main():
     try:
         scope_facts = load_scope_facts(scope_summary_paths)
     except ValueError as exc:
-        # Two unrelated failures land here. Either scope discovery itself
-        # failed and never got as far as writing a summary — then it already
-        # printed the diagnosis and the ACTION that fits it, and a missing
-        # file is only the downstream symptom. Or scope succeeded and its
-        # summary is unreadable, which is the infrastructure failure this
-        # message names.
-        if scope_status == "ERROR":
-            print(build_scope_failure_output(
-                effective_agent_name, scope_output, plugin_root
-            ))
-        else:
-            print(build_error_output(
-                effective_agent_name,
-                f"Could not read the scope summary: {exc}",
-                plugin_root,
-            ))
+        # Scope succeeded and its summary is unreadable: the infrastructure
+        # failure this message names.
+        print(build_error_output(
+            effective_agent_name,
+            f"Could not read the scope summary: {exc}",
+            plugin_root,
+        ))
         sys.exit(1)
     scope_lines_for_budget = scope_facts["in_scope_stat_lines"]
     inline_diff_files, review_claimable_files = partition_scope_paths(
@@ -2081,10 +2083,9 @@ def main():
         f.write(datetime.now(timezone.utc).isoformat())
     print(stub)
 
-    # Exit code: 0 for success (NO_DOMAIN_FILES included; its review is
-    # recorded above), 1 for errors
-    if overall_status == "ERROR":
-        sys.exit(1)
+    # Every error exited above, before a briefing or a started marker
+    # existed, so a delivered briefing is a success (NO_DOMAIN_FILES
+    # included; its review is recorded above).
     sys.exit(0)
 
 

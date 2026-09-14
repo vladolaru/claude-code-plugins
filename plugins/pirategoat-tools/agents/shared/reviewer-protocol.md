@@ -58,9 +58,9 @@ The script outputs structured text. Parse these key fields from the header:
 | `PR_NUMBER` | PR number (if detected) |
 | `BUDGET_EXCEEDED` | Files listed but not diffed due to context budget |
 
-**On `STATUS: ERROR`:** Report the error to the caller. Do NOT proceed with review.
+**On `STATUS: ERROR`:** bootstrap prints the diagnosis and its ACTION and delivers no briefing. Each agent definition branches on the status before its read-the-briefing instruction, because this section is stripped before you receive the protocol.
 
-**On `STATUS: NO_DOMAIN_FILES`:** bootstrap has already recorded and finalized your `not_applicable` review at the `REVIEW` path it printed. Return `STATUS: FINISHED` with the signal it printed, verbatim; do not open the builder or analyze anything.
+**On `STATUS: NO_DOMAIN_FILES`:** bootstrap records and finalizes the `not_applicable` review itself. Its stdout stub delivers the return signal, and each agent definition branches on the status before its read-the-briefing instruction, because this section is stripped before you receive the protocol.
 
 **On `STATUS: OK`:** The `=== DIFFS ===` section contains filtered diffs for matched files within the context budget. Files are sorted by budget priority (production code before tests for mixed domains), largest-first within each tier. One oversized leading file may be admitted in full as a protected exception; the remaining files share the normal budget.
 

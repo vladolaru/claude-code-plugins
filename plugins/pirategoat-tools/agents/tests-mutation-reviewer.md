@@ -24,7 +24,7 @@ PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
 python3 $PLUGIN_ROOT/scripts/review/agent/bootstrap.py --agent tests-mutation-reviewer
 ```
 
-The output names your briefing file; read it in full. It contains your review rules and output instructions (no scope — this agent discovers its own test scope). Only then proceed with the mutation testing below.
+If STATUS is ERROR, report the error and exit. Otherwise the output names your briefing file; read it in full. It contains your review rules and output instructions (no scope — this agent discovers its own test scope). Only then proceed with the mutation testing below.
 
 ---
 

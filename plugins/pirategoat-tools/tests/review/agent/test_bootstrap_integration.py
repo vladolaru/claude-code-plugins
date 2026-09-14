@@ -400,6 +400,11 @@ class TestCategoryRepresentatives:
         assert result.returncode == 1
         assert "STATUS: ERROR" in result.stdout
         assert "No files matched" not in result.stdout
+        # An ERROR ends the review before any briefing: nothing to read, and
+        # no started marker left to read as RUNNING.
+        assert "BRIEFING:" not in result.stdout
+        from review.reviewer_lifecycle import started_marker_path
+        assert not Path(started_marker_path(str(tmp_path), "repo-renewals")).exists()
 
     def test_ref_mode_agent_start_records_the_dispatched_model_tier(
         self, tmp_path
@@ -2059,13 +2064,45 @@ class TestEveryReviewerMandatesBootstrap:
         text = (PLUGIN_ROOT / "agents" / f"{agent}.md").read_text()
         assert self.RECORDED_ABSTENTION_CLAUSE in text, agent
         assert "APPROVE → exit" not in text, agent
+        # The branch precedes the read instruction: a reviewer told to read
+        # the briefing first reads and parses it before it meets the status
+        # that says not to (PR #21 review: history-insights-reviewer put
+        # three parse steps between the two).
+        assert "read it in full" in text, agent
+        assert text.index(self.RECORDED_ABSTENTION_CLAUSE) < text.index("read it in full"), agent
 
-    @pytest.mark.parametrize("protocol", [
-        "agents/shared/reviewer-protocol.md",
-        "agents/shared/tests-reviewer-protocol.md",
-    ])
-    def test_shared_protocols_state_the_recorded_abstention(self, protocol):
-        text = (PLUGIN_ROOT / protocol).read_text()
+    @pytest.mark.parametrize("status", ["NO_DOMAIN_FILES", "ERROR"])
+    def test_the_stripped_scope_section_defers_statuses_that_end_the_review(self, status):
+        """reviewer-protocol.md's Scope Discovery is stripped before any
+        reviewer reads the protocol, so a status that ends the review states
+        where its handling is delivered instead of instructing an action no
+        reviewer receives. The PR #21 review found the NO_DOMAIN_FILES return
+        written there, and this test used to require it."""
+        text = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
+        line = next(l for l in text.splitlines() if l.startswith(f"**On `STATUS: {status}`"))
+        delivered = _mod.extract_protocol_sections(text, _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS)
+        assert line not in delivered
+        assert "stripped" in line
+        for instruction in ("STATUS: FINISHED", "mark_not_applicable", "Report the error", "Do NOT"):
+            assert instruction not in line
+
+    ERROR_BRANCH = "If STATUS is ERROR, report the error and exit."
+
+    @pytest.mark.parametrize("agent", ALL_AGENTS)
+    def test_definition_branches_on_error_before_the_read(self, agent):
+        """Every STATUS: ERROR bootstrap prints ends without a briefing, so
+        every definition that runs bootstrap says so before it tells the
+        reviewer to read one, domain or not."""
+        if agent in BOOTSTRAP_EXEMPT_AGENTS:
+            pytest.skip("not dispatched through bootstrap")
+        text = (PLUGIN_ROOT / "agents" / f"{agent}.md").read_text()
+        assert self.ERROR_BRANCH in text and "read it in full" in text, agent
+        assert text.index(self.ERROR_BRANCH) < text.index("read it in full"), agent
+
+    def test_the_tests_protocol_states_the_recorded_abstention(self):
+        """Delivered whole with the briefing, so a tests reviewer that reads
+        an empty-scope briefing anyway meets the same model the stub states."""
+        text = (PLUGIN_ROOT / "agents/shared/tests-reviewer-protocol.md").read_text()
         line = next(l for l in text.splitlines() if "NO_DOMAIN_FILES" in l and "already recorded" in l)
         assert "STATUS: FINISHED" in line
         assert "mark_not_applicable" not in line
