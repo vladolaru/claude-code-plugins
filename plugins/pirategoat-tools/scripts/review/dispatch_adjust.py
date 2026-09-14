@@ -7,14 +7,16 @@ dispatched agent to SKIPPED_OVERRIDE and `--dispatch NAME REASON` moves a
 skipped one to DISPATCH_OVERRIDE; both repeatable. Every name is validated
 against the plan first, and the read and the single atomic write happen
 under the run-directory lock. An unknown name, an empty reason or a
-malformed plan exits 1 and writes nothing; an agent already in the requested
-family is a reported `UNCHANGED` no-op, so a re-run is idempotent. Two
-requests are refused because they cannot do what they say: a `--dispatch`
-of a `no_domain_files` skip (bootstrap scopes the agent to the same empty
-domain, and no review comes of it) and a `--skip` of an agent whose started
-marker or final review exists (a skipped row is no longer waited for, so
-the skip only hides a live reviewer); each refusal names the route that
-works.
+malformed plan exits 1 and writes nothing. A request that moves no status is
+never refused: an agent already in the requested family is a reported
+`UNCHANGED` no-op, and a new reason on an override already in place is a
+reported `UPDATED` reason, so a re-run is idempotent. Two transitions are
+refused because they cannot do what they say: a `--dispatch` of a
+`no_domain_files` skip (bootstrap scopes the agent to the same empty domain,
+and no review comes of it) and a `--skip` of a dispatched agent whose
+started marker or final review exists (a skipped row is no longer waited
+for, so the skip only hides a live reviewer); each refusal names the route
+that works.
 
 `dispatch_status.OVERRIDE_REASON_KEY`, `PLANNER_STATUS_KEY` and
 `ORPHANED_FILES_KEY` are the one spelling of the fields written here. Each
@@ -62,7 +64,7 @@ except ImportError:
 
 ACTION_SKIP = "skip"
 ACTION_DISPATCH = "dispatch"
-# What each flag may do: the statuses it applies to and the one it sets.
+# What each flag may do: the statuses it moves a row from, and the one it sets.
 _TRANSITIONS = {
     ACTION_SKIP: (DISPATCHED_STATUSES, SKIPPED_OVERRIDE),
     ACTION_DISPATCH: (SKIPPED_STATUSES, DISPATCH_OVERRIDE),
@@ -153,7 +155,13 @@ def _record_override_orphans(plan):
 
 
 def _refusal(output_dir, agent, action):
-    """Why this request cannot do what it says, or None.
+    """Why this transition cannot do what it says, or None.
+
+    Judged only for a request that moves a row from the flag's source
+    statuses to its target, since that move is what each refusal protects:
+    a repeat, a new reason on an override already in place, or a row the
+    planner already put where the flag points moves no status, so a re-run
+    is never refused.
 
     A `no_domain_files` skip is a scope fact, not a triage judgment:
     bootstrap scopes the agent to the same domain the planner measured,
@@ -197,7 +205,9 @@ def adjust_dispatch_plan(output_dir, skips=None, dispatches=None, dry_run=False)
     `--skip` of a planner-skipped agent, a `--dispatch` of a dispatched
     one, or a repeat of the same override — is a reported no-op
     (`changed: False`), never a refusal, so a re-run after the planner
-    changed its mind is idempotent. Raises DispatchAdjustmentError with
+    changed its mind is idempotent. A new reason on an override already in
+    place is recorded (`changed: True`, `from` equal to `to`) and never
+    refused, since no status moves. Raises DispatchAdjustmentError with
     every problem and writes nothing when any request is invalid.
     """
     requests, problems = _requests(skips, dispatches)
@@ -214,23 +224,22 @@ def adjust_dispatch_plan(output_dir, skips=None, dispatches=None, dry_run=False)
             if agent is None:
                 problems.append(f"unknown agent '{name}'; the plan names: {known}")
                 continue
-            family, target = _TRANSITIONS[action]
-            refusal = _refusal(output_dir, agent, action)
-            if refusal:
-                problems.append(refusal)
-                continue
+            sources, target = _TRANSITIONS[action]
             current = agent["status"]
             if current == target:
-                rows.append({"name": name, "from": current, "to": target, "reason": reason,
-                             "changed": agent.get(OVERRIDE_REASON_KEY) != reason})
-            elif current in family:
-                rows.append({"name": name, "from": current, "to": target, "reason": reason,
-                             "changed": True})
+                to, changed = target, agent.get(OVERRIDE_REASON_KEY) != reason
+            elif current in sources:
+                refusal = _refusal(output_dir, agent, action)
+                if refusal:
+                    problems.append(refusal)
+                    continue
+                to, changed = target, True
             else:
                 # Already skipped (or dispatched) by the planner: nothing to
                 # override, and the other flag would flip it the wrong way.
-                rows.append({"name": name, "from": current, "to": current, "reason": reason,
-                             "changed": False})
+                to, changed = current, False
+            rows.append({"name": name, "from": current, "to": to, "reason": reason,
+                         "changed": changed})
         if problems:
             raise DispatchAdjustmentError(problems)
 
@@ -262,7 +271,14 @@ def render_adjustments(rows):
     lines = []
     for row in rows:
         if row["changed"]:
-            lines.append(f"{row['to']} {row['name']} — {row['reason']}")
+            if row["from"] == row["to"]:
+                # A new reason on an override already in place: no status
+                # moved, so the line must not read like a fresh override.
+                lines.append(
+                    f"UPDATED {row['name']} — already {row['to']}, reason now: {row['reason']}"
+                )
+            else:
+                lines.append(f"{row['to']} {row['name']} — {row['reason']}")
             if row.get(ORPHANED_FILES_KEY):
                 lines.append(
                     "  " + ORPHANED_FILES_LEAD
@@ -281,14 +297,14 @@ def main(argv=None):
         description="Record the orchestrator's dispatch-plan adjustments",
         epilog=(
             "Exit codes: 0 = applied (or --dry-run); 1 = a request was refused "
-            "and nothing was written. Each refusal names the agent, its current "
-            "status and the flag that applies to it."
+            "and nothing was written. Each refusal names the agent and the route "
+            "that works."
         ),
     )
     parser.add_argument("--output-dir", required=True, help="The run directory")
     parser.add_argument(
         "--skip", nargs=2, action="append", metavar=("NAME", "REASON"), default=[],
-        help="Skip a dispatched agent (→ SKIPPED_OVERRIDE); a planner-skipped one is a reported no-op; repeatable",
+        help="Skip a dispatched agent (→ SKIPPED_OVERRIDE); an already-skipped one is a reported no-op; repeatable",
     )
     parser.add_argument(
         "--dispatch", nargs=2, action="append", metavar=("NAME", "REASON"), default=[],
