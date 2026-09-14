@@ -24,7 +24,9 @@ from datetime import datetime
 from typing import Any, Dict
 
 try:
-    from .verdict_rules import VALID_SEVERITIES, VERDICT_RANK, summary_for
+    from .verdict_rules import (
+        NOT_APPLICABLE_VERDICT, VALID_SEVERITIES, VERDICT_RANK, summary_for,
+    )
 except ImportError:
     _scripts_parent = os.path.dirname(
         os.path.dirname(os.path.abspath(__file__))
@@ -32,6 +34,7 @@ except ImportError:
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
     from review.verdict_rules import (
+        NOT_APPLICABLE_VERDICT,
         VALID_SEVERITIES,
         VERDICT_RANK,
         summary_for,
@@ -44,12 +47,9 @@ except ImportError:
 # `version: "1.0.0"` string that survived six format changes unbumped —
 # an unmaintained compatibility claim is worse than none.
 #
-# One carve-out, matching the rule in the plugin's AGENTS.md: a shape change
-# made within the same UNRELEASED version that introduced the current number
-# updates the TypeScript contract in the same commit but does NOT bump. The
-# number states a compatibility guarantee only once released, so bumping
-# here would publish a shape no artifact ever had. This migration deliberately
-# establishes schema 2 as the one review-artifact contract shipped by 1.114.0.
+# The carve-outs that let a shape change keep its number are in
+# docs/artifact-schemas.md. This migration deliberately establishes schema 2
+# as the one review-artifact contract shipped by 1.114.0.
 REVIEW_OUTPUT_SCHEMA = 2
 
 VALID_CHANNELS = ('blocking', 'advisory')
@@ -520,7 +520,7 @@ def validate_review_content(document, *, schema):
     except ValueError as exc:
         raise ValueError(f"review findings are malformed: {exc}") from exc
     expected_verdict = derived["verdict"]
-    if document.get("verdict") == "not_applicable":
+    if document.get("verdict") == NOT_APPLICABLE_VERDICT:
         skip_reason = document.get("skip_reason")
         if (
             findings
@@ -528,7 +528,7 @@ def validate_review_content(document, *, schema):
             or not skip_reason.strip()
         ):
             raise ValueError("review not_applicable verdict is malformed")
-        expected_verdict = "not_applicable"
+        expected_verdict = NOT_APPLICABLE_VERDICT
     elif "skip_reason" in document:
         raise ValueError(
             "review skip_reason requires a not_applicable verdict"

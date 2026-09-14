@@ -1,15 +1,19 @@
-"""Tests for atomic_io — the single atomic-JSON-write primitive shared by
-every writer in the review pipeline (except agent/output.py's deliberately
-different staged-nonce protocol, see atomic_io.py's module docstring)."""
+"""Tests for atomic_io — the pipeline's JSON file conventions: the atomic
+write every writer shares, the one reader of a JSON object file, and the
+output-directory lock."""
 
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 
 import pytest
 
-from review.atomic_io import atomic_write_json, atomic_write_text, output_dir_lock
+from review.atomic_io import (
+    atomic_write_json, atomic_write_text, collect_json_object, output_dir_lock,
+    read_json_object,
+)
 
 TESTS_DIR = Path(__file__).resolve().parent.parent  # review/ -> tests/
 PLUGIN_ROOT = TESTS_DIR.parent
@@ -113,6 +117,69 @@ def _calls_os_replace(source_path):
         and node.value.id == "os"
         for node in ast.walk(tree)
     )
+
+
+class TestReadJsonObject:
+    """The one reader of "a JSON file holding an object". The critic's
+    snapshot reader, its save channel and the reviewer finalizer each had
+    their own, with three wordings for one fault."""
+
+    def test_an_object_is_returned(self, tmp_path):
+        path = tmp_path / "a.json"
+        path.write_text('{"k": 1}')
+        assert read_json_object(path, "thing") == {"k": 1}
+
+    def test_a_missing_file_raises_file_not_found(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            read_json_object(tmp_path / "absent.json", "thing")
+
+    @pytest.mark.parametrize("contents, message", [
+        pytest.param(b"null", "thing must be a JSON object, got null", id="null"),
+        pytest.param(b"[]", "thing must be a JSON object, got list", id="list"),
+        pytest.param(b"5", "thing must be a JSON object, got int", id="scalar"),
+        pytest.param(b"{oops", "thing is not readable JSON", id="not-json"),
+        pytest.param(b"\xff\xfe", "thing is not readable JSON", id="not-utf8"),
+        pytest.param(b"[" * 200000, "thing is not readable JSON", id="too-deeply-nested"),
+    ])
+    def test_every_other_fault_is_one_value_error_naming_the_label(
+        self, tmp_path, contents, message
+    ):
+        path = tmp_path / "a.json"
+        path.write_bytes(contents)
+        with pytest.raises(ValueError, match=re.escape(message)):
+            read_json_object(path, "thing")
+
+    def test_a_directory_is_a_value_error_not_an_os_error(self, tmp_path):
+        with pytest.raises(ValueError, match="thing is not readable JSON"):
+            read_json_object(tmp_path, "thing")
+
+
+class TestCollectJsonObject:
+    """The save channels' form of the reader: every outcome is a return
+    value or one recorded problem, never an exception."""
+
+    def test_an_object_is_returned_with_no_problem(self, tmp_path):
+        path = tmp_path / "a.json"
+        path.write_text('{"k": 1}')
+        problems = []
+        assert collect_json_object(path, "--thing", problems) == {"k": 1}
+        assert problems == []
+
+    @pytest.mark.parametrize("contents, problem", [
+        pytest.param(None, "--thing file not found: {path}", id="missing"),
+        pytest.param(b"{oops", "--thing ({path}) is not readable JSON", id="not-json"),
+        pytest.param(b"[]", "--thing ({path}) must be a JSON object, got list", id="list"),
+    ])
+    def test_every_fault_is_one_problem_naming_the_flag_and_path(
+        self, tmp_path, contents, problem
+    ):
+        path = tmp_path / "a.json"
+        if contents is not None:
+            path.write_bytes(contents)
+        problems = []
+        assert collect_json_object(path, "--thing", problems) is None
+        assert len(problems) == 1
+        assert problems[0].startswith(problem.format(path=path))
 
 
 class TestAtomicWriteText:

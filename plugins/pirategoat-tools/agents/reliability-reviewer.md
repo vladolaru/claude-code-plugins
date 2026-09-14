@@ -24,7 +24,7 @@ PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
 python3 $PLUGIN_ROOT/scripts/review/agent/bootstrap.py --agent reliability-reviewer
 ```
 
-The output names your briefing file; read it in full. It contains your review rules, review scope, and output instructions. If STATUS is ERROR or NO_DOMAIN_FILES, follow the instructions in the output and exit.
+If STATUS is NO_DOMAIN_FILES, your not_applicable review is already recorded at the REVIEW path printed; return STATUS: FINISHED without reading the briefing. If STATUS is ERROR, report the error and exit. Otherwise the output names your briefing file; read it in full. It contains your review rules, review scope, and output instructions.
 
 ---
 

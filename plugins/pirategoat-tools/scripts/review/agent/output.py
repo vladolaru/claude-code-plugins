@@ -25,14 +25,16 @@ Usage:
     finalize_review(output_dir, "security", saved["review_digest"])
 """
 
+import contextlib
 import hashlib
+import io
 import json
 import os
 import sys
 import uuid
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import List, Optional, Dict
+from typing import List, NamedTuple, Optional, Dict
 
 try:
     from .review_assignment import (
@@ -53,7 +55,7 @@ except ImportError:
     )
 
 try:
-    from ..atomic_io import output_dir_lock
+    from ..atomic_io import output_dir_lock, read_json_object
     from ..reviewer_lifecycle import (
         finalize_review_command,
         require_not_finalized,
@@ -77,7 +79,7 @@ try:
         validate_review_document,
     )
 except ImportError:
-    from review.atomic_io import output_dir_lock
+    from review.atomic_io import output_dir_lock, read_json_object
     from review.reviewer_lifecycle import (
         finalize_review_command,
         require_not_finalized,
@@ -103,6 +105,7 @@ except ImportError:
 
 try:
     from ..verdict_rules import (
+        NOT_APPLICABLE_VERDICT,
         SEVERITY_RANK,
         VALID_SEVERITIES,
         summary_for,
@@ -121,6 +124,7 @@ except ImportError:
     if _SCRIPTS_DIR not in sys.path:
         sys.path.insert(0, _SCRIPTS_DIR)
     from review.verdict_rules import (
+        NOT_APPLICABLE_VERDICT,
         SEVERITY_RANK,
         VALID_SEVERITIES,
         summary_for,
@@ -445,7 +449,7 @@ class ReviewOutputBuilder:
         builder.next_finding_number = meta["next_finding_number"]
         builder.next_check_number = meta["next_check_number"]
         builder.overall_confidence = meta["confidence_score"]
-        builder._not_applicable = review["verdict"] == "not_applicable"
+        builder._not_applicable = review["verdict"] == NOT_APPLICABLE_VERDICT
         builder._skip_reason = review.get("skip_reason")
         return builder
 
@@ -602,6 +606,7 @@ class ReviewOutputBuilder:
         ``verifies`` names the change purpose's Verify items this check settles
         (``["V2"]``); absent when it cites none.
         """
+        self._refuse_after_not_applicable("record a check")
         if source_reviewers is None:
             source_reviewers = [self.reviewer]
         values = [
@@ -706,6 +711,7 @@ class ReviewOutputBuilder:
         should NOT count toward the verdict.
         When severity_floor is provided, lower severities are promoted to it.
         """
+        self._refuse_after_not_applicable("add a finding")
         if not 0.0 <= confidence <= 1.0:
             raise ValueError(f"Confidence must be 0.0-1.0, got {confidence}")
         if behavior_evidence is not None and behavior_evidence not in (
@@ -770,6 +776,7 @@ class ReviewOutputBuilder:
         specific line reference. They don't affect the verdict and are
         displayed separately from findings.
         """
+        self._refuse_after_not_applicable("add an observation")
         self.observations.append({
             "file": file,
             "note": note,
@@ -791,11 +798,13 @@ class ReviewOutputBuilder:
 
     def add_recommendation(self, priority: str, text: str):
         """Add recommendation (priority: immediate, important, suggestions)."""
+        self._refuse_after_not_applicable("add a recommendation")
         if priority in self.recommendations:
             self.recommendations[priority].append(coerce_text(text))
 
     def add_positive_observation(self, observation: str):
         """Add positive observation."""
+        self._refuse_after_not_applicable("add a positive observation")
         self.positive_observations.append(coerce_text(observation))
 
     @staticmethod
@@ -844,10 +853,9 @@ class ReviewOutputBuilder:
         if self._paths is None:
             return None
         try:
-            with open(self._paths.assignment, "r", encoding="utf-8") as handle:
-                data = json.load(handle)
+            data = _read_assignment(self._paths.assignment)
             return derive_reviewed_files(data, [], reviewer=self.reviewer)
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ReviewAssignmentError):
+        except ValueError:  # ReviewAssignmentError included
             return None
 
     def _marker_name(self) -> Optional[str]:
@@ -948,18 +956,7 @@ class ReviewOutputBuilder:
         manually via to_dict knowingly opts out; publication is the
         enforcing seam.
         """
-        assignment_path = self._paths.assignment
-        try:
-            with open(assignment_path, "r", encoding="utf-8") as handle:
-                assignment = json.load(handle)
-        except FileNotFoundError as exc:
-            raise ValueError(
-                f"missing authoritative review assignment: {assignment_path}"
-            ) from exc
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError(
-                f"malformed authoritative review assignment: {assignment_path}"
-            ) from exc
+        assignment = _read_assignment(self._paths.assignment)
         return derive_reviewed_files(
             assignment, self.reviewed_file_claims, reviewer=self.reviewer
         )
@@ -997,25 +994,85 @@ class ReviewOutputBuilder:
             raise ValueError(f"Confidence must be 0.0-1.0, got {score}")
         self.overall_confidence = score
 
-    def mark_not_applicable(self, reason: str):
-        """Mark this review as not applicable — changes not relevant to this domain.
+    def _recorded_work(self) -> Dict[str, int]:
+        """What this review has recorded, by kind, non-zero kinds only.
 
-        Use this when the Quick Relevance Check determines the diff has no
-        changes relevant to this agent's specialty, or when NO_DOMAIN_FILES
-        is returned by scope discovery. Produces a 'not_applicable' verdict
-        so the reconciliator knows the agent abstained rather than endorsed.
+        Findings, checks, observations, positive observations and
+        recommendations are work: each says the reviewer judged the code.
+        `reviewed_file_claims` are not: reading a claimable file's diff is
+        how a reviewer decides relevance, and "I read it, it is not mine"
+        is a legitimate abstention. `assessment` is the reconciliator's,
+        which never abstains.
+        """
+        counts = {
+            "finding": len(self.findings),
+            "check": len(self.checks),
+            "observation": len(self.observations),
+            "positive observation": len(self.positive_observations),
+            "recommendation": sum(len(v) for v in self.recommendations.values()),
+        }
+        return {label: count for label, count in counts.items() if count}
+
+    def _refuse_after_not_applicable(self, action: str) -> None:
+        """Recording work after `mark_not_applicable` is the same
+        contradiction as abstaining after work, so both orders are refused
+        and a persisted mark rehydrated by `open()` stays one until
+        `withdraw_not_applicable` lifts it."""
+        if self._not_applicable:
+            raise ValueError(
+                f"Cannot {action} — this review is marked not_applicable. "
+                "An abstention records no work: abstain only when the diff "
+                "holds nothing for your domain, before recording anything. "
+                "If a closer read found work after all, call "
+                "withdraw_not_applicable() first, then record it."
+            )
+
+    def withdraw_not_applicable(self) -> None:
+        """Lift the not_applicable mark so the review can record work.
+
+        The explicit way back for a reviewer that marked the diff not
+        applicable, saved, and then found something on a closer read: the
+        guards refuse work in either order around the mark, and a
+        persisted one would otherwise dead-end the review, since the draft
+        is never edited by hand.
+        """
+        if not self._not_applicable:
+            raise ValueError(
+                "Cannot withdraw not_applicable — this review is not marked "
+                "not_applicable."
+            )
+        self._not_applicable = False
+        self._skip_reason = None
+
+    def mark_not_applicable(self, reason: str):
+        """Mark this review as not applicable — the changes are not relevant to this domain.
+
+        For the Quick Relevance Check, and for the protocol's NO_DOMAIN_FILES
+        step, both of which run on a fresh builder. Produces a
+        'not_applicable' verdict so the reconciliator knows the agent
+        abstained rather than endorsed. Refused once any work is recorded:
+        an abstention after a check or observation is an approve wearing
+        the wrong label, which drops the reviewer from the run's
+        reviewing_agents and understates coverage (20 cases across 14
+        field runs).
         """
         if not reason or not reason.strip():
             raise ValueError(
                 "mark_not_applicable requires a non-empty reason explaining "
                 "why the changes are not relevant to this domain."
             )
-        if self.findings:
+        recorded = self._recorded_work()
+        if recorded:
+            summary = ", ".join(f"{count} {label}(s)" for label, count in recorded.items())
             raise ValueError(
-                "Cannot mark review as not_applicable — "
-                f"{len(self.findings)} finding(s) already recorded. "
-                "An agent that found findings reviewed the code; "
-                "it should not also claim the changes are irrelevant."
+                f"Cannot mark review as not_applicable — {summary} already "
+                "recorded. An agent that recorded work reviewed the code; "
+                "finish with the verdict its findings derive (approve when "
+                "there are none), not with an abstention. Keep that work: "
+                "remove only the mark_not_applicable() call and re-run this "
+                "same script with every finding, check and observation it "
+                "carried. A builder that raises has recorded nothing, so a "
+                "retry that drops them publishes an empty approve."
             )
         self._not_applicable = True
         self._skip_reason = reason.strip()
@@ -1031,19 +1088,12 @@ class ReviewOutputBuilder:
 
         derived = summary_for(self.findings)
         verdict = (
-            'not_applicable' if self._not_applicable else derived['verdict']
+            NOT_APPLICABLE_VERDICT if self._not_applicable else derived['verdict']
         )
+        # An abstention has an empty finding list by construction (the
+        # builder refuses work in either order around it), so its summary
+        # is the ordinary empty one.
         summary = derived['summary']
-        if self._not_applicable:
-            # `mark_not_applicable` only refuses to abstain once a finding
-            # is ALREADY recorded; nothing stops a subsequent add_finding
-            # call, so the summary cannot assume an empty finding list here.
-            # An abstaining review makes no advisory-suppression claim
-            # regardless of what was added afterward — the verdict does not
-            # depend on it either way.
-            summary = dict(summary)
-            summary['suppressed_advisory_finding_count'] = 0
-            summary.pop('verdict_without_advisory', None)
 
         result = {
             'pr_id': self.pr_id,
@@ -1077,8 +1127,9 @@ class ReviewOutputBuilder:
         """Milliseconds from this actor's dispatch to now, or None.
 
         Derived from the dispatch marker the pipeline wrote — the one clock
-        that spans the actual review. A negative interval (marker stamped
-        after this serialization, which no ordering produces) is discarded
+        that spans the actual review. Bootstrap records an empty-scope
+        review before it writes that marker, so such a review reads None:
+        there was no review to time. A negative interval is discarded
         rather than published: a wrong number is worse than a missing one.
         """
         started = _actor_start_time(self._output_dir, self._marker_name())
@@ -1175,12 +1226,20 @@ class ReviewOutputBuilder:
             # An approve that records nothing reads downstream as a clean
             # approve. The one seen in the field followed a builder script
             # that raised after its content was added.
+            advice = (
+                "If an earlier builder script raised, re-run the whole script "
+                "with its content, not only the save"
+            )
+            if review["verdict"] != NOT_APPLICABLE_VERDICT:
+                # An abstention records nothing by contract; only a verdict
+                # that claims a review should say what it checked.
+                advice += (
+                    "; if the review truly found nothing to record, say what "
+                    "you checked with record_check()"
+                )
             print(
                 f"NOTE: verdict {review['verdict']} with nothing recorded — no "
-                "finding, check, observation or positive observation. If an "
-                "earlier builder script raised, re-run the whole script with "
-                "its content, not only the save; if the review truly found "
-                "nothing to record, say what you checked with record_check().",
+                f"finding, check, observation or positive observation. {advice}.",
                 file=sys.stderr,
             )
         unclaimed = list(review["unclaimed_review_files"])
@@ -1207,17 +1266,6 @@ class ReviewOutputBuilder:
         }
 
 
-def _read_json_object(path, label):
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            value = json.load(handle)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError(f"malformed {label}: {path}") from exc
-    if not isinstance(value, dict):
-        raise ValueError(f"malformed {label}: expected an object")
-    return value
-
-
 def reviewed_files_fields(reviewed_files) -> Dict:
     """The six reviewer-envelope reviewed-file fields, from one derivation.
 
@@ -1234,6 +1282,20 @@ def reviewed_files_fields(reviewed_files) -> Dict:
     }
 
 
+def _read_assignment(path):
+    """The authoritative review assignment at `path`.
+
+    The one reader for every step that needs it (add-time feedback, the
+    draft save, the finalizer), so a missing or malformed assignment reads
+    the same everywhere: a ValueError naming the file, which the builder's
+    callers and the finalize-review CLI report as REJECTED.
+    """
+    try:
+        return read_json_object(path, f"authoritative review assignment {path}")
+    except FileNotFoundError as exc:
+        raise ValueError(f"missing authoritative review assignment: {path}") from exc
+
+
 def _validate_review(output_dir, reviewer, paths, review_bytes):
     """Validate one exact review snapshot and return telemetry facts."""
     try:
@@ -1242,9 +1304,7 @@ def _validate_review(output_dir, reviewer, paths, review_bytes):
         raise ValueError("malformed review JSON") from exc
     validate_review_document(review, reviewer)
 
-    assignment = _read_json_object(
-        paths.assignment, "review assignment"
-    )
+    assignment = _read_assignment(paths.assignment)
     try:
         reviewed_files = derive_reviewed_files(
             assignment, review["reviewed_file_claims"], reviewer=reviewer
@@ -1324,6 +1384,58 @@ def finalize_review(output_dir: str, reviewer: str, review_digest: str):
                     file=sys.stderr,
                 )
     return {"final": paths.final, "review_digest": review_digest}
+
+
+class NotApplicableReview(NamedTuple):
+    """The final review bootstrap recorded for an empty scope and the
+    reason it states, which is what the reviewer's return signal carries."""
+    path: str
+    skip_reason: str
+
+
+def record_no_domain_files_review(
+    output_dir: str, pr_id: str, reviewer: str, skip_reason: str
+) -> NotApplicableReview:
+    """Record and finalize the not_applicable review of a reviewer whose
+    scope matched no files, returning the final review path and the reason
+    that review records.
+
+    Called by bootstrap on NO_DOMAIN_FILES. The content is fully determined
+    by scope, so no model turn is spent producing it, and the reviewer
+    cannot leave a started marker with no review behind (run b9c0: two
+    reviewers, 20 minutes each as RUNNING). Goes through the same open /
+    mark / save / finalize path a reviewer uses, so validation, the
+    assignment binding and agent_complete telemetry are the ones every
+    other review gets; the builder's receipts and notes are swallowed
+    because they advise a reviewer and bootstrap's stub is the only thing
+    its caller reads.
+
+    An existing final that passes `_validate_review` (the check
+    `finalize_review` applies to one) and abstains is returned untouched,
+    with the skip_reason it states, so a bootstrap retry cannot fail on its
+    own success and the signal never names a reason the review does not
+    carry. Any other existing final raises ValueError, which bootstrap
+    reports as STATUS: ERROR: a not_applicable signal would contradict the
+    verdict the review records.
+    """
+    paths = review_paths(output_dir, reviewer)
+    if os.path.exists(paths.final):
+        review, _agent_name = _validate_review(
+            output_dir, reviewer, paths, Path(paths.final).read_bytes()
+        )
+        if review["verdict"] != NOT_APPLICABLE_VERDICT:
+            raise ValueError(
+                f"{reviewer} is already finalized as {review['verdict']} at "
+                f"{paths.final}; bootstrap records not_applicable only for a "
+                "reviewer with no final review"
+            )
+        return NotApplicableReview(paths.final, review["skip_reason"])
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        builder = ReviewOutputBuilder.open(output_dir, pr_id, reviewer)
+        builder.mark_not_applicable(skip_reason)
+        receipt = builder.save_draft()
+        finalize_review(output_dir, reviewer, receipt["review_digest"])
+    return NotApplicableReview(paths.final, skip_reason)
 
 
 if __name__ == '__main__':

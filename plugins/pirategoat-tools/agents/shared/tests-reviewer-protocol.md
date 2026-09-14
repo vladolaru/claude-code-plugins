@@ -70,6 +70,6 @@ Ask these as open questions, not yes/no confirmations.
 
 | Situation | Action |
 |-----------|--------|
-| No test files in diff | `builder.mark_not_applicable("No test files in diff")`; save and exit |
+| No test files in diff (`STATUS: NO_DOMAIN_FILES`) | Bootstrap already recorded your `not_applicable` review at the `REVIEW` path it printed; return `STATUS: FINISHED` with the signal it printed, verbatim |
 | Unfamiliar framework | WebSearch for patterns before generic review |
 | Config only (no test logic) | Apply config standards, not quality standards |

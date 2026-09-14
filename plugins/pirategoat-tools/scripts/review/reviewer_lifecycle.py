@@ -4,7 +4,7 @@
 This module owns the fixed per-reviewer filenames under
 `reviewers/<reviewer>/`: `review.draft.json`, `review.json`,
 `assignment.json`, `review.md`, `scope-summary*.json`,
-`scoped-diff.patch`, `briefing.md` and `started`. They are per-reviewer,
+`scoped-diff.patch`, `briefing.md`, `started` and `bootstrap-error`. They are per-reviewer,
 so they are named here rather than in `run_paths.ARTIFACTS`, which
 registers the run's shared artifacts.
 """
@@ -20,11 +20,13 @@ try:
     from .run_paths import artifact_path, reviewer_dir
     from .reviewer_names import derive_reviewer_name
     from .review_document import load_review_document
+    from .verdict_rules import NOT_APPLICABLE_VERDICT
 except ImportError:
     from review.atomic_io import atomic_write_json, output_dir_lock
     from review.run_paths import artifact_path, reviewer_dir
     from review.reviewer_names import derive_reviewer_name
     from review.review_document import load_review_document
+    from review.verdict_rules import NOT_APPLICABLE_VERDICT
 
 
 FINALIZE_REVIEW_COMMAND = (
@@ -119,6 +121,63 @@ def started_marker_path(output_dir: str, reviewer: str) -> str:
     return str(reviewer_dir(output_dir, reviewer) / "started")
 
 
+def bootstrap_error_path(output_dir: str, reviewer: str) -> str:
+    """Return one reviewer's bootstrap failure record path."""
+    return str(reviewer_dir(output_dir, reviewer) / "bootstrap-error")
+
+
+def record_bootstrap_error(output_dir: str, reviewer: str, error_output: str) -> None:
+    """Record that one reviewer's bootstrap exited with STATUS: ERROR.
+
+    The failure record holds a UTC timestamp line, then the ERROR and ACTION
+    lines of the output the reviewer was given. Without it, a dispatched
+    reviewer that failed before its started marker reads exactly like one
+    that was never dispatched, and the step-7 briefing dispatches it again.
+    """
+    path = bootstrap_error_path(output_dir, reviewer)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    diagnosis = [
+        line for line in error_output.splitlines()
+        if line.startswith(("ERROR:", "ACTION:"))
+    ]
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(
+            "\n".join([datetime.now(timezone.utc).isoformat(), *diagnosis]) + "\n"
+        )
+
+
+def read_bootstrap_error(output_dir: str, reviewer: str) -> str:
+    """The first ERROR line a failed bootstrap recorded, without its prefix."""
+    try:
+        with open(
+            bootstrap_error_path(output_dir, reviewer), encoding="utf-8"
+        ) as handle:
+            lines = handle.read().splitlines()
+    except (OSError, UnicodeDecodeError):
+        lines = []
+    return next(
+        (line.removeprefix("ERROR:").strip() for line in lines if line.startswith("ERROR:")),
+        "bootstrap failed without a recorded diagnosis",
+    )
+
+
+def mark_started(output_dir: str, reviewer: str) -> None:
+    """Write one reviewer's started marker: its briefing was delivered.
+
+    A started marker supersedes a bootstrap failure record beside it,
+    whichever was written first: an earlier dispatch's failure the reviewer
+    got past, or a duplicate dispatch that failed while this one runs.
+    agents_status reads them that way. Anything that renames a started
+    marker away without a review (pirategoat-bot's resume stale-out) must
+    retire the record beside it too, or the superseded failure reads as
+    terminal and blocks the re-dispatch.
+    """
+    path = started_marker_path(output_dir, reviewer)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(datetime.now(timezone.utc).isoformat())
+
+
 def require_review_intake_open(output_dir: str) -> None:
     """Reject reviewer state transitions after synthesis freezes intake."""
     intake_path = artifact_path(output_dir, "review_intake")
@@ -127,11 +186,30 @@ def require_review_intake_open(output_dir: str) -> None:
 
 
 def require_not_finalized(paths: ReviewPaths) -> None:
-    """Reject a mutable draft save once final JSON exists."""
-    if os.path.exists(paths.final):
+    """Reject a mutable draft save once final JSON exists.
+
+    A finalized abstention names the return a reviewer owes, so one that
+    opened the builder anyway is told what to do instead of being left with
+    a bare refusal. The cause is not stated: bootstrap records an
+    abstention for an empty scope and a reviewer records one after its
+    Quick Relevance Check, and the file does not say which.
+    """
+    if not os.path.exists(paths.final):
+        return
+    try:
+        with open(paths.final, encoding="utf-8") as handle:
+            verdict = json.load(handle).get("verdict")
+    except (OSError, ValueError, AttributeError):
+        verdict = None
+    if verdict == NOT_APPLICABLE_VERDICT:
         raise ValueError(
-            f"reviewer {os.path.basename(paths.final)!r} is already finalized"
+            f"reviewer {os.path.basename(paths.final)!r} is already finalized "
+            "as not_applicable. Return STATUS: FINISHED with that path; an "
+            "abstention records no further work"
         )
+    raise ValueError(
+        f"reviewer {os.path.basename(paths.final)!r} is already finalized"
+    )
 
 
 def _load_closed_intake(path: str):

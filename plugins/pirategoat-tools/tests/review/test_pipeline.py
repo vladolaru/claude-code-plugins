@@ -706,6 +706,10 @@ class TestStep5DispatchPlan:
         ) in lowered
         assert "DISPATCH_OVERRIDE" in text
         assert "SKIPPED_OVERRIDE" in text
+        # b9c0: the boundary the orchestrator otherwise learns by reading source.
+        assert "no files in" in lowered and "cannot be force-dispatched" in lowered
+        assert "isolated execution" in lowered
+        assert "reconciliation_notes.py" in text
 
     def test_adjustments_go_through_the_entry_point_not_a_hand_edit(self, mod, tmp_path):
         """Run 4's orchestrator wrote its own throwaway script to flip four
@@ -1469,6 +1473,25 @@ class TestStep7SaveReviewBaseline:
         # Must not carry the Claude-host end-turn/notification mechanism
         assert "END YOUR TURN" not in text
 
+    @pytest.mark.parametrize("host", ["claude", "codex"])
+    def test_a_failed_bootstrap_is_never_dispatched_again(self, mod, tmp_path, host):
+        """A reviewer whose bootstrap exited with STATUS: ERROR used to read as
+        NOT_DISPATCHED, which this same guidance dispatches, so the
+        orchestrator sent it back into the stop bootstrap had already
+        reported. agents_status now reads it as BOOTSTRAP_ERROR, and the
+        wait guidance on both hosts must say it is not dispatched again."""
+        state = {"completed_steps": [], "resolved_params": {"git_range": "abc..HEAD"}}
+        ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main"}}
+        kwargs = {"config": {"host": "codex"}} if host == "codex" else {}
+        g = mod.get_step_guidance(7, "full", state, ctx, output_dir=str(tmp_path), **kwargs)
+
+        line = next(
+            line for line in "\n".join(g["actions"]).splitlines()
+            if "BOOTSTRAP_ERROR" in line
+        ).lower()
+
+        assert "never dispatch" in line or "do not dispatch" in line
+
 
 class TestStep8Reconcile:
     """Step 8: Reconcile + Verify. main() reads dispatch-plan.json + review files, passes to get_step_guidance()."""
@@ -1543,7 +1566,9 @@ class TestStep8Reconcile:
         assert lines[3] == (
             "Orchestrator notes: read orchestrator_notes in the context and "
             "answer each with an outcome and evidence; a confirmed note about "
-            "severity changes that severity in the same pass."
+            "severity changes that severity in the same pass, and a confirmed "
+            "note that is itself a defect in the diff becomes a finding sourced "
+            "to the note."
         )
         assert len(lines) == 4
         assert "retry logic" not in block
@@ -1557,6 +1582,11 @@ class TestStep8Reconcile:
         assert f'--output-dir "{tmp_path}" --note' in text
         assert "stated as a claim" in text
         assert "BEFORE dispatch" in text
+        # b9c0: four Verify items the orchestrator settled by reading the
+        # code stayed "unverified" because notes were described for
+        # concerns only.
+        assert "Verify item" in text and "verifies=" in text
+        assert "sourced to the note" in text
 
     def test_change_purpose_is_rendered_exactly_once_in_step_8(self, mod, tmp_path):
         """It is in the context already (`change_purpose`); the situation
@@ -2290,6 +2320,37 @@ class TestStep10DecisionCritic:
         assert "omitted" in revise and "not_checked" in revise
         assert "Never report the batch in aggregate anywhere" in revise
 
+    def test_critic_and_adjudication_files_are_staged_in_the_run_scratch_dir(self, mod, tmp_path):
+        """B's orchestrator found A's critic-adjudication.json at the
+        $TMPDIR path it was about to use (2026-09-14); pirategoat-bot runs
+        five reviews under one $TMPDIR."""
+        g = mod.get_step_guidance(10, "pr", {"completed_steps": [], "ledger_status": "ok"}, {}, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert f"{tmp_path}/tmp/decision-critic-findings.md" in text
+        assert f"{tmp_path}/tmp/decision-critic-adjustments.json" in text
+        assert f"{tmp_path}/tmp/critic-adjudication.json" in text
+
+    def test_prompt_names_the_scripts_directory(self, mod, tmp_path):
+        """The critic saves through critic.py; without this line its only
+        source for the plugin root was the machine-wide pointer file, so a
+        dev session and a release session could build with one version and
+        save with another."""
+        g = mod.get_step_guidance(10, "pr", {"completed_steps": [], "ledger_status": "ok"}, {}, output_dir=str(tmp_path))
+        lines = [l for l in self._prompt_block(g).strip().splitlines() if l.strip()]
+        output_index = next(i for i, l in enumerate(lines) if l.startswith("Output directory: "))
+        assert lines[output_index + 1].startswith("Plugin scripts directory: ")
+        assert lines[output_index + 1].endswith("/scripts")
+
+    def test_briefing_names_one_recovery_for_a_critic_killed_by_an_api_error(self, mod, tmp_path):
+        """Three critics were refused by an API safeguard on 2026-09-14; the
+        two orchestrators whose critic died improvised different recoveries,
+        one of them by reading the critic's uncommitted drafts."""
+        g = mod.get_step_guidance(10, "pr", {"completed_steps": [], "ledger_status": "ok"}, {}, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "terminated with an API error" in text
+        assert "do not read its draft files" in text
+        assert "dispatch it once more with the same prompt" in text
+
     def test_codex_critic_uses_canonical_agent_definition(self, mod, tmp_path):
         state = {"completed_steps": []}
         config = {"host": "codex"}
@@ -2385,6 +2446,52 @@ class TestStep10DecisionCritic:
         assert any(phrase in lower for phrase in [
             "no changes", "no action", "proceed to writing",
         ]), "STAND must convey no report edits needed"
+        # A STAND may carry wording corrections; they are adjudicated like
+        # a REVISE batch, and the briefing says so.
+        assert "wording corrections" in lower
+
+    def test_the_dispatch_prompt_states_the_stand_batch_rule(self, mod, tmp_path):
+        """A STAND batch holds wording corrections only. The prompt once said
+        a STAND with corrections authors every finding or check adjustment,
+        which `critic.py --save` refuses at a cost of a resubmit round."""
+        from review.critic_adjustments import LEDGER_MOVES, STAND_BATCH_RULE
+        g = mod.get_step_guidance(10, "pr", {"completed_steps": []}, {}, output_dir=str(tmp_path))
+        assert LEDGER_MOVES in "\n".join(g["actions"])
+        prompt = "\n".join(g["actions"]).split("Use this dispatch prompt:", 1)[1]
+        prompt = prompt.split("Act on the critic's verdict:", 1)[0]
+        stand_clause = prompt.split("on a STAND that carries wording corrections", 1)[1]
+        assert STAND_BATCH_RULE in stand_clause.split(".", 1)[0]
+
+    def test_the_adjudication_template_copied_as_shown_revises_nothing(self, mod, tmp_path):
+        """An orchestrator that fills in the ids and copies the rest of the
+        step-10 request as shown must leave the reconciler's prose standing
+        under a wording-only STAND. The PR #21 review found the template's
+        empty recommendations object replacing that advice with nothing."""
+        from helpers.critic_seeds import _finding, _ledger, _publish_revise, _write_findings
+        from review import critic_adjustments
+
+        g = mod.get_step_guidance(10, "pr", {"completed_steps": []}, {}, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        block = text.split("adjudication request at", 1)[1]
+        request = json.loads(block.split("```json\n", 1)[1].split("\n```", 1)[0])
+        recommendations = {"immediate": ["Fix f1 before merge."], "important": [], "suggestions": []}
+        _write_findings(
+            tmp_path, [_finding("f1", "medium")],
+            assessment="Reconciler view.", recommendations=recommendations,
+        )
+        request["verified"] = _publish_revise(tmp_path, [{
+            "action": "correct", "target": {"kind": "finding", "id": "f1"},
+            "fields": {"title": "Sharper title"}, "rationale": "wording",
+        }], verdict="STAND")
+        request["refuted"] = []
+
+        critic_adjustments.adjudicate(str(tmp_path), request)
+
+        ledger = _ledger(tmp_path)
+        assert ledger["assessment"] == "Reconciler view."
+        assert ledger["recommendations"] == recommendations
+        assert "invalidated_assessments" not in ledger
+        assert "invalidated_recommendations" not in ledger
 
     def test_escalate_instructs_override_to_comment(self, mod, tmp_path):
         """ESCALATE verdict instructions must say to override verdict to COMMENT."""
@@ -3284,7 +3391,9 @@ class TestStep10QuickMode:
 
     QUICK_MODE_CRITIC = (
         pytest.param("approve", True, False, id="approve_quick_skips"),
-        pytest.param("COMMENT", True, False, id="comment_quick_skips_case_insensitive"),
+        # Lower case: step 10 records the validated ledger verdict (or ""),
+        # the only values this state key ever holds.
+        pytest.param("comment", True, False, id="comment_quick_skips"),
         pytest.param("request_changes", True, True, id="request_changes_quick_runs"),
         pytest.param("block", True, True, id="block_quick_runs"),
         pytest.param("approve", False, True, id="approve_normal_always_runs"),
@@ -3403,6 +3512,15 @@ class TestStep3DependencyRefresh:
         text = self._text(g)
         assert "Dependency refresh" not in text
         assert "dependency-refresh.json" not in text
+
+    def test_refresh_request_is_staged_in_the_run_scratch_dir(self, mod, tmp_path):
+        """Two interactive sessions on one machine share $TMPDIR, and the
+        report carries no run identity, so a fixed name there could be read
+        as this run's report. The run already owns tmp/."""
+        config = {"mode": "full", "interactive": True, "refresh_dependencies": True}
+        g = mod.get_step_guidance(3, "full", dict(self._CLEAN_STATE), {}, config=config, output_dir=str(tmp_path))
+        text = self._text(g)
+        assert f"{tmp_path}/tmp/dependency-refresh-report.json" in text
 
 
 class TestStep11Projection:

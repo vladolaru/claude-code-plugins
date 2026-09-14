@@ -20,6 +20,7 @@ BOOTSTRAP_SCRIPT = SCRIPTS_DIR / "review" / "agent" / "bootstrap.py"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from review.agent.output import ReviewOutputBuilder
+from helpers.review_fixtures import write_artifact
 from review import run_paths
 from review.reviewer_lifecycle import (
     briefing_path,
@@ -379,7 +380,7 @@ class TestCategoryRepresentatives:
     def test_ref_mode_scope_failure_is_an_error_not_a_clean_exit(
         self, tmp_path
     ):
-        """When every declared ref-mode domain fails scope discovery (bad
+        """When any declared ref-mode domain fails scope discovery (bad
         range, git error, timeout), the adapter must report the
         infrastructure failure — a NO_DOMAIN_FILES exit would let the repo
         reviewer emit a clean not-applicable result for a run that never
@@ -399,6 +400,44 @@ class TestCategoryRepresentatives:
         assert result.returncode == 1
         assert "STATUS: ERROR" in result.stdout
         assert "No files matched" not in result.stdout
+        # An ERROR ends the review before any briefing: nothing to read, no
+        # started marker left to read as RUNNING, and the failure recorded.
+        assert "BRIEFING:" not in result.stdout
+        from review.reviewer_lifecycle import read_bootstrap_error, started_marker_path
+        assert not Path(started_marker_path(str(tmp_path), "repo-renewals")).exists()
+        assert read_bootstrap_error(str(tmp_path), "repo-renewals").startswith("[code]")
+
+    @pytest.mark.parametrize("adapter", [False, True], ids=["primary", "adapter"])
+    def test_an_empty_range_is_reported_never_approved_or_abstained(self, tmp_path, adapter):
+        """A range with no changes reaches the reviewer as scope.py's own
+        NO_CHANGES diagnosis and its report ACTION, on the primary path and
+        the repo adapter's alike: no briefing, no started marker, no
+        recorded review. The adapter used to skip exit code 2, fall through
+        to NO_DOMAIN_FILES and report a missing scope summary instead."""
+        from review.reviewer_lifecycle import read_bootstrap_error, started_marker_path
+        if adapter:
+            ref = tmp_path / "renewals.md"
+            ref.write_text("Review renewals logic end to end.")
+            args = ["--agent", "repo-reviewer-adapter", "--repo-agent-ref", str(ref),
+                    "--instance-name", "repo-renewals-reviewer", "--scope-domains", "code"]
+            reviewer = "repo-renewals"
+        else:
+            args = ["--agent", "security-reviewer"]
+            reviewer = "security"
+        out = tmp_path / "out"
+
+        result = run_bootstrap(*args, "--output-dir", str(out), "--range", "HEAD..HEAD")
+
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert "STATUS: ERROR" in result.stdout
+        assert "NO_CHANGES" in result.stdout
+        assert "ACTION: Report this to the caller: the range holds no changes" in result.stdout
+        assert "APPROVE" not in result.stdout
+        assert "scope summary" not in result.stdout
+        assert "BRIEFING:" not in result.stdout
+        assert not Path(started_marker_path(str(out), reviewer)).exists()
+        assert "NO_CHANGES" in read_bootstrap_error(str(out), reviewer)
+        assert not Path(review_paths(str(out), reviewer).final).exists()
 
     def test_ref_mode_agent_start_records_the_dispatched_model_tier(
         self, tmp_path
@@ -1024,40 +1063,58 @@ class TestNotApplicableCompletionContract:
             end = prompt.index("\nPY", start) + len("\nPY")
             invocations.append(prompt[start:end])
 
+        timeout_seconds = 30
+
         def run_invocation(invocation):
-            return subprocess.run(
-                ["bash", "-c", invocation],
-                cwd=tmp_path,
-                timeout=30,
-                capture_output=True,
-                text=True,
-            )
+            # A timeout comes back as a failed result carrying what the
+            # process printed, so a hang on the output lock and a slow
+            # import read differently, and the other reviewer's result is
+            # not lost with the exception.
+            try:
+                return subprocess.run(
+                    ["bash", "-c", invocation],
+                    cwd=tmp_path,
+                    timeout=timeout_seconds,
+                    capture_output=True,
+                    text=True,
+                )
+            except subprocess.TimeoutExpired as exc:
+                def text(stream):
+                    return stream.decode(errors="replace") if isinstance(stream, bytes) else (stream or "")
+                return subprocess.CompletedProcess(
+                    exc.cmd, f"timed out after {timeout_seconds}s",
+                    text(exc.stdout), text(exc.stderr),
+                )
+
+        def evidence(completed):
+            # Every assertion below carries both streams: this test failed
+            # once under a full-suite run and left nothing to diagnose.
+            return [
+                {"exit": r.returncode, "stdout": r.stdout, "stderr": r.stderr}
+                for r in completed
+            ]
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             results = list(executor.map(run_invocation, invocations))
 
-        assert all(result.returncode == 0 for result in results), [
-            result.stderr for result in results
-        ]
-        assert all("DRAFT TOTALS:" in result.stdout for result in results)
+        assert all(result.returncode == 0 for result in results), evidence(results)
+        assert all("DRAFT TOTALS:" in result.stdout for result in results), evidence(results)
         finalize_results = []
         for result in results:
             finalize_command = next(
-                line.removeprefix("FINALIZE REVIEW: ")
-                for line in result.stdout.splitlines()
-                if line.startswith("FINALIZE REVIEW: ")
+                (
+                    line.removeprefix("FINALIZE REVIEW: ")
+                    for line in result.stdout.splitlines()
+                    if line.startswith("FINALIZE REVIEW: ")
+                ),
+                None,
             )
-            finalize_results.append(subprocess.run(
-                ["bash", "-c", finalize_command],
-                cwd=tmp_path,
-                timeout=30,
-                capture_output=True,
-                text=True,
-            ))
-        assert all(result.returncode == 0 for result in finalize_results)
+            assert finalize_command, evidence([result])
+            finalize_results.append(run_invocation(finalize_command))
+        assert all(result.returncode == 0 for result in finalize_results), evidence(finalize_results)
         assert all(
             "REVIEW FINALIZED" in result.stdout for result in finalize_results
-        )
+        ), evidence(finalize_results)
         for reviewer_name in ("security", "performance"):
             saved = json.loads(
                 Path(review_paths(output_dir, reviewer_name).final).read_text()
@@ -1289,8 +1346,13 @@ class TestBriefingFileDelivery:
         assert "offset" in stub
         assert stub.index("one Read call") < stub.index("Only if")
 
-    def test_no_domain_files_run_still_writes_the_briefing(self, tmp_path):
-        """The reviewer still needs the briefing to report not-applicable."""
+    def test_no_domain_files_run_records_the_review_and_still_writes_the_briefing(self, tmp_path):
+        """An empty scope has nothing for a model to judge, so bootstrap
+        records the not_applicable review itself and the stub tells the
+        reviewer to return FINISHED. b9c0: two forced reviewers read the
+        stub, exited without a review, and sat as RUNNING for 20 minutes.
+        The briefing is still written, as the run's record of what the
+        reviewer was told."""
         result = run_bootstrap(
             "--agent", "php-tests-reviewer", "--output-dir", str(tmp_path),
             fixture="js-clean-source.diff",
@@ -1298,7 +1360,96 @@ class TestBriefingFileDelivery:
 
         assert result.returncode == 0, result.stderr
         assert "STATUS: NO_DOMAIN_FILES" in result.stdout
+        final = review_paths(str(tmp_path), "php-tests").final
+        assert stub_field(result.stdout, "REVIEW") == final
+        review = json.loads(Path(final).read_text())
+        assert review["verdict"] == "not_applicable"
+        assert "php-tests" in review["skip_reason"]
+        assert "Return STATUS: FINISHED" in result.stdout
+        assert "Do not read the briefing" in result.stdout
+        assert "mark_not_applicable" not in result.stdout
+        # The stub hands over the complete return signal, in the shape the
+        # briefing it tells the reviewer not to read would have taught.
+        for line in (
+            "  STATUS: FINISHED",
+            "  OUTPUT_FILES:",
+            f"    - {final}",
+            "  COUNTS: critical: 0, high: 0, medium: 0",
+            "  VERDICT: not_applicable",
+            f"  SUMMARY: {review['skip_reason']}",
+        ):
+            assert line in result.stdout.splitlines(), line
         assert "STATUS: NO_DOMAIN_FILES" in briefing_text(result)
+        # agents_status reads the reviewer as finished, not running.
+        from review.agents_status import check_status
+        write_artifact(tmp_path, "dispatch_plan", {"agents": [
+            {"name": "php-tests-reviewer", "status": "DISPATCH", "reason": "r", "signal": "always"},
+        ]})
+        status = {a["name"]: a["status"] for a in check_status(str(tmp_path))["agents"]}
+        assert status["php-tests-reviewer"] == "FINISHED"
+
+    def test_a_secondary_only_scope_is_reviewed_not_recorded(self, tmp_path):
+        """resolve_overall_status flips a primary-empty, secondary-present
+        scope to OK so the secondary files get reviewed; the recorder must
+        key on that flipped status, never on the primary domain alone."""
+        result = run_bootstrap(
+            "--agent", "security-reviewer", "--output-dir", str(tmp_path),
+            fixture="ci-config-changes.diff",
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "STATUS: OK" in result.stdout
+        assert "REVIEW:" not in result.stdout
+        assert not Path(review_paths(str(tmp_path), "security").final).exists()
+
+    def test_a_ref_mode_adapter_with_an_empty_scope_is_recorded(self, tmp_path):
+        """Ref mode honours its own scope status, so an adapter whose declared
+        domains match nothing gets the same recorded review, under the
+        instance-derived reviewer name."""
+        ref = tmp_path / "renewals.md"
+        ref.write_text("Review renewals logic end to end.")
+        result = run_bootstrap(
+            "--agent", "repo-reviewer-adapter",
+            "--repo-agent-ref", str(ref),
+            "--instance-name", "repo-renewals-reviewer",
+            "--scope-domains", "php",
+            "--output-dir", str(tmp_path),
+            fixture="js-clean-source.diff",
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "STATUS: NO_DOMAIN_FILES" in result.stdout
+        final = review_paths(str(tmp_path), "repo-renewals").final
+        assert stub_field(result.stdout, "REVIEW") == final
+        assert json.loads(Path(final).read_text())["verdict"] == "not_applicable"
+
+    def test_an_existing_final_that_does_not_abstain_is_an_error(self, tmp_path):
+        """A reviewer already finalized as approve, bootstrapped again over
+        an empty scope: returning a not_applicable signal would contradict
+        the review agents_status reads. STATUS: ERROR, no started marker
+        left to read as RUNNING, and the review untouched."""
+        from review.agent.output import finalize_review
+        from review.reviewer_lifecycle import read_bootstrap_error, started_marker_path
+        args = ("--agent", "php-tests-reviewer", "--output-dir", str(tmp_path))
+        assert run_bootstrap(*args, fixture="js-clean-source.diff").returncode == 0
+        paths = review_paths(str(tmp_path), "php-tests")
+        marker = Path(started_marker_path(str(tmp_path), "php-tests"))
+        Path(paths.final).unlink()
+        marker.unlink()
+        receipt = ReviewOutputBuilder.open(tmp_path, "0", "php-tests").save_draft()
+        finalize_review(str(tmp_path), "php-tests", receipt["review_digest"])
+        before = Path(paths.final).read_bytes()
+
+        result = run_bootstrap(*args, fixture="js-clean-source.diff")
+
+        assert result.returncode == 1
+        assert "STATUS: ERROR" in result.stdout
+        assert "php-tests is already finalized as approve" in result.stdout
+        assert not marker.exists()
+        assert "php-tests is already finalized as approve" in read_bootstrap_error(
+            str(tmp_path), "php-tests"
+        )
+        assert Path(paths.final).read_bytes() == before
 
     def test_two_reviewers_get_distinct_briefing_files(self, tmp_path):
         first = run_bootstrap(
@@ -1947,6 +2098,68 @@ class TestEveryReviewerMandatesBootstrap:
         text = path.read_text()
         assert "## MANDATORY SETUP — Run Bootstrap Before Reviewing" in text, agent
         assert f"bootstrap.py --agent {agent}" in text, agent
+
+    # The one NO_DOMAIN_FILES model, as every definition states it. Run b9c0:
+    # the protocol, six tests-reviewer definitions and twenty others described
+    # the status three ways, and two reviewers exited without a review.
+    RECORDED_ABSTENTION_CLAUSE = (
+        "your not_applicable review is already recorded at the REVIEW path printed"
+    )
+
+    @pytest.mark.parametrize("agent", ALL_AGENTS)
+    def test_definition_states_the_recorded_abstention(self, agent):
+        """Every definition that runs bootstrap and can receive NO_DOMAIN_FILES
+        says the same thing about it. A null-domain agent never sees the
+        status, except the repo adapter, whose ref-mode scope can be empty."""
+        if agent in BOOTSTRAP_EXEMPT_AGENTS:
+            pytest.skip("not dispatched through bootstrap")
+        if AGENT_CONFIG[agent].get("domain") is None and agent != "repo-reviewer-adapter":
+            pytest.skip("no domain: never receives NO_DOMAIN_FILES")
+        text = (PLUGIN_ROOT / "agents" / f"{agent}.md").read_text()
+        assert self.RECORDED_ABSTENTION_CLAUSE in text, agent
+        assert "APPROVE → exit" not in text, agent
+        # The branch precedes the read instruction: a reviewer told to read
+        # the briefing first reads and parses it before it meets the status
+        # that says not to (PR #21 review: history-insights-reviewer put
+        # three parse steps between the two).
+        assert "read it in full" in text, agent
+        assert text.index(self.RECORDED_ABSTENTION_CLAUSE) < text.index("read it in full"), agent
+
+    @pytest.mark.parametrize("status", ["NO_DOMAIN_FILES", "ERROR"])
+    def test_the_stripped_scope_section_defers_statuses_that_end_the_review(self, status):
+        """reviewer-protocol.md's Scope Discovery is stripped before any
+        reviewer reads the protocol, so a status that ends the review states
+        where its handling is delivered instead of instructing an action no
+        reviewer receives. The PR #21 review found the NO_DOMAIN_FILES return
+        written there, and this test used to require it."""
+        text = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
+        line = next(l for l in text.splitlines() if l.startswith(f"**On `STATUS: {status}`"))
+        delivered = _mod.extract_protocol_sections(text, _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS)
+        assert line not in delivered
+        assert "stripped" in line
+        for instruction in ("STATUS: FINISHED", "mark_not_applicable", "Report the error", "Do NOT"):
+            assert instruction not in line
+
+    ERROR_BRANCH = "If STATUS is ERROR, report the error and exit."
+
+    @pytest.mark.parametrize("agent", ALL_AGENTS)
+    def test_definition_branches_on_error_before_the_read(self, agent):
+        """Every STATUS: ERROR bootstrap prints ends without a briefing, so
+        every definition that runs bootstrap says so before it tells the
+        reviewer to read one, domain or not."""
+        if agent in BOOTSTRAP_EXEMPT_AGENTS:
+            pytest.skip("not dispatched through bootstrap")
+        text = (PLUGIN_ROOT / "agents" / f"{agent}.md").read_text()
+        assert self.ERROR_BRANCH in text and "read it in full" in text, agent
+        assert text.index(self.ERROR_BRANCH) < text.index("read it in full"), agent
+
+    def test_the_tests_protocol_states_the_recorded_abstention(self):
+        """Delivered whole with the briefing, so a tests reviewer that reads
+        an empty-scope briefing anyway meets the same model the stub states."""
+        text = (PLUGIN_ROOT / "agents/shared/tests-reviewer-protocol.md").read_text()
+        line = next(l for l in text.splitlines() if "NO_DOMAIN_FILES" in l and "already recorded" in l)
+        assert "STATUS: FINISHED" in line
+        assert "mark_not_applicable" not in line
 
 
 class TestBuilderSnippetSignatures:

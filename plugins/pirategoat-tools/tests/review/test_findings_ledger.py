@@ -88,7 +88,7 @@ def test_ledger_requires_reconciliation_before_serializing(tmp_path):
 def test_ledger_has_no_reviewer_lifecycle(tmp_path):
     """Matched on the message: an inherited signature can raise TypeError
     of its own, which would pass this test without any override at all.
-    One representative stands for the four lifecycle names bound to the
+    One representative stands for the five lifecycle names bound to the
     same `_no_lifecycle` function object; `open` is the other binding
     below, a classmethod that calls `_no_lifecycle()` directly."""
     builder = FindingsLedgerBuilder(pr_id="42", output_dir=str(tmp_path))
@@ -177,6 +177,16 @@ def test_the_taught_snippet_calls_only_methods_the_builder_has():
             f"builder.{method}() is taught but raises: the findings ledger "
             "has no reviewer lifecycle"
         )
+
+
+def test_the_taught_snippet_says_to_omit_method_without_an_own_probe():
+    """Run C (2026-09-14) made zero repository reads and its checks
+    still read "Read class-wc-data-store-wp.php:343-370 …", a paraphrase
+    of a reviewer's method: the template asked for THE_EXACT_PROBE for
+    every check, and the builder already carries the sources' methods."""
+    text = RECONCILIATOR_MD.read_text(encoding="utf-8")
+    assert "method=None" in text
+    assert "ran no probe of your own" in text
 
 
 def test_the_definition_states_what_the_builder_derives_and_accepts():
@@ -299,6 +309,26 @@ def test_provenance_ledger_passes_the_reader_boundary(tmp_path):
         id="duplicate_source-normalized_sources",
     ),
     pytest.param(
+        lambda b: b.add_finding(severity="low", title="t", file="f", line=1,
+                                description="d", recommendation="r",
+                                sources=[{"reviewer": "orchestrator", "id": "f1"}]),
+        id="note_stem_with_a_finding_id-normalized_sources",
+    ),
+    pytest.param(
+        lambda b: b.add_finding(severity="low", title="t", file="f", line=1,
+                                description="d", recommendation="r",
+                                sources=[{"reviewer": "x-review", "id": "n1"}]),
+        id="reviewer_stem_with_a_note_id-normalized_sources",
+    ),
+    pytest.param(
+        lambda b: b.record_check("q", "m", "r", sources=[{"reviewer": "orchestrator", "id": "n1"}]),
+        id="note_source_on_a_check-record_check",
+    ),
+    pytest.param(
+        lambda b: b.drop_finding("orchestrator", "n1", reason="false_positive", evidence="e"),
+        id="note_as_a_dropped_finding-drop_finding",
+    ),
+    pytest.param(
         lambda b: b.drop_finding("x-review", "f1", reason="bogus", evidence="e"),
         id="bad_drop_reason-drop_finding",
     ),
@@ -319,6 +349,18 @@ def test_malformed_provenance_is_refused_at_the_builder(tmp_path, call):
     builder = FindingsLedgerBuilder(pr_id="42", output_dir=str(tmp_path))
     with pytest.raises(ValueError):
         call(builder)
+
+
+def test_a_confirmed_note_is_a_valid_finding_source(tmp_path):
+    """b9c0: the note is the source when no reviewer filed the concern; the
+    id grammar admits nN only under the orchestrator stem (the two refusals
+    above), and the save gate then requires the note to be confirmed."""
+    builder = FindingsLedgerBuilder(pr_id="42", output_dir=str(tmp_path))
+    builder.add_finding(severity="medium", title="t", file="f", line=1,
+                        description="d", recommendation="r",
+                        sources=[{"reviewer": "orchestrator", "id": "n1"}],
+                        severity_note="n1: confirmed — medium on its own evidence")
+    assert builder.findings[0]["sources"] == [{"reviewer": "orchestrator", "id": "n1"}]
 
 
 class TestNoteSettlesVerifyItems:

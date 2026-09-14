@@ -25,7 +25,6 @@ from helpers.graders import (
     grade_review_json,
     grade_review_markdown,
     grade_signal_format,
-    grade_no_domain_files,
     grade_error_exit,
     grade_output_pair,
     grade_review_baseline,
@@ -272,36 +271,6 @@ class TestGradeSignalFormat:
 
     def test_missing_status(self):
         result = grade_signal_format("OUTPUT_FILES:\nVERDICT: APPROVE\n")
-        assert not result.passed
-
-
-class TestGradeNoDomainFiles:
-    """Tests for grade_no_domain_files."""
-
-    def test_approve_with_no_findings(self):
-        text = "VERDICT: APPROVE\nNo security files to review."
-        result = grade_no_domain_files(text)
-        assert result.passed
-
-    def test_non_approve_fails(self):
-        text = "VERDICT: REQUEST_CHANGES\nCRITICAL: found finding"
-        result = grade_no_domain_files(text)
-        assert not result.passed
-
-    def test_bootstrap_signal_template_is_not_a_finding(self):
-        # Bootstrap output embeds the return-signal template; its "N"
-        # placeholders and explicit zero counts are not severity findings.
-        text = (
-            "STATUS: NO_DOMAIN_FILES\nACTION: APPROVE and exit\n"
-            "COUNTS: critical: N, high: N, medium: N\n"
-            "critical: 0, high: 0, medium: 0"
-        )
-        result = grade_no_domain_files(text)
-        assert result.passed, f"Failures: {result.failures}"
-
-    def test_nonzero_count_fails(self):
-        text = "VERDICT: APPROVE\nCOUNTS: critical: 0, high: 2, medium: 0"
-        result = grade_no_domain_files(text)
         assert not result.passed
 
 
@@ -553,6 +522,11 @@ class TestGradeDetection:
         assert passing.detail["finding_count"] == 0
 
         r = grade_detection(self._review("comment", [self._finding()]), key)
+        assert not r.passed
+
+        # One spelling: an approve is a review that looked and found
+        # nothing, keyed with verdict_in instead, so it fails this key.
+        r = grade_detection(self._review("approve", []), key)
         assert not r.passed
 
         r = grade_detection(self._review("not_applicable", [self._finding()]), key)
@@ -837,19 +811,6 @@ class TestReviewRoundHardening:
         result = grade_detection(review, key)
         assert not result.passed
         assert result.detail["gates"]["max_severity"] is False
-
-    def test_abstention_accepts_both_doctrine_readings(self):
-        from helpers.graders import grade_detection
-        key = {"expect_not_applicable": True}
-        for verdict in ("not_applicable", "approve"):
-            review = {"verdict": verdict, "findings": []}
-            assert grade_detection(review, key).passed, verdict
-        assert not grade_detection({"verdict": "comment", "findings": []}, key).passed
-        assert not grade_detection(
-            {"verdict": "approve", "findings": [{"severity": "low", "file": "f",
-                                              "title": "t", "description": "", "category": ""}]},
-            key,
-        ).passed
 
     def test_patterns_cannot_bridge_field_boundaries(self):
         from helpers.graders import _finding_matches

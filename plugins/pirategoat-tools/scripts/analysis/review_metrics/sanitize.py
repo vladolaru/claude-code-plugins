@@ -1610,18 +1610,19 @@ def _sanitize_reconciliation(value: object) -> dict[str, Any] | None:
         if count is None:
             return None
         result[name] = count
-    # The producer's invariants (findings_save.validate_findings and
-    # critic_adjustments' reconciliation validator), mirrored so a damaged
-    # manifest cannot republish a population the ledger would have refused:
-    # the three classifications partition the grouped count, and grouped
-    # concerns cannot outnumber the findings they were grouped from.
+    # The producer's partition invariant (findings_save.validate_findings
+    # and critic_adjustments' reconciliation validator), mirrored so a
+    # damaged manifest cannot republish a population the ledger would have
+    # refused: the three classifications partition the grouped count. The
+    # grouped count is NOT bounded by the reviewer input here: since
+    # 1.119.6 a confirmed orchestrator note can become a concern of its
+    # own, so a run whose reviewers filed nothing can group one concern,
+    # and this block carries no note count to bound against.
     if result["grouped_concern_count"] != (
         result["verified_concern_count"]
         + result["false_positive_concern_count"]
         + result["out_of_scope_concern_count"]
     ):
-        return None
-    if result["grouped_concern_count"] > result["input_finding_count"]:
         return None
     # Rosters are unique agent names; reviewing_agents is the one roster
     # the producer always fills, the others are null when dispatch is
@@ -1769,7 +1770,14 @@ def _sanitize_evidence(value: object) -> dict[str, Any] | None:
             if not isinstance(row, dict):
                 continue
             agent = identity(row.get("agent"), _PRODUCER_AGENT_NAME_RE)
-            source_id = identity(row.get("id"), _FINDINGS_LEDGER_CONTRACT.SOURCE_ID_RE)
+            # A note-sourced finding's lineage row names the orchestrator
+            # and carries the note's nN id.
+            id_pattern = (
+                _FINDINGS_LEDGER_CONTRACT.NOTE_ID_RE
+                if agent == _FINDINGS_LEDGER_CONTRACT.NOTE_SOURCE_REVIEWER
+                else _FINDINGS_LEDGER_CONTRACT.SOURCE_ID_RE
+            )
+            source_id = identity(row.get("id"), id_pattern)
             if agent is None or source_id is None:
                 continue
             entry = {"agent": agent, "id": source_id}

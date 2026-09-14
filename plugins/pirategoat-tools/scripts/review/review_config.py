@@ -29,20 +29,19 @@ import unicodedata
 from typing import Any, Dict, List
 
 try:
-    from .dispatch_status import AGENT_NAME_RE
+    from .dispatch_status import AGENT_NAME_RE, EXECUTION_INLINE, EXECUTIONS
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
-    from review.dispatch_status import AGENT_NAME_RE
+    from review.dispatch_status import AGENT_NAME_RE, EXECUTION_INLINE, EXECUTIONS
 
 from containment import contains
 from git_paths import decode_git_c_quoted_path
 from hosts.repo_config import CONFIG_RELATIVE_PATH as CONFIG_RELPATH
 
-DEFAULT_EXECUTION = "inline"
+DEFAULT_EXECUTION = EXECUTION_INLINE
 DEFAULT_CHANNEL = "blocking"
-_VALID_EXECUTIONS = {"inline", "isolated"}
 _VALID_CHANNELS = {"blocking", "advisory"}
 
 # Complexity caps for repo-supplied path globs. Patterns come from the reviewed
@@ -169,7 +168,7 @@ def load_review_config(
     defaults = review.get("defaults")
     if isinstance(defaults, dict):
         execution = defaults.get("execution")
-        if execution in _VALID_EXECUTIONS:
+        if execution in EXECUTIONS:
             result["defaults"]["execution"] = execution
         channel = defaults.get("channel")
         if channel in _VALID_CHANNELS:
@@ -271,7 +270,7 @@ def _normalize_reviewer(raw, repo_path, defaults, seen_ids, diagnostics):
     channel = _valid_channel(raw.get("channel"), defaults["channel"], kind, rid, diagnostics)
 
     execution = raw.get("execution")
-    if execution not in _VALID_EXECUTIONS:
+    if execution not in EXECUTIONS:
         if execution is not None:
             diagnostics.append(
                 f"{kind} '{rid}': invalid execution {execution!r}; using {defaults['execution']}"

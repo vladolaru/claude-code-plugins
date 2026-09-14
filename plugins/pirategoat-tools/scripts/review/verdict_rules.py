@@ -40,7 +40,11 @@ SEVERITY_RANK = {
 # maps onto the three of them the terminal result can carry, and BLOCK
 # is in the tuple for the return signal alone.
 LEDGER_VERDICTS = tuple(VERDICT_RANK)
-REVIEW_VERDICTS = LEDGER_VERDICTS + ("not_applicable",)
+# The abstention, spelled once: the builder, the review validator, the
+# reconciliator's save gate, bootstrap's empty-scope return signal and the
+# session-metrics reader of that signal all use it.
+NOT_APPLICABLE_VERDICT = "not_applicable"
+REVIEW_VERDICTS = LEDGER_VERDICTS + (NOT_APPLICABLE_VERDICT,)
 PIPELINE_VERDICTS = ("APPROVE", "COMMENT", "REQUEST_CHANGES", "BLOCK")
 
 _PUBLISHED_BY_LEDGER_VERDICT = {

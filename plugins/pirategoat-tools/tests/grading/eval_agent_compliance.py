@@ -118,7 +118,7 @@ def setup_temp_git_repo(diff_file: str = None) -> str:
 # helpers.graders.grade_detection — see its docstring for key fields and the
 # matcher's claimed-set rule (one finding satisfies at most one spec).
 SCENARIOS = {
-    "no_domain_files_approve": {
+    "no_domain_files": {
         "description": "Docs-only changes: every non-docs reviewer must short-circuit",
         # docs-drift-reviewer legitimately owns docs-only diffs (its domain
         # HAS files here), so the short-circuit assertion cannot apply to it.
@@ -874,18 +874,25 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
             )
 
         if scenario["grader"] == "no_domain_files":
-            # Bootstrap short-circuit: NO_DOMAIN_FILES means no agent runs, so
-            # there is no agent output to grade. helpers.graders.grade_no_domain_files
-            # targets agent return signals — running it against the full bootstrap
-            # prompt false-positives on protocol prose that teaches severity
-            # vocabulary. The short-circuit itself is the pass condition —
-            # and the ONLY pass condition: an unconditional pass on the
-            # fallthrough made this scenario structurally unable to fail,
-            # granting free credit to every entry.
+            # Bootstrap short-circuit: on NO_DOMAIN_FILES bootstrap records the
+            # not_applicable review itself and no agent runs, so there is no
+            # agent output to grade. The pass condition is the status line AND
+            # the recorded review — the status alone would pass a bootstrap
+            # that left the reviewer to write a review it was told not to
+            # write. An unconditional pass on the fallthrough once made this
+            # scenario structurally unable to fail.
             if "NO_DOMAIN_FILES" in bootstrap_out:
+                final = review_paths(output_dir, _mod.derive_reviewer_name(agent_name)).final
+                if os.path.exists(final):
+                    return GradeResult(
+                        passed=True, score=1.0, failures=[],
+                        checks_run=2, checks_passed=2,
+                        detail={"status": "bootstrap_only", "review": final},
+                    )
                 return GradeResult(
-                    passed=True, score=1.0, failures=[],
-                    checks_run=1, checks_passed=1,
+                    passed=False, score=0.0,
+                    failures=["bootstrap printed NO_DOMAIN_FILES but recorded no review"],
+                    checks_run=2, checks_passed=1,
                     detail={"status": "bootstrap_only"},
                 )
             return GradeResult(

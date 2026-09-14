@@ -317,3 +317,22 @@ def test_an_unreadable_dispatch_plan_reads_host_citations_as_unmeasured(tmp_path
     (tmp_path / "pipeline").mkdir(exist_ok=True)
     artifact_path(str(tmp_path), "dispatch_plan").write_text("not json")
     assert build_evidence_manifest(str(tmp_path))["host_citations"] is None
+
+
+def test_a_note_sourced_finding_keeps_its_note_lineage(tmp_path):
+    """b9c0: a finding whose source is a confirmed orchestrator note is
+    projected with the orchestrator as its lineage, so a cohort can count
+    what the note route carried; before, the row was dropped and the
+    finding read like a critic addition."""
+    ledger = canonical_findings_ledger(["medium"])
+    ledger["findings"][0]["sources"] = [{"reviewer": "orchestrator", "id": "n1"}]
+    ledger["findings"][0]["severity_note"] = "n1: confirmed — medium on its own evidence"
+    ledger["orchestrator_notes"] = [
+        {"id": "n1", "note": "the mock omits getAdminLink", "outcome": "confirmed", "evidence": "url.js:6"},
+    ]
+    _write(tmp_path, "review_findings_json", ledger)
+    evidence = build_evidence_manifest(str(tmp_path))
+    assert evidence["findings"][0]["sources"] == [
+        {"agent": "orchestrator", "id": "n1", "severity": None},
+    ]
+

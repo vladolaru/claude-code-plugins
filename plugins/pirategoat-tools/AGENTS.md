@@ -35,7 +35,7 @@ This file holds the rules and the map. A fact about one module lives in that mod
 | `scripts/review/triage_sources.py` | The prose the keyword triage reads, reduced to the author's words. Stdlib-only leaf. |
 | `scripts/review/change_purpose.py` | Parser of the step-3 change purpose (Verify and Context items) and of who may cite a Verify item. Stdlib-only leaf. |
 | `scripts/review/dispatch_adjust.py` | The orchestrator's one channel for step-5 dispatch overrides (`--skip`, `--dispatch`). |
-| `scripts/review/dispatch_status.py` | Dispatch-status and signal vocabulary; `load_dispatch_plan()` is the one plan reader. |
+| `scripts/review/dispatch_status.py` | Dispatch-plan row vocabulary (statuses, signals, field keys, execution modes); `load_dispatch_plan()` is the one plan reader. |
 | `scripts/review/agent/bootstrap.py` | Builds each reviewer's structured prompt: protocol extraction, scope, output instructions. |
 | `scripts/review/agent/scope.py` | Domain-filtered diff scoping; language recognition lives in its `_*_LANGS` groups only. |
 | `scripts/review/agent/output.py` | `ReviewOutputBuilder`: draft, finalize, and the `finalize-review` CLI. |
@@ -49,7 +49,7 @@ This file holds the rules and the map. A fact about one module lives in that mod
 | `scripts/review/verdict_rules.py` | `verdict_for_counts()`, the one severity-to-verdict ladder, and `publish_verdict()`, the one ledger-to-published mapping. |
 | `scripts/review/critic.py` | The decision critic's validating `--save` channel. |
 | `scripts/review/critic_adjustments.py` | Critic lifecycle after authorship: proposal writer, `adjudicate()`, ledger read/write. |
-| `scripts/review/atomic_io.py` | Atomic JSON writes and the output-directory lock. |
+| `scripts/review/atomic_io.py` | Atomic JSON writes, the JSON object read, and the output-directory lock. |
 | `scripts/review/evidence_manifest.py` | The path- and prose-free evidence projection telemetry shares. |
 | `scripts/review/manifest_sections.py` | Pure builders for every manifest section, `aggregate_file_review()`, and the host-context projection. |
 | `scripts/review/synthesis_lifecycle.py` | Dispatch and completion measurement for the reconciliator and the critic. |
@@ -74,9 +74,9 @@ Each rule names the test that holds it where one exists. One clause of why; the 
 
 **Dual host.** `commands/*.md` are canonical; `codex-skills/` adapters are generated and marked `GENERATED FILE - DO NOT EDIT`. The generator also surfaces shared skills a command references (copied to `codex-skills/<name>/` with their `references/`), so fix a skill in `skills/`, never in the copy. Canonical commands use `${CLAUDE_PLUGIN_ROOT}`; the generator prepends the Codex assignment. Shared skills use `$SKILL_DIR`, never `${CLAUDE_SKILL_DIR}`. Codex briefings dispatch native subagents that read the canonical `agents/*.md`; Claude model labels never map to another host.
 
-**Artifact schemas.** An artifact with a `schema` field bumps it in the same commit as any shape change (key added, removed, or re-typed), updating `schemas/review-output.ts` and the changelog. The key is the integer `schema`, never `schema_version` or a `version` string. One carve-out (a change inside the same unreleased window that introduced the number) and the `version: 1` the bot owns in `review-context.json` and `issue-context.json` are in `docs/artifact-schemas.md`.
+**Artifact schemas.** An artifact with a `schema` field bumps it in the same commit as any shape change (key added, removed, or re-typed), updating `schemas/review-output.ts` and the changelog. The key is the integer `schema`, never `schema_version` or a `version` string. Two carve-outs (a change inside the same unreleased window that introduced the number; an additive optional key or a widened value space no earlier artifact carries) and the `version: 1` the bot owns in `review-context.json` and `issue-context.json` are in `docs/artifact-schemas.md`.
 
-**Shared protocols.** Bootstrap includes `reviewer-protocol.md` by a skip-list of the sections it replaces with concrete values (`## Step 0`, `## Scope Discovery`, `## Output Directory`, `## ReviewOutputBuilder API`, `## File-Based Output`). Text in a skipped section reaches no reviewer, so behavioral policy never goes there; policy about what an agent does with a scope result belongs in `bootstrap.build_output()`. `TestNotDiffedContractIsDelivered` guards this.
+**Shared protocols.** Bootstrap includes `reviewer-protocol.md` by a skip-list of the sections it replaces with concrete values (`## Step 0`, `## Scope Discovery`, `## Output Directory`, `## ReviewOutputBuilder API`, `## File-Based Output`). Text in a skipped section reaches no reviewer, so behavioral policy never goes there; policy about what an agent does with a scope result belongs in `bootstrap.build_output()`, or, for a status that ends the review before the briefing is read, in bootstrap's stdout (`deliver_briefing()`'s stub, or the error output) and the agent definition's setup paragraph. `TestNotDiffedContractIsDelivered`, `TestBriefingFileDelivery` and `TestEveryReviewerMandatesBootstrap` guard this.
 
 **Bootstrap facts arrive as parameters.** `build_output()` never re-derives a fact from the rendered `scope_output` text; every fact it needs (`review_claimable_count`, `has_php`, and whatever comes next) is a required parameter computed from a structured source, so a reformat of scope.py's text cannot flip a reviewer's briefing. `TestDynamicDispatchRisk` guards this.
 

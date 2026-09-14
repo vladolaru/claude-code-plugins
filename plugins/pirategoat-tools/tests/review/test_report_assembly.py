@@ -522,7 +522,7 @@ class TestRecordIsAProjection:
         *,
         verified=(),
         refuted=(),
-        assessment="Post-critic assessment.",
+        assessment="Revised assessment.",
     ):
         proposal = critic_adjustments.prepare_proposal({
             "schema": 2,
@@ -563,7 +563,7 @@ class TestRecordIsAProjection:
         after = (out_dir / REVIEW_RECORD_MD).read_text()
 
         # Recomputed verdict (one medium left → comment), post-adjustment
-        # severities, and the orchestrator's replacement assessment.
+        # severities, and the orchestrator's revised assessment.
         assert "**Verdict:** COMMENT" in after
         assert "## Low Findings" in after
         assert "Only one real problem after the probe." in after

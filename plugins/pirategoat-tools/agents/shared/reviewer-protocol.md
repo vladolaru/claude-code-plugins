@@ -58,9 +58,9 @@ The script outputs structured text. Parse these key fields from the header:
 | `PR_NUMBER` | PR number (if detected) |
 | `BUDGET_EXCEEDED` | Files listed but not diffed due to context budget |
 
-**On `STATUS: ERROR`:** Report the error to the caller. Do NOT proceed with review.
+**On `STATUS: ERROR`:** bootstrap prints the diagnosis and its ACTION and delivers no briefing. Each agent definition branches on the status before its read-the-briefing instruction, because this section is stripped before you receive the protocol.
 
-**On `STATUS: NO_DOMAIN_FILES`:** Call `builder.mark_not_applicable("No [domain] files in diff")`, save output, and exit. Do NOT perform any further analysis.
+**On `STATUS: NO_DOMAIN_FILES`:** bootstrap records and finalizes the `not_applicable` review itself. Its stdout stub delivers the return signal, and each agent definition branches on the status before its read-the-briefing instruction, because this section is stripped before you receive the protocol.
 
 **On `STATUS: OK`:** The `=== DIFFS ===` section contains filtered diffs for matched files within the context budget. Files are sorted by budget priority (production code before tests for mixed domains), largest-first within each tier. One oversized leading file may be admitted in full as a protected exception; the remaining files share the normal budget.
 
@@ -208,7 +208,7 @@ Rules for any "nothing depends on this" / "no blast radius" / "no consumers" cla
 
 The dispatch prompt always provides `--output-dir`. Use that durable run directory (`mkdir -p` if needed) for every review artifact.
 
-Per-reviewer artifacts live under `OUTPUT_DIR/reviewers/<reviewer>/` with fixed filenames: `assignment.json`, `scope-summary.json` (plus domain-specific `scope-summary-<domain>.json` files), `scoped-diff.patch`, `started`, `review.draft.json`, `review.json`, and derived `review.md`; use the short reviewer identity bootstrap provides, never a full agent-name filename prefix.
+Per-reviewer artifacts live under `OUTPUT_DIR/reviewers/<reviewer>/` with fixed filenames: `assignment.json`, `scope-summary.json` (plus domain-specific `scope-summary-<domain>.json` files), `scoped-diff.patch`, `briefing.md`, `started` and a `bootstrap-error` failure record when a bootstrap stopped, `review.draft.json`, `review.json`, and derived `review.md`; use the short reviewer identity bootstrap provides, never a full agent-name filename prefix.
 
 Use `OUTPUT_DIR/tmp/` as the sanctioned scratch location for probes, `.patch` experiments, and similar temporary work — never the reviewed repo worktree and never the run-directory root.
 

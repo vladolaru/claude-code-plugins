@@ -523,7 +523,7 @@ class TestAssessmentProvenance:
 
     The reconciler writes it; the decision critic then mutates the findings
     it summarizes. The critic's vocabulary reaches every finding but no
-    ledger-level prose, so a withdrawn or demoted finding described in the
+    ledger-level prose, so a removed or demoted finding described in the
     Assessment survives every correction channel — the rendered file
     contradicting the list printed beneath it.
     """
@@ -552,7 +552,7 @@ class TestAssessmentProvenance:
         # An explicit absence, not a pointer at a file nobody may open: an
         # invalidated-and-unreplaced assessment says it has no current one.
         assert "no current assessment" in rendered.lower()
-        # The retracted text is never presented as current.
+        # The invalidated text is never presented as current.
         assert "Old claim." not in rendered
 
     ASSESSMENT_ABSENT_CASES = (
@@ -620,7 +620,7 @@ class TestAssessmentProvenance:
         assert "- `refuted-one` — refuted" in rendered
         assert "- `refuted-two` — refuted" in rendered
 
-    def test_a_replacement_is_not_attributed_to_the_reconciler(self):
+    def test_a_revised_assessment_is_not_attributed_to_the_reconciler(self):
         """Moved from `test_critic_adjustments.py` (fix 554723eb)."""
         data = _reconciliator_findings("low", "Minor problem",
             assessment="After spot-checking: guarded upstream.",
@@ -631,7 +631,53 @@ class TestAssessmentProvenance:
         )
         rendered = render_markdown(data)
         assert "After spot-checking: guarded upstream." in rendered
+        assert "*Revised assessment, installed after the critic adjustments applied.*" in rendered
         assert "not adjusted by the decision critic" not in rendered
+
+    def test_a_null_record_beside_a_record_that_kept_text_renders_the_notice(self):
+        """Round one installs revised text over no assessment (a null
+        record); round two moves the ledger without revised text (a record
+        keeping round one's text). The assessment was lost, and the notice
+        says so: one record that kept text is enough."""
+        rendered = render_markdown(_reconciliator_findings("low", "Minor problem",
+            assessment=None,
+            applied_critic_adjustments=[
+                {"adjustment_id": "a1", "outcome": "verified"},
+                {"adjustment_id": "a2", "outcome": "verified"},
+            ],
+            invalidated_assessments=[
+                {"text": None, "invalidated_by_critic_adjustment_ids": ["a1"]},
+                {"text": "Orchestrator's revised text.",
+                 "invalidated_by_critic_adjustment_ids": ["a2"]},
+            ],
+        ))
+        assert "no current assessment" in rendered.lower()
+        assert "Orchestrator's revised text." not in rendered
+
+    def test_a_revised_assessment_over_none_is_not_attributed_to_the_reconciler(self):
+        """A revised assessment over a null prior records the displacement
+        as `text: null`; that record alone attributes the standing text."""
+        rendered = render_markdown(_reconciliator_findings("low", "Minor problem",
+            assessment="Orchestrator's revised text.",
+            applied_critic_adjustments=[{"adjustment_id": "a1", "outcome": "verified"}],
+            invalidated_assessments=[
+                {"text": None, "invalidated_by_critic_adjustment_ids": ["a1"]},
+            ],
+        ))
+        assert "*Revised assessment, installed after the critic adjustments applied.*" in rendered
+        assert "not adjusted by the decision critic" not in rendered
+
+    def test_an_invalidation_record_over_no_assessment_renders_no_section(self):
+        """Nothing stood and nothing stands: a notice that the assessment
+        was invalidated would describe an act that never happened."""
+        rendered = render_markdown(_reconciliator_findings("low", "Minor problem",
+            assessment=None,
+            applied_critic_adjustments=[{"adjustment_id": "a1", "outcome": "verified"}],
+            invalidated_assessments=[
+                {"text": None, "invalidated_by_critic_adjustment_ids": ["a1"]},
+            ],
+        ))
+        assert "## Assessment" not in rendered
 
     def test_malformed_decision_records_are_ignored(self):
         """Moved from `test_critic_adjustments.py` (fix 554723eb)."""
@@ -761,25 +807,57 @@ class TestEvidenceTrailSections:
 
     def test_revised_recommendations_without_prior_advice_are_attributed(self):
         """The rendering-facing half of what `adjudicate()` produces when a
-        critic batch revises recommendations with no prior advice to
-        invalidate — built as a dict, as
-        ``test_withdrawn_recommendations_render_the_current_state`` does;
-        the write/adjudicate mechanics that produce this shape are
+        critic batch revises recommendations over an empty prior: the
+        displacement is recorded (empty prior and all), and that record is
+        what attributes the standing advice to the orchestrator — built as
+        a dict, as ``test_invalidated_recommendations_render_the_current_state``
+        does; the write/adjudicate mechanics that produce this shape are
         `test_critic_adjustments.py`'s contract."""
         settled = canonical_findings_ledger(("high",))
         settled["recommendations"] = {"suggestions": ["Add a nonce."]}
         settled["applied_critic_adjustments"] = [
             {"adjustment_id": "a1", "outcome": "verified"},
         ]
+        settled["invalidated_recommendations"] = [{
+            "recommendations": {"immediate": [], "important": [], "suggestions": []},
+            "invalidated_by_critic_adjustment_ids": ["a1"],
+        }]
         text = render_review_body(settled)
         assert "- Add a nonce." in text
-        assert "*Post-critic recommendations, installed after the critic adjustments applied.*" in text
+        assert "*Revised recommendations, installed after the critic adjustments applied.*" in text
 
-    @pytest.mark.parametrize("replacement", [None, "New advice."])
-    def test_withdrawn_recommendations_render_the_current_state(self, replacement):
+    def test_an_applied_batch_that_invalidated_nothing_keeps_the_reconciler_attribution(self):
+        """A wording-only batch with no revised text: the ledger carries
+        applied ids but no invalidation record, so the reconciler's
+        assessment and recommendations render as the reconciler's."""
+        settled = canonical_findings_ledger(("high",))
+        settled["assessment"] = "One high finding."
+        settled["recommendations"] = {"immediate": ["Wrap the call in a transaction."]}
+        settled["applied_critic_adjustments"] = [
+            {"adjustment_id": "a1", "outcome": "verified"},
+        ]
+        text = render_review_body(settled)
+        assert "*Reconciler-authored assessment, not adjusted by the decision critic.*" in text
+        assert "- Wrap the call in a transaction." in text
+        assert "Revised" not in text
+
+    def test_an_invalidation_record_over_no_advice_renders_no_section(self):
+        """Nothing stood and nothing stands: a notice that the reconciler's
+        advice was invalidated would describe an act that never happened."""
+        settled = canonical_findings_ledger(("high",))
+        settled["recommendations"] = {"immediate": [], "important": [], "suggestions": []}
+        settled["invalidated_recommendations"] = [{
+            "recommendations": {"immediate": [], "important": [], "suggestions": []},
+            "invalidated_by_critic_adjustment_ids": ["a1"],
+        }]
+        settled["applied_critic_adjustments"] = [{"adjustment_id": "a1", "outcome": "verified"}]
+        assert "## Recommendations" not in render_review_body(settled)
+
+    @pytest.mark.parametrize("revised", [None, "New advice."])
+    def test_invalidated_recommendations_render_the_current_state(self, revised):
         doc = canonical_findings_ledger(("high",))
         doc["recommendations"] = {
-            "immediate": [replacement] if replacement else [],
+            "immediate": [revised] if revised else [],
             "important": [], "suggestions": [],
         }
         doc["invalidated_recommendations"] = [{
@@ -793,9 +871,9 @@ class TestEvidenceTrailSections:
         text = render_review_body(doc)
         assert "## Recommendations" in text
         assert "Old advice." not in text
-        if replacement:
+        if revised:
             assert "- New advice." in text
-            assert "*Post-critic recommendations, installed after the critic adjustments applied.*" in text
+            assert "*Revised recommendations, installed after the critic adjustments applied.*" in text
         else:
             assert "No current recommendations: the reconciler's were invalidated by critic revision and not replaced; see the findings." in text
 

@@ -89,8 +89,9 @@ def _write_findings(output_dir, findings, **extra):
     return data
 
 
-def _publish_revise(output_dir, adjustments):
-    """Publish one REVISE proposal the way `critic.py --save` does.
+def _publish_revise(output_dir, adjustments, *, verdict="REVISE"):
+    """Publish one proposal the way `critic.py --save` does: a REVISE by
+    default, or a STAND that carries wording corrections.
 
     Returns the script-assigned adjustment ids in proposal order, which is
     the only handle the orchestrator's adjudication request has on them.
@@ -98,12 +99,13 @@ def _publish_revise(output_dir, adjustments):
     proposal = critic_adjustments_module.prepare_proposal({
         "schema": 2, "adjustments": adjustments,
     })
-    write_critic_verdict(str(output_dir), "REVISE", proposal)
+    write_critic_verdict(str(output_dir), verdict, proposal)
     return [entry["adjustment_id"] for entry in proposal["adjustments"]]
 
 
 def _publish_verdict(output_dir, verdict):
-    """Publish a non-REVISE verdict with its mandatory empty proposal."""
+    """Publish a verdict with no adjustments (ESCALATE, SKIPPED, or a STAND
+    with nothing to correct) and its empty proposal."""
     write_critic_verdict(
         str(output_dir), verdict, critic_adjustments_module.empty_proposal()
     )
@@ -136,10 +138,10 @@ def _adjudicate(
 
 def _publish_and_adjudicate(
     output_dir, adjustments, *, verified=(), refuted=(), assessment=None,
-    recommendations=None,
+    recommendations=None, verdict="REVISE",
 ):
     """Run one whole critic round: publish the proposal, then adjudicate it."""
-    ids = _publish_revise(output_dir, adjustments)
+    ids = _publish_revise(output_dir, adjustments, verdict=verdict)
     result = _adjudicate(
         output_dir, ids,
         verified=verified, refuted=refuted, assessment=assessment,

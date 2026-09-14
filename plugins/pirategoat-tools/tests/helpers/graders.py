@@ -37,6 +37,7 @@ from review.review_document import (
     REVIEWER_FIELDS,
 )
 from review.verdict_rules import (
+    NOT_APPLICABLE_VERDICT,
     REVIEW_VERDICTS as _PRODUCTION_VERDICTS,
     SEVERITY_RANK,
     VALID_SEVERITIES as _PRODUCTION_SEVERITIES,
@@ -378,26 +379,6 @@ def grade_signal_format(text: str) -> GradeResult:
     return _grade(checks)
 
 
-def grade_no_domain_files(text: str) -> GradeResult:
-    """Grade agent output for NO_DOMAIN_FILES scenario.
-
-    Checks: APPROVE verdict, zero findings.
-    """
-    text_upper = text.upper()
-    # A severity mention only counts as a finding when it is followed by
-    # something other than a zero count or the literal "N" placeholder from
-    # the bootstrap's return-signal template ("COUNTS: critical: N, ...").
-    finding_mention = re.search(r"(CRITICAL|HIGH|MEDIUM):\s*(?!0\b|N\b)\S", text_upper)
-    checks = [
-        ("APPROVE" in text_upper, "Missing APPROVE verdict"),
-        (
-            finding_mention is None,
-            "Expected zero findings but found severity mentions"
-        ),
-    ]
-    return _grade(checks)
-
-
 def grade_error_exit(text: str) -> GradeResult:
     """Grade agent output for ERROR scenario.
 
@@ -530,13 +511,6 @@ def grade_review_baseline(path: str) -> GradeResult:
 # order-dependent and can under-match overlapping specs.
 
 DEFAULT_LINE_TOLERANCE = 2
-
-# Verdicts accepted as correct abstention on a NO_DOMAIN_FILES scenario.
-# The shared reviewer protocol mandates not_applicable; the tests-reviewer
-# agent definitions mandate approve — a live doctrine conflict inside the
-# plugin. Keys accept both compliant readings; the conflict itself is a
-# production-definition fix, not a benchmark one.
-_ABSTENTION_VERDICTS = frozenset({"not_applicable", "approve"})
 
 
 def _norm_path(path) -> str:
@@ -707,16 +681,14 @@ def grade_detection(review: dict, key: dict, repo_root=None) -> GradeResult:
         ]
 
     if key.get("expect_not_applicable"):
-        # Both abstention spellings are doctrine-compliant: the shared
-        # reviewer protocol mandates mark_not_applicable on NO_DOMAIN_FILES,
-        # while the tests-reviewer agent definitions instruct APPROVE on the
-        # same status. Until that conflict is reconciled in the definitions,
-        # punishing either reading would grade an internal doc inconsistency,
-        # not reviewer quality. The zero-findings requirement carries the
-        # actual behavioral content.
+        # Abstention has one spelling: the not_applicable review bootstrap
+        # records when the reviewer's scope matches no file. A reviewer that
+        # reads an in-domain diff and finds nothing approves, and a key for
+        # that case says verdict_in ["approve"] (as php_clean_review does),
+        # never expect_not_applicable.
         result = _grade([
-            (verdict in _ABSTENTION_VERDICTS,
-             f"expected abstention ({'/'.join(sorted(_ABSTENTION_VERDICTS))}), got '{verdict}'"),
+            (verdict == NOT_APPLICABLE_VERDICT,
+             f"expected {NOT_APPLICABLE_VERDICT}, got '{verdict}'"),
             (len(findings) == 0,
              f"expected zero findings on abstention, got {len(findings)}"),
         ])

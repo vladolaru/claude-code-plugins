@@ -12,7 +12,7 @@ Usage:
     python3 bootstrap.py --agent patterns-reviewer --output-dir <output-dir>
 
 Exit codes:
-    0  Success (scope may be OK or NO_DOMAIN_FILES)
+    0  Success (scope OK, or NO_DOMAIN_FILES with the not_applicable review recorded)
     1  Error (plugin root not found, unknown agent, scope discovery failed)
 """
 
@@ -25,7 +25,7 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, NoReturn, Optional, Tuple
 
 # reviewer_names.py is a leaf module (stdlib only, no review-internal
 # imports) precisely so this import can never re-enter this file: an
@@ -41,21 +41,24 @@ if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
 from review.reviewer_names import derive_reviewer_name
+from review.agent.output import NotApplicableReview, record_no_domain_files_review
 from review.agent.review_assignment import ASSIGNMENT_SCHEMA, derive_reviewed_files
 from review.atomic_io import atomic_write_json, atomic_write_text
 from review.change_purpose import parse_change_purpose
+from review.dispatch_status import EXECUTION_INLINE, EXECUTION_ISOLATED, EXECUTIONS
 from review.manifest_sections import host_identity_phrase, project_host_entry
 from review.run_paths import artifact_path
 from review.triage_sources import strip_html_comments
 from review.reviewer_lifecycle import (
     SCOPE_SUMMARY_SCHEMA,
     briefing_path,
+    mark_started,
+    record_bootstrap_error,
     review_paths,
     scope_summary_path,
     scoped_diff_path,
-    started_marker_path,
 )
-from review.verdict_rules import PIPELINE_VERDICTS
+from review.verdict_rules import NOT_APPLICABLE_VERDICT, PIPELINE_VERDICTS
 
 
 class ReviewArgumentParser(argparse.ArgumentParser):
@@ -308,6 +311,50 @@ def extract_status(scope_output: str) -> Optional[str]:
     """Extract STATUS from scope discovery output."""
     match = re.search(r"STATUS:\s*(\S+)", scope_output)
     return match.group(1).strip() if match else None
+
+
+def scope_run_failed(rc: int, scope_output: str) -> bool:
+    """Whether one scope discovery run failed.
+
+    scope.py prints a STATUS on every structured exit, and a range with no
+    changes is one of them (exit 2 with STATUS: ERROR); an exit that printed
+    no STATUS is a failure it could not describe. The one rule for every
+    run bootstrap makes (the primary scope, a secondary domain, the
+    exploration scope, each of a repo reviewer's domains), so no run's
+    failure is dropped because another run succeeded.
+    """
+    status = extract_status(scope_output)
+    return status == "ERROR" or (status is None and rc != 0)
+
+
+def scope_failure_diagnosis(scope_output: str) -> List[str]:
+    """The ERROR and ACTION lines one failed scope run reported.
+
+    scope.py names the problem on every structured exit. A run that ended
+    before it could (bootstrap's own timeout on the subprocess, an
+    interpreter crash) printed no ERROR line, so the last line it did print
+    becomes one, and the reviewer reports what actually happened.
+    """
+    lines = scope_output.splitlines()
+    diagnosis = [line for line in lines if line.startswith(("ERROR:", "ACTION:"))]
+    if not any(line.startswith("ERROR:") for line in diagnosis):
+        last = next((line.strip() for line in reversed(lines) if line.strip()), None)
+        diagnosis.insert(0, (
+            f"ERROR: Scope discovery failed: {last}" if last
+            else "ERROR: Scope discovery failed and reported no diagnosis."
+        ))
+    return diagnosis
+
+
+def label_scope_failure(label: str, scope_output: str) -> str:
+    """One failed scope run's diagnosis, each ERROR line naming the scope it
+    came from. Every run but a primary scope is labelled, a repo reviewer's
+    single declared domain included."""
+    return "\n".join(
+        f"ERROR: [{label}] {line.removeprefix('ERROR:').strip()}"
+        if line.startswith("ERROR:") else line
+        for line in scope_failure_diagnosis(scope_output)
+    )
 
 
 def get_file_history(files: List[str], max_commits: int = 15) -> str:
@@ -1184,7 +1231,7 @@ def build_output(
     lines.append(
         "OUTPUT_DIR accepts only your named artifacts (the files this "
         "briefing tells you to write). Scratch work — diff slices, notes, "
-        "intermediate files — goes in OUTPUT_DIR/tmp/ (create it first)."
+        "intermediate files — goes in OUTPUT_DIR/tmp/, which the run already has."
     )
     lines.append("")
     pr_id_str = pr_number if pr_number else "0"
@@ -1293,6 +1340,34 @@ BRIEFING_STUB_GUIDANCE = (
     "Follow it; do not read run artifacts by hand."
 )
 
+# What a reviewer with an empty scope is told instead. Bootstrap has already
+# recorded and finalized its not_applicable review (agents_status reads it
+# as FINISHED), so the reviewer's whole job is to say so; reading the
+# briefing or opening the builder would be a turn spent on nothing.
+NO_DOMAIN_FILES_GUIDANCE = (
+    "Nothing to review: no changed file is in your domain, and your "
+    "not_applicable review is already recorded at the REVIEW path above. "
+    "Do not read the briefing or open the builder. Return STATUS: FINISHED "
+    "with exactly this signal:"
+)
+
+
+def no_domain_files_signal(path: str, skip_reason: str) -> List[str]:
+    """The complete return signal for an empty-scope reviewer.
+
+    The briefing teaches the five-line signal, and the stub tells this
+    reviewer not to read the briefing, so the stub carries the signal
+    itself: one shape for every return, whoever recorded the review.
+    """
+    return [
+        "  STATUS: FINISHED",
+        "  OUTPUT_FILES:",
+        f"    - {path}",
+        "  COUNTS: critical: 0, high: 0, medium: 0",
+        f"  VERDICT: {NOT_APPLICABLE_VERDICT}",
+        f"  SUMMARY: {skip_reason}",
+    ]
+
 
 def deliver_briefing(
     output: str,
@@ -1302,8 +1377,14 @@ def deliver_briefing(
     agent_name: str,
     plugin_root: str,
     status: str,
+    recorded_review: Optional[NotApplicableReview] = None,
 ) -> str:
     """Write one reviewer's briefing to the run directory, return the stub.
+
+    `recorded_review` is the not_applicable final review for an empty
+    scope, with the reason it states; the stub then names the review and
+    replaces the read-the-briefing guidance with the complete return
+    signal.
 
     Unconditional, with no size threshold and no inline branch: two
     delivery shapes would be two conventions for one thing, and the
@@ -1323,17 +1404,22 @@ def deliver_briefing(
     os.makedirs(os.path.dirname(path), exist_ok=True)
     text = READ_LINE_NUMBER_WARNING + output
     atomic_write_text(path, text)
-    return "\n".join([
+    lines = [
         f"=== BOOTSTRAP: {agent_name} ===",
         f"PLUGIN_ROOT: {plugin_root}",
-        # STATUS stays on stdout: every agent definition tells the reviewer
-        # to exit on ERROR or NO_DOMAIN_FILES, and the compliance grader
-        # reads it from here.
+        # STATUS stays on stdout: the reviewer's next action (read the
+        # briefing, or return FINISHED) is decided from it, and the
+        # compliance grader reads it from here. An ERROR never gets this far.
         f"STATUS: {status}",
         f"BRIEFING: {path}",
         f"BRIEFING_BYTES: {len(text.encode('utf-8'))}",
-        BRIEFING_STUB_GUIDANCE,
-    ])
+    ]
+    if recorded_review is not None:
+        lines += [f"REVIEW: {recorded_review.path}", NO_DOMAIN_FILES_GUIDANCE]
+        lines += no_domain_files_signal(*recorded_review)
+    else:
+        lines.append(BRIEFING_STUB_GUIDANCE)
+    return "\n".join(lines)
 
 
 def build_error_output(agent_name: str, error_msg: str, plugin_root: str = "UNKNOWN") -> str:
@@ -1354,25 +1440,42 @@ def build_scope_failure_output(
     """Re-report a failed scope discovery under the bootstrap header.
 
     scope.py already named the real problem — NO_CHANGES, NO_RELEVANT_FILES,
-    an unusable range, not a git repository — and the ACTION that fits it: a
-    benign nothing-to-review no-op says APPROVE and exit, an infrastructure
-    failure says report to the caller. Both lines are carried through
-    verbatim. The symptom bootstrap meets downstream is a scope summary that
-    was never written, which names the wrong problem and would read a clean
-    no-op as broken infrastructure.
+    an unusable range, not a git repository — and the ACTION that fits it.
+    Both reach the reviewer as `scope_failure_diagnosis` extracts them: a
+    run other than the primary scope arrives already labelled by
+    `label_scope_failure`, and a run that printed no ERROR line gets one
+    built from its last output line. Every one of those problems ends the
+    review with a report to the caller: a reviewer that approved a range with
+    no changes would publish a clean review of nothing. The symptom bootstrap
+    meets downstream is a scope summary that was never written, which names
+    the wrong problem instead of the one scope.py found.
     """
-    diagnosis = list(dict.fromkeys(
-        line for line in scope_output.splitlines()
-        if line.startswith(("ERROR:", "ACTION:"))
-    )) or ["ERROR: Scope discovery failed and reported no diagnosis."]
     return (
         f"=== BOOTSTRAP: {agent_name} ===\n"
         f"PLUGIN_ROOT: {plugin_root}\n"
         f"STATUS: ERROR\n"
         f"\n"
-        + "\n".join(diagnosis)
+        + "\n".join(scope_failure_diagnosis(scope_output))
         + "\n"
     )
+
+
+def exit_with_bootstrap_error(error_output: str, output_dir: str, agent_name: str) -> NoReturn:
+    """Print a STATUS: ERROR output, record the failure, and exit 1.
+
+    Every error exit once the dispatched reviewer is known goes through
+    here. Without the record, agents_status reads a reviewer that stopped
+    before its started marker as NOT_DISPATCHED, and the step-7 briefing
+    dispatches it again into the stop this output already reported.
+    Recording is best effort: a run directory that cannot take the record
+    must not replace the diagnosis the reviewer reports with a traceback.
+    """
+    print(error_output)
+    try:
+        record_bootstrap_error(output_dir, derive_reviewer_name(agent_name), error_output)
+    except (OSError, ValueError):
+        pass
+    sys.exit(1)
 
 
 def resolve_reviewer_identity(args):
@@ -1381,6 +1484,7 @@ def resolve_reviewer_identity(args):
     Returns (agent_name, effective_agent_name, adapter_label,
     repo_agent_ref, ref_mode_error) — ref_mode_error is a printable
     message when the ref-mode flags are inconsistent, else None.
+    effective_agent_name is None only when the flags name no instance.
     """
     agent_name = args.agent
     adapter_label = args.adapter_label
@@ -1399,17 +1503,17 @@ def resolve_reviewer_identity(args):
                 "Adapter ref-mode requires --instance-name.",
             ),
         )
-    if ref_mode and args.execution == "isolated":
-        # Defense in depth behind plan_dispatch's refusal: an explicit
-        # isolation request must never silently widen into inline
-        # execution of the repo prompt — not even via a dispatch override.
+    if ref_mode and args.execution == EXECUTION_ISOLATED:
+        # Defense in depth behind the planner's skip and dispatch_adjust's
+        # refusal of an override: an explicit isolation request must never
+        # silently widen into inline execution of the repo prompt.
         return (
             agent_name,
-            None,
+            args.instance_name,
             adapter_label,
             repo_agent_ref,
             build_error_output(
-                args.instance_name or agent_name,
+                args.instance_name,
                 "Isolated execution is not implemented. Refusing to run the "
                 "repo reviewer prompt inline against an explicit isolation "
                 "request.",
@@ -1494,8 +1598,8 @@ def main():
     )
     parser.add_argument(
         "--execution",
-        default="inline",
-        choices=["inline", "isolated"],
+        default=EXECUTION_INLINE,
+        choices=sorted(EXECUTIONS),
         help="How the adapter runs the repo reviewer (adapter ref-mode).",
     )
     parser.add_argument(
@@ -1526,9 +1630,16 @@ def main():
         repo_agent_ref,
         ref_mode_error,
     ) = resolve_reviewer_identity(args)
+    # A failure is recorded once the dispatched reviewer is known. A call
+    # that names none (ref-mode flags without --instance-name or, in the
+    # check below, an agent the registry does not know) has nothing to record
+    # against, and its fix is a corrected dispatch, which NOT_DISPATCHED
+    # invites.
     if ref_mode_error:
-        print(ref_mode_error)
-        sys.exit(1)
+        if effective_agent_name is None:
+            print(ref_mode_error)
+            sys.exit(1)
+        exit_with_bootstrap_error(ref_mode_error, args.output_dir, effective_agent_name)
     ref_mode = bool(repo_agent_ref)
 
     # Step 1: Validate agent name
@@ -1545,12 +1656,11 @@ def main():
     # Step 2: Find plugin root
     plugin_root = find_plugin_root()
     if not plugin_root:
-        print(build_error_output(
+        exit_with_bootstrap_error(build_error_output(
             agent_name,
             "Could not find pirategoat-tools plugin root. "
             "Ensure the plugin is installed or /tmp/.pirategoat-tools-root is set.",
-        ))
-        sys.exit(1)
+        ), args.output_dir, effective_agent_name)
 
     # Step 3: Read and extract protocol rules
     protocol_path = os.path.join(
@@ -1558,12 +1668,11 @@ def main():
     )
     protocol_content = read_file(protocol_path)
     if not protocol_content:
-        print(build_error_output(
+        exit_with_bootstrap_error(build_error_output(
             agent_name,
             f"Could not read reviewer protocol at {protocol_path}",
             plugin_root,
-        ))
-        sys.exit(1)
+        ), args.output_dir, effective_agent_name)
 
     review_rules = extract_protocol_sections(
         protocol_content, REVIEWER_PROTOCOL_SKIP_SECTIONS
@@ -1619,7 +1728,6 @@ def main():
                     ref_include_flags += ["--include-path", pattern]
         scope_status = "NO_DOMAIN_FILES"
         captured_meta = False
-        error_outputs = []
         for dom in ref_domains:
             if dom not in _REVIEW_DOMAINS:
                 continue
@@ -1644,30 +1752,24 @@ def main():
             if not captured_meta:
                 pr_number = extract_pr_number(dom_output)
                 captured_meta = True
+            if scope_run_failed(dom_rc, dom_output):
+                # One failed domain fails the repo reviewer, even when
+                # another domain succeeded: a review of the domains that
+                # happened to run would claim coverage of the one that did
+                # not, and reading the failure as NO_DOMAIN_FILES would turn
+                # it into a clean abstention. The range is shared, so the
+                # first failure is the diagnosis.
+                scope_status = "ERROR"
+                scope_output = label_scope_failure(dom, dom_output)
+                break
             if extract_status(dom_output) == "OK":
                 if scope_output:
                     scope_output += f"\n\n=== SECONDARY SCOPE: {dom} ===\n{dom_output}"
                 else:
                     scope_output = dom_output
                 scope_status = "OK"
-            elif dom_rc not in (0, 2):
-                # rc=2 means no changes, which is still structured output
-                # (same contract as the primary-domain path).
-                error_outputs.append(f"[{dom}] {dom_output}")
         if not scope_output:
-            if error_outputs:
-                # Every declared domain that ran failed (bad range, git
-                # error, timeout). Reporting NO_DOMAIN_FILES here would
-                # convert an infrastructure failure into a clean
-                # not-applicable exit — the repo reviewer must fail loudly
-                # instead.
-                scope_status = "ERROR"
-                scope_output = (
-                    "Scope discovery failed for the declared domains:\n"
-                    + "\n".join(error_outputs)
-                )
-            else:
-                scope_output = "(No files matched the repo reviewer's declared domains)"
+            scope_output = "(No files matched the repo reviewer's declared domains)"
         if not pr_number:
             pr_number = load_pr_number_from_context(output_dir)
     elif config["domain"] is not None:
@@ -1690,14 +1792,10 @@ def main():
         )
         scope_summary_paths.append(primary_summary_out)
 
-        if rc != 0 and rc != 2:
-            # rc=2 means no changes, which is still structured output
+        if scope_run_failed(rc, scope_output):
             scope_status = "ERROR"
-
-        # Parse status and PR number from scope output.
-        parsed_status = extract_status(scope_output)
-        if parsed_status:
-            scope_status = parsed_status
+        else:
+            scope_status = extract_status(scope_output) or scope_status
 
         pr_number = extract_pr_number(scope_output)
 
@@ -1705,16 +1803,24 @@ def main():
         if not pr_number:
             pr_number = load_pr_number_from_context(output_dir)
 
-        # Run extra scope for patterns-reviewer (exploration scope)
-        if "extra_scope" in config:
-            extra_flags = config["extra_scope"]
-            _, exploration_scope = run_scope_discovery(
-                plugin_root, config["domain"], extra_flags, args.range,
+        # The further scope runs (the exploration scope, secondary domains)
+        # follow the same rule: a failed run ends bootstrap with its labelled
+        # diagnosis, never a review of the scopes that happened to succeed.
+        # After the primary run failed there is nothing to add; the range is
+        # shared, so the first failure is the diagnosis.
+        if scope_status != "ERROR" and "extra_scope" in config:
+            extra_rc, exploration_scope = run_scope_discovery(
+                plugin_root, config["domain"], config["extra_scope"], args.range,
                 output_dir=args.output_dir,
             )
+            if scope_run_failed(extra_rc, exploration_scope):
+                scope_status = "ERROR"
+                scope_output = label_scope_failure("exploration", exploration_scope)
 
         # Run secondary domain scope discovery (e.g., config-ops for security/architecture)
         for sec_domain in config.get("secondary_domains", []):
+            if scope_status == "ERROR":
+                break
             sec_flags = list(config.get("scope_flags", []))
             if config.get("no_semantic_filter", False):
                 sec_flags.append("--no-semantic-filter")
@@ -1729,8 +1835,11 @@ def main():
                 summary_json_out=sec_summary_out,
             )
             scope_summary_paths.append(sec_summary_out)
-            sec_status = extract_status(sec_output)
-            if sec_status and sec_status == "OK":
+            if scope_run_failed(sec_rc, sec_output):
+                scope_status = "ERROR"
+                scope_output = label_scope_failure(sec_domain, sec_output)
+                break
+            if extract_status(sec_output) == "OK":
                 scope_output += f"\n\n=== SECONDARY SCOPE: {sec_domain} ===\n"
                 scope_output += sec_output
                 secondary_with_content.append(sec_domain)
@@ -1753,6 +1862,16 @@ def main():
 
     os.makedirs(output_dir, exist_ok=True)
 
+    # A failed scope ends here, whether or not it left a summary behind: the
+    # diagnosis and the ACTION that fits it, no briefing, and a failure
+    # record in place of the started marker. Every STATUS: ERROR a reviewer
+    # sees therefore comes with no briefing to read, which is what each
+    # agent definition branches on before its read-the-briefing instruction.
+    if scope_status == "ERROR":
+        exit_with_bootstrap_error(build_scope_failure_output(
+            effective_agent_name, scope_output, plugin_root
+        ), output_dir, effective_agent_name)
+
     # Scope facts come from the machine-readable sidecars and only from them
     # — the same producer dict the rendered text was printed from. A run that
     # could not produce one has no facts, and a reviewer briefed with facts
@@ -1760,23 +1879,13 @@ def main():
     try:
         scope_facts = load_scope_facts(scope_summary_paths)
     except ValueError as exc:
-        # Two unrelated failures land here. Either scope discovery itself
-        # failed and never got as far as writing a summary — then it already
-        # printed the diagnosis and the ACTION that fits it, and a missing
-        # file is only the downstream symptom. Or scope succeeded and its
-        # summary is unreadable, which is the infrastructure failure this
-        # message names.
-        if scope_status == "ERROR":
-            print(build_scope_failure_output(
-                effective_agent_name, scope_output, plugin_root
-            ))
-        else:
-            print(build_error_output(
-                effective_agent_name,
-                f"Could not read the scope summary: {exc}",
-                plugin_root,
-            ))
-        sys.exit(1)
+        # Scope succeeded and its summary is unreadable: the infrastructure
+        # failure this message names.
+        exit_with_bootstrap_error(build_error_output(
+            effective_agent_name,
+            f"Could not read the scope summary: {exc}",
+            plugin_root,
+        ), output_dir, effective_agent_name)
     scope_lines_for_budget = scope_facts["in_scope_stat_lines"]
     inline_diff_files, review_claimable_files = partition_scope_paths(
         scope_facts["inline_diff_files"], scope_facts["review_claimable_files"]
@@ -1870,12 +1979,11 @@ def main():
             channels=channels,
         )
     except (OSError, ValueError) as exc:
-        print(build_error_output(
+        exit_with_bootstrap_error(build_error_output(
             effective_agent_name,
             f"Could not publish authoritative review assignment: {exc}",
             plugin_root,
-        ))
-        sys.exit(1)
+        ), output_dir, effective_agent_name)
 
     # Telemetry: log agent start (best-effort, after budget is finalized)
     if ReviewTelemetry is not None:
@@ -1954,7 +2062,7 @@ def main():
     )
     # In ref-mode the adapter has a null registry domain, so resolve_overall_status
     # forces OK. Honor the real ref-mode scope status instead, so an adapter with
-    # no matching files sees NO_DOMAIN_FILES and exits cleanly.
+    # no matching files gets NO_DOMAIN_FILES and its not_applicable review recorded.
     if ref_mode:
         overall_status = scope_status
         secondary_only = False
@@ -1989,6 +2097,32 @@ def main():
         plugin_version=load_plugin_version(output_dir),
     )
 
+    # An empty scope has nothing for a model to judge. Record the review
+    # here, through the reviewer's own builder path, so the reviewer's job
+    # is one line and a started marker can never outlive its review. The
+    # pr_id is the one the output instructions hand a reviewer.
+    recorded_review = None
+    if overall_status == "NO_DOMAIN_FILES":
+        try:
+            recorded_review = record_no_domain_files_review(
+                output_dir,
+                str(pr_number) if pr_number else "0",
+                reviewer_name,
+                f"No {config['domain'] or 'in-domain'} files among the changed "
+                "files: scope discovery matched nothing for this reviewer",
+            )
+        except (OSError, ValueError) as exc:
+            # A closed intake, an unreadable draft, or an existing final
+            # that is not a valid not_applicable review: the reviewer reads
+            # STATUS: ERROR like every other bootstrap failure, and its
+            # failure is recorded in place of a started marker that would
+            # read as RUNNING.
+            exit_with_bootstrap_error(build_error_output(
+                effective_agent_name,
+                f"Could not record the empty-scope review: {exc}",
+                plugin_root,
+            ), output_dir, effective_agent_name)
+
     # The briefing file precedes the marker: a reviewer that sees RUNNING
     # can rely on its briefing existing.
     stub = deliver_briefing(
@@ -1998,6 +2132,7 @@ def main():
         agent_name=effective_agent_name,
         plugin_root=plugin_root,
         status=overall_status,
+        recorded_review=recorded_review,
     )
 
     # The started marker is the last thing bootstrap writes: agents_status.py
@@ -2005,18 +2140,12 @@ def main():
     # started — leaving the marker would hold step 8 open until the timeout.
     # Keyed on the per-instance name so parallel adapter instances (same
     # registry key) don't collide.
-    started_path = started_marker_path(
-        output_dir, derive_reviewer_name(effective_agent_name)
-    )
-    os.makedirs(os.path.dirname(started_path), exist_ok=True)
-    with open(started_path, "w") as f:
-        from datetime import datetime, timezone
-        f.write(datetime.now(timezone.utc).isoformat())
+    mark_started(output_dir, reviewer_name)
     print(stub)
 
-    # Exit code: 0 for success (including NO_DOMAIN_FILES), 1 for errors
-    if overall_status == "ERROR":
-        sys.exit(1)
+    # Every error exited above, before a briefing or a started marker
+    # existed, so a delivered briefing is a success (NO_DOMAIN_FILES
+    # included; its review is recorded above).
     sys.exit(0)
 
 

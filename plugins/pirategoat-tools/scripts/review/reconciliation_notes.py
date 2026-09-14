@@ -11,7 +11,9 @@ a hint can no longer be adopted verbatim (run 6e6a) or lost.
 
 One writer, under the output-directory lock, appending to the context
 reconciliation_context.py wrote — which carries these claims across a
-rebuild under that same lock. Ids are monotonic within the run.
+rebuild under that same lock. Ids are monotonic within the run; a call that
+repeats --note registers each flag in order and prints one RECORDED NOTE line
+per claim.
 """
 
 import argparse
@@ -43,9 +45,15 @@ except ImportError:
 CONTEXT_FILENAME = artifact_path("", "reconciliation_context").name
 
 
-def add_note(output_dir, text):
-    """Append one note to the run's reconciliation context; return it."""
-    cleaned = normalize_bounded_text(text, "note")
+def add_notes(output_dir, texts):
+    """Append the given notes, in order, under one lock; return them.
+
+    All-or-nothing: every text is normalized before the context is read,
+    so one unusable claim rejects the call and writes nothing.
+    """
+    cleaned = [normalize_bounded_text(text, "note") for text in texts]
+    if not cleaned:
+        raise ValueError("at least one --note is required")
     path = artifact_path(output_dir, "reconciliation_context")
     with atomic_io.output_dir_lock(str(output_dir)):
         context = read_reconciliation_context(output_dir)
@@ -54,26 +62,38 @@ def add_note(output_dir, text):
                 f"{CONTEXT_FILENAME} schema is not {RECONCILIATION_CONTEXT_SCHEMA}"
             )
         notes = validate_orchestrator_notes(context.get("orchestrator_notes"))
-        note = {"id": f"n{len(notes) + 1}", "note": cleaned}
-        notes.append(note)
+        recorded = []
+        for text in cleaned:
+            note = {"id": f"n{len(notes) + 1}", "note": text}
+            notes.append(note)
+            recorded.append(note)
         context["orchestrator_notes"] = notes
         atomic_io.atomic_write_json(str(path), context)
-    return note
+    return recorded
+
+
+def add_note(output_dir, text):
+    """Append one note to the run's reconciliation context; return it."""
+    return add_notes(output_dir, [text])[0]
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Register one orchestrator claim in the reconciliation context",
+        description="Register orchestrator claims in the reconciliation context",
     )
     parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--note", required=True, help="One claim, stated as a claim")
+    parser.add_argument(
+        "--note", action="append", required=True,
+        help="One claim, stated as a claim; repeat the flag to register several in order",
+    )
     args = parser.parse_args()
     try:
-        note = add_note(args.output_dir, args.note)
+        recorded = add_notes(args.output_dir, args.note)
     except ValueError as err:
         print(f"REJECTED: {err}")
         sys.exit(1)
-    print(f"RECORDED NOTE: {note['id']}")
+    for note in recorded:
+        print(f"RECORDED NOTE: {note['id']}")
 
 
 if __name__ == "__main__":

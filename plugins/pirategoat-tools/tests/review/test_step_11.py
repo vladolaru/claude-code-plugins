@@ -318,28 +318,46 @@ class TestStepElevenReportsUnadjudicatedProposal:
         """
         monkeypatch.chdir(tmp_path)
 
-    _NOTE = (
-        "critic REVISE proposal was never adjudicated; the ledger is "
-        "published without its adjustments"
-    )
+    @staticmethod
+    def _note(verdict):
+        return (
+            f"critic {verdict} proposal was never adjudicated; the ledger is "
+            "published without its adjustments"
+        )
 
     def _step_11(self, output_dir, state=None):
         return _publish_step_11(output_dir, state)
 
+    @staticmethod
+    def _publish_pending(output_dir, verdict):
+        """One unadjudicated proposal under the verdict that carries it."""
+        if verdict == "REVISE":
+            _publish_revise(output_dir, [{
+                "action": "promote", "target": {"kind": "finding", "id": "f1"},
+                "fields": {"severity": "critical"}, "rationale": "r",
+            }])
+            return
+        from review.critic_adjustments import prepare_proposal, write_critic_verdict
+        write_critic_verdict(str(output_dir), "STAND", prepare_proposal({
+            "schema": 2, "adjustments": [{
+                "action": "correct", "target": {"kind": "finding", "id": "f1"},
+                "fields": {"description": "clearer"}, "rationale": "r",
+            }],
+        }))
+
+    @pytest.mark.parametrize("verdict", ["REVISE", "STAND"])
     def test_the_degradation_is_stable_across_the_publication_handoff(
-        self, tmp_path
+        self, tmp_path, verdict
     ):
-        """One pending, unprobed REVISE batch: step 11 must not apply it on
-        the orchestrator's behalf, and re-entering step 11 after the report
-        handoff must not duplicate or drop the degradation it already
-        recorded."""
+        """One pending, unprobed batch, under REVISE or under a STAND that
+        carries corrections: step 11 must not apply it on the orchestrator's
+        behalf, and re-entering step 11 after the report handoff must not
+        duplicate or drop the degradation it already recorded."""
         _write_findings(tmp_path, [_finding("f1", "low")], verdict="approve")
-        _publish_revise(tmp_path, [{
-            "action": "promote", "target": {"kind": "finding", "id": "f1"},
-            "fields": {"severity": "critical"}, "rationale": "r",
-        }])
+        self._publish_pending(tmp_path, verdict)
         (tmp_path / "review-report.md").write_text("# report")
         state = {}
+        note = self._note(verdict)
 
         self._step_11(tmp_path, state)
 
@@ -352,12 +370,24 @@ class TestStepElevenReportsUnadjudicatedProposal:
         self._step_11(tmp_path, state)
 
         result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert result["degradation_notes"] == [self._NOTE]
+        assert result["degradation_notes"] == [note]
         assert result["status"] == "degraded"
         assert state["step_11_degradation_records"] == [{
             "code": "critic_adjudication_missing",
-            "message": self._NOTE,
+            "message": note,
         }]
+
+    def test_a_bare_stand_records_no_adjudication_degradation(self, tmp_path):
+        _write_findings(tmp_path, [_finding("f1", "low")], verdict="approve")
+        _publish_verdict(tmp_path, "STAND")
+        (tmp_path / "review-report.md").write_text("# report")
+        state = {}
+
+        self._step_11(tmp_path, state)
+
+        assert "critic_adjudication_missing" not in [
+            record.get("code") for record in state.get("step_11_degradation_records", [])
+        ]
 
     def test_an_unreadable_proposal_is_a_missing_verdict_not_a_crash(
         self, tmp_path

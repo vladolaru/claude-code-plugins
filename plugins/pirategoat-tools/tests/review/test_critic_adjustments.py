@@ -1,6 +1,7 @@
 """Tests for critic_adjustments — the sole writer that carries decision-critic
 finding-level decisions into review-findings.json."""
 
+import copy
 import json
 import re
 import subprocess
@@ -325,13 +326,41 @@ class TestAdjudicateWritesTheLedgerOnce:
         ])
         assert adjudication_state(str(tmp_path)) == "pending"
 
-    def test_non_revise_verdict_cannot_be_adjudicated(self, tmp_path):
+    def test_an_empty_proposal_cannot_be_adjudicated(self, tmp_path):
         write_findings(str(tmp_path), canonical_findings_ledger(("high",)))
         _publish_verdict(tmp_path, "STAND")
 
         assert adjudication_state(str(tmp_path)) == "empty"
-        with pytest.raises(ValueError, match="STAND"):
+        with pytest.raises(ValueError, match="nothing to adjudicate under a STAND"):
             _adjudicate(tmp_path, [])
+
+    def test_a_stand_with_corrections_is_adjudicated(self, tmp_path):
+        """13 of 13 field runs came back REVISE because a wording correction could ride
+        nothing else; a correct-only batch now rides STAND and is applied
+        the same way."""
+        from review.critic_adjustments import prepare_proposal, write_critic_verdict
+        write_findings(str(tmp_path), canonical_findings_ledger(("high",)))
+        proposal = prepare_proposal({"schema": 2, "adjustments": [
+            {"action": "correct", "target": {"kind": "finding", "id": "f1"},
+             "fields": {"description": "The reworded description."}, "rationale": "r"},
+        ]})
+        write_critic_verdict(str(tmp_path), "STAND", proposal)
+        ids = [entry["adjustment_id"] for entry in proposal["adjustments"]]
+
+        before = _ledger(tmp_path)
+        assert adjudication_state(str(tmp_path)) == "pending"
+        _adjudicate(tmp_path, ids, verified=(0,))
+        assert adjudication_state(str(tmp_path)) == "adjudicated"
+        after = _ledger(tmp_path)
+        assert after["findings"][0]["description"] == "The reworded description."
+        assert read_critic_verdict(str(tmp_path)) == "STAND"
+        # Nothing the ladder or the assessment rests on moved.
+        from review.critic_adjustments import VERDICT_BEFORE_ADJUSTMENTS_KEY
+        assert after["verdict"] == before["verdict"]
+        assert VERDICT_BEFORE_ADJUSTMENTS_KEY not in after
+        assert after["assessment"] == before["assessment"]
+        assert after["recommendations"] == before["recommendations"]
+        assert "invalidated_assessments" not in after
 
     def test_a_tampered_proposal_is_refused(self, tmp_path):
         """The marker commits a digest; an edited proposal is unusable."""
@@ -942,7 +971,7 @@ class TestReadCriticVerdict:
 
 
 class TestRecommendationsInvalidation:
-    """An applying batch must withdraw advice that its revisions may contradict."""
+    """A batch that moves the ledger must invalidate advice its revisions may contradict."""
 
     _RECS = {
         "immediate": ["Escape the payment notice before merge."],
@@ -959,7 +988,7 @@ class TestRecommendationsInvalidation:
             "fields": {"severity": "low"}, "rationale": "guarded upstream",
         }])
 
-    def test_an_applying_batch_withdraws_the_recommendations(self, tmp_path):
+    def test_a_moving_batch_invalidates_the_recommendations(self, tmp_path):
         ids = self._seed(tmp_path)
         result = _adjudicate(tmp_path, ids, verified=(0,))
         assert result["applied"] == 1
@@ -973,17 +1002,16 @@ class TestRecommendationsInvalidation:
         }]
         validate_findings_document(data)
 
-    @pytest.mark.parametrize("replacement,expected", [
-        pytest.param({"suggestions": ["  Add a nonce when convenient.  "]},
-                     ["Add a nonce when convenient."], id="normalized-subset"),
-        pytest.param({}, [], id="empty-replacement"),
-    ])
-    def test_revised_recommendations_are_installed(self, tmp_path, replacement, expected):
+    def test_revised_recommendations_are_installed_normalized(self, tmp_path):
         ids = self._seed(tmp_path)
-        _adjudicate(tmp_path, ids, verified=(0,), recommendations=replacement)
+        _adjudicate(
+            tmp_path, ids, verified=(0,),
+            recommendations={"suggestions": ["  Add a nonce when convenient.  "]},
+        )
         data = _ledger(tmp_path)
         assert data["recommendations"] == {
-            "immediate": [], "important": [], "suggestions": expected,
+            "immediate": [], "important": [],
+            "suggestions": ["Add a nonce when convenient."],
         }
         assert len(data["invalidated_recommendations"]) == 1
 
@@ -997,6 +1025,24 @@ class TestRecommendationsInvalidation:
         assert data["recommendations"] == self._RECS
         assert "invalidated_recommendations" not in data
 
+    def test_revised_recommendations_over_an_empty_prior_record_the_displacement(
+        self, tmp_path
+    ):
+        """The record is what says the standing recommendations are the
+        orchestrator's; without it, revised advice over an empty prior
+        would render as the reconciler's."""
+        _write_findings(tmp_path, [_finding("f1", "critical")])
+        ids, _ = _publish_and_adjudicate(tmp_path, [{
+            "action": "demote", "target": {"kind": "finding", "id": "f1"},
+            "fields": {"severity": "low"}, "rationale": "guarded upstream",
+        }], verified=(0,), recommendations={"suggestions": ["Add a nonce."]})
+        data = _ledger(tmp_path)
+        assert data["recommendations"]["suggestions"] == ["Add a nonce."]
+        assert data["invalidated_recommendations"] == [{
+            "recommendations": {p: [] for p in ("immediate", "important", "suggestions")},
+            "invalidated_by_critic_adjustment_ids": ids,
+        }]
+
     def test_empty_recommendations_record_no_invalidation(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1", "critical")])
         _publish_and_adjudicate(tmp_path, [{
@@ -1009,6 +1055,9 @@ class TestRecommendationsInvalidation:
         pytest.param("not a dict", id="not-object"),
         pytest.param({"immediate": "x"}, id="not-list"),
         pytest.param({"immediate": [1]}, id="not-string"),
+        pytest.param({}, id="no-priority"),
+        pytest.param({"immediate": [], "important": [], "suggestions": []},
+                     id="every-priority-empty"),
     ])
     def test_malformed_revised_recommendations_are_refused(self, tmp_path, bad):
         ids = self._seed(tmp_path)
@@ -1018,7 +1067,40 @@ class TestRecommendationsInvalidation:
         assert any("revised_recommendations" in p for p in excinfo.value.problems)
         assert (tmp_path / "review-findings.json").read_bytes() == before
 
-    def test_reader_rejects_malformed_withdrawn_priority(self, tmp_path):
+    @pytest.mark.parametrize("key, empty, noun", [
+        pytest.param("revised_recommendations",
+                     {"immediate": [], "important": [], "suggestions": []},
+                     "recommendation", id="recommendations"),
+        pytest.param("revised_assessment", "   ", "assessment", id="assessment"),
+    ])
+    def test_empty_revised_text_under_a_wording_only_stand_is_refused(
+        self, tmp_path, key, empty, noun
+    ):
+        """The PR #21 review's reproduction: the step-10 template once showed
+        every priority empty as the value to copy, and that object displaced
+        the reconciler's advice under a batch that moved nothing. Revised
+        text is null or content for both keys, and the refusal says how to
+        send none."""
+        _write_findings(
+            tmp_path, [_finding("f1", "medium")],
+            assessment="Reconciler view.", recommendations=self._RECS,
+        )
+        ids = _publish_revise(tmp_path, [{
+            "action": "correct", "target": {"kind": "finding", "id": "f1"},
+            "fields": {"title": "Sharper title"}, "rationale": "wording",
+        }], verdict="STAND")
+        before = (tmp_path / "review-findings.json").read_bytes()
+        request = _request(ids, verified=(0,))
+        request[key] = empty
+        with pytest.raises(critic_adjustments_module.AdjustmentValidationError) as excinfo:
+            critic_adjustments_module.adjudicate(str(tmp_path), request)
+        assert excinfo.value.problems == [
+            f"adjudication request: '{key}' names no {noun}; send null, or "
+            "omit the key, when you are not revising it"
+        ]
+        assert (tmp_path / "review-findings.json").read_bytes() == before
+
+    def test_reader_rejects_malformed_invalidated_priority(self, tmp_path):
         bad = "not a list"
         ids = self._seed(tmp_path)
         _adjudicate(tmp_path, ids, verified=(0,))
@@ -1040,7 +1122,7 @@ class TestAssessmentInvalidation:
     demoted critical still described as "one CRITICAL blocker" survives the
     whole correction pipeline and renders directly above the list that
     contradicts it. The pipeline cannot re-derive the prose (it is LLM
-    output), so an applying batch withdraws it — auditably.
+    output), so a batch that moves the ledger invalidates it — auditably.
     """
 
     _SUMMARY = "One CRITICAL blocker: the payment path is unescaped."
@@ -1051,7 +1133,7 @@ class TestAssessmentInvalidation:
             assessment=self._SUMMARY,
         )
 
-    def test_an_applying_batch_withdraws_the_summary(self, tmp_path):
+    def test_a_moving_batch_invalidates_the_summary(self, tmp_path):
         self._seed(tmp_path)
         _, result = _publish_and_adjudicate(tmp_path, [{
             "action": "demote", "target": {"kind": "finding", "id": "f1"},
@@ -1067,11 +1149,11 @@ class TestAssessmentInvalidation:
         # touched finding names the action that touched it.
         assert invalidated[0]["invalidated_by_critic_adjustment_ids"] == _applied_ids(data)
 
-    def test_a_second_withdrawal_names_only_its_own_batch(self, tmp_path):
+    def test_a_second_invalidation_names_only_its_own_batch(self, tmp_path):
         """invalidated_by_critic_adjustment_ids is causal attribution, not history: a second
-        reconciliation round's withdrawal must name the batch that caused
+        reconciliation round's invalidation must name the batch that caused
         it, never the cumulative applied-ids list. Also covers a second
-        round appending rather than overwriting the first withdrawal's
+        round appending rather than overwriting the first invalidation's
         text. Fix 47cd4c16."""
         self._seed(tmp_path)
         _publish_and_adjudicate(tmp_path, [{
@@ -1100,7 +1182,7 @@ class TestAssessmentInvalidation:
         assert invalidated[1]["invalidated_by_critic_adjustment_ids"] == second_batch
         assert invalidated[0]["invalidated_by_critic_adjustment_ids"] == first_batch
 
-    def test_no_summary_to_withdraw_records_no_withdrawal(self, tmp_path):
+    def test_no_summary_to_invalidate_records_no_invalidation(self, tmp_path):
         _write_findings(tmp_path, [_finding("f1", "critical")])
         _publish_and_adjudicate(tmp_path, [{
             "action": "demote", "target": {"kind": "finding", "id": "f1"},
@@ -1109,6 +1191,59 @@ class TestAssessmentInvalidation:
         data = _ledger(tmp_path)
         assert data["assessment"] is None
         assert INVALIDATED_ASSESSMENTS_KEY not in data
+
+    @pytest.mark.parametrize("verdict, entry", [
+        pytest.param("STAND", {
+            "action": "correct", "target": {"kind": "finding", "id": "f1"},
+            "fields": {"title": "Sharper title"}, "rationale": "wording",
+        }, id="wording-only-stand"),
+        pytest.param("REVISE", {
+            "action": "demote", "target": {"kind": "finding", "id": "f1"},
+            "fields": {"severity": "low"}, "rationale": "guarded upstream",
+        }, id="moving-revise"),
+    ])
+    def test_a_revised_assessment_over_none_records_the_displacement(
+        self, tmp_path, verdict, entry
+    ):
+        """The PR #21 review's reproduction: with no reconciler assessment,
+        revised text left no record and rendered as reconciler-authored. The
+        record over a null prior is what attributes it, the rule the
+        recommendations already followed."""
+        from review.review_markdown import render_review_body
+        _write_findings(tmp_path, [_finding("f1", "medium")], assessment=None)
+        ids, _ = _publish_and_adjudicate(
+            tmp_path, [entry], verified=(0,), verdict=verdict,
+            assessment="Orchestrator's revised text.",
+        )
+        data = _ledger(tmp_path)
+        assert data["assessment"] == "Orchestrator's revised text."
+        assert data[INVALIDATED_ASSESSMENTS_KEY] == [{
+            "text": None, "invalidated_by_critic_adjustment_ids": ids,
+        }]
+        validate_findings_document(data)
+        body = render_review_body(data)
+        assert "*Revised assessment, installed after the critic adjustments applied.*" in body
+        assert "Reconciler-authored" not in body
+
+    @pytest.mark.parametrize("text, valid", [
+        pytest.param(None, True, id="null"),
+        pytest.param("Old claim.", True, id="text"),
+        pytest.param("   ", False, id="blank"),
+        pytest.param(5, False, id="not-a-string"),
+    ])
+    def test_reader_admits_a_null_or_non_blank_invalidated_text(self, tmp_path, text, valid):
+        self._seed(tmp_path)
+        _publish_and_adjudicate(tmp_path, [{
+            "action": "demote", "target": {"kind": "finding", "id": "f1"},
+            "fields": {"severity": "low"}, "rationale": "r",
+        }], verified=(0,))
+        data = _ledger(tmp_path)
+        data[INVALIDATED_ASSESSMENTS_KEY][0]["text"] = text
+        if valid:
+            validate_findings_document(data)
+        else:
+            with pytest.raises(ValueError, match="invalidated_assessments.*malformed"):
+                validate_findings_document(data)
 
 
 class TestCheckPassthrough:
@@ -1150,7 +1285,7 @@ class TestReconciliatorWritePathPin:
     thing that can hold it to the sanctioned write path is a test.
 
     Since findings_save.py shipped, the reconciliator no longer calls
-    `write_findings()` directly — it stages the ledger in `$TMPDIR` and
+    `write_findings()` directly — it stages the ledger in the run's `tmp/` and
     saves it through `findings_save.py`, the validating channel that
     calls `write_findings()` internally (mirroring critic.py's `--save`
     mode for the decision critic). If `agents/review-reconciliator.md`
@@ -1181,6 +1316,19 @@ class TestReconciliatorWritePathPin:
         assert "scripts/review/findings_save.py" in text
         assert "--output-dir" in text
         assert "--findings" in text
+
+    def test_every_note_the_snippet_cites_as_a_source_is_resolved_confirmed(self):
+        """The save refuses a note source the same ledger does not confirm,
+        so the taught snippet must confirm every note it sources — read top
+        to bottom, the way the agent follows it."""
+        import re
+        text = self._text()
+        confirmed = set(re.findall(
+            r'resolve_note\("(n\d+)",\s*outcome="confirmed"', text
+        ))
+        sourced = set(re.findall(r'\{"reviewer": "orchestrator", "id": "(n\d+)"\}', text))
+        assert sourced, "the snippet teaches the note-sourced finding"
+        assert sourced <= confirmed, sourced - confirmed
 
 
 
@@ -1243,11 +1391,14 @@ class TestOutcomeVocabulary:
         }]))
 
 class TestRevisedAssessment:
-    """The orchestrator's post-critic assessment, in the channel.
+    """The orchestrator's revised assessment, in the channel.
 
-    An applying batch withdraws the reconciler's `assessment` and
-    nothing used to replace it, so a REVISE run published a ledger whose
+    A batch that moves the ledger invalidates the reconciler's `assessment`
+    and nothing used to replace it, so a REVISE run published a ledger whose
     Assessment section pointed at a report the machine could not read.
+    Revised text supplied on a wording-only batch invalidates the prior the
+    same way, so the record never credits the orchestrator's words to the
+    reconciler.
     """
 
     _SUMMARY = "One CRITICAL blocker: the payment path is unescaped."
@@ -1265,7 +1416,7 @@ class TestRevisedAssessment:
         )
 
     def test_it_becomes_the_ledger_assessment(self, tmp_path):
-        """Replacement is not erasure: the reconciler's retracted words
+        """Revision is not erasure: the reconciler's invalidated words
         stay auditable beside the ids that cost them their standing."""
         self._seed(tmp_path)
         _publish_and_adjudicate(
@@ -1276,14 +1427,61 @@ class TestRevisedAssessment:
         assert data["assessment"] == self._REVISED
         assert data[INVALIDATED_ASSESSMENTS_KEY][0]["text"] == self._SUMMARY
 
-    def test_a_blank_revised_assessment_is_rejected_without_mutation(
+    _RECOMMENDATIONS = {
+        "immediate": ["Wrap the call in a transaction."],
+        "important": [], "suggestions": [],
+    }
+    _WORDING_ONLY = [{
+        "action": "correct", "target": {"kind": "finding", "id": "f1"},
+        "fields": {"recommendation": "Use a row lock instead."},
+        "rationale": "a transaction does not serialize the read",
+    }]
+
+    def _seed_with_recommendations(self, tmp_path):
+        _write_findings(
+            tmp_path, [_finding("f1", "critical")],
+            assessment=self._SUMMARY,
+            recommendations=copy.deepcopy(self._RECOMMENDATIONS),
+        )
+
+    def test_revised_text_on_a_wording_only_batch_invalidates_the_prior_on_the_record(
         self, tmp_path
     ):
-        self._seed(tmp_path)
-        ids = _publish_revise(tmp_path, self._DEMOTION)
-        with pytest.raises(ValueError, match="revised_assessment"):
-            _adjudicate(tmp_path, ids, verified=(0,), assessment="   ")
-        assert _ledger(tmp_path)["assessment"] == self._SUMMARY
+        """A verified wording correction leaves the reconciler's prose standing
+        unless the orchestrator revises it — a corrected recommendation the
+        ledger's recommendations restate is the case. The revised text then
+        installs the way it does after a move: the prior invalidated beside
+        the ids, never overwritten as if the reconciler had written it."""
+        self._seed_with_recommendations(tmp_path)
+        revised = {"immediate": ["Use a row lock."], "important": [], "suggestions": []}
+        ids, _ = _publish_and_adjudicate(
+            tmp_path, self._WORDING_ONLY, verified=(0,), verdict="STAND",
+            assessment=self._REVISED, recommendations=revised,
+        )
+        data = _ledger(tmp_path)
+        assert data["assessment"] == self._REVISED
+        assert data[INVALIDATED_ASSESSMENTS_KEY] == [{
+            "text": self._SUMMARY,
+            "invalidated_by_critic_adjustment_ids": ids,
+        }]
+        assert data["recommendations"] == revised
+        assert data["invalidated_recommendations"] == [{
+            "recommendations": self._RECOMMENDATIONS,
+            "invalidated_by_critic_adjustment_ids": ids,
+        }]
+
+    def test_a_wording_only_batch_without_revised_text_leaves_the_prose_standing(
+        self, tmp_path
+    ):
+        self._seed_with_recommendations(tmp_path)
+        _publish_and_adjudicate(
+            tmp_path, self._WORDING_ONLY, verified=(0,), verdict="STAND",
+        )
+        data = _ledger(tmp_path)
+        assert data["assessment"] == self._SUMMARY
+        assert data["recommendations"] == self._RECOMMENDATIONS
+        assert INVALIDATED_ASSESSMENTS_KEY not in data
+        assert "invalidated_recommendations" not in data
 
     def test_a_wholly_refuted_batch_never_replaces_the_summary(self, tmp_path):
         self._seed(tmp_path)
@@ -2417,6 +2615,25 @@ class TestAdjudicationCLI:
         assert "REVISED ASSESSMENT: absent" in result.stdout
         assert "REVISED RECOMMENDATIONS: present" in result.stdout
 
+    def test_revised_text_on_a_wholly_refuted_batch_echoes_not_installed(
+        self, tmp_path
+    ):
+        """The echo reports the ledger, not the request: nothing applied,
+        so the reconciler's prose stands and the orchestrator is told so."""
+        ids = self._seed(tmp_path)
+
+        result = self._run(tmp_path, _request(
+            ids, refuted=((0, "not reproducible"),),
+            assessment="Never installed.",
+            recommendations={"suggestions": ["Never installed."]},
+        ))
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "REVISED ASSESSMENT: not installed (every adjustment refuted)" in result.stdout
+        assert "REVISED RECOMMENDATIONS: not installed (every adjustment refuted)" in result.stdout
+        assert "APPLIED: 0 | REJECTED: 1" in result.stdout
+        assert "invalidated_assessments" not in _ledger(tmp_path)
+
     def test_an_invalid_request_is_rejected_line_by_line(self, tmp_path):
         self._seed(tmp_path)
 
@@ -2562,3 +2779,133 @@ class TestCriticCannotTouchVerifies:
                     "fields": {"verifies": ["V2"]}, "rationale": "No.",
                 }],
             })
+
+
+class TestQuickModeSkipsCritic:
+    """Step 10's orchestration records the quick-mode skip and its briefing
+    announces it. Both used to spell ("approve", "comment") by hand; both
+    now read this one test, derived from the verdict ladder."""
+
+    def test_the_skip_verdicts_are_the_ledger_verdicts_below_request_changes(self):
+        from review.critic_adjustments import QUICK_MODE_SKIP_VERDICTS
+        assert QUICK_MODE_SKIP_VERDICTS == ("approve", "comment")
+
+    @pytest.mark.parametrize("quick, verdict, skips", [
+        (True, "approve", True),
+        (True, "comment", True),
+        (True, "request_changes", False),
+        (True, "block", False),
+        (True, "", False),
+        (False, "approve", False),
+    ])
+    def test_the_skip_needs_quick_mode_and_a_verdict_below_request_changes(
+        self, quick, verdict, skips
+    ):
+        from review.critic_adjustments import quick_mode_skips_critic
+        assert quick_mode_skips_critic({"quick": quick}, verdict) is skips
+
+
+class TestVerdictAdmitsProposal:
+    """One rule for what each verdict may commit, used by the save, the
+    commit, the read and the adjudication: only STAND and REVISE carry a
+    proposal, STAND carries wording corrections only, REVISE needs a
+    change the verdict ladder reads. A `correct` that touches file or
+    line is a scope move, not a wording correction."""
+
+    @staticmethod
+    def _proposal(entries):
+        """Rows are an action, an (action, fields) pair, or an
+        (action, fields, target kind) triple; the kind defaults to a finding."""
+        from review.critic_adjustments import ADJUSTMENTS_SCHEMA
+        rows = []
+        for entry in entries:
+            if isinstance(entry, tuple):
+                action, fields, *rest = entry
+                kind = rest[0] if rest else "finding"
+            else:
+                action, fields, kind = entry, {}, "finding"
+            rows.append({"action": action, "fields": fields, "target": {"kind": kind}})
+        return {"schema": ADJUSTMENTS_SCHEMA, "adjustments": rows}
+
+    @pytest.mark.parametrize("verdict, entries, problem", [
+        ("STAND", [], None),
+        ("STAND", ["correct"], None),
+        ("STAND", [("correct", {"description": "d"}), ("correct", {"title": "t"})], None),
+        ("STAND", ["correct", "demote"], "a STAND batch holds finding `correct` entries only"),
+        ("STAND", ["add"], "a STAND batch holds finding `correct` entries only"),
+        ("STAND", [("correct", {"file": "a.py", "line": 3})], "correct(file/line) changes what the verdict ladder"),
+        ("STAND", [("correct", {"result": "3 hits"}, "check")], "correct(check) changes what the verdict ladder"),
+        ("REVISE", [("correct", {"result": "3 hits"}, "check")], None),
+        ("REVISE", ["demote"], None),
+        ("REVISE", ["correct", "remove"], None),
+        ("REVISE", [("correct", {"file": "a.py", "line": 3})], None),
+        ("REVISE", [], "REVISE requires a non-empty adjustments batch"),
+        ("REVISE", ["correct"], "rides STAND"),
+        ("ESCALATE", [], None),
+        ("ESCALATE", ["correct"], "ESCALATE carries no proposal"),
+        ("SKIPPED", ["correct"], "SKIPPED carries no proposal"),
+    ])
+    def test_the_rule(self, verdict, entries, problem):
+        from review.critic_adjustments import verdict_admits_proposal
+        result = verdict_admits_proposal(verdict, self._proposal(entries))
+        if problem is None:
+            assert result is None
+        else:
+            assert problem in result
+
+    @pytest.mark.parametrize("proposal", [
+        {"schema": 2, "adjustments": 5},
+        {"schema": 2, "adjustments": [{"action": "correct", "target": "f1", "fields": {"title": "t"}}]},
+        {"schema": 2, "adjustments": ["not-an-entry"]},
+    ], ids=["adjustments-not-a-list", "target-not-an-object", "entry-not-an-object"])
+    def test_a_malformed_document_is_judged_not_crashed_on(self, proposal):
+        """The shape validator reports these; admission must not turn them
+        into a traceback that swallows its REJECTED lines."""
+        from review.critic_adjustments import verdict_admits_proposal
+        assert verdict_admits_proposal("STAND", proposal) is None
+        # REVISE gets a string back, never a traceback: "requires a non-empty
+        # batch" when nothing survives, "rides STAND" when a correct does.
+        assert isinstance(verdict_admits_proposal("REVISE", proposal), str)
+
+    def test_every_reader_of_the_verdict_rule_states_it_in_the_same_words(self, tmp_path):
+        """The step-10 briefing once told the critic a STAND with corrections
+        authors "every finding or check adjustment", which the save channel
+        refuses, and the move list was spelled both "membership change" and
+        "the finding set". The rejections, the critic's synthesis guidance
+        and the agent definition carry LEDGER_MOVES and STAND_BATCH_RULE (the
+        briefing is pinned in test_pipeline.py), so each half has one
+        spelling."""
+        from review import critic as critic_module
+        from review.critic_adjustments import (
+            LEDGER_MOVES, STAND_BATCH_RULE, verdict_admits_proposal,
+        )
+        assert STAND_BATCH_RULE in verdict_admits_proposal("STAND", self._proposal(["demote"]))
+        assert LEDGER_MOVES in verdict_admits_proposal("REVISE", self._proposal(["correct"]))
+        guidance = " ".join(critic_module.get_step_guidance(
+            4, 4, "/tmp/review-record.md", str(tmp_path), "/tmp/review-findings.json",
+        )["actions"])
+        assert STAND_BATCH_RULE in guidance and LEDGER_MOVES in guidance
+        definition = (
+            Path(__file__).resolve().parents[2] / "agents" / "decision-reviewer.md"
+        ).read_text()
+        assert definition.count(STAND_BATCH_RULE) == 1
+        assert LEDGER_MOVES in definition and "membership" not in definition
+
+    @pytest.mark.parametrize("verdict, entries, problem", [
+        # The two REVISE clauses relax: recorded run 6e6a is a REVISE of
+        # corrections alone, and the low-level helpers publish an empty one.
+        ("REVISE", ["correct"], None),
+        ("REVISE", [], None),
+        # The safety invariant does not.
+        ("STAND", ["demote"], "a STAND batch holds finding `correct` entries only"),
+        ("STAND", [("correct", {"file": "a.py", "line": 3})], "changes what the verdict ladder"),
+        ("ESCALATE", ["correct"], "ESCALATE carries no proposal"),
+        ("SKIPPED", ["correct"], "SKIPPED carries no proposal"),
+    ])
+    def test_the_commit_and_read_sites_keep_only_the_safety_invariant(self, verdict, entries, problem):
+        from review.critic_adjustments import verdict_admits_proposal
+        result = verdict_admits_proposal(verdict, self._proposal(entries), strict=False)
+        if problem is None:
+            assert result is None
+        else:
+            assert problem in result

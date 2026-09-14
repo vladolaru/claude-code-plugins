@@ -23,11 +23,16 @@ try:
         ORPHANED_FILES_KEY,
         ORPHANED_FILES_LEAD,
         DISPATCHED_STATUSES,
+        EXECUTION_INLINE,
         SKIPPED_QUICK_MODE,
         SKIPPED_STATUSES,
     )
     from .manifest_sections import describe_reconciliation_verification, host_identity_phrase, project_host_entry
-    from .run_paths import artifact_path
+    from .critic_adjustments import (
+        LEDGER_MOVES, STAND_BATCH_RULE, quick_mode_skips_critic,
+    )
+    from .review_document import RECOMMENDATION_PRIORITIES
+    from .run_paths import artifact_path, scratch_dir
     from .telemetry_share import CONSENT_DISCLOSURE, REMOTE_REPO
 except ImportError:
     _scripts_parent = str(Path(__file__).resolve().parent.parent)
@@ -49,11 +54,16 @@ except ImportError:
         ORPHANED_FILES_KEY,
         ORPHANED_FILES_LEAD,
         DISPATCHED_STATUSES,
+        EXECUTION_INLINE,
         SKIPPED_QUICK_MODE,
         SKIPPED_STATUSES,
     )
     from review.manifest_sections import describe_reconciliation_verification, host_identity_phrase, project_host_entry
-    from review.run_paths import artifact_path
+    from review.critic_adjustments import (
+        LEDGER_MOVES, STAND_BATCH_RULE, quick_mode_skips_critic,
+    )
+    from review.review_document import RECOMMENDATION_PRIORITIES
+    from review.run_paths import artifact_path, scratch_dir
     from review.telemetry_share import CONSENT_DISCLOSURE, REMOTE_REPO
 
 
@@ -86,6 +96,20 @@ def _artifact_run_path(key):
     orchestrator matches the file's real location, not a bare basename.
     """
     return str(artifact_path("", key))
+
+
+def _scratch_display(output_dir, name):
+    """Render one staging path under the run's own scratch directory.
+
+    Staged inputs to a validating save (a request, a draft) used to be
+    named under `$TMPDIR`, which every session on a machine shares and
+    which pirategoat-bot never scopes per run; the run directory already
+    owns `tmp/` (`run_paths.scratch_dir`, created at allocation for
+    interactive runs and by every `pipeline.py` step call otherwise, so a
+    caller-supplied directory that never went through the allocator still
+    has it).
+    """
+    return str(scratch_dir(output_dir or "<OUTPUT_DIR>") / name)
 
 
 # ---------------------------------------------------------------------------
@@ -725,13 +749,13 @@ def _dependency_refresh_briefing(state, config, output_dir):
         f"`python3 {SCRIPTS_DIR / 'context.py'} --output-dir {od} "
         "--refresh-host-context`",
         "4. Prepare the exact schema-1 request at "
-        "`$TMPDIR/dependency-refresh-report.json`. When inspection finds no "
+        f"`{_scratch_display(od, 'dependency-refresh-report.json')}`. When inspection finds no "
         "refresh work, report `not_needed` with an empty command list.",
         "",
     ]
 
     handoff = [
-        "Prepare one of these request shapes under `$TMPDIR`:",
+        f"Prepare one of these request shapes at `{_scratch_display(od, 'dependency-refresh-report.json')}`:",
         "```json",
         '{"schema": 1, "status": "not_needed", "commands": []}',
         "```",
@@ -744,7 +768,7 @@ def _dependency_refresh_briefing(state, config, output_dir):
         "Publish it only through the validating save channel:",
         f"`python3 {SCRIPTS_DIR / 'dependency_refresh.py'} save "
         f"--output-dir {od} --report "
-        '"$TMPDIR/dependency-refresh-report.json"`',
+        f'"{_scratch_display(od, "dependency-refresh-report.json")}"`',
         "Proceed only when the command prints literal `SAVED "
         f"{_artifact_run_path('dependency_refresh')}`.",
     ]
@@ -1041,6 +1065,13 @@ def _step_5_dispatch_plan(mode, state, context, config, output_dir):
         "- Only force-dispatch a skipped agent when you're confident it will find "
         "something the plan missed."
     )
+    actions.append(
+        '- An agent skipped for "no files in … domain", or a repo reviewer skipped '
+        "for isolated execution, cannot be force-dispatched: no review comes of "
+        "it (its scope is empty, or bootstrap refuses to run its prompt inline). "
+        "A claim you want checked against the code is a step-8 note "
+        "(reconciliation_notes.py)."
+    )
     actions.append("")
     actions.append(
         "Record every adjustment in ONE call — it validates each name and "
@@ -1168,7 +1199,7 @@ def _step_6_dispatch_agents(mode, state, context, config, output_dir):
                     "--instance-name", name,
                     "--repo-agent-ref", agent.get("ref") or "",
                     "--adapter-label", agent.get("label") or name,
-                    "--execution", agent.get("execution") or "inline",
+                    "--execution", agent.get("execution") or EXECUTION_INLINE,
                     "--channel", agent.get("channel") or "blocking",
                     "--scope-domains", scope_domains,
                     # The tier actually dispatched for this instance (the
@@ -1308,6 +1339,9 @@ def _step_7_save_baseline(mode, state, context, config, output_dir):
             "- Exit code 3 (60s elapsed, still running): re-run the same "
             "call, no commentary",
             "- NOT_DISPATCHED agents: dispatch them first, then re-check",
+            "- BOOTSTRAP_ERROR agents: do not dispatch them again; bootstrap "
+            "already stopped them with the error shown, and they are "
+            "excluded from reconciliation",
             "- A `DRAFT` line for an agent whose Codex task has returned: "
             "run the exact command on its `FINALIZE_REVIEW_COMMAND` line, "
             "then re-check",
@@ -1344,7 +1378,9 @@ def _step_7_save_baseline(mode, state, context, config, output_dir):
             f"`python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\"` "
             "once. Any NOT_DISPATCHED agents: dispatch them, launch a fresh "
             "watchdog, end your turn — ALL_DONE does not wait for an agent "
-            "that never started. Otherwise exit 0: proceed to step 8; "
+            "that never started. Never dispatch BOOTSTRAP_ERROR agents again: "
+            "bootstrap already stopped them with the error shown. Otherwise "
+            "exit 0: proceed to step 8; "
             "exit 2: launch a fresh watchdog, end your turn.",
             "- A subagent notification whose result begins `STATUS: "
             "FINISHED`: no action. End your turn; the watchdog fires when "
@@ -1559,7 +1595,9 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
     actions.append(
         "Orchestrator notes: read orchestrator_notes in the context and "
         "answer each with an outcome and evidence; a confirmed note about "
-        "severity changes that severity in the same pass."
+        "severity changes that severity in the same pass, and a confirmed "
+        "note that is itself a defect in the diff becomes a finding sourced "
+        "to the note."
     )
     actions.append("```")
     actions.append(
@@ -1568,7 +1606,12 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
         "findings you believe describe one concern, or any fact you want "
         "weighed goes into the context as a note, BEFORE dispatch, stated as "
         "a claim, so the reconciliator must confirm or refute it with "
-        "evidence rather than adopt it:"
+        "evidence rather than adopt it. A Verify item you settled yourself by "
+        "reading the code is a note too, opening with its id (\"V3: wc-csv is "
+        "registered only on admin_enqueue_scripts, WCAdminAssets.php:50\"); "
+        "the reconciliator's confirmation then cites `verifies=[\"V3\"]` and "
+        "the record credits the item instead of leaving it unverified for the "
+        "decision critic to redo:"
     )
     actions.append("```bash")
     actions.append(
@@ -1964,9 +2007,8 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     findings_json_name = _artifact_name("review_findings_json")
 
     # Quick-mode critic skip: low-risk verdicts don't need stress-testing
-    is_quick = config.get("quick", False)
     recon_verdict = state.get("reconciliation_verdict", "")
-    skip_critic = is_quick and recon_verdict.lower() in ("approve", "comment")
+    skip_critic = quick_mode_skips_critic(config, recon_verdict)
 
     if skip_critic:
         situation = [
@@ -2091,6 +2133,10 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         actions.append(f"Review document to stress-test: {critic_target}")
         actions.append(f"No structured findings available (reconciliation failed) — critique the document directly without --context.")
     actions.append(f"Output directory: {od}")
+    # The directory, never a file, like the step-8 prompt: the critic saves
+    # through critic.py and must run the same code the run was built with,
+    # not whatever /tmp/.pirategoat-tools-root last pointed at.
+    actions.append(f"Plugin scripts directory: {SCRIPTS_DIR.parent}")
     git = context.get("git", {})
     head_ref = git.get("head_ref")
     head_sha = git.get("head_sha")
@@ -2112,19 +2158,19 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append(f"Context: <one-line summary of PR scope, verdict, and finding count>")
     actions.append(
         "Return STAND, REVISE, or ESCALATE. Author findings first at "
-        f"`$TMPDIR/{_artifact_name('critic_findings')}`, then publish the findings "
+        f"`{_scratch_display(od, _artifact_name('critic_findings'))}`, then publish the findings "
         "and verdict through `critic.py --save` for every verdict. Never "
         "write a canonical `decision-critic-*` artifact directly."
     )
     actions.append(
         "On REVISE, also author every finding or check adjustment in "
-        f"`$TMPDIR/{_artifact_name('critic_adjustments')}` and pass it to the "
-        "same `critic.py --save` command, "
-        "per your agent instructions. "
-        "On STAND or ESCALATE, invoke that command without an adjustments "
-        "file. A recommendation that exists only as prose cannot reach "
-        "the machine-readable ledger, while a raw write bypasses its "
-        "source-bound commit."
+        f"`{_scratch_display(od, _artifact_name('critic_adjustments'))}`; on a STAND that "
+        f"carries wording corrections, that file holds {STAND_BATCH_RULE}. "
+        "Pass it to the same `critic.py --save` command, per your agent "
+        "instructions; a bare STAND or an ESCALATE invokes the command "
+        "without an adjustments file. A recommendation that exists only as "
+        "prose cannot reach the machine-readable ledger, while a raw write "
+        "bypasses its source-bound commit."
     )
     actions.append("```")
     actions.append("")
@@ -2143,7 +2189,7 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         "**You write nothing here.** That file is the critic's own "
         "artifact and it already exists; a second, hand-written copy would "
         "be an unvalidated writer of a file three things depend on — the "
-        "REVISE gate inside the adjustments applier, step 11's derived "
+        "admission gate inside the adjustments applier, step 11's derived "
         "verdict, and the critic's measured duration, which is keyed on "
         "this file's mtime. A mistranscription would overwrite a "
         "channel-validated verdict with a typo."
@@ -2155,12 +2201,26 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         "reports it as a degradation, and a stand-in would hide exactly "
         "that."
     )
+    actions.append(
+        "If the critic terminated with an API error (a safeguard refusal "
+        "or an invalid_request) after it started and before its verdict "
+        "file exists: send it one message, `Continue from where you "
+        "stopped and save your verdict through critic.py --save`, and "
+        "wait again; do not read its draft files, since restating them "
+        "makes you a co-author of the proposal you adjudicate next. If it "
+        "cannot be resumed, dispatch it once more with the same prompt, "
+        "once. Either way, note the retry in your step-11 report's run "
+        "notes with the error text, since telemetry cannot see it yet."
+    )
     actions.append("")
     actions.append("Act on the critic's verdict:")
     actions.append("")
     actions.append(
-        "**STAND** — No changes needed. The review stands as reconciled; "
-        "proceed to the next step."
+        "**STAND** — No changes to severities or verdict; the review stands "
+        "as reconciled. If the critic filed wording corrections (`correct` "
+        "entries), adjudicate them exactly as under REVISE below; the "
+        "assessment and recommendations stand, since nothing they rest on "
+        "moved. Then proceed to the next step."
     )
     actions.append("")
     actions.append(
@@ -2175,8 +2235,7 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     )
     actions.append(
         "2) Probe the claims with `git grep`/`Read`, then author ONLY "
-        "this schema-2 adjudication request under `$TMPDIR` (create the "
-        "directory first if needed):"
+        f"this schema-2 adjudication request at `{_scratch_display(od, 'critic-adjudication.json')}`:"
     )
     actions.append("```json")
     actions.append("{")
@@ -2192,10 +2251,8 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     )
     actions.append("    }")
     actions.append("  ],")
-    actions.append(
-        '  "revised_assessment": "<optional post-critic assessment>",'
-    )
-    actions.append('  "revised_recommendations": {"immediate": [], "important": [], "suggestions": []}')
+    actions.append('  "revised_assessment": null,')
+    actions.append('  "revised_recommendations": null')
     actions.append("}")
     actions.append("```")
     actions.append(
@@ -2204,25 +2261,35 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         "individually disproved IDs in `\"refuted\"`, each refutation with "
         "its non-empty reason. Every committed ID omitted from both lists is "
         "derived as `not_checked`. The orchestrator never edits the committed "
-        "proposal. `revised_assessment` is optional: omit it when no "
-        "replacement assessment should be installed. `revised_recommendations` "
-        "is likewise optional: an applying batch withdraws the reconciler's "
-        "recommendations along with its assessment, and this is where replacements go."
+        "proposal. `revised_assessment` and `revised_recommendations` stay "
+        "null unless you revise that text: a revised assessment is a "
+        "string, and revised recommendations are an object with keys among "
+        + ", ".join(f"`{priority}`" for priority in RECOMMENDATION_PRIORITIES)
+        + ", each a list of non-empty strings; an empty value is refused. "
+        f"A batch that moves {LEDGER_MOVES} "
+        "invalidates the reconciler's assessment and "
+        "recommendations, and these are where the revised text goes. A "
+        "wording-only batch leaves both standing: supply revised text only "
+        "when a verified correction contradicts them (a corrected "
+        "recommendation the ledger's recommendations restate). Revised "
+        "text rides the applied batch and invalidates the reconciler's "
+        "text on the record; a batch you refute whole installs neither."
     )
     actions.append(
-        "3) Save the request as `$TMPDIR/critic-adjudication.json`, then run "
+        "3) Save the request there, then run "
         "the validating adjudication channel exactly once:"
     )
     actions.append("```bash")
     actions.append(
         f'python3 {SCRIPTS_DIR}/critic_adjustments.py adjudicate '
-        f'--output-dir "{od}" < "$TMPDIR/critic-adjudication.json"'
+        f'--output-dir "{od}" < "{_scratch_display(od, "critic-adjudication.json")}"'
     )
     actions.append("```")
     actions.append(
         "A successful handoff reports `RECORDED ADJUDICATION`, the derived "
         "`VERIFIED | REFUTED | NOT_CHECKED` counts, `REVISED ASSESSMENT: "
-        "present|absent`, `REVISED RECOMMENDATIONS: present|absent`, "
+        "present|absent|not installed`, `REVISED RECOMMENDATIONS: "
+        "present|absent|not installed`, "
         "`APPLIED | REJECTED`, and the `LEDGER VERDICT`. On "
         "any `REJECTED:` line, correct only the temp request and resubmit it; "
         "never edit the output artifact or bypass `adjudicate`."
@@ -2237,8 +2304,8 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append(
         "Never hand-edit the findings ledger either: that one write "
         "carries provenance, invalidates the reconciler's prior assessment and recommendations "
-        "only when an accepted operation really changes the ledger, installs "
-        "a supplied revised assessment and recommendations, recounts findings, and derives the "
+        "when an accepted operation moves the ledger, and each of them when you supply its revised "
+        "text, installs what you supplied, recounts findings, and derives the "
         "final ledger verdict. Refuted operations do not invalidate or "
         "replace the assessment or recommendations."
     )
@@ -2277,8 +2344,8 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         f"saved one, and written nothing verdict-shaped yourself. If the "
         f"critic produced no verdict, that file is absent and stays "
         f"absent — step 11 reports it.",
-        f"On REVISE: `{_artifact_display(od, 'review_findings_json')}` carries the applied "
-        f"adjustments. Nothing else needs syncing — step 11 re-assembles "
+        f"On REVISE, or a STAND with corrections: `{_artifact_display(od, 'review_findings_json')}` "
+        f"carries the applied adjustments. Nothing else needs syncing — step 11 re-assembles "
         f"the record from that ledger before the report is written.",
     ]
 

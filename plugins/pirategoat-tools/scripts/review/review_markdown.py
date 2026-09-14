@@ -118,6 +118,23 @@ def _rejected_critic_decision(record):
     return adjustment_id, 'refuted'
 
 
+def _invalidated_content(data: Dict, key: str) -> bool:
+    """Whether any invalidation record of one ledger prose field kept text
+    that said something (`critic_adjustments.LEDGER_PROSE`).
+
+    Revised text over an empty prior records the displacement (that record
+    is what attributes the standing text to the orchestrator), so a record
+    alone does not mean the prose was lost.
+    """
+    prose = critic_adjustments.LEDGER_PROSE[key]
+    records = data.get(prose.invalidated_key)
+    return isinstance(records, list) and any(
+        isinstance(record, dict)
+        and not critic_adjustments.prose_is_empty(record.get(prose.record_field))
+        for record in records
+    )
+
+
 def render_review_body(data: Dict) -> str:
     """Everything a rendered review says beneath its title.
 
@@ -229,39 +246,41 @@ def render_review_body(data: Dict) -> str:
     #
     # It is also the one part of this document the decision critic cannot
     # correct: its adjustment vocabulary addresses findings, and this is
-    # ledger-level prose. So an applying batch INVALIDATES it
+    # ledger-level prose. So a batch that moves the ledger, or a revised
+    # assessment the orchestrator supplies, INVALIDATES it
     # (critic_adjustments.py) rather than leaving a stale claim rendered
     # above the list that contradicts it, and this renders the invalidation
-    # instead of silently dropping the section — an absent Assessment and a
-    # retracted one are different facts. Prose that survived a critic round
+    # instead of silently dropping the section — an absent Assessment and
+    # an invalidated one are different facts. Prose that survived a critic round
     # untouched still renders as prose: that is the STAND case, and the
     # marker below says exactly whose words they are.
     invalidated = data.get('invalidated_assessments')
     if data.get('assessment'):
         md.append("## Assessment\n\n")
         md.append(f"{data['assessment']}\n\n")
-        # Whose words these are depends on whether a batch already invalidated
-        # the reconciler's. After invalidation the standing text is the
-        # orchestrator's `revised_assessment`, carried in through the
-        # adjustments channel — attributing it to the reconciler would
-        # credit prose that was retracted a step earlier.
+        # Whose words these are is what the invalidation record says: one is
+        # written whenever revised text is installed, even over a null
+        # prior, so standing text beside a record is the orchestrator's
+        # `revised_assessment`, and attributing it to the reconciler would
+        # credit prose that was invalidated or never written.
         md.append(
-            "*Post-critic assessment, written after the critic "
+            "*Revised assessment, installed after the critic "
             "adjustments applied.*\n\n"
             if invalidated else
             "*Reconciler-authored assessment, not adjusted by the decision "
             "critic.*\n\n"
         )
-    elif invalidated:
-        # Keyed on the invalidation record itself, not on
+    elif _invalidated_content(data, critic_adjustments.ASSESSMENT_KEY):
+        # Keyed on an invalidation record that kept text, not on
         # applied_critic_adjustments: a ledger that never carried a summary
-        # records no withdrawal, and rendering a retraction notice for it
-        # would claim an act that never happened.
+        # records no invalidation under a moving batch, a record over a null
+        # prior lost nothing, and a notice for either would claim an act
+        # that never happened.
         #
         # An explicit absence, not a pointer: the previous wording sent the
         # reader to "the report for the current assessment", which on a bot
-        # run is a file nobody opens and on any run may carry no post-critic
-        # assessment at all. The retracted text is deliberately NOT shown
+        # run is a file nobody opens and on any run may carry no revised
+        # assessment at all. The invalidated text is deliberately NOT shown
         # here — it is the one thing this section must not present as
         # current.
         md.append("## Assessment\n\n")
@@ -375,12 +394,17 @@ def render_review_body(data: Dict) -> str:
         if groups:
             md.append("## Recommendations\n\n")
             md.extend(groups)
-            if data.get('applied_critic_adjustments'):
+            # Keyed on the invalidation record, like the assessment marker:
+            # an applied batch that moved nothing and carried no revised
+            # recommendations leaves the reconciler's standing, and the
+            # record is written even over an empty prior when revised text
+            # displaces it, so it is the one fact that says whose these are.
+            if invalidated_recommendations:
                 md.append(
-                    "*Post-critic recommendations, installed after the critic "
+                    "*Revised recommendations, installed after the critic "
                     "adjustments applied.*\n\n"
                 )
-        elif invalidated_recommendations:
+        elif _invalidated_content(data, critic_adjustments.RECOMMENDATIONS_KEY):
             md.append("## Recommendations\n\n")
             md.append(
                 "No current recommendations: the reconciler's were invalidated "

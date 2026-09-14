@@ -31,7 +31,7 @@ import os
 import re
 import sys
 import uuid
-from typing import Mapping
+from typing import Callable, Mapping, NamedTuple
 
 try:
     from . import atomic_io
@@ -63,6 +63,7 @@ try:
     from .verdict_rules import (
         LEDGER_VERDICTS,
         SEVERITY_RANK,
+        VERDICT_RANK,
         summary_for,
     )
     from .run_paths import artifact_path
@@ -99,6 +100,7 @@ except ImportError:
     from review.verdict_rules import (
         LEDGER_VERDICTS,
         SEVERITY_RANK,
+        VERDICT_RANK,
         summary_for,
     )
     from review.run_paths import artifact_path
@@ -130,19 +132,46 @@ OUTCOME_REFUTED = "refuted"
 OUTCOME_NOT_CHECKED = "not_checked"
 OUTCOMES = (OUTCOME_VERIFIED, OUTCOME_REFUTED, OUTCOME_NOT_CHECKED)
 
-# The orchestrator's post-critic assessment, submitted with the adjudication
-# request. An applying batch invalidates the reconciler's
-# assessment (see INVALIDATED_ASSESSMENTS_KEY below), and without a replacement
-# REVISE run published a ledger whose Assessment section was a pointer to
-# prose only a human could read. This is that assessment's machine-readable
-# seat: on apply it BECOMES the ledger's assessment, with the invalidation
-# record left intact beside it.
+# The orchestrator's revised ledger prose, submitted with the adjudication
+# request. The adjustment vocabulary cannot address the reconciler's
+# assessment or recommendations, so an applied batch that moves the ledger
+# (`entry_moves_ledger`) invalidates them (see INVALIDATED_ASSESSMENTS_KEY
+# below), and without revised text a REVISE run published an Assessment
+# section that pointed at prose only a human could read. These keys are that
+# prose's machine-readable seat: on apply the revised text BECOMES the
+# ledger's, with the invalidation record left intact beside it. A
+# wording-only batch leaves the prose standing, so the keys are optional
+# there; revised text supplied anyway (a verified correction the prose
+# restates) invalidates the prior the same way. Revised text is null or
+# content (`prose_is_empty`): an empty value would be a second spelling of
+# "not revised", and under a batch that moved nothing it would replace the
+# reconciler's prose with nothing.
 REVISED_ASSESSMENT_KEY = "revised_assessment"
-
-# Recommendations are ledger-level prose the critic cannot address directly;
-# an applying batch withdraws them and the request may supply replacements.
 REVISED_RECOMMENDATIONS_KEY = "revised_recommendations"
 INVALIDATED_RECOMMENDATIONS_KEY = "invalidated_recommendations"
+
+
+def prose_is_empty(value):
+    """Whether ledger prose says nothing: a null or blank assessment, or
+    recommendations with no entry under any priority.
+
+    The one emptiness rule for the reconciler's prose and the orchestrator's
+    revised text: the request validator refuses empty revised text by it,
+    `_invalidate_prose` decides by it whether a prior is recorded as text or
+    as the field's empty value, and the renderer decides by it whether an
+    invalidation lost anything, so the three cannot disagree.
+    """
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, dict):
+        return not any(value.values())
+    return True
+
+
+_EMPTY_REVISED_TEXT = (
+    "adjudication request: {key!r} names no {noun}; send null, or omit the "
+    "key, when you are not revising it"
+)
 
 ADJUSTMENTS_FILENAME = artifact_path("", "critic_adjustments").name
 FINDINGS_FILENAME = artifact_path("", "review_findings_json").name
@@ -180,18 +209,127 @@ ADJUDICATION_SCHEMA = 2
 
 # The canonical critic verdict vocabulary, owned here because this module is
 # what commits it: `write_critic_verdict()` is the one writer of the marker,
-# and `REVISE_VERDICT` is the one verdict `adjudicate()` accepts. critic.py
-# and the offline metrics consumer read these rather than respelling them.
-CRITIC_VERDICTS = ("STAND", "REVISE", "ESCALATE")
+# and `verdict_admits_proposal()` is the one rule for what each verdict may
+# carry. critic.py, pipeline steps 10 and 11 and the offline metrics consumer
+# read these rather than respelling them.
+STAND_VERDICT = "STAND"
+REVISE_VERDICT = "REVISE"
+ESCALATE_VERDICT = "ESCALATE"
+CRITIC_VERDICTS = (STAND_VERDICT, REVISE_VERDICT, ESCALATE_VERDICT)
 # Deliberately NOT a member of CRITIC_VERDICTS: it is not a critique outcome,
 # it is the record that no critique happened — pipeline step 10 commits it
 # when quick mode skips the critic. Consumers that measure critique quality
 # must exclude it; consumers that measure whether a critic ran must not.
 CRITIC_VERDICT_SKIPPED = "SKIPPED"
 VALID_CRITIC_VERDICTS = CRITIC_VERDICTS + (CRITIC_VERDICT_SKIPPED,)
-# The one verdict that sanctions applying adjustments. Everything else —
-# STAND, ESCALATE, SKIPPED, an unrecognized string, a missing file — refuses.
-REVISE_VERDICT = "REVISE"
+# The ledger verdicts quick mode leaves unstressed, derived from the ladder:
+# every verdict ranked below request_changes. `quick_mode_skips_critic` is
+# the one test, read by step 10's orchestration (which commits
+# CRITIC_VERDICT_SKIPPED) and by its briefing (which tells the orchestrator).
+QUICK_MODE_SKIP_VERDICTS = tuple(
+    verdict for verdict in LEDGER_VERDICTS
+    if VERDICT_RANK[verdict] < VERDICT_RANK["request_changes"]
+)
+
+
+def quick_mode_skips_critic(config, ledger_verdict):
+    """Whether step 10 skips the decision critic: quick mode is on and the
+    reconciled ledger verdict (a validated LEDGER_VERDICTS value, or "" when
+    no ledger was read) is one of QUICK_MODE_SKIP_VERDICTS."""
+    return bool(config.get("quick")) and ledger_verdict in QUICK_MODE_SKIP_VERDICTS
+
+# The verdicts a proposal may ride: REVISE, which says something the ladder
+# reads moved, and a STAND that carries wording corrections. ESCALATE,
+# SKIPPED, an unrecognized string and a missing file carry nothing.
+PROPOSAL_VERDICTS = (STAND_VERDICT, REVISE_VERDICT)
+# What each verdict may commit. A wording correction moves none of
+# LEDGER_MOVES, so a batch of them rides STAND and is adjudicated like
+# any proposal; REVISE is reserved for a batch that moves something the
+# verdict ladder reads. Before this rule the critic could not return STAND
+# with a wording correction, and 13 of 13 field runs came back REVISE.
+WORDING_ONLY_ACTIONS = frozenset({"correct"})
+# A `correct` may patch these, and then it is a scope move, not a wording correction.
+_SCOPE_FIELDS = frozenset({"file", "line"})
+# The two halves of the verdict rule, in the words every reader of it sees:
+# the save channel's rejections, the critic's synthesis guidance, the
+# step-10 briefing and decision-reviewer.md, which tests pin to these
+# strings. What a REVISE batch moves (`_ledger_move_label` classifies an
+# entry), and what a STAND batch may hold. The briefing once drifted to
+# "every finding or check adjustment", and the move list was spelled both
+# "membership change" and "the finding set".
+LEDGER_MOVES = "a severity, a scope, a check or the finding set"
+STAND_BATCH_RULE = "finding `correct` entries only, none touching `file` or `line`"
+
+
+def _ledger_move_label(entry):
+    """What one adjustment moves in the ledger, as a rejection message names
+    it, or None for a wording correction.
+
+    A move is anything the verdict ladder or the assessment rests on: any
+    action but `correct`, a `correct` that touches a finding's file or line,
+    or any correction of a check, since the record's verifications are
+    evidence the assessment cites.
+    """
+    if not isinstance(entry, dict):
+        return None
+    action = entry.get("action")
+    if action not in WORDING_ONLY_ACTIONS:
+        return str(action)
+    target = entry.get("target")
+    if isinstance(target, dict) and target.get("kind") == TARGET_CHECK:
+        return "correct(check)"
+    fields = entry.get("fields")
+    if isinstance(fields, dict) and _SCOPE_FIELDS & set(fields):
+        return "correct(file/line)"
+    return None
+
+
+def entry_moves_ledger(entry):
+    """Whether one adjustment moves something the verdict ladder or the
+    assessment rests on (`_ledger_move_label` holds the rule)."""
+    return _ledger_move_label(entry) is not None
+
+
+def verdict_admits_proposal(verdict, proposal, *, strict=True):
+    """The one problem with `proposal` under `verdict`, or None.
+
+    Only STAND and REVISE carry a proposal at all. STAND carries wording
+    corrections only; `strict` is the rule the critic is held to at its
+    save channel: REVISE must move something, and a wording-only batch
+    rides STAND. The commit and read sites pass `strict=False` and keep
+    only the safety invariant (nothing under any other verdict, wording
+    only under STAND), so a proposal committed before the rule — recorded
+    run 6e6a is a REVISE of corrections alone — stays readable and
+    adjudicable.
+    """
+    # Tolerant of a malformed document: the shape validator reports those
+    # problems itself, and this rule must not turn them into a traceback.
+    entries = proposal.get("adjustments") if isinstance(proposal, dict) else None
+    if not isinstance(entries, list):
+        entries = []
+    entries = [entry for entry in entries if isinstance(entry, dict)]
+    moving = sorted({
+        label for label in map(_ledger_move_label, entries) if label is not None
+    })
+    if verdict not in PROPOSAL_VERDICTS and entries:
+        return (
+            f"{verdict} carries no proposal; only {' and '.join(PROPOSAL_VERDICTS)} "
+            "commit adjustments, and nothing is adjudicated under any other verdict"
+        )
+    if verdict == STAND_VERDICT and moving:
+        return (
+            f"a {STAND_VERDICT} batch holds {STAND_BATCH_RULE}; "
+            f"{', '.join(moving)} changes what the verdict ladder or the "
+            f"assessment rests on and is a {REVISE_VERDICT}"
+        )
+    if strict and verdict == REVISE_VERDICT and not entries:
+        return f"{REVISE_VERDICT} requires a non-empty adjustments batch"
+    if strict and verdict == REVISE_VERDICT and not moving:
+        return (
+            f"a batch of wording corrections alone rides {STAND_VERDICT}; "
+            f"a {REVISE_VERDICT} batch moves {LEDGER_MOVES}"
+        )
+    return None
 
 _PROPOSAL_TOP_LEVEL_KEYS = frozenset({"schema", "adjustments"})
 _PROPOSAL_ENTRY_KEYS = frozenset({"action", "target", "fields", "rationale"})
@@ -231,15 +369,64 @@ FindingsRead = collections.namedtuple(
 # above a list where the critical has just been demoted to low.
 #
 # The pipeline cannot re-derive that prose (it is LLM output, not a
-# projection of the findings), so an applying batch invalidates it rather
-# than leaving it to contradict the ledger it summarizes. Invalidated, not
+# projection of the findings), so a batch that moves the ledger, or a
+# revised assessment the orchestrator supplies, invalidates it rather than leaving
+# it to contradict the ledger it summarizes. Invalidated, not
 # deleted: the text moves here beside the ids of the decisions that
 # invalidated it, the same way a removed finding moves into
-# `findings_removed_by_critic` carrying the action that removed it. A list,
+# `findings_removed_by_critic` carrying the action that removed it. Revised
+# text over a null assessment records `text: null` the same way, since that
+# record is what attributes the standing text (`LEDGER_PROSE`). A list,
 # because a second reconciliation-plus-critic round is a second invalidation and
 # must not erase the first.
 INVALIDATED_ASSESSMENTS_KEY = "invalidated_assessments"
 ASSESSMENT_KEY = "assessment"
+RECOMMENDATIONS_KEY = "recommendations"
+
+
+class LedgerProse(NamedTuple):
+    """How one piece of ledger prose is invalidated."""
+
+    invalidated_key: str  # the ledger key its invalidation records go under
+    record_field: str  # the record field that keeps the prior
+    empty: Callable[[], object]  # the field's empty value, fresh on each call
+    valid_prior: Callable[[object], bool]  # the shapes a recorded prior may take
+
+
+def _valid_assessment_prior(prior):
+    return prior is None or (isinstance(prior, str) and not prose_is_empty(prior))
+
+
+def _valid_recommendations_prior(prior):
+    return (
+        isinstance(prior, dict)
+        and set(prior) <= set(RECOMMENDATION_PRIORITIES)
+        and all(
+            isinstance(entries, list)
+            and all(isinstance(entry, str) and entry.strip() for entry in entries)
+            for entries in prior.values()
+        )
+    )
+
+
+# The two pieces of ledger prose the adjustment vocabulary cannot address,
+# in one table so both follow one invalidation rule (`_invalidate_prose`),
+# one record validator and one renderer check. A recorded prior is the
+# displaced text, or the field's empty value when revised text displaced
+# nothing, since that record is what attributes the standing text to the
+# orchestrator. The two writers this replaced had drifted: only the
+# recommendations recorded an empty prior, so a revised assessment over a
+# reconciler that wrote none rendered as reconciler-authored.
+LEDGER_PROSE = {
+    ASSESSMENT_KEY: LedgerProse(
+        INVALIDATED_ASSESSMENTS_KEY, "text", lambda: None, _valid_assessment_prior,
+    ),
+    RECOMMENDATIONS_KEY: LedgerProse(
+        INVALIDATED_RECOMMENDATIONS_KEY, "recommendations",
+        lambda: {priority: [] for priority in RECOMMENDATION_PRIORITIES},
+        _valid_recommendations_prior,
+    ),
+}
 
 
 class AdjustmentValidationError(ValueError):
@@ -547,21 +734,9 @@ def validate_adjustments_document(payload):
 
 
 def empty_proposal():
-    """The proposal every non-REVISE verdict commits."""
+    """The proposal a verdict with no adjustments commits: ESCALATE, SKIPPED,
+    or a STAND with nothing to correct."""
     return {"schema": ADJUSTMENTS_SCHEMA, "adjustments": []}
-
-
-def _read_json_object(path, label):
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            value = json.load(handle)
-    except FileNotFoundError:
-        raise
-    except (OSError, json.JSONDecodeError) as error:
-        raise ValueError(f"{label} is not readable JSON: {error}") from error
-    if not isinstance(value, dict):
-        raise ValueError(f"{label} must be a JSON object")
-    return value
 
 
 def _validate_verdict_marker(marker):
@@ -602,8 +777,9 @@ def write_critic_verdict(output_dir, verdict, proposal):
     problems = validate_adjustments_document(proposal)
     if problems:
         raise AdjustmentValidationError(problems)
-    if verdict != REVISE_VERDICT and proposal["adjustments"]:
-        raise ValueError(f"{verdict} may not commit a non-empty proposal")
+    problem = verdict_admits_proposal(verdict, proposal, strict=False)
+    if problem:
+        raise ValueError(problem)
     digest = proposal_digest(proposal)
     adjustments_path = artifact_path(output_dir, "critic_adjustments")
     verdict_path = artifact_path(output_dir, "critic_verdict")
@@ -628,7 +804,7 @@ def read_verdict_marker(output_dir):
     None` — so the marker has one reader, which `read_committed_proposal`
     calls before it goes on to bind the proposal.
     """
-    marker = _read_json_object(
+    marker = atomic_io.read_json_object(
         artifact_path(output_dir, "critic_verdict"),
         CRITIC_VERDICT_FILENAME,
     )
@@ -641,7 +817,7 @@ def read_verdict_marker(output_dir):
 def read_committed_proposal(output_dir):
     """Return (verdict, proposal) only when the marker binds the proposal."""
     marker = read_verdict_marker(output_dir)
-    proposal = _read_json_object(
+    proposal = atomic_io.read_json_object(
         artifact_path(output_dir, "critic_adjustments"), ADJUSTMENTS_FILENAME
     )
     problems = validate_adjustments_document(proposal)
@@ -652,10 +828,9 @@ def read_committed_proposal(output_dir):
             "proposal digest mismatch: the proposal changed after its "
             "verdict was committed"
         )
-    if marker["verdict"] != REVISE_VERDICT and proposal["adjustments"]:
-        raise ValueError(
-            f"{marker['verdict']} may not commit a non-empty proposal"
-        )
+    problem = verdict_admits_proposal(marker["verdict"], proposal, strict=False)
+    if problem:
+        raise ValueError(problem)
     return marker["verdict"], proposal
 
 
@@ -856,9 +1031,12 @@ def _validate_sources(value, label, *, with_severity):
     """`sources` on a ledger finding or check, in the builder's grammar.
 
     A finding's entries may carry the source `severity` findings_save.py
-    stamps from the context; a check's never do.
+    stamps from the context and may cite a confirmed orchestrator note; a
+    check's do neither.
     """
-    normalized_sources(value, label, allow_severity=with_severity)
+    normalized_sources(
+        value, label, allow_severity=with_severity, allow_note=with_severity
+    )
 
 
 def _validate_dropped(
@@ -965,46 +1143,19 @@ def _validate_ledger_check(check, index, *, removed=False):
     )
 
 
-def _validate_invalidated_assessments(value, applied_ids):
-    label = f"{FINDINGS_FILENAME}: {INVALIDATED_ASSESSMENTS_KEY}"
+def _validate_invalidation_records(key, value, applied_ids):
+    """Validate one ledger prose field's invalidation records (`LEDGER_PROSE`)."""
+    prose = LEDGER_PROSE[key]
+    label = f"{FINDINGS_FILENAME}: {prose.invalidated_key}"
     if not isinstance(value, list) or not value:
         raise ValueError(f"{label} must be a non-empty list")
     for index, record in enumerate(value):
         if (
             not isinstance(record, dict)
             or set(record) != {
-                "text", "invalidated_by_critic_adjustment_ids",
+                prose.record_field, "invalidated_by_critic_adjustment_ids",
             }
-            or not isinstance(record.get("text"), str)
-            or not record["text"].strip()
-        ):
-            raise ValueError(f"{label}[{index}] is malformed")
-        ids = record["invalidated_by_critic_adjustment_ids"]
-        _validate_unique_strings(ids, f"{label}[{index}] adjustment ids")
-        if not ids or not set(ids) <= applied_ids:
-            raise ValueError(f"{label}[{index}] cites unknown adjustments")
-
-
-def _validate_invalidated_recommendations(value, applied_ids):
-    label = f"{FINDINGS_FILENAME}: {INVALIDATED_RECOMMENDATIONS_KEY}"
-    if not isinstance(value, list) or not value:
-        raise ValueError(f"{label} must be a non-empty list")
-    for index, record in enumerate(value):
-        if (
-            not isinstance(record, dict)
-            or set(record) != {
-                "recommendations", "invalidated_by_critic_adjustment_ids",
-            }
-            or not isinstance(record["recommendations"], dict)
-            or not set(record["recommendations"]) <= set(RECOMMENDATION_PRIORITIES)
-            or any(
-                not isinstance(entries, list) or any(
-                    not isinstance(entry, str) or not entry.strip()
-                    for entry in entries
-                )
-                for entries in record["recommendations"].values()
-            )
-            or not any(record["recommendations"].values())
+            or not prose.valid_prior(record[prose.record_field])
         ):
             raise ValueError(f"{label}[{index}] is malformed")
         ids = record["invalidated_by_critic_adjustment_ids"]
@@ -1157,14 +1308,11 @@ def validate_findings_document(document):
         raise ValueError(
             f"{FINDINGS_FILENAME}: verdict_before_adjustments is invalid"
         )
-    if INVALIDATED_ASSESSMENTS_KEY in extensions:
-        _validate_invalidated_assessments(
-            extensions[INVALIDATED_ASSESSMENTS_KEY], set(applied_by_id)
-        )
-    if INVALIDATED_RECOMMENDATIONS_KEY in extensions:
-        _validate_invalidated_recommendations(
-            extensions[INVALIDATED_RECOMMENDATIONS_KEY], set(applied_by_id)
-        )
+    for key, prose in LEDGER_PROSE.items():
+        if prose.invalidated_key in extensions:
+            _validate_invalidation_records(
+                key, extensions[prose.invalidated_key], set(applied_by_id)
+            )
     return document
 
 
@@ -1377,14 +1525,19 @@ def _validate_adjudication_request(request, known_ids):
             f"adjudication request: 'schema' must be {ADJUDICATION_SCHEMA}"
         )
     revised = request.get(REVISED_ASSESSMENT_KEY)
-    if revised is not None and (
-        not isinstance(revised, str) or not revised.strip()
-    ):
-        problems.append(
-            "adjudication request: 'revised_assessment' must be null or a "
-            "non-empty string"
-        )
-    normalized_assessment = revised.strip() if isinstance(revised, str) else None
+    normalized_assessment = None
+    if revised is not None:
+        if not isinstance(revised, str):
+            problems.append(
+                "adjudication request: 'revised_assessment' must be null or a "
+                "string"
+            )
+        elif prose_is_empty(revised):
+            problems.append(_EMPTY_REVISED_TEXT.format(
+                key=REVISED_ASSESSMENT_KEY, noun="assessment",
+            ))
+        else:
+            normalized_assessment = revised.strip()
 
     revised_recs = request.get(REVISED_RECOMMENDATIONS_KEY)
     normalized_recommendations = None
@@ -1401,6 +1554,7 @@ def _validate_adjudication_request(request, known_ids):
             normalized_recommendations = {
                 priority: [] for priority in RECOMMENDATION_PRIORITIES
             }
+            malformed = False
             for priority, entries in revised_recs.items():
                 if not isinstance(entries, list) or any(
                     not isinstance(entry, str) or not entry.strip()
@@ -1410,10 +1564,15 @@ def _validate_adjudication_request(request, known_ids):
                         f"adjudication request: 'revised_recommendations'.{priority} "
                         "must be a list of non-empty strings"
                     )
+                    malformed = True
                     continue
                 normalized_recommendations[priority] = [
                     entry.strip() for entry in entries
                 ]
+            if not malformed and prose_is_empty(normalized_recommendations):
+                problems.append(_EMPTY_REVISED_TEXT.format(
+                    key=REVISED_RECOMMENDATIONS_KEY, noun="recommendation",
+                ))
 
     verified = request.get("verified")
     decisions = {}
@@ -1473,49 +1632,39 @@ def _validate_adjudication_request(request, known_ids):
     return problems, decisions, normalized_assessment, normalized_recommendations
 
 
-def _invalidate_assessment(review, recorded_ids):
-    """Invalidate prose the applied batch may have just contradicted.
+def _invalidate_prose(ledger, key, recorded_ids, *, displaced):
+    """Invalidate one piece of ledger prose (`LEDGER_PROSE`), keeping it
+    auditable beside the ids of the decisions that invalidated it.
 
-    Called only when a batch actually applied, so an adjudication that
-    refuted everything leaves the assessment exactly as the reconciler wrote
-    it — nothing changed, nothing to invalidate.
+    Called only when a batch actually applied, for a batch that moves the
+    ledger or for revised text, so an adjudication that refuted everything
+    leaves the reconciler's prose exactly as written.
 
-    A ledger with no assessment records no invalidation: there is no text to
-    keep auditable, and fabricating an empty entry would claim an invalidation
-    that never happened.
+    An empty prior (`prose_is_empty`) is recorded, as the field's empty
+    value, only when revised text displaces it (`displaced`): that record is
+    what tells the renderer the standing text is the orchestrator's, for an
+    assessment the reconciler left null as much as for recommendations it
+    left empty. A moving batch that clears an empty prior records nothing:
+    there is no text to keep, and an entry would claim an invalidation that
+    never happened.
     """
-    prior = review.get(ASSESSMENT_KEY)
-    review[ASSESSMENT_KEY] = None
-    if not isinstance(prior, str) or not prior.strip():
+    prose = LEDGER_PROSE[key]
+    prior = ledger.get(key)
+    ledger[key] = prose.empty()
+    if prose_is_empty(prior) and not displaced:
         return
-    invalidated = review.get(INVALIDATED_ASSESSMENTS_KEY)
-    if not isinstance(invalidated, list):
-        invalidated = []
-    invalidated.append({
-        "text": prior,
-        # The exact decisions that cost the assessment its standing, so the
+    records = ledger.get(prose.invalidated_key)
+    if not isinstance(records, list):
+        records = []
+    records.append({
+        prose.record_field: (
+            prose.empty() if prose_is_empty(prior) else copy.deepcopy(prior)
+        ),
+        # The exact decisions that cost the prose its standing, so the
         # invalidation can be read back against the batch that caused it.
         "invalidated_by_critic_adjustment_ids": list(recorded_ids),
     })
-    review[INVALIDATED_ASSESSMENTS_KEY] = invalidated
-
-
-def _invalidate_recommendations(review, recorded_ids):
-    """Withdraw recommendations only when an applying batch may contradict them."""
-    prior = review.get("recommendations")
-    review["recommendations"] = {
-        priority: [] for priority in RECOMMENDATION_PRIORITIES
-    }
-    if not isinstance(prior, dict) or not any(prior.values()):
-        return
-    invalidated = review.get(INVALIDATED_RECOMMENDATIONS_KEY)
-    if not isinstance(invalidated, list):
-        invalidated = []
-    invalidated.append({
-        "recommendations": copy.deepcopy(prior),
-        "invalidated_by_critic_adjustment_ids": list(recorded_ids),
-    })
-    review[INVALIDATED_RECOMMENDATIONS_KEY] = invalidated
+    ledger[prose.invalidated_key] = records
 
 
 def _changed_fields(target, fields):
@@ -1584,6 +1733,10 @@ def _apply_proposal(
     rejected_records = list(ledger.get(REJECTED_ADJUSTMENTS_KEY) or [])
     batch_ids = []
     refuted_count = 0
+    # The assessment and recommendations rest on severities, scope and the
+    # finding set; a batch that moves none of them leaves them standing
+    # unless the orchestrator replaces them (see REVISED_ASSESSMENT_KEY).
+    moved = False
     for index, entry in enumerate(proposal["adjustments"]):
         label = f"adjustment[{index}]"
         outcome, reason = decisions.get(
@@ -1599,6 +1752,7 @@ def _apply_proposal(
             })
             refuted_count += 1
             continue
+        moved = moved or entry_moves_ledger(entry)
         action = entry["action"]
         kind = entry["target"]["kind"]
         provenance = {"action": action, "rationale": entry["rationale"]}
@@ -1653,12 +1807,20 @@ def _apply_proposal(
             ledger.setdefault(VERDICT_BEFORE_ADJUSTMENTS_KEY, ledger["verdict"])
             ledger["verdict"] = derived["verdict"]
         ledger[APPLIED_IDS_KEY] = applied_records
-        _invalidate_assessment(ledger, batch_ids)
-        if revised_assessment:
-            ledger[ASSESSMENT_KEY] = revised_assessment
-        _invalidate_recommendations(ledger, batch_ids)
-        if revised_recommendations is not None:
-            ledger["recommendations"] = revised_recommendations
+        for key, revised in (
+            (ASSESSMENT_KEY, revised_assessment),
+            (RECOMMENDATIONS_KEY, revised_recommendations),
+        ):
+            # Revised text invalidates the prior on the record even when
+            # nothing moved: installing it over the reconciler's prose would
+            # leave that prose unrecoverable and the revised text rendered
+            # as the reconciler's.
+            if moved or revised is not None:
+                _invalidate_prose(
+                    ledger, key, batch_ids, displaced=revised is not None
+                )
+            if revised is not None:
+                ledger[key] = revised
     if refuted_count:
         ledger[REJECTED_ADJUSTMENTS_KEY] = rejected_records
     return len(batch_ids), refuted_count
@@ -1685,10 +1847,8 @@ def adjudicate(output_dir, request):
     """
     with atomic_io.output_dir_lock(output_dir):
         verdict, proposal = read_committed_proposal(output_dir)
-        if verdict != REVISE_VERDICT:
-            raise ValueError(
-                f"cannot adjudicate a critic proposal under a {verdict} verdict"
-            )
+        if not proposal["adjustments"]:
+            raise ValueError(f"nothing to adjudicate under a {verdict} verdict")
         known_ids = {
             entry["adjustment_id"] for entry in proposal["adjustments"]
         }
@@ -1724,6 +1884,17 @@ def adjudicate(output_dir, request):
             "rejected": rejected,
             "verdict": ledger["verdict"],
         }
+
+
+REVISED_NOT_INSTALLED = "not installed (every adjustment refuted)"
+
+
+def _revised_echo(supplied, applied):
+    """`present`, `absent`, or the not-installed note for revised text
+    that rode a batch the orchestrator refuted whole."""
+    if not supplied:
+        return "absent"
+    return "present" if applied else REVISED_NOT_INSTALLED
 
 
 def adjudication_state(output_dir):
@@ -1776,14 +1947,16 @@ def main():
         f"REFUTED: {counts[OUTCOME_REFUTED]} | "
         f"NOT_CHECKED: {counts[OUTCOME_NOT_CHECKED]}"
     )
-    print(
-        "REVISED ASSESSMENT: "
-        f"{'present' if request.get(REVISED_ASSESSMENT_KEY) else 'absent'}"
-    )
-    print(
-        "REVISED RECOMMENDATIONS: "
-        f"{'present' if request.get(REVISED_RECOMMENDATIONS_KEY) is not None else 'absent'}"
-    )
+    # Echo what the ledger now holds, not what the request carried: revised
+    # text rides the applied batch, so a wholly refuted one installs
+    # nothing and the reconciler's prose stands.
+    for label, key in (
+        ("REVISED ASSESSMENT", REVISED_ASSESSMENT_KEY),
+        ("REVISED RECOMMENDATIONS", REVISED_RECOMMENDATIONS_KEY),
+    ):
+        print(f"{label}: " + _revised_echo(
+            request.get(key) is not None, result["applied"]
+        ))
     print(f"APPLIED: {result['applied']} | REJECTED: {result['rejected']}")
     print(f"LEDGER VERDICT: {result['verdict']}")
 

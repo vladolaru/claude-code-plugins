@@ -6,27 +6,27 @@ A 4-phase pipeline tailored for code review criticism: Decompose, Verify, Challe
 Synthesize. Fork of the generic decision-critic.py with prompts focused on severity
 calibration, false positive detection, and code-grounded verification.
 
-Grounded in:
-- Chain-of-Verification (Dhuliawala et al., 2023)
-- Self-Consistency (Wang et al., 2023)
-- Multi-Expert Prompting (Wang et al., 2024)
+Between phases the critic carries a claim table in `--worklog`: every claim id
+with its status marker and evidence pointer. The script never reads it; the
+model does, as its own tool-call input on the next phase, which is what makes
+the write-down durable. The argument is required on every phase and refused
+when empty from phase 2 on.
 """
 
 import argparse
-import json
 import os
 import sys
 from typing import Optional
 
 try:
     from . import atomic_io, critic_adjustments
-    from .run_paths import artifact_path
+    from .run_paths import artifact_path, scratch_dir
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
     from review import atomic_io, critic_adjustments
-    from review.run_paths import artifact_path
+    from review.run_paths import artifact_path, scratch_dir
 
 atomic_write_text = atomic_io.atomic_write_text
 
@@ -45,11 +45,17 @@ def get_step_guidance(
 
     next_step = step + 1 if step < total_steps else None
 
-    # Common state accumulation requirement for steps 2+
-    state_requirement = (
-        "STATE ACCUMULATION REQUIREMENT: Your --thoughts from this step must include "
-        "ALL IDs, classifications, and status markers from previous steps. This "
-        "accumulated state is essential for workflow continuity."
+    # Carry-forward reminder for phases 2+: the next phase's --worklog is the
+    # claim table this phase produced. Ids, status markers and evidence
+    # pointers only; the pipeline keys everything by the ledger's fN/cN ids.
+    carry_forward = (
+        "WORKLOG CARRY-FORWARD: the `--worklog` you pass to the next phase "
+        "lists every claim id from the previous phase and this one (fN, cN, "
+        "SN, JN) with its status marker (VERIFIED / FAILED / UNCERTAIN / "
+        "PENDING), its evidence pointer (file:line, or the command run), and "
+        "the verdict direction so far. Ids, markers and pointers only, no "
+        "narrative; a claim missing from the worklog is a claim the next "
+        "phase cannot act on."
     )
 
     # STEP 1 — DECOMPOSITION
@@ -102,10 +108,6 @@ def get_step_guidance(
             "step_title": "Decompose",
             "actions": actions,
             "next": f"Step {next_step}: Verify each verifiable item against primary source code.",
-            "academic_note": (
-                "Multi-Expert Prompting (Wang et al., 2024): \"Integrating multiple experts' "
-                "perspectives catches blind spots in reasoning.\""
-            ),
         }
 
     # STEP 2 — VERIFICATION
@@ -146,18 +148,13 @@ def get_step_guidance(
             "",
             "Mark each: VERIFIED / FAILED / UNCERTAIN.",
             "",
-            state_requirement,
+            carry_forward,
         ])
         return {
             "phase": "VERIFICATION",
             "step_title": "Verify",
             "actions": actions_2,
             "next": f"Step {next_step}: Challenge the review with adversarial analysis.",
-            "academic_note": (
-                "Chain-of-Verification (Dhuliawala et al., 2023): \"Factored verification "
-                "prevents confirmation bias. Plan verification questions, then answer them "
-                "independently.\""
-            ),
         }
 
     # STEP 3 — CHALLENGE
@@ -191,13 +188,9 @@ def get_step_guidance(
                 "STEEL-MANNING: Present the PR author's BEST defense, not a strawman. Make the "
                 "argument as strong as you can.",
                 "",
-                state_requirement,
+                carry_forward,
             ],
             "next": f"Step {next_step}: Synthesize findings into verdict.",
-            "academic_note": (
-                "Self-Consistency (Wang et al., 2023): \"Correct reasoning processes tend to "
-                "have greater agreement in their final answer than incorrect processes.\""
-            ),
         }
 
     # STEP 4 — SYNTHESIS
@@ -218,19 +211,26 @@ def get_step_guidance(
                 "- Challenges from Step 3 are minor or the review already addresses them",
                 "- The verdict is proportionate to the actual issues found",
                 "",
-                "REVISE when ANY of these apply:",
-                "- One or more FAILED factual claims that materially affect a finding",
-                "- Severity is materially wrong on a finding that changes the verdict tier",
-                "- The review omits important context that would change how a human interprets it",
-                "- Specific adjustments can be identified (not just \"could be better\")",
+                "REVISE when ANY of these apply — each names a change the verdict ladder reads:",
+                "- One or more FAILED factual claims that materially affect a finding (a removal or demotion follows)",
+                "- Severity is materially wrong on a finding (a promotion or demotion follows)",
+                "- A verified defect in the diff is missing (an addition follows), or a finding sits on the wrong lines (a rescope follows)",
+                "",
+                "A finding's wording, title, recommendation or description correction changes none "
+                "of those, so it rides STAND, and a STAND batch holds "
+                f"{critic_adjustments.STAND_BATCH_RULE}. A STAND with corrections is "
+                "adjudicated exactly like a REVISE; the verdict word reports whether anything moved. "
+                "A correction that moves a finding's file or line, or corrects a check, is a REVISE: "
+                "the assessment rests on scope and on the record's verifications.",
                 "",
                 "ESCALATE when ANY of these apply:",
                 "- Multiple FAILED claims suggesting systematic quality issues",
                 "- The review may be actively misleading about what the code does",
                 "- Fundamental framing problem that revision cannot fix",
                 "",
-                "BORDERLINE: When between STAND and REVISE, favor REVISE (cheaper to refine "
-                "than to ship an unfair review).",
+                "BORDERLINE: a proposal is REVISE if and only if it moves "
+                f"{critic_adjustments.LEDGER_MOVES}. Do not upgrade a clean review to REVISE to carry a "
+                "wording correction, and do not soften a needed demotion to keep STAND.",
                 "",
                 "A refuted factual claim rarely lives in one place. When a demotion or "
                 "removal rests on one, grep the ledger's `checks[].result` and "
@@ -238,18 +238,18 @@ def get_step_guidance(
                 "same proposal; a check that restates a refuted claim leaves the record "
                 "contradicting itself, and nothing after you can touch a check.",
                 "",
-                "Author findings in `$TMPDIR/"
-                f"{artifact_path('', 'critic_findings').name}` "
+                "Author findings in `"
+                f"{scratch_dir(output_dir) / artifact_path('', 'critic_findings').name}` "
                 "using the format specified in the agent definition; never "
                 f"write `{artifact_path(output_dir, 'critic_findings')}` directly.",
                 "Invoke `critic.py --save` for the final STAND, REVISE, or "
-                "ESCALATE verdict. Pass the temp adjustments file only for "
-                "REVISE, as specified in the agent definition.",
+                "ESCALATE verdict. Pass the temp adjustments file for REVISE, "
+                "and for a STAND that carries `correct` entries; never for "
+                "ESCALATE.",
                 "",
-                state_requirement,
+                carry_forward,
             ],
             "next": None,
-            "academic_note": None,
         }
 
     # Fallback (should not be reached with proper validation)
@@ -258,7 +258,6 @@ def get_step_guidance(
         "step_title": "Unknown Step",
         "actions": ["Invalid step number."],
         "next": None,
-        "academic_note": None,
     }
 
 
@@ -278,11 +277,6 @@ def format_output(step: int, total_steps: int, guidance: dict) -> str:
         lines.append(action)
     lines.append("")
 
-    # Academic note if present
-    if guidance.get("academic_note"):
-        lines.append(f"[{guidance['academic_note']}]")
-        lines.append("")
-
     # Next step or completion
     if guidance["next"]:
         lines.append(
@@ -301,8 +295,7 @@ def _read_required(path, problems, label):
     Records a problem (and returns None) instead of raising when the path
     is absent, missing, or unreadable — `run_save()` collects every
     problem before deciding whether to write anything, so a bad
-    `--findings`/`--adjustments` path is just one more REJECTED line, not
-    a crash.
+    `--findings` path is just one more REJECTED line, not a crash.
     """
     if not path:
         problems.append(f"--{label} is required")
@@ -313,25 +306,8 @@ def _read_required(path, problems, label):
     try:
         with open(path, "r", encoding="utf-8") as f:
             return f.read()
-    except OSError as err:
+    except (OSError, UnicodeDecodeError) as err:
         problems.append(f"--{label} could not be read ({path}): {err}")
-        return None
-
-
-def _read_json(path, problems, label):
-    """Read a required save-mode input file as JSON.
-
-    Layered on `_read_required()`: a missing/unreadable file reports
-    through that shared check, and a present-but-unparseable file gets
-    its own problem here instead of an uncaught `JSONDecodeError`.
-    """
-    text = _read_required(path, problems, label)
-    if text is None:
-        return None
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as err:
-        problems.append(f"--{label} is not valid JSON ({path}): {err}")
         return None
 
 
@@ -355,7 +331,7 @@ def run_save(args):
     Every problem is collected before anything is decided, the same
     all-or-nothing style `critic_adjustments.prepare_proposal()` and
     `adjudicate()` use: a bad verdict, a missing findings file, an
-    invalid adjustments batch, and a REVISE/STAND contradiction are all
+    invalid adjustments batch, and a verdict that does not admit its batch are all
     independent facts, and reporting only the first would make a caller
     fix one problem at a time instead of seeing the whole rejection at
     once. Proposal normalization assigns the stable adjustment IDs before
@@ -385,7 +361,11 @@ def run_save(args):
     adjustments = None
     adjustment_snapshot = None
     if args.adjustments:
-        adjustments = _read_json(args.adjustments, problems, "adjustments")
+        # The shared reader refuses null, a list or a scalar, which is what
+        # stops a `null` file from being judged as an empty proposal.
+        adjustments = atomic_io.collect_json_object(
+            args.adjustments, "--adjustments", problems
+        )
         if adjustments is not None:
             try:
                 adjustment_snapshot = critic_adjustments.prepare_proposal(
@@ -393,22 +373,27 @@ def run_save(args):
                 )
             except critic_adjustments.AdjustmentValidationError as error:
                 problems.extend(error.problems)
-    adjustments_doc = adjustments if isinstance(adjustments, dict) else {}
-    entries = adjustments_doc.get("adjustments") or []
-    if verdict == "REVISE" and not entries:
-        problems.append("REVISE requires a non-empty adjustments batch")
-    if verdict in ("STAND", "ESCALATE") and entries:
-        problems.append(
-            f"{verdict} with adjustments is a contradiction — adjustments "
-            f"are a REVISE-only channel"
-        )
+    # Admission runs against the validated proposal, never the raw file: a
+    # batch that failed preparation already has its REJECTED lines, and a
+    # save with no adjustments file is judged as an empty proposal.
+    if args.adjustments:
+        admitted = adjustment_snapshot
+    else:
+        admitted = critic_adjustments.empty_proposal()
+    # `admitted is None` implies a recorded problem: the reader refuses
+    # anything but an object, and preparation reports every shape fault.
+    if admitted is not None and verdict in critic_adjustments.CRITIC_VERDICTS:
+        problem = critic_adjustments.verdict_admits_proposal(verdict, admitted)
+        if problem:
+            problems.append(problem)
+    entries = (admitted or {}).get("adjustments") or []
 
     if problems:
         for p in problems:
             print(f"REJECTED: {p}")
         return 1
 
-    if verdict != "REVISE":
+    if not entries:
         adjustment_snapshot = critic_adjustments.empty_proposal()
     od = args.output_dir
     with atomic_io.output_dir_lock(od):
@@ -469,7 +454,7 @@ def main():
         "--adjustments",
         type=str,
         default=None,
-        help="Save mode: path to the adjustments JSON (REVISE only)",
+        help="Save mode: path to the adjustments JSON (REVISE, or STAND with `correct` entries)",
     )
     parser.add_argument(
         "--step-number",
@@ -502,10 +487,13 @@ def main():
         help="Directory for output files",
     )
     parser.add_argument(
-        "--thoughts",
+        "--worklog",
         type=str,
         default=None,
-        help="Accumulated analysis state from previous steps",
+        help=(
+            "Claim table carried from the previous phase: every claim id with "
+            "its status marker and evidence pointer. Any short text on phase 1."
+        ),
     )
 
     args = parser.parse_args()
@@ -517,11 +505,16 @@ def main():
         args.step_number is None
         or args.total_steps is None
         or args.report is None
-        or args.thoughts is None
+        or args.worklog is None
     ):
         parser.error(
-            "--step-number, --total-steps, --report, and --thoughts are "
+            "--step-number, --total-steps, --report, and --worklog are "
             "required unless --save is given"
+        )
+    if args.step_number >= 2 and not args.worklog.strip():
+        parser.error(
+            "--worklog is empty: from phase 2 on it lists every claim id from "
+            "the previous phase with its status marker and evidence pointer"
         )
 
     # Validate total steps matches the constant

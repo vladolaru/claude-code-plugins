@@ -585,10 +585,6 @@ class TestReviewVocabularyLifecycleMigration:
     @pytest.mark.parametrize(
         "damage",
         [
-            pytest.param(
-                {"grouped_concern_count": 9, "verified_concern_count": 9},
-                id="grouped-exceeds-input",
-            ),
             pytest.param({"reviewing_agents": None}, id="reviewing-null"),
             # One duplicate check in the loop over the reconciliation agent
             # lists; a duplicated dispatched agent fails the same check.
@@ -623,6 +619,33 @@ class TestReviewVocabularyLifecycleMigration:
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
         assert measured["outcome"]["reconciliation"] is None
+
+    @pytest.mark.parametrize("counts", [
+        pytest.param({
+            "input_finding_count": 0, "contributing_agent_count": 0,
+            "grouped_concern_count": 1, "verified_concern_count": 1,
+            "false_positive_concern_count": 0, "out_of_scope_concern_count": 0,
+        }, id="note-alone"),
+        pytest.param({
+            "input_finding_count": 1, "contributing_agent_count": 1,
+            "grouped_concern_count": 2, "verified_concern_count": 1,
+            "false_positive_concern_count": 1, "out_of_scope_concern_count": 0,
+        }, id="reviewer-finding-dropped-plus-note"),
+    ])
+    def test_a_concern_grouped_from_a_note_is_kept(self, tmp_path, counts):
+        """Shapes findings_save accepts since 1.119.6: a confirmed
+        orchestrator note became a concern of its own, so grouped concerns
+        exceed the reviewer input. The reader must keep them, or a valid
+        run's whole reconciliation block (counts and rosters) reads as
+        unmeasured."""
+        manifest = _task_5_manifest()
+        manifest["outcome"]["reconciliation"].update(counts)
+
+        measured = measure_run(manifest, tmp_path, include_transcripts=False)
+
+        assert measured["outcome"]["reconciliation"] == (
+            manifest["outcome"]["reconciliation"]
+        )
 
     def test_schema_three_manifest_keeps_only_canonical_live_vocabulary(
         self, tmp_path
@@ -8606,6 +8629,24 @@ class TestEvidenceMetrics:
         assert result["survival_by_agent"] == {
             "security-reviewer": {"kept": 1, "dropped": {"false_positive": 1}, "critic_removed": 1},
         }
+
+    def test_a_note_sourced_finding_keeps_its_lineage_through_the_sanitizer(self):
+        """A lineage row naming the orchestrator with a note id survives
+        sanitization and counts as a survival row of its own."""
+        manifest = _manifest("added")
+        manifest["evidence"] = _evidence_payload()
+        manifest["availability"]["evidence"] = True
+        manifest["evidence"]["findings"].append(
+            {"id": "f9", "severity": "medium",
+             "sources": [{"agent": "orchestrator", "id": "n1", "severity": None}],
+             "critic_action": None}
+        )
+        measured = measure_run(manifest, Path("/nonexistent"), include_transcripts=False)
+        assert measured["evidence"]["findings"][1]["sources"] == [
+            {"agent": "orchestrator", "id": "n1", "severity": None}
+        ]
+        result = aggregate_cohort([measured])["evidence"]
+        assert result["survival_by_agent"]["orchestrator"]["kept"] == 1
 
     def test_a_manifest_without_critic_removals_has_unknown_lineage(self):
         """A manifest projected before critic removals were carried cannot

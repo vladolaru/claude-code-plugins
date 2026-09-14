@@ -782,7 +782,7 @@ def _pipeline_metric_availability(
         outcomes_state = "missing"
     steps = manifest.get("steps")
     # The producer's skip decision is latest-wins: a step-10 rerun (after
-    # the review verdict escalates past quick-mode approve/comment) clears
+    # the review verdict leaves critic_adjustments.QUICK_MODE_SKIP_VERDICTS) clears
     # the stale decision and appends a fresh step-10 event without one, but
     # the append-only telemetry keeps both events. Only the final step-10
     # event's decision is authoritative — any() would resurrect the

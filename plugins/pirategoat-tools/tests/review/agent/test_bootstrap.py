@@ -20,7 +20,11 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 from review.agent.output import ReviewOutputBuilder
 from review import run_paths
-from review.reviewer_lifecycle import review_paths
+from review.reviewer_lifecycle import (
+    read_bootstrap_error,
+    review_paths,
+    started_marker_path,
+)
 
 # Import functions under test via importlib (file-based loading)
 import importlib
@@ -137,7 +141,9 @@ class TestResolveReviewerIdentity:
         ) = _mod.resolve_reviewer_identity(args)
 
         assert agent_name == "repo-reviewer-adapter"
-        assert effective_agent_name is None
+        # Kept whenever the flags name an instance, so bootstrap records the
+        # refusal against the dispatched reviewer.
+        assert effective_agent_name == instance_name
         assert adapter_label == "Renewals"
         assert repo_agent_ref == ".pirategoat/reviewers/renewals.md"
         assert expected_error in error
@@ -398,6 +404,9 @@ class TestPartitionScopePaths:
         output = capsys.readouterr().out
         assert "STATUS: ERROR" in output
         assert "Could not publish authoritative review assignment: disk full" in output
+        assert read_bootstrap_error(str(tmp_path), "security") == (
+            "Could not publish authoritative review assignment: disk full"
+        )
 
     def test_main_refuses_to_run_without_scope_facts(
         self, tmp_path, monkeypatch, capsys
@@ -426,53 +435,10 @@ class TestPartitionScopePaths:
         output = capsys.readouterr().out
         assert "STATUS: ERROR" in output
         assert "scope summary" in output
-        assert not list(tmp_path.glob("*-assignment.json"))
-
-    def test_scope_failure_reports_what_scope_said_not_the_missing_sidecar(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        """A clean tree is a no-op, not broken infrastructure.
-
-        scope.py already answered the question — nothing changed, approve and
-        exit — and never got as far as writing a summary. Reporting the
-        missing file instead would hide that answer behind a symptom and
-        turn every benign no-op into an error the reviewer must escalate.
-        """
-        monkeypatch.setattr(_mod, "find_plugin_root", lambda: str(PLUGIN_ROOT))
-        monkeypatch.setattr(_mod, "read_file", lambda _path: "# rules")
-        monkeypatch.setattr(
-            _mod,
-            "run_scope_discovery",
-            lambda *_args, **_kwargs: (
-                2,
-                "=== REVIEW SCOPE ===\n"
-                "STATUS: ERROR\n"
-                "ERROR: NO_CHANGES: No changes to review — clean working "
-                "tree.\n"
-                "ACTION: APPROVE and exit — nothing to review.\n",
-            ),
+        assert not os.path.exists(review_paths(tmp_path, "security").assignment)
+        assert read_bootstrap_error(str(tmp_path), "security").startswith(
+            "Could not read the scope summary"
         )
-        monkeypatch.setattr(
-            sys, "argv",
-            [
-                "bootstrap.py", "--agent", "security-reviewer",
-                "--output-dir", str(tmp_path),
-            ],
-        )
-
-        with pytest.raises(SystemExit, match="1"):
-            _mod.main()
-
-        output = capsys.readouterr().out
-        assert "=== BOOTSTRAP: security-reviewer ===" in output
-        assert "ERROR: NO_CHANGES: No changes to review" in output
-        assert "ACTION: APPROVE and exit — nothing to review." in output
-        # The downstream symptom must not displace the real diagnosis.
-        assert "scope summary" not in output
-        assert not list(tmp_path.glob("*-assignment.json"))
-        # No marker either: agents_status would otherwise report a reviewer
-        # that never received a briefing as RUNNING until the timeout.
-        assert not list(tmp_path.glob("*.started"))
 
     def test_pinned_output_dir_gets_measured_facts(
         self, tmp_path, monkeypatch
@@ -518,6 +484,215 @@ class TestPartitionScopePaths:
         assert payload["in_scope_review_file_count"] == 2
         assert len(payload["inline_diff_files"]) == 1
 
+
+
+class TestScopeRunFailure:
+    """A failed scope run ends bootstrap with that run's own diagnosis, and
+    nothing a later step reads as a briefed reviewer is published: no
+    briefing, no assignment, no started marker."""
+
+    _SCOPE_OK = "=== REVIEW SCOPE ===\nSTATUS: OK\n=== FILES ===\nsrc/a.py  (+1 -0)\n"
+    _GIT_TIMEOUT = (1, (
+        "=== REVIEW SCOPE ===\nSTATUS: ERROR\nERROR: git diff timed out\n"
+        "ACTION: Report this error to the caller. Do NOT proceed with review.\n"
+    ))
+    _NO_CHANGES = (2, (
+        "=== REVIEW SCOPE ===\n"
+        "STATUS: ERROR\n"
+        "ERROR: NO_CHANGES: No changes to review — clean working tree.\n"
+        "ACTION: Report this to the caller: the range holds no changes, so "
+        "there is nothing to review. Do NOT approve.\n"
+    ))
+    # Bootstrap's own 60s limit on the scope.py subprocess (run_cmd): exit 1,
+    # no STATUS, and one line on stderr.
+    _SUBPROCESS_TIMEOUT = (
+        1, "Command timed out after 60s: python3 scope.py --domain security"
+    )
+
+    def _bootstrap(self, tmp_path, monkeypatch, capsys, argv, failing, failure):
+        """Run main() with the scope run named `failing` (a domain, or
+        "exploration") returning `failure` and every other run succeeding;
+        return what bootstrap printed."""
+        monkeypatch.setattr(_mod, "find_plugin_root", lambda: str(PLUGIN_ROOT))
+        monkeypatch.setattr(_mod, "read_file", lambda _path: "# rules")
+
+        def scope_run(_root, domain, flags, _range, **_kwargs):
+            run = "exploration" if "--base-ref-only" in (flags or []) else domain
+            return failure if run == failing else (0, self._SCOPE_OK)
+
+        monkeypatch.setattr(_mod, "run_scope_discovery", scope_run)
+        if "repo-reviewer-adapter" in argv:
+            ref = tmp_path / "renewals.md"
+            ref.write_text("Review renewals logic end to end.")
+            argv = [*argv, "--repo-agent-ref", str(ref)]
+        monkeypatch.setattr(
+            sys, "argv", ["bootstrap.py", *argv, "--output-dir", str(tmp_path)],
+        )
+
+        with pytest.raises(SystemExit, match="1"):
+            _mod.main()
+        return capsys.readouterr().out
+
+    @staticmethod
+    def _assert_stopped_with_recorded_failure(tmp_path, reviewer, output, error):
+        assert "BRIEFING:" not in output
+        # The downstream symptom must not displace the real diagnosis.
+        assert "scope summary" not in output
+        assert not os.path.exists(review_paths(tmp_path, reviewer).assignment)
+        # No started marker, which agents_status would read as RUNNING until
+        # the timeout; the failure is recorded instead, so the reviewer reads
+        # as BOOTSTRAP_ERROR and is not dispatched again.
+        assert not os.path.exists(started_marker_path(tmp_path, reviewer))
+        assert error in read_bootstrap_error(str(tmp_path), reviewer)
+
+    def test_scope_failure_reports_what_scope_said_not_the_missing_sidecar(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """A clean tree is reported as what it is, not as broken infrastructure.
+
+        scope.py already answered the question (nothing changed: report it,
+        never approve) and never got as far as writing a summary. Reporting
+        the missing file instead would hide that answer behind a symptom.
+        """
+        output = self._bootstrap(
+            tmp_path, monkeypatch, capsys,
+            ["--agent", "security-reviewer"], "security", self._NO_CHANGES,
+        )
+
+        assert "=== BOOTSTRAP: security-reviewer ===" in output
+        assert "ERROR: NO_CHANGES: No changes to review" in output
+        assert "ACTION: Report this to the caller: the range holds no changes" in output
+        self._assert_stopped_with_recorded_failure(
+            tmp_path, "security", output, "NO_CHANGES: No changes to review",
+        )
+
+    @pytest.mark.parametrize("argv, reviewer, failing", [
+        pytest.param(
+            ["--agent", "security-reviewer"], "security", "config-ops",
+            id="secondary-domain",
+        ),
+        pytest.param(
+            ["--agent", "patterns-reviewer"], "patterns", "exploration",
+            id="exploration-scope",
+        ),
+        pytest.param(
+            ["--agent", "repo-reviewer-adapter", "--instance-name", "repo-renewals-reviewer",
+             "--scope-domains", "security,code"],
+            "repo-renewals", "security", id="adapter-domain-before-one-that-succeeds",
+        ),
+    ])
+    def test_one_failed_scope_run_fails_the_reviewer(
+        self, tmp_path, monkeypatch, capsys, argv, reviewer, failing
+    ):
+        """A failed scope run is never passed over because another run
+        succeeded. A failed secondary or repo-reviewer domain used to stop
+        the reviewer on the scope summary it never wrote, not on its own
+        diagnosis, and a failed exploration scope was ignored outright."""
+        output = self._bootstrap(
+            tmp_path, monkeypatch, capsys, argv, failing, self._GIT_TIMEOUT,
+        )
+
+        assert "STATUS: ERROR" in output
+        assert f"ERROR: [{failing}] git diff timed out" in output
+        assert "ACTION: Report this error to the caller" in output
+        self._assert_stopped_with_recorded_failure(
+            tmp_path, reviewer, output, f"[{failing}] git diff timed out",
+        )
+
+    @pytest.mark.parametrize("failing, error", [
+        pytest.param(
+            "security",
+            "ERROR: Scope discovery failed: Command timed out after 60s",
+            id="primary-run",
+        ),
+        pytest.param(
+            "config-ops",
+            "ERROR: [config-ops] Scope discovery failed: Command timed out after 60s",
+            id="secondary-run",
+        ),
+    ])
+    def test_a_run_with_no_diagnosis_reports_the_last_thing_it_printed(
+        self, tmp_path, monkeypatch, capsys, failing, error
+    ):
+        """Bootstrap's own limit on the scope.py subprocess ends a run before
+        scope.py can name the problem, so the run prints no STATUS and no
+        ERROR line, only the timeout. That line is the diagnosis: a generic
+        "reported no diagnosis" would drop the one thing the run said."""
+        output = self._bootstrap(
+            tmp_path, monkeypatch, capsys,
+            ["--agent", "security-reviewer"], failing, self._SUBPROCESS_TIMEOUT,
+        )
+
+        assert error in output
+        self._assert_stopped_with_recorded_failure(
+            tmp_path, "security", output, error.removeprefix("ERROR: "),
+        )
+
+
+class TestBootstrapFailureRecord:
+    """A bootstrap that stops with STATUS: ERROR once the dispatched reviewer
+    is known records the failure, so agents_status reads the reviewer as
+    BOOTSTRAP_ERROR instead of one nobody dispatched."""
+
+    @pytest.mark.parametrize("argv, reviewer, stubs, error", [
+        pytest.param(
+            ["--agent", "security-reviewer"], "security",
+            {"find_plugin_root": lambda: None},
+            "Could not find pirategoat-tools plugin root.", id="plugin-root",
+        ),
+        pytest.param(
+            ["--agent", "security-reviewer"], "security",
+            {"find_plugin_root": lambda: str(PLUGIN_ROOT), "read_file": lambda _path: ""},
+            "Could not read reviewer protocol at", id="protocol",
+        ),
+        pytest.param(
+            ["--agent", "repo-reviewer-adapter", "--instance-name", "repo-renewals-reviewer",
+             "--execution", "isolated", "--repo-agent-ref", "renewals.md"],
+            "repo-renewals", {},
+            "Isolated execution is not implemented.", id="isolated-execution",
+        ),
+    ])
+    def test_an_error_exit_records_the_failure(
+        self, tmp_path, monkeypatch, capsys, argv, reviewer, stubs, error
+    ):
+        for name, stub in stubs.items():
+            monkeypatch.setattr(_mod, name, stub)
+        monkeypatch.setattr(
+            sys, "argv", ["bootstrap.py", *argv, "--output-dir", str(tmp_path)],
+        )
+
+        with pytest.raises(SystemExit, match="1"):
+            _mod.main()
+
+        assert "STATUS: ERROR" in capsys.readouterr().out
+        assert read_bootstrap_error(str(tmp_path), reviewer).startswith(error)
+        assert not os.path.exists(started_marker_path(tmp_path, reviewer))
+
+    @pytest.mark.parametrize("argv, error", [
+        pytest.param(
+            ["--agent", "repo-reviewer-adapter", "--repo-agent-ref", "renewals.md"],
+            "Adapter ref-mode requires --instance-name.", id="no-instance-name",
+        ),
+        pytest.param(
+            ["--agent", "no-such-reviewer"], "Unknown agent 'no-such-reviewer'",
+            id="unknown-agent",
+        ),
+    ])
+    def test_a_call_that_names_no_dispatched_reviewer_records_nothing(
+        self, tmp_path, monkeypatch, capsys, argv, error
+    ):
+        """There is no dispatched reviewer to record the failure against, and
+        the fix is a corrected dispatch, which NOT_DISPATCHED invites."""
+        output_dir = tmp_path / "run"
+        monkeypatch.setattr(
+            sys, "argv", ["bootstrap.py", *argv, "--output-dir", str(output_dir)],
+        )
+
+        with pytest.raises(SystemExit, match="1"):
+            _mod.main()
+
+        assert error in capsys.readouterr().out
+        assert not output_dir.exists()
 
 
 class TestExtractProtocolSections:

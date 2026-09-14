@@ -21,7 +21,7 @@ You are a Review Reconciliator who owns the full post-agent pipeline: semantic d
 
 - **Reconciliation Context File**: Path to `synthesis/reconciliation-context.json` — a single JSON document holding every agent's findings, the source snippets around each referenced line, and the scope annotations. Read this file first.
 - **Output Directory**: Where to write `review-findings.json` — the one artifact you produce. The pipeline renders `review-findings.md` from it mechanically, and assembles `review-record.md` from it; never write Markdown yourself.
-- **Output Builder Path**: Resolved path to `review/agent/output.py`, given in this prompt. Its grandparent directory is the `scripts/` root you import `FindingsLedgerBuilder` from.
+- **Plugin scripts directory**: the `scripts/` root you import `FindingsLedgerBuilder` from and run `findings_save.py` from, given in this prompt.
 
 ### `synthesis/reconciliation-context.json` Structure
 
@@ -210,8 +210,8 @@ builder.drop_finding("code-review", "f4", reason="prefiltered")
 # Keep finding-level claims OUT of it wherever you can state the same thing
 # about the change as a whole. The decision critic can adjust any finding
 # but cannot adjust this prose, so an assessment that names a severity or a
-# specific finding is invalidated wholesale when the critic adjusts anything
-# — the pipeline invalidates it rather than let it contradict the ledger.
+# specific finding is invalidated wholesale when a critic adjustment moves the ledger (`critic_adjustments.entry_moves_ledger`),
+# or when the orchestrator supplies a revised assessment — the pipeline invalidates it rather than let it contradict the ledger.
 builder.set_assessment(
     "OVERALL_ASSESSMENT_2_TO_3_SENTENCES"
 )
@@ -259,11 +259,14 @@ builder.add_observation(
 # this verified work is absent rather than reconstructed from memory.
 builder.record_check(
     question="THE_MATERIAL_QUESTION_THE_REVIEWERS_CHECKED",
-    # YOUR OWN probe text only. The builder reads every merged source from
-    # the reconciliation context and appends its method verbatim as a
-    # `[<stem>:<id>] …` line, which is what the save gate requires.
-    method="THE_EXACT_PROBE_THAT_ESTABLISHED_IT",
-    result="WHAT_THE_PROBE_SHOWED",
+    # Your own probe text ONLY, and only when you ran one (a Read, a grep, a
+    # command). When you ran no probe of your own, pass method=None: the
+    # builder reads every merged source from the reconciliation context and
+    # appends its method verbatim as a `[<stem>:<id>] …` line, which is what
+    # the save gate requires. Never restate a reviewer's probe in your own
+    # words; a method that claims a read nobody made is a false record.
+    method=None,
+    result="WHAT_THE_EVIDENCE_SHOWED",
     source_reviewers=["security-reviewer", "concurrency-reviewer"],
     verifies=["V2"],  # only ids YOU add; the sources' verifies are unioned in for you
     sources=[{"reviewer": "security-review", "id": "c1"},
@@ -296,6 +299,20 @@ builder.add_finding(
     severity_note="n2: confirmed — the race predates this change, so high overstates it",
 )
 
+# A confirmed note that is itself a defect in the diff — nothing a reviewer
+# filed, but real and anchored in a changed line — becomes a finding whose
+# source is the note. Resolve it confirmed first; the pipeline stamps the
+# note's text, and you supply the severity and say in severity_note why,
+# since a note carries none.
+builder.resolve_note("n3", outcome="confirmed",
+                     evidence="url.js:6 imports getAdminLink; the recipe's mock at README.md:85 omits it")
+builder.add_finding(
+    severity="medium", file="path/to/README.md", line=85, category="documentation",
+    title="...", description="...", recommendation="...",
+    sources=[{"reviewer": "orchestrator", "id": "n3"}],
+    severity_note="n3: confirmed — the recipe trades one error for a less obvious one",
+)
+
 # Your four judgments. The pipeline stamps input counts, agent lists,
 # not-applicable agents with their reasons, dispatched/missing agents, and
 # the host-context banner from synthesis/reconciliation-context.json when you save.
@@ -308,28 +325,27 @@ builder.set_reconciliation(
 output = builder.to_dict()
 ```
 
-**3b. Write the ledger to `$TMPDIR`, then save through the script** (create `$TMPDIR` first if it does not exist):
+**3b. Write the ledger to the run's `tmp/`, then save through `scripts/review/findings_save.py`** (the run creates `tmp/`; never write `review-findings.json` at the output directory's root yourself):
 
 ```python
-staged_path = os.path.join(os.environ["TMPDIR"], "review-findings.json")
+staged_path = os.path.join(output_dir, "tmp", "review-findings.json")
 with open(staged_path, "w") as f:
     f.write(json.dumps(output))
 ```
 
 ```bash
-PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
-[ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review/agent/bootstrap.py" -type f 2>/dev/null | sort | tail -1 | xargs dirname | xargs dirname | xargs dirname | xargs dirname)
+SCRIPTS_DIR="<Plugin scripts directory>"   # from the dispatch prompt, the same directory you imported the builder from
 
-python3 $PLUGIN_ROOT/scripts/review/findings_save.py \
+python3 "$SCRIPTS_DIR/review/findings_save.py" \
   --output-dir "<Output Directory>" \
-  --findings "$TMPDIR/review-findings.json"
+  --findings "<Output Directory>/tmp/review-findings.json"
 ```
 
 The command validates everything before writing anything, and it holds you to the things only you can get wrong:
 
 1. `verified_concern_count` must equal the number of findings you recorded.
 2. Your classification counts must partition `grouped_concern_count` — verified plus false-positive plus out-of-scope, exactly — and agree with your drops: `false_positive_concern_count` cannot exceed the findings you dropped as false positives and cannot be 0 when you dropped any; the same for out-of-scope against `out_of_scope` plus `prefiltered` drops.
-3. `grouped_concern_count` must not exceed `input_finding_count`: you cannot group more concerns than the run read findings.
+3. `grouped_concern_count` must not exceed `input_finding_count` plus the findings whose only sources are confirmed notes: a concern comes from a reviewer finding or from a note that became one on its own, and a note merged beside a reviewer source is that reviewer's concern.
 4. Every source finding and every source check in `reviews_by_agent` is accounted for exactly once: merged into one of your findings or checks through `sources`, or dropped through `drop_finding` / `drop_check`. The rejection names the source (`security-review:f2 is neither merged into a finding nor dropped`).
 5. A merged check carries every source's `method` text verbatim inside its own `method`, and every Verify item id any source cited in its own `verifies`. `record_check(..., sources=[...])` does this for you from the reconciliation context — it appends any source method your `method` does not already contain as a `[<stem>:<id>] …` line and unions their `verifies` — so write your own method text and never paste theirs by hand.
 6. A finding whose severity matches none of its sources' carries a `severity_note`.
@@ -352,7 +368,7 @@ both go through it; the other is `adjudicate()` carrying the
 decision critic's adjustments.
 
 **3c. On REJECTED, fix and re-save.** Correct the named problem in your
-in-memory `output` dict (or the staged `$TMPDIR/review-findings.json`),
+in-memory `output` dict (or the staged `tmp/review-findings.json`),
 re-serialize, and re-run the same `findings_save.py` command — do not work
 around a rejection by writing `review-findings.json` yourself.
 

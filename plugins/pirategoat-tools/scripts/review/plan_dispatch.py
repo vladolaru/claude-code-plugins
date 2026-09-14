@@ -35,6 +35,8 @@ from typing import Callable, Dict, List, Optional, Tuple
 try:
     from .dispatch_status import (
         DISPATCH,
+        EXECUTION_INLINE,
+        EXECUTION_ISOLATED,
         LOW_SIGNAL_DISPATCH_SIGNALS,
         SIGNAL_ALWAYS,
         SIGNAL_CHECK,
@@ -62,6 +64,8 @@ except ImportError:
         sys.path.insert(0, _scripts_parent)
     from review.dispatch_status import (
         DISPATCH,
+        EXECUTION_INLINE,
+        EXECUTION_ISOLATED,
         LOW_SIGNAL_DISPATCH_SIGNALS,
         SIGNAL_ALWAYS,
         SIGNAL_CHECK,
@@ -1930,21 +1934,21 @@ def expand_repo_reviewers(
         # The globs bootstrap passes to scope.py as `--include-path`; the
         # orphan measurement in dispatch_adjust reads them from the row.
         include_paths = [p for p in ((applies or {}).get("paths") or []) if isinstance(p, str)]
-        if rev.get("execution") == "isolated":
+        if rev.get("execution") == EXECUTION_ISOLATED:
             # An explicit isolation request must never silently WIDEN into
             # inline execution — refuse until isolated execution exists.
-            status = "SKIPPED"
+            status = SKIPPED
             signal = SIGNAL_REPO_REVIEWER if applicable else SIGNAL_NO_DOMAIN_FILES
             reason = (
                 "isolated execution is not implemented — refusing the "
                 "inline fallback"
             )
         elif applicable:
-            status = "DISPATCH"
+            status = DISPATCH
             signal = SIGNAL_REPO_REVIEWER
             reason = "repo reviewer applicable to this diff"
         else:
-            status = "SKIPPED_TRIAGE"
+            status = SKIPPED_TRIAGE
             signal = SIGNAL_NO_DOMAIN_FILES
             reason = "repo reviewer not applicable (no matching domain files or paths)"
         dispatch_list.append({
@@ -1958,7 +1962,7 @@ def expand_repo_reviewers(
             "ref": rev.get("resolved_ref") or rev.get("ref"),
             "label": rev.get("label", rev["id"]),
             "channel": rev.get("channel", "blocking"),
-            "execution": rev.get("execution", "inline"),
+            "execution": rev.get("execution", EXECUTION_INLINE),
             "model": (
                 "inherit"
                 if host == "codex" and rev.get("model")

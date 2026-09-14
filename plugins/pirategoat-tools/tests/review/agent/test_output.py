@@ -1221,6 +1221,20 @@ class TestSaveDraft:
             _save_draft(b, d)
             err = capsys.readouterr().err
             assert "NOTE: verdict approve with nothing recorded" in err
+            assert "record_check()" in err
+
+    def test_an_abstention_is_not_told_to_record_a_check(self, capsys):
+        """An abstention records nothing by contract, and the builder now
+        refuses a record_check() after it, so the note keeps only the
+        re-run-your-script half of its advice."""
+        with tempfile.TemporaryDirectory() as d:
+            b = ReviewOutputBuilder(pr_id="1", reviewer="security")
+            b.mark_not_applicable("No security-relevant changes")
+            _write_required_assignment(d, "security")
+            _save_draft(b, d)
+            err = capsys.readouterr().err
+            assert "NOTE: verdict not_applicable with nothing recorded" in err
+            assert "record_check()" not in err
 
     @pytest.mark.parametrize("record", [
         lambda b: b.record_check("q", "m", "r"),
@@ -1719,6 +1733,99 @@ class TestNotApplicable:
         with pytest.raises(ValueError, match="finding.*already recorded"):
             b.mark_not_applicable("Agent mistakenly started before checking relevance")
 
+    @pytest.mark.parametrize("record, expected", [
+        (lambda b: b.record_check(
+            "Does the hook still fire?", "grep for the hook name", "yes, at a.php:4"
+        ), r"1 check\(s\) already recorded"),
+        (lambda b: b.add_positive_observation("Clean escaping throughout"),
+         r"1 positive observation\(s\) already recorded"),
+        (lambda b: b.add_observation("a.php", "Two call sites share one helper"),
+         r"1 observation\(s\) already recorded"),
+        (lambda b: b.add_recommendation("important", "Cache the lookup"),
+         r"1 recommendation\(s\) already recorded"),
+    ], ids=["check", "positive_observation", "observation", "recommendation"])
+    def test_raises_if_work_already_recorded(self, record, expected):
+        """An abstention after a check or observation is an approve wearing
+        the not-applicable label; it drops the reviewer from the run's
+        reviewing_agents (20 cases across 14 field runs)."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="perf")
+        record(b)
+        with pytest.raises(ValueError, match=expected):
+            b.mark_not_applicable("No performance defects found")
+
+    def test_refusal_tells_the_reviewer_to_keep_the_recorded_work(self):
+        """B docs-drift (2026-09-14) hit this refusal, rebuilt its script
+        with only a positive observation, and published an approve with
+        zero checks: the refusal named the verdict to use but not that the
+        recorded check had to survive the retry."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="docs")
+        b.record_check("Do the docs mention the hook?", "grep -rn hook docs/", "no hit")
+        with pytest.raises(ValueError) as exc:
+            b.mark_not_applicable("No documentation changes in scope")
+        message = str(exc.value)
+        assert "1 check(s) already recorded" in message
+        assert "remove only the mark_not_applicable() call" in message
+        assert "re-run this same script with every finding, check and observation it carried" in message
+        assert "publishes an empty approve" in message
+
+    @pytest.mark.parametrize("record", [
+        lambda b: b.add_finding("high", "XSS", "f.php", "desc", "rec", line=1),
+        lambda b: b.record_check("q", "m", "r"),
+        lambda b: b.add_observation("a.php", "note"),
+        lambda b: b.add_positive_observation("fine"),
+        lambda b: b.add_recommendation("suggestions", "later"),
+    ], ids=["finding", "check", "observation", "positive_observation", "recommendation"])
+    def test_raises_if_work_is_recorded_after_abstaining(self, record):
+        """The other order is the same contradiction, and it is the one a
+        rehydrated draft can reach without calling mark_not_applicable."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="perf")
+        b.mark_not_applicable("No performance-relevant changes")
+        with pytest.raises(ValueError, match="marked not_applicable"):
+            record(b)
+
+    def test_a_reopened_abstention_still_refuses_work(self, tmp_path):
+        """open() rehydrates the abstention from the persisted draft, so a
+        continuation script cannot record work without calling
+        mark_not_applicable and slip past the other guard."""
+        _write_required_assignment(tmp_path, "perf")
+        b = ReviewOutputBuilder.open(tmp_path, "1", "perf")
+        b.mark_not_applicable("No performance-relevant changes")
+        b.save_draft()
+        reopened = ReviewOutputBuilder.open(tmp_path, "1", "perf")
+        with pytest.raises(ValueError, match="marked not_applicable"):
+            reopened.record_check("q", "m", "r")
+
+    def test_the_refusal_names_the_way_back(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="perf")
+        b.mark_not_applicable("No performance-relevant changes")
+        with pytest.raises(ValueError, match="withdraw_not_applicable"):
+            b.record_check("q", "m", "r")
+
+    def test_a_withdrawn_not_applicable_reopens_the_review_for_work(self, tmp_path):
+        """A reviewer that abstained, saved, and then read closer has a
+        route back: the withdrawal is explicit, and it survives the draft
+        round-trip so the finding it then records reaches reconciliation."""
+        _write_required_assignment(tmp_path, "perf")
+        b = ReviewOutputBuilder.open(tmp_path, "1", "perf")
+        b.mark_not_applicable("No performance-relevant changes")
+        b.save_draft()
+        reopened = ReviewOutputBuilder.open(tmp_path, "1", "perf")
+        reopened.withdraw_not_applicable()
+        reopened.add_finding(
+            "high", "N+1 query", "src/orders.php",
+            "Loads each order in a loop.", "Batch the lookup.", line=12,
+        )
+        reopened.save_draft()
+        saved = ReviewOutputBuilder.open(tmp_path, "1", "perf").to_dict()
+        assert saved["verdict"] == "request_changes"
+        assert "skip_reason" not in saved
+        assert len(saved["findings"]) == 1
+
+    def test_withdrawing_not_applicable_without_the_mark_is_refused(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="perf")
+        with pytest.raises(ValueError, match="not marked not_applicable"):
+            b.withdraw_not_applicable()
+
 
 # =============================================================================
 # Advisory channel — repo-contributed reviewers
@@ -1847,13 +1954,10 @@ class TestAdvisoryChannel:
         assert "verdict_without_advisory" not in output["summary"]
 
     def test_not_applicable_does_not_claim_advisory_suppression(self):
+        """The abstention's summary is the ordinary empty one; nothing is
+        suppressed and no advisory-free verdict is claimed."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
         b.mark_not_applicable("No relevant changes")
-        b.add_finding(
-            severity="critical", title="advisory", file="a.php",
-            description="d", recommendation="r", line=5,
-            channel="advisory",
-        )
 
         output = b.to_dict()
 
@@ -2015,6 +2119,18 @@ class TestBudgetTargetEcho:
         self._clean_env(monkeypatch)
         with pytest.raises(ValueError, match="missing authoritative review assignment"):
             self._save_with_unreviewed(tmp_path, monkeypatch, capsys)
+
+    def test_a_missing_assignment_at_finalize_reads_the_same(self, tmp_path, capsys):
+        """The draft save and the finalizer read the assignment through one
+        reader, so an assignment gone between the two is named the same way
+        instead of surfacing as a bare OS error."""
+        from review.agent.output import finalize_review
+        _write_required_assignment(tmp_path, "code-clarity")
+        receipt = ReviewOutputBuilder.open(tmp_path, "68615", "code-clarity").save_draft()
+        capsys.readouterr()
+        Path(review_paths(str(tmp_path), "code-clarity").assignment).unlink()
+        with pytest.raises(ValueError, match="missing authoritative review assignment"):
+            finalize_review(str(tmp_path), "code-clarity", receipt["review_digest"])
 
     @pytest.mark.parametrize("publish", ["draft", "final"])
     def test_a_sidecar_at_another_schema_refuses_publication(
@@ -2625,4 +2741,112 @@ def test_builder_timestamp_is_aware_utc():
     shift by hand (run e08e: `2026-09-08T14:52:52.137095` for a 11:52Z finish)."""
     stamp = datetime.fromisoformat(ReviewOutputBuilder("42", "security").timestamp)
     assert stamp.tzinfo is not None and stamp.utcoffset() == timedelta(0)
+
+
+# =============================================================================
+# record_no_domain_files_review — bootstrap records the empty-scope review
+# =============================================================================
+
+
+class TestRecordNoDomainFilesReview:
+    """Bootstrap records the review a reviewer with an empty scope would
+    otherwise have to write itself: three tool calls to produce a file
+    whose content is fully determined, which two b9c0 reviewers skipped,
+    leaving a started marker that read RUNNING for 20 minutes."""
+
+    def test_records_a_finalized_not_applicable_review(self, tmp_path, capsys):
+        from review.agent.output import record_no_domain_files_review
+        from review.reviewer_lifecycle import review_paths
+        _write_required_assignment(tmp_path, "code-clarity")
+        path, reason = record_no_domain_files_review(
+            str(tmp_path), "68615", "code-clarity",
+            "No clarity files among the changed files",
+        )
+        assert path == review_paths(str(tmp_path), "code-clarity").final
+        assert reason == "No clarity files among the changed files"
+        review = json.loads(Path(path).read_text())
+        assert review["verdict"] == "not_applicable"
+        assert review["skip_reason"] == "No clarity files among the changed files"
+        assert review["findings"] == []
+        assert not Path(review_paths(str(tmp_path), "code-clarity").draft).exists()
+        # The builder's receipts are for a reviewer; bootstrap's stub is
+        # the only thing on stdout.
+        assert capsys.readouterr().out == ""
+
+    def test_is_idempotent(self, tmp_path):
+        from review.agent.output import record_no_domain_files_review
+        _write_required_assignment(tmp_path, "code-clarity")
+        first = record_no_domain_files_review(str(tmp_path), "68615", "code-clarity", "No clarity files")
+        before = Path(first.path).read_bytes()
+        second = record_no_domain_files_review(str(tmp_path), "68615", "code-clarity", "a different reason")
+        # The reason returned is the one the review states, so the signal
+        # built from it never names a sentence the review does not carry.
+        assert second == first and Path(first.path).read_bytes() == before
+
+    def test_an_existing_final_that_does_not_abstain_is_refused(self, tmp_path, capsys):
+        """A re-dispatch into a run directory that already holds this
+        reviewer's approve review: returning it would print a
+        not_applicable signal with a SUMMARY the review does not carry, and
+        the return would disagree with what agents_status reads."""
+        from review.agent.output import finalize_review, record_no_domain_files_review
+        _write_required_assignment(tmp_path, "code-clarity")
+        builder = ReviewOutputBuilder.open(tmp_path, "68615", "code-clarity")
+        receipt = builder.save_draft()
+        final = Path(finalize_review(str(tmp_path), "code-clarity", receipt["review_digest"])["final"])
+        capsys.readouterr()
+        before = final.read_bytes()
+        with pytest.raises(ValueError, match="code-clarity is already finalized as approve"):
+            record_no_domain_files_review(str(tmp_path), "68615", "code-clarity", "No clarity files")
+        assert final.read_bytes() == before
+
+    def test_an_existing_final_that_fails_validation_is_refused(self, tmp_path):
+        """The existing final is trusted only the way `finalize_review`
+        trusts one: a not_applicable final whose assignment no longer
+        derives its reviewed-file fields is not a review to return."""
+        from review.agent.output import record_no_domain_files_review
+        _write_required_assignment(tmp_path, "code-clarity")
+        record_no_domain_files_review(str(tmp_path), "68615", "code-clarity", "No clarity files")
+        write_canonical_assignment(
+            tmp_path, "code-clarity", review_claimable_files=["src/unread.py"],
+        )
+        with pytest.raises(ValueError, match="do not match the assignment"):
+            record_no_domain_files_review(str(tmp_path), "68615", "code-clarity", "No clarity files")
+
+    @pytest.mark.parametrize("corrupt", ["[]", '"text"', "{oops"])
+    def test_a_corrupt_existing_final_fails_closed(self, tmp_path, corrupt):
+        """Bootstrap catches ValueError and prints STATUS: ERROR; the
+        validator refuses a final that is not a review document, so an
+        unparseable or non-object file reaches it that way, never as a
+        traceback."""
+        from review.agent.output import record_no_domain_files_review
+        from review.reviewer_lifecycle import review_paths
+        _write_required_assignment(tmp_path, "code-clarity")
+        final = Path(review_paths(str(tmp_path), "code-clarity").final)
+        final.parent.mkdir(parents=True, exist_ok=True)
+        final.write_text(corrupt)
+        with pytest.raises(ValueError):
+            record_no_domain_files_review(str(tmp_path), "68615", "code-clarity", "No clarity files")
+
+    def test_a_saved_draft_without_a_final_is_finalized(self, tmp_path, capsys):
+        """The crash window between save and finalize: a retry rehydrates
+        the abstained draft and finalizes it rather than failing on it."""
+        from review.agent.output import record_no_domain_files_review
+        from review.reviewer_lifecycle import review_paths
+        _write_required_assignment(tmp_path, "code-clarity")
+        b = ReviewOutputBuilder.open(tmp_path, "68615", "code-clarity")
+        b.mark_not_applicable("No clarity files")
+        b.save_draft()
+        capsys.readouterr()
+        path, _reason = record_no_domain_files_review(str(tmp_path), "68615", "code-clarity", "No clarity files")
+        assert Path(path).exists()
+        assert not Path(review_paths(str(tmp_path), "code-clarity").draft).exists()
+
+    def test_a_reviewer_that_opens_the_builder_anyway_is_told_what_to_return(self, tmp_path):
+        """A definition that sends an empty-scope reviewer into the builder
+        gets a refusal that names the recorded abstention and the return."""
+        from review.agent.output import record_no_domain_files_review
+        _write_required_assignment(tmp_path, "code-clarity")
+        record_no_domain_files_review(str(tmp_path), "68615", "code-clarity", "No clarity files")
+        with pytest.raises(ValueError, match="already finalized as not_applicable.*STATUS: FINISHED"):
+            ReviewOutputBuilder.open(tmp_path, "68615", "code-clarity")
 

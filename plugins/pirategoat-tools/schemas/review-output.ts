@@ -13,13 +13,9 @@
  * below to match, and note the bump in the changelog. A schema number that
  * lags the shape is worse than none: it states a compatibility guarantee
  * the producer is not honoring.
- * One carve-out, spelled out beside REVIEW_OUTPUT_SCHEMA/LEDGER_SCHEMA and
- * in AGENTS.md: a shape change made inside the SAME unreleased version that
- * introduced the current number updates this file without moving the
- * number, because the number only guarantees anything once released.
- * Other artifact families carry their own `schema` constants; see the
- * Artifact Schemas section of the plugin's AGENTS.md for the full list and
- * for which artifacts deliberately carry no schema at all.
+ * The carve-outs that let a shape change keep its number, and the list of
+ * artifact families with their own `schema` constants (and those that
+ * deliberately carry none), are in docs/artifact-schemas.md.
  *
  * Implements: Proposal #3 (Structured Output) from Tier 1 agentic patterns
  */
@@ -45,6 +41,7 @@ export type ConfidenceScore = number; // 0.0 - 1.0
  */
 export type FindingId = `f${number}`;
 export type CheckId = `c${number}`;
+export type NoteId = `n${number}`;
 
 /** Source identity in reconciliation evidence; reviewer is a review stem. */
 export interface ReviewSource {
@@ -52,9 +49,15 @@ export interface ReviewSource {
     id: FindingId | CheckId;
 }
 
-export interface FindingSource extends ReviewSource {
-    severity?: Severity; // Stamped from the source review by findings_save.py.
-}
+/**
+ * A finding's source: a reviewer finding, or — only for a finding — a
+ * confirmed orchestrator note, cited as reviewer "orchestrator" with the
+ * note's id. findings_save.py admits the note form only when the same
+ * ledger resolves that note as confirmed. Checks and drops never cite a note.
+ */
+export type FindingSource =
+    | (ReviewSource & { severity?: Severity }) // Stamped from the source review by findings_save.py.
+    | { reviewer: 'orchestrator'; id: NoteId };
 
 export interface DroppedFindingSource extends ReviewSource {
     scope_status?: string; // Stamped scope evidence, when available.
@@ -123,14 +126,14 @@ export interface ReviewCheck {
 }
 
 export interface InvalidatedAssessment {
-    text: string;
+    text: string | null; // Null: a revised assessment displaced nothing; the record still attributes it (critic_adjustments.LEDGER_PROSE).
     invalidated_by_critic_adjustment_ids: string[];
 }
 
 export type ReviewRecommendations = ReviewContent['recommendations'];
 
 export interface InvalidatedRecommendations {
-    recommendations: Partial<ReviewRecommendations>; // At least one non-empty priority at runtime.
+    recommendations: Partial<ReviewRecommendations>; // May be all-empty: revised recommendations displaced nothing; the record still attributes them.
     invalidated_by_critic_adjustment_ids: string[]; // Non-empty; each ID must name an applied adjustment.
 }
 
@@ -229,6 +232,8 @@ export interface AdjudicationRequest {
     schema: 2;
     verified: string[];
     refuted: Array<{ adjustment_id: string; rejection_reason: string }>;
+    // Revised text is null or content (critic_adjustments.prose_is_empty): a
+    // blank assessment or recommendations with no entry are refused.
     revised_assessment?: string | null;
     revised_recommendations?: Partial<ReviewRecommendations> | null;
 }
@@ -423,10 +428,14 @@ export interface FindingsLedger extends ReviewContent {
     // than duplicating if a proposal's ids are already recorded here.
     rejected_critic_adjustments?: CriticRejectedAdjustment[];
 
-    // Assessments invalidated by an applying batch, oldest first.
+    // Assessments invalidated by a batch that moves the ledger or displaced
+    // by a revised assessment (then recorded even when there was none, as
+    // null), oldest first.
     invalidated_assessments?: InvalidatedAssessment[];
 
-    // Recommendations withdrawn by an applying batch, citing the applied IDs.
+    // Recommendations invalidated by a batch that moves the ledger or
+    // displaced by revised recommendations (then recorded even when empty),
+    // citing the applied IDs.
     invalidated_recommendations?: InvalidatedRecommendations[];
 }
 

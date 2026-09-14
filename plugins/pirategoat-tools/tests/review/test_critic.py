@@ -41,7 +41,7 @@ class TestStepCount:
             "--total-steps", "7",
             "--report", "/tmp/nonexistent-report.md",
             "--output-dir", "/tmp/test-critic",
-            "--thoughts", "initial",
+            "--worklog", "initial",
         )
         assert result.returncode != 0
         assert "must be 4" in result.stderr
@@ -53,11 +53,68 @@ class TestStepCount:
             "--total-steps", "4",
             "--report", "/tmp/nonexistent-report.md",
             "--output-dir", "/tmp/test-critic",
-            "--thoughts", "initial",
+            "--worklog", "initial",
         ])
         with pytest.raises(SystemExit) as exc:
             critic_module.main()
         assert exc.value.code == 1
+
+
+class TestWorklogContract:
+    """The between-phase write-down is a claim table: every claim id with
+    its status marker and evidence pointer. The script requires it on every
+    phase, refuses an empty one from phase 2 on, and reminds the model at
+    phases 2-4 what the next call must carry."""
+
+    def test_worklog_is_required(self):
+        result = run_critic(
+            "--step-number", "1", "--total-steps", "4",
+            "--report", "/tmp/nonexistent-report.md",
+            "--output-dir", "/tmp/test-critic",
+        )
+        assert result.returncode == 2
+        assert "--worklog" in result.stderr
+
+    def test_an_empty_worklog_is_refused_after_phase_1(self, tmp_path):
+        report = tmp_path / "review-record.md"
+        report.write_text("# record\n", encoding="utf-8")
+        result = run_critic(
+            "--step-number", "2", "--total-steps", "4",
+            "--report", str(report), "--output-dir", str(tmp_path),
+            "--worklog", "   ",
+        )
+        assert result.returncode == 2
+        assert "every claim id from the previous phase" in result.stderr
+
+    def test_phase_1_accepts_a_minimal_worklog(self, tmp_path):
+        report = tmp_path / "review-record.md"
+        report.write_text("# record\n", encoding="utf-8")
+        result = run_critic(
+            "--step-number", "1", "--total-steps", "4",
+            "--report", str(report), "--output-dir", str(tmp_path),
+            "--worklog", "start",
+        )
+        assert result.returncode == 0, result.stderr
+        assert "Step 1/4" in result.stdout
+
+    @pytest.mark.parametrize("step", [2, 3, 4])
+    def test_later_phases_carry_the_claim_table_forward(self, step):
+        guidance = critic_module.get_step_guidance(
+            step, 4, "/tmp/test-report.md", "/tmp/test-critic", None,
+        )
+        output = critic_module.format_output(step, 4, guidance)
+        assert "WORKLOG CARRY-FORWARD" in output
+        assert "--worklog" in output
+        assert "every claim id" in output
+
+    def test_the_definition_invokes_every_phase_with_a_worklog(self):
+        """The definition is what the critic follows; each of its five
+        phase commands (four normal, one degraded) passes the flag the
+        script requires."""
+        text = (PLUGIN_ROOT / "agents" / "decision-reviewer.md").read_text(encoding="utf-8")
+        phase_lines = [l for l in text.splitlines() if "critic.py --step-number" in l]
+        assert len(phase_lines) == 5
+        assert all("--worklog" in l for l in phase_lines)
 
 
 class TestSynthesisAuthorsSiblingCheckCorrections:
@@ -103,7 +160,7 @@ class TestOutputPathInSynthesis:
         output = critic_module.format_output(4, 4, guidance)
         assert "/tmp/test-critic-output" in output
         assert "decision-critic-findings.md" in output
-        assert "$TMPDIR/decision-critic-findings.md" in output
+        assert "/tmp/test-critic-output/tmp/decision-critic-findings.md" in output
         assert "critic.py --save" in output
         assert "STAND, REVISE, or ESCALATE" in output
         assert (
@@ -301,13 +358,11 @@ class TestCriticSave:
         assert "adjustments" in out.lower()
         assert [p.name for p in tmp_path.iterdir()] == [findings.name]
 
-    def test_critic_save_rejects_non_revise_with_adjustments(
+    def test_critic_save_rejects_stand_with_a_severity_change(
         self, tmp_path, capsys
     ):
-        """STAND alongside a non-empty batch is the contradiction the
-        apply gate could only quarantine downstream; now rejected at
-        source."""
-        verdict = "STAND"
+        """A batch that moves a severity is a REVISE whatever the critic
+        called it; rejected at source, nothing written."""
         findings = self._write_findings(tmp_path)
         adjustments = self._write_adjustments(tmp_path, [{
             "action": "promote", "target": {"kind": "finding", "id": "f1"},
@@ -315,16 +370,137 @@ class TestCriticSave:
         }])
 
         result = critic_module.run_save(
-            self._args(tmp_path, verdict, findings, adjustments)
+            self._args(tmp_path, "STAND", findings, adjustments)
         )
         out = capsys.readouterr().out
 
         assert result != 0
         assert "REJECTED" in out
-        assert "contradiction" in out.lower()
+        assert "a STAND batch holds finding `correct` entries only" in out
         assert sorted(p.name for p in tmp_path.iterdir()) == [
             "a.json", "f.md",
         ], "a rejected save must write nothing"
+
+    def test_critic_save_accepts_stand_with_wording_corrections(
+        self, tmp_path, capsys
+    ):
+        """A wording correction changes nothing the verdict ladder reads, so it rides
+        STAND and is committed as a proposal the orchestrator adjudicates."""
+        findings = self._write_findings(tmp_path)
+        adjustments = self._write_adjustments(tmp_path, [{
+            "action": "correct", "target": {"kind": "finding", "id": "f1"},
+            "fields": {"description": "clearer"}, "rationale": "r",
+        }])
+
+        result = critic_module.run_save(
+            self._args(tmp_path, "STAND", findings, adjustments)
+        )
+        out = capsys.readouterr().out
+
+        assert result == 0, out
+        proposal = json.loads(_artifact(tmp_path, "critic_adjustments").read_text())
+        assert [e["action"] for e in proposal["adjustments"]] == ["correct"]
+        assert json.loads(_artifact(tmp_path, "critic_verdict").read_text())["verdict"] == "STAND"
+
+    @pytest.mark.parametrize("payload, fragment", [
+        ({"schema": 2, "adjustments": 5}, "'adjustments' must be a list"),
+        ({"schema": 2, "adjustments": [{
+            "action": "correct", "target": "f1",
+            "fields": {"title": "t"}, "rationale": "r",
+        }]}, "target"),
+    ], ids=["adjustments-not-a-list", "target-not-an-object"])
+    def test_critic_save_rejects_a_malformed_proposal_without_crashing(
+        self, tmp_path, capsys, payload, fragment
+    ):
+        """Admission judges the validated proposal, never the raw file, so
+        a shape the validator rejects reaches the critic as REJECTED lines
+        rather than as a traceback that swallows them."""
+        findings = self._write_findings(tmp_path)
+        adjustments = tmp_path / "a.json"
+        adjustments.write_text(json.dumps(payload))
+
+        result = critic_module.run_save(
+            self._args(tmp_path, "STAND", findings, adjustments)
+        )
+        out = capsys.readouterr().out
+
+        assert result != 0
+        assert "REJECTED" in out and fragment.lower() in out.lower()
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["a.json", "f.md"]
+
+    @pytest.mark.parametrize("verdict", ["REVISE", "STAND"])
+    @pytest.mark.parametrize("contents, got", [
+        ("null", "got null"), ("[]", "got list"), ("5", "got int"),
+    ], ids=["null", "list", "scalar"])
+    def test_critic_save_rejects_a_non_object_adjustments_file(
+        self, tmp_path, capsys, verdict, contents, got
+    ):
+        """A readable file holding JSON null parsed to None with no read
+        problem; before the reader owned the object check a REVISE
+        published an empty proposal from it and adjudication_state read
+        'empty', hiding the loss. Every non-object is one mechanism now."""
+        findings = self._write_findings(tmp_path)
+        adjustments = tmp_path / "a.json"
+        adjustments.write_text(contents)
+
+        result = critic_module.run_save(
+            self._args(tmp_path, verdict, findings, adjustments)
+        )
+        out = capsys.readouterr().out
+
+        assert result != 0
+        assert "REJECTED" in out and got in out and "--adjustments" in out
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["a.json", "f.md"]
+
+    @pytest.mark.parametrize("make", [
+        pytest.param(lambda path: path.mkdir(), id="directory"),
+        pytest.param(lambda path: path.write_bytes(b"\xff\xfe"), id="not-utf8"),
+        pytest.param(lambda path: path.write_text("[" * 200000), id="too-deeply-nested"),
+    ])
+    def test_critic_save_reports_an_unreadable_adjustments_file(self, tmp_path, capsys, make):
+        """Every fault the shared JSON reader names reaches the critic as one
+        REJECTED line naming the flag and the path. A non-UTF-8 file used to
+        escape as a traceback, and a directory read as "file not found"."""
+        findings = self._write_findings(tmp_path)
+        adjustments = tmp_path / "a.json"
+        make(adjustments)
+
+        result = critic_module.run_save(
+            self._args(tmp_path, "REVISE", findings, adjustments)
+        )
+        out = capsys.readouterr().out
+
+        assert result != 0
+        assert f"REJECTED: --adjustments ({adjustments}) is not readable JSON" in out
+
+    def test_critic_save_reports_a_non_utf8_findings_file(self, tmp_path, capsys):
+        """The findings document is prose, read as text: invalid UTF-8 is a
+        REJECTED line, not a traceback."""
+        findings = tmp_path / "f.md"
+        findings.write_bytes(b"\xff\xfe")
+
+        result = critic_module.run_save(self._args(tmp_path, "STAND", findings))
+        out = capsys.readouterr().out
+
+        assert result != 0
+        assert f"REJECTED: --findings could not be read ({findings})" in out
+
+    def test_critic_save_rejects_revise_with_only_wording_corrections(
+        self, tmp_path, capsys
+    ):
+        findings = self._write_findings(tmp_path)
+        adjustments = self._write_adjustments(tmp_path, [{
+            "action": "correct", "target": {"kind": "finding", "id": "f1"},
+            "fields": {"title": "clearer"}, "rationale": "r",
+        }])
+
+        result = critic_module.run_save(
+            self._args(tmp_path, "REVISE", findings, adjustments)
+        )
+        out = capsys.readouterr().out
+
+        assert result != 0
+        assert "rides STAND" in out
 
     def test_critic_save_without_adjustments_replaces_stale_snapshot(
         self, tmp_path, capsys

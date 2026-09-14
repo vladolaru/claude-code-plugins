@@ -261,3 +261,58 @@ def test_meta_file_identity_is_exact_against_the_registry(tmp_path):
         path.write_text(json.dumps({"type": "user", "message": {"content": "review the code"}}) + "\n")
         (tmp_path / f"agent-{name}.meta.json").write_text(json.dumps({"agentType": f"pirategoat-tools:{name}"}))
         assert identify_agent_type(str(path)) == name
+
+
+class TestVerdictVocabulary:
+    """Every return-signal verdict a session can end on is read, including
+    the lower-case abstention bootstrap now records for an empty scope."""
+
+    @pytest.mark.parametrize("line, expected", [
+        ("STATUS: FINISHED\nVERDICT: not_applicable", "not_applicable"),
+        ("STATUS: FINISHED\nVERDICT: NOT_APPLICABLE", "not_applicable"),
+        ("STATUS: FINISHED\nVERDICT: BLOCK\nCOUNTS: critical: 1", "BLOCK"),
+        ("STATUS: FINISHED\nVERDICT: APPROVE", "APPROVE"),
+        # The reconciliator's return (agents/review-reconciliator.md).
+        ("RECONCILIATION COMPLETE\nVerdict: REQUEST_CHANGES", "REQUEST_CHANGES"),
+    ])
+    def test_verdict_is_read_from_the_return_signal(self, tmp_path, line, expected):
+        path = _write_jsonl(
+            [
+                _make_user_message("python3 bootstrap.py --agent security-reviewer"),
+                _make_assistant_message(line),
+            ],
+            str(tmp_path),
+        )
+        assert _mod.extract_subagent_metrics(path)["verdict"] == expected
+
+    @pytest.mark.parametrize("verdict", _mod.PIPELINE_VERDICTS)
+    def test_every_pipeline_verdict_is_read(self, tmp_path, verdict):
+        """The pattern is built from verdict_rules, so a verdict added there
+        is counted here without a second list to edit."""
+        path = _write_jsonl(
+            [
+                _make_user_message("python3 bootstrap.py --agent security-reviewer"),
+                _make_assistant_message(f"STATUS: FINISHED\nVERDICT: {verdict}"),
+            ],
+            str(tmp_path),
+        )
+        assert _mod.extract_subagent_metrics(path)["verdict"] == verdict
+
+    @pytest.mark.parametrize("line", [
+        "the expected verdict: approve when the tests are present",
+        "VERDICT: APPROVED",
+        "VERDICT: comment",
+    ])
+    def test_prose_and_near_misses_are_not_a_verdict(self, tmp_path, line):
+        """The signal is the upper-case token (or the lower-case abstention)
+        at a word boundary; a transcript line that discusses a verdict, or
+        misspells one, reports none rather than the nearest match."""
+        path = _write_jsonl(
+            [
+                _make_user_message("python3 bootstrap.py --agent security-reviewer"),
+                _make_assistant_message(line),
+            ],
+            str(tmp_path),
+        )
+        assert _mod.extract_subagent_metrics(path)["verdict"] is None
+

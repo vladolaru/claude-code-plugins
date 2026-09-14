@@ -1262,7 +1262,9 @@ def _orchestrate_step_5(mode, config, state, context, output_dir):
                 ]
                 # Surface coverage warnings (e.g. unrecognized source language).
                 state["dispatch_plan_warnings"] = plan.get("warnings", [])
-            except (json.JSONDecodeError, OSError):
+            # A malformed or unreadable plan raises on purpose; only a plan
+            # removed since the existence check reads as no plan.
+            except FileNotFoundError:
                 state["dispatch_plan_summary"] = {}
                 state["dispatch_plan_agents"] = []
                 state["dispatch_plan_warnings"] = []
@@ -1316,7 +1318,9 @@ def _orchestrate_step_6(mode, config, state, context, output_dir):
                     and "conditional" in a.get("reason", "").lower()
                 ),
             }
-        except (json.JSONDecodeError, OSError):
+        # As in step 5: a malformed or unreadable plan raises; only a plan
+        # removed since the existence check reads as no plan.
+        except FileNotFoundError:
             state["dispatched_agents"] = []
     else:
         state["dispatched_agents"] = []
@@ -1718,14 +1722,11 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
     ) if read.status == critic_adjustments.FINDINGS_READ_OK else None
 
     # Record critic skip decision for telemetry.
-    # Clear any stale decision first (step 10 may be rerun after
-    # the findings ledger changes from approve/comment to a higher verdict).
+    # Clear any stale decision first (step 10 may be rerun after the
+    # findings ledger's verdict leaves critic_adjustments.QUICK_MODE_SKIP_VERDICTS).
     state.setdefault("step_decisions", {}).pop("10", None)
-    is_quick = config.get("quick", False)
     recon_verdict = state.get("reconciliation_verdict", "")
-    should_skip = (
-        is_quick and recon_verdict.lower() in ("approve", "comment")
-    )
+    should_skip = critic_adjustments.quick_mode_skips_critic(config, recon_verdict)
     if should_skip:
         reason = f"quick mode + reconciliation verdict: {recon_verdict}"
         state["step_decisions"]["10"] = {
@@ -2098,8 +2099,9 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
             "critic was dispatched but produced no verdict"
         )
 
-    # Report whether the critic's REVISE proposal was ever adjudicated. Step
-    # 10's REVISE briefing has the orchestrator probe each entry and submit
+    # Report whether the critic's proposal was ever adjudicated. Step 10's
+    # briefing, for a REVISE or a STAND that carries wording corrections,
+    # has the orchestrator probe each entry and submit
     # its verified/refuted claims through `adjudicate`, which is the one and
     # only writer that carries them into the ledger. Any orchestrator — bot
     # or interactive — can stop short of that (a crash, an early return, a
@@ -2110,7 +2112,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # decisions nobody chose.
     if (
         read.status != critic_adjustments.FINDINGS_READ_ABSENT
-        and critic_verdict == "REVISE"
+        and critic_verdict in critic_adjustments.PROPOSAL_VERDICTS
     ):
         try:
             proposal_state = critic_adjustments.adjudication_state(output_dir)
@@ -2125,8 +2127,8 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
                 _record_step_11_degradation(
                     degradation_records,
                     "critic_adjudication_missing",
-                    "critic REVISE proposal was never adjudicated; the ledger "
-                    "is published without its adjustments",
+                    f"critic {critic_verdict} proposal was never adjudicated; "
+                    "the ledger is published without its adjustments",
                 )
 
     # Re-render the derived artifacts from the FINAL ledger — immediately
@@ -2261,7 +2263,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
         else None
     )
 
-    if critic_verdict == "ESCALATE":
+    if critic_verdict == critic_adjustments.ESCALATE_VERDICT:
         # The critic's one unilateral power, exercised by the pipeline
         # rather than asked of the orchestrator: ESCALATE means the review's
         # conclusions did not survive the stress test, so nothing it

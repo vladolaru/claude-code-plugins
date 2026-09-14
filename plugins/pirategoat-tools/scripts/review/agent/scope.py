@@ -33,7 +33,7 @@ Usage:
 Exit codes:
     0  Success — scope determined, output on stdout
     1  Error — something failed, details on stderr AND stdout (for agent visibility)
-    2  No changes — clean working tree, nothing to review
+    2  No changes in the range or working tree: STATUS: ERROR, report to the caller, never approve
 
 Zero external dependencies (stdlib only).
 """
@@ -1981,7 +1981,7 @@ def main():
 
         # Exit code based on status
         if scope["status"] == "NO_DOMAIN_FILES":
-            sys.exit(0)  # Not an error — agent should APPROVE and exit
+            sys.exit(0)  # Not an error — bootstrap records the not_applicable review
         sys.exit(0)
 
     except RuntimeError as e:
@@ -1994,9 +1994,15 @@ def main():
             f"ERROR: {error_msg}\n"
         )
 
-        # Special exit code for "no changes" (not a failure)
+        # Its own exit code: no changes is a fact to report, not a broken
+        # environment.
         if error_msg.startswith("NO_CHANGES:"):
-            error_output += "ACTION: APPROVE and exit — nothing to review.\n"
+            # Report, never approve: an approval of a range with no changes
+            # would be a clean review of nothing.
+            error_output += (
+                "ACTION: Report this to the caller: the range holds no changes, "
+                "so there is nothing to review. Do NOT approve.\n"
+            )
             print(error_output)
             print(error_output, file=sys.stderr)
             sys.exit(2)

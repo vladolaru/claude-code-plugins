@@ -261,6 +261,8 @@ Execute the instructions printed by the script. After completing each step's wor
 
 Claude must write down everything subsequent steps need. If step 3 assigns IDs `F1, F2, F3` with scope status, those IDs must appear verbatim in `--thoughts` when calling step 4. The script does not store state — `--thoughts` is the only continuity mechanism.
 
+**Vocabulary (2026-09-14).** The live scripts call this argument `--worklog` and describe its content as a claim table: every id with its status marker and evidence pointer, no narrative. The mechanism is unchanged; the words say what the payload holds rather than asking the model for its thoughts or accumulated analysis. New scripts should use the same words.
+
 **What to include in `state_requirement`:**
 - The names of all ID types assigned in step 1-2 (e.g., "F1, F2...", "C1, A1...")
 - Every classification/status marker subsequent steps depend on (e.g., IN_SCOPE/OUT_OF_SCOPE, VERIFIED/FAILED/UNCERTAIN)

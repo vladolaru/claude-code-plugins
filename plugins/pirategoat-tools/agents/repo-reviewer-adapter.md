@@ -29,11 +29,7 @@ python3 $PLUGIN_ROOT/scripts/review/agent/bootstrap.py --agent repo-reviewer-ada
   --execution <given> --scope-domains "<given>" --range "<given>" --output-dir "<given>"
 ```
 
-The output names your briefing file; read it in full. Alongside the usual review rules, scope, and output
-instructions, it contains a **`=== REPO REVIEWER PROMPT ===`** section with the
-concrete values you need: the `REPO_AGENT_REF` file to run, the `EXECUTION` mode,
-the `CHANNEL` to tag findings with, and your `reviewer_name` / output file paths.
-If STATUS is ERROR, follow the instructions and exit.
+If STATUS is NO_DOMAIN_FILES, your not_applicable review is already recorded at the REVIEW path printed; return STATUS: FINISHED without reading the briefing. If STATUS is ERROR, report the error and exit. Otherwise the output names your briefing file; read it in full. Alongside the usual review rules, scope, and output instructions, it contains a **`=== REPO REVIEWER PROMPT ===`** section with the concrete values you need: the `REPO_AGENT_REF` file to run, the `EXECUTION` mode, the `CHANNEL` to tag findings with, and your `reviewer_name` / output file paths.
 
 ---
 

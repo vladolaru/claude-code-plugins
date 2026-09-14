@@ -22,7 +22,10 @@ from .critic_adjustments import (
     read_committed_proposal, read_findings_file, read_verdict_marker,
 )
 from .dispatch_status import AGENT_NAME_RE, DISPATCHED_STATUSES, load_dispatch_plan
-from .findings_ledger import DROP_REASONS_CHECK, DROP_REASONS_FINDING, NOTE_OUTCOMES, SOURCE_ID_RE
+from .findings_ledger import (
+    DROP_REASONS_CHECK, DROP_REASONS_FINDING, NOTE_ID_RE, NOTE_OUTCOMES,
+    NOTE_SOURCE_REVIEWER, SOURCE_ID_RE,
+)
 from .manifest_sections import read_change_purpose
 from .review_document import cited_hosts, load_review_document
 from .reviewer_lifecycle import review_paths
@@ -49,9 +52,17 @@ def _sources(entries, reasons=None):
     rows = []
     for entry in entries or []:
         identity = entry.get("id")
-        if not isinstance(identity, str) or not SOURCE_ID_RE.fullmatch(identity):
-            continue
-        row = {"agent": _agent(entry.get("reviewer")), "id": identity}
+        if entry.get("reviewer") == NOTE_SOURCE_REVIEWER:
+            # A confirmed orchestrator note that sourced a finding: its
+            # lineage row names the orchestrator, so a cohort can count
+            # what the note route carried.
+            if not isinstance(identity, str) or not NOTE_ID_RE.fullmatch(identity):
+                continue
+            row = {"agent": NOTE_SOURCE_REVIEWER, "id": identity}
+        else:
+            if not isinstance(identity, str) or not SOURCE_ID_RE.fullmatch(identity):
+                continue
+            row = {"agent": _agent(entry.get("reviewer")), "id": identity}
         if reasons is None:
             severity = entry.get("severity")
             row["severity"] = severity if severity in VALID_SEVERITIES else None
@@ -73,9 +84,10 @@ def _optional_sources(container, name, reasons=None):
 def _finding_row(finding):
     """One finding's id, severity, source lineage and critic action.
 
-    A finding the critic added has no reviewer sources by construction,
-    so its lineage is a measured empty collection; only a finding the
-    ledger recorded before sources existed has an unknown one.
+    A finding the critic added has no sources by construction, so its
+    lineage is a measured empty collection; a note-sourced finding's
+    lineage names the orchestrator; only a finding the ledger recorded
+    before sources existed has an unknown one.
     """
     action = (finding.get("critic_adjustment") or {}).get("action")
     if "sources" in finding:
