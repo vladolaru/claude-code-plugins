@@ -1068,7 +1068,11 @@ class ReviewOutputBuilder:
                 f"Cannot mark review as not_applicable — {summary} already "
                 "recorded. An agent that recorded work reviewed the code; "
                 "finish with the verdict its findings derive (approve when "
-                "there are none), not with an abstention."
+                "there are none), not with an abstention. Keep that work: "
+                "remove only the mark_not_applicable() call and re-run this "
+                "same script with every finding, check and observation it "
+                "carried. A builder that raises has recorded nothing, so a "
+                "retry that drops them publishes an empty approve."
             )
         self._not_applicable = True
         self._skip_reason = reason.strip()

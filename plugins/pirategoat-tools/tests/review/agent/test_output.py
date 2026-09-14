@@ -1753,6 +1753,21 @@ class TestNotApplicable:
         with pytest.raises(ValueError, match=expected):
             b.mark_not_applicable("No performance defects found")
 
+    def test_refusal_tells_the_reviewer_to_keep_the_recorded_work(self):
+        """B docs-drift (2026-09-14) hit this refusal, rebuilt its script
+        with only a positive observation, and published an approve with
+        zero checks: the refusal named the verdict to use but not that the
+        recorded check had to survive the retry."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="docs")
+        b.record_check("Do the docs mention the hook?", "grep -rn hook docs/", "no hit")
+        with pytest.raises(ValueError) as exc:
+            b.mark_not_applicable("No documentation changes in scope")
+        message = str(exc.value)
+        assert "1 check(s) already recorded" in message
+        assert "remove only the mark_not_applicable() call" in message
+        assert "re-run this same script with every finding, check and observation it carried" in message
+        assert "publishes an empty approve" in message
+
     @pytest.mark.parametrize("record", [
         lambda b: b.add_finding("high", "XSS", "f.php", "desc", "rec", line=1),
         lambda b: b.record_check("q", "m", "r"),
