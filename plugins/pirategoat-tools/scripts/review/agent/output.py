@@ -105,6 +105,7 @@ except ImportError:
 
 try:
     from ..verdict_rules import (
+        NOT_APPLICABLE_VERDICT,
         SEVERITY_RANK,
         VALID_SEVERITIES,
         summary_for,
@@ -123,6 +124,7 @@ except ImportError:
     if _SCRIPTS_DIR not in sys.path:
         sys.path.insert(0, _SCRIPTS_DIR)
     from review.verdict_rules import (
+        NOT_APPLICABLE_VERDICT,
         SEVERITY_RANK,
         VALID_SEVERITIES,
         summary_for,
@@ -447,7 +449,7 @@ class ReviewOutputBuilder:
         builder.next_finding_number = meta["next_finding_number"]
         builder.next_check_number = meta["next_check_number"]
         builder.overall_confidence = meta["confidence_score"]
-        builder._not_applicable = review["verdict"] == "not_applicable"
+        builder._not_applicable = review["verdict"] == NOT_APPLICABLE_VERDICT
         builder._skip_reason = review.get("skip_reason")
         return builder
 
@@ -1094,7 +1096,7 @@ class ReviewOutputBuilder:
 
         derived = summary_for(self.findings)
         verdict = (
-            'not_applicable' if self._not_applicable else derived['verdict']
+            NOT_APPLICABLE_VERDICT if self._not_applicable else derived['verdict']
         )
         # An abstention has an empty finding list by construction (the
         # builder refuses work in either order around it), so its summary
@@ -1236,7 +1238,7 @@ class ReviewOutputBuilder:
                 "If an earlier builder script raised, re-run the whole script "
                 "with its content, not only the save"
             )
-            if review["verdict"] != "not_applicable":
+            if review["verdict"] != NOT_APPLICABLE_VERDICT:
                 # An abstention records nothing by contract; only a verdict
                 # that claims a review should say what it checked.
                 advice += (
@@ -1428,7 +1430,7 @@ def record_no_domain_files_review(
         review, _agent_name = _validate_review(
             output_dir, reviewer, paths, Path(paths.final).read_bytes()
         )
-        if review["verdict"] != "not_applicable":
+        if review["verdict"] != NOT_APPLICABLE_VERDICT:
             raise ValueError(
                 f"{reviewer} is already finalized as {review['verdict']} at "
                 f"{paths.final}; bootstrap records not_applicable only for a "

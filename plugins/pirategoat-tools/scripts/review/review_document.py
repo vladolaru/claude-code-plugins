@@ -24,7 +24,9 @@ from datetime import datetime
 from typing import Any, Dict
 
 try:
-    from .verdict_rules import VALID_SEVERITIES, VERDICT_RANK, summary_for
+    from .verdict_rules import (
+        NOT_APPLICABLE_VERDICT, VALID_SEVERITIES, VERDICT_RANK, summary_for,
+    )
 except ImportError:
     _scripts_parent = os.path.dirname(
         os.path.dirname(os.path.abspath(__file__))
@@ -32,6 +34,7 @@ except ImportError:
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
     from review.verdict_rules import (
+        NOT_APPLICABLE_VERDICT,
         VALID_SEVERITIES,
         VERDICT_RANK,
         summary_for,
@@ -520,7 +523,7 @@ def validate_review_content(document, *, schema):
     except ValueError as exc:
         raise ValueError(f"review findings are malformed: {exc}") from exc
     expected_verdict = derived["verdict"]
-    if document.get("verdict") == "not_applicable":
+    if document.get("verdict") == NOT_APPLICABLE_VERDICT:
         skip_reason = document.get("skip_reason")
         if (
             findings
@@ -528,7 +531,7 @@ def validate_review_content(document, *, schema):
             or not skip_reason.strip()
         ):
             raise ValueError("review not_applicable verdict is malformed")
-        expected_verdict = "not_applicable"
+        expected_verdict = NOT_APPLICABLE_VERDICT
     elif "skip_reason" in document:
         raise ValueError(
             "review skip_reason requires a not_applicable verdict"

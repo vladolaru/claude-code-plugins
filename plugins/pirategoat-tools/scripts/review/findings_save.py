@@ -38,7 +38,7 @@ try:
         validate_orchestrator_notes,
     )
     from .review_document import MAX_LEDGER_TEXT_LENGTH
-    from .verdict_rules import REVIEW_VERDICTS, VALID_SEVERITIES
+    from .verdict_rules import NOT_APPLICABLE_VERDICT, REVIEW_VERDICTS, VALID_SEVERITIES
     from .run_paths import artifact_path
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -57,7 +57,7 @@ except ImportError:
         validate_orchestrator_notes,
     )
     from review.review_document import MAX_LEDGER_TEXT_LENGTH
-    from review.verdict_rules import REVIEW_VERDICTS, VALID_SEVERITIES
+    from review.verdict_rules import NOT_APPLICABLE_VERDICT, REVIEW_VERDICTS, VALID_SEVERITIES
     from review.run_paths import artifact_path
 
 
@@ -180,7 +180,7 @@ def _is_review_entry(review):
     verdict = review.get("verdict")
     if verdict not in REVIEW_VERDICTS:
         return False
-    if verdict == "not_applicable":
+    if verdict == NOT_APPLICABLE_VERDICT:
         skip_reason = review.get("skip_reason")
         return (
             not findings
@@ -484,7 +484,7 @@ def stamp_pipeline_facts(document, context):
     reviewing = []
     for stem in sorted(reviews):
         review = reviews[stem]
-        if review.get("verdict") == "not_applicable":
+        if review.get("verdict") == NOT_APPLICABLE_VERDICT:
             not_applicable.append({
                 "name": stem,
                 "skip_reason": _bounded_skip_reason(review["skip_reason"]),

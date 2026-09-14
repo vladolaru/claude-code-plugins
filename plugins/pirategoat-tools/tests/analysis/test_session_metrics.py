@@ -285,6 +285,19 @@ class TestVerdictVocabulary:
         )
         assert _mod.extract_subagent_metrics(path)["verdict"] == expected
 
+    @pytest.mark.parametrize("verdict", _mod.PIPELINE_VERDICTS)
+    def test_every_pipeline_verdict_is_read(self, tmp_path, verdict):
+        """The pattern is built from verdict_rules, so a verdict added there
+        is counted here without a second list to edit."""
+        path = _write_jsonl(
+            [
+                _make_user_message("python3 bootstrap.py --agent security-reviewer"),
+                _make_assistant_message(f"STATUS: FINISHED\nVERDICT: {verdict}"),
+            ],
+            str(tmp_path),
+        )
+        assert _mod.extract_subagent_metrics(path)["verdict"] == verdict
+
     @pytest.mark.parametrize("line", [
         "the expected verdict: approve when the tests are present",
         "VERDICT: APPROVED",

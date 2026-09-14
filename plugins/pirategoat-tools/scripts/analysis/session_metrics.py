@@ -42,13 +42,28 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-# Sibling module in scripts/review — the one place the severity vocabulary
-# is declared, so a new severity added there reaches this script's counts
-# and rendering without a second hand-spelled list to remember.
+# Sibling module in scripts/review — the one place the severity and verdict
+# vocabularies are declared, so a severity or verdict added there reaches
+# this script's counts and rendering without a second hand-spelled list.
 _ANALYSIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(_ANALYSIS_DIR))
 from analysis.review_transcript import usage_summary_for_transcript  # noqa: E402
-from review.verdict_rules import VALID_SEVERITIES  # noqa: E402
+from review.verdict_rules import (  # noqa: E402
+    NOT_APPLICABLE_VERDICT, PIPELINE_VERDICTS, VALID_SEVERITIES,
+)
+
+# The return-signal verdicts a session can end on: the pipeline verdicts a
+# reviewer echoes, and the abstention in the lower case the signal spells
+# (its upper case is read too). The label is case-insensitive (the
+# reconciliator returns `Verdict:`); the token is not and ends at a word
+# boundary, so a transcript line that discusses a verdict in prose is not one.
+_VERDICT_RE = re.compile(
+    r"(?i:VERDICT):\s*("
+    + "|".join(re.escape(token) for token in (
+        *PIPELINE_VERDICTS, NOT_APPLICABLE_VERDICT, NOT_APPLICABLE_VERDICT.upper(),
+    ))
+    + r")\b"
+)
 
 
 # -- Known reviewer agent types --
@@ -503,23 +518,13 @@ def extract_subagent_metrics(filepath: str) -> dict:
                         first_timestamp = ts_str
                     last_timestamp = ts_str
 
-                # Verdict (reviewer agents)
-                # The return-signal vocabulary: the four pipeline verdicts,
-                # the Linear pipeline's ALIGN, and the abstention a reviewer
-                # (or bootstrap, for an empty scope) returns in lower case.
-                # The label is case-insensitive (the reconciliator returns
-                # `Verdict:`), the token is not and ends at a word boundary,
-                # so a transcript line that discusses a verdict in prose is
-                # not one.
-                verdict_match = re.search(
-                    r"(?i:VERDICT):\s*(APPROVE|COMMENT|REQUEST_CHANGES|BLOCK|ALIGN"
-                    r"|not_applicable|NOT_APPLICABLE)\b",
-                    line,
-                )
+                # Verdict (reviewer agents): see _VERDICT_RE.
+                verdict_match = _VERDICT_RE.search(line)
                 if verdict_match:
-                    verdict = verdict_match.group(1).upper()
+                    token = verdict_match.group(1)
                     metrics["verdict"] = (
-                        "not_applicable" if verdict == "NOT_APPLICABLE" else verdict
+                        NOT_APPLICABLE_VERDICT
+                        if token.lower() == NOT_APPLICABLE_VERDICT else token
                     )
 
                 # Severity counts (from COUNTS line in reviewer output)

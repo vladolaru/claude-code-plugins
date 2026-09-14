@@ -56,7 +56,7 @@ from review.reviewer_lifecycle import (
     scoped_diff_path,
     started_marker_path,
 )
-from review.verdict_rules import PIPELINE_VERDICTS
+from review.verdict_rules import NOT_APPLICABLE_VERDICT, PIPELINE_VERDICTS
 
 
 class ReviewArgumentParser(argparse.ArgumentParser):
@@ -1318,7 +1318,7 @@ def no_domain_files_signal(path: str, skip_reason: str) -> List[str]:
         "  OUTPUT_FILES:",
         f"    - {path}",
         "  COUNTS: critical: 0, high: 0, medium: 0",
-        "  VERDICT: not_applicable",
+        f"  VERDICT: {NOT_APPLICABLE_VERDICT}",
         f"  SUMMARY: {skip_reason}",
     ]
 

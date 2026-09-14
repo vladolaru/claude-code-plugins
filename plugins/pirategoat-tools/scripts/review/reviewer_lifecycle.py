@@ -20,11 +20,13 @@ try:
     from .run_paths import artifact_path, reviewer_dir
     from .reviewer_names import derive_reviewer_name
     from .review_document import load_review_document
+    from .verdict_rules import NOT_APPLICABLE_VERDICT
 except ImportError:
     from review.atomic_io import atomic_write_json, output_dir_lock
     from review.run_paths import artifact_path, reviewer_dir
     from review.reviewer_names import derive_reviewer_name
     from review.review_document import load_review_document
+    from review.verdict_rules import NOT_APPLICABLE_VERDICT
 
 
 FINALIZE_REVIEW_COMMAND = (
@@ -142,7 +144,7 @@ def require_not_finalized(paths: ReviewPaths) -> None:
             verdict = json.load(handle).get("verdict")
     except (OSError, ValueError, AttributeError):
         verdict = None
-    if verdict == "not_applicable":
+    if verdict == NOT_APPLICABLE_VERDICT:
         raise ValueError(
             f"reviewer {os.path.basename(paths.final)!r} is already finalized "
             "as not_applicable. Return STATUS: FINISHED with that path; an "

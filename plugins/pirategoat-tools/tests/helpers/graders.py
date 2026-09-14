@@ -37,6 +37,7 @@ from review.review_document import (
     REVIEWER_FIELDS,
 )
 from review.verdict_rules import (
+    NOT_APPLICABLE_VERDICT,
     REVIEW_VERDICTS as _PRODUCTION_VERDICTS,
     SEVERITY_RANK,
     VALID_SEVERITIES as _PRODUCTION_SEVERITIES,
@@ -511,12 +512,11 @@ def grade_review_baseline(path: str) -> GradeResult:
 
 DEFAULT_LINE_TOLERANCE = 2
 
-# Verdicts accepted as correct abstention on a NO_DOMAIN_FILES scenario.
-# The shared reviewer protocol mandates not_applicable; the tests-reviewer
-# agent definitions mandate approve — a live doctrine conflict inside the
-# plugin. Keys accept both compliant readings; the conflict itself is a
-# production-definition fix, not a benchmark one.
-_ABSTENTION_VERDICTS = frozenset({"not_applicable", "approve"})
+# Verdicts accepted as correct abstention on a NO_DOMAIN_FILES scenario: the
+# not_applicable review bootstrap records, and approve, which the
+# tests-reviewer agent definitions mandated before bootstrap recorded the
+# abstention itself (1.119.6).
+_ABSTENTION_VERDICTS = frozenset({NOT_APPLICABLE_VERDICT, "approve"})
 
 
 def _norm_path(path) -> str:
