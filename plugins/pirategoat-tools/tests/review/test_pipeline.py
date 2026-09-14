@@ -1472,6 +1472,25 @@ class TestStep7SaveReviewBaseline:
         # Must not carry the Claude-host end-turn/notification mechanism
         assert "END YOUR TURN" not in text
 
+    @pytest.mark.parametrize("host", ["claude", "codex"])
+    def test_a_failed_bootstrap_is_never_dispatched_again(self, mod, tmp_path, host):
+        """A reviewer whose bootstrap exited with STATUS: ERROR used to read as
+        NOT_DISPATCHED, which this same guidance dispatches, so the
+        orchestrator sent it back into the stop bootstrap had already
+        reported. agents_status now reads it as BOOTSTRAP_ERROR, and the
+        wait guidance on both hosts must say it is not dispatched again."""
+        state = {"completed_steps": [], "resolved_params": {"git_range": "abc..HEAD"}}
+        ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main"}}
+        kwargs = {"config": {"host": "codex"}} if host == "codex" else {}
+        g = mod.get_step_guidance(7, "full", state, ctx, output_dir=str(tmp_path), **kwargs)
+
+        line = next(
+            line for line in "\n".join(g["actions"]).splitlines()
+            if "BOOTSTRAP_ERROR" in line
+        ).lower()
+
+        assert "never dispatch" in line or "do not dispatch" in line
+
 
 class TestStep8Reconcile:
     """Step 8: Reconcile + Verify. main() reads dispatch-plan.json + review files, passes to get_step_guidance()."""

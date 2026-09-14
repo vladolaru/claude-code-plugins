@@ -25,7 +25,7 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, NoReturn, Optional, Tuple
 
 # reviewer_names.py is a leaf module (stdlib only, no review-internal
 # imports) precisely so this import can never re-enter this file: an
@@ -51,10 +51,11 @@ from review.triage_sources import strip_html_comments
 from review.reviewer_lifecycle import (
     SCOPE_SUMMARY_SCHEMA,
     briefing_path,
+    mark_started,
+    record_bootstrap_error,
     review_paths,
     scope_summary_path,
     scoped_diff_path,
-    started_marker_path,
 )
 from review.verdict_rules import NOT_APPLICABLE_VERDICT, PIPELINE_VERDICTS
 
@@ -1458,12 +1459,31 @@ def build_scope_failure_output(
     )
 
 
+def exit_with_bootstrap_error(error_output: str, output_dir: str, agent_name: str) -> NoReturn:
+    """Print a STATUS: ERROR output, record the failure, and exit 1.
+
+    Every error exit once the dispatched reviewer is known goes through
+    here. Without the record, agents_status reads a reviewer that stopped
+    before its started marker as NOT_DISPATCHED, and the step-7 briefing
+    dispatches it again into the stop this output already reported.
+    Recording is best effort: a run directory that cannot take the record
+    must not replace the diagnosis the reviewer reports with a traceback.
+    """
+    print(error_output)
+    try:
+        record_bootstrap_error(output_dir, derive_reviewer_name(agent_name), error_output)
+    except (OSError, ValueError):
+        pass
+    sys.exit(1)
+
+
 def resolve_reviewer_identity(args):
     """Resolve registry vs adapter-ref identity for this invocation.
 
     Returns (agent_name, effective_agent_name, adapter_label,
     repo_agent_ref, ref_mode_error) — ref_mode_error is a printable
     message when the ref-mode flags are inconsistent, else None.
+    effective_agent_name is None only when the flags name no instance.
     """
     agent_name = args.agent
     adapter_label = args.adapter_label
@@ -1488,11 +1508,11 @@ def resolve_reviewer_identity(args):
         # execution of the repo prompt — not even via a dispatch override.
         return (
             agent_name,
-            None,
+            args.instance_name,
             adapter_label,
             repo_agent_ref,
             build_error_output(
-                args.instance_name or agent_name,
+                args.instance_name,
                 "Isolated execution is not implemented. Refusing to run the "
                 "repo reviewer prompt inline against an explicit isolation "
                 "request.",
@@ -1609,9 +1629,16 @@ def main():
         repo_agent_ref,
         ref_mode_error,
     ) = resolve_reviewer_identity(args)
+    # A failure is recorded once the dispatched reviewer is known. A call
+    # that names none (ref-mode flags without --instance-name or, in the
+    # check below, an agent the registry does not know) has nothing to record
+    # against, and its fix is a corrected dispatch, which NOT_DISPATCHED
+    # invites.
     if ref_mode_error:
-        print(ref_mode_error)
-        sys.exit(1)
+        if effective_agent_name is None:
+            print(ref_mode_error)
+            sys.exit(1)
+        exit_with_bootstrap_error(ref_mode_error, args.output_dir, effective_agent_name)
     ref_mode = bool(repo_agent_ref)
 
     # Step 1: Validate agent name
@@ -1628,12 +1655,11 @@ def main():
     # Step 2: Find plugin root
     plugin_root = find_plugin_root()
     if not plugin_root:
-        print(build_error_output(
+        exit_with_bootstrap_error(build_error_output(
             agent_name,
             "Could not find pirategoat-tools plugin root. "
             "Ensure the plugin is installed or /tmp/.pirategoat-tools-root is set.",
-        ))
-        sys.exit(1)
+        ), args.output_dir, effective_agent_name)
 
     # Step 3: Read and extract protocol rules
     protocol_path = os.path.join(
@@ -1641,12 +1667,11 @@ def main():
     )
     protocol_content = read_file(protocol_path)
     if not protocol_content:
-        print(build_error_output(
+        exit_with_bootstrap_error(build_error_output(
             agent_name,
             f"Could not read reviewer protocol at {protocol_path}",
             plugin_root,
-        ))
-        sys.exit(1)
+        ), args.output_dir, effective_agent_name)
 
     review_rules = extract_protocol_sections(
         protocol_content, REVIEWER_PROTOCOL_SKIP_SECTIONS
@@ -1837,15 +1862,14 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
 
     # A failed scope ends here, whether or not it left a summary behind: the
-    # diagnosis and the ACTION that fits it, no briefing and no started
-    # marker. Every STATUS: ERROR a reviewer sees therefore comes with no
-    # briefing to read, which is what each agent definition branches on
-    # before its read-the-briefing instruction.
+    # diagnosis and the ACTION that fits it, no briefing, and a failure
+    # record in place of the started marker. Every STATUS: ERROR a reviewer
+    # sees therefore comes with no briefing to read, which is what each
+    # agent definition branches on before its read-the-briefing instruction.
     if scope_status == "ERROR":
-        print(build_scope_failure_output(
+        exit_with_bootstrap_error(build_scope_failure_output(
             effective_agent_name, scope_output, plugin_root
-        ))
-        sys.exit(1)
+        ), output_dir, effective_agent_name)
 
     # Scope facts come from the machine-readable sidecars and only from them
     # — the same producer dict the rendered text was printed from. A run that
@@ -1856,12 +1880,11 @@ def main():
     except ValueError as exc:
         # Scope succeeded and its summary is unreadable: the infrastructure
         # failure this message names.
-        print(build_error_output(
+        exit_with_bootstrap_error(build_error_output(
             effective_agent_name,
             f"Could not read the scope summary: {exc}",
             plugin_root,
-        ))
-        sys.exit(1)
+        ), output_dir, effective_agent_name)
     scope_lines_for_budget = scope_facts["in_scope_stat_lines"]
     inline_diff_files, review_claimable_files = partition_scope_paths(
         scope_facts["inline_diff_files"], scope_facts["review_claimable_files"]
@@ -1955,12 +1978,11 @@ def main():
             channels=channels,
         )
     except (OSError, ValueError) as exc:
-        print(build_error_output(
+        exit_with_bootstrap_error(build_error_output(
             effective_agent_name,
             f"Could not publish authoritative review assignment: {exc}",
             plugin_root,
-        ))
-        sys.exit(1)
+        ), output_dir, effective_agent_name)
 
     # Telemetry: log agent start (best-effort, after budget is finalized)
     if ReviewTelemetry is not None:
@@ -2091,14 +2113,14 @@ def main():
         except (OSError, ValueError) as exc:
             # A closed intake, an unreadable draft, or an existing final
             # that is not a valid not_applicable review: the reviewer reads
-            # STATUS: ERROR like every other bootstrap failure, and no
-            # started marker is left behind to read as RUNNING.
-            print(build_error_output(
+            # STATUS: ERROR like every other bootstrap failure, and its
+            # failure is recorded in place of a started marker that would
+            # read as RUNNING.
+            exit_with_bootstrap_error(build_error_output(
                 effective_agent_name,
                 f"Could not record the empty-scope review: {exc}",
                 plugin_root,
-            ))
-            sys.exit(1)
+            ), output_dir, effective_agent_name)
 
     # The briefing file precedes the marker: a reviewer that sees RUNNING
     # can rely on its briefing existing.
@@ -2117,13 +2139,7 @@ def main():
     # started — leaving the marker would hold step 8 open until the timeout.
     # Keyed on the per-instance name so parallel adapter instances (same
     # registry key) don't collide.
-    started_path = started_marker_path(
-        output_dir, derive_reviewer_name(effective_agent_name)
-    )
-    os.makedirs(os.path.dirname(started_path), exist_ok=True)
-    with open(started_path, "w") as f:
-        from datetime import datetime, timezone
-        f.write(datetime.now(timezone.utc).isoformat())
+    mark_started(output_dir, reviewer_name)
     print(stub)
 
     # Every error exited above, before a briefing or a started marker

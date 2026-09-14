@@ -3,12 +3,16 @@
 Check Reviewer Agent Status — deterministic status check.
 
 Reads the dispatch plan and checks each dispatch identity's reviewer directory.
-Five states per dispatched agent:
-  FINISHED       — canonical schema-2 final review exists
-  INVALID_OUTPUT — final filename exists but its contents are not canonical
-  RUNNING        — fixed `started` marker exists, within timeout
-  TIMED_OUT      — fixed `started` marker exists, exceeded timeout
-  NOT_DISPATCHED — neither marker nor review file (LLM forgot to dispatch)
+Six states per dispatched agent:
+  FINISHED        — canonical schema-2 final review exists
+  INVALID_OUTPUT  — final filename exists but its contents are not canonical
+  RUNNING         — fixed `started` marker exists, within timeout
+  TIMED_OUT       — fixed `started` marker exists, exceeded timeout
+  BOOTSTRAP_ERROR — `bootstrap-error` failure record, no started marker:
+                    bootstrap exited with STATUS: ERROR; terminal, the
+                    recorded error is why the reviewer stopped
+  NOT_DISPATCHED  — no started marker, failure record or review file (LLM
+                    forgot to dispatch)
 
 Exit codes:
     0  ALL_DONE: true (nothing left to wait for, including invalid output)
@@ -45,7 +49,9 @@ try:
     )
     from .reviewer_names import derive_reviewer_name
     from .reviewer_lifecycle import (
+        bootstrap_error_path,
         finalize_review_command,
+        read_bootstrap_error,
         review_paths,
         started_marker_path,
     )
@@ -61,7 +67,9 @@ except ImportError:
     )
     from review.reviewer_names import derive_reviewer_name
     from review.reviewer_lifecycle import (
+        bootstrap_error_path,
         finalize_review_command,
+        read_bootstrap_error,
         review_paths,
         started_marker_path,
     )
@@ -199,6 +207,13 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
                     "elapsed_seconds": elapsed,
                 }
             agents.append(agent_state)
+        elif os.path.isfile(bootstrap_error_path(output_dir, reviewer)):
+            # Read after the started marker, which supersedes the failure
+            # record whichever was written first (reviewer_lifecycle.mark_started).
+            agents.append({
+                "name": name, "status": "BOOTSTRAP_ERROR",
+                "error": read_bootstrap_error(output_dir, reviewer),
+            })
         else:
             agents.append({"name": name, "status": "NOT_DISPATCHED"})
 
@@ -209,8 +224,8 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
     running = counts["RUNNING"]
 
     # ALL_DONE = nothing left to WAIT for.
-    # NOT_DISPATCHED agents will never start — don't wait for them.
-    # Only RUNNING agents block completion.
+    # NOT_DISPATCHED and BOOTSTRAP_ERROR agents will never start on their
+    # own — don't wait for them. Only RUNNING agents block completion.
     all_done = running == 0
 
     return {
@@ -223,6 +238,7 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
         "running": running,
         "timed_out": counts["TIMED_OUT"],
         "not_dispatched": counts["NOT_DISPATCHED"],
+        "bootstrap_error": counts["BOOTSTRAP_ERROR"],
         "skipped": sum(counts[status] for status in SKIPPED_STATUSES),
         "agents": agents,
     }
@@ -275,7 +291,8 @@ def format_output(result: dict) -> str:
     t = result["timed_out"]
     nd = result["not_dispatched"]
     invalid = result.get("invalid", 0)
-    lines.append(f"AGENT STATUS: {d} expected, {f} finished, {invalid} invalid, {r} running, {t} timed out, {nd} never started")
+    be = result.get("bootstrap_error", 0)
+    lines.append(f"AGENT STATUS: {d} expected, {f} finished, {invalid} invalid, {r} running, {t} timed out, {be} bootstrap errors, {nd} never started")
     lines.append("")
     for a in result["agents"]:
         name = a["name"]
@@ -295,6 +312,8 @@ def format_output(result: dict) -> str:
         elif st == "TIMED_OUT":
             elapsed = _fmt_elapsed(a.get("elapsed_seconds", 0))
             lines.append(f"  {name:30s} TIMED_OUT ({elapsed} — exceeded timeout)")
+        elif st == "BOOTSTRAP_ERROR":
+            lines.append(f"  {name:30s} BOOTSTRAP_ERROR ({a.get('error', '')})")
         elif st == "NOT_DISPATCHED":
             lines.append(f"  {name:30s} NOT_DISPATCHED (never started — LLM may have failed to dispatch)")
         elif st == "INVALID_OUTPUT":
@@ -318,6 +337,12 @@ def format_output(result: dict) -> str:
     if result["not_dispatched"] > 0:
         names = [a["name"] for a in result["agents"] if a["status"] == "NOT_DISPATCHED"]
         lines.append(f"NOTE: {len(names)} agent(s) never started (LLM may have failed to dispatch): {', '.join(names)}")
+    if result.get("bootstrap_error", 0) > 0:
+        names = [a["name"] for a in result["agents"] if a["status"] == "BOOTSTRAP_ERROR"]
+        lines.append(
+            f"NOTE: {len(names)} agent(s) failed at bootstrap and will be excluded "
+            f"from reconciliation; do not dispatch them again: {', '.join(names)}"
+        )
     if result["timed_out"] > 0:
         names = [a["name"] for a in result["agents"] if a["status"] == "TIMED_OUT"]
         lines.append(f"NOTE: Timed out agents will be excluded from reconciliation: {', '.join(names)}")

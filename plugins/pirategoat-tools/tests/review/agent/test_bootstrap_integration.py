@@ -400,11 +400,12 @@ class TestCategoryRepresentatives:
         assert result.returncode == 1
         assert "STATUS: ERROR" in result.stdout
         assert "No files matched" not in result.stdout
-        # An ERROR ends the review before any briefing: nothing to read, and
-        # no started marker left to read as RUNNING.
+        # An ERROR ends the review before any briefing: nothing to read, no
+        # started marker left to read as RUNNING, and the failure recorded.
         assert "BRIEFING:" not in result.stdout
-        from review.reviewer_lifecycle import started_marker_path
+        from review.reviewer_lifecycle import read_bootstrap_error, started_marker_path
         assert not Path(started_marker_path(str(tmp_path), "repo-renewals")).exists()
+        assert read_bootstrap_error(str(tmp_path), "repo-renewals").startswith("[code]")
 
     @pytest.mark.parametrize("adapter", [False, True], ids=["primary", "adapter"])
     def test_an_empty_range_is_reported_never_approved_or_abstained(self, tmp_path, adapter):
@@ -413,7 +414,7 @@ class TestCategoryRepresentatives:
         the repo adapter's alike: no briefing, no started marker, no
         recorded review. The adapter used to skip exit code 2, fall through
         to NO_DOMAIN_FILES and report a missing scope summary instead."""
-        from review.reviewer_lifecycle import started_marker_path
+        from review.reviewer_lifecycle import read_bootstrap_error, started_marker_path
         if adapter:
             ref = tmp_path / "renewals.md"
             ref.write_text("Review renewals logic end to end.")
@@ -435,6 +436,7 @@ class TestCategoryRepresentatives:
         assert "scope summary" not in result.stdout
         assert "BRIEFING:" not in result.stdout
         assert not Path(started_marker_path(str(out), reviewer)).exists()
+        assert "NO_CHANGES" in read_bootstrap_error(str(out), reviewer)
         assert not Path(review_paths(str(out), reviewer).final).exists()
 
     def test_ref_mode_agent_start_records_the_dispatched_model_tier(
@@ -1427,7 +1429,7 @@ class TestBriefingFileDelivery:
         the review agents_status reads. STATUS: ERROR, no started marker
         left to read as RUNNING, and the review untouched."""
         from review.agent.output import finalize_review
-        from review.reviewer_lifecycle import started_marker_path
+        from review.reviewer_lifecycle import read_bootstrap_error, started_marker_path
         args = ("--agent", "php-tests-reviewer", "--output-dir", str(tmp_path))
         assert run_bootstrap(*args, fixture="js-clean-source.diff").returncode == 0
         paths = review_paths(str(tmp_path), "php-tests")
@@ -1444,6 +1446,9 @@ class TestBriefingFileDelivery:
         assert "STATUS: ERROR" in result.stdout
         assert "php-tests is already finalized as approve" in result.stdout
         assert not marker.exists()
+        assert "php-tests is already finalized as approve" in read_bootstrap_error(
+            str(tmp_path), "php-tests"
+        )
         assert Path(paths.final).read_bytes() == before
 
     def test_two_reviewers_get_distinct_briefing_files(self, tmp_path):

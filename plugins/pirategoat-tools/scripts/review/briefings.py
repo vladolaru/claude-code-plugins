@@ -1321,6 +1321,9 @@ def _step_7_save_baseline(mode, state, context, config, output_dir):
             "- Exit code 3 (60s elapsed, still running): re-run the same "
             "call, no commentary",
             "- NOT_DISPATCHED agents: dispatch them first, then re-check",
+            "- BOOTSTRAP_ERROR agents: do not dispatch them again; bootstrap "
+            "already stopped them with the error shown, and they are "
+            "excluded from reconciliation",
             "- A `DRAFT` line for an agent whose Codex task has returned: "
             "run the exact command on its `FINALIZE_REVIEW_COMMAND` line, "
             "then re-check",
@@ -1357,7 +1360,9 @@ def _step_7_save_baseline(mode, state, context, config, output_dir):
             f"`python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\"` "
             "once. Any NOT_DISPATCHED agents: dispatch them, launch a fresh "
             "watchdog, end your turn — ALL_DONE does not wait for an agent "
-            "that never started. Otherwise exit 0: proceed to step 8; "
+            "that never started. Never dispatch BOOTSTRAP_ERROR agents again: "
+            "bootstrap already stopped them with the error shown. Otherwise "
+            "exit 0: proceed to step 8; "
             "exit 2: launch a fresh watchdog, end your turn.",
             "- A subagent notification whose result begins `STATUS: "
             "FINISHED`: no action. End your turn; the watchdog fires when "

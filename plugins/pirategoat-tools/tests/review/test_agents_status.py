@@ -19,7 +19,9 @@ from review import run_paths
 from review import synthesis_lifecycle
 from review.agent.output import ReviewOutputBuilder, finalize_review
 from review.reconciliation_context import load_agent_reviews
-from review.reviewer_lifecycle import review_paths, started_marker_path
+from review.reviewer_lifecycle import (
+    record_bootstrap_error, review_paths, started_marker_path,
+)
 from review.reviewer_names import derive_reviewer_name
 from helpers.review_fixtures import (
     canonical_assignment,
@@ -179,6 +181,61 @@ class TestCheckStatus:
         assert result["not_dispatched"] == 1
         security = [a for a in result["agents"] if a["name"] == "security-reviewer"][0]
         assert security["status"] == "NOT_DISPATCHED"
+
+    @staticmethod
+    def _fail_bootstrap(tmp_path, name, error_output):
+        """A failed bootstrap's record, through the production writer."""
+        record_bootstrap_error(str(tmp_path), derive_reviewer_name(name), error_output)
+
+    def test_a_failed_bootstrap_is_terminal_and_not_read_as_never_dispatched(
+        self, mod, tmp_path
+    ):
+        """A reviewer whose bootstrap exited with STATUS: ERROR used to read
+        as NOT_DISPATCHED, so the step-7 briefing dispatched it again into
+        the same failure. Its failure record makes it BOOTSTRAP_ERROR:
+        terminal, carrying the ERROR line, and told not to dispatch."""
+        _write_plan(tmp_path, [
+            {"name": "code-reviewer", "status": "DISPATCH"},
+            {"name": "security-reviewer", "status": "DISPATCH"},
+        ])
+        _start_agent(tmp_path, "code-reviewer")
+        _finish_agent(tmp_path, "code-reviewer")
+        self._fail_bootstrap(
+            tmp_path, "security-reviewer",
+            "ERROR: [config-ops] git diff timed out\nACTION: Report this error to the caller.",
+        )
+
+        result = mod.check_status(str(tmp_path))
+
+        assert result["all_done"] is True
+        assert result["bootstrap_error"] == 1 and result["not_dispatched"] == 0
+        security = [a for a in result["agents"] if a["name"] == "security-reviewer"][0]
+        assert security == {
+            "name": "security-reviewer", "status": "BOOTSTRAP_ERROR",
+            "error": "[config-ops] git diff timed out",
+        }
+        output = mod.format_output(result)
+        # Every dispatched agent is counted in exactly one bucket.
+        assert (
+            "2 expected, 1 finished, 0 invalid, 0 running, 0 timed out, "
+            "1 bootstrap errors, 0 never started"
+        ) in output
+        assert "BOOTSTRAP_ERROR ([config-ops] git diff timed out)" in output
+        assert "do not dispatch them again: security-reviewer" in output
+
+    def test_a_started_marker_supersedes_a_failure_record(self, mod, tmp_path):
+        """Whichever was written first: an earlier failure the reviewer got
+        past on a later dispatch, or a duplicate dispatch that failed while
+        this one runs. Either way a reviewer got past bootstrap and is
+        running."""
+        _write_plan(tmp_path, [{"name": "security-reviewer", "status": "DISPATCH"}])
+        self._fail_bootstrap(tmp_path, "security-reviewer", "ERROR: an earlier failure")
+        _start_agent(tmp_path, "security-reviewer")
+
+        result = mod.check_status(str(tmp_path))
+
+        assert result["agents"][0]["status"] == "RUNNING"
+        assert result["bootstrap_error"] == 0
 
     def test_timed_out_agent(self, mod, tmp_path):
         """Agent started 25 minutes ago, no review file → TIMED_OUT."""

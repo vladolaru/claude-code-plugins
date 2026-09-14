@@ -4,7 +4,7 @@
 This module owns the fixed per-reviewer filenames under
 `reviewers/<reviewer>/`: `review.draft.json`, `review.json`,
 `assignment.json`, `review.md`, `scope-summary*.json`,
-`scoped-diff.patch`, `briefing.md` and `started`. They are per-reviewer,
+`scoped-diff.patch`, `briefing.md`, `started` and `bootstrap-error`. They are per-reviewer,
 so they are named here rather than in `run_paths.ARTIFACTS`, which
 registers the run's shared artifacts.
 """
@@ -119,6 +119,63 @@ def briefing_path(output_dir: str, reviewer: str) -> str:
 def started_marker_path(output_dir: str, reviewer: str) -> str:
     """Return one reviewer's dispatch-start marker path."""
     return str(reviewer_dir(output_dir, reviewer) / "started")
+
+
+def bootstrap_error_path(output_dir: str, reviewer: str) -> str:
+    """Return one reviewer's bootstrap failure record path."""
+    return str(reviewer_dir(output_dir, reviewer) / "bootstrap-error")
+
+
+def record_bootstrap_error(output_dir: str, reviewer: str, error_output: str) -> None:
+    """Record that one reviewer's bootstrap exited with STATUS: ERROR.
+
+    The failure record holds a UTC timestamp line, then the ERROR and ACTION
+    lines of the output the reviewer was given. Without it, a dispatched
+    reviewer that failed before its started marker reads exactly like one
+    that was never dispatched, and the step-7 briefing dispatches it again.
+    """
+    path = bootstrap_error_path(output_dir, reviewer)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    diagnosis = [
+        line for line in error_output.splitlines()
+        if line.startswith(("ERROR:", "ACTION:"))
+    ]
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(
+            "\n".join([datetime.now(timezone.utc).isoformat(), *diagnosis]) + "\n"
+        )
+
+
+def read_bootstrap_error(output_dir: str, reviewer: str) -> str:
+    """The first ERROR line a failed bootstrap recorded, without its prefix."""
+    try:
+        with open(
+            bootstrap_error_path(output_dir, reviewer), encoding="utf-8"
+        ) as handle:
+            lines = handle.read().splitlines()
+    except (OSError, UnicodeDecodeError):
+        lines = []
+    return next(
+        (line.removeprefix("ERROR:").strip() for line in lines if line.startswith("ERROR:")),
+        "bootstrap failed without a recorded diagnosis",
+    )
+
+
+def mark_started(output_dir: str, reviewer: str) -> None:
+    """Write one reviewer's started marker: its briefing was delivered.
+
+    A started marker supersedes a bootstrap failure record beside it,
+    whichever was written first: an earlier dispatch's failure the reviewer
+    got past, or a duplicate dispatch that failed while this one runs.
+    agents_status reads them that way. Anything that renames a started
+    marker away without a review (pirategoat-bot's resume stale-out) must
+    retire the record beside it too, or the superseded failure reads as
+    terminal and blocks the re-dispatch.
+    """
+    path = started_marker_path(output_dir, reviewer)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(datetime.now(timezone.utc).isoformat())
 
 
 def require_review_intake_open(output_dir: str) -> None:
