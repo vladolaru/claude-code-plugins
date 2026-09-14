@@ -1030,40 +1030,58 @@ class TestNotApplicableCompletionContract:
             end = prompt.index("\nPY", start) + len("\nPY")
             invocations.append(prompt[start:end])
 
+        timeout_seconds = 30
+
         def run_invocation(invocation):
-            return subprocess.run(
-                ["bash", "-c", invocation],
-                cwd=tmp_path,
-                timeout=30,
-                capture_output=True,
-                text=True,
-            )
+            # A timeout comes back as a failed result carrying what the
+            # process printed, so a hang on the output lock and a slow
+            # import read differently, and the other reviewer's result is
+            # not lost with the exception.
+            try:
+                return subprocess.run(
+                    ["bash", "-c", invocation],
+                    cwd=tmp_path,
+                    timeout=timeout_seconds,
+                    capture_output=True,
+                    text=True,
+                )
+            except subprocess.TimeoutExpired as exc:
+                def text(stream):
+                    return stream.decode(errors="replace") if isinstance(stream, bytes) else (stream or "")
+                return subprocess.CompletedProcess(
+                    exc.cmd, f"timed out after {timeout_seconds}s",
+                    text(exc.stdout), text(exc.stderr),
+                )
+
+        def evidence(completed):
+            # Every assertion below carries both streams: this test failed
+            # once under a full-suite run and left nothing to diagnose.
+            return [
+                {"exit": r.returncode, "stdout": r.stdout, "stderr": r.stderr}
+                for r in completed
+            ]
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             results = list(executor.map(run_invocation, invocations))
 
-        assert all(result.returncode == 0 for result in results), [
-            result.stderr for result in results
-        ]
-        assert all("DRAFT TOTALS:" in result.stdout for result in results)
+        assert all(result.returncode == 0 for result in results), evidence(results)
+        assert all("DRAFT TOTALS:" in result.stdout for result in results), evidence(results)
         finalize_results = []
         for result in results:
             finalize_command = next(
-                line.removeprefix("FINALIZE REVIEW: ")
-                for line in result.stdout.splitlines()
-                if line.startswith("FINALIZE REVIEW: ")
+                (
+                    line.removeprefix("FINALIZE REVIEW: ")
+                    for line in result.stdout.splitlines()
+                    if line.startswith("FINALIZE REVIEW: ")
+                ),
+                None,
             )
-            finalize_results.append(subprocess.run(
-                ["bash", "-c", finalize_command],
-                cwd=tmp_path,
-                timeout=30,
-                capture_output=True,
-                text=True,
-            ))
-        assert all(result.returncode == 0 for result in finalize_results)
+            assert finalize_command, evidence([result])
+            finalize_results.append(run_invocation(finalize_command))
+        assert all(result.returncode == 0 for result in finalize_results), evidence(finalize_results)
         assert all(
             "REVIEW FINALIZED" in result.stdout for result in finalize_results
-        )
+        ), evidence(finalize_results)
         for reviewer_name in ("security", "performance"):
             saved = json.loads(
                 Path(review_paths(output_dir, reviewer_name).final).read_text()
