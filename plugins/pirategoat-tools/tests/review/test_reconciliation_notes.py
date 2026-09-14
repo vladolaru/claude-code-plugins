@@ -113,3 +113,47 @@ def test_cli_rejects_and_writes_nothing(tmp_path):
     assert result.returncode == 1
     assert result.stdout.startswith("REJECTED: ")
     assert _context(tmp_path)["orchestrator_notes"] == []
+
+
+def test_cli_records_every_repeated_note_flag_in_order(tmp_path):
+    """Run A (2026-09-14) passed three --note flags in one call and the CLI
+    kept only the last one, printing a success line for it; two claims
+    vanished without an error."""
+    _write_context(tmp_path)
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--output-dir", str(tmp_path),
+         "--note", "V3: the preset's babel-jest entry is unreachable",
+         "--note", "the history-insights high is false: the suite passes 30/30",
+         "--note", "V2: the barrel import adds no checkout bundle weight"],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.splitlines() == [
+        "RECORDED NOTE: n1", "RECORDED NOTE: n2", "RECORDED NOTE: n3",
+    ]
+    notes = _context(tmp_path)["orchestrator_notes"]
+    assert [n["id"] for n in notes] == ["n1", "n2", "n3"]
+    assert notes[0]["note"].startswith("V3:")
+    assert notes[2]["note"].startswith("V2:")
+
+
+def test_cli_with_one_unusable_note_among_several_writes_nothing(tmp_path):
+    """All-or-nothing: a partial registration would leave the orchestrator
+    guessing which claims reached the context."""
+    _write_context(tmp_path)
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--output-dir", str(tmp_path),
+         "--note", "a real claim", "--note", " "],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 1
+    assert result.stdout.startswith("REJECTED: ")
+    assert _context(tmp_path)["orchestrator_notes"] == []
+
+
+def test_add_notes_registers_in_order_under_one_lock(tmp_path):
+    _write_context(tmp_path, notes=[{"id": "n1", "note": "already here"}])
+    from review.reconciliation_notes import add_notes
+    recorded = add_notes(tmp_path, ["second", "third"])
+    assert [n["id"] for n in recorded] == ["n2", "n3"]
+    assert [n["id"] for n in _context(tmp_path)["orchestrator_notes"]] == ["n1", "n2", "n3"]

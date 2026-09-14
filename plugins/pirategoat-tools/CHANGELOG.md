@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A reviewer whose bootstrap stops with an error now shows as `BOOTSTRAP_ERROR` in the agent status check and is not dispatched again, where it used to read as never dispatched and be sent back into the same failure.
 - A reviewer whose review range holds no changes is told to report that to the caller instead of approving, so an empty range can no longer publish a clean review of nothing.
 - A review can no longer mix an abstention with recorded work in either order: `mark_not_applicable` is refused after a finding, check, observation or recommendation, and recording any of those is refused after an abstention, so a reviewer that looked and found nothing approves and stays in the run's reviewing agents; `withdraw_not_applicable()` is the explicit way back for a reviewer that marked `not_applicable` and then found work on a closer read.
+- Registering several orchestrator notes in one call now records every one of them: a repeated `--note` flag used to keep only the last claim while printing a success line for it, so the other claims never reached the reconciliator.
 
 ## [1.119.5] - 2026-09-12
 
