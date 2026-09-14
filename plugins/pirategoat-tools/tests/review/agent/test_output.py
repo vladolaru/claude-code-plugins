@@ -2756,11 +2756,41 @@ class TestRecordNoDomainFilesReview:
         # built from it never names a sentence the review does not carry.
         assert second == first and Path(first.path).read_bytes() == before
 
+    def test_an_existing_final_that_does_not_abstain_is_refused(self, tmp_path, capsys):
+        """A re-dispatch into a run directory that already holds this
+        reviewer's approve review: returning it would print a
+        not_applicable signal with a SUMMARY the review does not carry, and
+        the return would disagree with what agents_status reads."""
+        from review.agent.output import finalize_review, record_no_domain_files_review
+        _write_required_assignment(tmp_path, "code-clarity")
+        builder = ReviewOutputBuilder.open(tmp_path, "68615", "code-clarity")
+        receipt = builder.save_draft()
+        final = Path(finalize_review(str(tmp_path), "code-clarity", receipt["review_digest"])["final"])
+        capsys.readouterr()
+        before = final.read_bytes()
+        with pytest.raises(ValueError, match="code-clarity is already finalized as approve"):
+            record_no_domain_files_review(str(tmp_path), "68615", "code-clarity", "No clarity files")
+        assert final.read_bytes() == before
+
+    def test_an_existing_final_that_fails_validation_is_refused(self, tmp_path):
+        """The existing final is trusted only the way `finalize_review`
+        trusts one: a not_applicable final whose assignment no longer
+        derives its reviewed-file fields is not a review to return."""
+        from review.agent.output import record_no_domain_files_review
+        _write_required_assignment(tmp_path, "code-clarity")
+        record_no_domain_files_review(str(tmp_path), "68615", "code-clarity", "No clarity files")
+        write_canonical_assignment(
+            tmp_path, "code-clarity", review_claimable_files=["src/unread.py"],
+        )
+        with pytest.raises(ValueError, match="do not match the assignment"):
+            record_no_domain_files_review(str(tmp_path), "68615", "code-clarity", "No clarity files")
+
     @pytest.mark.parametrize("corrupt", ["[]", '"text"', "{oops"])
     def test_a_corrupt_existing_final_fails_closed(self, tmp_path, corrupt):
-        """Bootstrap catches ValueError and prints STATUS: ERROR; a final
-        that parses to a non-object must reach it the same way, not as an
-        AttributeError traceback."""
+        """Bootstrap catches ValueError and prints STATUS: ERROR; the
+        validator refuses a final that is not a review document, so an
+        unparseable or non-object file reaches it that way, never as a
+        traceback."""
         from review.agent.output import record_no_domain_files_review
         from review.reviewer_lifecycle import review_paths
         _write_required_assignment(tmp_path, "code-clarity")

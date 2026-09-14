@@ -1367,6 +1367,31 @@ class TestBriefingFileDelivery:
         assert stub_field(result.stdout, "REVIEW") == final
         assert json.loads(Path(final).read_text())["verdict"] == "not_applicable"
 
+    def test_an_existing_final_that_does_not_abstain_is_an_error(self, tmp_path):
+        """A reviewer already finalized as approve, bootstrapped again over
+        an empty scope: returning a not_applicable signal would contradict
+        the review agents_status reads. STATUS: ERROR, no started marker
+        left to read as RUNNING, and the review untouched."""
+        from review.agent.output import finalize_review
+        from review.reviewer_lifecycle import started_marker_path
+        args = ("--agent", "php-tests-reviewer", "--output-dir", str(tmp_path))
+        assert run_bootstrap(*args, fixture="js-clean-source.diff").returncode == 0
+        paths = review_paths(str(tmp_path), "php-tests")
+        marker = Path(started_marker_path(str(tmp_path), "php-tests"))
+        Path(paths.final).unlink()
+        marker.unlink()
+        receipt = ReviewOutputBuilder.open(tmp_path, "0", "php-tests").save_draft()
+        finalize_review(str(tmp_path), "php-tests", receipt["review_digest"])
+        before = Path(paths.final).read_bytes()
+
+        result = run_bootstrap(*args, fixture="js-clean-source.diff")
+
+        assert result.returncode == 1
+        assert "STATUS: ERROR" in result.stdout
+        assert "php-tests is already finalized as approve" in result.stdout
+        assert not marker.exists()
+        assert Path(paths.final).read_bytes() == before
+
     def test_two_reviewers_get_distinct_briefing_files(self, tmp_path):
         first = run_bootstrap(
             "--agent", "performance-reviewer", "--output-dir", str(tmp_path)

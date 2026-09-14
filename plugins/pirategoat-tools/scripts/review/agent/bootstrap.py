@@ -1335,7 +1335,7 @@ def deliver_briefing(
 ) -> str:
     """Write one reviewer's briefing to the run directory, return the stub.
 
-    `recorded_review` is the final review bootstrap wrote for an empty
+    `recorded_review` is the not_applicable final review for an empty
     scope, with the reason it states; the stub then names the review and
     replaces the read-the-briefing guidance with the complete return
     signal.
@@ -2044,7 +2044,8 @@ def main():
                 "files: scope discovery matched nothing for this reviewer",
             )
         except (OSError, ValueError) as exc:
-            # A closed intake or an unreadable draft: the reviewer reads
+            # A closed intake, an unreadable draft, or an existing final
+            # that is not a valid not_applicable review: the reviewer reads
             # STATUS: ERROR like every other bootstrap failure, and no
             # started marker is left behind to read as RUNNING.
             print(build_error_output(

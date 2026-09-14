@@ -1413,24 +1413,28 @@ def record_no_domain_files_review(
     assignment binding and agent_complete telemetry are the ones every
     other review gets; the builder's receipts and notes are swallowed
     because they advise a reviewer and bootstrap's stub is the only thing
-    its caller reads. Idempotent: an
-    existing final review is returned untouched, with the reason it
-    already states, so a bootstrap retry cannot fail on its own success
-    and the signal never names a reason the review does not carry.
+    its caller reads.
+
+    An existing final that passes `_validate_review` (the check
+    `finalize_review` applies to one) and abstains is returned untouched,
+    with the skip_reason it states, so a bootstrap retry cannot fail on its
+    own success and the signal never names a reason the review does not
+    carry. Any other existing final raises ValueError, which bootstrap
+    reports as STATUS: ERROR: a not_applicable signal would contradict the
+    verdict the review records.
     """
     paths = review_paths(output_dir, reviewer)
     if os.path.exists(paths.final):
-        # A final that parses but is not an object is corrupt, and a
-        # ValueError is what bootstrap turns into STATUS: ERROR; an
-        # AttributeError from `.get` would escape as a traceback.
-        with open(paths.final, "r", encoding="utf-8") as handle:
-            review = json.load(handle)
-        if not isinstance(review, dict):
-            raise ValueError(f"malformed final review: {paths.final}")
-        recorded = review.get("skip_reason")
-        return NotApplicableReview(
-            paths.final, recorded if isinstance(recorded, str) else skip_reason
+        review, _agent_name = _validate_review(
+            output_dir, reviewer, paths, Path(paths.final).read_bytes()
         )
+        if review["verdict"] != "not_applicable":
+            raise ValueError(
+                f"{reviewer} is already finalized as {review['verdict']} at "
+                f"{paths.final}; bootstrap records not_applicable only for a "
+                "reviewer with no final review"
+            )
+        return NotApplicableReview(paths.final, review["skip_reason"])
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         builder = ReviewOutputBuilder.open(output_dir, pr_id, reviewer)
         builder.mark_not_applicable(skip_reason)
