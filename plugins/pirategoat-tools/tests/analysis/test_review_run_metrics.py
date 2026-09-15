@@ -5057,7 +5057,7 @@ class TestInlineDiffLines:
                          include_transcripts=False)],
             {},
         ).splitlines()[0]
-        assert header.split("|")[6].strip() == "Diff lines"
+        assert header.split("|")[6].strip() == "Inline diff lines"
 
 
 class TestTranscriptFamilyAvailability:
@@ -7520,7 +7520,7 @@ class TestFormattingAndCli:
             "Assigned/Reviewable/Unassigned",
             "Outcome/Critic",
             "Wall",
-            "Eff In/Out",
+            "Eff In/Out (all actors)",
             "Budget util",
             "Transcript",
         ):
@@ -7566,7 +7566,7 @@ class TestFormattingAndCli:
         lines = format_table([measured], aggregate_cohort([measured])).splitlines()
         headers = [cell.strip() for cell in lines[0].strip("|").split("|")]
         cells = [cell.strip() for cell in lines[2].strip("|").split("|")]
-        assert dict(zip(headers, cells))["Eff In/Out"] == "—"
+        assert dict(zip(headers, cells))["Eff In/Out (all actors)"] == "—"
         assert payload["runs"][0]["metric_availability"]["usage"] == "missing"
         assert payload["runs"][0]["transcript"]["usage"] == _usage(0)
 

@@ -248,6 +248,11 @@ def format_table(runs: list[dict[str, Any]], aggregate: dict[str, Any]) -> str:
     if not runs:
         return "No review runs found.\n"
     shared = any(run.get("uploaded_by") is not None for run in runs)
+    # Labels name the population: "Inline diff lines" is the sum over
+    # dispatched reviewers of the diff lines their briefings carried, not
+    # the PR's diff size; "Eff In/Out (all actors)" includes the
+    # orchestrator, where the pipeline result's usage block is subagents
+    # only (run A, 2026-09-14: 25.09M here against 17.21M there).
     headers = [
         *(["Uploader"] if shared else []),
         "Run ID",
@@ -255,12 +260,12 @@ def format_table(runs: list[dict[str, Any]], aggregate: dict[str, Any]) -> str:
         "Planner→Actual",
         "Adjustments",
         "Assigned/Reviewable/Unassigned",
-        "Diff lines",
+        "Inline diff lines",
         "Outcome/Critic",
         "Wall",
         "Recon/Critic",
         "Synth %",
-        "Eff In/Out",
+        "Eff In/Out (all actors)",
         "Transcript",
         "Budget util",
     ]
