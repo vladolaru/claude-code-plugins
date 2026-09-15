@@ -21,6 +21,7 @@ sys.path.insert(0, _ANALYSIS_DIR)
 # turn every contractual poll back into a recorded tool failure.
 sys.path.insert(0, os.path.dirname(_ANALYSIS_DIR))
 from review.agents_status import STATUS_ENVELOPE_PREFIX  # noqa: E402
+from containment import contains  # noqa: E402
 
 
 _USAGE_FIELDS = (
@@ -36,6 +37,11 @@ _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
 # variant the API actually resolved, so stripping it would misreport
 # attribution. Rejecting it nulled the model for every Opus-tier dispatch.
 _SAFE_MODEL = re.compile(r"^claude-[a-z0-9][a-z0-9._-]{0,119}(\[[a-z0-9._-]{1,16}\])?$")
+# Raw harness tokens retained verbatim: a stop reason or an API error kind
+# is a short lowercase identifier the harness writes; anything else is not
+# retained, never "cleaned". Grouping by these values is the reader's job.
+_SAFE_TOKEN = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+_MAX_API_ERRORS = 20
 # The harness appends its trailer as a LINE-ANCHORED
 # "agentId: <id> (use SendMessage ...)" near the end of the result text
 # (verified against real transcripts). Anchor to line starts and take the
@@ -1306,6 +1312,47 @@ def _entry_usage(entry: dict[str, Any]) -> dict[str, int] | None:
     return usage
 
 
+def _safe_token(value: object) -> str | None:
+    return value if isinstance(value, str) and _SAFE_TOKEN.fullmatch(value) else None
+
+
+def _termination(entries: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """How the transcript ended, in the harness's own words.
+
+    Three 2026-09-14 critics died on an API error and every telemetry
+    surface read them as clean, because failure classification looked at
+    tool results only. This reads the two records the harness writes on
+    its own: `message.stop_reason` on every assistant entry, and the
+    top-level `isApiErrorMessage` entry with its `apiErrorStatus` and
+    `error` token. Values are retained raw and counted; nothing here says
+    what a value means, so a kind of failure never seen before appears as
+    a new value rather than as a clean run. Bounded, because a looping
+    error would otherwise grow the manifest without bound.
+    """
+    stop_reasons: Counter[str] = Counter()
+    api_errors: list[dict[str, Any]] = []
+    last_stop_reason: str | None = None
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("type") != "assistant":
+            continue
+        message = entry.get("message")
+        reason = _safe_token(message.get("stop_reason")) if isinstance(message, dict) else None
+        if reason is not None:
+            stop_reasons[reason] += 1
+            last_stop_reason = reason
+        if entry.get("isApiErrorMessage") is True and len(api_errors) < _MAX_API_ERRORS:
+            status = entry.get("apiErrorStatus")
+            api_errors.append({
+                "status": status if isinstance(status, int) and not isinstance(status, bool) and 100 <= status <= 599 else None,
+                "kind": _safe_token(entry.get("error")),
+            })
+    return {
+        "stop_reasons": dict(sorted(stop_reasons.items())),
+        "api_errors": api_errors,
+        "last_stop_reason": last_stop_reason,
+    }
+
+
 def _add_usage(target: dict[str, int], addition: dict[str, int]) -> None:
     for key in target:
         target[key] += addition.get(key, 0)
@@ -1925,8 +1972,13 @@ def _is_poll_outcome(command: object, result: dict[str, Any]) -> bool:
     return STATUS_ENVELOPE_PREFIX in _result_text(result)
 
 
-def _bash_read_paths(command: object, repo_root: Path) -> list[str]:
+def _bash_read_paths(
+    command: object, repo_root: Path, start_cwd: str | None = ""
+) -> list[str]:
     """Every repository-relative or absolute path a Bash command reads.
+
+    Relative operands resolve against `start_cwd`, the directory the shell
+    was in when the call was issued, until the command's own `cd` moves it.
 
     Compounds are walked as the shell would run them: lines and `;`, `&&`,
     `||`, `&` separate simple commands; the first segment of a pipeline is
@@ -1962,7 +2014,13 @@ def _bash_read_paths(command: object, repo_root: Path) -> list[str]:
     if not isinstance(command, str) or not command.strip() or "\x00" in command:
         return []
     reads: list[str] = []
-    cwd: str | None = ""  # "" is the repository root; None is unknown
+    # Where the shell was when the call was issued: "" is the repository
+    # root, a relative path is a directory under it, None is unknown. The
+    # caller seeds it from the entry's own `cwd` field, because subagents
+    # inherit the orchestrator's live directory and a Bash tool's cwd
+    # persists between calls; starting every command at the root joined
+    # relative reads to a directory the shell was not in.
+    cwd: str | None = start_cwd
     lists = _and_or_lists(command)
     # An `exit`, `exec` or `return` may have ended the shell with status 0
     # before anything after it ran (`test -f x || exit 0; cat y`, or
@@ -1972,7 +2030,8 @@ def _bash_read_paths(command: object, repo_root: Path) -> list[str]:
     for position, (commands, operators, backgrounded) in enumerate(lists):
         # `&` runs the list in a subshell: its `cd` moves nothing in the
         # foreground and its `exit` ends nothing here, so the list is
-        # opaque (`cd src & cat a.py` reads the root's a.py).
+        # opaque (`cd src & cat a.py` reads a.py from where the shell
+        # started, unmoved by the backgrounded `cd`).
         if backgrounded:
             continue
         every_command_ran = position == len(lists) - 1 and "||" not in operators
@@ -2017,6 +2076,31 @@ def _bash_read_paths(command: object, repo_root: Path) -> list[str]:
                 elif cwd is not None:
                     reads.append(os.path.join(cwd, operand) if cwd else operand)
     return reads
+
+
+def _entry_cwd(entry: dict[str, Any], repo_root: Path) -> str | None:
+    """The shell's directory when this entry's call was issued, repo-relative.
+
+    Every transcript entry carries the live shell `cwd`. "" is the
+    repository root, a relative path is a directory under it, None is
+    absent, relative (a relative spelling resolves against this analyzer
+    process's own working directory, not the shell's — accepting one could
+    reintroduce the very phantom read this seed removes, if the analyzer
+    happens to run from the repository root), or outside the repository (a
+    read there is not a repository read, and a guess would count files
+    that do not exist under the root). Containment is `containment.contains`,
+    the repository's single repo-boundary authority; only once it has
+    passed is the repo-relative spelling derived from both sides' realpaths.
+    """
+    raw = entry.get("cwd") if isinstance(entry, dict) else None
+    if not isinstance(raw, str) or not raw or not os.path.isabs(raw):
+        return None
+    root = str(repo_root)
+    if not contains(root, raw):
+        return None
+    relative = os.path.relpath(os.path.realpath(raw), os.path.realpath(root))
+    text = Path(relative).as_posix()
+    return "" if text == "." else text
 
 
 def _simple_bash_read_paths(tokens: list[str]) -> list[str]:
@@ -2191,7 +2275,9 @@ def _analyze_entries(
         if call["name"] == "Read":
             candidates = [call["input"].get("file_path")]
         elif call["name"] == "Bash":
-            candidates = _bash_read_paths(call["input"].get("command"), repo)
+            candidates = _bash_read_paths(
+                call["input"].get("command"), repo, _entry_cwd(entries[call["index"]], repo)
+            )
         for candidate in candidates:
             normalized = _normalize_repo_path(candidate, repo)
             if normalized is not None:
@@ -2518,6 +2604,7 @@ def enrich_run_transcript(
     agent_usage: list[dict[str, Any]] = []
     seen_paths = {str(Path(main_session).resolve(strict=False))}
     missing_transcripts: set[str] = set()
+    api_error_agents: set[str] = set()
     agent_transcript_parse_gaps: set[str] = set()
     unresolved_evidence: set[str] = set()
     missing_scope_evidence: set[str] = set()
@@ -2552,6 +2639,11 @@ def enrich_run_transcript(
     missing = sorted(missing_counts)
     for agent in missing:
         warnings.append({"code": "expected_agent_uncorrelated", "agent": agent})
+    for agent in sorted(correlated_counts):
+        if agent in _NON_SCOPE_COMPARABLE_AGENTS and correlated_counts[agent] > 1:
+            # The synthesis lifecycle row measures one dispatch; a second
+            # Agent call for the same identity is only visible here.
+            warnings.append({"code": "synthesis_redispatch", "agent": agent})
     for dispatch in correlated:
         transcript = Path(dispatch["transcript"])
         metadata = {
@@ -2575,6 +2667,7 @@ def enrich_run_transcript(
                     "usage_by_model": None,
                     "tool_calls": None,
                     "repository_reads": None,
+                    "termination": None,
                 }
             )
             continue
@@ -2654,6 +2747,7 @@ def enrich_run_transcript(
                 }
             )
         _add_usage(total_usage, analysis["usage"])
+        termination = _termination(entries)
         agent_usage.append(
             {
                 **metadata,
@@ -2663,8 +2757,12 @@ def enrich_run_transcript(
                 "tool_calls": analysis["tool_calls"],
                 # Count distinct repository files in normalized read evidence.
                 "repository_reads": len(analysis["observed_reads"]["all"]),
+                "termination": termination,
             }
         )
+        if termination["api_errors"] and dispatch["agent"] not in api_error_agents:
+            api_error_agents.add(dispatch["agent"])
+            warnings.append({"code": "agent_api_error", "agent": dispatch["agent"]})
         failures.extend(
             {"actor": dispatch["agent"], **failure}
             for failure in analysis["tool_failures"]
@@ -2700,6 +2798,19 @@ def enrich_run_transcript(
     for row in agent_usage:
         if row["agent"] in incomplete_read_agents:
             row["repository_reads"] = None
+    # A row's termination was computed from the same bounded entry stream a
+    # parse gap or a timestamp gap truncated (agent_transcript_parse_gaps
+    # covers both — _bounded_jsonl_entries drops an undecodable line and an
+    # untimestamped assistant/user turn alike). An empty api_errors list
+    # from a cut-off stream reads as a clean ending, so the record itself
+    # is dropped rather than kept half-true. missing_counts and
+    # unresolved_evidence do not drop entries from what was already read,
+    # so they leave termination alone. A real API error observed before the
+    # gap already raised agent_api_error above; only the row's own record
+    # stops claiming completeness.
+    for row in agent_usage:
+        if row["agent"] in agent_transcript_parse_gaps:
+            row["termination"] = None
     # Two independent completeness axes: whether every expected transcript
     # was observed and classified (per actor family), and — for the reads
     # partition only — whether an authoritative scope mapping backed the

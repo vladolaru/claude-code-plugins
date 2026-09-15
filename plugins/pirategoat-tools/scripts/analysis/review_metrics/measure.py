@@ -29,6 +29,7 @@ from .sanitize import (
     _safe_string,
     _safe_wall_time_ms,
     _sanitize_manifest,
+    _sanitize_termination,
     _sanitize_warnings,
     _strict_repo_read_paths,
     _strict_safe_strings,
@@ -156,10 +157,12 @@ def _sanitize_agent_usage(value: object) -> list[dict[str, Any]] | None:
             safe["usage"] = usage
             safe["tool_calls"] = tool_calls
             safe["repository_reads"] = _nonnegative_exact_int(item.get("repository_reads"))
+            safe["termination"] = _sanitize_termination(item.get("termination"))
         else:
             safe["usage"] = None
             safe["tool_calls"] = None
             safe["repository_reads"] = None
+            safe["termination"] = None
         result.append(safe)
     return result
 
@@ -677,6 +680,52 @@ def _apply_synthesis_dispatch_lag(measured: dict[str, Any]) -> list[str]:
             continue
         row["dispatch_lag_ms"] = lag_ms
     return warnings
+
+
+def _apply_synthesis_attempts(measured: dict[str, Any]) -> None:
+    """Join the transcript's dispatch count and finishing model onto each
+    synthesis row.
+
+    The lifecycle row is one marker to one completion artifact: a critic
+    that an API error killed and the orchestrator re-dispatched is one row
+    whose duration spans both executions (run B, 2026-09-14: 551 s over a
+    failed Opus run, a gap and a Fable run). The pipeline script cannot see
+    an Agent call; the transcript can, and correlation already counts one
+    row per dispatch. `attempts` is that count and `final_model` the model
+    of the last dispatch by time, both None when the transcript is
+    unavailable or never correlated the agent: unmeasured is not one.
+    """
+    section = measured.get("synthesis_agents")
+    rows = section.get("agents") if isinstance(section, dict) else None
+    if not isinstance(rows, list):
+        return
+    transcript = measured.get("transcript")
+    transcript = transcript if isinstance(transcript, dict) else {}
+    correlation = transcript.get("correlation")
+    counts = (
+        correlation.get("correlated_by_agent")
+        if isinstance(correlation, dict) else None
+    )
+    counts = counts if isinstance(counts, dict) else {}
+    usage_rows = transcript.get("agent_usage")
+    latest: dict[str, tuple[datetime, str | None]] = {}
+    for entry in usage_rows if isinstance(usage_rows, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        agent = entry.get("agent")
+        instant = _parse_time(entry.get("dispatched_at"))
+        if not isinstance(agent, str) or instant is None:
+            continue
+        model = entry.get("model")
+        if agent not in latest or instant >= latest[agent][0]:
+            latest[agent] = (instant, model if isinstance(model, str) else None)
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        agent = row.get("agent")
+        count = counts.get(agent) if isinstance(agent, str) else None
+        row["attempts"] = count if isinstance(count, int) and count >= 1 else None
+        row["final_model"] = latest[agent][1] if row["attempts"] is not None and agent in latest else None
 
 
 def _lifecycle_summary(manifest: dict[str, Any]) -> dict[str, Any] | None:
@@ -1248,6 +1297,7 @@ def measure_run(
     for warning in _apply_synthesis_dispatch_lag(measured):
         if warning not in warnings:
             warnings.append(warning)
+    _apply_synthesis_attempts(measured)
     measured["warnings"] = _sanitize_warnings(warnings)
     measured["budget_utilization"] = _budget_utilization(measured)
     measured["usage_shares"] = _usage_shares(measured)

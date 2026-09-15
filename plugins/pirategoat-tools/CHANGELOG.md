@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The plugin-root pointer the PreToolUse hook writes for reviewer agents is now one file per session, `~/.pirategoat-tools/sessions/<session id>/plugin-root`, so a session running a dev checkout and one running the installed release no longer overwrite each other's pointer before every command, and an agent can no longer build its briefing with one plugin version and save its review through another. Session directories whose pointer is a day old are swept.
 - The installed-release fallback search orders versions numerically, so `1.119.10` outranks `1.119.9`.
+- Run metrics record how each dispatched agent's transcript ended, as the harness's raw stop reasons and API error statuses, and warn when an agent hit an API error.
+- Synthesis rows in run metrics show how many times the reconciliator or critic was dispatched and which model finished, and warn when one was dispatched more than once; the cohort table marks a retried agent with its attempt count.
+- The metrics reader keeps step 9's `reconciliation_verification`, so run metrics no longer drop whether a reconciliation was verified.
+- The read detector starts each Bash call in the directory the shell was in, so a relative read after an inherited `cd` is no longer credited to a path that does not exist at the repository root.
+- The cohort table's "Inline diff lines" and "Eff In/Out (all actors)" columns now say which population they sum.
 
 ## [1.119.6] - 2026-09-14
 

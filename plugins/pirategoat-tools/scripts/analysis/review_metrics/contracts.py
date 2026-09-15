@@ -228,6 +228,8 @@ _FIXED_WARNING_CODES = {
     "agent_scope_evidence_missing",
     "inline_diff_empty",
     "synthesis_dispatch_before_marker",
+    "agent_api_error",
+    "synthesis_redispatch",
 }
 _SUMMARY_FIELDS = (
     "total_duration_ms",

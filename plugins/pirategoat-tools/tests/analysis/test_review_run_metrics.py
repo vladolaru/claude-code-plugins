@@ -72,6 +72,60 @@ class TestRepositoryReadEvidence:
         }])
         assert row["repository_reads"] is None
 
+    def test_available_row_sanitizes_its_termination(self):
+        # An unsafe token ("END TURN") proves `_sanitize_termination` ran
+        # on this path, not that the row was copied through untouched.
+        [row] = measure._sanitize_agent_usage([{
+            "agent": "review-reconciliator", "available": True,
+            "usage": _usage(2), "tool_calls": 3,
+            "termination": {
+                "stop_reasons": {"tool_use": 1, "END TURN": 1},
+                "api_errors": [],
+                "last_stop_reason": "tool_use",
+            },
+        }])
+        assert row["termination"] == {
+            "stop_reasons": {"tool_use": 1},
+            "api_errors": [],
+            "last_stop_reason": "tool_use",
+        }
+
+    def test_unavailable_row_cannot_claim_a_termination(self):
+        [row] = measure._sanitize_agent_usage([{
+            "agent": "review-reconciliator", "available": False,
+            "termination": {
+                "stop_reasons": {"tool_use": 1}, "api_errors": [],
+                "last_stop_reason": "tool_use",
+            },
+        }])
+        assert row["termination"] is None
+
+
+class TestSanitizeTermination:
+    def test_passes_safe_raw_values_through(self):
+        value = {
+            "stop_reasons": {"tool_use": 3, "end_turn": 1},
+            "api_errors": [{"status": 429, "kind": "rate_limit"}, {"status": None, "kind": None}],
+            "last_stop_reason": "end_turn",
+        }
+        assert sanitize._sanitize_termination(value) == value
+
+    def test_drops_unsafe_tokens_and_out_of_range_statuses(self):
+        value = {
+            "stop_reasons": {"tool_use": 3, "END TURN": 1, "x" * 50: 2},
+            "api_errors": [{"status": 42, "kind": "rate limit"}, {"status": 529, "kind": "overloaded"}],
+            "last_stop_reason": "end turn",
+        }
+        assert sanitize._sanitize_termination(value) == {
+            "stop_reasons": {"tool_use": 3},
+            "api_errors": [{"status": None, "kind": None}, {"status": 529, "kind": "overloaded"}],
+            "last_stop_reason": None,
+        }
+
+    @pytest.mark.parametrize("value", [None, "x", [], {"stop_reasons": []}])
+    def test_anything_else_is_none(self, value):
+        assert sanitize._sanitize_termination(value) is None
+
 
 def _load_telemetry_module():
     spec = importlib.util.spec_from_file_location(
@@ -206,6 +260,23 @@ def test_usage_fields_extend_transcript_producer_fields():
     assert set(contracts._USAGE_FIELDS) == set(transcript._USAGE_FIELDS) | {
         "effective_input_tokens"
     }
+
+
+def test_sanitizer_token_grammar_and_error_cap_match_the_transcript_producer():
+    """sanitize.py repeats review_transcript.py's _SAFE_TOKEN pattern and
+    _MAX_API_ERRORS cap rather than importing them (the standalone
+    transcript module cannot import this package). Nothing else pins the
+    two copies together, so a producer-side change could drift silently
+    past the sanitizer that is supposed to mirror it."""
+    spec = importlib.util.spec_from_file_location(
+        "review_transcript_for_termination_grammar",
+        PLUGIN_ROOT / "scripts" / "analysis" / "review_transcript.py",
+    )
+    transcript = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(transcript)
+
+    assert sanitize._SAFE_TOKEN.pattern == transcript._SAFE_TOKEN.pattern
+    assert sanitize._MAX_API_ERRORS == transcript._MAX_API_ERRORS
 
 
 def test_warning_allowlist_covers_transcript_emitted_codes():
@@ -5003,7 +5074,7 @@ class TestInlineDiffLines:
                          include_transcripts=False)],
             {},
         ).splitlines()[0]
-        assert header.split("|")[6].strip() == "Diff lines"
+        assert header.split("|")[6].strip() == "Inline diff lines"
 
 
 class TestTranscriptFamilyAvailability:
@@ -7466,7 +7537,7 @@ class TestFormattingAndCli:
             "Assigned/Reviewable/Unassigned",
             "Outcome/Critic",
             "Wall",
-            "Eff In/Out",
+            "Eff In/Out (all actors)",
             "Budget util",
             "Transcript",
         ):
@@ -7512,7 +7583,7 @@ class TestFormattingAndCli:
         lines = format_table([measured], aggregate_cohort([measured])).splitlines()
         headers = [cell.strip() for cell in lines[0].strip("|").split("|")]
         cells = [cell.strip() for cell in lines[2].strip("|").split("|")]
-        assert dict(zip(headers, cells))["Eff In/Out"] == "—"
+        assert dict(zip(headers, cells))["Eff In/Out (all actors)"] == "—"
         assert payload["runs"][0]["metric_availability"]["usage"] == "missing"
         assert payload["runs"][0]["transcript"]["usage"] == _usage(0)
 
@@ -9845,3 +9916,115 @@ class TestOptionalSectionsReachMeasureRun:
         assert measured["availability"]["dependency_refresh"] is True
         assert measured["availability"]["reviewer_markdown"] is True
         assert measured["availability"]["findings_markdown"] is True
+
+
+class TestSynthesisAttempts:
+    """A retried critic is one lifecycle row spanning both executions
+    (2026-09-14 run B: 551 s covering a failed Opus run, a gap and a Fable
+    run). The transcript sees each dispatch; the measured view joins the
+    count and the model that finished, beside the duration."""
+
+    def _measured(self, transcript):
+        return {
+            "synthesis_agents": {"finalized": True, "agents": [
+                {"agent": "review-reconciliator", "verdict": "approve", "started_at": "2026-09-14T10:00:00+00:00",
+                 "completed_at": "2026-09-14T10:05:00+00:00", "duration_ms": 300000, "stalled": False, "dispatch_lag_ms": None},
+                {"agent": "decision-reviewer", "verdict": "STAND", "started_at": "2026-09-14T10:41:22+00:00",
+                 "completed_at": "2026-09-14T10:50:33+00:00", "duration_ms": 551138, "stalled": False, "dispatch_lag_ms": None},
+            ]},
+            "transcript": transcript,
+        }
+
+    def test_counts_dispatches_and_names_the_model_that_finished(self):
+        measured = self._measured({
+            "available": True,
+            "correlation": {"correlated_by_agent": {"decision-reviewer": 2, "review-reconciliator": 1}},
+            "agent_usage": [
+                {"agent": "decision-reviewer", "model": "claude-opus-5", "dispatched_at": "2026-09-14T10:41:40+00:00"},
+                {"agent": "decision-reviewer", "model": "claude-fable-5-1", "dispatched_at": "2026-09-14T10:45:28+00:00"},
+                {"agent": "review-reconciliator", "model": "claude-opus-5", "dispatched_at": "2026-09-14T10:00:10+00:00"},
+            ],
+        })
+        measure._apply_synthesis_attempts(measured)
+        rows = {row["agent"]: row for row in measured["synthesis_agents"]["agents"]}
+        assert rows["decision-reviewer"]["attempts"] == 2
+        assert rows["decision-reviewer"]["final_model"] == "claude-fable-5-1"
+        assert rows["review-reconciliator"]["attempts"] == 1
+        assert rows["review-reconciliator"]["final_model"] == "claude-opus-5"
+
+    def test_unavailable_transcript_is_unmeasured_not_one(self):
+        measured = self._measured({"available": False, "correlation": None, "agent_usage": None})
+        measure._apply_synthesis_attempts(measured)
+        for row in measured["synthesis_agents"]["agents"]:
+            assert row["attempts"] is None
+            assert row["final_model"] is None
+
+    def test_a_synthesis_agent_the_transcript_never_correlated_is_unmeasured(self):
+        measured = self._measured({
+            "available": True,
+            "correlation": {"correlated_by_agent": {"review-reconciliator": 1}},
+            "agent_usage": [{"agent": "review-reconciliator", "model": "claude-opus-5", "dispatched_at": "2026-09-14T10:00:10+00:00"}],
+        })
+        measure._apply_synthesis_attempts(measured)
+        rows = {row["agent"]: row for row in measured["synthesis_agents"]["agents"]}
+        assert rows["decision-reviewer"]["attempts"] is None
+        assert rows["review-reconciliator"]["attempts"] == 1
+
+    def test_no_synthesis_section_is_a_no_op(self):
+        measure._apply_synthesis_attempts({"synthesis_agents": None, "transcript": {"available": True}})
+
+
+class TestSynthesisCellAttempts:
+    def test_a_retried_critic_shows_its_attempt_count(self):
+        section = {"agents": [
+            {"agent": "review-reconciliator", "duration_ms": 300000, "stalled": False, "attempts": 1},
+            {"agent": "decision-reviewer", "duration_ms": 551138, "stalled": False, "attempts": 2},
+        ]}
+        cell = render._synthesis_cell(section, "complete")
+        assert cell.endswith(" ×2")
+        assert " ×1" not in cell
+
+    def test_a_retried_critic_that_stalled_still_shows_its_attempt_count(self):
+        section = {"agents": [
+            {"agent": "review-reconciliator", "duration_ms": 300000, "stalled": False, "attempts": 1},
+            {"agent": "decision-reviewer", "stalled": True, "attempts": 2},
+        ]}
+        cell = render._synthesis_cell(section, "complete")
+        assert cell.endswith("stalled ×2")
+
+
+class TestOutcomeReconciliationVerification:
+    """Step 9's one published signal. The producer writes it everywhere
+    (state, record, pipeline-result.json, manifest); the reader dropped it,
+    so the cohort could not count unverified reconciliations."""
+
+    def test_is_kept_with_validated_values(self):
+        outcome = sanitize._sanitize_outcome({
+            "summary": {}, "reconciliation": None, "pipeline_status": "complete", "verdict": "approve",
+            "reconciliation_verification": {"status": "unverified", "repository_reads": 0, "verified_concern_count": 7},
+        })
+        assert outcome["reconciliation_verification"] == {
+            "status": "unverified", "repository_reads": 0, "verified_concern_count": 7,
+        }
+
+    def test_unknown_status_and_bad_counts_read_as_missing_values(self):
+        outcome = sanitize._sanitize_outcome({
+            "reconciliation_verification": {"status": "green", "repository_reads": -1, "verified_concern_count": "7"},
+        })
+        assert outcome["reconciliation_verification"] == {
+            "status": None, "repository_reads": None, "verified_concern_count": None,
+        }
+
+    @pytest.mark.parametrize("value", [None, "unverified", []])
+    def test_absent_or_malformed_is_absent(self, value):
+        outcome = sanitize._sanitize_outcome({"reconciliation_verification": value})
+        assert "reconciliation_verification" not in outcome
+
+    @pytest.mark.parametrize("status", [["unverified"], {"status": "unverified"}])
+    def test_unhashable_status_is_nulled(self, status):
+        outcome = sanitize._sanitize_outcome({
+            "reconciliation_verification": {"status": status, "repository_reads": 0, "verified_concern_count": 0},
+        })
+        assert outcome["reconciliation_verification"] == {
+            "status": None, "repository_reads": 0, "verified_concern_count": 0,
+        }

@@ -32,6 +32,10 @@ manifest_step_timeline = _mod._manifest_step_timeline
 result_state = _mod._result_state
 parse_builder_envelope = _mod.parse_builder_envelope
 safe_model = _mod._safe_model
+_termination = _mod._termination
+_bash_read_paths = _mod._bash_read_paths
+_entry_cwd = _mod._entry_cwd
+_analyze_entries = _mod._analyze_entries
 
 _bootstrap_spec = importlib.util.spec_from_file_location(
     "review_bootstrap_for_transcript_test", BOOTSTRAP_PATH
@@ -71,6 +75,7 @@ def _assistant(
     model: str = "claude-sonnet-4-5",
     entry_usage: bool = False,
     message_id: str | None = None,
+    cwd: str | None = None,
 ) -> dict:
     message = {"role": "assistant", "model": model, "content": list(blocks)}
     if message_id is not None:
@@ -81,6 +86,8 @@ def _assistant(
             entry["usage"] = usage
         else:
             message["usage"] = usage
+    if cwd is not None:
+        entry["cwd"] = cwd
     return entry
 
 
@@ -2386,7 +2393,8 @@ class TestAnalyzeSubagent:
         ]
         entries = []
         for call, result in calls_and_results:
-            entries.extend([_assistant(call), result])
+            cwd = str(repo) if call["name"] == "Bash" else None
+            entries.extend([_assistant(call, cwd=cwd), result])
         transcript = _write_jsonl(tmp_path / "reads.jsonl", entries)
 
         observed = analyze_subagent(
@@ -2537,7 +2545,7 @@ class TestAnalyzeSubagent:
         (repo / "lib").mkdir(parents=True)
         (repo / "src").mkdir()
         (repo / "src" / "a.py").write_text("")
-        entries = [_assistant(_call("c", "Bash", command=command)), _result("c")]
+        entries = [_assistant(_call("c", "Bash", command=command), cwd=str(repo)), _result("c")]
         transcript = _write_jsonl(tmp_path / "edge.jsonl", entries)
         observed = analyze_subagent(transcript, repo, [])["observed_reads"]
         assert observed["all"] == expected
@@ -2600,7 +2608,8 @@ class TestAnalyzeSubagent:
         ]
         entries = []
         for call, result in calls_and_results:
-            entries.extend([_assistant(call), result])
+            cwd = str(repo) if call["name"] == "Bash" else None
+            entries.extend([_assistant(call, cwd=cwd), result])
         transcript = _write_jsonl(tmp_path / "idioms.jsonl", entries)
 
         observed = analyze_subagent(transcript, repo, ["src/k.py", "src/l.py"])["observed_reads"]
@@ -2618,6 +2627,85 @@ class TestAnalyzeSubagent:
         ]
         assert observed["in_scope"] == ["src/k.py", "src/l.py"]
         assert observed["exhaustive"] is False
+
+
+class TestReadDetectorStartsWhereTheShellWas:
+    """Subagents inherit the orchestrator's live working directory and a
+    Bash tool's cwd persists between calls, so a relative read after an
+    inherited `cd plugins/woocommerce` was joined to the repository root
+    and counted a file that does not exist there (run B, 2026-09-14: four
+    phantom reads, real files under two spellings). The entry's own `cwd`
+    field is where the shell was when the call was issued."""
+
+    def test_relative_operands_resolve_against_the_start_cwd(self, tmp_path):
+        assert _bash_read_paths("cat src/x.php", tmp_path, start_cwd="plugins/woocommerce") == [
+            "plugins/woocommerce/src/x.php"
+        ]
+
+    def test_an_unknown_start_cwd_leaves_relative_reads_uncounted(self, tmp_path):
+        assert _bash_read_paths("cat src/x.php; cat /abs/y.php", tmp_path, start_cwd=None) == ["/abs/y.php"]
+
+    def test_the_default_is_still_the_repository_root(self, tmp_path):
+        assert _bash_read_paths("cat src/x.php", tmp_path) == ["src/x.php"]
+
+    def test_a_cd_inside_the_command_still_moves_from_the_start(self, tmp_path):
+        (tmp_path / "plugins" / "woocommerce" / "src").mkdir(parents=True)
+        assert _bash_read_paths("cd src && cat x.php", tmp_path, start_cwd="plugins/woocommerce") == [
+            "plugins/woocommerce/src/x.php"
+        ]
+
+    @pytest.mark.parametrize(
+        "cwd, expected",
+        [
+            ("{root}", ""),
+            ("{root}/plugins/woocommerce", "plugins/woocommerce"),
+            ("{root}/plugins/woocommerce/", "plugins/woocommerce"),
+            ("/somewhere/else", None),
+            ("{root}-sibling", None),
+            (None, None),
+            (7, None),
+        ],
+    )
+    def test_entry_cwd_is_repo_relative_or_unknown(self, tmp_path, cwd, expected):
+        (tmp_path / "plugins" / "woocommerce").mkdir(parents=True)
+        entry = {"type": "assistant"}
+        if cwd is not None:
+            entry["cwd"] = cwd.format(root=tmp_path) if isinstance(cwd, str) else cwd
+        assert _entry_cwd(entry, tmp_path) == expected
+
+    def test_a_relative_cwd_is_unknown_even_when_it_resolves_inside_the_repo(
+        self, tmp_path, monkeypatch
+    ):
+        """A relative `cwd` spelling resolves against this analyzer
+        process's own working directory, not the shell's. Without the
+        `isabs` guard, chdir-ing here to `tmp_path` would make
+        `plugins/woocommerce` resolve inside the repo and the analyzer's
+        own cwd, not the entry's, would decide the answer."""
+        (tmp_path / "plugins" / "woocommerce").mkdir(parents=True)
+        monkeypatch.chdir(tmp_path)
+        entry = {"type": "assistant", "cwd": "plugins/woocommerce"}
+        assert _entry_cwd(entry, tmp_path) is None
+
+    def test_analyze_entries_seeds_each_call_from_its_entry(self, tmp_path):
+        repo = tmp_path / "repo"
+        (repo / "plugins" / "woocommerce" / "src").mkdir(parents=True)
+        (repo / "plugins" / "woocommerce" / "src" / "x.php").write_text("<?php\n")
+        (repo / "plugins" / "woocommerce" / "src" / "y.php").write_text("<?php\n")
+        moved = _assistant(
+            _call("b1", "Bash", command="cat src/x.php"),
+            usage=_usage(1, 1),
+            cwd=str(repo / "plugins" / "woocommerce"),
+        )
+        at_root = _assistant(
+            _call("b2", "Bash", command="cat plugins/woocommerce/src/y.php"),
+            cwd=str(repo),
+        )
+        entries = [moved, _result("b1", content="<?php"), at_root, _result("b2", content="<?php")]
+        analysis = _analyze_entries(entries, repo, [])
+        assert analysis["observed_reads"]["all"] == [
+            "plugins/woocommerce/src/x.php",
+            "plugins/woocommerce/src/y.php",
+        ]
 
 
 def test_orchestrator_usage_uses_manifest_events_not_multiline_stage_commands(tmp_path):
@@ -3698,6 +3786,7 @@ class TestEnrichRunTranscript:
                 "usage_by_model": None,
                 "tool_calls": None,
                 "repository_reads": None,
+                "termination": None,
             }
         ]
         assert result["usage"]["output_tokens"] == 2
@@ -6039,3 +6128,193 @@ def test_usage_summary_for_transcript_counts_a_split_response_once(tmp_path):
     assert summary["usage_valid"] is True
     assert summary["usage_observed"] is True
     assert summary["parse_gap"] is True
+
+
+def _ended(stop_reason: str, *blocks: dict, usage: dict | None = None) -> dict:
+    """An assistant entry whose message carries a raw stop_reason."""
+    entry = _assistant(*blocks, usage=usage if usage is not None else _usage(1, 1))
+    entry["message"]["stop_reason"] = stop_reason
+    return entry
+
+
+def _api_error_entry(status: int, kind: str) -> dict:
+    """The harness's API-error entry, as recorded on real transcripts:
+    top-level isApiErrorMessage/apiErrorStatus/error, a synthetic model,
+    zero usage and stop_reason stop_sequence."""
+    return {
+        "type": "assistant",
+        "isApiErrorMessage": True,
+        "apiErrorStatus": status,
+        "error": kind,
+        "message": {
+            "role": "assistant",
+            "model": "<synthetic>",
+            "stop_reason": "stop_sequence",
+            "content": [{"type": "text", "text": "API Error"}],
+            "usage": {"input_tokens": 0, "output_tokens": 0,
+                      "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0},
+        },
+    }
+
+
+class TestTermination:
+    """How a transcript ended, in the harness's own words. Raw values only:
+    the reader groups them, so a failure kind never seen before shows up as
+    a new value, not as a clean run (three 2026-09-14 critics died on an
+    API error and every telemetry surface read them as clean)."""
+
+    def test_counts_raw_stop_reasons_and_keeps_the_last(self):
+        entries = [
+            _ended("tool_use", _call("a", "Read", file_path="/r/a.py")),
+            _result("a"),
+            _ended("tool_use", _call("b", "Read", file_path="/r/b.py")),
+            _result("b"),
+            _ended("end_turn"),
+        ]
+        assert _termination(entries) == {
+            "stop_reasons": {"end_turn": 1, "tool_use": 2},
+            "api_errors": [],
+            "last_stop_reason": "end_turn",
+        }
+
+    def test_records_every_api_error_with_its_raw_status_and_kind(self):
+        entries = [
+            _ended("tool_use", _call("a", "Read", file_path="/r/a.py")),
+            _result("a"),
+            _api_error_entry(429, "rate_limit"),
+            _api_error_entry(400, "invalid_request"),
+            _ended("refusal"),
+        ]
+        result = _termination(entries)
+        assert result["api_errors"] == [
+            {"status": 429, "kind": "rate_limit"},
+            {"status": 400, "kind": "invalid_request"},
+        ]
+        assert result["last_stop_reason"] == "refusal"
+        assert result["stop_reasons"] == {"refusal": 1, "stop_sequence": 2, "tool_use": 1}
+
+    @pytest.mark.parametrize(
+        "raw",
+        ["END_TURN", "end turn", "x" * 41, "", 7, None],
+    )
+    def test_an_unsafe_stop_reason_is_not_retained(self, raw):
+        entry = _assistant(usage=_usage(1, 1))
+        entry["message"]["stop_reason"] = raw
+        result = _termination([entry])
+        assert result["last_stop_reason"] is None
+        assert result["stop_reasons"] == {}
+
+    def test_an_api_error_with_unsafe_fields_is_recorded_as_unknown(self):
+        entry = _api_error_entry(999, "rate limit; DROP TABLE")
+        entry["apiErrorStatus"] = "429"
+        result = _termination([entry])
+        assert result["api_errors"] == [{"status": None, "kind": None}]
+
+    def test_api_errors_are_bounded(self):
+        entries = [_api_error_entry(529, "overloaded") for _ in range(25)]
+        assert len(_termination(entries)["api_errors"]) == 20
+
+    def test_no_assistant_entries_means_an_empty_record(self):
+        assert _termination([_result("a")]) == {
+            "stop_reasons": {}, "api_errors": [], "last_stop_reason": None,
+        }
+
+
+class TestTerminationOnAgentRows:
+    def _run(self, tmp_path, agent_entries_by_id, dispatches):
+        sessions = tmp_path / "sessions"
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        session_id = "termination"
+        main_entries = []
+        for call, agent_id in dispatches:
+            main_entries.append(_assistant(call, usage=_usage(1, 1)))
+            main_entries.append(_result(call["id"], structured={"agentId": agent_id}))
+        _write_jsonl(sessions / f"{session_id}.jsonl", main_entries)
+        for agent_id, entries in agent_entries_by_id.items():
+            _write_jsonl(sessions / session_id / "subagents" / f"agent-{agent_id}.jsonl", entries)
+        return enrich_run_transcript(
+            _manifest(session_id, repo, tmp_path / "run", started=[]),
+            sessions,
+            {"security-reviewer", "critic"},
+        )
+
+    def test_each_correlated_row_carries_its_termination(self, tmp_path):
+        result = self._run(
+            tmp_path,
+            {"rev-1": [_ended("tool_use", _call("r", "Read", file_path=str(tmp_path / "repo" / "a.py"))),
+                       _result("r"), _ended("end_turn")]},
+            [(_call("reviewer", "Agent", prompt=_agent_prompt(tmp_path / "run")), "rev-1")],
+        )
+        rows = {row["agent"]: row for row in result["agent_usage"]}
+        assert rows["security-reviewer"]["termination"] == {
+            "stop_reasons": {"end_turn": 1, "tool_use": 1},
+            "api_errors": [],
+            "last_stop_reason": "end_turn",
+        }
+        assert not any(w["code"] == "agent_api_error" for w in result["warnings"])
+
+    def test_an_api_error_row_warns_once_per_agent(self, tmp_path):
+        result = self._run(
+            tmp_path,
+            {"rev-1": [_api_error_entry(529, "overloaded"), _api_error_entry(529, "overloaded")]},
+            [(_call("reviewer", "Agent", prompt=_agent_prompt(tmp_path / "run")), "rev-1")],
+        )
+        rows = {row["agent"]: row for row in result["agent_usage"]}
+        assert rows["security-reviewer"]["termination"]["api_errors"] == [
+            {"status": 529, "kind": "overloaded"}, {"status": 529, "kind": "overloaded"},
+        ]
+        assert [w for w in result["warnings"] if w["code"] == "agent_api_error"] == [
+            {"code": "agent_api_error", "agent": "security-reviewer"}
+        ]
+
+    def test_a_missing_transcript_has_no_termination(self, tmp_path):
+        result = self._run(
+            tmp_path, {},
+            [(_call("reviewer", "Agent", prompt=_agent_prompt(tmp_path / "run")), "rev-1")],
+        )
+        rows = {row["agent"]: row for row in result["agent_usage"]}
+        assert rows["security-reviewer"]["termination"] is None
+
+    def test_a_truncated_transcript_has_no_termination(self, tmp_path):
+        # A malformed line mid-transcript makes the entry stream incomplete;
+        # an empty api_errors list from that partial stream would read as a
+        # clean ending, exactly the false confidence this branch removes.
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        main = sessions / "session-term-gap.jsonl"
+        _write_jsonl(
+            main,
+            [
+                _assistant(_call("a1", "Agent", prompt=_agent_prompt(output_dir)), usage=_usage(1, 1)),
+                _result("a1", structured={"agentId": "term-gap"}),
+            ],
+        )
+        subagent = sessions / "session-term-gap" / "subagents" / "agent-term-gap.jsonl"
+        _write_jsonl(subagent, [_ended("tool_use", _call("r", "Read", file_path="/r/a.py")), _result("r")])
+        with subagent.open("a") as stream:
+            stream.write('{"type": "truncated"\n')
+
+        result = enrich_run_transcript(
+            _manifest("session-term-gap", tmp_path, output_dir),
+            sessions,
+            {"security-reviewer"},
+        )
+
+        rows = {row["agent"]: row for row in result["agent_usage"]}
+        assert rows["security-reviewer"]["termination"] is None
+        assert {"code": "agent_transcript_parse_gap", "agent": "security-reviewer"} in result["warnings"]
+
+    def test_a_redispatched_synthesis_agent_warns_once(self, tmp_path):
+        first = _special_agent_call("critic-1", tmp_path / "run", "critic")
+        second = _special_agent_call("critic-2", tmp_path / "run", "critic")
+        result = self._run(
+            tmp_path,
+            {"c-1": [_api_error_entry(400, "invalid_request")],
+             "c-2": [_ended("end_turn")]},
+            [(first, "c-1"), (second, "c-2")],
+        )
+        assert result["correlation"]["correlated_by_agent"]["critic"] == 2
+        assert [w for w in result["warnings"] if w["code"] == "synthesis_redispatch"] == [
+            {"code": "synthesis_redispatch", "agent": "critic"}
+        ]

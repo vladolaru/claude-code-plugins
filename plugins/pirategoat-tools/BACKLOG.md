@@ -331,3 +331,35 @@ Changelog fragments (`scope.py` `CHANGELOG_FRAGMENT_PATTERN`, ~728) belong to th
 **Deferred because:** it needs a misconfigured repo config, and the right fix is a config-validation decision that belongs with `docs/repo-reviewers.md`.
 **Do when:** the next change to `review_config._normalize_applies_to` or to how `plan_dispatch` builds repo-reviewer rows.
 
+### 41. `review_transcript.py` decides repository boundaries three ways
+
+`_entry_cwd` routes containment through `containment.contains` (`scripts/containment.py`), but the same module still decides boundaries inline with `Path.relative_to`: in session-file discovery (`find_session_file`, around line 426) and in `_normalize_repo_path` (around line 1517). Moving both onto `containment.py` would give the module one convention. `_normalize_repo_path` is the observed-reads core, so this is a refactor with its own test surface, not a ride-along. The drift-guard test in `test_containment_contract.py` catches only `commonpath`, `is_relative_to`, or `commonprefix`, so `relative_to` slips past it today.
+
+**Evidence:** the 1.119.7 termination-accounting fix pass, item 4 (`_entry_cwd`'s docstring correction) at `scripts/analysis/review_transcript.py:2081-2103`, against `find_session_file` (~426) and `_normalize_repo_path` (~1517).
+**Deferred because:** `_normalize_repo_path` is the read detector's core function; moving it onto containment is a refactor with its own test surface, not a docs-only fix.
+**Do when:** the next time `review_transcript.py`'s boundary logic is touched, or `test_containment_contract.py`'s drift guard is extended to catch `relative_to`.
+
+### 42. Reviewer rows still lack `attempts` and a saved-state signal (spec item 1.2 remainder)
+
+The reconciled priorities plan (`.claude/docs/analysis/2026-09-14-claude-review-pipeline-priorities-reconciled.md` § 4, Phase 1, item 1.2) asks that reviewer rows, not only synthesis rows, record `attempts`, and that every row record whether the agent saved. 1.119.7 joins `attempts`/`final_model` onto synthesis rows only (`_apply_synthesis_attempts` in `review_metrics/measure.py`). Reviewer dispatch counts already exist in `transcript.correlation.correlated_by_agent`, and saved state lives in lifecycle (`started`/`completed`/`incomplete`) and synthesis completion. Pending the maintainer's decision on whether to join them onto reviewer rows, and what "saved" means for a reviewer.
+
+**Evidence:** reconciled priorities plan § 4, Phase 1, item 1.2; `scripts/analysis/review_metrics/measure.py::_apply_synthesis_attempts`.
+**Deferred because:** the maintainer scoped 1.119.7 to synthesis rows; extending to reviewer rows needs a decision on what counts as "saved" for a reviewer (an artifact write vs. lifecycle completion).
+**Do when:** the maintainer decides reviewer rows should carry `attempts` and a saved-state signal.
+
+### 43. The cohort table does not aggregate `reconciliation_verification`
+
+The metrics reader keeps `reconciliation_verification` (1.119.7), but `review_metrics/cohort.py` does not aggregate it, so the cohort table cannot yet count unverified runs even though the per-run data is now available.
+
+**Evidence:** the 1.119.7 `reconciliation_verification` reader fix; `scripts/analysis/review_metrics/cohort.py` (no `reconciliation_verification` aggregation today).
+**Deferred because:** the reader fix was scoped to making the field survive sanitization; cohort aggregation is a separate metric with its own column and format decision.
+**Do when:** the cohort table's columns are next revised, or someone needs to count unverified reconciliations across a cohort.
+
+### 44. The `api_error` tool-result text signature needs a replacement design before it can retire
+
+Spec item 1.2 says to retire the `("api error", "api_error")` entry in `review_transcript.py`'s `_FAILURE_SIGNATURES` (line 59). It classifies tool-result text — a Read or Agent result reading "API Error: …" without `is_error` — a different signal from the assistant-level `isApiErrorMessage` entry `termination` now records. Removing it without a tool-result-level replacement would turn those calls into unflagged successes.
+
+**Evidence:** reconciled priorities plan § 4, Phase 1, item 1.2 ("Retires the `api_error` text mapping at `review_transcript.py:53`"); `scripts/analysis/review_transcript.py::_FAILURE_SIGNATURES`.
+**Deferred because:** retiring the entry needs a tool-result-level replacement signal decided first, or those calls silently stop being counted as failures.
+**Do when:** the maintainer decides the replacement signal for tool-result-level API errors, alongside or after item 42.
+

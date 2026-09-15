@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 import unicodedata
 from collections import Counter
 from datetime import datetime
@@ -143,6 +144,47 @@ def _safe_string(value: object) -> str | None:
     ):
         return None
     return value if len(value) <= 4096 else None
+
+
+# Mirrors review_transcript.py's producer-side token grammar and API-error
+# cap exactly: a stop reason or an API error kind is a short lowercase
+# identifier the harness writes, never reclassified here either, and the
+# error list is already bounded at the producer.
+_SAFE_TOKEN = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+_MAX_API_ERRORS = 20
+
+
+def _sanitize_termination(value: object) -> dict[str, Any] | None:
+    """The transcript's raw termination record, tokens and statuses only."""
+    if not isinstance(value, dict):
+        return None
+    raw_reasons = value.get("stop_reasons")
+    raw_errors = value.get("api_errors")
+    if not isinstance(raw_reasons, dict) or not isinstance(raw_errors, list):
+        return None
+    reasons: dict[str, int] = {}
+    for token, count in raw_reasons.items():
+        if not isinstance(token, str) or not _SAFE_TOKEN.fullmatch(token):
+            continue
+        safe_count = _nonnegative_int(count)
+        if safe_count is None:
+            continue
+        reasons[token] = safe_count
+    errors = []
+    for item in raw_errors[:_MAX_API_ERRORS]:
+        item = item if isinstance(item, dict) else {}
+        status = item.get("status")
+        kind = item.get("kind")
+        errors.append({
+            "status": status if isinstance(status, int) and not isinstance(status, bool) and 100 <= status <= 599 else None,
+            "kind": kind if isinstance(kind, str) and _SAFE_TOKEN.fullmatch(kind) else None,
+        })
+    last = value.get("last_stop_reason")
+    return {
+        "stop_reasons": reasons,
+        "api_errors": errors,
+        "last_stop_reason": last if isinstance(last, str) and _SAFE_TOKEN.fullmatch(last) else None,
+    }
 
 
 def _safe_run_id(value: object) -> str | None:
@@ -1669,6 +1711,20 @@ def _sanitize_reconciliation(value: object) -> dict[str, Any] | None:
     return result
 
 
+_RECONCILIATION_VERIFICATION_STATUSES = frozenset({"verified", "unverified", "unmeasured"})
+
+
+def _sanitize_reconciliation_verification(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    status = value.get("status")
+    return {
+        "status": status if isinstance(status, str) and status in _RECONCILIATION_VERIFICATION_STATUSES else None,
+        "repository_reads": _nonnegative_int(value.get("repository_reads")),
+        "verified_concern_count": _nonnegative_int(value.get("verified_concern_count")),
+    }
+
+
 def _sanitize_outcome(value: object) -> dict[str, Any]:
     value = value if isinstance(value, dict) else {}
     summary = _sanitize_summary(value.get("summary"))
@@ -1689,6 +1745,9 @@ def _sanitize_outcome(value: object) -> dict[str, Any]:
     critic_verdict = value.get("critic_verdict")
     if isinstance(critic_verdict, str) and critic_verdict in _RETAINED_CRITIC_VALUES:
         result["critic_verdict"] = critic_verdict
+    verification = _sanitize_reconciliation_verification(value.get("reconciliation_verification"))
+    if verification is not None:
+        result["reconciliation_verification"] = verification
     return result
 
 
