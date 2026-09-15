@@ -2165,14 +2165,23 @@ class TestEveryReviewerMandatesBootstrap:
         'cat "${PIRATEGOAT_TOOLS_HOME:-$HOME/.pirategoat-tools}/sessions/$CLAUDE_CODE_SESSION_ID/plugin-root" 2>/dev/null'
     )
 
+    # CHANGELOG.md is release history, not live guidance, and this test
+    # file is where the literal is spelled deliberately to check for it.
+    MACHINE_WIDE_POINTER_SCAN_EXEMPT = {"CHANGELOG.md", "test_bootstrap_integration.py"}
+
     def test_no_definition_names_the_machine_wide_pointer(self):
-        """The hook writes one pointer per session; a definition that read
-        the old /tmp file would find nothing and fall back to the installed
-        release, which under the dev wrapper is the wrong version."""
+        """The hook writes one pointer per session; anything in the plugin
+        tree that read the old /tmp file would find nothing and fall back
+        to the installed release, which under the dev wrapper is the wrong
+        version. Widened from agents/**/*.md alone (run 2026-09-15's final
+        review, F5): a stray reference anywhere else in the plugin — a
+        script, a doc, a fixture — is the same defect."""
         offenders = [
             str(path.relative_to(PLUGIN_ROOT))
-            for path in sorted((PLUGIN_ROOT / "agents").rglob("*.md"))
-            if "/tmp/.pirategoat-tools-root" in path.read_text()
+            for pattern in ("*.md", "*.py", "*.sh", "*.json")
+            for path in sorted(PLUGIN_ROOT.rglob(pattern))
+            if path.name not in self.MACHINE_WIDE_POINTER_SCAN_EXEMPT
+            and "/tmp/.pirategoat-tools-root" in path.read_text()
         ]
         assert offenders == []
 
