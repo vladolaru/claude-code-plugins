@@ -82,10 +82,10 @@ def _synthesis_cell(section: object, state: str) -> str:
         row = by_agent.get(name)
         if row is None:
             return "—"
-        if row.get("stalled") is True:
-            return "stalled"
         attempts = row.get("attempts")
         suffix = f" ×{attempts}" if isinstance(attempts, int) and attempts > 1 else ""
+        if row.get("stalled") is True:
+            return "stalled" + suffix
         return _duration_cell(row.get("duration_ms")) + suffix
 
     # Identities come from the producer's own constants, never respelled

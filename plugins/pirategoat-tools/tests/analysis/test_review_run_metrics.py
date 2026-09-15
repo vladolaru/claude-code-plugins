@@ -9967,6 +9967,14 @@ class TestSynthesisCellAttempts:
         assert cell.endswith(" ×2")
         assert " ×1" not in cell
 
+    def test_a_retried_critic_that_stalled_still_shows_its_attempt_count(self):
+        section = {"agents": [
+            {"agent": "review-reconciliator", "duration_ms": 300000, "stalled": False, "attempts": 1},
+            {"agent": "decision-reviewer", "stalled": True, "attempts": 2},
+        ]}
+        cell = render._synthesis_cell(section, "complete")
+        assert cell.endswith("stalled ×2")
+
 
 class TestOutcomeReconciliationVerification:
     """Step 9's one published signal. The producer writes it everywhere
