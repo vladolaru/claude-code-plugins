@@ -62,7 +62,7 @@ Run the 4-phase review criticism pipeline. Each phase builds on the prior: `--wo
 
 ```bash
 SCRIPTS_DIR="<Plugin scripts directory>"
-[ -d "$SCRIPTS_DIR/review" ] || SCRIPTS_DIR="$(cat /tmp/.pirategoat-tools-root 2>/dev/null)/scripts"
+[ -d "$SCRIPTS_DIR/review" ] || SCRIPTS_DIR="$(cat "${PIRATEGOAT_TOOLS_HOME:-$HOME/.pirategoat-tools}/sessions/$CLAUDE_CODE_SESSION_ID/plugin-root" 2>/dev/null)/scripts"
 
 # Phase 1: Decompose — extract claims, severity assertions, scope claims
 python3 $SCRIPTS_DIR/review/critic.py --step-number 1 --total-steps 4 --report "<record-path>" --context "<findings-path>" --output-dir "<output-dir>" --worklog "start"
@@ -204,7 +204,7 @@ outcome in the ledger.
 
 ```bash
 SCRIPTS_DIR="<Plugin scripts directory>"
-[ -d "$SCRIPTS_DIR/review" ] || SCRIPTS_DIR="$(cat /tmp/.pirategoat-tools-root 2>/dev/null)/scripts"
+[ -d "$SCRIPTS_DIR/review" ] || SCRIPTS_DIR="$(cat "${PIRATEGOAT_TOOLS_HOME:-$HOME/.pirategoat-tools}/sessions/$CLAUDE_CODE_SESSION_ID/plugin-root" 2>/dev/null)/scripts"
 
 # ESCALATE, or STAND with nothing to correct (no adjustments file):
 python3 $SCRIPTS_DIR/review/critic.py --save \

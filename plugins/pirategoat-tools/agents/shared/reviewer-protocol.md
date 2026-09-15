@@ -7,17 +7,17 @@ Standard protocol for all review agents. Read this FIRST before starting your re
 **Preferred: Use the bootstrap script** which handles all setup (plugin root, protocol, scope discovery) in a single command:
 
 ```bash
-PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
-[ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review/agent/bootstrap.py" -type f 2>/dev/null | sort | tail -1 | xargs dirname | xargs dirname | xargs dirname | xargs dirname)
+PLUGIN_ROOT=$(cat "${PIRATEGOAT_TOOLS_HOME:-$HOME/.pirategoat-tools}/sessions/$CLAUDE_CODE_SESSION_ID/plugin-root" 2>/dev/null)
+[ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review/agent/bootstrap.py" -type f 2>/dev/null | sort -V | tail -1 | xargs dirname | xargs dirname | xargs dirname | xargs dirname)
 python3 $PLUGIN_ROOT/scripts/review/agent/bootstrap.py --agent <agent-name>
 ```
 
 If the bootstrap script is not available, locate the plugin root manually:
 
 ```bash
-PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
+PLUGIN_ROOT=$(cat "${PIRATEGOAT_TOOLS_HOME:-$HOME/.pirategoat-tools}/sessions/$CLAUDE_CODE_SESSION_ID/plugin-root" 2>/dev/null)
 # Fallback if hook hasn't run yet
-[ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review/agent/scope.py" -type f 2>/dev/null | sort | tail -1 | xargs dirname | xargs dirname | xargs dirname | xargs dirname)
+[ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review/agent/scope.py" -type f 2>/dev/null | sort -V | tail -1 | xargs dirname | xargs dirname | xargs dirname | xargs dirname)
 echo "PLUGIN_ROOT=$PLUGIN_ROOT"
 ```
 

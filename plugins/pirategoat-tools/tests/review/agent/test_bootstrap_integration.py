@@ -2161,6 +2161,37 @@ class TestEveryReviewerMandatesBootstrap:
         assert "STATUS: FINISHED" in line
         assert "mark_not_applicable" not in line
 
+    SESSION_POINTER_READ = (
+        'cat "${PIRATEGOAT_TOOLS_HOME:-$HOME/.pirategoat-tools}/sessions/$CLAUDE_CODE_SESSION_ID/plugin-root" 2>/dev/null'
+    )
+
+    def test_no_definition_names_the_machine_wide_pointer(self):
+        """The hook writes one pointer per session; a definition that read
+        the old /tmp file would find nothing and fall back to the installed
+        release, which under the dev wrapper is the wrong version."""
+        offenders = [
+            str(path.relative_to(PLUGIN_ROOT))
+            for path in sorted((PLUGIN_ROOT / "agents").rglob("*.md"))
+            if "/tmp/.pirategoat-tools-root" in path.read_text()
+        ]
+        assert offenders == []
+
+    @pytest.mark.parametrize("agent", ALL_AGENTS)
+    def test_definition_reads_its_own_sessions_pointer(self, agent):
+        if agent in BOOTSTRAP_EXEMPT_AGENTS:
+            pytest.skip("not dispatched through bootstrap")
+        text = (PLUGIN_ROOT / "agents" / f"{agent}.md").read_text()
+        assert self.SESSION_POINTER_READ in text, agent
+        assert "| sort | tail -1" not in text, agent
+        assert "sort -V | tail -1" in text, agent
+
+    def test_the_protocol_and_the_critic_read_the_session_pointer(self):
+        protocol = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
+        assert protocol.count(self.SESSION_POINTER_READ) == 2
+        assert protocol.count("sort -V | tail -1") == 2
+        critic = (PLUGIN_ROOT / "agents/decision-reviewer.md").read_text()
+        assert critic.count(self.SESSION_POINTER_READ) == 2
+
 
 class TestBuilderSnippetSignatures:
     """Run e582 and 6e6a: both Opus reviewers called add_observation with

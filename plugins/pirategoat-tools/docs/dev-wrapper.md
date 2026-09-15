@@ -44,4 +44,4 @@ python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["plugin_commit"]
 
 - The mount is the live working tree, uncommitted edits included. Check `git status` before starting a session you intend to trust.
 - Edits made during a session do not affect the already-loaded plugin; restart the wrapper.
-- `/tmp/.pirategoat-tools-root` is repopulated from `$CLAUDE_PLUGIN_ROOT` by the PreToolUse hook, which under the wrapper is the worktree, so the fallback cache self-corrects.
+- The PreToolUse hook records `$CLAUDE_PLUGIN_ROOT` in `~/.pirategoat-tools/sessions/<session id>/plugin-root` before every Bash call, which under the wrapper is the checkout; a release session open at the same time writes its own file, so the two never mix.
