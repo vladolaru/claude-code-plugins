@@ -84,7 +84,9 @@ def _synthesis_cell(section: object, state: str) -> str:
             return "—"
         if row.get("stalled") is True:
             return "stalled"
-        return _duration_cell(row.get("duration_ms"))
+        attempts = row.get("attempts")
+        suffix = f" ×{attempts}" if isinstance(attempts, int) and attempts > 1 else ""
+        return _duration_cell(row.get("duration_ms")) + suffix
 
     # Identities come from the producer's own constants, never respelled
     # here: a renamed agent must break this package's tests, not silently

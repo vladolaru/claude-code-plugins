@@ -9899,3 +9899,70 @@ class TestOptionalSectionsReachMeasureRun:
         assert measured["availability"]["dependency_refresh"] is True
         assert measured["availability"]["reviewer_markdown"] is True
         assert measured["availability"]["findings_markdown"] is True
+
+
+class TestSynthesisAttempts:
+    """A retried critic is one lifecycle row spanning both executions
+    (2026-09-14 run B: 551 s covering a failed Opus run, a gap and a Fable
+    run). The transcript sees each dispatch; the measured view joins the
+    count and the model that finished, beside the duration."""
+
+    def _measured(self, transcript):
+        return {
+            "synthesis_agents": {"finalized": True, "agents": [
+                {"agent": "review-reconciliator", "verdict": "approve", "started_at": "2026-09-14T10:00:00+00:00",
+                 "completed_at": "2026-09-14T10:05:00+00:00", "duration_ms": 300000, "stalled": False, "dispatch_lag_ms": None},
+                {"agent": "decision-reviewer", "verdict": "STAND", "started_at": "2026-09-14T10:41:22+00:00",
+                 "completed_at": "2026-09-14T10:50:33+00:00", "duration_ms": 551138, "stalled": False, "dispatch_lag_ms": None},
+            ]},
+            "transcript": transcript,
+        }
+
+    def test_counts_dispatches_and_names_the_model_that_finished(self):
+        measured = self._measured({
+            "available": True,
+            "correlation": {"correlated_by_agent": {"decision-reviewer": 2, "review-reconciliator": 1}},
+            "agent_usage": [
+                {"agent": "decision-reviewer", "model": "claude-opus-5", "dispatched_at": "2026-09-14T10:41:40+00:00"},
+                {"agent": "decision-reviewer", "model": "claude-fable-5-1", "dispatched_at": "2026-09-14T10:45:28+00:00"},
+                {"agent": "review-reconciliator", "model": "claude-opus-5", "dispatched_at": "2026-09-14T10:00:10+00:00"},
+            ],
+        })
+        measure._apply_synthesis_attempts(measured)
+        rows = {row["agent"]: row for row in measured["synthesis_agents"]["agents"]}
+        assert rows["decision-reviewer"]["attempts"] == 2
+        assert rows["decision-reviewer"]["final_model"] == "claude-fable-5-1"
+        assert rows["review-reconciliator"]["attempts"] == 1
+        assert rows["review-reconciliator"]["final_model"] == "claude-opus-5"
+
+    def test_unavailable_transcript_is_unmeasured_not_one(self):
+        measured = self._measured({"available": False, "correlation": None, "agent_usage": None})
+        measure._apply_synthesis_attempts(measured)
+        for row in measured["synthesis_agents"]["agents"]:
+            assert row["attempts"] is None
+            assert row["final_model"] is None
+
+    def test_a_synthesis_agent_the_transcript_never_correlated_is_unmeasured(self):
+        measured = self._measured({
+            "available": True,
+            "correlation": {"correlated_by_agent": {"review-reconciliator": 1}},
+            "agent_usage": [{"agent": "review-reconciliator", "model": "claude-opus-5", "dispatched_at": "2026-09-14T10:00:10+00:00"}],
+        })
+        measure._apply_synthesis_attempts(measured)
+        rows = {row["agent"]: row for row in measured["synthesis_agents"]["agents"]}
+        assert rows["decision-reviewer"]["attempts"] is None
+        assert rows["review-reconciliator"]["attempts"] == 1
+
+    def test_no_synthesis_section_is_a_no_op(self):
+        measure._apply_synthesis_attempts({"synthesis_agents": None, "transcript": {"available": True}})
+
+
+class TestSynthesisCellAttempts:
+    def test_a_retried_critic_shows_its_attempt_count(self):
+        section = {"agents": [
+            {"agent": "review-reconciliator", "duration_ms": 300000, "stalled": False, "attempts": 1},
+            {"agent": "decision-reviewer", "duration_ms": 551138, "stalled": False, "attempts": 2},
+        ]}
+        cell = render._synthesis_cell(section, "complete")
+        assert cell.endswith(" ×2")
+        assert " ×1" not in cell
