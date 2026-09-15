@@ -116,6 +116,44 @@ def test_refuses_a_session_id_that_is_not_a_safe_segment(state_root, plugin_root
     assert not (state_root.parent / "evil").exists()
 
 
+def test_replaces_the_pointer_by_rename_not_truncation(state_root, plugin_root, tmp_path):
+    """A concurrent reader must never observe an empty file mid-write, which
+    truncate-in-place (`>`) allows and replace-by-rename does not."""
+    other_root = tmp_path / "plugin2"
+    other_root.mkdir()
+    env = {"CLAUDE_PLUGIN_ROOT": str(plugin_root), "CLAUDE_CODE_SESSION_ID": "s1",
+           "PIRATEGOAT_TOOLS_HOME": str(state_root)}
+
+    first = _run_hook(env, {})
+    assert first.returncode == 0, first.stderr
+    pointer = _pointer(state_root, "s1")
+    inode_before = pointer.stat().st_ino
+
+    second_env = dict(env, CLAUDE_PLUGIN_ROOT=str(other_root))
+    second = _run_hook(second_env, {})
+    assert second.returncode == 0, second.stderr
+
+    assert pointer.stat().st_ino != inode_before
+    assert pointer.read_text() == f"{other_root}\n"
+    assert list(pointer.parent.glob("plugin-root.*")) == []
+
+
+def test_stderr_stays_silent_when_the_write_fails(state_root, plugin_root):
+    session_dir = state_root / "sessions" / "s1"
+    session_dir.mkdir(parents=True)
+    session_dir.chmod(0o500)  # read+execute only: the write into it fails
+    try:
+        result = _run_hook(
+            {"CLAUDE_PLUGIN_ROOT": str(plugin_root), "CLAUDE_CODE_SESSION_ID": "s1",
+             "PIRATEGOAT_TOOLS_HOME": str(state_root)},
+            {},
+        )
+        assert result.returncode == 0
+        assert result.stderr == ""
+    finally:
+        session_dir.chmod(0o700)
+
+
 def test_sweeps_session_dirs_whose_pointer_is_older_than_a_day(state_root, plugin_root):
     stale = _pointer(state_root, "stale")
     stale.parent.mkdir(parents=True)

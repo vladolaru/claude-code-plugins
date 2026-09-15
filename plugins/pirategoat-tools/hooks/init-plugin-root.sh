@@ -14,8 +14,12 @@
 # every command. Every shell in a session, subagents included, carries the same
 # CLAUDE_CODE_SESSION_ID, so readers name the file by their own session id.
 # Session directories whose pointer is older than a day are swept: a live
-# session rewrites its pointer before every Bash call. Exit 0 on every path:
-# a hook that fails must never block a Bash call.
+# session rewrites its pointer before every Bash call. The pointer is
+# replaced by writing a same-directory temporary file and renaming it over
+# the target (same-directory rename is atomic), never truncated in place,
+# so a parallel reader in the same session never observes an empty file
+# mid-write. Exit 0 on every path: a hook that fails must never block a
+# Bash call.
 
 [ -n "$CLAUDE_PLUGIN_ROOT" ] || exit 0
 
@@ -37,7 +41,11 @@ esac
 sessions="$root/sessions"
 
 mkdir -p "$sessions/$session" 2>/dev/null || exit 0
-printf '%s\n' "$CLAUDE_PLUGIN_ROOT" > "$sessions/$session/plugin-root" 2>/dev/null
+pointer="$sessions/$session/plugin-root"
+tmp="$pointer.$$"
+{
+    printf '%s\n' "$CLAUDE_PLUGIN_ROOT" > "$tmp" && mv -f "$tmp" "$pointer" || rm -f "$tmp"
+} 2>/dev/null
 
 find "$sessions" -mindepth 2 -maxdepth 2 -name plugin-root -mmin +1440 -print0 2>/dev/null \
     | while IFS= read -r -d '' stale; do rm -rf "$(dirname "$stale")"; done
