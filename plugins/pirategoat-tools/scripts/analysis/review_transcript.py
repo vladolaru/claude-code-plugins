@@ -21,6 +21,7 @@ sys.path.insert(0, _ANALYSIS_DIR)
 # turn every contractual poll back into a recorded tool failure.
 sys.path.insert(0, os.path.dirname(_ANALYSIS_DIR))
 from review.agents_status import STATUS_ENVELOPE_PREFIX  # noqa: E402
+from containment import contains  # noqa: E402
 
 
 _USAGE_FIELDS = (
@@ -1971,8 +1972,13 @@ def _is_poll_outcome(command: object, result: dict[str, Any]) -> bool:
     return STATUS_ENVELOPE_PREFIX in _result_text(result)
 
 
-def _bash_read_paths(command: object, repo_root: Path) -> list[str]:
+def _bash_read_paths(
+    command: object, repo_root: Path, start_cwd: str | None = ""
+) -> list[str]:
     """Every repository-relative or absolute path a Bash command reads.
+
+    Relative operands resolve against `start_cwd`, the directory the shell
+    was in when the call was issued, until the command's own `cd` moves it.
 
     Compounds are walked as the shell would run them: lines and `;`, `&&`,
     `||`, `&` separate simple commands; the first segment of a pipeline is
@@ -2008,7 +2014,13 @@ def _bash_read_paths(command: object, repo_root: Path) -> list[str]:
     if not isinstance(command, str) or not command.strip() or "\x00" in command:
         return []
     reads: list[str] = []
-    cwd: str | None = ""  # "" is the repository root; None is unknown
+    # Where the shell was when the call was issued: "" is the repository
+    # root, a relative path is a directory under it, None is unknown. The
+    # caller seeds it from the entry's own `cwd` field, because subagents
+    # inherit the orchestrator's live directory and a Bash tool's cwd
+    # persists between calls; starting every command at the root joined
+    # relative reads to a directory the shell was not in.
+    cwd: str | None = start_cwd
     lists = _and_or_lists(command)
     # An `exit`, `exec` or `return` may have ended the shell with status 0
     # before anything after it ran (`test -f x || exit 0; cat y`, or
@@ -2018,7 +2030,8 @@ def _bash_read_paths(command: object, repo_root: Path) -> list[str]:
     for position, (commands, operators, backgrounded) in enumerate(lists):
         # `&` runs the list in a subshell: its `cd` moves nothing in the
         # foreground and its `exit` ends nothing here, so the list is
-        # opaque (`cd src & cat a.py` reads the root's a.py).
+        # opaque (`cd src & cat a.py` reads a.py from where the shell
+        # started, unmoved by the backgrounded `cd`).
         if backgrounded:
             continue
         every_command_ran = position == len(lists) - 1 and "||" not in operators
@@ -2063,6 +2076,31 @@ def _bash_read_paths(command: object, repo_root: Path) -> list[str]:
                 elif cwd is not None:
                     reads.append(os.path.join(cwd, operand) if cwd else operand)
     return reads
+
+
+def _entry_cwd(entry: dict[str, Any], repo_root: Path) -> str | None:
+    """The shell's directory when this entry's call was issued, repo-relative.
+
+    Every transcript entry carries the live shell `cwd`. "" is the
+    repository root, a relative path is a directory under it, None is
+    absent, relative (a relative spelling resolves against this analyzer
+    process's own working directory, not the shell's — accepting one could
+    reintroduce the very phantom read this seed removes, if the analyzer
+    happens to run from the repository root), or outside the repository (a
+    read there is not a repository read, and a guess would count files
+    that do not exist under the root). Containment is `containment.contains`,
+    the module's one repo-boundary decision; only once it has passed is the
+    repo-relative spelling derived from both sides' realpaths.
+    """
+    raw = entry.get("cwd") if isinstance(entry, dict) else None
+    if not isinstance(raw, str) or not raw or not os.path.isabs(raw):
+        return None
+    root = str(repo_root)
+    if not contains(root, raw):
+        return None
+    relative = os.path.relpath(os.path.realpath(raw), os.path.realpath(root))
+    text = Path(relative).as_posix()
+    return "" if text == "." else text
 
 
 def _simple_bash_read_paths(tokens: list[str]) -> list[str]:
@@ -2237,7 +2275,9 @@ def _analyze_entries(
         if call["name"] == "Read":
             candidates = [call["input"].get("file_path")]
         elif call["name"] == "Bash":
-            candidates = _bash_read_paths(call["input"].get("command"), repo)
+            candidates = _bash_read_paths(
+                call["input"].get("command"), repo, _entry_cwd(entries[call["index"]], repo)
+            )
         for candidate in candidates:
             normalized = _normalize_repo_path(candidate, repo)
             if normalized is not None:

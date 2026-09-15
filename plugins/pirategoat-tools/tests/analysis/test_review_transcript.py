@@ -33,6 +33,9 @@ result_state = _mod._result_state
 parse_builder_envelope = _mod.parse_builder_envelope
 safe_model = _mod._safe_model
 _termination = _mod._termination
+_bash_read_paths = _mod._bash_read_paths
+_entry_cwd = _mod._entry_cwd
+_analyze_entries = _mod._analyze_entries
 
 _bootstrap_spec = importlib.util.spec_from_file_location(
     "review_bootstrap_for_transcript_test", BOOTSTRAP_PATH
@@ -72,6 +75,7 @@ def _assistant(
     model: str = "claude-sonnet-4-5",
     entry_usage: bool = False,
     message_id: str | None = None,
+    cwd: str | None = None,
 ) -> dict:
     message = {"role": "assistant", "model": model, "content": list(blocks)}
     if message_id is not None:
@@ -82,6 +86,8 @@ def _assistant(
             entry["usage"] = usage
         else:
             message["usage"] = usage
+    if cwd is not None:
+        entry["cwd"] = cwd
     return entry
 
 
@@ -2387,7 +2393,8 @@ class TestAnalyzeSubagent:
         ]
         entries = []
         for call, result in calls_and_results:
-            entries.extend([_assistant(call), result])
+            cwd = str(repo) if call["name"] == "Bash" else None
+            entries.extend([_assistant(call, cwd=cwd), result])
         transcript = _write_jsonl(tmp_path / "reads.jsonl", entries)
 
         observed = analyze_subagent(
@@ -2538,7 +2545,7 @@ class TestAnalyzeSubagent:
         (repo / "lib").mkdir(parents=True)
         (repo / "src").mkdir()
         (repo / "src" / "a.py").write_text("")
-        entries = [_assistant(_call("c", "Bash", command=command)), _result("c")]
+        entries = [_assistant(_call("c", "Bash", command=command), cwd=str(repo)), _result("c")]
         transcript = _write_jsonl(tmp_path / "edge.jsonl", entries)
         observed = analyze_subagent(transcript, repo, [])["observed_reads"]
         assert observed["all"] == expected
@@ -2601,7 +2608,8 @@ class TestAnalyzeSubagent:
         ]
         entries = []
         for call, result in calls_and_results:
-            entries.extend([_assistant(call), result])
+            cwd = str(repo) if call["name"] == "Bash" else None
+            entries.extend([_assistant(call, cwd=cwd), result])
         transcript = _write_jsonl(tmp_path / "idioms.jsonl", entries)
 
         observed = analyze_subagent(transcript, repo, ["src/k.py", "src/l.py"])["observed_reads"]
@@ -2619,6 +2627,85 @@ class TestAnalyzeSubagent:
         ]
         assert observed["in_scope"] == ["src/k.py", "src/l.py"]
         assert observed["exhaustive"] is False
+
+
+class TestReadDetectorStartsWhereTheShellWas:
+    """Subagents inherit the orchestrator's live working directory and a
+    Bash tool's cwd persists between calls, so a relative read after an
+    inherited `cd plugins/woocommerce` was joined to the repository root
+    and counted a file that does not exist there (run B, 2026-09-14: four
+    phantom reads, real files under two spellings). The entry's own `cwd`
+    field is where the shell was when the call was issued."""
+
+    def test_relative_operands_resolve_against_the_start_cwd(self, tmp_path):
+        assert _bash_read_paths("cat src/x.php", tmp_path, start_cwd="plugins/woocommerce") == [
+            "plugins/woocommerce/src/x.php"
+        ]
+
+    def test_an_unknown_start_cwd_leaves_relative_reads_uncounted(self, tmp_path):
+        assert _bash_read_paths("cat src/x.php; cat /abs/y.php", tmp_path, start_cwd=None) == ["/abs/y.php"]
+
+    def test_the_default_is_still_the_repository_root(self, tmp_path):
+        assert _bash_read_paths("cat src/x.php", tmp_path) == ["src/x.php"]
+
+    def test_a_cd_inside_the_command_still_moves_from_the_start(self, tmp_path):
+        (tmp_path / "plugins" / "woocommerce" / "src").mkdir(parents=True)
+        assert _bash_read_paths("cd src && cat x.php", tmp_path, start_cwd="plugins/woocommerce") == [
+            "plugins/woocommerce/src/x.php"
+        ]
+
+    @pytest.mark.parametrize(
+        "cwd, expected",
+        [
+            ("{root}", ""),
+            ("{root}/plugins/woocommerce", "plugins/woocommerce"),
+            ("{root}/plugins/woocommerce/", "plugins/woocommerce"),
+            ("/somewhere/else", None),
+            ("{root}-sibling", None),
+            (None, None),
+            (7, None),
+        ],
+    )
+    def test_entry_cwd_is_repo_relative_or_unknown(self, tmp_path, cwd, expected):
+        (tmp_path / "plugins" / "woocommerce").mkdir(parents=True)
+        entry = {"type": "assistant"}
+        if cwd is not None:
+            entry["cwd"] = cwd.format(root=tmp_path) if isinstance(cwd, str) else cwd
+        assert _entry_cwd(entry, tmp_path) == expected
+
+    def test_a_relative_cwd_is_unknown_even_when_it_resolves_inside_the_repo(
+        self, tmp_path, monkeypatch
+    ):
+        """A relative `cwd` spelling resolves against this analyzer
+        process's own working directory, not the shell's. Without the
+        `isabs` guard, chdir-ing here to `tmp_path` would make
+        `plugins/woocommerce` resolve inside the repo and the analyzer's
+        own cwd, not the entry's, would decide the answer."""
+        (tmp_path / "plugins" / "woocommerce").mkdir(parents=True)
+        monkeypatch.chdir(tmp_path)
+        entry = {"type": "assistant", "cwd": "plugins/woocommerce"}
+        assert _entry_cwd(entry, tmp_path) is None
+
+    def test_analyze_entries_seeds_each_call_from_its_entry(self, tmp_path):
+        repo = tmp_path / "repo"
+        (repo / "plugins" / "woocommerce" / "src").mkdir(parents=True)
+        (repo / "plugins" / "woocommerce" / "src" / "x.php").write_text("<?php\n")
+        (repo / "plugins" / "woocommerce" / "src" / "y.php").write_text("<?php\n")
+        moved = _assistant(
+            _call("b1", "Bash", command="cat src/x.php"),
+            usage=_usage(1, 1),
+            cwd=str(repo / "plugins" / "woocommerce"),
+        )
+        at_root = _assistant(
+            _call("b2", "Bash", command="cat plugins/woocommerce/src/y.php"),
+            cwd=str(repo),
+        )
+        entries = [moved, _result("b1", content="<?php"), at_root, _result("b2", content="<?php")]
+        analysis = _analyze_entries(entries, repo, [])
+        assert analysis["observed_reads"]["all"] == [
+            "plugins/woocommerce/src/x.php",
+            "plugins/woocommerce/src/y.php",
+        ]
 
 
 def test_orchestrator_usage_uses_manifest_events_not_multiline_stage_commands(tmp_path):
