@@ -2798,6 +2798,19 @@ def enrich_run_transcript(
     for row in agent_usage:
         if row["agent"] in incomplete_read_agents:
             row["repository_reads"] = None
+    # A row's termination was computed from the same bounded entry stream a
+    # parse gap or a timestamp gap truncated (agent_transcript_parse_gaps
+    # covers both — _bounded_jsonl_entries drops an undecodable line and an
+    # untimestamped assistant/user turn alike). An empty api_errors list
+    # from a cut-off stream reads as a clean ending, so the record itself
+    # is dropped rather than kept half-true. missing_counts and
+    # unresolved_evidence do not drop entries from what was already read,
+    # so they leave termination alone. A real API error observed before the
+    # gap already raised agent_api_error above; only the row's own record
+    # stops claiming completeness.
+    for row in agent_usage:
+        if row["agent"] in agent_transcript_parse_gaps:
+            row["termination"] = None
     # Two independent completeness axes: whether every expected transcript
     # was observed and classified (per actor family), and — for the reads
     # partition only — whether an authoritative scope mapping backed the

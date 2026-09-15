@@ -6284,6 +6284,35 @@ class TestTerminationOnAgentRows:
         rows = {row["agent"]: row for row in result["agent_usage"]}
         assert rows["security-reviewer"]["termination"] is None
 
+    def test_a_truncated_transcript_has_no_termination(self, tmp_path):
+        # A malformed line mid-transcript makes the entry stream incomplete;
+        # an empty api_errors list from that partial stream would read as a
+        # clean ending, exactly the false confidence this branch removes.
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        main = sessions / "session-term-gap.jsonl"
+        _write_jsonl(
+            main,
+            [
+                _assistant(_call("a1", "Agent", prompt=_agent_prompt(output_dir)), usage=_usage(1, 1)),
+                _result("a1", structured={"agentId": "term-gap"}),
+            ],
+        )
+        subagent = sessions / "session-term-gap" / "subagents" / "agent-term-gap.jsonl"
+        _write_jsonl(subagent, [_ended("tool_use", _call("r", "Read", file_path="/r/a.py")), _result("r")])
+        with subagent.open("a") as stream:
+            stream.write('{"type": "truncated"\n')
+
+        result = enrich_run_transcript(
+            _manifest("session-term-gap", tmp_path, output_dir),
+            sessions,
+            {"security-reviewer"},
+        )
+
+        rows = {row["agent"]: row for row in result["agent_usage"]}
+        assert rows["security-reviewer"]["termination"] is None
+        assert {"code": "agent_transcript_parse_gap", "agent": "security-reviewer"} in result["warnings"]
+
     def test_a_redispatched_synthesis_agent_warns_once(self, tmp_path):
         first = _special_agent_call("critic-1", tmp_path / "run", "critic")
         second = _special_agent_call("critic-2", tmp_path / "run", "critic")
