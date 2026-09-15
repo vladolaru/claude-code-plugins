@@ -6194,21 +6194,14 @@ class TestTermination:
         assert result["stop_reasons"] == {"refusal": 1, "stop_sequence": 2, "tool_use": 1}
 
     @pytest.mark.parametrize(
-        "raw, expected",
-        [
-            ("END_TURN", None),
-            ("end turn", None),
-            ("x" * 41, None),
-            ("", None),
-            (7, None),
-            (None, None),
-        ],
+        "raw",
+        ["END_TURN", "end turn", "x" * 41, "", 7, None],
     )
-    def test_an_unsafe_stop_reason_is_not_retained(self, raw, expected):
+    def test_an_unsafe_stop_reason_is_not_retained(self, raw):
         entry = _assistant(usage=_usage(1, 1))
         entry["message"]["stop_reason"] = raw
         result = _termination([entry])
-        assert result["last_stop_reason"] is expected
+        assert result["last_stop_reason"] is None
         assert result["stop_reasons"] == {}
 
     def test_an_api_error_with_unsafe_fields_is_recorded_as_unknown(self):
@@ -6230,7 +6223,6 @@ class TestTermination:
 class TestTerminationOnAgentRows:
     def _run(self, tmp_path, agent_entries_by_id, dispatches):
         sessions = tmp_path / "sessions"
-        output_dir = tmp_path / "run"
         repo = tmp_path / "repo"
         repo.mkdir()
         session_id = "termination"
