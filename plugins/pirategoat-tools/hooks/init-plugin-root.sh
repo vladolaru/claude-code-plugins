@@ -25,10 +25,16 @@
 
 session="$CLAUDE_CODE_SESSION_ID"
 if [ -z "$session" ]; then
-    # The hook's stdin is the event JSON, which carries session_id.
-    session=$(python3 -c 'import json, sys; print(json.load(sys.stdin).get("session_id", ""))' 2>/dev/null)
+    # The hook's stdin is the event JSON, which carries session_id. A JSON
+    # null (`.get("session_id")` with no default) must read as absent, not
+    # as the literal string "None".
+    session=$(python3 -c 'import json, sys; print(json.load(sys.stdin).get("session_id") or "")' 2>/dev/null)
 fi
 [ -n "$session" ] || exit 0
+# The C locale is forced for this match: under a caller's UTF-8 locale,
+# [!A-Za-z0-9._-] does not refuse a byte like "é", so the case would accept
+# an id run_paths.SESSION_ID_RE (which is locale-independent) refuses.
+export LC_ALL=C
 case "$session" in
     .|..|*[!A-Za-z0-9._-]*) exit 0 ;;   # never build a path from an unexpected id
 esac

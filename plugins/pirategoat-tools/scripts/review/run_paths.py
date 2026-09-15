@@ -94,8 +94,14 @@ def _is_safe_session_id(session_id: str) -> bool:
 
 
 def current_session_id() -> str | None:
-    """This process's Claude Code session id, or None when absent or unsafe."""
-    session = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
+    """This process's Claude Code session id, or None when absent or unsafe.
+
+    Not stripped: the hook's `case` and the shell readers never strip
+    surrounding whitespace either, so an id like " s1" must be refused
+    here exactly as it is refused there — stripping it would make this
+    reader accept an id the hook never wrote a pointer for.
+    """
+    session = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
     return session if _is_safe_session_id(session) else None
 
 

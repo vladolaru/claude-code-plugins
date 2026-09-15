@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from helpers.session_ids import UNSAFE_SESSION_IDS
+
 HOOK = Path(__file__).resolve().parent.parent / "hooks" / "init-plugin-root.sh"
 STRIPPED = ("CLAUDE_PLUGIN_ROOT", "CLAUDE_CODE_SESSION_ID", "PIRATEGOAT_TOOLS_HOME", "HOME")
 
@@ -104,16 +106,30 @@ def test_writes_nothing_without_a_session_id(state_root, plugin_root):
     assert not state_root.exists()
 
 
-@pytest.mark.parametrize("bad", ["../evil", "..", ".", "a/b", "a b"])
+@pytest.mark.parametrize("bad", UNSAFE_SESSION_IDS)
 def test_refuses_a_session_id_that_is_not_a_safe_segment(state_root, plugin_root, bad):
+    # A UTF-8 locale in the subprocess environment (regardless of the host
+    # machine's own locale) pins that the hook's own `export LC_ALL=C`
+    # wins for the non-ASCII id ("é") in this list — under the caller's
+    # locale alone, [!A-Za-z0-9._-] would not refuse it.
     result = _run_hook(
         {"CLAUDE_PLUGIN_ROOT": str(plugin_root), "CLAUDE_CODE_SESSION_ID": bad,
-         "PIRATEGOAT_TOOLS_HOME": str(state_root)},
+         "PIRATEGOAT_TOOLS_HOME": str(state_root),
+         "LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8"},
         {},
     )
     assert result.returncode == 0
     assert not state_root.exists()
     assert not (state_root.parent / "evil").exists()
+
+
+def test_null_session_id_on_stdin_writes_nothing(state_root, plugin_root):
+    result = _run_hook(
+        {"CLAUDE_PLUGIN_ROOT": str(plugin_root), "PIRATEGOAT_TOOLS_HOME": str(state_root)},
+        {"session_id": None},
+    )
+    assert result.returncode == 0, result.stderr
+    assert not state_root.exists()
 
 
 def test_replaces_the_pointer_by_rename_not_truncation(state_root, plugin_root, tmp_path):
