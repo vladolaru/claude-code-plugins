@@ -198,14 +198,13 @@ class TestUnchangedCallerScopeContract:
         assert "`debug`" in rule0
 
 
-# The cross-validators carry a document-level HIGH/MEDIUM/LOW label in
-# their own Markdown; they never call set_confidence. Every other
-# definition feeds the builder, whose validator accepts 0.0–1.0 only.
-_LABEL_CONFIDENCE_DEFINITIONS = {"codex-reviewer.md", "gemini-reviewer.md"}
 # Still teaches confidence on 0-100 (BACKLOG 45): the Phase 1 D rewrite's
 # 18-file list missed it. Remove it from this set once it is converted,
 # at which point this test starts holding it to the same 0.0-1.0 contract
-# as every other definition.
+# as every other definition. (The cross-validators, codex-reviewer.md and
+# gemini-reviewer.md, carry a document-level HIGH/MEDIUM/LOW label instead
+# of a percent confidence scale and need no exemption: the guard below
+# does not match a line in either file.)
 _PENDING_PERCENT_SCALE_DEFINITIONS = {"devils-advocate-reviewer.md"}
 _PERCENT_SCALE = re.compile(
     r"(?:\b\d{2}-\d{2,3}\b(?!%)"     # a band: 80-100, 60-79 (not a percent)
@@ -218,7 +217,10 @@ _PERCENT_SCALE = re.compile(
     r"|\([+\-−]\d{2}[-–]\d{2}\)"     # (+10-20)
     r"|\bConfidence: \[?\d{2}"       # Confidence: 85 / [0-100]
     r"|\*\*\d{2}\*\*"                # Final: **85**
-    r"|\b0[-–]100\b)"
+    r"|\b0[-–]100\b"
+    r"|\| 0[-–]\d{2} \|"             # a floor cell: | 0-59 |
+    r"|→ [+\-−]\d{1,2}\b(?![.\d])"   # a worked-example step: → +15
+    r"|[+\-−]\d{1,2} confidence\b)"  # get -10 confidence
 )
 
 
@@ -229,18 +231,37 @@ def test_no_definition_teaches_a_percent_confidence_scale():
     defect was latent, and a new definition copied from one of these
     tables would have shipped it. devils-advocate-reviewer.md still
     teaches the percent scale (BACKLOG 45); it is held to a weaker
-    assertion below so the exemption cannot outlive the fix."""
+    assertion below so the exemption cannot outlive the fix.
+
+    The line filter and the regex were both narrower than the docstring's
+    claim until the 2026-09-15 final review: 38 of the 133 lines the
+    Phase 1 D rewrite actually changed carried no "confiden"/"scor" and no
+    leading "|" (every Boosters/Reducers row, both "Start at 70" lines,
+    and toolchain's "Hard cutoff: drop findings below 60."), and another
+    20 matched no regex alternative at all (every floor cell like
+    "| 0-59 |", architecture's "get -10 confidence", and dead-code's
+    "→ +15" worked-example steps). A new reviewer definition written with
+    any of those shapes would have passed this guard silently."""
     offenders = []
     pending_offenders = []
     for path in sorted(AGENTS_DIR.rglob("*.md")):
-        if path.name in _LABEL_CONFIDENCE_DEFINITIONS:
-            continue
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             lowered = line.lower()
-            if (
-                "confiden" not in lowered
-                and "scor" not in lowered
-                and not line.startswith("|")
+            if not (
+                any(
+                    word in lowered
+                    for word in (
+                        "confiden",
+                        "scor",
+                        "boost",
+                        "reduc",
+                        "start at",
+                        "cutoff",
+                        "floor",
+                    )
+                )
+                or line.startswith("|")
+                or "→" in line
             ):
                 continue
             if _PERCENT_SCALE.search(line):
@@ -249,7 +270,7 @@ def test_no_definition_teaches_a_percent_confidence_scale():
                     pending_offenders.append(entry)
                 else:
                     offenders.append(entry)
-    assert offenders == []
+    assert not offenders, "\n".join(offenders)
     assert pending_offenders, (
         "devils-advocate-reviewer.md no longer matches the percent-scale "
         "guard - remove it from _PENDING_PERCENT_SCALE_DEFINITIONS "
