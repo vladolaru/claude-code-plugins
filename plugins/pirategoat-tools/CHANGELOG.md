@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The cohort table's "Inline diff lines" and "Eff In/Out (all actors)" columns now say which population they sum.
 - The run record's dispatch line counts low-signal dispatches from the planner's signal instead of searching each reason for the word "conditional", so a reworded reason no longer zeroes the count and a keyword dispatch whose reason mentions the word no longer inflates it.
 - The reviewer return signal's COUNTS template now includes low, which counts toward the verdict, so reviewers no longer append it by hand.
+- toolchain-reviewer now runs with a fixed 50-call budget instead of one scaled from its usually tiny diff, so the briefing no longer tells it to wrap up at 18 calls when reading the changelogs its job requires takes 30 to 50.
 
 ## [1.119.6] - 2026-09-14
 
