@@ -1345,7 +1345,7 @@ def build_output(
     lines.append("  STATUS: FINISHED")
     lines.append("  OUTPUT_FILES:")
     lines.append(f"    - {paths.final}")
-    lines.append("  COUNTS: critical: N, high: N, medium: N  (copied from DRAFT TOTALS)")
+    lines.append("  COUNTS: critical: N, high: N, medium: N, low: N  (copied from DRAFT TOTALS)")
     lines.append("  VERDICT: <" + "|".join(PIPELINE_VERDICTS) + ">")
     lines.append("  SUMMARY: <one sentence>")
     lines.append("")
@@ -1397,7 +1397,7 @@ def no_domain_files_signal(path: str, skip_reason: str) -> List[str]:
         "  STATUS: FINISHED",
         "  OUTPUT_FILES:",
         f"    - {path}",
-        "  COUNTS: critical: 0, high: 0, medium: 0",
+        "  COUNTS: critical: 0, high: 0, medium: 0, low: 0",
         f"  VERDICT: {NOT_APPLICABLE_VERDICT}",
         f"  SUMMARY: {skip_reason}",
     ]
