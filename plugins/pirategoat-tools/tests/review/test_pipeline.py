@@ -671,7 +671,7 @@ class TestStep5DispatchPlan:
         return {
             "resolved_params": {"git_range": "abc..HEAD"},
             "completed_steps": [1, 2, 3],
-            "dispatch_plan_summary": {"dispatched": 7, "skipped": 3, "conditional": 2},
+            "dispatch_plan_summary": {"dispatched": 7, "skipped": 3, "low_signal": 2},
             "dispatch_plan_agents": [
                 {"name": "code-reviewer", "focus": "PR overall goal alignment, cross-domain bugs and regressions, overall code quality", "status": "DISPATCH", "reason": "always dispatch (domain has files)"},
                 {"name": "security-reviewer", "focus": "XSS, SQL injection, CSRF, sanitization", "status": "SKIPPED", "reason": "no files in security domain"},
@@ -764,7 +764,7 @@ class TestStep5DispatchPlan:
     def test_change_purpose_problems_are_warnings_before_dispatch(self, mod, tmp_path):
         state = {
             "completed_steps": [1, 2, 3, 4],
-            "dispatch_plan_summary": {"dispatched": 3, "skipped": 1, "conditional": 1},
+            "dispatch_plan_summary": {"dispatched": 3, "skipped": 1, "low_signal": 1},
             "dispatch_plan_agents": [],
             "change_purpose_items": {
                 "verify": [{"id": "V1"}], "context": [], "structured": True,
@@ -846,7 +846,7 @@ class TestStep5QuickMode:
         return {
             "resolved_params": {"git_range": "abc..HEAD"},
             "completed_steps": [1, 2, 3],
-            "dispatch_plan_summary": {"dispatched": 5, "skipped": 2, "conditional": 1},
+            "dispatch_plan_summary": {"dispatched": 5, "skipped": 2, "low_signal": 1},
             "dispatch_plan_agents": [
                 {"name": "code-reviewer", "focus": "PR overall goal alignment", "status": "DISPATCH", "reason": "always dispatch (domain has files)"},
                 {"name": "security-reviewer", "focus": "XSS, SQL injection", "status": "DISPATCH", "reason": "keywords matched (commits: auth)"},
@@ -888,7 +888,7 @@ class TestAdditionalInstructions:
         5: {
             "resolved_params": {"git_range": "abc..HEAD"},
             "completed_steps": [1, 2, 3],
-            "dispatch_plan_summary": {"dispatched": 2, "skipped": 1, "conditional": 0},
+            "dispatch_plan_summary": {"dispatched": 2, "skipped": 1, "low_signal": 0},
             "dispatch_plan_agents": [
                 {"name": "code-reviewer", "focus": "PR goal alignment", "status": "DISPATCH", "reason": "always dispatch (domain has files)"},
                 {"name": "security-reviewer", "focus": "XSS, SQL injection", "status": "SKIPPED", "reason": "no files in security domain"},
@@ -1254,10 +1254,10 @@ class TestStep6DispatchAgents:
 
         plan = {
             "agents": [
-                {"name": "code-reviewer", "status": "DISPATCH", "reason": "always"},
-                {"name": "security-reviewer", "status": "DISPATCH", "reason": "keywords"},
+                {"name": "code-reviewer", "status": "DISPATCH", "reason": "always dispatch (domain has files)", "signal": "always"},
+                {"name": "security-reviewer", "status": "DISPATCH", "reason": "conditional (keyword)", "signal": "keyword"},
                 {"name": "a11y-reviewer", "status": "SKIPPED_OVERRIDE", "reason": "conditional",
-                 "override_reason": "no markup", "planner_status": "DISPATCH"},
+                 "override_reason": "no markup", "planner_status": "DISPATCH", "signal": "override"},
             ]
         }
         _artifact(tmp_path, "dispatch_plan").write_text(json.dumps(plan))
@@ -1266,7 +1266,7 @@ class TestStep6DispatchAgents:
             "resolved_params": {"git_range": "abc..HEAD"},
             "completed_steps": [1, 2, 3, 5],
             # Pre-override summary (stale — should be overwritten)
-            "dispatch_plan_summary": {"dispatched": 3, "skipped": 0, "conditional": 1},
+            "dispatch_plan_summary": {"dispatched": 3, "skipped": 0, "low_signal": 1},
         }
         config = {"mode": "pr", "interactive": True}
         context = {"git": {"git_range": "abc..HEAD"}}
@@ -1276,6 +1276,11 @@ class TestStep6DispatchAgents:
         summary = state["dispatch_plan_summary"]
         assert summary["dispatched"] == 2  # code-reviewer + security-reviewer
         assert summary["skipped"] == 1  # SKIPPED_OVERRIDE
+        # From the signal, never from the reason: security-reviewer's reason
+        # says "conditional" and it is a keyword dispatch; code-reviewer's
+        # reason does not and it is the low-signal one.
+        assert summary["low_signal"] == 1
+        assert "conditional" not in summary
 
         text = "\n".join(mod.get_step_guidance(
             6, "pr", state, context, output_dir=str(tmp_path)

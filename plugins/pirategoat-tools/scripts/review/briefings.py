@@ -1014,7 +1014,7 @@ def _step_5_dispatch_plan(mode, state, context, config, output_dir):
         situation.append(
             f"Dispatch plan computed: {plan_summary.get('dispatched', 0)} agents to dispatch, "
             f"{plan_summary.get('skipped', 0)} skipped, "
-            f"{plan_summary.get('conditional', 0)} conditional."
+            f"{plan_summary.get('low_signal', 0)} low-signal."
         )
 
     # Build human-readable dispatch summary from agent details

@@ -405,7 +405,7 @@ class TestRecordAssembly:
                 "dirty_files": [],
             },
             "dispatch_plan_summary": {
-                "dispatched": 12, "skipped": 9, "conditional": 4,
+                "dispatched": 12, "skipped": 9, "low_signal": 4,
             },
             "dispatch_plan_warnings": ["unrecognized source language: .zig"],
         }
@@ -416,6 +416,7 @@ class TestRecordAssembly:
         assert "## Run notes" in text
         assert "12 dispatched" in text
         assert "9 skipped" in text
+        assert "4 low-signal" in text
         assert "unrecognized source language: .zig" in text
 
     DEPENDENCY_REFRESH_NOTES = (

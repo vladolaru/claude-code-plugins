@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The metrics reader keeps step 9's `reconciliation_verification`, so run metrics no longer drop whether a reconciliation was verified.
 - The read detector starts each Bash call in the directory the shell was in, so a relative read after an inherited `cd` is no longer credited to a path that does not exist at the repository root.
 - The cohort table's "Inline diff lines" and "Eff In/Out (all actors)" columns now say which population they sum.
+- The run record's dispatch line counts low-signal dispatches from the planner's signal instead of searching each reason for the word "conditional", so a reworded reason no longer zeroes the count and a keyword dispatch whose reason mentions the word no longer inflates it.
 
 ## [1.119.6] - 2026-09-14
 
