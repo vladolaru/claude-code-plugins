@@ -363,15 +363,7 @@ Spec item 1.2 says to retire the `("api error", "api_error")` entry in `review_t
 **Deferred because:** retiring the entry needs a tool-result-level replacement signal decided first, or those calls silently stop being counted as failures.
 **Do when:** the maintainer decides the replacement signal for tool-result-level API errors, alongside or after item 42.
 
-### 45. `devils-advocate-reviewer.md` still teaches finding confidence on 0-100
-
-The reviewer teaches its own 0-100 confidence scale in six places the Phase 1 D rewrite's 18-file list did not cover: the frontmatter `description` at line 3 ("High confidence threshold (85+)"), the worked example `Confidence: 92."` at line 70, `**Hard floor: 85.**` at line 130, `**Start at 80**` at line 132, the `+10`/`+5`/`-10`/`-5` modifier table at lines 136-141, and `Is my confidence **85 or above**?` at line 164. `review_document.py` validates a finding's confidence as 0.0-1.0, so a reviewer that followed this table literally would be rejected at save.
-
-**Evidence:** `plugins/pirategoat-tools/tests/review/test_registry_docs.py::test_no_definition_teaches_a_percent_confidence_scale`, which holds the file to a weaker assertion (`_PENDING_PERCENT_SCALE_DEFINITIONS`) instead of the `not offenders` every other definition meets.
-**Deferred because:** the Phase 1 D task was scoped by the user to exactly the 18 named files; widening it was out of scope for that task. The 2026-09-15 final review widened the guard's line filter and regex to close the gaps that let 58 of the branch's 133 changed lines escape unseen; against that widened guard, lines 70, 132 and 136-141 (8 lines) now match and land in the pending set, while line 3 (`85+`, inside a frontmatter `description:` line the filter and regex both still miss), line 130 (`**Hard floor: 85.**`, where `\bbelow \d{2}\b` is case-sensitive against "Below 85" and no other alternative matches "floor: 85") and line 164 (`85 or above`, which has no "N or above" alternative) still escape the guard entirely — converting the file should close these three remaining gaps in the same change, not just rewrite the prose.
-**Do when:** the next change to `devils-advocate-reviewer.md`, or before any new reviewer definition is modeled on it.
-
-### 46. `code-reviewer.md`'s 0.75 boundary sits in two overlapping bands
+### 45. `code-reviewer.md`'s 0.75 boundary sits in two overlapping bands
 
 The confidence table's `0.51–0.75` row is labeled **Note** ("DO NOT REPORT"), but the rule right below it reads "**RULE: Only report issues with confidence >= 0.75**" — so a finding scored exactly `0.75` falls inside the do-not-report Note band and also clears the reporting rule. The Phase 1 D rewrite carried this faithfully: the pre-rewrite table read `51-75` / **Note** against `>= 75`, the same overlap on the old 0-100 scale.
 

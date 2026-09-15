@@ -198,18 +198,16 @@ class TestUnchangedCallerScopeContract:
         assert "`debug`" in rule0
 
 
-# Still teaches confidence on 0-100 (BACKLOG 45): the Phase 1 D rewrite's
-# 18-file list missed it. Remove it from this set once it is converted,
-# at which point this test starts holding it to the same 0.0-1.0 contract
-# as every other definition. (The cross-validators, codex-reviewer.md and
-# gemini-reviewer.md, carry a document-level HIGH/MEDIUM/LOW label instead
-# of a percent confidence scale and need no exemption: the guard below
-# does not match a line in either file.)
-_PENDING_PERCENT_SCALE_DEFINITIONS = {"devils-advocate-reviewer.md"}
+# The cross-validators, codex-reviewer.md and gemini-reviewer.md, carry a
+# document-level HIGH/MEDIUM/LOW label instead of a percent confidence
+# scale and need no exemption: the guard below matches no line in either.
 _PERCENT_SCALE = re.compile(
     r"(?:\b\d{2}-\d{2,3}\b(?!%)"     # a band: 80-100, 60-79 (not a percent)
     r"|\b\d{2}–\d{2,3}\b(?!%)"       # the same band with an en dash
-    r"|\bbelow \d{2}\b"              # below 60
+    r"|\b[Bb]elow \d{2}\b"           # below 60 / Below 85
+    r"|\bfloor: \d{2}\b"             # Hard floor: 85
+    r"|(?<![.\d])\d{2} or above\b"    # 85 or above (not the 85 in 0.85)
+    r"|\(\d{2}\+\)"                  # a threshold in a description: (85+)
     r"|>= \d{2}\b(?!%)"              # >= 75 (not a percent)
     r"|\bat \d{2}\b"                 # start at 70
     r"|\bby \d{2}\b"                 # reduce by 20
@@ -229,9 +227,8 @@ def test_no_definition_teaches_a_percent_confidence_scale():
     API says set_confidence(0.0-1.0); eighteen definitions taught 0–100.
     Reviewers normalized at the call in every 2026 field run, so the
     defect was latent, and a new definition copied from one of these
-    tables would have shipped it. devils-advocate-reviewer.md still
-    teaches the percent scale (BACKLOG 45); it is held to a weaker
-    assertion below so the exemption cannot outlive the fix.
+    tables would have shipped it; devils-advocate-reviewer.md, which the
+    rewrite's file list missed, was converted in the same change.
 
     The line filter and the regex were both narrower than the docstring's
     claim until the 2026-09-15 final review: 38 of the 133 lines the
@@ -240,10 +237,11 @@ def test_no_definition_teaches_a_percent_confidence_scale():
     and toolchain's "Hard cutoff: drop findings below 60."), and another
     20 matched no regex alternative at all (every floor cell like
     "| 0-59 |", architecture's "get -10 confidence", and dead-code's
-    "→ +15" worked-example steps). A new reviewer definition written with
-    any of those shapes would have passed this guard silently."""
+    "→ +15" worked-example steps), and devils-advocate's "(85+)",
+    "Hard floor: 85" and "85 or above" matched nothing until its
+    conversion added them. A new reviewer definition written with any of
+    those shapes would have passed this guard silently."""
     offenders = []
-    pending_offenders = []
     for path in sorted(AGENTS_DIR.rglob("*.md")):
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             lowered = line.lower()
@@ -265,18 +263,8 @@ def test_no_definition_teaches_a_percent_confidence_scale():
             ):
                 continue
             if _PERCENT_SCALE.search(line):
-                entry = f"{path.name}:{number}: {line.strip()[:80]}"
-                if path.name in _PENDING_PERCENT_SCALE_DEFINITIONS:
-                    pending_offenders.append(entry)
-                else:
-                    offenders.append(entry)
+                offenders.append(f"{path.name}:{number}: {line.strip()[:80]}")
     assert not offenders, "\n".join(offenders)
-    assert pending_offenders, (
-        "devils-advocate-reviewer.md no longer matches the percent-scale "
-        "guard - remove it from _PENDING_PERCENT_SCALE_DEFINITIONS "
-        "(BACKLOG 45) so this test holds it to the same 0.0-1.0 contract "
-        "as every other definition."
-    )
 
 
 def _registry_tiers():

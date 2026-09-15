@@ -23,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A dependency-refresh save that replaces a different earlier report now keeps that report under superseded (at most five, newest last) and says so, where the earlier record used to vanish.
 - After the orchestrator applies the critic's proposal, the echo and the step-10 briefing name the ledger keys the result landed in, so an orchestrator no longer searches other runs for where the adjudication was recorded.
 - The Linear issue pipeline's steps 12 and 13 now render the titles their step footers name (Iterative Review and Re-Verify), and step 12's loop output moves from code-review/ to iterative-review/ under the run directory.
-- Eighteen reviewer definitions now state finding confidence on the 0.0–1.0 scale the review document validates and the severity-floor rule reads, where they taught 0–100 in their tables and examples. The Codex and Gemini cross-validators keep their HIGH/MEDIUM/LOW document label, and devils-advocate-reviewer still teaches 0–100 until a follow-up.
+- Every reviewer definition now states finding confidence on the 0.0–1.0 scale the review document validates and the severity-floor rule reads, where nineteen of them taught 0–100 in their tables and examples. The Codex and Gemini cross-validators keep their HIGH/MEDIUM/LOW document label.
 
 ## [1.119.6] - 2026-09-14
 
