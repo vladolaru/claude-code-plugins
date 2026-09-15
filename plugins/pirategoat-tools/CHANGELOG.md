@@ -5,6 +5,13 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.119.7] - UNRELEASED
+
+### Fixed
+
+- The plugin-root pointer the PreToolUse hook writes for reviewer agents is now one file per session, `~/.pirategoat-tools/sessions/<session id>/plugin-root`, so a session running a dev checkout and one running the installed release no longer overwrite each other's pointer before every command, and an agent can no longer build its briefing with one plugin version and save its review through another. Session directories whose pointer is a day old are swept.
+- The installed-release fallback search orders versions numerically, so `1.119.10` outranks `1.119.9`.
+
 ## [1.119.6] - 2026-09-14
 
 ### Changed
