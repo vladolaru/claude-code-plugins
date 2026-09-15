@@ -1382,3 +1382,63 @@ class TestAdditionalInstructionsInjection:
         assert "REVIEWER-REQUESTED FOCUS" not in output
 
 
+class TestSessionPointer:
+    """Bootstrap's second root source is the hook's per-session pointer,
+    read through run_paths so the path is spelled once in Python."""
+
+    def _write_pointer(self, tmp_path, monkeypatch, session, root):
+        monkeypatch.setenv("PIRATEGOAT_TOOLS_HOME", str(tmp_path / "state"))
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", session)
+        pointer = tmp_path / "state" / "sessions" / session / "plugin-root"
+        pointer.parent.mkdir(parents=True)
+        pointer.write_text(f"{root}\n")
+        return pointer
+
+    def test_the_pointer_yields_a_root_that_holds_scope_py(self, tmp_path, monkeypatch):
+        root = tmp_path / "root"
+        (root / "scripts" / "review" / "agent").mkdir(parents=True)
+        (root / "scripts" / "review" / "agent" / "scope.py").write_text("")
+        self._write_pointer(tmp_path, monkeypatch, "s1", root)
+        assert _mod._root_from_session_pointer() == str(root)
+
+    def test_a_pointer_at_a_directory_without_scope_py_is_ignored(self, tmp_path, monkeypatch):
+        self._write_pointer(tmp_path, monkeypatch, "s1", tmp_path)
+        assert _mod._root_from_session_pointer() is None
+
+    def test_another_sessions_pointer_is_never_read(self, tmp_path, monkeypatch):
+        root = tmp_path / "root"
+        (root / "scripts" / "review" / "agent").mkdir(parents=True)
+        (root / "scripts" / "review" / "agent" / "scope.py").write_text("")
+        self._write_pointer(tmp_path, monkeypatch, "other", root)
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "mine")
+        assert _mod._root_from_session_pointer() is None
+
+    def test_no_session_means_no_pointer(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PIRATEGOAT_TOOLS_HOME", str(tmp_path / "state"))
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        assert _mod._root_from_session_pointer() is None
+
+    def test_an_unsafe_session_id_means_no_pointer(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PIRATEGOAT_TOOLS_HOME", str(tmp_path / "state"))
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "../evil")
+        assert _mod._root_from_session_pointer() is None
+
+
+class TestInstallVersionOrder:
+    def test_versions_sort_numerically(self):
+        paths = [
+            "/h/.claude/plugins/cache/m/pirategoat-tools/1.119.9/scripts/review/agent/bootstrap.py",
+            "/h/.claude/plugins/cache/m/pirategoat-tools/1.119.10/scripts/review/agent/bootstrap.py",
+            "/h/.claude/plugins/cache/m/pirategoat-tools/1.118.0/scripts/review/agent/bootstrap.py",
+        ]
+        ordered = sorted(paths, key=_mod._install_version_key)
+        assert ordered[-1].split("/pirategoat-tools/")[1].split("/")[0] == "1.119.10"
+
+    def test_a_path_without_a_version_sorts_first(self):
+        paths = [
+            "/h/.claude/plugins/cache/m/pirategoat-tools/1.0.0/scripts/review/agent/bootstrap.py",
+            "/h/.claude/plugins/pirategoat-tools/scripts/review/agent/bootstrap.py",
+        ]
+        assert sorted(paths, key=_mod._install_version_key)[-1].endswith("1.0.0/scripts/review/agent/bootstrap.py")
+
+

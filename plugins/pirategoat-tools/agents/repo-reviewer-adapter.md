@@ -22,8 +22,8 @@ flags (`--repo-agent-ref`, `--instance-name`, `--execution`, `--scope-domains`).
 **Run exactly that command** — do not invent one. It looks like:
 
 ```bash
-PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
-[ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review/agent/bootstrap.py" -type f 2>/dev/null | sort | tail -1 | xargs dirname | xargs dirname | xargs dirname | xargs dirname)
+PLUGIN_ROOT=$(cat "${PIRATEGOAT_TOOLS_HOME:-$HOME/.pirategoat-tools}/sessions/$CLAUDE_CODE_SESSION_ID/plugin-root" 2>/dev/null)
+[ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review/agent/bootstrap.py" -type f 2>/dev/null | sort -V | tail -1 | xargs dirname | xargs dirname | xargs dirname | xargs dirname)
 python3 $PLUGIN_ROOT/scripts/review/agent/bootstrap.py --agent repo-reviewer-adapter \
   --instance-name <given> --repo-agent-ref "<given>" --adapter-label "<given>" \
   --execution <given> --scope-domains "<given>" --range "<given>" --output-dir "<given>"

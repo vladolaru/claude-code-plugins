@@ -47,7 +47,7 @@ from review.atomic_io import atomic_write_json, atomic_write_text
 from review.change_purpose import parse_change_purpose
 from review.dispatch_status import EXECUTION_INLINE, EXECUTION_ISOLATED, EXECUTIONS
 from review.manifest_sections import host_identity_phrase, project_host_entry
-from review.run_paths import artifact_path
+from review.run_paths import artifact_path, current_session_id, plugin_root_pointer
 from review.triage_sources import strip_html_comments
 from review.reviewer_lifecycle import (
     SCOPE_SUMMARY_SCHEMA,
@@ -168,43 +168,77 @@ def run_cmd(cmd: List[str], timeout: int = 30) -> Tuple[int, str, str]:
         return 1, "", f"Command not found: {cmd[0]}"
 
 
+def _root_from_session_pointer() -> Optional[str]:
+    """The plugin root this session's pointer names, if it holds scope.py.
+
+    `hooks/init-plugin-root.sh` writes it before every Bash call; the path
+    is run_paths.plugin_root_pointer(current session). Another session's
+    pointer is never read, which is the point of the per-session file.
+    """
+    session = current_session_id()
+    if session is None:
+        return None
+    pointer = plugin_root_pointer(session)
+    if not pointer.is_file():
+        return None
+    try:
+        root = pointer.read_text().strip()
+    except OSError:
+        return None
+    if root and os.path.isfile(os.path.join(root, "scripts", "review", "agent", "scope.py")):
+        return root
+    return None
+
+
+def _install_version_key(path: str) -> tuple:
+    """Sort key for installed-plugin paths: the version segment, numerically.
+
+    A marketplace install lives at `.../pirategoat-tools/<version>/...`;
+    a plain text sort put 1.119.9 after 1.119.10. A path with no version
+    segment sorts before every versioned one.
+    """
+    marker = "/pirategoat-tools/"
+    if marker not in path:
+        return (0, ())
+    segment = path.split(marker, 1)[1].split("/", 1)[0]
+    # If the segment doesn't start with a digit, it's not a version
+    if not segment or not segment[0].isdigit():
+        return (0, ())
+    parts = []
+    for piece in segment.split("."):
+        parts.append((0, int(piece)) if piece.isdigit() else (1, piece))
+    return (1, tuple(parts))
+
+
 def find_plugin_root() -> Optional[str]:
     """Find the pirategoat-tools plugin root directory."""
-    # Method 1: derive from own location. This MUST outrank the hook cache:
+    # Method 1: derive from own location. This MUST outrank the pointer:
     # bootstrap invokes sibling scripts (scope.py) whose CLI contract matches
-    # its own version. A cache file pointing at a different install (e.g. the
-    # plugin cache while running the repo checkout, or a stale version dir)
-    # silently mixes script versions — bootstrap then drives a scope.py that
-    # may not understand its flags.
+    # its own version. A pointer at a different install (the plugin cache
+    # while running the repo checkout, or a stale version dir) silently
+    # mixes script versions — bootstrap then drives a scope.py that may
+    # not understand its flags.
     # __file__ is in scripts/review/agent/, so go up 3 levels to plugin root
     script_dir = os.path.dirname(os.path.abspath(__file__))
     candidate = os.path.dirname(os.path.dirname(os.path.dirname(script_dir)))  # agent/ -> review/ -> scripts/ -> plugin root
     if os.path.isfile(os.path.join(candidate, "scripts", "review", "agent", "scope.py")):
         return candidate
 
-    # Method 2: cached value from hook
-    cache_file = "/tmp/.pirategoat-tools-root"
-    if os.path.isfile(cache_file):
-        try:
-            with open(cache_file) as f:
-                root = f.read().strip()
-            if root and os.path.isfile(os.path.join(root, "scripts", "review", "agent", "scope.py")):
-                return root
-        except OSError:
-            pass
+    # Method 2: this session's pointer, written by the hook
+    root = _root_from_session_pointer()
+    if root:
+        return root
 
-    # Method 3: find command fallback
+    # Method 3: the newest installed release
     rc, stdout, _ = run_cmd([
         "find", os.path.expanduser("~/.claude"),
         "-path", "*/pirategoat-tools/*/scripts/review/agent/bootstrap.py",
         "-type", "f",
     ])
     if rc == 0 and stdout:
-        # Take the last (most recent version) path
         paths = stdout.strip().splitlines()
         if paths:
-            # Sort for version ordering, take last
-            paths.sort()
+            paths.sort(key=_install_version_key)
             script_path = paths[-1]
             return str(Path(script_path).parent.parent.parent.parent)
 
@@ -1659,7 +1693,7 @@ def main():
         exit_with_bootstrap_error(build_error_output(
             agent_name,
             "Could not find pirategoat-tools plugin root. "
-            "Ensure the plugin is installed or /tmp/.pirategoat-tools-root is set.",
+            "Ensure the plugin is installed, or run inside a Claude Code session so the hook can record this session's plugin root under sessions/<session id>/plugin-root in ~/.pirategoat-tools.",
         ), args.output_dir, effective_agent_name)
 
     # Step 3: Read and extract protocol rules

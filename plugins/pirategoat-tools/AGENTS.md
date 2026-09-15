@@ -135,4 +135,4 @@ These are normal; handle them, do not stop or apologize:
 
 - `agent/scope.py` returns an empty scope: no files match this agent's domain. Skip the agent; that is correct triage.
 - Tests fail after your change: read the output, fix the root cause, re-run. Failures are feedback.
-- `agent/bootstrap.py` cannot find the plugin root: run from inside the repository; it walks up from CWD looking for `.claude-plugin/`.
+- `agent/bootstrap.py` cannot find the plugin root: it tries its own location, this session's pointer, then the newest installed release.

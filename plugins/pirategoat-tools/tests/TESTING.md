@@ -16,6 +16,7 @@ tests/
 ├── test_instruction_budget.py        # Byte budgets for every AGENTS.md and the CLAUDE.md shims (Codex 32 KiB chain)
 ├── test_git_paths.py                 # Shared Git C-quoted path grammar tests
 ├── test_pytest_layout.py             # Repo-wide guard: no __init__.py under any plugin's tests/
+├── test_plugin_root_hook.py          # hooks/init-plugin-root.sh: per-session plugin-root pointer contract
 ├── review/                           # Tests for scripts/review/
 │   ├── test_pipeline.py              # briefings.py through the pipeline.py compatibility facade
 │   ├── test_pipeline_infra.py        # pipeline.py + pipeline_contract.py routing, state, and CLI
@@ -671,6 +672,7 @@ The full plugin suite runs in about a minute (`pytest plugins/pirategoat-tools/t
 | Changed file | Run |
 |---|---|
 | Any `AGENTS.md` or `CLAUDE.md` in the repository | `pytest plugins/pirategoat-tools/tests/test_instruction_budget.py -v` (byte ceilings per file and for the root-plus-plugin chain, and the `@AGENTS.md` shim contract) |
+| `hooks/init-plugin-root.sh` | `pytest plugins/pirategoat-tools/tests/test_plugin_root_hook.py -v` (the PreToolUse hook's per-session pointer contract: write, id grammar, JSON stdin, atomic replace, and the stale-session sweep) |
 | `scripts/review/agent/bootstrap.py` | `pytest plugins/pirategoat-tools/tests/review/agent/test_bootstrap.py plugins/pirategoat-tools/tests/review/agent/test_bootstrap_integration.py -v` |
 | `scripts/review/reviewer_lifecycle.py` | `pytest plugins/pirategoat-tools/tests/review/test_reviewer_lifecycle.py plugins/pirategoat-tools/tests/review/test_agents_status.py plugins/pirategoat-tools/tests/review/agent/test_bootstrap.py plugins/pirategoat-tools/tests/review/agent/test_bootstrap_integration.py plugins/pirategoat-tools/tests/review/agent/test_output.py plugins/pirategoat-tools/tests/review/agent/test_scope.py plugins/pirategoat-tools/tests/review/test_dispatch_adjust.py plugins/pirategoat-tools/tests/review/test_telemetry.py plugins/pirategoat-tools/tests/review/test_synthesis_lifecycle.py plugins/pirategoat-tools/tests/review/test_review_markdown.py plugins/pirategoat-tools/tests/review/test_file_review.py -v` (the per-reviewer files and the review-intake lifecycle: bootstrap writes the scope summaries, assignment, briefing, started marker and bootstrap failure record through it; `agent/output.py` saves and finalizes drafts through `review_paths` and reads the started marker for timing, as telemetry does; `agents_status` reads the started marker, the failure record and the final review; `dispatch_adjust` reads the started marker and the final review to refuse a skip; `review_markdown` materializes `review.md`; `synthesis_lifecycle` keeps its markers out of these names; pirategoat-bot's `src/review-artifacts.js` spells the same names) |
 | `agents/shared/reviewer-protocol.md` | `pytest plugins/pirategoat-tools/tests/review/agent/test_bootstrap_integration.py -v` |
