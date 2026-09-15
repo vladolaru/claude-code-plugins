@@ -9,8 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Run metrics now record how every dispatched agent's transcript ended (the harness's raw stop reasons and API error statuses), how many times a synthesis agent was dispatched and which model finished, and warn on an API error or a re-dispatched synthesis agent; three critics that died on an API error on 2026-09-14 had read as three clean critics with one duration spanning the failed run and its retry.
-- The metrics reader keeps step 9's `reconciliation_verification`, so the cohort can count unverified reconciliations; the read detector starts each Bash call in the directory the shell was actually in, so a relative read after an inherited `cd` is no longer credited to a path that does not exist at the repository root; and the cohort table's "Inline diff lines" and "Eff In/Out (all actors)" columns say which population they sum.
+- Run metrics record how each dispatched agent's transcript ended, as the harness's raw stop reasons and API error statuses, and warn when an agent hit an API error.
+- Synthesis rows in run metrics show how many times the reconciliator or critic was dispatched and which model finished, and warn when one was dispatched more than once; the cohort table marks a retried agent with its attempt count.
+- The metrics reader keeps step 9's `reconciliation_verification`, so run metrics no longer drop whether a reconciliation was verified.
+- The read detector starts each Bash call in the directory the shell was in, so a relative read after an inherited `cd` is no longer credited to a path that does not exist at the repository root.
+- The cohort table's "Inline diff lines" and "Eff In/Out (all actors)" columns now say which population they sum.
 
 ## [1.119.6] - 2026-09-14
 
