@@ -494,6 +494,24 @@ class TestStepGuidance:
             assert "phase" in result
             assert "title" in result
 
+    def test_every_rendered_title_matches_the_step_sequence(self, mod):
+        """Step 11's footer names the next step from STEP_SEQUENCE; step 12
+        rendered "Iterative Review" under a sequence title of "Self-Review",
+        so the footer pointed at a step that did not exist."""
+        for step_def in mod.STEP_SEQUENCE:
+            result = mod.get_step_guidance(
+                step_def["step"], "fix", {}, {},
+                config={"interactive": False},
+                output_dir="/tmp/test",
+            )
+            assert result["title"] == step_def["title"], step_def["step"]
+
+    def test_step_12_writes_under_iterative_review(self, mod, tmp_path):
+        result = mod.get_step_guidance(12, "fix", {}, {}, config={"interactive": False}, output_dir=str(tmp_path))
+        handoff = "\n".join(result["handoff"])
+        assert f"{tmp_path}/iterative-review/review-loop-result.json" in handoff
+        assert "code-review/" not in handoff
+
 
 # ---------------------------------------------------------------------------
 # CLI (subprocess tests)

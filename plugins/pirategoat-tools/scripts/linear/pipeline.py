@@ -119,7 +119,7 @@ STEP_SEQUENCE = [
     {"step": 9,  "title": "Write Plan",             "phase": "IMPLEMENTATION", "condition": "fix_mode_and_unresolved"},
     {"step": 10, "title": "Implement",              "phase": "IMPLEMENTATION", "condition": "fix_mode_and_unresolved"},
     {"step": 11, "title": "Verify",                 "phase": "IMPLEMENTATION", "condition": "fix_mode_and_unresolved"},
-    {"step": 12, "title": "Self-Review",            "phase": "VALIDATION",     "condition": "fix_mode_and_unresolved_review_needed"},
+    {"step": 12, "title": "Iterative Review",       "phase": "VALIDATION",     "condition": "fix_mode_and_unresolved_review_needed"},
     {"step": 13, "title": "Re-Verify",              "phase": "VALIDATION",     "condition": "fix_mode_and_unresolved_review_needed"},
     {"step": 14, "title": "Create Draft PR",        "phase": "OUTPUT",         "condition": "fix_mode_and_unresolved"},
     {"step": 15, "title": "Present Results",         "phase": "OUTPUT",         "condition": "always"},
@@ -526,7 +526,7 @@ def get_step_guidance(step, mode, state, context, config=None, output_dir=None):
     elif step == 11:
         return _step_11_verify(mode, state, context, config, output_dir)
     elif step == 12:
-        return _step_12_self_review(mode, state, context, config, output_dir)
+        return _step_12_iterative_review(mode, state, context, config, output_dir)
     elif step == 13:
         return _step_13_reverify(mode, state, context, config, output_dir)
     elif step == 14:
@@ -1190,10 +1190,10 @@ def _step_11_verify(mode, state, context, config, output_dir):
 
 
 # ---------------------------------------------------------------------------
-# Step 12: Self-Review (fix mode only)
+# Step 12: Iterative Review (fix mode only)
 # ---------------------------------------------------------------------------
 
-def _step_12_self_review(mode, state, context, config, output_dir):
+def _step_12_iterative_review(mode, state, context, config, output_dir):
     """Step 12: Iterative Review — multi-round independent code review loop."""
 
     scripts_dir = Path(__file__).resolve().parent
@@ -1207,7 +1207,7 @@ def _step_12_self_review(mode, state, context, config, output_dir):
         "pushback tracking and convergence detection.",
     ]
 
-    code_review_dir = os.path.join(output_dir, 'code-review')
+    iterative_review_dir = os.path.join(output_dir, 'iterative-review')
 
     adaptive_flag = ""
     if config and config.get("adaptive_iterative_review"):
@@ -1243,14 +1243,14 @@ def _step_12_self_review(mode, state, context, config, output_dir):
         "3. Start the review loop with round 1:",
         f"   ```bash",
         f"   PYTHONPATH={scripts_dir}:$PYTHONPATH python3 -m iterative_review --action review --round 1 \\",
-        f"     --output-dir {code_review_dir} \\",
+        f"     --output-dir {iterative_review_dir} \\",
         f"     --merge-base $MERGE_BASE \\",
         f"     --context-file {os.path.join(output_dir, 'investigation-report.md')} \\",
         f"     --analysis-prefix {issue_id.lower()}{adaptive_flag}{autonomous_flag}",
         f"   ```",
         f"   (Run from the target repo root — PYTHONPATH makes the module importable.)",
         "",
-        f"   Tail `{os.path.join(code_review_dir, 'review-progress.jsonl')}` for status.",
+        f"   Tail `{os.path.join(iterative_review_dir, 'review-progress.jsonl')}` for status.",
         "",
         "4. If the script prints `UNAVAILABLE` — the review tool is not installed or not",
         "   authenticated. The iterative review cannot run. Note this as a degradation",
@@ -1266,13 +1266,13 @@ def _step_12_self_review(mode, state, context, config, output_dir):
         "7. After writing outcomes, advance (replace N with the current round number):",
         f"   ```bash",
         f"   PYTHONPATH={scripts_dir}:$PYTHONPATH python3 -m iterative_review --action advance --round N \\",
-        f"     --output-dir {code_review_dir}",
+        f"     --output-dir {iterative_review_dir}",
         f"   ```",
         "",
         "8. If advance says 'Proceed to review round M', run the next review:",
         f"   ```bash",
         f"   PYTHONPATH={scripts_dir}:$PYTHONPATH python3 -m iterative_review --action review --round M \\",
-        f"     --output-dir {code_review_dir}{adaptive_flag}{autonomous_flag}",
+        f"     --output-dir {iterative_review_dir}{adaptive_flag}{autonomous_flag}",
         f"   ```",
         "   Then repeat from step 6. Only round 1 needs --merge-base and --context-file.",
         "",
@@ -1285,7 +1285,7 @@ def _step_12_self_review(mode, state, context, config, output_dir):
         "situation": situation,
         "actions": actions,
         "handoff": [
-            f"`{os.path.join(output_dir, 'code-review', 'review-loop-result.json')}` exists with final review stats",
+            f"`{os.path.join(output_dir, 'iterative-review', 'review-loop-result.json')}` exists with final review stats",
         ],
     }
 
@@ -1309,7 +1309,7 @@ def _step_13_reverify(mode, state, context, config, output_dir):
 
     return {
         "phase": "VALIDATION",
-        "title": "Re-Verify (Handled by Review Loop)",
+        "title": "Re-Verify",
         "situation": situation,
         "actions": actions,
         "handoff": None,
@@ -1329,7 +1329,7 @@ def _step_14_create_draft_pr(mode, state, context, config, output_dir):
         "The PR links back to the Linear issue and includes investigation context.",
     ]
 
-    review_result_path = os.path.join(output_dir, "code-review", "review-loop-result.json")
+    review_result_path = os.path.join(output_dir, "iterative-review", "review-loop-result.json")
 
     actions = [
         "1. Create a feature branch (if not already on one):",
@@ -1633,7 +1633,7 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
             "backend_timeout": "unavailable",
             "backend_timeout_at_cap": "unavailable",
         }
-        review_result_path = os.path.join(output_dir, "code-review", "review-loop-result.json")
+        review_result_path = os.path.join(output_dir, "iterative-review", "review-loop-result.json")
         review_outcome = "not_run"
         _review_termination = ""
         if os.path.isfile(review_result_path):
