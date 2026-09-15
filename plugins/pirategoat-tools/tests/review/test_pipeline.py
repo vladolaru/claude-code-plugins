@@ -966,6 +966,19 @@ class TestStep6DispatchAgents:
         assert lines[0] == mod.DISPATCH_PROMPT_LEAD
         assert lines[1].startswith("python3 ") and "bootstrap.py --agent code-reviewer" in lines[1]
 
+    def test_step6_sends_the_orchestrator_to_step_7_instead_of_a_poll(self, mod, tmp_path):
+        """Two of three 2026-09-14 orchestrators waited and polled inside
+        step 6, where the briefing invited a status call, before reaching
+        the step-7 watchdog guidance."""
+        state = self._make_state_with_agents()
+        ctx = {"git": {"git_range": "abc..HEAD"}}
+        g = mod.get_step_guidance(6, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "Do NOT poll or wait here" in text
+        assert "step 7" in text
+        assert "agents_status.py" not in text
+        assert "Monitor progress" not in text
+
     def test_codex_dispatch_uses_spawn_agent_and_canonical_reviewer(self, mod, tmp_path):
         """Codex dispatch reads the canonical reviewer instead of copying it."""
         state = self._make_state_with_agents()

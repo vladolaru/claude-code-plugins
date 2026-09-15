@@ -1261,10 +1261,13 @@ def _step_6_dispatch_agents(mode, state, context, config, output_dir):
                 actions.append("```")
                 actions.append("")
 
-    actions.append("Monitor progress at any time:")
-    actions.append(f"```")
-    actions.append(f"python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\"")
-    actions.append(f"```")
+    # The watchdog and the wait rules live in step 7. An invitation to
+    # poll here had two of three 2026-09-14 orchestrators waiting inside
+    # step 6 before they ever read them.
+    actions.append(
+        "Do NOT poll or wait here. As soon as the dispatch calls are issued, "
+        "run step 7: it launches the background watchdog and says how to wait."
+    )
 
     return {
         "phase": "EXECUTION",
