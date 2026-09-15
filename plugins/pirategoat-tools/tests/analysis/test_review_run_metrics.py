@@ -262,6 +262,23 @@ def test_usage_fields_extend_transcript_producer_fields():
     }
 
 
+def test_sanitizer_token_grammar_and_error_cap_match_the_transcript_producer():
+    """sanitize.py repeats review_transcript.py's _SAFE_TOKEN pattern and
+    _MAX_API_ERRORS cap rather than importing them (the standalone
+    transcript module cannot import this package). Nothing else pins the
+    two copies together, so a producer-side change could drift silently
+    past the sanitizer that is supposed to mirror it."""
+    spec = importlib.util.spec_from_file_location(
+        "review_transcript_for_termination_grammar",
+        PLUGIN_ROOT / "scripts" / "analysis" / "review_transcript.py",
+    )
+    transcript = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(transcript)
+
+    assert sanitize._SAFE_TOKEN.pattern == transcript._SAFE_TOKEN.pattern
+    assert sanitize._MAX_API_ERRORS == transcript._MAX_API_ERRORS
+
+
 def test_warning_allowlist_covers_transcript_emitted_codes():
     """Every warning code review_transcript.py can emit must survive
     sanitization — a dropped code erases the diagnostic while the affected

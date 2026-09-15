@@ -146,10 +146,12 @@ def _safe_string(value: object) -> str | None:
     return value if len(value) <= 4096 else None
 
 
-# Mirrors review_transcript.py's producer-side token grammar exactly: a
-# stop reason or an API error kind is a short lowercase identifier the
-# harness writes, never reclassified here either.
+# Mirrors review_transcript.py's producer-side token grammar and API-error
+# cap exactly: a stop reason or an API error kind is a short lowercase
+# identifier the harness writes, never reclassified here either, and the
+# error list is already bounded at the producer.
 _SAFE_TOKEN = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+_MAX_API_ERRORS = 20
 
 
 def _sanitize_termination(value: object) -> dict[str, Any] | None:
@@ -169,7 +171,7 @@ def _sanitize_termination(value: object) -> dict[str, Any] | None:
             continue
         reasons[token] = safe_count
     errors = []
-    for item in raw_errors[:20]:
+    for item in raw_errors[:_MAX_API_ERRORS]:
         item = item if isinstance(item, dict) else {}
         status = item.get("status")
         kind = item.get("kind")
