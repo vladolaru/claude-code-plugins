@@ -106,7 +106,7 @@ At step 5 the pipeline reads the report through `load_dependency_refresh_report(
 
 ## Run directory layout
 
-Interactive reviews keep durable state under `~/.pirategoat-tools/reviews/`; an absolute `$PIRATEGOAT_TOOLS_HOME` overrides `~/.pirategoat-tools`, and a relative override is ignored.
+Interactive reviews keep durable state under `~/.pirategoat-tools/reviews/`; an absolute `$PIRATEGOAT_TOOLS_HOME` overrides `~/.pirategoat-tools`, and a relative override is ignored. Every session with the plugin loaded also writes its own `~/.pirategoat-tools/sessions/<session id>/plugin-root`, independent of any review: the PreToolUse hook records it before each Bash call, and bootstrap and the agent definitions read it back so a dev checkout and the installed release never mix.
 
 ```text
 ~/.pirategoat-tools/reviews/<kind>/<safe-repo>/<safe-target>/   # target directory: cross-run state
