@@ -72,6 +72,60 @@ class TestRepositoryReadEvidence:
         }])
         assert row["repository_reads"] is None
 
+    def test_available_row_sanitizes_its_termination(self):
+        # An unsafe token ("END TURN") proves `_sanitize_termination` ran
+        # on this path, not that the row was copied through untouched.
+        [row] = measure._sanitize_agent_usage([{
+            "agent": "review-reconciliator", "available": True,
+            "usage": _usage(2), "tool_calls": 3,
+            "termination": {
+                "stop_reasons": {"tool_use": 1, "END TURN": 1},
+                "api_errors": [],
+                "last_stop_reason": "tool_use",
+            },
+        }])
+        assert row["termination"] == {
+            "stop_reasons": {"tool_use": 1},
+            "api_errors": [],
+            "last_stop_reason": "tool_use",
+        }
+
+    def test_unavailable_row_cannot_claim_a_termination(self):
+        [row] = measure._sanitize_agent_usage([{
+            "agent": "review-reconciliator", "available": False,
+            "termination": {
+                "stop_reasons": {"tool_use": 1}, "api_errors": [],
+                "last_stop_reason": "tool_use",
+            },
+        }])
+        assert row["termination"] is None
+
+
+class TestSanitizeTermination:
+    def test_passes_safe_raw_values_through(self):
+        value = {
+            "stop_reasons": {"tool_use": 3, "end_turn": 1},
+            "api_errors": [{"status": 429, "kind": "rate_limit"}, {"status": None, "kind": None}],
+            "last_stop_reason": "end_turn",
+        }
+        assert sanitize._sanitize_termination(value) == value
+
+    def test_drops_unsafe_tokens_and_out_of_range_statuses(self):
+        value = {
+            "stop_reasons": {"tool_use": 3, "END TURN": 1, "x" * 50: 2},
+            "api_errors": [{"status": 42, "kind": "rate limit"}, {"status": 529, "kind": "overloaded"}],
+            "last_stop_reason": "end turn",
+        }
+        assert sanitize._sanitize_termination(value) == {
+            "stop_reasons": {"tool_use": 3},
+            "api_errors": [{"status": None, "kind": None}, {"status": 529, "kind": "overloaded"}],
+            "last_stop_reason": None,
+        }
+
+    @pytest.mark.parametrize("value", [None, "x", [], {"stop_reasons": []}])
+    def test_anything_else_is_none(self, value):
+        assert sanitize._sanitize_termination(value) is None
+
 
 def _load_telemetry_module():
     spec = importlib.util.spec_from_file_location(

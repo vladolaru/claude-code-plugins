@@ -36,6 +36,11 @@ _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
 # variant the API actually resolved, so stripping it would misreport
 # attribution. Rejecting it nulled the model for every Opus-tier dispatch.
 _SAFE_MODEL = re.compile(r"^claude-[a-z0-9][a-z0-9._-]{0,119}(\[[a-z0-9._-]{1,16}\])?$")
+# Raw harness tokens retained verbatim: a stop reason or an API error kind
+# is a short lowercase identifier the harness writes; anything else is not
+# retained, never "cleaned". Grouping by these values is the reader's job.
+_SAFE_TOKEN = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+_MAX_API_ERRORS = 20
 # The harness appends its trailer as a LINE-ANCHORED
 # "agentId: <id> (use SendMessage ...)" near the end of the result text
 # (verified against real transcripts). Anchor to line starts and take the
@@ -1306,6 +1311,47 @@ def _entry_usage(entry: dict[str, Any]) -> dict[str, int] | None:
     return usage
 
 
+def _safe_token(value: object) -> str | None:
+    return value if isinstance(value, str) and _SAFE_TOKEN.fullmatch(value) else None
+
+
+def _termination(entries: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """How the transcript ended, in the harness's own words.
+
+    Three 2026-09-14 critics died on an API error and every telemetry
+    surface read them as clean, because failure classification looked at
+    tool results only. This reads the two records the harness writes on
+    its own: `message.stop_reason` on every assistant entry, and the
+    top-level `isApiErrorMessage` entry with its `apiErrorStatus` and
+    `error` token. Values are retained raw and counted; nothing here says
+    what a value means, so a kind of failure never seen before appears as
+    a new value rather than as a clean run. Bounded, because a looping
+    error would otherwise grow the manifest without bound.
+    """
+    stop_reasons: Counter[str] = Counter()
+    api_errors: list[dict[str, Any]] = []
+    last_stop_reason: str | None = None
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("type") != "assistant":
+            continue
+        message = entry.get("message")
+        reason = _safe_token(message.get("stop_reason")) if isinstance(message, dict) else None
+        if reason is not None:
+            stop_reasons[reason] += 1
+            last_stop_reason = reason
+        if entry.get("isApiErrorMessage") is True and len(api_errors) < _MAX_API_ERRORS:
+            status = entry.get("apiErrorStatus")
+            api_errors.append({
+                "status": status if isinstance(status, int) and not isinstance(status, bool) and 100 <= status <= 599 else None,
+                "kind": _safe_token(entry.get("error")),
+            })
+    return {
+        "stop_reasons": dict(sorted(stop_reasons.items())),
+        "api_errors": api_errors,
+        "last_stop_reason": last_stop_reason,
+    }
+
+
 def _add_usage(target: dict[str, int], addition: dict[str, int]) -> None:
     for key in target:
         target[key] += addition.get(key, 0)
@@ -2518,6 +2564,7 @@ def enrich_run_transcript(
     agent_usage: list[dict[str, Any]] = []
     seen_paths = {str(Path(main_session).resolve(strict=False))}
     missing_transcripts: set[str] = set()
+    api_error_agents: set[str] = set()
     agent_transcript_parse_gaps: set[str] = set()
     unresolved_evidence: set[str] = set()
     missing_scope_evidence: set[str] = set()
@@ -2552,6 +2599,11 @@ def enrich_run_transcript(
     missing = sorted(missing_counts)
     for agent in missing:
         warnings.append({"code": "expected_agent_uncorrelated", "agent": agent})
+    for agent in sorted(correlated_counts):
+        if agent in _NON_SCOPE_COMPARABLE_AGENTS and correlated_counts[agent] > 1:
+            # The synthesis lifecycle row measures one dispatch; a second
+            # Agent call for the same identity is only visible here.
+            warnings.append({"code": "synthesis_redispatch", "agent": agent})
     for dispatch in correlated:
         transcript = Path(dispatch["transcript"])
         metadata = {
@@ -2575,6 +2627,7 @@ def enrich_run_transcript(
                     "usage_by_model": None,
                     "tool_calls": None,
                     "repository_reads": None,
+                    "termination": None,
                 }
             )
             continue
@@ -2654,6 +2707,7 @@ def enrich_run_transcript(
                 }
             )
         _add_usage(total_usage, analysis["usage"])
+        termination = _termination(entries)
         agent_usage.append(
             {
                 **metadata,
@@ -2663,8 +2717,12 @@ def enrich_run_transcript(
                 "tool_calls": analysis["tool_calls"],
                 # Count distinct repository files in normalized read evidence.
                 "repository_reads": len(analysis["observed_reads"]["all"]),
+                "termination": termination,
             }
         )
+        if termination["api_errors"] and dispatch["agent"] not in api_error_agents:
+            api_error_agents.add(dispatch["agent"])
+            warnings.append({"code": "agent_api_error", "agent": dispatch["agent"]})
         failures.extend(
             {"actor": dispatch["agent"], **failure}
             for failure in analysis["tool_failures"]

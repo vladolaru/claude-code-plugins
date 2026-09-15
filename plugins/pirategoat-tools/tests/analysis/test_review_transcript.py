@@ -32,6 +32,7 @@ manifest_step_timeline = _mod._manifest_step_timeline
 result_state = _mod._result_state
 parse_builder_envelope = _mod.parse_builder_envelope
 safe_model = _mod._safe_model
+_termination = _mod._termination
 
 _bootstrap_spec = importlib.util.spec_from_file_location(
     "review_bootstrap_for_transcript_test", BOOTSTRAP_PATH
@@ -3698,6 +3699,7 @@ class TestEnrichRunTranscript:
                 "usage_by_model": None,
                 "tool_calls": None,
                 "repository_reads": None,
+                "termination": None,
             }
         ]
         assert result["usage"]["output_tokens"] == 2
@@ -6039,3 +6041,172 @@ def test_usage_summary_for_transcript_counts_a_split_response_once(tmp_path):
     assert summary["usage_valid"] is True
     assert summary["usage_observed"] is True
     assert summary["parse_gap"] is True
+
+
+def _ended(stop_reason: str, *blocks: dict, usage: dict | None = None) -> dict:
+    """An assistant entry whose message carries a raw stop_reason."""
+    entry = _assistant(*blocks, usage=usage if usage is not None else _usage(1, 1))
+    entry["message"]["stop_reason"] = stop_reason
+    return entry
+
+
+def _api_error_entry(status: int, kind: str) -> dict:
+    """The harness's API-error entry, as recorded on real transcripts:
+    top-level isApiErrorMessage/apiErrorStatus/error, a synthetic model,
+    zero usage and stop_reason stop_sequence."""
+    return {
+        "type": "assistant",
+        "isApiErrorMessage": True,
+        "apiErrorStatus": status,
+        "error": kind,
+        "message": {
+            "role": "assistant",
+            "model": "<synthetic>",
+            "stop_reason": "stop_sequence",
+            "content": [{"type": "text", "text": "API Error"}],
+            "usage": {"input_tokens": 0, "output_tokens": 0,
+                      "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0},
+        },
+    }
+
+
+class TestTermination:
+    """How a transcript ended, in the harness's own words. Raw values only:
+    the reader groups them, so a failure kind never seen before shows up as
+    a new value, not as a clean run (three 2026-09-14 critics died on an
+    API error and every telemetry surface read them as clean)."""
+
+    def test_counts_raw_stop_reasons_and_keeps_the_last(self):
+        entries = [
+            _ended("tool_use", _call("a", "Read", file_path="/r/a.py")),
+            _result("a"),
+            _ended("tool_use", _call("b", "Read", file_path="/r/b.py")),
+            _result("b"),
+            _ended("end_turn"),
+        ]
+        assert _termination(entries) == {
+            "stop_reasons": {"end_turn": 1, "tool_use": 2},
+            "api_errors": [],
+            "last_stop_reason": "end_turn",
+        }
+
+    def test_records_every_api_error_with_its_raw_status_and_kind(self):
+        entries = [
+            _ended("tool_use", _call("a", "Read", file_path="/r/a.py")),
+            _result("a"),
+            _api_error_entry(429, "rate_limit"),
+            _api_error_entry(400, "invalid_request"),
+            _ended("refusal"),
+        ]
+        result = _termination(entries)
+        assert result["api_errors"] == [
+            {"status": 429, "kind": "rate_limit"},
+            {"status": 400, "kind": "invalid_request"},
+        ]
+        assert result["last_stop_reason"] == "refusal"
+        assert result["stop_reasons"] == {"refusal": 1, "stop_sequence": 2, "tool_use": 1}
+
+    @pytest.mark.parametrize(
+        "raw, expected",
+        [
+            ("END_TURN", None),
+            ("end turn", None),
+            ("x" * 41, None),
+            ("", None),
+            (7, None),
+            (None, None),
+        ],
+    )
+    def test_an_unsafe_stop_reason_is_not_retained(self, raw, expected):
+        entry = _assistant(usage=_usage(1, 1))
+        entry["message"]["stop_reason"] = raw
+        result = _termination([entry])
+        assert result["last_stop_reason"] is expected
+        assert result["stop_reasons"] == {}
+
+    def test_an_api_error_with_unsafe_fields_is_recorded_as_unknown(self):
+        entry = _api_error_entry(999, "rate limit; DROP TABLE")
+        entry["apiErrorStatus"] = "429"
+        result = _termination([entry])
+        assert result["api_errors"] == [{"status": None, "kind": None}]
+
+    def test_api_errors_are_bounded(self):
+        entries = [_api_error_entry(529, "overloaded") for _ in range(25)]
+        assert len(_termination(entries)["api_errors"]) == 20
+
+    def test_no_assistant_entries_means_an_empty_record(self):
+        assert _termination([_result("a")]) == {
+            "stop_reasons": {}, "api_errors": [], "last_stop_reason": None,
+        }
+
+
+class TestTerminationOnAgentRows:
+    def _run(self, tmp_path, agent_entries_by_id, dispatches):
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        session_id = "termination"
+        main_entries = []
+        for call, agent_id in dispatches:
+            main_entries.append(_assistant(call, usage=_usage(1, 1)))
+            main_entries.append(_result(call["id"], structured={"agentId": agent_id}))
+        _write_jsonl(sessions / f"{session_id}.jsonl", main_entries)
+        for agent_id, entries in agent_entries_by_id.items():
+            _write_jsonl(sessions / session_id / "subagents" / f"agent-{agent_id}.jsonl", entries)
+        return enrich_run_transcript(
+            _manifest(session_id, repo, tmp_path / "run", started=[]),
+            sessions,
+            {"security-reviewer", "critic"},
+        )
+
+    def test_each_correlated_row_carries_its_termination(self, tmp_path):
+        result = self._run(
+            tmp_path,
+            {"rev-1": [_ended("tool_use", _call("r", "Read", file_path=str(tmp_path / "repo" / "a.py"))),
+                       _result("r"), _ended("end_turn")]},
+            [(_call("reviewer", "Agent", prompt=_agent_prompt(tmp_path / "run")), "rev-1")],
+        )
+        rows = {row["agent"]: row for row in result["agent_usage"]}
+        assert rows["security-reviewer"]["termination"] == {
+            "stop_reasons": {"end_turn": 1, "tool_use": 1},
+            "api_errors": [],
+            "last_stop_reason": "end_turn",
+        }
+        assert not any(w["code"] == "agent_api_error" for w in result["warnings"])
+
+    def test_an_api_error_row_warns_once_per_agent(self, tmp_path):
+        result = self._run(
+            tmp_path,
+            {"rev-1": [_api_error_entry(529, "overloaded"), _api_error_entry(529, "overloaded")]},
+            [(_call("reviewer", "Agent", prompt=_agent_prompt(tmp_path / "run")), "rev-1")],
+        )
+        rows = {row["agent"]: row for row in result["agent_usage"]}
+        assert rows["security-reviewer"]["termination"]["api_errors"] == [
+            {"status": 529, "kind": "overloaded"}, {"status": 529, "kind": "overloaded"},
+        ]
+        assert [w for w in result["warnings"] if w["code"] == "agent_api_error"] == [
+            {"code": "agent_api_error", "agent": "security-reviewer"}
+        ]
+
+    def test_a_missing_transcript_has_no_termination(self, tmp_path):
+        result = self._run(
+            tmp_path, {},
+            [(_call("reviewer", "Agent", prompt=_agent_prompt(tmp_path / "run")), "rev-1")],
+        )
+        rows = {row["agent"]: row for row in result["agent_usage"]}
+        assert rows["security-reviewer"]["termination"] is None
+
+    def test_a_redispatched_synthesis_agent_warns_once(self, tmp_path):
+        first = _special_agent_call("critic-1", tmp_path / "run", "critic")
+        second = _special_agent_call("critic-2", tmp_path / "run", "critic")
+        result = self._run(
+            tmp_path,
+            {"c-1": [_api_error_entry(400, "invalid_request")],
+             "c-2": [_ended("end_turn")]},
+            [(first, "c-1"), (second, "c-2")],
+        )
+        assert result["correlation"]["correlated_by_agent"]["critic"] == 2
+        assert [w for w in result["warnings"] if w["code"] == "synthesis_redispatch"] == [
+            {"code": "synthesis_redispatch", "agent": "critic"}
+        ]

@@ -29,6 +29,7 @@ from .sanitize import (
     _safe_string,
     _safe_wall_time_ms,
     _sanitize_manifest,
+    _sanitize_termination,
     _sanitize_warnings,
     _strict_repo_read_paths,
     _strict_safe_strings,
@@ -156,10 +157,12 @@ def _sanitize_agent_usage(value: object) -> list[dict[str, Any]] | None:
             safe["usage"] = usage
             safe["tool_calls"] = tool_calls
             safe["repository_reads"] = _nonnegative_exact_int(item.get("repository_reads"))
+            safe["termination"] = _sanitize_termination(item.get("termination"))
         else:
             safe["usage"] = None
             safe["tool_calls"] = None
             safe["repository_reads"] = None
+            safe["termination"] = None
         result.append(safe)
     return result
 
