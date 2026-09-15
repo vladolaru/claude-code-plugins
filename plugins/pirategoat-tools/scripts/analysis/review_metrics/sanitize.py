@@ -1709,6 +1709,20 @@ def _sanitize_reconciliation(value: object) -> dict[str, Any] | None:
     return result
 
 
+_RECONCILIATION_VERIFICATION_STATUSES = frozenset({"verified", "unverified", "unmeasured"})
+
+
+def _sanitize_reconciliation_verification(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    status = value.get("status")
+    return {
+        "status": status if isinstance(status, str) and status in _RECONCILIATION_VERIFICATION_STATUSES else None,
+        "repository_reads": _nonnegative_int(value.get("repository_reads")),
+        "verified_concern_count": _nonnegative_int(value.get("verified_concern_count")),
+    }
+
+
 def _sanitize_outcome(value: object) -> dict[str, Any]:
     value = value if isinstance(value, dict) else {}
     summary = _sanitize_summary(value.get("summary"))
@@ -1729,6 +1743,9 @@ def _sanitize_outcome(value: object) -> dict[str, Any]:
     critic_verdict = value.get("critic_verdict")
     if isinstance(critic_verdict, str) and critic_verdict in _RETAINED_CRITIC_VALUES:
         result["critic_verdict"] = critic_verdict
+    verification = _sanitize_reconciliation_verification(value.get("reconciliation_verification"))
+    if verification is not None:
+        result["reconciliation_verification"] = verification
     return result
 
 

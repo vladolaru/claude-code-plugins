@@ -9966,3 +9966,40 @@ class TestSynthesisCellAttempts:
         cell = render._synthesis_cell(section, "complete")
         assert cell.endswith(" ×2")
         assert " ×1" not in cell
+
+
+class TestOutcomeReconciliationVerification:
+    """Step 9's one published signal. The producer writes it everywhere
+    (state, record, pipeline-result.json, manifest); the reader dropped it,
+    so the cohort could not count unverified reconciliations."""
+
+    def test_is_kept_with_validated_values(self):
+        outcome = sanitize._sanitize_outcome({
+            "summary": {}, "reconciliation": None, "pipeline_status": "complete", "verdict": "approve",
+            "reconciliation_verification": {"status": "unverified", "repository_reads": 0, "verified_concern_count": 7},
+        })
+        assert outcome["reconciliation_verification"] == {
+            "status": "unverified", "repository_reads": 0, "verified_concern_count": 7,
+        }
+
+    def test_unknown_status_and_bad_counts_read_as_missing_values(self):
+        outcome = sanitize._sanitize_outcome({
+            "reconciliation_verification": {"status": "green", "repository_reads": -1, "verified_concern_count": "7"},
+        })
+        assert outcome["reconciliation_verification"] == {
+            "status": None, "repository_reads": None, "verified_concern_count": None,
+        }
+
+    @pytest.mark.parametrize("value", [None, "unverified", []])
+    def test_absent_or_malformed_is_absent(self, value):
+        outcome = sanitize._sanitize_outcome({"reconciliation_verification": value})
+        assert "reconciliation_verification" not in outcome
+
+    @pytest.mark.parametrize("status", [["unverified"], {"status": "unverified"}])
+    def test_unhashable_status_is_nulled(self, status):
+        outcome = sanitize._sanitize_outcome({
+            "reconciliation_verification": {"status": status, "repository_reads": 0, "verified_concern_count": 0},
+        })
+        assert outcome["reconciliation_verification"] == {
+            "status": None, "repository_reads": 0, "verified_concern_count": 0,
+        }
