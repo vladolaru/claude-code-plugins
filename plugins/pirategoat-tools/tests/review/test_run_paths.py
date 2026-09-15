@@ -51,6 +51,43 @@ class TestStateRoot:
             assert run_paths.state_root() == tmp_path / "elsewhere"
 
 
+class TestSessionDir:
+    """One directory per Claude Code session under the state root.
+
+    The plugin-root pointer the PreToolUse hook writes used to be one
+    machine-wide file under /tmp, last writer wins across every open
+    session. It now lives at sessions/<session id>/plugin-root, and this
+    module is the only place Python spells that path.
+    """
+
+    def test_session_dir_is_under_the_state_root(self, home):
+        assert run_paths.session_dir("abc-123") == home / ".pirategoat-tools" / "sessions" / "abc-123"
+
+    def test_session_dir_honors_an_absolute_override(self, home, monkeypatch, tmp_path):
+        monkeypatch.setenv("PIRATEGOAT_TOOLS_HOME", str(tmp_path / "elsewhere"))
+        assert run_paths.session_dir("s1") == tmp_path / "elsewhere" / "sessions" / "s1"
+
+    def test_plugin_root_pointer_is_the_fixed_filename_in_the_session_dir(self, home):
+        assert run_paths.plugin_root_pointer("s1") == run_paths.session_dir("s1") / "plugin-root"
+
+    @pytest.mark.parametrize("bad", ["", ".", "..", "../evil", "a/b", "a b", "s1\n"])
+    def test_session_dir_refuses_an_unsafe_id(self, home, bad):
+        with pytest.raises(ValueError):
+            run_paths.session_dir(bad)
+
+    def test_current_session_id_comes_from_the_environment(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "3933e13c-ebc1-4d08-ae95-533307b88d20")
+        assert run_paths.current_session_id() == "3933e13c-ebc1-4d08-ae95-533307b88d20"
+
+    @pytest.mark.parametrize("value", [None, "", "  ", "../evil", ".."])
+    def test_current_session_id_is_none_when_unset_or_unsafe(self, monkeypatch, value):
+        if value is None:
+            monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        else:
+            monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", value)
+        assert run_paths.current_session_id() is None
+
+
 class TestSafeSegment:
     def test_keeps_a_readable_prefix_and_stable_digest(self):
         segment = run_paths.safe_segment("feat/x y")

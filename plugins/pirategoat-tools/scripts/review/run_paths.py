@@ -12,6 +12,7 @@ External layout (under state_root()):
         runs/<run-id>/                            one run's artifacts
                                                   (run ids sort lexically; the
                                                   newest-named dir is the latest)
+    sessions/<session id>/plugin-root             this session's plugin root, written by the hook
 
 Internal layout (inside a run dir): boundary files at the root, plus
 pipeline/ (orchestration state), reviewers/<reviewer>/ (per-reviewer
@@ -64,12 +65,50 @@ _ALLOCATION_LOCK_FILENAME = ".run-allocation.lock"
 _ALLOCATION_LOCK_TIMEOUT_SECONDS = 10.0
 _ALLOCATION_LOCK_POLL_SECONDS = 0.01
 
+# Per-session state. `hooks/init-plugin-root.sh` writes this session's
+# plugin root at sessions/<session id>/plugin-root before every Bash call
+# (every shell in a session, a subagent's included, carries the same
+# CLAUDE_CODE_SESSION_ID). One directory per session so the hook's sweep
+# has one unit to remove and any later per-session fact has a home. The
+# shell readers in agents/*.md spell the same path from
+# ${PIRATEGOAT_TOOLS_HOME:-$HOME/.pirategoat-tools}.
+SESSIONS_SUBDIR = "sessions"
+PLUGIN_ROOT_POINTER_FILENAME = "plugin-root"
+# The hook refuses to write any other id, so nothing else is ever read.
+SESSION_ID_RE = re.compile(r"[A-Za-z0-9._-]+")
+
 
 def state_root() -> Path:
     override = os.environ.get("PIRATEGOAT_TOOLS_HOME", "")
     if override and os.path.isabs(override):
         return Path(override)
     return Path(os.path.expanduser("~")) / ".pirategoat-tools"
+
+
+def _is_safe_session_id(session_id: str) -> bool:
+    return (
+        bool(session_id)
+        and SESSION_ID_RE.fullmatch(session_id) is not None
+        and session_id not in (".", "..")
+    )
+
+
+def current_session_id() -> str | None:
+    """This process's Claude Code session id, or None when absent or unsafe."""
+    session = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
+    return session if _is_safe_session_id(session) else None
+
+
+def session_dir(session_id: str) -> Path:
+    """sessions/<session id>/ under state_root(); refuses an unsafe id."""
+    if not _is_safe_session_id(session_id):
+        raise ValueError(f"session id is not a safe path segment: {session_id!r}")
+    return state_root() / SESSIONS_SUBDIR / session_id
+
+
+def plugin_root_pointer(session_id: str) -> Path:
+    """The file the hook writes this session's plugin root into."""
+    return session_dir(session_id) / PLUGIN_ROOT_POINTER_FILENAME
 
 
 def safe_segment(text: str) -> str:
