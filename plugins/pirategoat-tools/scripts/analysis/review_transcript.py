@@ -2089,8 +2089,8 @@ def _entry_cwd(entry: dict[str, Any], repo_root: Path) -> str | None:
     happens to run from the repository root), or outside the repository (a
     read there is not a repository read, and a guess would count files
     that do not exist under the root). Containment is `containment.contains`,
-    the module's one repo-boundary decision; only once it has passed is the
-    repo-relative spelling derived from both sides' realpaths.
+    the repository's single repo-boundary authority; only once it has
+    passed is the repo-relative spelling derived from both sides' realpaths.
     """
     raw = entry.get("cwd") if isinstance(entry, dict) else None
     if not isinstance(raw, str) or not raw or not os.path.isabs(raw):
