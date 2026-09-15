@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The metrics reader keeps step 9's `reconciliation_verification`, so run metrics no longer drop whether a reconciliation was verified.
 - The read detector starts each Bash call in the directory the shell was in, so a relative read after an inherited `cd` is no longer credited to a path that does not exist at the repository root.
 - The cohort table's "Inline diff lines" and "Eff In/Out (all actors)" columns now say which population they sum.
+- The run record's dispatch line counts low-signal dispatches from the planner's signal instead of searching each reason for the word "conditional", so a reworded reason no longer zeroes the count and a keyword dispatch whose reason mentions the word no longer inflates it.
+- The reviewer return signal's COUNTS template now includes low, which counts toward the verdict, so reviewers no longer append it by hand.
+- toolchain-reviewer now runs with a fixed 50-call budget instead of one scaled from its usually tiny diff, since reading the changelogs its job requires does not scale with the diff.
+- The step-6 dispatch briefing now sends the orchestrator straight to step 7 instead of inviting a status poll, since step 7 is where the wait rules are.
+- A dependency-refresh save that replaces a different earlier report now keeps that report under superseded (at most five, newest last) and says so, where the earlier record used to vanish.
+- After the orchestrator applies the critic's proposal, the echo and the step-10 briefing name the ledger keys the result landed in, so an orchestrator no longer searches other runs for where the adjudication was recorded.
+- The Linear issue pipeline's steps 12 and 13 now render the titles their step footers name (Iterative Review and Re-Verify), and step 12's loop output moves from code-review/ to iterative-review/ under the run directory.
 
 ## [1.119.6] - 2026-09-14
 

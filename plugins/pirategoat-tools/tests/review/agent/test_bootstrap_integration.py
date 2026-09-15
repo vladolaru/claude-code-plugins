@@ -1374,7 +1374,7 @@ class TestBriefingFileDelivery:
             "  STATUS: FINISHED",
             "  OUTPUT_FILES:",
             f"    - {final}",
-            "  COUNTS: critical: 0, high: 0, medium: 0",
+            "  COUNTS: critical: 0, high: 0, medium: 0, low: 0",
             "  VERDICT: not_applicable",
             f"  SUMMARY: {review['skip_reason']}",
         ):
@@ -1463,6 +1463,17 @@ class TestBriefingFileDelivery:
         assert len(paths) == 2
         assert "performance-reviewer" in briefing_text(first)
         assert "security-reviewer" in briefing_text(second)
+
+    def test_return_signal_counts_every_verdict_counting_severity(self, tmp_path):
+        """Three 2026-09-14 reviewers appended `low: N` by hand because the
+        template stopped at medium while DRAFT TOTALS reports low."""
+        result = run_bootstrap(
+            "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
+        )
+
+        assert result.returncode == 0, result.stderr
+        text = briefing_text(result)
+        assert "  COUNTS: critical: N, high: N, medium: N, low: N  (copied from DRAFT TOTALS)" in text
 
 
 class TestBootstrapOutputSizeCap:

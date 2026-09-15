@@ -2598,6 +2598,13 @@ class TestAdjudicationCLI:
         assert "REVISED ASSESSMENT: present" in result.stdout
         assert "APPLIED: 1 | REJECTED: 0" in result.stdout
         assert "LEDGER VERDICT: approve" in result.stdout
+        # Run B's orchestrator went grepping other runs for where the
+        # result lives; the echo names the ledger keys.
+        assert (
+            "RECORDED IN review-findings.json: applied_critic_adjustments, "
+            "rejected_critic_adjustments, invalidated_assessments, "
+            "invalidated_recommendations"
+        ) in result.stdout
 
     def test_the_assessment_and_recommendations_echo_report_presence(
         self, tmp_path

@@ -769,6 +769,7 @@
         "stylelint"
       ],
       "focus": "Package manager configs, build tools, linting configs, version constraints, CI pipelines, supply chain settings — proactively searches changelogs for deprecations and behavior changes",
+      "budget_override": 50,
       "model_tier": "sonnet"
     },
     "reference-integrity-reviewer": {

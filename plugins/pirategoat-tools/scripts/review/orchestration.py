@@ -32,6 +32,7 @@ try:
         ORPHANED_FILES_KEY,
         DISPATCH_OVERRIDE,
         DISPATCHED_STATUSES,
+        LOW_SIGNAL_DISPATCH_SIGNALS,
         OVERRIDE_REASON_KEY,
         PLANNER_STATUS_KEY,
         SKIPPED_OVERRIDE,
@@ -81,6 +82,7 @@ except ImportError:
         ORPHANED_FILES_KEY,
         DISPATCH_OVERRIDE,
         DISPATCHED_STATUSES,
+        LOW_SIGNAL_DISPATCH_SIGNALS,
         OVERRIDE_REASON_KEY,
         PLANNER_STATUS_KEY,
         SKIPPED_OVERRIDE,
@@ -362,6 +364,25 @@ def _host_summary_phrase(entry):
     )
 
 
+def _dispatch_plan_summary(agents):
+    """Counts for the record: how many rows were dispatched, skipped, and
+    dispatched on no positive triage evidence. The last is read from the
+    row's `signal`, never from its prose `reason` (dispatch_status.py's
+    rule): the count used to search the reason for the word "conditional",
+    so a reword zeroed it and a keyword dispatch whose reason said
+    "conditional" inflated it.
+    """
+    return {
+        "dispatched": sum(1 for a in agents if a.get("status") in DISPATCHED_STATUSES),
+        "skipped": sum(1 for a in agents if a.get("status") in SKIPPED_STATUSES),
+        "low_signal": sum(
+            1 for a in agents
+            if a.get("status") in DISPATCHED_STATUSES
+            and a.get("signal") in LOW_SIGNAL_DISPATCH_SIGNALS
+        ),
+    }
+
+
 def _render_run_notes(state: dict, hosts) -> str:
     """The run's own measurements and actions, which the ledger cannot carry.
 
@@ -402,13 +423,18 @@ def _render_run_notes(state: dict, hosts) -> str:
                 f"{command_count} command(s) reported; final tracked files "
                 f"dirty: {_tri_state(report.get('tracked_files_dirty'))}."
             )
+            if report.get("superseded"):
+                lines.append(
+                    f"  Superseded {len(report['superseded'])} earlier "
+                    f"report(s); the last one was `{report['superseded'][-1].get('status')}`."
+                )
 
     summary = state.get("dispatch_plan_summary")
     if isinstance(summary, dict) and summary:
         lines.append(
             f"- Dispatch: {summary.get('dispatched', 0)} dispatched, "
             f"{summary.get('skipped', 0)} skipped "
-            f"({summary.get('conditional', 0)} conditional)."
+            f"({summary.get('low_signal', 0)} low-signal)."
         )
     else:
         lines.append("- Dispatch: no plan summary recorded for this run.")
@@ -1245,11 +1271,7 @@ def _orchestrate_step_5(mode, config, state, context, output_dir):
                 if ok:
                     _preserve_initial_dispatch_plan(output_dir, plan)
                 agents = plan["agents"]
-                state["dispatch_plan_summary"] = {
-                    "dispatched": sum(1 for a in agents if a.get("status") in DISPATCHED_STATUSES),
-                    "skipped": sum(1 for a in agents if a.get("status") in SKIPPED_STATUSES),
-                    "conditional": sum(1 for a in agents if a.get("status") in DISPATCHED_STATUSES and "conditional" in a.get("reason", "").lower()),
-                }
+                state["dispatch_plan_summary"] = _dispatch_plan_summary(agents)
                 # Store agent details for human-readable step 5 summary
                 state["dispatch_plan_agents"] = [
                     {
@@ -1303,21 +1325,7 @@ def _orchestrate_step_6(mode, config, state, context, output_dir):
             state["dispatch_adjustments"] = _dispatch_adjustments(plan)
             # Recompute dispatch_plan_summary from final plan (post-override)
             all_agents = plan["agents"]
-            state["dispatch_plan_summary"] = {
-                "dispatched": sum(
-                    1 for a in all_agents
-                    if a.get("status") in DISPATCHED_STATUSES
-                ),
-                "skipped": sum(
-                    1 for a in all_agents
-                    if a.get("status") in SKIPPED_STATUSES
-                ),
-                "conditional": sum(
-                    1 for a in all_agents
-                    if a.get("status") in DISPATCHED_STATUSES
-                    and "conditional" in a.get("reason", "").lower()
-                ),
-            }
+            state["dispatch_plan_summary"] = _dispatch_plan_summary(all_agents)
         # As in step 5: a malformed or unreadable plan raises; only a plan
         # removed since the existence check reads as no plan.
         except FileNotFoundError:

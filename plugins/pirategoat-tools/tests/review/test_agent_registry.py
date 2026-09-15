@@ -179,3 +179,16 @@ class TestEcosystemIntegrationReviewerEntry:
         assert entry["require_php_source_file"] is True
         assert entry["triage_keywords"]
         assert entry.get("budget_override", 0) > 0
+
+
+class TestToolchainReviewerRegistry:
+    """Its diffs are a lockfile line or a config bump, so the diff-scaled
+    budget lands near the base of 15 to 18 calls, while its work is reading
+    changelogs and lockfiles regardless of diff size: 28 and 47 calls
+    against that budget on the 2026-09-14 runs. A fixed budget is what the
+    registry has for reviewers whose work does not scale with the diff."""
+
+    def test_has_a_fixed_budget(self, agents):
+        entry = agents["toolchain-reviewer"]
+        assert entry["dispatch_class"] == "conditional"
+        assert entry.get("budget_override", 0) >= 45

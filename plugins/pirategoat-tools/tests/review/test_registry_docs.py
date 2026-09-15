@@ -231,3 +231,17 @@ def test_model_tier_doc_vocabulary_covers_registry():
         f"(documented: {sorted(_documented_tiers())})"
     )
 
+
+def test_dispatch_class_row_says_always_is_gated_and_skippable():
+    """plan_dispatch skips an `always` reviewer whose domain has no files,
+    and the orchestrator may skip one at step 5 with a reason (run B,
+    2026-09-14, skipped simplification-reviewer soundly). The row used to
+    say "every review"."""
+    row = next(
+        line for line in AGENTS_MD.read_text(encoding="utf-8").splitlines()
+        if line.startswith("| `dispatch_class` |")
+    )
+    assert "domain has files" in row
+    assert "skip" in row
+    assert "every review" not in row
+

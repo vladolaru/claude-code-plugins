@@ -32,7 +32,7 @@ The field earns its place where an artifact outlives the run that wrote it, or c
 | Telemetry JSONL events and `<log>.manifest.json` | 3 | `EVENT_SCHEMA`, `scripts/review/telemetry.py` |
 | `synthesis-agents.json` | 1 | `LIFECYCLE_SCHEMA`, `scripts/review/synthesis_lifecycle.py` |
 | `usage-snapshot.json` | 1 | `SNAPSHOT_SCHEMA`, `scripts/analysis/usage_snapshot.py` |
-| `dependency-refresh.json` | 1 | `REPORT_SCHEMA`, `scripts/review/dependency_refresh.py` |
+| `dependency-refresh.json` | 1 | `REPORT_SCHEMA`, `scripts/review/dependency_refresh.py`; may carry `superseded`, an additive optional list (newest last, at most 5) of the earlier canonical reports a later save replaced, each with `superseded_at`; added under the additive-key carve-out without a bump |
 | `observed_reads` payload in transcript enrichment | 2 | `_OBSERVED_READS_SCHEMA`, `scripts/analysis/review_transcript.py`; the same-named constant in `review_metrics/contracts.py` is the consumer's expected value and moves in lockstep |
 | `review_run_metrics.py --format json` report | 5 | `_REPORT_SCHEMA`, `scripts/analysis/review_metrics/contracts.py` |
 | `reviewers/<reviewer>/assignment.json` | 5 | `persist_review_assignment()`, `scripts/review/agent/bootstrap.py` |

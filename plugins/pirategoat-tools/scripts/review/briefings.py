@@ -1014,7 +1014,7 @@ def _step_5_dispatch_plan(mode, state, context, config, output_dir):
         situation.append(
             f"Dispatch plan computed: {plan_summary.get('dispatched', 0)} agents to dispatch, "
             f"{plan_summary.get('skipped', 0)} skipped, "
-            f"{plan_summary.get('conditional', 0)} conditional."
+            f"{plan_summary.get('low_signal', 0)} low-signal."
         )
 
     # Build human-readable dispatch summary from agent details
@@ -1261,10 +1261,14 @@ def _step_6_dispatch_agents(mode, state, context, config, output_dir):
                 actions.append("```")
                 actions.append("")
 
-    actions.append("Monitor progress at any time:")
-    actions.append(f"```")
-    actions.append(f"python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\"")
-    actions.append(f"```")
+    # The wait rules live in step 7: the background watchdog on Claude
+    # Code, the --wait poll loop on Codex. An invitation to poll here had
+    # two of three 2026-09-14 orchestrators waiting inside step 6 before
+    # they ever reached step 7.
+    actions.append(
+        "Do NOT poll or wait here. As soon as the dispatch calls are issued, "
+        "run step 7: it says how to wait for the agents."
+    )
 
     return {
         "phase": "EXECUTION",
@@ -2290,7 +2294,12 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         "`VERIFIED | REFUTED | NOT_CHECKED` counts, `REVISED ASSESSMENT: "
         "present|absent|not installed`, `REVISED RECOMMENDATIONS: "
         "present|absent|not installed`, "
-        "`APPLIED | REJECTED`, and the `LEDGER VERDICT`. On "
+        "`APPLIED | REJECTED`, and the `LEDGER VERDICT`, plus a "
+        f"`RECORDED IN {_artifact_name('review_findings_json')}:` line naming "
+        "the ledger keys that now hold the result (`applied_critic_adjustments`, "
+        "`rejected_critic_adjustments`, `invalidated_assessments`, "
+        "`invalidated_recommendations`); nothing else records the "
+        "adjudication, so do not look for it in other files or runs. On "
         "any `REJECTED:` line, correct only the temp request and resubmit it; "
         "never edit the output artifact or bypass `adjudicate`."
     )
