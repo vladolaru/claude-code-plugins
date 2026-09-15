@@ -2135,7 +2135,7 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append(f"Output directory: {od}")
     # The directory, never a file, like the step-8 prompt: the critic saves
     # through critic.py and must run the same code the run was built with,
-    # not whatever /tmp/.pirategoat-tools-root last pointed at.
+    # not whatever another session's plugin-root pointer names.
     actions.append(f"Plugin scripts directory: {SCRIPTS_DIR.parent}")
     git = context.get("git", {})
     head_ref = git.get("head_ref")

@@ -173,7 +173,7 @@ labels are not translated because the hosts expose different model catalogs.
 
 ### Review artifact permissions
 
-Interactive reviews write durable artifacts under `~/.pirategoat-tools/`. If permission prompts are enabled, add `Read(~/.pirategoat-tools/**)` and `Edit(~/.pirategoat-tools/**)` to your user-scope allow rules.
+Interactive reviews write durable artifacts under `~/.pirategoat-tools/`. If permission prompts are enabled, add `Read(~/.pirategoat-tools/**)` and `Edit(~/.pirategoat-tools/**)` to your user-scope allow rules. Every Claude Code session with the plugin loaded also writes `sessions/<session id>/plugin-root` there before each Bash call, whether or not a review is running, so a reviewer subagent can find this session's plugin location without searching.
 
 Agents never edit user settings. Add these rules yourself only when you want review sessions to read and write this machine-local state.
 
