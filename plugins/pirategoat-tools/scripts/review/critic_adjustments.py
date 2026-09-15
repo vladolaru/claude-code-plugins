@@ -1942,6 +1942,14 @@ def main():
 
     counts = result["counts"]
     print(f"RECORDED ADJUDICATION: {sum(counts.values())}")
+    # Where the result now lives, in the ledger's own key names: nothing
+    # else records an adjudication, and an orchestrator that does not know
+    # this went looking in other runs' artifacts (run B, 2026-09-14).
+    print(
+        f"RECORDED IN {FINDINGS_FILENAME}: "
+        f"{APPLIED_IDS_KEY}, {REJECTED_ADJUSTMENTS_KEY}, "
+        f"{INVALIDATED_ASSESSMENTS_KEY}, {INVALIDATED_RECOMMENDATIONS_KEY}"
+    )
     print(
         f"VERIFIED: {counts[OUTCOME_VERIFIED]} | "
         f"REFUTED: {counts[OUTCOME_REFUTED]} | "

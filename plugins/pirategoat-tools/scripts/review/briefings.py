@@ -2293,7 +2293,12 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         "`VERIFIED | REFUTED | NOT_CHECKED` counts, `REVISED ASSESSMENT: "
         "present|absent|not installed`, `REVISED RECOMMENDATIONS: "
         "present|absent|not installed`, "
-        "`APPLIED | REJECTED`, and the `LEDGER VERDICT`. On "
+        "`APPLIED | REJECTED`, and the `LEDGER VERDICT`, plus a "
+        f"`RECORDED IN {_artifact_name('review_findings_json')}:` line naming "
+        "the ledger keys that now hold the result (`applied_critic_adjustments`, "
+        "`rejected_critic_adjustments`, `invalidated_assessments`, "
+        "`invalidated_recommendations`); nothing else records the "
+        "adjudication, so do not look for it in other files or runs. On "
         "any `REJECTED:` line, correct only the temp request and resubmit it; "
         "never edit the output artifact or bypass `adjudicate`."
     )

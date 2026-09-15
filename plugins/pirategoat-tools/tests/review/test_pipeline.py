@@ -2440,6 +2440,15 @@ class TestStep10DecisionCritic:
             "findings JSON before step 11 authors the report"
         )
 
+    def test_revise_names_the_ledger_keys_the_adjudication_lands_in(self, mod, tmp_path):
+        state = {"completed_steps": []}
+        g = mod.get_step_guidance(10, "pr", state, {}, output_dir=str(tmp_path))
+        revise_text = self._revise_section(g)
+        for key in ("applied_critic_adjustments", "rejected_critic_adjustments",
+                    "invalidated_assessments", "invalidated_recommendations"):
+            assert key in revise_text, key
+        assert "RECORDED IN" in revise_text
+
     def test_critic_dispatch_prompt_requires_the_adjustments_file(
         self, mod, tmp_path
     ):
