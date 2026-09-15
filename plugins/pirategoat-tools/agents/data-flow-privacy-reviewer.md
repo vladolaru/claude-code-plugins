@@ -145,16 +145,16 @@ For each suspected violation, reason through:
 
 ## Finding Confidence
 
-Score confidence 0-100 before reporting. **Hard cutoff: never report below 60.**
+Score confidence 0.0–1.0 before reporting. **Hard cutoff: never report below 0.6.**
 
 | Score | Action |
 |-------|--------|
-| 80-100 | Report with full confidence |
-| 60-79 | Report, note uncertainty |
-| 0-59 | **Drop it** |
+| 0.8–1.0 | Report with full confidence |
+| 0.6–0.79 | Report, note uncertainty |
+| below 0.6 | **Drop it** |
 
-**Boost (+10-20):** Verified PII in actual log/response output, confirmed no erasure handler exists for this data store, data clearly crosses trust boundary
-**Reduce (-10-20):** Data may be masked/hashed before reaching the sink, erasure handler may exist elsewhere not in scope, "might contain PII" without confirming actual data content
+**Boost (+0.1 to +0.2):** Verified PII in actual log/response output, confirmed no erasure handler exists for this data store, data clearly crosses trust boundary
+**Reduce (-0.1 to -0.2):** Data may be masked/hashed before reaching the sink, erasure handler may exist elsewhere not in scope, "might contain PII" without confirming actual data content
 
 ## Final Check Before Writing Output
 

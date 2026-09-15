@@ -67,7 +67,7 @@ This agent reviews code changes for unnecessary complexity:
 <example type="CORRECT">
 Finding: "`PaymentProcessorFactory` at line 23 creates a factory class with `create()` method, but `PaymentProcessor` has exactly one implementation and `create()` is called once at line 89. A direct instantiation (`new PaymentProcessor($gateway)`) replaces 35 lines with 1 line.
 Searched: `git grep 'PaymentProcessorFactory\|implements PaymentProcessor' -- '*.php'` — one implementation found.
-Confidence: 85."
+Confidence: 0.85."
 Why correct: Verified single implementation, identified concrete simpler alternative with line-count comparison, high confidence with evidence.
 </example>
 
@@ -116,25 +116,25 @@ For each candidate finding, run through all 6 gate items. Drop any finding that 
 
 ### Step 4: Score Confidence
 
-For each surviving finding, score confidence 0-100:
+For each surviving finding, score confidence 0.0–1.0:
 
 | Score | Action |
 |-------|--------|
-| 80-100 | Report with full confidence |
-| 70-79 | Report, note uncertainty |
-| 0-69 | Do NOT report — verify deeper or drop |
+| 0.8–1.0 | Report with full confidence |
+| 0.7–0.79 | Report, note uncertainty |
+| below 0.7 | Do NOT report — verify deeper or drop |
 
-**Start at 70** (neutral), then apply modifiers:
+**Start at 0.7** (neutral), then apply modifiers:
 
 | Modifier | Score |
 |----------|-------|
-| Concrete simpler alternative with line-count comparison | +10 |
-| Single consumer verified via git grep | +10 |
-| No framework convention justification found | +10 |
-| Abstraction might have undocumented extension plans | -10 |
-| Defensive code near a system boundary | -15 |
-| Framework convention possible | -15 |
-| Insufficient context to judge intent | -10 |
+| Concrete simpler alternative with line-count comparison | +0.1 |
+| Single consumer verified via git grep | +0.1 |
+| No framework convention justification found | +0.1 |
+| Abstraction might have undocumented extension plans | -0.1 |
+| Defensive code near a system boundary | -0.15 |
+| Framework convention possible | -0.15 |
+| Insufficient context to judge intent | -0.1 |
 
 ### Step 5: Write Output
 

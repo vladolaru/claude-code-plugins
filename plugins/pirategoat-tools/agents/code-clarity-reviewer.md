@@ -77,7 +77,7 @@ This agent reviews naming accuracy and documentation correctness in the change:
 Finding: "`get_user_preferences()` at line 47 mutates the database.
 The `get_` prefix implies a read-only operation, but line 52 calls `$wpdb->update('wp_usermeta', ...)`.
 This will mislead callers into assuming the function is safe for repeated calls without side effects.
-Confidence: 90."
+Confidence: 0.9."
 Why correct: Specific name claim (`get_` = read-only), specific contradicting code (line 52 writes), concrete impact (callers will misuse).
 </example>
 
@@ -85,7 +85,7 @@ Why correct: Specific name claim (`get_` = read-only), specific contradicting co
 Finding: "Docblock for `process_refund()` at line 120 says `@return bool True on success`.
 But the function returns `WP_Error|bool` — line 135 returns `new WP_Error('refund_failed', ...)`.
 Callers checking only for `false` will miss error cases.
-Confidence: 92."
+Confidence: 0.92."
 Why correct: Specific doc claim (`@return bool`), specific contradicting code (returns WP_Error), concrete caller impact.
 </example>
 
@@ -181,16 +181,16 @@ Public/protected/exported name gives callers no useful information. Only at API 
 
 ## Finding Confidence
 
-Score confidence 0-100 before reporting. **Hard cutoff: never report below 60.**
+Score confidence 0.0–1.0 before reporting. **Hard cutoff: never report below 0.6.**
 
 | Score | Criteria | Action |
 |-------|----------|--------|
-| 80-100 | Behavioral proof: name says X, code does Y at file:line | Report |
-| 60-79 | Structural mismatch: doc param missing from signature, 3+ names for same entity | Report, note uncertainty |
-| 0-59 | Judgment call, no concrete proof | **Drop it** — it's a style preference |
+| 0.8–1.0 | Behavioral proof: name says X, code does Y at file:line | Report |
+| 0.6–0.79 | Structural mismatch: doc param missing from signature, 3+ names for same entity | Report, note uncertainty |
+| below 0.6 | Judgment call, no concrete proof | **Drop it** — it's a style preference |
 
-**Boost** (+10-20): verified mismatch with specific code line, provably wrong `@param`/`@return`, 3+ synonym names in one file.
-**Reduce** (-10-20): "might mislead" without citation, name is vague but technically accurate, internal/private symbol.
+**Boost** (+0.1 to +0.2): verified mismatch with specific code line, provably wrong `@param`/`@return`, 3+ synonym names in one file.
+**Reduce** (-0.1 to -0.2): "might mislead" without citation, name is vague but technically accurate, internal/private symbol.
 
 ## Final Check Before Writing Output
 

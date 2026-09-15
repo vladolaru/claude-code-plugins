@@ -198,6 +198,66 @@ class TestUnchangedCallerScopeContract:
         assert "`debug`" in rule0
 
 
+# The cross-validators carry a document-level HIGH/MEDIUM/LOW label in
+# their own Markdown; they never call set_confidence. Every other
+# definition feeds the builder, whose validator accepts 0.0–1.0 only.
+_LABEL_CONFIDENCE_DEFINITIONS = {"codex-reviewer.md", "gemini-reviewer.md"}
+# Still teaches confidence on 0-100 (BACKLOG 45): the Phase 1 D rewrite's
+# 18-file list missed it. Remove it from this set once it is converted,
+# at which point this test starts holding it to the same 0.0-1.0 contract
+# as every other definition.
+_PENDING_PERCENT_SCALE_DEFINITIONS = {"devils-advocate-reviewer.md"}
+_PERCENT_SCALE = re.compile(
+    r"(?:\b\d{2}-\d{2,3}\b(?!%)"     # a band: 80-100, 60-79 (not a percent)
+    r"|\b\d{2}–\d{2,3}\b(?!%)"       # the same band with an en dash
+    r"|\bbelow \d{2}\b"              # below 60
+    r"|>= \d{2}\b(?!%)"              # >= 75 (not a percent)
+    r"|\bat \d{2}\b"                 # start at 70
+    r"|\bby \d{2}\b"                 # reduce by 20
+    r"|\| [+\-−]\d{1,2} \|"          # a modifier cell: | +15 |
+    r"|\([+\-−]\d{2}[-–]\d{2}\)"     # (+10-20)
+    r"|\bConfidence: \[?\d{2}"       # Confidence: 85 / [0-100]
+    r"|\*\*\d{2}\*\*"                # Final: **85**
+    r"|\b0[-–]100\b)"
+)
+
+
+def test_no_definition_teaches_a_percent_confidence_scale():
+    """review_document validates confidence as 0.0–1.0 and the protocol's
+    API says set_confidence(0.0-1.0); eighteen definitions taught 0–100.
+    Reviewers normalized at the call in every 2026 field run, so the
+    defect was latent, and a new definition copied from one of these
+    tables would have shipped it. devils-advocate-reviewer.md still
+    teaches the percent scale (BACKLOG 45); it is held to a weaker
+    assertion below so the exemption cannot outlive the fix."""
+    offenders = []
+    pending_offenders = []
+    for path in sorted(AGENTS_DIR.rglob("*.md")):
+        if path.name in _LABEL_CONFIDENCE_DEFINITIONS:
+            continue
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            lowered = line.lower()
+            if (
+                "confiden" not in lowered
+                and "scor" not in lowered
+                and not line.startswith("|")
+            ):
+                continue
+            if _PERCENT_SCALE.search(line):
+                entry = f"{path.name}:{number}: {line.strip()[:80]}"
+                if path.name in _PENDING_PERCENT_SCALE_DEFINITIONS:
+                    pending_offenders.append(entry)
+                else:
+                    offenders.append(entry)
+    assert offenders == []
+    assert pending_offenders, (
+        "devils-advocate-reviewer.md no longer matches the percent-scale "
+        "guard - remove it from _PENDING_PERCENT_SCALE_DEFINITIONS "
+        "(BACKLOG 45) so this test holds it to the same 0.0-1.0 contract "
+        "as every other definition."
+    )
+
+
 def _registry_tiers():
     registry = json.loads(REGISTRY.read_text(encoding="utf-8"))
     return {agent["model_tier"] for agent in registry["agents"].values()}

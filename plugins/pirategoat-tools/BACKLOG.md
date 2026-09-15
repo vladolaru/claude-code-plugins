@@ -363,3 +363,11 @@ Spec item 1.2 says to retire the `("api error", "api_error")` entry in `review_t
 **Deferred because:** retiring the entry needs a tool-result-level replacement signal decided first, or those calls silently stop being counted as failures.
 **Do when:** the maintainer decides the replacement signal for tool-result-level API errors, alongside or after item 42.
 
+### 45. `devils-advocate-reviewer.md` still teaches finding confidence on 0-100
+
+The reviewer teaches its own 0-100 confidence scale in five places the Phase 1 D rewrite's 18-file list did not cover: the frontmatter `description` at line 3 ("High confidence threshold (85+)"), the worked example `Confidence: 92."` at line 70, `**Hard floor: 85.**` at line 130, `**Start at 80**` at line 132, the `+10`/`+5`/`-10`/`-5` modifier table at lines 136-141, and `Is my confidence **85 or above**?` at line 164. `review_document.py` validates a finding's confidence as 0.0-1.0, so a reviewer that followed this table literally would be rejected at save.
+
+**Evidence:** `plugins/pirategoat-tools/tests/review/test_registry_docs.py::test_no_definition_teaches_a_percent_confidence_scale`, which holds the file to a weaker assertion (`_PENDING_PERCENT_SCALE_DEFINITIONS`) instead of the `offenders == []` every other definition meets; `.superpowers/sdd/2026-09-15-phase1-d-confidence-scale/task-1-brief.md`'s 18-file `EDITS` map, which omits this file even though it existed with this text at the plan's own audit baseline (`95a013b4`).
+**Deferred because:** the Phase 1 D task was scoped by the user to exactly the 18 named files; widening it was out of scope for that task. Two different guard gaps hide part of this, so converting the file should close both in the same change, not just rewrite the prose: the line filter (checks for "confiden", "scor", or a leading `|`) still misses lines 130 and 132 (neither substring, no leading `|`); line 164 passes the filter (it says "confidence") but escapes the regex itself, which has no "N or above" alternative.
+**Do when:** the next change to `devils-advocate-reviewer.md`, or before any new reviewer definition is modeled on it.
+

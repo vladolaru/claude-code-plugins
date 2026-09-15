@@ -83,14 +83,14 @@ If you are about to report a finding, **STOP**. Can you point to a specific doc 
 <example type="CORRECT">
 Finding: "README.md line 45 says 'Use `process_order()` to submit orders' but this PR renamed the function to `submit_order()` at src/orders.php:120.
 The README reference is now broken — developers following the docs will call a function that no longer exists.
-Confidence: 95."
+Confidence: 0.95."
 Why correct: Specific doc claim (line 45), specific code change (rename at src/orders.php:120), clear impact (developers will call nonexistent function).
 </example>
 
 <example type="CORRECT">
 Finding: "CLAUDE.md line 12 instructs AI agents to 'always use the synchronous payment flow via `charge_card()`' but this PR changed `charge_card()` to return a Promise and process asynchronously (src/payments.php:80-95).
 AI agents following this instruction will write synchronous calling code for an async function.
-Confidence: 88."
+Confidence: 0.88."
 Why correct: Specific doc instruction (CLAUDE.md line 12), specific behavioral change (sync→async), concrete impact on doc readers.
 </example>
 
@@ -204,16 +204,16 @@ Code examples, setup instructions, or configuration snippets in docs reference p
 
 ## Finding Confidence
 
-Score confidence 0-100 before reporting. **Hard cutoff: never report below 60.**
+Score confidence 0.0–1.0 before reporting. **Hard cutoff: never report below 0.6.**
 
 | Score | Criteria | Action |
 |-------|----------|--------|
-| 80-100 | Exact symbol match: doc references X, PR renames/removes X | Report |
-| 60-79 | Behavioral comparison: doc describes behavior A, PR changes to B | Report, note uncertainty |
-| 0-59 | Vague connection between code change and doc claim | **Drop it** |
+| 0.8–1.0 | Exact symbol match: doc references X, PR renames/removes X | Report |
+| 0.6–0.79 | Behavioral comparison: doc describes behavior A, PR changes to B | Report, note uncertainty |
+| below 0.6 | Vague connection between code change and doc claim | **Drop it** |
 
-**Boost** (+10-20): exact symbol name match in doc, doc explicitly describes the changed behavior, doc contains code example using the changed pattern.
-**Reduce** (-10-20): doc uses generic description that might still apply, symbol match could be coincidental (common word), behavioral change is subtle and doc is high-level enough to still be accurate.
+**Boost** (+0.1 to +0.2): exact symbol name match in doc, doc explicitly describes the changed behavior, doc contains code example using the changed pattern.
+**Reduce** (-0.1 to -0.2): doc uses generic description that might still apply, symbol match could be coincidental (common word), behavioral change is subtle and doc is high-level enough to still be accurate.
 
 ## Final Check Before Writing Output
 

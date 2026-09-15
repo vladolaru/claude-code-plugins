@@ -63,7 +63,7 @@ Before approving new patterns, verify they don't already exist. The answer to "h
 Before reporting a pattern as something the PR should follow:
 
 1. **Count independent usages** in the base ref. Copy-pasted duplicates don't count — look for independent implementations of the same approach in separate files or modules.
-2. **If count < 3:** Do NOT report as "established pattern." You may mention it as "one existing approach" but do not recommend alignment. Reduce confidence by 20.
+2. **If count < 3:** Do NOT report as "established pattern." You may mention it as "one existing approach" but do not recommend alignment. Reduce confidence by 0.2.
 3. **If count >= 3:** Verify the pattern is still actively adopted (see Staleness Check below).
 
 **Exception — Authoritative locations:** Patterns in explicitly authoritative code (design system foundations, documented conventions, architectural decision records, base classes/interfaces) may be enforced at any count if they represent deliberate decisions. The authority must be verifiable — a comment, ADR, README, or docblock that establishes the pattern as intentional.
@@ -151,7 +151,7 @@ Examine the most recent 3-5 commits from that output:
 - **If no recent commits touch the pattern:** Pattern is stable (neither growing nor dying). Report normally — old does not mean bad.
 - **If commits explicitly replace pattern A with pattern B** (look for "refactor", "migrate", "replace" in messages): Recommend the **newer** pattern, not the older one.
 
-When a pattern is declining, reduce confidence by 15 and note "pattern appears to be in decline — N removals in recent history" in the finding description.
+When a pattern is declining, reduce confidence by 0.15 and note "pattern appears to be in decline — N removals in recent history" in the finding description.
 
 ### 6. Check Naming Conventions
 ```bash
@@ -209,26 +209,26 @@ Before approving ANY new pattern:
 
 ## Finding Confidence
 
-For each finding, score confidence 0-100 before reporting:
+For each finding, score confidence 0.0–1.0 before reporting:
 
 | Score | Action |
 |-------|--------|
-| 80-100 | Report with full confidence |
-| 60-79 | Report, note uncertainty |
-| 0-59 | Do NOT report — verify deeper or drop |
+| 0.8–1.0 | Report with full confidence |
+| 0.6–0.79 | Report, note uncertainty |
+| below 0.6 | Do NOT report — verify deeper or drop |
 
-**Boosters (+10-20):** Verified existing pattern in base ref, confirmed with git history, specific commit/file reference
-**Reducers (-10-20):** "Might"/"could" in reasoning, pattern match is superficial, no concrete existing implementation found
+**Boosters (+0.1 to +0.2):** Verified existing pattern in base ref, confirmed with git history, specific commit/file reference
+**Reducers (-0.1 to -0.2):** "Might"/"could" in reasoning, pattern match is superficial, no concrete existing implementation found
 
 **Proximity modifiers (apply after base confidence):**
 
 | Pattern source relative to changed files | Modifier |
 |---|---|
-| Same directory or module (sibling files) | +15 |
-| Same architectural layer or package | +5 |
-| Different area of the codebase | -15 |
+| Same directory or module (sibling files) | +0.15 |
+| Same architectural layer or package | +0.05 |
+| Different area of the codebase | -0.15 |
 
-Proximity is about where the *existing pattern* lives relative to the *changed files*. A pattern in `src/components/Button.tsx` is proximate when the PR modifies `src/components/Modal.tsx`, but distant when the PR modifies `integrations/custom-checkout/`. When a pattern scores below 60 *only because of the proximity penalty*, note it as "existing approach in distant module" rather than silently dropping it.
+Proximity is about where the *existing pattern* lives relative to the *changed files*. A pattern in `src/components/Button.tsx` is proximate when the PR modifies `src/components/Modal.tsx`, but distant when the PR modifies `integrations/custom-checkout/`. When a pattern scores below 0.6 *only because of the proximity penalty*, note it as "existing approach in distant module" rather than silently dropping it.
 
 ## Output
 

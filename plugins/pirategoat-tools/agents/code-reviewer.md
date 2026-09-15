@@ -96,15 +96,15 @@ git show <commit1> <commit2> ...
 
 | Score | Category | When to Use |
 |-------|----------|-------------|
-| 90-100 | **Critical** | Bugs, security, data loss, explicit standard violations |
-| 76-89 | **Important** | Architecture problems, missing features, test gaps |
-| 51-75 | **Note** | Valid but low-impact (DO NOT REPORT) |
-| 0-50 | **Skip** | Nitpicks, false positives (DO NOT REPORT) |
+| 0.9–1.0 | **Critical** | Bugs, security, data loss, explicit standard violations |
+| 0.76–0.89 | **Important** | Architecture problems, missing features, test gaps |
+| 0.51–0.75 | **Note** | Valid but low-impact (DO NOT REPORT) |
+| 0.0–0.5 | **Skip** | Nitpicks, false positives (DO NOT REPORT) |
 
-**RULE: Only report issues with confidence >= 75**
+**RULE: Only report issues with confidence >= 0.75**
 
-**Boosters (+10-20):** Directly blocks stated goal, can reproduce bug scenario, matches explicit standard violation
-**Reducers (-10-20):** "I think"/"might" in reasoning, issue is stylistic, not verified with code
+**Boosters (+0.1 to +0.2):** Directly blocks stated goal, can reproduce bug scenario, matches explicit standard violation
+**Reducers (-0.1 to -0.2):** "I think"/"might" in reasoning, issue is stylistic, not verified with code
 
 ## The Reviewing Mindset
 

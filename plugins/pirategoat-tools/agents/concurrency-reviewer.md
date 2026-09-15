@@ -164,16 +164,16 @@ If any answer is "duplicate records, lost data, or inconsistent state," it's a c
 
 ## Finding Confidence
 
-Score confidence 0-100 before reporting. **Hard cutoff: never report below 60.**
+Score confidence 0.0–1.0 before reporting. **Hard cutoff: never report below 0.6.**
 
 | Score | Action |
 |-------|--------|
-| 80-100 | Report with full confidence |
-| 60-79 | Report, note uncertainty |
-| 0-59 | **Drop it** |
+| 0.8–1.0 | Report with full confidence |
+| 0.6–0.79 | Report, note uncertainty |
+| below 0.6 | **Drop it** |
 
-**Boost (+10-20):** Verified read-modify-write without transaction in code, confirmed no idempotency check exists, identified concrete double-execution scenario
-**Reduce (-10-20):** External locking mechanism may exist outside scope, framework may provide implicit transactions, single-threaded execution context (WordPress admin-ajax within single request)
+**Boost (+0.1 to +0.2):** Verified read-modify-write without transaction in code, confirmed no idempotency check exists, identified concrete double-execution scenario
+**Reduce (-0.1 to -0.2):** External locking mechanism may exist outside scope, framework may provide implicit transactions, single-threaded execution context (WordPress admin-ajax within single request)
 
 ## Final Check Before Writing Output
 

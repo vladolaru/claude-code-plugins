@@ -196,16 +196,16 @@ When config-ops files appear in scope (CI workflows, Dockerfiles, Terraform, etc
 
 ## Finding Confidence
 
-Score confidence 0-100 before reporting. **Hard cutoff: never report below 60.**
+Score confidence 0.0–1.0 before reporting. **Hard cutoff: never report below 0.6.**
 
 | Score | Action |
 |-------|--------|
-| 80-100 | Report with full confidence |
-| 60-79 | Report, note uncertainty |
-| 0-59 | **Drop it** |
+| 0.8–1.0 | Report with full confidence |
+| 0.6–0.79 | Report, note uncertainty |
+| below 0.6 | **Drop it** |
 
-**Boost (+10-20):** Verified missing error handling in actual code, confirmed no timeout/retry in HTTP client setup, migration has no rollback script in the changeset, known antipattern match (e.g., catch-and-swallow)
-**Reduce (-10-20):** "Might"/"could" in reasoning, error handling may exist in a base class not in scope, framework may provide default timeout, theoretical without concrete failure scenario
+**Boost (+0.1 to +0.2):** Verified missing error handling in actual code, confirmed no timeout/retry in HTTP client setup, migration has no rollback script in the changeset, known antipattern match (e.g., catch-and-swallow)
+**Reduce (-0.1 to -0.2):** "Might"/"could" in reasoning, error handling may exist in a base class not in scope, framework may provide default timeout, theoretical without concrete failure scenario
 
 ## Final Check Before Writing Output
 
