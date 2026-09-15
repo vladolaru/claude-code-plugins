@@ -169,16 +169,16 @@ For detailed false positive handling, see: `../docs/guides/FALSE-POSITIVE-HANDLI
 
 ## Finding Confidence
 
-For each finding, score confidence 0-100 before reporting:
+For each finding, score confidence 0.0–1.0 before reporting:
 
 | Score | Action |
 |-------|--------|
-| 80-100 | Report with full confidence |
-| 60-79 | Report, note uncertainty |
-| 0-59 | Do NOT report — verify deeper or drop |
+| 0.8–1.0 | Report with full confidence |
+| 0.6–0.79 | Report, note uncertainty |
+| below 0.6 | Do NOT report — verify deeper or drop |
 
-**Boosters (+10-20):** Verified in code, matches known vulnerability pattern (CWE), confirmed exploit path from source to sink
-**Reducers (-10-20):** "Might"/"could" in reasoning, not verified with code, theoretical without concrete exploit path
+**Boosters (+0.1 to +0.2):** Verified in code, matches known vulnerability pattern (CWE), confirmed exploit path from source to sink
+**Reducers (-0.1 to -0.2):** "Might"/"could" in reasoning, not verified with code, theoretical without concrete exploit path
 
 ## Output
 

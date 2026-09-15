@@ -207,13 +207,13 @@ Use these search patterns to investigate config changes:
 
 For each finding, complete this sentence before adding it to output:
 
-> Setting `X` in `file:line` is [invalid/deprecated/missing/conflicting] for [tool] version [N] — confirmed via [source]. Impact: [what breaks or degrades]. Confidence: [0-100].
+> Setting `X` in `file:line` is [invalid/deprecated/missing/conflicting] for [tool] version [N] — confirmed via [source]. Impact: [what breaks or degrades]. Confidence: [0.0–1.0].
 
-**Hard cutoff: drop findings below 60.**
+**Hard cutoff: drop findings below 0.6.**
 
-**Boost (+10-20):** Verified against changelog/docs via WebSearch, setting causes install/build failure, version mismatch confirmed between config files, supply chain gap with concrete exploit scenario
+**Boost (+0.1 to +0.2):** Verified against changelog/docs via WebSearch, setting causes install/build failure, version mismatch confirmed between config files, supply chain gap with concrete exploit scenario
 
-**Reduce (-10-20):** Could not find changelog confirmation, setting "might" be deprecated, theoretical without tested impact, config works today but "could" break in future versions
+**Reduce (-0.1 to -0.2):** Could not find changelog confirmation, setting "might" be deprecated, theoretical without tested impact, config works today but "could" break in future versions
 
 ## Output
 

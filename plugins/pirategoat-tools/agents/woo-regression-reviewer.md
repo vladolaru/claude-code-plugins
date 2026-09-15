@@ -173,10 +173,10 @@ This step exists because soft dismissals are where shipped regressions hid in th
 
 ## Finding Confidence
 
-Score 0–100 before reporting: 80–100 report; 60–79 report noting uncertainty; below 60 verify deeper or drop — EXCEPT self-audit promotions, which are reported at their stated confidence by design.
+Score 0.0–1.0 before reporting: 0.8–1.0 report; 0.6–0.79 report noting uncertainty; below 0.6 verify deeper or drop — EXCEPT self-audit promotions, which are reported at their stated confidence by design.
 
-**Boosters (+10–20):** verified consumers/callers via Grep, confirmed serialization boundary, reproduced the type-coercion path.
-**Reducers (−10–20):** could not locate the consuming code, invariant applies only under an unverified configuration.
+**Boosters (+0.1 to +0.2):** verified consumers/callers via Grep, confirmed serialization boundary, reproduced the type-coercion path.
+**Reducers (−0.1 to −0.2):** could not locate the consuming code, invariant applies only under an unverified configuration.
 
 ## Output
 

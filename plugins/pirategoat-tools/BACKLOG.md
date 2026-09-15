@@ -363,3 +363,11 @@ Spec item 1.2 says to retire the `("api error", "api_error")` entry in `review_t
 **Deferred because:** retiring the entry needs a tool-result-level replacement signal decided first, or those calls silently stop being counted as failures.
 **Do when:** the maintainer decides the replacement signal for tool-result-level API errors, alongside or after item 42.
 
+### 45. `code-reviewer.md`'s 0.75 boundary sits in two overlapping bands
+
+The confidence table's `0.51–0.75` row is labeled **Note** ("DO NOT REPORT"), but the rule right below it reads "**RULE: Only report issues with confidence >= 0.75**" — so a finding scored exactly `0.75` falls inside the do-not-report Note band and also clears the reporting rule. The Phase 1 D rewrite carried this faithfully: the pre-rewrite table read `51-75` / **Note** against `>= 75`, the same overlap on the old 0-100 scale.
+
+**Evidence:** `plugins/pirategoat-tools/agents/code-reviewer.md:101` (`| 0.51–0.75 | **Note** | Valid but low-impact (DO NOT REPORT) |`) against `:104` (`**RULE: Only report issues with confidence >= 0.75**`).
+**Deferred because:** resolving it decides which findings code-reviewer reports, a behavior change outside a scale conversion.
+**Do when:** the next change to code-reviewer's confidence rules.
+

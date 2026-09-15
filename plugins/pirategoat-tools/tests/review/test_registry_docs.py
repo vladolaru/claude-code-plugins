@@ -198,6 +198,75 @@ class TestUnchangedCallerScopeContract:
         assert "`debug`" in rule0
 
 
+# The cross-validators, codex-reviewer.md and gemini-reviewer.md, carry a
+# document-level HIGH/MEDIUM/LOW label instead of a percent confidence
+# scale and need no exemption: the guard below matches no line in either.
+_PERCENT_SCALE = re.compile(
+    r"(?:\b\d{2}-\d{2,3}\b(?!%)"     # a band: 80-100, 60-79 (not a percent)
+    r"|\b\d{2}–\d{2,3}\b(?!%)"       # the same band with an en dash
+    r"|\b[Bb]elow \d{2}\b"           # below 60 / Below 85
+    r"|\bfloor: \d{2}\b"             # Hard floor: 85
+    r"|(?<![.\d])\d{2} or above\b"    # 85 or above (not the 85 in 0.85)
+    r"|\(\d{2}\+\)"                  # a threshold in a description: (85+)
+    r"|>= \d{2}\b(?!%)"              # >= 75 (not a percent)
+    r"|\bat \d{2}\b"                 # start at 70
+    r"|\bby \d{2}\b"                 # reduce by 20
+    r"|\| [+\-−]\d{1,2} \|"          # a modifier cell: | +15 |
+    r"|\([+\-−]\d{2}[-–]\d{2}\)"     # (+10-20)
+    r"|\bConfidence: \[?\d{2}"       # Confidence: 85 / [0-100]
+    r"|\*\*\d{2}\*\*"                # Final: **85**
+    r"|\b0[-–]100\b"
+    r"|\| 0[-–]\d{2} \|"             # a floor cell: | 0-59 |
+    r"|→ [+\-−]\d{1,2}\b(?![.\d])"   # a worked-example step: → +15
+    r"|[+\-−]\d{1,2} confidence\b)"  # get -10 confidence
+)
+
+
+def test_no_definition_teaches_a_percent_confidence_scale():
+    """review_document validates confidence as 0.0–1.0 and the protocol's
+    API says set_confidence(0.0-1.0); eighteen definitions taught 0–100.
+    Reviewers normalized at the call in every 2026 field run, so the
+    defect was latent, and a new definition copied from one of these
+    tables would have shipped it; devils-advocate-reviewer.md, which the
+    rewrite's file list missed, was converted in the same change.
+
+    The line filter and the regex were both narrower than the docstring's
+    claim until the 2026-09-15 final review: 38 of the 133 lines the
+    Phase 1 D rewrite actually changed carried no "confiden"/"scor" and no
+    leading "|" (every Boosters/Reducers row, both "Start at 70" lines,
+    and toolchain's "Hard cutoff: drop findings below 60."), and another
+    20 matched no regex alternative at all (every floor cell like
+    "| 0-59 |", architecture's "get -10 confidence", and dead-code's
+    "→ +15" worked-example steps), and devils-advocate's "(85+)",
+    "Hard floor: 85" and "85 or above" matched nothing until its
+    conversion added them. A new reviewer definition written with any of
+    those shapes would have passed this guard silently."""
+    offenders = []
+    for path in sorted(AGENTS_DIR.rglob("*.md")):
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            lowered = line.lower()
+            if not (
+                any(
+                    word in lowered
+                    for word in (
+                        "confiden",
+                        "scor",
+                        "boost",
+                        "reduc",
+                        "start at",
+                        "cutoff",
+                        "floor",
+                    )
+                )
+                or line.startswith("|")
+                or "→" in line
+            ):
+                continue
+            if _PERCENT_SCALE.search(line):
+                offenders.append(f"{path.name}:{number}: {line.strip()[:80]}")
+    assert not offenders, "\n".join(offenders)
+
+
 def _registry_tiers():
     registry = json.loads(REGISTRY.read_text(encoding="utf-8"))
     return {agent["model_tier"] for agent in registry["agents"].values()}

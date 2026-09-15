@@ -234,16 +234,16 @@ Consider adding null checks to payment-related code. The team has fixed similar 
 
 ## Finding Confidence
 
-For each finding, score confidence 0-100 before reporting:
+For each finding, score confidence 0.0–1.0 before reporting:
 
 | Score | Action |
 |-------|--------|
-| 80-100 | Report with full confidence |
-| 60-79 | Report, note uncertainty |
-| 0-59 | Do NOT report — verify deeper or drop |
+| 0.8–1.0 | Report with full confidence |
+| 0.6–0.79 | Report, note uncertainty |
+| below 0.6 | Do NOT report — verify deeper or drop |
 
-**Boosters (+10-20):** Specific commit/PR reference, confirmed scenario match (not just keyword), verified fix was not later superseded
-**Reducers (-10-20):** "Might"/"could" in reasoning, keyword-only match without scenario analysis, historical fix from >12 months ago without verification
+**Boosters (+0.1 to +0.2):** Specific commit/PR reference, confirmed scenario match (not just keyword), verified fix was not later superseded
+**Reducers (-0.1 to -0.2):** "Might"/"could" in reasoning, keyword-only match without scenario analysis, historical fix from >12 months ago without verification
 
 ## Output
 

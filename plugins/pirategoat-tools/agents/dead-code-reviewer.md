@@ -75,7 +75,7 @@ This agent reviews for dead code introduced or exposed by the change:
 Finding: "`add_premium_badge()` defined at line 45 has zero callers.
 Searched: `git grep -n 'add_premium_badge' -- '*.php'` → returned only the definition line.
 Checked dynamic patterns: `git grep 'add_action.*add_premium_badge\|add_filter.*add_premium_badge'` → zero results.
-Confidence: 90."
+Confidence: 0.9."
 Why correct: Searched for all references, checked dynamic patterns, high confidence with evidence.
 </example>
 
@@ -91,7 +91,7 @@ The function is registered via `add_action('widgets_init', ...)` two files away.
 
 Check the `DYNAMIC_DISPATCH_RISK` value from bootstrap output.
 
-- **`DYNAMIC_DISPATCH_RISK: low`** — No PHP files in scope. Skip the grep below and start confidence at 75. Standard verification sufficient.
+- **`DYNAMIC_DISPATCH_RISK: low`** — No PHP files in scope. Skip the grep below and start confidence at 0.75. Standard verification sufficient.
 - **`DYNAMIC_DISPATCH_RISK: high`** — PHP files are in scope. Run the command below to gauge false positive risk:
 
 ```bash
@@ -99,9 +99,9 @@ Check the `DYNAMIC_DISPATCH_RISK` value from bootstrap output.
 git grep -c 'add_action\|add_filter\|register_rest_route\|add_shortcode' -- '*.php' 2>/dev/null | tail -5
 ```
 
-**High dynamic dispatch** (WordPress/WooCommerce plugins): Many functions are called by the framework, not by grep-able code. Apply the False Positive Checklist aggressively. Start confidence at 60 and require boosters to report.
+**High dynamic dispatch** (WordPress/WooCommerce plugins): Many functions are called by the framework, not by grep-able code. Apply the False Positive Checklist aggressively. Start confidence at 0.6 and require boosters to report.
 
-**Low dynamic dispatch** (standalone JS/TS libraries): Most calls are explicit. Start confidence at 75. Standard verification sufficient.
+**Low dynamic dispatch** (standalone JS/TS libraries): Most calls are explicit. Start confidence at 0.75. Standard verification sufficient.
 
 ### Step 1: Catalog Changed Symbols
 
@@ -187,26 +187,26 @@ When the diff **removes** a function call, search for remaining callers of the c
 
 ### Step 4: Categorize and Score Confidence
 
-For each confirmed finding, score confidence 0-100. The score must reflect what you **verified**, not what you **suspect**.
+For each confirmed finding, score confidence 0.0–1.0. The score must reflect what you **verified**, not what you **suspect**.
 
 | Score | Action |
 |-------|--------|
-| 80-100 | Report with full confidence |
-| 60-79 | Report, note uncertainty |
-| 0-59 | Do NOT report — verify deeper or drop |
+| 0.8–1.0 | Report with full confidence |
+| 0.6–0.79 | Report, note uncertainty |
+| below 0.6 | Do NOT report — verify deeper or drop |
 
-**Start at 70** (neutral), then apply modifiers:
+**Start at 0.7** (neutral), then apply modifiers:
 
-**Boosters (+10-20):** Zero results from `git grep`, no dynamic patterns found in Step 3, simple function with clear call site expectations, import with no usage in the file
+**Boosters (+0.1 to +0.2):** Zero results from `git grep`, no dynamic patterns found in Step 3, simple function with clear call site expectations, import with no usage in the file
 
-**Reducers (-10-20):** WordPress/WooCommerce codebase (high dynamic dispatch), function name matches common hook patterns, only searched one file type, class could be instantiated via autoloader
+**Reducers (-0.1 to -0.2):** WordPress/WooCommerce codebase (high dynamic dispatch), function name matches common hook patterns, only searched one file type, class could be instantiated via autoloader
 
 **Worked example:**
-- Symbol `calculate_discount()` added in diff → start at 70
-- `git grep` finds zero references → +15 (verified no callers)
-- No dynamic patterns found in Step 3 → +10 (checked all categories)
-- WordPress codebase → -10 (high dynamic dispatch risk)
-- Final: **85** → Report with full confidence
+- Symbol `calculate_discount()` added in diff → start at 0.7
+- `git grep` finds zero references → +0.15 (verified no callers)
+- No dynamic patterns found in Step 3 → +0.1 (checked all categories)
+- WordPress codebase → -0.1 (high dynamic dispatch risk)
+- Final: **0.85** → Report with full confidence
 
 ### Step 5: Write Output
 

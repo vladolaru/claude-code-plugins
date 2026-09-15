@@ -148,16 +148,16 @@ When config-ops files appear in scope (CI workflows, Dockerfiles, Terraform, Hel
 
 ### Step 5: Score Finding Confidence
 
-For each finding, score confidence 0-100 before reporting:
+For each finding, score confidence 0.0–1.0 before reporting:
 
 | Score | Action |
 |-------|--------|
-| 80-100 | Report with full confidence |
-| 60-79 | Report, note uncertainty |
-| 0-59 | Do NOT report — verify deeper or drop |
+| 0.8–1.0 | Report with full confidence |
+| 0.6–0.79 | Report, note uncertainty |
+| below 0.6 | Do NOT report — verify deeper or drop |
 
-**Boosters (+10-20):** Verified in code, matches known SOLID violation, confirmed impact on testability/maintainability
-**Reducers (-10-20):** "Might"/"could" in reasoning, not verified with code, theoretical pattern improvement without current pain, finding primarily recommends "extract shared code" or "align with existing implementation" (patterns-reviewer's domain)
+**Boosters (+0.1 to +0.2):** Verified in code, matches known SOLID violation, confirmed impact on testability/maintainability
+**Reducers (-0.1 to -0.2):** "Might"/"could" in reasoning, not verified with code, theoretical pattern improvement without current pain, finding primarily recommends "extract shared code" or "align with existing implementation" (patterns-reviewer's domain)
 
 ### Step 6: Write Output
 
@@ -194,7 +194,7 @@ Recommend patterns for current problems, not future "what ifs."
 
 When reviewing WordPress plugin or PHP theme code, apply these adjustments:
 
-- **Abstract architecture opinions without concrete impact get -10 confidence.** Claims like "this violates SRP" or "consider introducing an interface" must cite a specific bug, regression, or maintainability hazard in the current code. WordPress plugins prioritize convention-over-architecture — structural purity opinions without concrete defects are STYLE, not findings.
+- **Abstract architecture opinions without concrete impact get -0.1 confidence.** Claims like "this violates SRP" or "consider introducing an interface" must cite a specific bug, regression, or maintainability hazard in the current code. WordPress plugins prioritize convention-over-architecture — structural purity opinions without concrete defects are STYLE, not findings.
 - **Defer WordPress-specific concerns** to wp-architecture-reviewer. Do not duplicate hook design, WPCS, i18n, or backwards compatibility analysis.
 - **Verify framework conventions before flagging.** WordPress and WooCommerce use patterns (global state, hook-based architecture, service containers) that may look like anti-patterns to a general architecture reviewer but are intentional framework conventions.
 

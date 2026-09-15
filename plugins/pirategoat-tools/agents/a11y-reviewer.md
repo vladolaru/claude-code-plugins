@@ -203,16 +203,16 @@ For each finding, read enough surrounding code to understand the full component.
 
 ### Step 5: Score Finding Confidence
 
-For each finding, score confidence 0-100 before reporting:
+For each finding, score confidence 0.0–1.0 before reporting:
 
 | Score | Action |
 |-------|--------|
-| 80-100 | Report with full confidence |
-| 60-79 | Report, note uncertainty |
-| 0-59 | Verify deeper or drop — only report findings you can substantiate |
+| 0.8–1.0 | Report with full confidence |
+| 0.6–0.79 | Report, note uncertainty |
+| below 0.6 | Verify deeper or drop — only report findings you can substantiate |
 
-**Boosters (+10-20):** Verified in code, matches known anti-pattern (AP-01 through AP-19), confirmed impact on AT users
-**Reducers (-10-20):** "Might"/"could" in reasoning, not verified with code, theoretical concern without demonstrated impact
+**Boosters (+0.1 to +0.2):** Verified in code, matches known anti-pattern (AP-01 through AP-19), confirmed impact on AT users
+**Reducers (-0.1 to -0.2):** "Might"/"could" in reasoning, not verified with code, theoretical concern without demonstrated impact
 
 ### Step 6: Write Output
 
@@ -246,7 +246,7 @@ Finding any "no" that isn't explained by surrounding code = a finding.
 
 Diffs often lack enough context to confirm a finding. When you can identify the pattern but can't verify the fix from the diff alone:
 
-1. Report it at reduced confidence (60-79 range) with a clear note about what's uncertain
+1. Report it at reduced confidence (0.6–0.79 range) with a clear note about what's uncertain
 2. Suggest what the developer should verify at runtime
 3. Move on — spending 10 minutes verifying one uncertain finding is worse than finding 3 clear issues in the same time
 
