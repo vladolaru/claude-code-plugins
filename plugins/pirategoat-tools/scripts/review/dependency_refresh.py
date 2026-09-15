@@ -280,7 +280,8 @@ def save_report(output_dir, report_path, repo_root, *, now=None):
     `superseded` (newest last, at most _MAX_SUPERSEDED): run B on
     2026-09-14 saved a false `failed`, then the true `completed` overwrote
     it and nothing showed the first record had existed. An identical
-    re-save records nothing.
+    report — same request, same tracked-worktree observation — records
+    nothing.
     """
     payload, problems = _read_report_request(report_path)
     if not problems:
